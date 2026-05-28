@@ -32,7 +32,34 @@ These mirror how this project was built and must be preserved:
 
 ---
 
-## 2. Status as of v0.1 (current)
+## 2. Status (current: v0.2)
+
+Added in **v0.2** (all of §3's v0.2 milestones are done):
+
+- Six more built-in adapters: `gh`, `gcloud`, `docker`, `helm` (env-dir),
+  `kubectl` (env-file), `aws` (env-var). Total: 7.
+- `clikae migrate [<cli>]` — adopts a hand-rolled config-dir + alias setup
+  (the `~/.claude-acct-{a,b}` pattern) into clikae. See `lib/commands/migrate.sh`.
+- `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
+  wired into CI on `ubuntu-latest` + `macos-latest` (installed via `npm i -g bats`).
+- All sourced libs carry a `# shellcheck shell=bash` directive; the tree is
+  shellcheck-clean at `warning`.
+- Two helpers added to kill duplication: `adapter_env_prefix` (adapter_loader.sh,
+  used by alias/app/migrate) and `rc_wrap_block` (shell_rc.sh, used by
+  rc_add_block/migrate). Don't re-inline these.
+- **Bug fixed:** `clikae app` never compiled on macOS — the launcher command was
+  substituted via `sed`, but BSD `sed` strips backslashes from the replacement,
+  so escaped quotes collapsed and the AppleScript was invalid. Now substituted
+  via bash parameter expansion (backslash-escape before quote-escape). This is
+  exactly the BSD-sed footgun in §4 — heed it.
+- Published to **github.com/CVERInc/clikae** (public, MIT). `<your-handle>` is
+  resolved to `CVERInc` everywhere. Open question §9.4 (org) → CVERInc; §9.2
+  (AWS strategy) → `env-var`/`AWS_PROFILE`, with the `env-file` alternative
+  documented in `lib/adapters/aws.sh`.
+
+Still open before a Homebrew tap (v0.3): `REPLACE_WITH_RELEASE_SHA256` in
+`homebrew/clikae.rb` is filled for the current tag, but the `homebrew-clikae`
+tap repo does not exist yet.
 
 Shipped in v0.1:
 
@@ -49,10 +76,11 @@ Shipped in v0.1:
 
 Smoke-tested end-to-end in a sandbox HOME: `init --alias` → `list` → `remove --force` cleans dir + alias block + leaves a `.bak`.
 
-**Known placeholders** that need replacing before publishing:
+**Known placeholders** (status):
 
-- `<your-handle>` in `README.md`, `install.sh`, `homebrew/clikae.rb`.
-- `REPLACE_WITH_RELEASE_SHA256` in `homebrew/clikae.rb` (fill once a tagged release tarball exists).
+- ~~`<your-handle>`~~ — resolved to `CVERInc` (v0.2).
+- `REPLACE_WITH_RELEASE_SHA256` in `homebrew/clikae.rb` — filled for the v0.2.0
+  tarball (v0.2); re-fill on each new tagged release.
 - The `2026 clikae contributors` line in `LICENSE` is fine as a placeholder; some maintainers prefer `<their name>`.
 
 ---

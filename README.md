@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.1%20preview-orange.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.2-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -26,7 +26,7 @@ It works for any CLI that respects an environment variable for its config locati
 
 ## Install
 
-### From source (recommended during v0.1)
+### From source (recommended until the Homebrew tap lands in v0.3)
 
 ```bash
 git clone https://github.com/CVERInc/clikae.git
@@ -126,8 +126,8 @@ Roadmap (PRs very welcome): `terraform`, `vercel`, `firebase`, `npm`, `az`. See 
 
 ## Roadmap
 
-- **v0.1** *(current)* — core CLI, claude adapter, macOS `.app` launchers, install script.
-- **v0.2** — `bats-core` tests, GitHub Actions CI (shellcheck + tests), `migrate` command for old setups.
+- **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
+- **v0.2** *(current)* — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** — Homebrew tap, demo GIF / asciinema, polish docs, more built-in adapters.
 - **v0.4** — Windows PowerShell module (alias generation only; no `.app`).
 - **v1.0** — SwiftUI menu bar GUI for macOS (click-to-switch active profile).
