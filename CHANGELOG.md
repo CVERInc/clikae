@@ -12,9 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in adapters for **GitHub CLI** (`gh`), **Google Cloud** (`gcloud`),
   **Docker** (`docker`), **Helm** (`helm`), **kubectl** (`kubectl`, the first
   `env-file` adapter), and **AWS** (`aws`, the first `env-var` adapter).
+- `clikae migrate [<cli>]` — adopt a hand-rolled "config dir + shell alias"
+  setup (e.g. the `~/.claude-acct-{a,b}` dual-account pattern) into clikae: it
+  moves each referenced config directory under `~/.clikae/profiles/<cli>/<p>/`
+  and rewrites the alias into clikae's managed sentinel block. Previews the plan
+  and confirms first, backs up the rc once, and never overwrites an existing
+  profile. Supports `--dry-run` and `--force`.
 - `bats-core` test suite under `tests/bats/` (init, alias, list, remove, app,
-  adapters, and bash-3.2 compatibility guards). Each test runs in an isolated
-  throwaway `$HOME` + `$CLIKAE_HOME`.
+  migrate, adapters, and bash-3.2 compatibility guards). Each test runs in an
+  isolated throwaway `$HOME` + `$CLIKAE_HOME`.
 
 ### Fixed
 

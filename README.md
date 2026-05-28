@@ -75,6 +75,21 @@ clikae run claude work
 clikae remove claude work
 ```
 
+## Migrating an existing setup
+
+Already juggling accounts by hand — say a `~/.claude-acct-a` / `~/.claude-acct-b`
+pair with aliases in your `~/.zshrc`? `clikae migrate` adopts that into clikae:
+
+```bash
+clikae migrate --dry-run   # preview: which dirs move where, which aliases change
+clikae migrate             # do it (asks to confirm first)
+```
+
+It moves each config directory under `~/.clikae/profiles/claude/<name>/`, rewrites
+the aliases into clikae's managed blocks, backs up your rc file, and never
+overwrites an existing profile. Pass a CLI name (`clikae migrate gh`) to migrate
+a different tool's aliases.
+
 ## How it works
 
 For each profile, `clikae`:

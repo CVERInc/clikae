@@ -29,6 +29,7 @@ Commands:
   run <cli> <profile> [-- args]    Run a CLI with the given profile (no alias needed)
   list                             List all profiles
   remove <cli> <profile>           Remove a profile (dir, alias, .app)
+  migrate [cli]                    Adopt a hand-rolled config-dir + alias setup
   info                             Show install paths and counts
   adapters                         List supported CLIs
   help [command]                   Show help (run `clikae help <cmd>` for details)

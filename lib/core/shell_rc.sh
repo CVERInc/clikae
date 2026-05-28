@@ -39,6 +39,16 @@ rc_has_block() {
   [ -f "$rc_file" ] && grep -qF "# >>> clikae:$id >>>" "$rc_file"
 }
 
+# rc_wrap_block <id>  < content_on_stdin   -> sentinel-wrapped block on stdout.
+# Single source of truth for the on-disk block format (used by rc_add_block and
+# `clikae migrate`). Changing this format is a breaking change — see HANDOFF §7.
+rc_wrap_block() {
+  local id="$1"
+  printf '\n# >>> clikae:%s >>>\n' "$id"
+  cat
+  printf '# <<< clikae:%s <<<\n' "$id"
+}
+
 # rc_add_block <rc_file> <id> < content_on_stdin
 # Refuses to add if the block already exists; caller can rc_remove_block first.
 rc_add_block() {
@@ -52,11 +62,7 @@ rc_add_block() {
   else
     touch "$rc_file"
   fi
-  {
-    printf '\n# >>> clikae:%s >>>\n' "$id"
-    cat
-    printf '# <<< clikae:%s <<<\n' "$id"
-  } >> "$rc_file"
+  rc_wrap_block "$id" >> "$rc_file"
 }
 
 # rc_remove_block <rc_file> <id>

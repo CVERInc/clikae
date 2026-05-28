@@ -67,15 +67,9 @@ EOF
     fi
   fi
 
-  # Build the shell command the .app will run in Terminal.
-  # It's: KEY1="V1" KEY2="V2" ... <binary>
-  local shell_cmd=""
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    local key="${line%%=*}" val="${line#*=}"
-    shell_cmd="$shell_cmd $key=\"$val\""
-  done < <(adapter_export_env "$d")
-  shell_cmd="${shell_cmd# } $binary"
+  # Build the shell command the .app will run in Terminal: KEY="V" ... <binary>
+  local shell_cmd
+  shell_cmd="$(adapter_env_prefix "$d") $binary"
 
   # AppleScript: open Terminal, run cmd, set custom title.
   local tmpl tmp_dir tmp_scpt

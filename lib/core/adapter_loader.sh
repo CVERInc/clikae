@@ -26,6 +26,21 @@ list_adapters() {
   done | sort
 }
 
+# adapter_env_prefix <profile_dir>  -> one line: KEY="VAL" KEY2="VAL2" ...
+# Renders the adapter's env vars as a shell-quoted prefix string, used to build
+# both the alias body (`clikae alias`) and the .app command (`clikae app`).
+# Requires the adapter to already be loaded (adapter_export_env in scope).
+adapter_env_prefix() {
+  local profile_dir="$1" prefix="" line key val
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    prefix="$prefix $key=\"$val\""
+  done < <(adapter_export_env "$profile_dir")
+  printf '%s\n' "${prefix# }"
+}
+
 # Source the adapter file for <cli>. Fails if missing.
 load_adapter() {
   local cli="$1"

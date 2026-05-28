@@ -48,15 +48,9 @@ EOF
   local binary
   binary="$(adapter_meta_cli_binary)"
 
-  # Build the env-var prefix string from adapter_export_env. Each line is KEY=VALUE.
-  local env_prefix=""
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    local key="${line%%=*}" val="${line#*=}"
-    # Quote the value safely for shell.
-    env_prefix="$env_prefix $key=\"$val\""
-  done < <(adapter_export_env "$d")
-  env_prefix="${env_prefix# }"  # trim leading space
+  # Build the env-var prefix string (KEY="VAL" ...) from the adapter.
+  local env_prefix
+  env_prefix="$(adapter_env_prefix "$d")"
 
   local rc_file rc_id
   rc_file="$(detect_shell_rc)"
