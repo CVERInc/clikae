@@ -50,6 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install bats
-        run: npm install -g bats
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          "$RUNNER_TEMP/bats/install.sh" "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: bats --print-output-on-failure tests/bats
