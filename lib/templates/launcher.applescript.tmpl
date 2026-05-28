@@ -1,0 +1,11 @@
+-- clikae launcher template. Placeholders are substituted by lib/commands/app.sh:
+--   @SHELL_CMD@ : the shell command to run, e.g.  CLAUDE_CONFIG_DIR="/Users/me/.clikae/profiles/claude/work" claude
+--   @TITLE@     : the window title, e.g.  claude (work)
+
+on run
+    tell application "Terminal"
+        activate
+        set newTab to do script "@SHELL_CMD@"
+        set custom title of newTab to "@TITLE@"
+    end tell
+end run

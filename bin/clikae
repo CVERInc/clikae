@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# clikae - CLI profile switcher  /  ｷﾘｶｴ (切り替え)
+# https://github.com/CVERInc/clikae
+# MIT License
+
+set -eo pipefail
+
+CLIKAE_VERSION="0.1.0"
+
+# Resolve install root (handles symlink chains, e.g., via Homebrew)
+__resolve_self() {
+  local src="${BASH_SOURCE[0]}"
+  while [ -h "$src" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ $src != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+
+CLIKAE_BIN_DIR="$(__resolve_self)"
+CLIKAE_ROOT="$(cd "$CLIKAE_BIN_DIR/.." && pwd)"
+CLIKAE_LIB="$CLIKAE_ROOT/lib"
+export CLIKAE_VERSION CLIKAE_ROOT CLIKAE_LIB
+
+# Profile store layout. Override with $CLIKAE_HOME if you want.
+CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}"
+export CLIKAE_HOME
+
+# Load core libs
+# shellcheck source=../lib/core/log.sh
+source "$CLIKAE_LIB/core/log.sh"
+# shellcheck source=../lib/core/profile_store.sh
+source "$CLIKAE_LIB/core/profile_store.sh"
+# shellcheck source=../lib/core/shell_rc.sh
+source "$CLIKAE_LIB/core/shell_rc.sh"
+# shellcheck source=../lib/core/adapter_loader.sh
+source "$CLIKAE_LIB/core/adapter_loader.sh"
+
+# Subcommand dispatch
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  init|app|list|ls|remove|rm|run|alias|info|adapters|help|--help|-h|version|--version|-v)
+    case "$cmd" in
+      ls) cmd="list" ;;
+      rm) cmd="remove" ;;
+      --help|-h) cmd="help" ;;
+      --version|-v) cmd="version" ;;
+    esac
+    ;;
+  *)
+    log_err "Unknown command: $cmd"
+    echo ""
+    cmd="help"
+    ;;
+esac
+
+if [ "$cmd" = "version" ]; then
+  echo "clikae $CLIKAE_VERSION"
+  exit 0
+fi
+
+cmd_file="$CLIKAE_LIB/commands/$cmd.sh"
+if [ ! -f "$cmd_file" ]; then
+  log_err "Internal: command file not found: $cmd_file"
+  exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$cmd_file"
+"cmd_$cmd" "$@"

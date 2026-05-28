@@ -1,0 +1,17 @@
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local dev artefacts
+/tmp/
+/dist/
+/build/
+
+# Test outputs
+/tests/.bats-tmp/
+
+# Backups created by clikae itself (shouldn't be in repo, but just in case someone runs it inside the checkout)
+*.clikae.bak.*

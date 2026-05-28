@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          scandir: '.'
+          additional_files: 'bin/clikae install.sh'
+
+  smoke:
+    name: smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: ./install.sh
+        env:
+          PREFIX: ${{ github.workspace }}/.local
+      - name: Sanity
+        run: |
+          export PATH="${{ github.workspace }}/.local/bin:$PATH"
+          clikae version
+          clikae help
+          clikae adapters
+          clikae list

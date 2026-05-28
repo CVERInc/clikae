@@ -1,0 +1,50 @@
+# shellcheck shell=bash
+# lib/core/adapter_loader.sh — load a CLI adapter and expose its hooks.
+#
+# An adapter is a bash script at lib/adapters/<cli>.sh that defines these functions:
+#
+#   adapter_meta_name           # human-readable name, echo-only
+#   adapter_meta_cli_binary     # name of the binary to exec ("claude", "gh", ...)
+#   adapter_meta_env_var        # primary env var (e.g. "CLAUDE_CONFIG_DIR")
+#   adapter_meta_strategy       # one of: env-dir, env-file, env-var, flag, subcommand
+#   adapter_meta_description    # one-line description
+#
+#   adapter_init <profile_dir>          # called once when a profile is created (optional, default no-op)
+#   adapter_export_env <profile_dir>    # prints KEY=VALUE lines to be exported in shell/.app
+#   adapter_run <profile_dir> [args...] # invoke the CLI with this profile
+
+# Discover available adapter names by scanning lib/adapters/.
+list_adapters() {
+  local f name
+  for f in "$CLIKAE_LIB"/adapters/*.sh; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f" .sh)"
+    case "$name" in
+      _*) continue ;;  # underscored files are templates/helpers
+    esac
+    printf '%s\n' "$name"
+  done | sort
+}
+
+# Source the adapter file for <cli>. Fails if missing.
+load_adapter() {
+  local cli="$1"
+  local f="$CLIKAE_LIB/adapters/$cli.sh"
+  if [ ! -f "$f" ]; then
+    log_err "No built-in adapter for '$cli'."
+    log_dim "Available: $(list_adapters | paste -sd ', ' -)"
+    log_dim "To add your own, see docs/adding-an-adapter.md"
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$f"
+  # Verify required hooks exist.
+  local fn
+  for fn in adapter_meta_name adapter_meta_cli_binary adapter_meta_env_var \
+            adapter_meta_strategy adapter_meta_description \
+            adapter_export_env adapter_run; do
+    if ! declare -F "$fn" >/dev/null; then
+      log_fail "Adapter '$cli' is missing required function: $fn"
+    fi
+  done
+}
