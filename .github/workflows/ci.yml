@@ -39,3 +39,17 @@ jobs:
           clikae help
           clikae adapters
           clikae list
+
+  bats:
+    name: bats (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: npm install -g bats
+      - name: Run tests
+        run: bats --print-output-on-failure tests/bats
