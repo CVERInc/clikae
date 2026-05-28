@@ -41,7 +41,9 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
 - `clikae migrate [<cli>]` — adopts a hand-rolled config-dir + alias setup
   (the `~/.claude-acct-{a,b}` pattern) into clikae. See `lib/commands/migrate.sh`.
 - `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
-  wired into CI on `ubuntu-latest` + `macos-latest` (installed via `npm i -g bats`).
+  wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
+  `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the
+  ubuntu runner's global npm prefix, exit 243). CI is green on both OSes.
 - All sourced libs carry a `# shellcheck shell=bash` directive; the tree is
   shellcheck-clean at `warning`.
 - Two helpers added to kill duplication: `adapter_env_prefix` (adapter_loader.sh,
@@ -52,10 +54,11 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   so escaped quotes collapsed and the AppleScript was invalid. Now substituted
   via bash parameter expansion (backslash-escape before quote-escape). This is
   exactly the BSD-sed footgun in §4 — heed it.
-- Published to **github.com/CVERInc/clikae** (public, MIT). `<your-handle>` is
-  resolved to `CVERInc` everywhere. Open question §9.4 (org) → CVERInc; §9.2
-  (AWS strategy) → `env-var`/`AWS_PROFILE`, with the `env-file` alternative
-  documented in `lib/adapters/aws.sh`.
+- Published to **github.com/CVERInc/clikae** (public, MIT), tagged **`v0.2.0`**
+  with a matching GitHub Release. `<your-handle>` is resolved to `CVERInc`
+  everywhere. Open question §9.4 (org) → CVERInc; §9.2 (AWS strategy) →
+  `env-var`/`AWS_PROFILE`, with the `env-file` alternative documented in
+  `lib/adapters/aws.sh`.
 
 Still open before a Homebrew tap (v0.3): `REPLACE_WITH_RELEASE_SHA256` in
 `homebrew/clikae.rb` is filled for the current tag, but the `homebrew-clikae`
@@ -87,7 +90,10 @@ Smoke-tested end-to-end in a sandbox HOME: `init --alias` → `list` → `remove
 
 ## 3. Next milestones (priority order)
 
-### v0.2 — quality + more adapters
+### v0.2 — quality + more adapters  ✅ DONE (shipped, see §2)
+
+All five items below were completed in v0.2 and are kept here as a record of what
+"done" covered. The next open milestone is **v0.3**.
 
 Goals: prove the project is robust, expand CLI coverage. Roughly half-a-day to a day.
 
