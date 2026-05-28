@@ -1,6 +1,8 @@
--- clikae launcher template. Placeholders are substituted by lib/commands/app.sh:
---   @SHELL_CMD@ : the shell command to run, e.g.  CLAUDE_CONFIG_DIR="/Users/me/.clikae/profiles/claude/work" claude
---   @TITLE@     : the window title, e.g.  claude (work)
+-- clikae launcher template. Two placeholders are substituted by
+-- lib/commands/app.sh at generation time (the SHELL_CMD token below becomes the
+-- env-prefixed CLI command; the TITLE token becomes the Terminal window title,
+-- e.g. claude (work)). They appear only on the two code lines, so substitution
+-- never touches this comment.
 
 on run
     tell application "Terminal"

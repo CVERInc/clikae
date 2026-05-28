@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in adapters for **GitHub CLI** (`gh`), **Google Cloud** (`gcloud`),
   **Docker** (`docker`), **Helm** (`helm`), **kubectl** (`kubectl`, the first
   `env-file` adapter), and **AWS** (`aws`, the first `env-var` adapter).
+- `bats-core` test suite under `tests/bats/` (init, alias, list, remove, app,
+  adapters, and bash-3.2 compatibility guards). Each test runs in an isolated
+  throwaway `$HOME` + `$CLIKAE_HOME`.
+
+### Fixed
+
+- `clikae app` produced an uncompilable AppleScript on macOS: the command was
+  substituted into the template with `sed`, but BSD/macOS `sed` strips
+  backslashes from the replacement string, so the escaped `\"` collapsed to `"`
+  and terminated the AppleScript string early. Substitution now uses bash
+  parameter expansion (and escapes backslashes before quotes), so launchers
+  compile and run correctly. This path was never exercised in v0.1.
 
 ## [0.1.0] — 2026-05-28
 

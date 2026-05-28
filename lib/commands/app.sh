@@ -78,21 +78,30 @@ EOF
   shell_cmd="${shell_cmd# } $binary"
 
   # AppleScript: open Terminal, run cmd, set custom title.
-  local tmpl tmp_scpt
+  local tmpl tmp_dir tmp_scpt
   tmpl="$CLIKAE_LIB/templates/launcher.applescript.tmpl"
   [ -f "$tmpl" ] || log_fail "Missing template: $tmpl"
-  tmp_scpt="$(mktemp -t clikae-launcher.XXXXXX).applescript"
+  tmp_dir="$(mktemp -d -t clikae-launcher.XXXXXX)"
+  tmp_scpt="$tmp_dir/launcher.applescript"
 
-  # Substitute. The shell_cmd needs its " escaped to \" for AppleScript.
-  local shell_cmd_escaped
-  shell_cmd_escaped="${shell_cmd//\"/\\\"}"
-  sed \
-    -e "s|@SHELL_CMD@|${shell_cmd_escaped}|g" \
-    -e "s|@TITLE@|${title}|g" \
-    "$tmpl" > "$tmp_scpt"
+  # Escape for an AppleScript double-quoted string: backslash FIRST, then quote.
+  # We substitute with bash parameter expansion, NOT sed: BSD/macOS sed strips
+  # backslashes from the replacement string, which silently corrupts the escaped
+  # command and produces an uncompilable script (see HANDOFF §4).
+  local shell_cmd_escaped="$shell_cmd" title_escaped="$title"
+  shell_cmd_escaped="${shell_cmd_escaped//\\/\\\\}"
+  shell_cmd_escaped="${shell_cmd_escaped//\"/\\\"}"
+  title_escaped="${title_escaped//\\/\\\\}"
+  title_escaped="${title_escaped//\"/\\\"}"
+
+  local tmpl_content
+  tmpl_content="$(cat "$tmpl")"
+  tmpl_content="${tmpl_content//@SHELL_CMD@/$shell_cmd_escaped}"
+  tmpl_content="${tmpl_content//@TITLE@/$title_escaped}"
+  printf '%s\n' "$tmpl_content" > "$tmp_scpt"
 
   osacompile -o "$app_path" "$tmp_scpt"
-  rm -f "$tmp_scpt"
+  rm -rf "$tmp_dir"
   log_ok "Created $app_path"
   log_dim "  title: $title"
   log_dim "  runs : $shell_cmd"

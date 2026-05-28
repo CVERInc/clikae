@@ -1,26 +1,33 @@
 # tests
 
-Reserved for v0.2 — bats-core test suite.
+[bats-core](https://github.com/bats-core/bats-core) test suite.
 
-Planned layout:
+## Layout
 
 ```
 tests/
-├── helpers.bash              # common test helpers
-├── bats/
-│   ├── init.bats
-│   ├── alias.bats
-│   ├── app.bats              # macOS-only, skipped on Linux
-│   ├── list.bats
-│   ├── remove.bats
-│   └── adapters/
-│       └── claude.bats
-└── fixtures/                 # sample profile dirs, mock CLIs
+├── helpers.bash              # shared setup/teardown (isolated $HOME + $CLIKAE_HOME)
+└── bats/
+    ├── init.bats
+    ├── alias.bats
+    ├── list.bats
+    ├── remove.bats
+    ├── app.bats              # macOS-only, skipped elsewhere
+    ├── compat.bats           # guards against bash 4+/GNU-isms (bash 3.2 must work)
+    └── adapters/
+        └── claude.bats
 ```
 
-Run with:
+Every test runs against a throwaway `$HOME` and `$CLIKAE_HOME` created with
+`mktemp`, so the suite never touches your real config or shell rc. `$SHELL` is
+pinned to `/bin/zsh` so the detected rc file is deterministic.
+
+## Run
 
 ```bash
-brew install bats-core
+brew install bats-core        # or: https://bats-core.readthedocs.io/
 bats tests/bats
 ```
+
+The `app.bats` cases need `osacompile` (a macOS built-in) and are skipped
+automatically on Linux.
