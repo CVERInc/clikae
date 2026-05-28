@@ -22,7 +22,7 @@ You probably have more than one account on at least one CLI tool. Two GitHub acc
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
 4. Cleans up after itself when you're done with a profile.
 
-It works for any CLI that respects an environment variable for its config location. v0.1 ships with a built-in adapter for **Anthropic Claude Code**; new adapters are ~10 lines of bash (see [docs/adding-an-adapter.md](docs/adding-an-adapter.md)).
+It works for any CLI that respects an environment variable for its config location. It ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, and AWS**; new adapters are ~10 lines of bash (see [docs/adding-an-adapter.md](docs/adding-an-adapter.md)).
 
 ## Install
 
@@ -91,13 +91,23 @@ For each profile, `clikae`:
 
 That's it. No daemons, no global state, no surprises. You can read every line of every script.
 
-## Supported CLIs (v0.1)
+## Supported CLIs
 
 | CLI | Strategy | Env var |
 |---|---|---|
 | `claude` (Anthropic Claude Code) | `env-dir` | `CLAUDE_CONFIG_DIR` |
+| `gh` (GitHub CLI) | `env-dir` | `GH_CONFIG_DIR` |
+| `gcloud` (Google Cloud CLI) | `env-dir` | `CLOUDSDK_CONFIG` |
+| `docker` (Docker CLI) | `env-dir` | `DOCKER_CONFIG` |
+| `helm` | `env-dir` | `HELM_CONFIG_HOME` |
+| `kubectl` | `env-file` | `KUBECONFIG` |
+| `aws` (AWS CLI) | `env-var` | `AWS_PROFILE` |
 
-Roadmap (PRs very welcome): `gh`, `gcloud`, `docker`, `helm`, `kubectl`, `aws`, `terraform`, `vercel`, `firebase`. See [docs/adding-an-adapter.md](docs/adding-an-adapter.md).
+Run `clikae adapters` to see them with descriptions.
+
+Roadmap (PRs very welcome): `terraform`, `vercel`, `firebase`, `npm`, `az`. See [docs/adding-an-adapter.md](docs/adding-an-adapter.md).
+
+> **Note on `aws`:** unlike the others, the AWS adapter doesn't isolate config into a separate directory — `AWS_PROFILE` selects a *named profile* from your existing `~/.aws/config`. So `clikae init aws work` expects a matching `[profile work]` entry to exist. See the comment at the top of `lib/adapters/aws.sh` for the alternative `env-file` approach.
 
 ## Roadmap
 

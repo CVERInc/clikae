@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Built-in adapters for **GitHub CLI** (`gh`), **Google Cloud** (`gcloud`),
+  **Docker** (`docker`), **Helm** (`helm`), **kubectl** (`kubectl`, the first
+  `env-file` adapter), and **AWS** (`aws`, the first `env-var` adapter).
+
 ## [0.1.0] — 2026-05-28
 
 ### Added
