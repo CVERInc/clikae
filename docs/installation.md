@@ -2,7 +2,17 @@
 
 `clikae` is pure bash (3.2+ compatible) with no Python/Node runtime. Pick whichever path fits.
 
-## From source (recommended until the Homebrew tap lands in v0.3)
+## Homebrew (recommended)
+
+```bash
+brew install CVERInc/clikae/clikae
+```
+
+That taps [`CVERInc/homebrew-clikae`](https://github.com/CVERInc/homebrew-clikae)
+and installs the formula. To track the latest `main` instead of the tagged
+release, add `--HEAD`. Upgrade with `brew upgrade clikae`.
+
+## From source
 
 ```bash
 git clone https://github.com/CVERInc/clikae.git
@@ -18,14 +28,6 @@ PREFIX=/usr/local sudo ./install.sh
 
 `install.sh` copies the tree to `$PREFIX/share/clikae` and symlinks
 `$PREFIX/bin/clikae`. Nothing else on your system is touched.
-
-## Homebrew (planned for v0.3)
-
-Once the `homebrew-clikae` tap is published:
-
-```bash
-brew install CVERInc/clikae/clikae
-```
 
 ## `curl | bash`
 

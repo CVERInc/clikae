@@ -24,6 +24,14 @@ You probably have more than one account on at least one CLI tool. Two GitHub acc
 
 It works for any CLI that respects an environment variable for its config location, ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, and AWS**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
+## Install
+
+```bash
+brew install CVERInc/clikae/clikae
+```
+
+Or from source / `curl | bash` — see [docs/installation.md](docs/installation.md).
+
 ## 30 seconds
 
 ```bash
@@ -43,7 +51,7 @@ claude-work                       # go
 
 - **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
 - **v0.2** *(current)* — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
-- **v0.3** — Homebrew tap, doc polish, more built-in adapters.
+- **v0.3** *(in progress)* — Homebrew tap ✅, split docs ✅, more built-in adapters.
 - **v0.4** — Windows PowerShell module (alias generation only; no `.app`).
 - **v1.0** — SwiftUI menu bar GUI for macOS (click-to-switch active profile).
 

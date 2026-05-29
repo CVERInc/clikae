@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Homebrew tap.** `brew install CVERInc/clikae/clikae` now works, served from
+  the [`CVERInc/homebrew-clikae`](https://github.com/CVERInc/homebrew-clikae)
+  tap (formula tracks v0.2.0).
+
+### Changed
+
+- Docs split: README trimmed to "what + why" plus a 30-second demo and links;
+  install, full usage/command reference, the `migrate` guide, and how-it-works
+  moved into `docs/installation.md` and `docs/usage.md`; new
+  `docs/troubleshooting.md`.
+
 ## [0.2.0] — 2026-05-28
 
 ### Added

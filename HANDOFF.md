@@ -60,9 +60,13 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   `env-var`/`AWS_PROFILE`, with the `env-file` alternative documented in
   `lib/adapters/aws.sh`.
 
-Still open before a Homebrew tap (v0.3): `REPLACE_WITH_RELEASE_SHA256` in
-`homebrew/clikae.rb` is filled for the current tag, but the `homebrew-clikae`
-tap repo does not exist yet.
+Homebrew tap (v0.3): **DONE.** The `homebrew-clikae` tap repo now exists at
+`github.com/CVERInc/homebrew-clikae` (public, MIT) with `Formula/clikae.rb`
+(tracks v0.2.0, sha256 verified). `brew install CVERInc/clikae/clikae` installs,
+`brew test`/`brew audit`/`brew style` all pass. The in-repo `homebrew/clikae.rb`
+is now just the source-of-truth copy; on each new tag, bump `url`+`sha256` in
+**both** the in-repo copy and the tap's `Formula/clikae.rb` (the tap repo's
+README documents the refresh steps).
 
 Shipped in v0.1:
 
@@ -125,7 +129,7 @@ Goals: prove the project is robust, expand CLI coverage. Roughly half-a-day to a
 
 Goals: smooth install path + good first impression. About a day.
 
-1. **Create a Homebrew tap repo** (separate repo: `homebrew-clikae`). Move `homebrew/clikae.rb` there as `Formula/clikae.rb`. Fill in `url` (tagged release tarball) and `sha256`. Document `brew install <handle>/clikae/clikae` in README.
+1. ~~**Create a Homebrew tap repo** (separate repo: `homebrew-clikae`). Move `homebrew/clikae.rb` there as `Formula/clikae.rb`. Fill in `url` (tagged release tarball) and `sha256`. Document `brew install <handle>/clikae/clikae` in README.~~ ✅ DONE — live at `github.com/CVERInc/homebrew-clikae`; `brew install CVERInc/clikae/clikae` verified (install + test + audit + style all green).
 
 2. ~~**Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why".~~ ✅ DONE — README trimmed to what+why / 30-second demo / doc links; install + full usage + troubleshooting moved into `docs/`.
 
