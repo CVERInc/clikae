@@ -7,13 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae migrate` in-use guard.** `migrate` now refuses to move a config
+  directory that the CLI is currently using in your shell — i.e. when the live
+  `$CLAUDE_CONFIG_DIR` (or whichever env var the adapter uses) points at a dir
+  slated to move. Previously this was only documented as a sharp edge; running
+  `migrate` from inside the very session whose config dir was being moved could
+  pull the directory out from under the live process and leave split state. The
+  guard is not bypassed by `--force` (it protects data, it isn't a confirmation)
+  and never blocks `--dry-run`.
+
 ## [0.3.0] — 2026-05-29
 
 ### Added
 
 - **Homebrew tap.** `brew install CVERInc/clikae/clikae` now works, served from
   the [`CVERInc/homebrew-clikae`](https://github.com/CVERInc/homebrew-clikae)
-  tap (formula tracks v0.2.0).
+  tap (formula tracks v0.3.0).
 - **`clikae migrate --keep-login`.** On macOS, Claude Code stores its OAuth token
   in the login Keychain keyed by the `CLAUDE_CONFIG_DIR` path, so migrating
   (which moves the dir to a new path) otherwise forces a one-time re-login per

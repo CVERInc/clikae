@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.2-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.3-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -42,7 +42,7 @@ claude-work                       # go
 
 ## Documentation
 
-- **[Installation](docs/installation.md)** — from source, Homebrew (planned), `curl | bash`, PATH setup.
+- **[Installation](docs/installation.md)** — Homebrew, from source, `curl | bash`, PATH setup.
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
 - **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
 - **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
@@ -51,8 +51,8 @@ claude-work                       # go
 ## Roadmap
 
 - **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
-- **v0.2** *(current)* — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
-- **v0.3** *(in progress)* — Homebrew tap ✅, split docs ✅, more built-in adapters.
+- **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
+- **v0.3** *(current)* — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
 - **v0.4** — Windows PowerShell module (alias generation only; no `.app`).
 - **v1.0** — SwiftUI menu bar GUI for macOS (click-to-switch active profile).
 

@@ -202,6 +202,26 @@ EOF
     log_info "Dry run — no changes made."
     return 0
   fi
+
+  # Safety guard: refuse to move a dir the CLI is *currently* using in this
+  # shell. If $<ENVVAR> points at one of the dirs slated to move, migrating now
+  # pulls the dir out from under the live process — which can recreate an empty
+  # dir at the old path, leaving split state. Bail with instructions to retry
+  # from a fresh shell. (--force does not override this — it is a data-integrity
+  # guard, not a confirmation. Dry runs never reach here; nothing moves.)
+  local live_dir="${!envvar:-}" live_norm
+  if [ -n "$live_dir" ]; then
+    live_norm="${live_dir%/}"
+    for ((i = 0; i < n; i++)); do
+      if [ "${c_old[$i]%/}" = "$live_norm" ]; then
+        log_err "\$$envvar is set to a directory slated to move:"
+        log_err "    $live_dir"
+        log_err "Moving it now would pull it out from under a running $binary (→ split state)."
+        log_fail "Open a fresh shell with $binary idle (and \$$envvar unset), then retry."
+      fi
+    done
+  fi
+
   if [ "$force" -eq 0 ]; then
     confirm "Proceed with migration?" || { log_info "Aborted."; return 0; }
   fi

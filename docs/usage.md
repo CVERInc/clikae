@@ -75,6 +75,12 @@ migrate a different tool's aliases. Default is `claude`.
 > from under that live process — it can fail to write, or recreate an empty dir
 > at the old path and leave you with two half-states. Run `migrate` from a fresh
 > shell with no instance of that CLI active. `--dry-run` is always safe.
+>
+> As of v0.4, `migrate` guards against the most common form of this: if
+> `$CLAUDE_CONFIG_DIR` (or whichever env var the adapter uses) currently points
+> at a directory slated to move, it refuses and tells you to retry from a fresh
+> shell. The guard is not bypassed by `--force` — it protects your data, it
+> isn't a confirmation prompt.
 
 > 🔑 **macOS + claude: expect a one-time re-login per migrated profile.** On
 > macOS, Claude Code keeps its login token in the **login Keychain**, not inside

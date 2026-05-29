@@ -95,6 +95,9 @@ location.
 
 To avoid it: **run `migrate` from a fresh shell with no instance of that CLI
 running.** `clikae migrate --dry-run` never moves anything, so preview freely.
+Since v0.4, `migrate` also refuses outright when the live `$CLAUDE_CONFIG_DIR`
+(or the adapter's env var) points at a dir it's about to move — so the most
+common trigger now stops with a clear message instead of corrupting state.
 
 To recover if it already happened: quit the affected CLI, delete the stray empty
 old directory (after confirming it's empty), and re-source your shell rc — the

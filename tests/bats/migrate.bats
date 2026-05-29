@@ -89,6 +89,43 @@ EOF
   [[ "$output" == *"nothing to migrate"* ]]
 }
 
+@test "migrate refuses to move the dir the CLI is currently using (guard)" {
+  seed_legacy
+  # Simulate running from inside a live session whose CLAUDE_CONFIG_DIR is one
+  # of the dirs slated to move — moving it would pull it out from under claude.
+  CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a" run clikae migrate --force
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"slated to move"* ]]
+  # The guard fires before anything is touched.
+  [ -d "$TEST_HOME/.claude-acct-a" ]
+  [ -d "$TEST_HOME/.claude-acct-b" ]
+  [ ! -d "$CLIKAE_HOME/profiles/claude/a" ]
+  grep -q "claude dual accounts" "$RC_FILE"
+}
+
+@test "migrate guard tolerates a trailing slash on the live env var" {
+  seed_legacy
+  CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a/" run clikae migrate --force
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"slated to move"* ]]
+}
+
+@test "migrate guard still allows a dry run from inside a live session" {
+  seed_legacy
+  CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a" run clikae migrate --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dry run"* ]]
+  [ -d "$TEST_HOME/.claude-acct-a" ]
+}
+
+@test "migrate guard ignores an unrelated live env var" {
+  seed_legacy
+  CLAUDE_CONFIG_DIR="$TEST_HOME/.some-other-dir" run clikae migrate --force
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/a" ]
+  [ -d "$CLIKAE_HOME/profiles/claude/b" ]
+}
+
 @test "migrate does not clobber an existing clikae profile" {
   seed_legacy
   clikae init claude a            # pre-existing profile 'a'

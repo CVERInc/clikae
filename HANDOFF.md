@@ -32,7 +32,31 @@ These mirror how this project was built and must be preserved:
 
 ---
 
-## 2. Status (current: v0.2)
+## 2. Status (current: v0.3)
+
+Added in **v0.3** (publish polish — all of §3's v0.3 milestones are done):
+
+- **Homebrew tap is live.** `brew install CVERInc/clikae/clikae` works, served
+  from `github.com/CVERInc/homebrew-clikae`. Both the tap's `Formula/clikae.rb`
+  and the in-repo `homebrew/clikae.rb` track **v0.3.0** (url + sha256 verified
+  against the tagged tarball). On each new tag, bump `url`+`sha256` in **both**.
+- **`clikae migrate --keep-login`** (opt-in). On macOS, claude stores its OAuth
+  token in the login **Keychain**, NOT in `CLAUDE_CONFIG_DIR`. The keychain
+  service is `Claude Code-credentials-<sha256(config-dir path)[:8]>`, so moving
+  the dir orphans the token → a one-time re-login per migrated profile.
+  `--keep-login` copies the token from the old path's keychain slot to the new
+  one, via an optional adapter hook `adapter_migrate_credentials <old> <new>`
+  (claude-only, in `lib/adapters/claude.sh`; other adapters simply don't define
+  it). Off by default; documented; covered by bats (macOS-only test stubs
+  `security`). The token never leaves the Keychain.
+- **Docs split.** README trimmed to what+why + 30-second demo + links; install /
+  full usage / `migrate` guide / how-it-works moved into `docs/installation.md`
+  and `docs/usage.md`; new `docs/troubleshooting.md`.
+- **`docs/claude-on-macos.md`** records two macOS-specific Claude Code behaviours
+  found while dogfooding (Keychain-stored login token keyed by the config-dir
+  path; "Welcome back" box vs compact logo driven by `.claude.json` counters +
+  `CLAUDE_CODE_FORCE_FULL_LOGO`). Confirmed against Claude Code 2.1.156.
+- Tagged **`v0.3.0`** with a matching GitHub Release; merged to `main`.
 
 Added in **v0.2** (all of §3's v0.2 milestones are done):
 
@@ -45,17 +69,12 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   `claude` session whose `CLAUDE_CONFIG_DIR` is one of the dirs being moved (you
   saw the dir out from under the live process; it can recreate an empty dir at
   the old path → split state). Run it from a fresh shell with the CLI idle.
-  Documented in `docs/usage.md` and `docs/troubleshooting.md`. A future guard
-  could refuse/-warn when `$CLAUDE_CONFIG_DIR` equals a dir slated to move.
-  **Second sharp edge (found while dogfooding, now handled):** on macOS, claude
-  stores its OAuth token in the login **Keychain**, NOT in `CLAUDE_CONFIG_DIR`.
-  The keychain service is `Claude Code-credentials-<sha256(config-dir path)[:8]>`,
-  so moving the dir orphans the token → a one-time re-login per migrated profile.
-  Added `clikae migrate --keep-login` (opt-in) which copies the token from the
-  old path's keychain slot to the new one, via an optional adapter hook
-  `adapter_migrate_credentials <old> <new>` (claude-only, in `lib/adapters/claude.sh`;
-  other adapters simply don't define it). Off by default; documented; covered by
-  bats (macOS-only test stubs `security`). The token never leaves the Keychain.
+  Documented in `docs/usage.md` and `docs/troubleshooting.md`. **Guarded as of
+  v0.4:** `migrate` now refuses (not bypassable by `--force`) when the live
+  `$<ENVVAR>` points at a dir slated to move, with bats coverage in
+  `tests/bats/migrate.bats`.
+  (The macOS Keychain sharp edge and its `--keep-login` fix shipped in v0.3 —
+  see the v0.3 section above.)
 - `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
   wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
   `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the
@@ -78,7 +97,7 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
 
 Homebrew tap (v0.3): **DONE.** The `homebrew-clikae` tap repo now exists at
 `github.com/CVERInc/homebrew-clikae` (public, MIT) with `Formula/clikae.rb`
-(tracks v0.2.0, sha256 verified). `brew install CVERInc/clikae/clikae` installs,
+(tracks v0.3.0, sha256 verified). `brew install CVERInc/clikae/clikae` installs,
 `brew test`/`brew audit`/`brew style` all pass. The in-repo `homebrew/clikae.rb`
 is now just the source-of-truth copy; on each new tag, bump `url`+`sha256` in
 **both** the in-repo copy and the tap's `Formula/clikae.rb` (the tap repo's
