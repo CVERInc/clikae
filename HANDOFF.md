@@ -40,6 +40,13 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   `kubectl` (env-file), `aws` (env-var). Total: 7.
 - `clikae migrate [<cli>]` — adopts a hand-rolled config-dir + alias setup
   (the `~/.claude-acct-{a,b}` pattern) into clikae. See `lib/commands/migrate.sh`.
+  **Known sharp edge:** migrate *moves* the config dir, so it must not run while
+  that CLI is using the dir — notably, do NOT migrate `claude` from inside a
+  `claude` session whose `CLAUDE_CONFIG_DIR` is one of the dirs being moved (you
+  saw the dir out from under the live process; it can recreate an empty dir at
+  the old path → split state). Run it from a fresh shell with the CLI idle.
+  Documented in `docs/usage.md` and `docs/troubleshooting.md`. A future guard
+  could refuse/-warn when `$CLAUDE_CONFIG_DIR` equals a dir slated to move.
 - `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
   wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
   `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the

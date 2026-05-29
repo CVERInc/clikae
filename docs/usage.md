@@ -68,6 +68,14 @@ The rc file is backed up to `<rc>.clikae.bak.<timestamp>` first, and an existing
 clikae profile is never overwritten. Pass a CLI name (`clikae migrate gh`) to
 migrate a different tool's aliases. Default is `claude`.
 
+> ⚠️ **Don't migrate a config dir that's currently in use.** `migrate` *moves*
+> the directory, so if a process is running against it right now (e.g. you run
+> `clikae migrate` from inside the very `claude` session whose
+> `CLAUDE_CONFIG_DIR` points at the dir being moved), you pull the directory out
+> from under that live process — it can fail to write, or recreate an empty dir
+> at the old path and leave you with two half-states. Run `migrate` from a fresh
+> shell with no instance of that CLI active. `--dry-run` is always safe.
+
 ## How it works
 
 For each profile, `clikae`:

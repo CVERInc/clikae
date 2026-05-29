@@ -83,6 +83,23 @@ each only if present, each independently. If something survived:
 - Used `--keep-data`? That intentionally keeps the profile directory under
   `~/.clikae/profiles/`.
 
+## `clikae migrate` broke a running session / a moved dir reappeared empty
+
+`migrate` *moves* the config directory into `~/.clikae/profiles/`. If the CLI
+was actively using that directory at the time — the classic case is running
+`clikae migrate` from inside the very `claude` session whose
+`CLAUDE_CONFIG_DIR` is the dir being moved — the live process loses its
+directory and may recreate an empty one at the old path. You end up with the
+real data under `~/.clikae/profiles/<cli>/<p>/` and a stray empty dir at the old
+location.
+
+To avoid it: **run `migrate` from a fresh shell with no instance of that CLI
+running.** `clikae migrate --dry-run` never moves anything, so preview freely.
+
+To recover if it already happened: quit the affected CLI, delete the stray empty
+old directory (after confirming it's empty), and re-source your shell rc — the
+rewritten alias already points at the migrated profile.
+
 ## I want to undo a change to my shell rc
 
 Every rc edit is backed up first to `<rc>.clikae.bak.<timestamp>` next to the rc
