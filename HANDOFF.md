@@ -32,18 +32,28 @@ These mirror how this project was built and must be preserved:
 
 ---
 
-## 2. Status — last tag `v0.3.0`; v0.4 work on `main` (unreleased)
+## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30)
 
-**HEAD state (read this first).** The latest tagged release is `v0.3.0`. Since
-then, `main` has accumulated **unreleased v0.4 work** (listed just below; full
-detail in the CHANGELOG `[Unreleased]` section and §3's v0.4 entry). The tree is
-clean, nothing is mid-flight, and CI is green on every push — **6 jobs**:
-shellcheck, smoke (ubuntu+macos), bats (ubuntu+macos), and pester (windows).
-When you decide to cut v0.4: bump the version, tag it, write the release, and
-bump `url`+`sha256` in **both** `homebrew/clikae.rb` and the tap's
-`Formula/clikae.rb` (see §3's "v0.3 publish polish" notes).
+**HEAD state (read this first).** The latest tagged release is **`v0.4.0`**
+(GitHub Release live; both `homebrew/clikae.rb` and the tap's
+`Formula/clikae.rb` track v0.4.0, sha256 `e2d6fdcb…0fa0`, verified via
+`brew fetch`/`style`/`audit`). The tree is clean, nothing is mid-flight, and CI
+is green on every push — **6 jobs**: shellcheck, smoke (ubuntu+macos), bats
+(ubuntu+macos), and pester (windows). CHANGELOG has a fresh empty `[Unreleased]`
+section ready for the next cycle.
 
-**On `main` since `v0.3.0` (unreleased):**
+**Release recipe (for next time you cut a tag) — what `v0.4.0` did:** bump
+`CLIKAE_VERSION` in `bin/clikae`; move CHANGELOG `[Unreleased]` → `[X.Y.Z] —
+<date>` and add a new empty `[Unreleased]`; commit "Release vX.Y.Z"; `git tag -a`
++ push commit & tag; `gh release create` with notes; **then** `curl -sL` the
+GitHub tarball, `shasum -a 256` it, and bump `url`+`sha256` in **both**
+`homebrew/clikae.rb` (in-repo) **and** the tap repo's `Formula/clikae.rb`
+(separate repo at `~/Desktop/GitHub/homebrew-clikae` → `CVERInc/homebrew-clikae`;
+the sha256 must come from GitHub's generated tarball, not `git archive`). Verify
+with `brew fetch/style/audit CVERInc/clikae/clikae`. NB: keep the local tap clone
+`git pull`ed — it was found stale (a release behind) when cutting v0.4.
+
+**Shipped in `v0.4.0`:**
 
 - **Four more built-in adapters (now 11 total)** — `az` (env-dir
   `AZURE_CONFIG_DIR`), `npm` (env-file `NPM_CONFIG_USERCONFIG`), `terraform`
@@ -53,7 +63,7 @@ bump `url`+`sha256` in **both** `homebrew/clikae.rb` and the tap's
   `--global-config` flag (no clean env var), so it needs `flag`-strategy support
   in the alias/app generators first — left as an open item, not added.
 - **v0.4 Windows / PowerShell module** — `powershell/Clikae.psm1` plus a Pester
-  suite (`powershell/Clikae.Tests.ps1`) and a `windows-latest` CI job. 20 Pester
+  suite (`powershell/Clikae.Tests.ps1`) and a `windows-latest` CI job. 21 Pester
   tests pass under **both** PowerShell 7 (`pwsh`) and Windows PowerShell 5.1
   (`powershell`). Full detail in §3's v0.4 entry. There is no Windows machine in
   the loop — CI on windows-latest IS the verification path.
@@ -164,6 +174,15 @@ Smoke-tested end-to-end in a sandbox HOME: `init --alias` → `list` → `remove
 
 ## 3. Next milestones (priority order)
 
+> **Where we are now (2026-05-30):** v0.1–v0.4 all SHIPPED. The next open work,
+> roughly in priority order: (1) the **v0.4 follow-ups** — a PowerShell `migrate`
+> equivalent, PSGallery publish + a `.psd1` manifest, `.lnk` UX polish; (2)
+> **`vercel` adapter**, which first needs `flag`-strategy support in the
+> alias/app generators (it has no clean config env var, only `--global-config`);
+> (3) **`clikae status`** + the **v1.0 SwiftUI menu-bar GUI**. Still needing a
+> maintainer decision (ask, don't decide): fish-shell support, and iTerm2/Warp
+> detection for `clikae app` (§9).
+
 ### v0.2 — quality + more adapters  ✅ DONE (shipped, see §2)
 
 All five items below were completed in v0.2 and are kept here as a record of what
@@ -209,7 +228,7 @@ Goals: smooth install path + good first impression. About a day.
 > deliberately not listed as roadmap tasks; the maintainer handles them when the
 > code and docs are ready.
 
-### v0.4 — Windows  🚧 ON MAIN (unreleased)
+### v0.4 — Windows  ✅ SHIPPED (`v0.4.0`, 2026-05-30)
 
 Implemented as `powershell/Clikae.psm1` (note: named `Clikae`, not the old
 `ClaudeProfiles` sketch, since the tool is generic). Same conceptual API,
