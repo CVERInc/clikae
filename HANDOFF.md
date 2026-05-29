@@ -45,6 +45,13 @@ bump `url`+`sha256` in **both** `homebrew/clikae.rb` and the tap's
 
 **On `main` since `v0.3.0` (unreleased):**
 
+- **Four more built-in adapters (now 11 total)** — `az` (env-dir
+  `AZURE_CONFIG_DIR`), `npm` (env-file `NPM_CONFIG_USERCONFIG`), `terraform`
+  (env-file `TF_CLI_CONFIG_FILE`) and `pulumi` (env-dir `PULUMI_HOME`). The
+  env-file pair seeds an empty config file on `init` (like kubectl). PS adapter
+  table + Pester count kept in sync. NB: `vercel` was considered but uses a
+  `--global-config` flag (no clean env var), so it needs `flag`-strategy support
+  in the alias/app generators first — left as an open item, not added.
 - **v0.4 Windows / PowerShell module** — `powershell/Clikae.psm1` plus a Pester
   suite (`powershell/Clikae.Tests.ps1`) and a `windows-latest` CI job. 20 Pester
   tests pass under **both** PowerShell 7 (`pwsh`) and Windows PowerShell 5.1
@@ -99,11 +106,14 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   `tests/bats/migrate.bats`.
   (The macOS Keychain sharp edge and its `--keep-login` fix shipped in v0.3 —
   see the v0.3 section above.)
-- `bats-core` suite under `tests/bats/` (now 56 tests; isolated
+- `bats-core` suite under `tests/bats/` (now 71 tests; isolated
   `$HOME`/`$CLIKAE_HOME`),
   wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
   `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the
   ubuntu runner's global npm prefix, exit 243). CI is green on both OSes.
+  **Run bats with `-r`** (`bats -r tests/bats`) — without it bats does NOT
+  recurse into `tests/bats/adapters/`, silently skipping the adapter tests. The
+  CI step was fixed to use `-r` (it had been skipping that subdir).
 - All sourced libs carry a `# shellcheck shell=bash` directive; the tree is
   shellcheck-clean at `warning`.
 - Two helpers added to kill duplication: `adapter_env_prefix` (adapter_loader.sh,
@@ -210,8 +220,10 @@ PowerShell mechanics:
 - ✅ No `.app` equivalent → `New-ClikaeShortcut` generates `.lnk` shortcuts via
   `WScript.Shell` (Windows-only; guarded by `Test-ClikaeWindows`).
 - ✅ Verbs: `New-`/`Get-`/`Remove-`/`Invoke-ClikaeProfile`, `Add-ClikaeFunction`,
-  `Get-ClikaeAdapter`, `Get-ClikaeProfileEnv`. The 7-adapter table mirrors
+  `Get-ClikaeAdapter`, `Get-ClikaeProfileEnv`. The 11-adapter table mirrors
   `lib/adapters/*.sh` — **keep them in sync when adding a bash adapter.**
+  (env-file entries carry a `File` key for the seeded filename — `config` for
+  kubectl, `npmrc` for npm, `terraformrc` for terraform.)
 - ✅ Pester suite `powershell/Clikae.Tests.ps1`, run in CI on `windows-latest`
   under both PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 (`powershell`).
   Watch for 5.1 gotchas: no `$IsWindows` automatic (StrictMode throws on it —
@@ -264,7 +276,7 @@ See `lib/adapters/_template.sh` for boilerplate and `lib/adapters/claude.sh` for
 > adapter table (the `$script:ClikaeAdapters` hashtable in
 > `powershell/Clikae.psm1`). When you add or change a bash adapter, add/change
 > the matching entry there too, or Windows users silently lose that CLI. The PS
-> Pester suite asserts the table has the same 7 CLIs as the bash side.
+> Pester suite asserts the table has the same 11 CLIs as the bash side.
 
 ---
 

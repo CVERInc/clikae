@@ -29,13 +29,17 @@ Set-StrictMode -Version Latest
 #   env-file  the env var is a file *inside* the profile directory (\config)
 #   env-var   the env var is the profile *name* (a selector, not a path)
 $script:ClikaeAdapters = [ordered]@{
-    claude  = @{ Name = 'Claude Code';      Binary = 'claude';  EnvVar = 'CLAUDE_CONFIG_DIR'; Strategy = 'env-dir';  Description = 'Anthropic Claude Code CLI (credentials + settings in CLAUDE_CONFIG_DIR)' }
-    gh      = @{ Name = 'GitHub CLI';       Binary = 'gh';      EnvVar = 'GH_CONFIG_DIR';     Strategy = 'env-dir';  Description = 'GitHub CLI (auth + config in GH_CONFIG_DIR)' }
-    gcloud  = @{ Name = 'Google Cloud CLI'; Binary = 'gcloud';  EnvVar = 'CLOUDSDK_CONFIG';   Strategy = 'env-dir';  Description = 'Google Cloud CLI (auth + active config in CLOUDSDK_CONFIG)' }
-    docker  = @{ Name = 'Docker CLI';       Binary = 'docker';  EnvVar = 'DOCKER_CONFIG';     Strategy = 'env-dir';  Description = 'Docker CLI (registry auth + contexts in DOCKER_CONFIG)' }
-    helm    = @{ Name = 'Helm';             Binary = 'helm';    EnvVar = 'HELM_CONFIG_HOME';  Strategy = 'env-dir';  Description = 'Helm (repo list + registry auth in HELM_CONFIG_HOME)' }
-    kubectl = @{ Name = 'kubectl';          Binary = 'kubectl'; EnvVar = 'KUBECONFIG';        Strategy = 'env-file'; Description = 'Kubernetes CLI (cluster/context/creds in a KUBECONFIG file)' }
-    aws     = @{ Name = 'AWS CLI';          Binary = 'aws';     EnvVar = 'AWS_PROFILE';       Strategy = 'env-var';  Description = 'AWS CLI (selects a named profile from your shared AWS config via AWS_PROFILE)' }
+    claude    = @{ Name = 'Claude Code';      Binary = 'claude';    EnvVar = 'CLAUDE_CONFIG_DIR';     Strategy = 'env-dir';  Description = 'Anthropic Claude Code CLI (credentials + settings in CLAUDE_CONFIG_DIR)' }
+    gh        = @{ Name = 'GitHub CLI';       Binary = 'gh';        EnvVar = 'GH_CONFIG_DIR';         Strategy = 'env-dir';  Description = 'GitHub CLI (auth + config in GH_CONFIG_DIR)' }
+    gcloud    = @{ Name = 'Google Cloud CLI'; Binary = 'gcloud';    EnvVar = 'CLOUDSDK_CONFIG';       Strategy = 'env-dir';  Description = 'Google Cloud CLI (auth + active config in CLOUDSDK_CONFIG)' }
+    docker    = @{ Name = 'Docker CLI';       Binary = 'docker';    EnvVar = 'DOCKER_CONFIG';         Strategy = 'env-dir';  Description = 'Docker CLI (registry auth + contexts in DOCKER_CONFIG)' }
+    helm      = @{ Name = 'Helm';             Binary = 'helm';      EnvVar = 'HELM_CONFIG_HOME';      Strategy = 'env-dir';  Description = 'Helm (repo list + registry auth in HELM_CONFIG_HOME)' }
+    kubectl   = @{ Name = 'kubectl';          Binary = 'kubectl';   EnvVar = 'KUBECONFIG';            Strategy = 'env-file'; File = 'config';      Description = 'Kubernetes CLI (cluster/context/creds in a KUBECONFIG file)' }
+    aws       = @{ Name = 'AWS CLI';          Binary = 'aws';       EnvVar = 'AWS_PROFILE';           Strategy = 'env-var';  Description = 'AWS CLI (selects a named profile from your shared AWS config via AWS_PROFILE)' }
+    az        = @{ Name = 'Azure CLI';        Binary = 'az';        EnvVar = 'AZURE_CONFIG_DIR';      Strategy = 'env-dir';  Description = 'Azure CLI (subscriptions + token cache in AZURE_CONFIG_DIR)' }
+    npm       = @{ Name = 'npm';              Binary = 'npm';       EnvVar = 'NPM_CONFIG_USERCONFIG'; Strategy = 'env-file'; File = 'npmrc';       Description = 'npm (registry auth tokens in a per-profile .npmrc file)' }
+    terraform = @{ Name = 'Terraform';        Binary = 'terraform'; EnvVar = 'TF_CLI_CONFIG_FILE';    Strategy = 'env-file'; File = 'terraformrc'; Description = 'Terraform (Terraform Cloud / registry credentials in a CLI config file)' }
+    pulumi    = @{ Name = 'Pulumi';           Binary = 'pulumi';    EnvVar = 'PULUMI_HOME';           Strategy = 'env-dir';  Description = 'Pulumi (backend login + credentials in PULUMI_HOME)' }
 }
 
 # Sentinel markers — identical in spirit to the bash tool so a block written by
@@ -128,7 +132,7 @@ function Get-ClikaeProfileEnv {
     $dir = Get-ClikaeProfileDir -Cli $Cli -Profile $Profile
     $value = switch ($a.Strategy) {
         'env-dir'  { $dir }
-        'env-file' { (Join-Path $dir 'config') }
+        'env-file' { (Join-Path $dir ($(if ($a.File) { $a.File } else { 'config' }))) }
         'env-var'  { $Profile }
         default    { throw "Unsupported strategy '$($a.Strategy)' for '$Cli'." }
     }

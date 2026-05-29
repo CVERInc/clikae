@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Four more built-in adapters (now 11 total).** `az` (Azure CLI, env-dir
+  `AZURE_CONFIG_DIR`), `npm` (env-file `NPM_CONFIG_USERCONFIG` — a per-profile
+  `.npmrc` holding registry auth tokens), `terraform` (env-file
+  `TF_CLI_CONFIG_FILE` — Terraform Cloud / registry credentials) and `pulumi`
+  (env-dir `PULUMI_HOME`). The two env-file adapters seed an empty config file
+  on `init`. The Windows PowerShell adapter table is kept in sync.
 - **Windows / PowerShell support (v0.4).** New `powershell/Clikae.psm1` module
   ports the tool to native Windows PowerShell — no bash required. It mirrors the
-  7 built-in adapters and the profile-store layout, and since PowerShell aliases
+  built-in adapters and the profile-store layout, and since PowerShell aliases
   can't carry env vars it writes a sentinel-wrapped *function* (e.g.
   `claude-work`) into your `$PROFILE` instead of an alias. Verbs: `New-`/`Get-`/
   `Remove-`/`Invoke-ClikaeProfile`, `Add-ClikaeFunction`, `Get-ClikaeAdapter`,
@@ -32,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI: bumped `actions/checkout` to v5 (the v4 pin runs on the now-deprecated
   Node 20 runtime) and added a `windows-latest` Pester job.
+
+### Fixed
+
+- CI: the bats step now runs with `-r`, so the `tests/bats/adapters/`
+  subdirectory is actually executed. It was previously skipped — `bats` does not
+  recurse into subdirectories without the flag — meaning the adapter-listing
+  tests never ran in CI.
 
 ## [0.3.0] — 2026-05-29
 

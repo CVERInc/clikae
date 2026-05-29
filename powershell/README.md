@@ -6,8 +6,8 @@ same model with PowerShell mechanics:
 
 - isolated profile dirs at `%USERPROFILE%\.clikae\profiles\<cli>\<profile>\`
   (override the root with `$env:CLIKAE_HOME`),
-- the same 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws),
-  kept in sync with `lib/adapters/*.sh`,
+- the same 11 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws,
+  az, npm, terraform, pulumi), kept in sync with `lib/adapters/*.sh`,
 - instead of a shell alias (PowerShell aliases can't carry env vars) it writes a
   **sentinel-wrapped function** into your `$PROFILE`, e.g. `claude-work`,
 - optional `.lnk` shortcuts you can pin to the Start menu / Taskbar.

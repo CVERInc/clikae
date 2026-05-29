@@ -122,6 +122,10 @@ No daemons, no global state, no network calls. You can read every line.
 | `helm` | `env-dir` | `HELM_CONFIG_HOME` |
 | `kubectl` | `env-file` | `KUBECONFIG` |
 | `aws` (AWS CLI) | `env-var` | `AWS_PROFILE` |
+| `az` (Azure CLI) | `env-dir` | `AZURE_CONFIG_DIR` |
+| `npm` | `env-file` | `NPM_CONFIG_USERCONFIG` |
+| `terraform` | `env-file` | `TF_CLI_CONFIG_FILE` |
+| `pulumi` | `env-dir` | `PULUMI_HOME` |
 
 Run `clikae adapters` to see them with descriptions. Adding your own is ~10
 lines of bash — see [adding-an-adapter.md](adding-an-adapter.md).

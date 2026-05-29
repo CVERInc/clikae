@@ -22,7 +22,7 @@ You probably have more than one account on at least one CLI tool. Two GitHub acc
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
 4. Cleans up after itself when you're done with a profile.
 
-It works for any CLI that respects an environment variable for its config location, ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, and AWS**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
+It works for any CLI that respects an environment variable for its config location, ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, and Pulumi**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
 ## Install
 
@@ -53,7 +53,7 @@ claude-work                       # go
 - **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
 - **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** *(current)* — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
-- **v0.4** *(on main, unreleased)* — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Plus a `migrate` guard against moving an in-use config dir.
+- **v0.4** *(on main, unreleased)* — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total). Plus a `migrate` guard against moving an in-use config dir.
 - **v1.0** — SwiftUI menu bar GUI for macOS (click-to-switch active profile).
 
 ## Contributing

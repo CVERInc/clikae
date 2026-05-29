@@ -26,10 +26,10 @@ AfterAll {
 }
 
 Describe 'adapter registry' {
-    It 'exposes the same 7 adapters as the bash tool' {
+    It 'exposes the same 11 adapters as the bash tool' {
         $adapters = Get-ClikaeAdapter
-        $adapters.Count | Should -Be 7
-        ($adapters.Cli | Sort-Object) | Should -Be (@('aws','claude','docker','gcloud','gh','helm','kubectl'))
+        $adapters.Count | Should -Be 11
+        ($adapters.Cli | Sort-Object) | Should -Be (@('aws','az','claude','docker','gcloud','gh','helm','kubectl','npm','pulumi','terraform'))
     }
 
     It 'maps each CLI to the correct env var and strategy' {
@@ -38,6 +38,10 @@ Describe 'adapter registry' {
         (Get-ClikaeAdapter -Cli kubectl).Strategy | Should -Be 'env-file'
         (Get-ClikaeAdapter -Cli aws).Strategy     | Should -Be 'env-var'
         (Get-ClikaeAdapter -Cli aws).EnvVar       | Should -Be 'AWS_PROFILE'
+        (Get-ClikaeAdapter -Cli az).EnvVar        | Should -Be 'AZURE_CONFIG_DIR'
+        (Get-ClikaeAdapter -Cli npm).Strategy     | Should -Be 'env-file'
+        (Get-ClikaeAdapter -Cli terraform).EnvVar | Should -Be 'TF_CLI_CONFIG_FILE'
+        (Get-ClikaeAdapter -Cli pulumi).EnvVar    | Should -Be 'PULUMI_HOME'
     }
 
     It 'throws on an unknown CLI' {
@@ -53,6 +57,10 @@ Describe 'Get-ClikaeProfileEnv (export_env equivalent)' {
     It 'env-file: value is <dir>\config' {
         $dir = Get-ClikaeProfileDir -Cli kubectl -Profile prod
         (Get-ClikaeProfileEnv -Cli kubectl -Profile prod)['KUBECONFIG'] | Should -Be (Join-Path $dir 'config')
+    }
+    It 'env-file: per-adapter filename overrides the default (npm -> npmrc)' {
+        $dir = Get-ClikaeProfileDir -Cli npm -Profile work
+        (Get-ClikaeProfileEnv -Cli npm -Profile work)['NPM_CONFIG_USERCONFIG'] | Should -Be (Join-Path $dir 'npmrc')
     }
     It 'env-var: value is the profile name, not a path' {
         (Get-ClikaeProfileEnv -Cli aws -Profile staging)['AWS_PROFILE'] | Should -Be 'staging'
