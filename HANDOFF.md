@@ -127,11 +127,13 @@ Goals: smooth install path + good first impression. About a day.
 
 1. **Create a Homebrew tap repo** (separate repo: `homebrew-clikae`). Move `homebrew/clikae.rb` there as `Formula/clikae.rb`. Fill in `url` (tagged release tarball) and `sha256`. Document `brew install <handle>/clikae/clikae` in README.
 
-2. **Demo GIF / asciinema** at the top of README. Show: `clikae init claude work --alias`, `claude-work` opening, a second `clikae init claude personal`, `clikae list`, `clikae app claude work` + double-click result.
+2. **Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why".
 
-3. **Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why + 30-second demo".
-
-4. **Promotion** (optional, the maintainer's call): a Show HN post once GIF and docs are tight. Don't post earlier — first impressions matter.
+> Out of scope for the assistant: the demo GIF / asciinema recording and any
+> promotion (e.g. a Show HN post) are manual, maintainer-only steps — they need
+> a human at a real terminal and a judgement call on timing. They are
+> deliberately not listed as roadmap tasks; the maintainer handles them when the
+> code and docs are ready.
 
 ### v0.4 — Windows
 
