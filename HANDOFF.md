@@ -127,7 +127,7 @@ Goals: smooth install path + good first impression. About a day.
 
 1. **Create a Homebrew tap repo** (separate repo: `homebrew-clikae`). Move `homebrew/clikae.rb` there as `Formula/clikae.rb`. Fill in `url` (tagged release tarball) and `sha256`. Document `brew install <handle>/clikae/clikae` in README.
 
-2. **Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why".
+2. ~~**Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why".~~ ✅ DONE — README trimmed to what+why / 30-second demo / doc links; install + full usage + troubleshooting moved into `docs/`.
 
 > Out of scope for the assistant: the demo GIF / asciinema recording and any
 > promotion (e.g. a Show HN post) are manual, maintainer-only steps — they need
