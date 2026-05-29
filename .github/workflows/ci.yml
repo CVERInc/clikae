@@ -11,7 +11,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run shellcheck
         uses: ludeeus/action-shellcheck@master
         with:
@@ -27,7 +27,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install
         run: ./install.sh
         env:
@@ -48,7 +48,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install bats
         run: |
           git clone --depth 1 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
@@ -56,3 +56,29 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: bats --print-output-on-failure tests/bats
+
+  pester:
+    name: pester (windows-latest, ${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pwsh = PowerShell 7+, powershell = Windows PowerShell 5.1
+        shell: [pwsh, powershell]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Pester 5
+        shell: ${{ matrix.shell }}
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+      - name: Run Pester
+        shell: ${{ matrix.shell }}
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = 'powershell/Clikae.Tests.ps1'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg

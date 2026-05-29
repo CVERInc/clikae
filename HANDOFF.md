@@ -174,13 +174,28 @@ Goals: smooth install path + good first impression. About a day.
 > deliberately not listed as roadmap tasks; the maintainer handles them when the
 > code and docs are ready.
 
-### v0.4 — Windows
+### v0.4 — Windows  🚧 ON MAIN (unreleased)
 
-Add `powershell/ClaudeProfiles.psm1`. Same conceptual API, different mechanics:
+Implemented as `powershell/Clikae.psm1` (note: named `Clikae`, not the old
+`ClaudeProfiles` sketch, since the tool is generic). Same conceptual API,
+PowerShell mechanics:
 
-- PowerShell aliases can't carry env vars → write **functions** into `$PROFILE` instead.
-- No `.app` equivalent → optionally generate `.lnk` shortcuts via `New-Object -ComObject WScript.Shell` for the user to pin to Start menu or Taskbar.
-- Test under both PowerShell 7 and Windows PowerShell 5.1 if you can.
+- ✅ PowerShell aliases can't carry env vars → it writes **sentinel-wrapped
+  functions** into `$PROFILE` (e.g. `claude-work`), idempotently, with a backup.
+- ✅ No `.app` equivalent → `New-ClikaeShortcut` generates `.lnk` shortcuts via
+  `WScript.Shell` (Windows-only; guarded by `Test-ClikaeWindows`).
+- ✅ Verbs: `New-`/`Get-`/`Remove-`/`Invoke-ClikaeProfile`, `Add-ClikaeFunction`,
+  `Get-ClikaeAdapter`, `Get-ClikaeProfileEnv`. The 7-adapter table mirrors
+  `lib/adapters/*.sh` — **keep them in sync when adding a bash adapter.**
+- ✅ Pester suite `powershell/Clikae.Tests.ps1`, run in CI on `windows-latest`
+  under both PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 (`powershell`).
+  Watch for 5.1 gotchas: no `$IsWindows` automatic (StrictMode throws on it —
+  use `Test-ClikaeWindows`), and Pester 5 must be installed (5.1 ships v3.4).
+
+Still open for a future PR: a `migrate` equivalent, PowerShell Gallery
+publishing (no manifest/`.psd1` yet), and `.lnk` UX polish. There is no Windows
+machine in the maintainer's loop, so this was authored and verified entirely via
+the windows-latest CI runner — extend that job rather than hand-testing.
 
 ### v1.0 — macOS menu bar GUI
 

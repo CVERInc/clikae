@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Windows / PowerShell support (v0.4).** New `powershell/Clikae.psm1` module
+  ports the tool to native Windows PowerShell — no bash required. It mirrors the
+  7 built-in adapters and the profile-store layout, and since PowerShell aliases
+  can't carry env vars it writes a sentinel-wrapped *function* (e.g.
+  `claude-work`) into your `$PROFILE` instead of an alias. Verbs: `New-`/`Get-`/
+  `Remove-`/`Invoke-ClikaeProfile`, `Add-ClikaeFunction`, `Get-ClikaeAdapter`,
+  and a Windows-only `New-ClikaeShortcut` (`.lnk`). Backs up `$PROFILE` before
+  editing and supports `-WhatIf`/`-Confirm`. Covered by a Pester suite
+  (`powershell/Clikae.Tests.ps1`) run in CI on `windows-latest` under both
+  PowerShell 7 and Windows PowerShell 5.1.
 - **`clikae migrate` in-use guard.** `migrate` now refuses to move a config
   directory that the CLI is currently using in your shell — i.e. when the live
   `$CLAUDE_CONFIG_DIR` (or whichever env var the adapter uses) points at a dir
@@ -17,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pull the directory out from under the live process and leave split state. The
   guard is not bypassed by `--force` (it protects data, it isn't a confirmation)
   and never blocks `--dry-run`.
+
+### Changed
+
+- CI: bumped `actions/checkout` to v5 (the v4 pin runs on the now-deprecated
+  Node 20 runtime) and added a `windows-latest` Pester job.
 
 ## [0.3.0] — 2026-05-29
 
