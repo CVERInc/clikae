@@ -45,6 +45,7 @@ claude-work                       # go
 - **[Installation](docs/installation.md)** — from source, Homebrew (planned), `curl | bash`, PATH setup.
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
 - **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
+- **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
 
 ## Roadmap

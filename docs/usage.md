@@ -44,7 +44,7 @@ clikae remove claude work
 | `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
 | `list [-p\|--paths]` | List all profiles across all CLIs. |
 | `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
-| `migrate [<cli>] [--dry-run] [--force]` | Adopt a hand-rolled config-dir + alias setup. |
+| `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
 | `info` | Show install paths and profile counts. |
 | `adapters` | List supported CLIs with descriptions. |
 
@@ -75,6 +75,16 @@ migrate a different tool's aliases. Default is `claude`.
 > from under that live process — it can fail to write, or recreate an empty dir
 > at the old path and leave you with two half-states. Run `migrate` from a fresh
 > shell with no instance of that CLI active. `--dry-run` is always safe.
+
+> 🔑 **macOS + claude: expect a one-time re-login per migrated profile.** On
+> macOS, Claude Code keeps its login token in the **login Keychain**, not inside
+> `CLAUDE_CONFIG_DIR` — and the keychain entry is keyed by the config-dir path.
+> Because `migrate` moves the dir to a new path, claude no longer finds the token
+> and asks you to log in once for each migrated profile. Your data is intact;
+> only the saved login doesn't follow the move. To avoid the re-login, pass
+> `--keep-login`, which copies the saved token from the old path's keychain entry
+> to the new one (macOS only; it never reads or transmits the token anywhere — it
+> stays in your Keychain). macOS may prompt you to allow keychain access.
 
 ## How it works
 
