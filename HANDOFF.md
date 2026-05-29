@@ -32,9 +32,33 @@ These mirror how this project was built and must be preserved:
 
 ---
 
-## 2. Status (current: v0.3)
+## 2. Status — last tag `v0.3.0`; v0.4 work on `main` (unreleased)
 
-Added in **v0.3** (publish polish — all of §3's v0.3 milestones are done):
+**HEAD state (read this first).** The latest tagged release is `v0.3.0`. Since
+then, `main` has accumulated **unreleased v0.4 work** (listed just below; full
+detail in the CHANGELOG `[Unreleased]` section and §3's v0.4 entry). The tree is
+clean, nothing is mid-flight, and CI is green on every push — **6 jobs**:
+shellcheck, smoke (ubuntu+macos), bats (ubuntu+macos), and pester (windows).
+When you decide to cut v0.4: bump the version, tag it, write the release, and
+bump `url`+`sha256` in **both** `homebrew/clikae.rb` and the tap's
+`Formula/clikae.rb` (see §3's "v0.3 publish polish" notes).
+
+**On `main` since `v0.3.0` (unreleased):**
+
+- **v0.4 Windows / PowerShell module** — `powershell/Clikae.psm1` plus a Pester
+  suite (`powershell/Clikae.Tests.ps1`) and a `windows-latest` CI job. 20 Pester
+  tests pass under **both** PowerShell 7 (`pwsh`) and Windows PowerShell 5.1
+  (`powershell`). Full detail in §3's v0.4 entry. There is no Windows machine in
+  the loop — CI on windows-latest IS the verification path.
+- **`clikae migrate` in-use guard** — refuses (NOT bypassable by `--force`,
+  never blocks `--dry-run`) when the live `$<ENVVAR>` points at a dir slated to
+  move. See the migrate note in the v0.2 list below; bats coverage added.
+- **CI maintenance** — `actions/checkout` v4→v5 (the v4 pin runs on the
+  deprecated Node 20 runtime) and the new pester job. NB: the `shell:` key cannot
+  take a `${{ matrix.* }}` expression — that's why the windows job uses two
+  explicit-shell steps, not a matrix. Validate workflow edits with `actionlint`.
+
+Added in **v0.3** (publish polish — all of §3's v0.3 milestones are done; tagged):
 
 - **Homebrew tap is live.** `brew install CVERInc/clikae/clikae` works, served
   from `github.com/CVERInc/homebrew-clikae`. Both the tap's `Formula/clikae.rb`
@@ -75,7 +99,8 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   `tests/bats/migrate.bats`.
   (The macOS Keychain sharp edge and its `--keep-login` fix shipped in v0.3 —
   see the v0.3 section above.)
-- `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
+- `bats-core` suite under `tests/bats/` (now 56 tests; isolated
+  `$HOME`/`$CLIKAE_HOME`),
   wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
   `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the
   ubuntu runner's global npm prefix, exit 243). CI is green on both OSes.
@@ -235,6 +260,12 @@ Every adapter file at `lib/adapters/<cli>.sh` must define these functions (all r
 
 See `lib/adapters/_template.sh` for boilerplate and `lib/adapters/claude.sh` for a real implementation. The full strategy guide is in `docs/adding-an-adapter.md`.
 
+> **Cross-language mirror:** the Windows PowerShell module keeps a parallel
+> adapter table (the `$script:ClikaeAdapters` hashtable in
+> `powershell/Clikae.psm1`). When you add or change a bash adapter, add/change
+> the matching entry there too, or Windows users silently lose that CLI. The PS
+> Pester suite asserts the table has the same 7 CLIs as the bash side.
+
 ---
 
 ## 6. How to verify your changes
@@ -269,6 +300,17 @@ brew install bats-core
 bats tests/bats
 ```
 
+For the Windows PowerShell module (v0.4+), if you have PowerShell:
+
+```powershell
+Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser
+Invoke-Pester -Path powershell/Clikae.Tests.ps1
+```
+
+No local PowerShell? The `pester` CI job runs this on `windows-latest` under
+both PS 7 and Windows PowerShell 5.1 on every push — that's the verification
+path. Lint workflow edits locally with `actionlint .github/workflows/ci.yml`.
+
 ---
 
 ## 7. Things you might be tempted to do — DON'T
@@ -286,22 +328,28 @@ bats tests/bats
 | Thing | Where |
 |---|---|
 | Repo root | `~/Desktop/GitHub/clikae/` |
-| Profile store (per user) | `~/.clikae/profiles/<cli>/<profile>/` |
+| Profile store (per user) | `~/.clikae/profiles/<cli>/<profile>/` (override root: `$CLIKAE_HOME`) |
 | Shell rc (auto-detected) | `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` / `~/.profile` |
 | .app launchers | `~/Applications/<cli> (<profile>).app` |
 | Backups | `<rc-file>.clikae.bak.<timestamp>` next to the rc file |
 | Logs | none (this is a sync CLI, errors go to stderr) |
+| Windows module (v0.4) | `powershell/Clikae.psm1` + `Clikae.Tests.ps1`; writes funcs into `$PROFILE`, backups `$PROFILE.clikae.bak.<ts>` |
+| CI | `.github/workflows/ci.yml` — shellcheck, smoke×2, bats×2, pester (windows)×1 |
 
 ---
 
-## 9. Open questions for the maintainer (decide before v0.2 starts)
+## 9. Open questions for the maintainer
+
+Still genuinely open (an assistant should **ask first**, not decide):
 
 1. **fish shell support** — list it as "PRs welcome" or commit to it? Fish syntax for aliases is different (`alias name 'cmd'`, no `=`).
-2. **AWS adapter strategy** — `AWS_PROFILE` env-var or `AWS_CONFIG_FILE` env-file? They behave differently for users who do/don't have `~/.aws/credentials`. Probably need to pick one default and document the other.
-3. **`clikae app` for non-Terminal users** — some macOS folks use iTerm2 or Warp. v0.2 idea: detect default terminal and pick the right `tell application` target, or accept a `--terminal-app` flag.
-4. **Naming for the GitHub org/user** — if this gets adopted, will it live under your personal handle or get a project org? Affects all the `<your-handle>` placeholders.
+2. **`clikae app` for non-Terminal users** — some macOS folks use iTerm2 or Warp. Idea: detect default terminal and pick the right `tell application` target, or accept a `--terminal-app` flag.
 
-If you (the assistant) are unsure about any of these, **ask the maintainer first** before deciding.
+Already resolved (kept for the record):
+
+- ~~**AWS adapter strategy**~~ → `env-var` / `AWS_PROFILE` (the `env-file` /
+  `AWS_CONFIG_FILE` alternative is documented in `lib/adapters/aws.sh`).
+- ~~**GitHub org/user naming**~~ → **CVERInc**; all `<your-handle>` placeholders resolved.
 
 ---
 
