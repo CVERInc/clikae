@@ -52,14 +52,15 @@ _migrate_profile_from_alias() {
 }
 
 cmd_migrate() {
-  local cli="claude" dry_run=0 force=0
+  local cli="claude" dry_run=0 force=0 keep_login=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      -n|--dry-run) dry_run=1; shift ;;
-      -f|--force)   force=1; shift ;;
+      -n|--dry-run)   dry_run=1; shift ;;
+      -f|--force)     force=1; shift ;;
+      -k|--keep-login) keep_login=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae migrate [<cli>] [--dry-run] [--force]
+Usage: clikae migrate [<cli>] [--dry-run] [--force] [--keep-login]
 
 Adopt a hand-rolled "config dir + shell alias" setup into clikae.
 
@@ -72,8 +73,13 @@ Arguments:
   <cli>        CLI to migrate (must have an adapter). Default: claude.
 
 Options:
-  -n, --dry-run   Show the plan without changing anything.
-  -f, --force     Skip the confirmation prompt.
+  -n, --dry-run     Show the plan without changing anything.
+  -f, --force       Skip the confirmation prompt.
+  -k, --keep-login  Carry over each profile's saved login so you don't have to
+                    log in again (macOS/claude only — claude stores its token in
+                    the Keychain keyed by the config-dir path, which the move
+                    changes). Off by default; without it, expect a one-time
+                    re-login per migrated profile.
 
 The rc file is backed up to <rc>.clikae.bak.<timestamp> before editing, and an
 existing clikae profile is never overwritten.
@@ -183,6 +189,13 @@ EOF
   if grep -q '^# >>> claude dual accounts' "$rc_file"; then
     log_dim "The legacy 'claude dual accounts' sentinel comments will be removed."
   fi
+  if [ "$keep_login" -eq 1 ]; then
+    if declare -f adapter_migrate_credentials >/dev/null 2>&1; then
+      log_dim "Will try to carry over each profile's saved login (--keep-login)."
+    else
+      log_dim "--keep-login has no effect for '$cli' (no saved-login carry-over)."
+    fi
+  fi
   echo ""
 
   if [ "$dry_run" -eq 1 ]; then
@@ -204,6 +217,21 @@ EOF
       log_warn "Source dir ${c_old[$i]} was missing; created empty ${c_new[$i]}."
     fi
   done
+
+  # 1b) Optionally carry over each profile's saved login (adapter-specific, e.g.
+  #     claude's macOS keychain token, which is keyed by the config-dir path).
+  if [ "$keep_login" -eq 1 ] && declare -f adapter_migrate_credentials >/dev/null 2>&1; then
+    for ((i = 0; i < n; i++)); do
+      [ -d "${c_new[$i]}" ] || continue
+      local mc_rc=0
+      adapter_migrate_credentials "${c_old[$i]}" "${c_new[$i]}" || mc_rc=$?
+      case "$mc_rc" in
+        0) log_ok "Carried over saved login for $cli/${c_profile[$i]}." ;;
+        2) log_warn "Couldn't carry over login for $cli/${c_profile[$i]} — open it once to log in." ;;
+        *) log_dim "No saved login to carry over for $cli/${c_profile[$i]}." ;;
+      esac
+    done
+  fi
 
   # 2) Rewrite the rc file in one pass (single backup), then append clikae blocks.
   cp "$rc_file" "$rc_file.clikae.bak.$(date +%Y%m%d-%H%M%S)"

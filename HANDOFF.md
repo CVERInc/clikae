@@ -47,6 +47,15 @@ Added in **v0.2** (all of §3's v0.2 milestones are done):
   the old path → split state). Run it from a fresh shell with the CLI idle.
   Documented in `docs/usage.md` and `docs/troubleshooting.md`. A future guard
   could refuse/-warn when `$CLAUDE_CONFIG_DIR` equals a dir slated to move.
+  **Second sharp edge (found while dogfooding, now handled):** on macOS, claude
+  stores its OAuth token in the login **Keychain**, NOT in `CLAUDE_CONFIG_DIR`.
+  The keychain service is `Claude Code-credentials-<sha256(config-dir path)[:8]>`,
+  so moving the dir orphans the token → a one-time re-login per migrated profile.
+  Added `clikae migrate --keep-login` (opt-in) which copies the token from the
+  old path's keychain slot to the new one, via an optional adapter hook
+  `adapter_migrate_credentials <old> <new>` (claude-only, in `lib/adapters/claude.sh`;
+  other adapters simply don't define it). Off by default; documented; covered by
+  bats (macOS-only test stubs `security`). The token never leaves the Keychain.
 - `bats-core` suite under `tests/bats/` (49 tests; isolated `$HOME`/`$CLIKAE_HOME`),
   wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
   `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the

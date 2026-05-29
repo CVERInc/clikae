@@ -100,6 +100,44 @@ To recover if it already happened: quit the affected CLI, delete the stray empty
 old directory (after confirming it's empty), and re-source your shell rc — the
 rewritten alias already points at the migrated profile.
 
+## After `clikae migrate`, claude asks me to log in again (macOS)
+
+Expected. On macOS, Claude Code stores its login token in the **login Keychain**,
+not inside `CLAUDE_CONFIG_DIR` — and the keychain entry is keyed by the
+config-dir *path* (`Claude Code-credentials-<sha256(path)[:8]>`). `migrate` moves
+the dir to a new path, so claude looks under a new keychain key, finds nothing,
+and prompts you to log in. Your settings, history, and projects all moved fine;
+only the saved login didn't follow.
+
+Two ways to handle it:
+
+- **Simplest:** just open each migrated profile once and log in again. The old
+  keychain entries for the pre-migration paths are now orphaned and harmless; you
+  can leave them or delete them in Keychain Access.
+- **Avoid it up front:** run `clikae migrate --keep-login`, which copies the
+  saved token from the old path's keychain entry to the new one as part of the
+  move (macOS only). The token never leaves your Keychain. macOS may pop a dialog
+  asking you to allow keychain access — that's expected.
+
+If you already migrated without `--keep-login`, re-running with it won't help:
+`migrate` skips profiles it has already moved, so the carry-over step never runs
+for them. Just log in once per profile — that's the simplest path.
+
+The full story (keychain key format, manual recovery) is in
+[Claude on macOS](claude-on-macos.md).
+
+## After migrating, claude's startup screen looks different (macOS)
+
+A migrated profile may open with the **compact** logo while another shows the
+**full welcome box** (`Welcome back …` + Tips + What's new). This is **not**
+caused by clikae or the move. Claude Code picks the header from counters in that
+profile's `.claude.json` (whether you've seen the current release notes and the
+Opus 4.8 banner) plus the `CLAUDE_CODE_FORCE_FULL_LOGO` env var — never from the
+config-dir path. A well-used profile that has already seen the announcements
+shows the compact logo; that state moved with the directory unchanged. To force
+the full box, set `CLAUDE_CODE_FORCE_FULL_LOGO=1`. Details and the decompiled
+logic: [Claude on macOS](claude-on-macos.md).
+
 ## I want to undo a change to my shell rc
 
 Every rc edit is backed up first to `<rc>.clikae.bak.<timestamp>` next to the rc
