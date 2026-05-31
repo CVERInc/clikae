@@ -14,6 +14,14 @@ _status_row_for() {
     local var strategy value active note
     var="$(adapter_meta_env_var)"
     strategy="$(adapter_meta_strategy)"
+
+    # flag-strategy adapters select the profile via a CLI flag, not an env var,
+    # so there's nothing in the environment to read back.
+    if [ -z "$var" ]; then
+      printf '%s\t%s\t%s\n' "$cli" "(n/a)" "flag-based — not detectable from the environment"
+      exit 0
+    fi
+
     # Indirect expansion — bash 3.2 supports ${!var}.
     value="${!var}"
     active="$(resolve_active_profile "$cli" "$strategy" "$value")"

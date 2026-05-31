@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`flag` strategy + two new adapters (now 13).** Adds a `flag` adapter strategy
+  for CLIs that have no config-directory env var and instead take a flag — via a
+  new optional adapter hook `adapter_flag_args <dir>` that the alias / `.app` /
+  `run` generators append after the binary. New adapters: **`codex`** (OpenAI
+  Codex CLI, env-dir `CODEX_HOME` — a cheaper model/vendor to route work to) and
+  **`vercel`** (flag strategy, `--global-config <dir>`). The alias/`.app` command
+  assembly is centralised in `adapter_command`. `clikae status` reports `(n/a)`
+  for flag-based CLIs (nothing to read from the environment). The PowerShell
+  module mirrors all of this (codex + vercel in the adapter table, `flag`
+  handling in the env/function/invoke/shortcut paths, new `Get-ClikaeFlagArgs`).
 - **macOS menu bar app skeleton (`gui/ClikaeMenuBar`, v1.0 track).** A SwiftPM +
   AppKit `NSStatusItem` app that builds with the Command Line Tools (no Xcode):
   lists profiles grouped by CLI, check-marks the active one (`clikae status`),

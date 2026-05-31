@@ -171,6 +171,7 @@ No daemons, no global state, no network calls. You can read every line.
 | CLI | Strategy | Env var |
 |---|---|---|
 | `claude` (Anthropic Claude Code) | `env-dir` | `CLAUDE_CONFIG_DIR` |
+| `codex` (OpenAI Codex CLI) | `env-dir` | `CODEX_HOME` |
 | `gh` (GitHub CLI) | `env-dir` | `GH_CONFIG_DIR` |
 | `gcloud` (Google Cloud CLI) | `env-dir` | `CLOUDSDK_CONFIG` |
 | `docker` (Docker CLI) | `env-dir` | `DOCKER_CONFIG` |
@@ -181,6 +182,13 @@ No daemons, no global state, no network calls. You can read every line.
 | `npm` | `env-file` | `NPM_CONFIG_USERCONFIG` |
 | `terraform` | `env-file` | `TF_CLI_CONFIG_FILE` |
 | `pulumi` | `env-dir` | `PULUMI_HOME` |
+| `vercel` (Vercel CLI) | `flag` | — (`--global-config <dir>`) |
+
+The `flag` strategy is for CLIs with no config-directory env var: the profile
+directory is injected as a command-line flag (e.g. vercel's `--global-config`)
+in the generated alias / `.app` / `run` command instead of an exported variable.
+Such a CLI shows `(n/a)` in `clikae status` (there's nothing in the environment
+to read back).
 
 Run `clikae adapters` to see them with descriptions. Adding your own is ~10
 lines of bash — see [adding-an-adapter.md](adding-an-adapter.md).

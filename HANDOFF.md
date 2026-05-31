@@ -98,9 +98,26 @@ These mirror how this project was built and must be preserved:
 >   LSUIElement `.app` bundle, login-item toggle, per-CLI terminal preference.
 >   `.build/` is gitignored.
 >
+> - **`flag` strategy + 2 new adapters (now 13).** New adapter strategy `flag`
+>   for CLIs with no config-dir env var (the dir is passed as a CLI flag). Added
+>   via optional hook `adapter_flag_args <dir>`; the alias/`.app` command is now
+>   assembled centrally in `adapter_command` (env prefix + binary + flag suffix),
+>   used by both `alias.sh` and `app.sh` — don't re-inline. New adapters:
+>   **`codex`** (env-dir `CODEX_HOME` — the product pivot: route cheap/dirty work
+>   to a cheaper model/vendor; see §10.1) and **`vercel`** (flag,
+>   `--global-config`). `clikae status` shows `(n/a)` for flag CLIs. **PowerShell
+>   mirrored** (codex+vercel in the table, `flag` handling in
+>   env/function/invoke/shortcut, new `Get-ClikaeFlagArgs`); Pester count 11→13.
+>   **PS NOT locally tested** (no pwsh on the Mac) — windows CI is the verifier.
+>   bats 71→**91**. NB: **`antigravity` was investigated and deliberately NOT
+>   added** — `~/.antigravitycli` is just a symlink into `~/.gemini`, there's no
+>   `antigravity` CLI binary and no clean config-dir env var; needs real info
+>   before an adapter can be written.
+>
 > Still TODO before a v0.5 tag: real-claude relay verification, iTerm2 dogfood
-> (partner has iTerm2), optional Warp target, the PowerShell mirror of
-> status/relay + app terminals, GUI runtime dogfood + `.app` packaging, and a
+> (partner has iTerm2), optional Warp target, codex dogfood (user will install
+> it), GUI runtime dogfood + `.app` packaging, the bigger product arc (see §10.1
+> below: ambient auto-relay + free naming/account labels + `clikae rename`), and a
 > roadmap decision on whether relay deserves its own headline in README's roadmap
 > list.
 
@@ -461,3 +478,53 @@ This project started as a personal need: the maintainer has two Anthropic Claude
 Stay close to that origin story — small, sharp, useful. Resist scope creep.
 
 Good luck.
+
+---
+
+## 10.1 Product direction (decided with the maintainer, 2026-05-31 session)
+
+The maintainer reframed clikae's core during this session. Capture for whoever
+continues — these are decisions, not musings:
+
+1. **From "multi-account switcher" to "fuel-tank / model router."** The headline
+   value is **routing work to a cheaper model/vendor** ("let the cheaper one do
+   the dirty work") and **continuing when a tank runs dry** — not just juggling
+   two Claude logins. The maintainer thinks the multi-vendor/model case (Claude ⇄
+   Codex ⇄ Antigravity…) may matter MORE than multi-Claude. Hence `relay`
+   (continue on another tank) is the flagship, and cross-vendor adapters (codex
+   added; antigravity pending real config info) are first-class, not afterthoughts.
+   "油箱" (fuel tank) = a profile/account/model you can burn; clikae supports a
+   pool of them.
+
+2. **UX philosophy: "quietly help, then tell me what you did."** Ambient,
+   hide-and-assist, with transparency after the fact and authorization before
+   anything outward. Build toward that, not a chatty/manual feel.
+
+3. **Auto-switch reality (researched via claude-code-guide — IMPORTANT, don't
+   re-litigate):** an INTERACTIVE Claude Code TUI hitting its usage limit does
+   **not exit**, returns **no exit code**, and **no hook fires** for usage limits
+   (hooks are PreToolUse/Stop/Notification/etc., none for quota). So an external
+   tool **cannot cleanly auto-switch mid-conversation**. What IS feasible:
+   (a) headless/print mode (`claude -p --output-format json`) can be wrapped to
+   detect a limit and auto-relay (JSON schema undocumented → test empirically);
+   (b) transcript-watching to NOTICE you were limited and proactively OFFER to
+   relay; (c) best-effort interactive output/transcript scraping (fragile).
+   **Maintainer chose: "盡量自動" — best-effort auto including interactive**, but
+   it must stay transparent + opt-in. So the design is: detect → offer (interactive)
+   / auto after one-time consent (headless). Don't promise silent mid-session
+   interactive switching; it isn't reliably possible.
+
+4. **Naming (maintainer's stated TOP priority): kill `a`/`b`.** Free naming
+   already works (`a`/`b` were just this user's choice). Decided: **free naming +
+   auto-detected account label** (read the logged-in account, e.g. claude's
+   `.claude.json` email, and show it in `list`/`status`) **+ a new `clikae rename`
+   command**, and **purge a/b from all docs/examples** in favour of meaningful
+   names. NB: `rename` for claude MOVES the profile dir → same macOS-Keychain
+   re-key issue as `migrate`, so it must reuse `adapter_migrate_credentials`
+   (the `--keep-login` carry-over). Treat rename like a mini-migrate.
+
+**Not yet built (next session's work, roughly prioritised):** (a) free
+naming/account-label + `clikae rename` (top priority, reuse keychain carry-over);
+(b) ambient relay: detect-and-offer on interactive, auto on headless, behind an
+explicit opt-in; (c) `antigravity` adapter once its config mechanism is known;
+(d) the existing v0.5 TODO list in §2.

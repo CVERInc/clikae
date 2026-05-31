@@ -45,12 +45,11 @@ EOF
   load_adapter "$cli"
   local d
   d="$(ensure_profile --require "$cli" "$profile")"
-  local binary
-  binary="$(adapter_meta_cli_binary)"
 
-  # Build the env-var prefix string (KEY="VAL" ...) from the adapter.
-  local env_prefix
-  env_prefix="$(adapter_env_prefix "$d")"
+  # Build the full command (env prefix + binary + any flag suffix) from the
+  # adapter — handles env-dir/env-file/env-var and flag strategies uniformly.
+  local cmd
+  cmd="$(adapter_command "$d")"
 
   local rc_file rc_id
   rc_file="$(detect_shell_rc)"
@@ -62,10 +61,10 @@ EOF
   fi
 
   rc_add_block "$rc_file" "$rc_id" <<EOF
-alias ${name}='${env_prefix} ${binary}'
+alias ${name}='${cmd}'
 EOF
 
   log_ok "Added alias '${name}' to $rc_file"
-  log_dim "  $env_prefix $binary"
+  log_dim "  $cmd"
   log_info "Run \`source $rc_file\` or open a new shell to use it."
 }

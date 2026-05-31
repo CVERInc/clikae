@@ -4,12 +4,36 @@
 
 load '../../helpers'
 
-@test "adapters lists all 11 built-in CLIs" {
+@test "adapters lists all 13 built-in CLIs" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  for cli in claude gh gcloud docker helm kubectl aws az npm terraform pulumi; do
+  for cli in claude codex gh gcloud docker helm kubectl aws az npm terraform pulumi vercel; do
     [[ "$output" == *"$cli"* ]] || { echo "missing adapter: $cli"; false; }
   done
+}
+
+@test "codex adapter reports env-dir + CODEX_HOME" {
+  run clikae adapters
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex"*"env-dir"*"CODEX_HOME"* ]]
+}
+
+@test "codex alias exports CODEX_HOME at the profile dir" {
+  clikae init codex cheap
+  clikae alias codex cheap
+  grep -qF "CODEX_HOME=\"$CLIKAE_HOME/profiles/codex/cheap\"" "$RC_FILE"
+}
+
+@test "vercel adapter reports the flag strategy" {
+  run clikae adapters
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"vercel"*"flag"* ]]
+}
+
+@test "vercel alias injects --global-config after the binary (flag strategy)" {
+  clikae init vercel prod
+  clikae alias vercel prod
+  grep -qF "vercel --global-config \"$CLIKAE_HOME/profiles/vercel/prod\"" "$RC_FILE"
 }
 
 @test "az adapter reports env-dir + AZURE_CONFIG_DIR" {

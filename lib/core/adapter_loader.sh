@@ -41,6 +41,35 @@ adapter_env_prefix() {
   printf '%s\n' "${prefix# }"
 }
 
+# adapter_cmd_suffix <profile_dir>  -> flag args to append AFTER the binary, or empty.
+# For `flag`-strategy adapters (no config env var; the profile is selected by a
+# CLI flag like vercel's `--global-config <dir>`). The adapter expresses this via
+# an optional `adapter_flag_args <profile_dir>` hook that prints the (already
+# shell-quoted) flag string. Env-strategy adapters don't define it -> empty.
+# Used by the alias and .app generators alongside adapter_env_prefix.
+adapter_cmd_suffix() {
+  local profile_dir="$1"
+  if declare -F adapter_flag_args >/dev/null; then
+    adapter_flag_args "$profile_dir"
+  fi
+}
+
+# adapter_command <profile_dir>  -> the full command string to run the CLI with
+# this profile applied: "[ENV=VAL ...] <binary> [--flag <dir> ...]". Single line.
+# This is what the alias body and the .app launcher both execute. Centralises the
+# env-prefix + binary + flag-suffix assembly so the two generators stay in sync.
+adapter_command() {
+  local profile_dir="$1"
+  local prefix suffix binary cmd
+  prefix="$(adapter_env_prefix "$profile_dir")"
+  suffix="$(adapter_cmd_suffix "$profile_dir")"
+  binary="$(adapter_meta_cli_binary)"
+  cmd="$binary"
+  [ -n "$prefix" ] && cmd="$prefix $cmd"
+  [ -n "$suffix" ] && cmd="$cmd $suffix"
+  printf '%s\n' "$cmd"
+}
+
 # Source the adapter file for <cli>. Fails if missing.
 load_adapter() {
   local cli="$1"

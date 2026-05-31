@@ -28,8 +28,10 @@ Set-StrictMode -Version Latest
 #   env-dir   the env var is the profile directory itself
 #   env-file  the env var is a file *inside* the profile directory (\config)
 #   env-var   the env var is the profile *name* (a selector, not a path)
+#   flag      no env var; the profile dir is passed via a CLI flag (Flag key)
 $script:ClikaeAdapters = [ordered]@{
     claude    = @{ Name = 'Claude Code';      Binary = 'claude';    EnvVar = 'CLAUDE_CONFIG_DIR';     Strategy = 'env-dir';  Description = 'Anthropic Claude Code CLI (credentials + settings in CLAUDE_CONFIG_DIR)' }
+    codex     = @{ Name = 'OpenAI Codex CLI';  Binary = 'codex';     EnvVar = 'CODEX_HOME';            Strategy = 'env-dir';  Description = 'OpenAI Codex CLI (auth + config + history in CODEX_HOME)' }
     gh        = @{ Name = 'GitHub CLI';       Binary = 'gh';        EnvVar = 'GH_CONFIG_DIR';         Strategy = 'env-dir';  Description = 'GitHub CLI (auth + config in GH_CONFIG_DIR)' }
     gcloud    = @{ Name = 'Google Cloud CLI'; Binary = 'gcloud';    EnvVar = 'CLOUDSDK_CONFIG';       Strategy = 'env-dir';  Description = 'Google Cloud CLI (auth + active config in CLOUDSDK_CONFIG)' }
     docker    = @{ Name = 'Docker CLI';       Binary = 'docker';    EnvVar = 'DOCKER_CONFIG';         Strategy = 'env-dir';  Description = 'Docker CLI (registry auth + contexts in DOCKER_CONFIG)' }
@@ -40,6 +42,7 @@ $script:ClikaeAdapters = [ordered]@{
     npm       = @{ Name = 'npm';              Binary = 'npm';       EnvVar = 'NPM_CONFIG_USERCONFIG'; Strategy = 'env-file'; File = 'npmrc';       Description = 'npm (registry auth tokens in a per-profile .npmrc file)' }
     terraform = @{ Name = 'Terraform';        Binary = 'terraform'; EnvVar = 'TF_CLI_CONFIG_FILE';    Strategy = 'env-file'; File = 'terraformrc'; Description = 'Terraform (Terraform Cloud / registry credentials in a CLI config file)' }
     pulumi    = @{ Name = 'Pulumi';           Binary = 'pulumi';    EnvVar = 'PULUMI_HOME';           Strategy = 'env-dir';  Description = 'Pulumi (backend login + credentials in PULUMI_HOME)' }
+    vercel    = @{ Name = 'Vercel CLI';       Binary = 'vercel';    EnvVar = '';                      Strategy = 'flag';     Flag = '--global-config'; Description = 'Vercel CLI (per-profile dir via --global-config)' }
 }
 
 # Sentinel markers — identical in spirit to the bash tool so a block written by
@@ -130,6 +133,9 @@ function Get-ClikaeProfileEnv {
     }
     $a   = $script:ClikaeAdapters[$Cli]
     $dir = Get-ClikaeProfileDir -Cli $Cli -Profile $Profile
+    # flag-strategy adapters select the profile via a CLI flag, not an env var,
+    # so there is nothing to export.
+    if ($a.Strategy -eq 'flag') { return [ordered]@{} }
     $value = switch ($a.Strategy) {
         'env-dir'  { $dir }
         'env-file' { (Join-Path $dir ($(if ($a.File) { $a.File } else { 'config' }))) }
@@ -137,6 +143,28 @@ function Get-ClikaeProfileEnv {
         default    { throw "Unsupported strategy '$($a.Strategy)' for '$Cli'." }
     }
     return [ordered]@{ $a.EnvVar = $value }
+}
+
+function Get-ClikaeFlagArgs {
+    <#
+    .SYNOPSIS  The flag args to append after the binary for a `flag`-strategy
+               profile (e.g. @('--global-config', '<dir>')). Empty for others.
+               Mirrors the bash adapter_flag_args hook.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Cli,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    Assert-ClikaeName -Kind 'cli' -Name $Cli
+    Assert-ClikaeName -Kind 'profile' -Name $Profile
+    if (-not $script:ClikaeAdapters.Contains($Cli)) {
+        throw "No adapter for '$Cli'. Known: $($script:ClikaeAdapters.Keys -join ', ')."
+    }
+    $a = $script:ClikaeAdapters[$Cli]
+    if ($a.Strategy -ne 'flag') { return @() }
+    $dir = Get-ClikaeProfileDir -Cli $Cli -Profile $Profile
+    return @($a.Flag, $dir)
 }
 
 # --- $PROFILE function blocks ----------------------------------------------
@@ -150,15 +178,22 @@ function Get-ClikaeFunctionName {
 function Get-ClikaeFunctionBlock {
     param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string]$Profile)
     $a      = $script:ClikaeAdapters[$Cli]
-    $envMap = Get-ClikaeProfileEnv -Cli $Cli -Profile $Profile
     $fn     = Get-ClikaeFunctionName -Cli $Cli -Profile $Profile
     $id     = "$Cli.$Profile"
-    # Single-quote the value and escape embedded single quotes for safe literals.
-    $val    = ([string]$envMap[$a.EnvVar]).Replace("'", "''")
-    $sets = "`$env:$($a.EnvVar) = '$val'"
+    if ($a.Strategy -eq 'flag') {
+        # No env var; pass the profile dir via the CLI flag.
+        $dir  = (Get-ClikaeProfileDir -Cli $Cli -Profile $Profile).Replace("'", "''")
+        $flag = ([string]$a.Flag).Replace("'", "''")
+        $body = "& '$($a.Binary)' '$flag' '$dir' @args"
+    } else {
+        $envMap = Get-ClikaeProfileEnv -Cli $Cli -Profile $Profile
+        # Single-quote the value and escape embedded single quotes for safe literals.
+        $val  = ([string]$envMap[$a.EnvVar]).Replace("'", "''")
+        $body = "`$env:$($a.EnvVar) = '$val'; & '$($a.Binary)' @args"
+    }
     @(
         (Get-ClikaeSentinelOpen -Id $id)
-        "function $fn { $sets; & '$($a.Binary)' @args }"
+        "function $fn { $body }"
         (Get-ClikaeSentinelClose -Id $id)
     ) -join [Environment]::NewLine
 }
@@ -331,7 +366,8 @@ function Invoke-ClikaeProfile {
         throw "'$bin' is not on PATH. Install it (or check your PATH) before running this profile."
     }
     foreach ($k in $envMap.Keys) { Set-Item -Path "Env:$k" -Value $envMap[$k] }
-    & $bin @Arguments
+    $flagArgs = Get-ClikaeFlagArgs -Cli $Cli -Profile $Profile
+    & $bin @flagArgs @Arguments
 }
 
 function New-ClikaeShortcut {
@@ -351,16 +387,22 @@ function New-ClikaeShortcut {
     if (-not (Test-ClikaeWindows)) {
         throw 'New-ClikaeShortcut is Windows-only (.lnk needs the WScript.Shell COM object).'
     }
+    $a       = $script:ClikaeAdapters[$Cli]
     $envMap  = Get-ClikaeProfileEnv -Cli $Cli -Profile $Profile
-    $bin     = $script:ClikaeAdapters[$Cli].Binary
-    $envVar  = @($envMap.Keys)[0]
-    $val     = $envMap[$envVar]
+    $bin     = $a.Binary
     $lnkPath = Join-Path $OutDir ("$Cli-$Profile.lnk")
 
     if (-not $PSCmdlet.ShouldProcess($lnkPath, 'Create shortcut')) { return }
     if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
 
-    $psArgs = "-NoExit -Command `"`$env:$envVar='$val'; & '$bin'`""
+    if ($a.Strategy -eq 'flag') {
+        $dir    = Get-ClikaeProfileDir -Cli $Cli -Profile $Profile
+        $psArgs = "-NoExit -Command `"& '$bin' '$($a.Flag)' '$dir'`""
+    } else {
+        $envVar = @($envMap.Keys)[0]
+        $val    = $envMap[$envVar]
+        $psArgs = "-NoExit -Command `"`$env:$envVar='$val'; & '$bin'`""
+    }
     $wsh    = New-Object -ComObject WScript.Shell
     $sc     = $wsh.CreateShortcut($lnkPath)
     $target = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
@@ -374,6 +416,6 @@ function New-ClikaeShortcut {
 
 Export-ModuleMember -Function `
     Get-ClikaeHome, Get-ClikaeProfileDir, Test-ClikaeName, Test-ClikaeWindows, Get-ClikaeAdapter, `
-    Get-ClikaeProfileEnv, Get-ClikaeFunctionName, Get-ClikaeFunctionBlock, `
+    Get-ClikaeProfileEnv, Get-ClikaeFlagArgs, Get-ClikaeFunctionName, Get-ClikaeFunctionBlock, `
     New-ClikaeProfile, Add-ClikaeFunction, Get-ClikaeProfile, Remove-ClikaeProfile, `
     Invoke-ClikaeProfile, New-ClikaeShortcut

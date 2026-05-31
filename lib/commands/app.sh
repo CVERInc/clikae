@@ -126,8 +126,7 @@ EOF
   load_adapter "$cli"
   local d
   d="$(ensure_profile --require "$cli" "$profile")"
-  local binary title
-  binary="$(adapter_meta_cli_binary)"
+  local title
   title="${cli} (${profile})"
 
   [ -n "$out_dir" ] || out_dir="$HOME/Applications"
@@ -144,9 +143,9 @@ EOF
     fi
   fi
 
-  # The shell command the launcher runs: KEY="V" ... <binary>
+  # The shell command the launcher runs: [KEY="V" ...] <binary> [--flag <dir>].
   local shell_cmd
-  shell_cmd="$(adapter_env_prefix "$d") $binary"
+  shell_cmd="$(adapter_command "$d")"
 
   local tmp_dir tmp_scpt
   tmp_dir="$(mktemp -d -t clikae-launcher.XXXXXX)"
