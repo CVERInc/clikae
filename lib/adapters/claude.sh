@@ -109,7 +109,14 @@ adapter_relay() {
 adapter_account_label() {
   local dir="$1" f="$1/.claude.json"
   [ -f "$f" ] || return 0
-  grep -o '"emailAddress":"[^"]*"' "$f" 2>/dev/null | head -n 1 | sed 's/.*:"//; s/"$//'
+  # Real .claude.json is pretty-printed: `"emailAddress": "you@example.com"`
+  # (whitespace after the colon), so tolerate it. And never let a no-match grep
+  # propagate failure up — under the caller's `set -eo pipefail` that would abort
+  # `clikae list` / `status` instead of just showing a dash.
+  grep -oE '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null \
+    | head -n 1 \
+    | sed -E 's/.*:[[:space:]]*"//; s/"$//' || true
+  return 0
 }
 
 # --- macOS keychain login carry-over (optional migrate hook) ----------------

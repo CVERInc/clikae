@@ -73,6 +73,20 @@ load '../helpers'
   [[ "$output" == *"hi@cver.net"* ]]
 }
 
+@test "list reads the account label from pretty-printed .claude.json (real format)" {
+  # Real Claude Code writes the file with whitespace after the colon; the label
+  # extractor must tolerate it, and a profile whose file lacks the field must not
+  # crash list (the no-match grep must not propagate under set -eo pipefail).
+  clikae init claude a
+  clikae init claude b
+  printf '{\n  "oauthAccount": {\n    "emailAddress": "spaced@cver.net"\n  }\n}\n' \
+    > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
+  printf '{\n  "numStartups": 3\n}\n' > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
+  run clikae list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spaced@cver.net"* ]]
+}
+
 @test "list shows a dash when no account is detectable" {
   clikae init gh personal
   run clikae list

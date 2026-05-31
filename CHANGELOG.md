@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `clikae watch --check` reports whether it would fire on the current session so
   you can confirm/tune it the first time you actually get limited. The live tail
   loop is smoke-tested; detection, pool fall-through, and consent are bats-covered.
+- **Fixed account-label extraction on real `.claude.json`.** The file is
+  pretty-printed (`"emailAddress": "you@…"`, whitespace after the colon), which
+  the extractor didn't match — and worse, the no-match `grep` propagated failure
+  under `set -eo pipefail`, so `clikae list` / `status` aborted with exit 1 on any
+  real, logged-in profile. Now tolerates the whitespace and never propagates a
+  miss. (Both bugs were in the unreleased account-label work; caught dogfooding.)
 - **Fixed an adapter-hook leak across adapters.** `load_adapter` now clears all
   adapter hooks before sourcing the next adapter, so an optional hook one adapter
   defines (e.g. `adapter_start_with_prompt`) is never inherited by another that
