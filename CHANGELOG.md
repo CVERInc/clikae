@@ -19,16 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the tour runs, the real home is untouched, the sandbox is cleaned up).
 - **Bare `clikae` now opens a home dashboard — your "tank board".** Typing
   `clikae` with no arguments used to print the help wall; it now opens a
-  glanceable dashboard: every profile (tank) grouped by CLI, the one **active in
-  this shell** marked, the logged-in account beside each, and the fuel-pool
-  fall-through order — the screen clikae wants to be the first thing you type.
-  With no profiles yet it shows a **welcome** that scans the machine and names
-  the supported CLIs you actually have, plus the exact first command. The full
-  command reference moved one keystroke away to `clikae help`. New **`clikae
-  doctor`** is a read-only health check (which CLIs are installed and logged in,
-  profile counts, `CLIKAE_HOME` / shell-rc / PATH, and targeted next steps), and
-  a shared read-only scanner (`lib/core/scan.sh`) backs both. Covered by bats
-  (incl. a regression guard that the last adapter row isn't dropped).
+  glanceable dashboard, the screen clikae wants to be the first thing you type:
+  every profile (tank) grouped by CLI, the one **active in this shell** marked,
+  the logged-in account and the **real managed alias name** beside each, an
+  **"Also available"** section of relay-capable CLIs/targets you can open without
+  a tank yet (e.g. `codex`, `agy` — chosen by who can take a handoff, so tools
+  like `gh`/`npm` aren't listed), and the fuel-pool fall-through order.
+  - On a **real terminal it's an interactive launcher**: ↑/↓ (or j/k) to move,
+    Enter to open the selected tank, `n` to create a new one, `q`/Esc to quit
+    (leaving the board on screen). It uses the alternate screen buffer so your
+    scrollback is untouched, and falls back to the **plain-text board** whenever
+    output isn't a TTY (a pipe, a script, the GUI) — set `CLIKAE_NO_INTERACTIVE`
+    to force that.
+  - With no profiles yet it shows a **welcome** that scans the machine and names
+    the supported CLIs you actually have, plus the exact first command. The full
+    command reference moved one keystroke away to `clikae help`.
+  New **`clikae doctor`** is a read-only health check (which CLIs are installed
+  and logged in, profile counts, `CLIKAE_HOME` / shell-rc / PATH, and targeted
+  next steps); a shared read-only scanner (`lib/core/scan.sh`) backs both.
+  Covered by bats (incl. guards that the last adapter row isn't dropped, the
+  agent/target filter, and that colour escapes don't leak as literal text).
 - **Machine-readable `--json` across the read commands (for the v1.0 GUI).**
   `clikae list --json`, `status --json`, `pool --json`, and `info --json` now
   emit structured output for the planned menu-bar app and for scripting. The

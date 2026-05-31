@@ -100,6 +100,20 @@ _fake_bin() {
   [[ "$output" == *"single-account"* ]]
 }
 
+@test "the launch hint emits real colour escapes, not a literal backslash-033" {
+  # Regression: colour codes are stored as the literal string '\033[2m' and only
+  # printf %b interprets them — embedding one in a %s string leaks it as text.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/pool.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  __C_DIM='\033[2m'; __C_RESET='\033[0m'; __C_BOLD='\033[1m'; __C_GREEN='\033[0;32m'
+  local items; items="$(printf 'tank\037claude\037work\037me@x\037claude-work\0371\037\n')"
+  run _home_render_static "$items"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"launch"* ]]
+  [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
+}
+
 @test "bare clikae changes nothing on disk (read-only)" {
   clikae init claude work
   before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"

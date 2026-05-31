@@ -159,9 +159,14 @@ EOF
   [ -n "$pool" ] && printf '  %-9s %s\n' "fuel pool" "$pool"
 
   if [ -n "$launch_cli" ]; then
-    local hint="clikae run $launch_cli $launch_profile"
-    [ -n "$launch_alias" ] && hint="$hint   ${__C_DIM}(or your alias: $launch_alias)${__C_RESET}"
-    printf '  %-9s %s\n' "launch" "$hint"
+    # Colour via %b args, never embedded in a %s string (the codes are literal
+    # \033 sequences and only printf %b interprets them).
+    if [ -n "$launch_alias" ]; then
+      printf '  %-9s clikae run %s %s   %b(or your alias: %s)%b\n' \
+        "launch" "$launch_cli" "$launch_profile" "$__C_DIM" "$launch_alias" "$__C_RESET"
+    else
+      printf '  %-9s clikae run %s %s\n' "launch" "$launch_cli" "$launch_profile"
+    fi
   fi
   printf '  %-9s %s\n' "more" "clikae status · clikae doctor · clikae demo · clikae help"
 }
@@ -197,16 +202,139 @@ EOF
   log_dim "  Curious first?  clikae demo   (a 30-second sandbox tour — touches nothing)"
 }
 
+# ---------------------------------------------------------------------------
+# Interactive launcher (only on a real TTY; pipes/scripts/tests get the static
+# board). Uses the alternate screen buffer so the user's scrollback is intact.
+
+_home_tty_leave() { printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
+
+# Resolve and EXEC the launch for one item row (replaces this process).
+#   tank   -> clikae run <cli> <profile>   (applies the profile env, then execs)
+#   agent  -> the CLI's own binary, default config (no tank)
+#   target -> the target's binary (already in the cli field)
+_home_launch() {
+  local kind cli profile label alias active note
+  IFS=$'\037' read -r kind cli profile label alias active note <<EOF
+$1
+EOF
+  : "$label" "$alias" "$active" "$note"
+  case "$kind" in
+    tank)   exec "$CLIKAE_BIN" run "$cli" "$profile" ;;
+    agent)  local bin; bin="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_meta_cli_binary)"; exec "$bin" ;;
+    target) exec "$cli" ;;
+  esac
+}
+
+# Guided new-tank flow (the `n` key). Line-mode prompts, then init --alias.
+_home_new_tank() {
+  local def_cli="$1" cli profile
+  printf '\nNew tank.\n'
+  read -rp "  CLI [${def_cli:-claude}]: " cli || return 0
+  cli="${cli:-${def_cli:-claude}}"
+  read -rp "  Profile name: " profile || return 0
+  [ -n "$profile" ] || { printf '  Cancelled.\n'; return 0; }
+  exec "$CLIKAE_BIN" init "$cli" "$profile" --alias
+}
+
+# Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
+_home_pick_draw() {
+  local items="$1" sel="$2"
+  printf '\033[H\033[2J'
+  printf '%bclikae  ｷﾘｶｴ%b  %b· pick a tank    ↑↓ move · ⏎ open · n new · q quit%b\n\n' \
+    "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot
+  while IFS=$'\037' read -r kind cli profile label alias active note; do
+    [ -n "$kind" ] || continue
+    if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
+    case "$kind" in
+      tank)
+        if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
+        if [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; else dot="${__C_DIM}○${__C_RESET}"; fi
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b %b%-10s %-24s %s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET"
+        else
+          printf '  %b %b %-10s %b%-24s %s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET"
+        fi
+        ;;
+      agent|target)
+        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %bAlso available%b\n' "$__C_BOLD" "$__C_RESET"; fi
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b· %-12s %s%b\n' "$mark" "$__C_BOLD" "$cli" "$note" "$__C_RESET"
+        else
+          printf '  %b · %-12s %b%s%b\n' "$mark" "$cli" "$__C_DIM" "$note" "$__C_RESET"
+        fi
+        ;;
+    esac
+    idx=$((idx + 1))
+  done <<EOF
+$items
+EOF
+}
+
+_home_pick() {
+  local items="$1"
+  local n; n="$(printf '%s\n' "$items" | grep -c .)"
+  [ "$n" -gt 0 ] || { _home_render_static "$items"; return 0; }
+
+  # Restore the terminal on any abnormal exit.
+  trap '_home_tty_leave' EXIT
+  trap '_home_tty_leave; exit 130' INT TERM
+  printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
+
+  local sel=0 key rest sel_cli
+  while :; do
+    _home_pick_draw "$items" "$sel"
+    IFS= read -rsn1 key || { key="q"; }
+    case "$key" in
+      $'\e')
+        # Arrow keys arrive as ESC [ A/B; a lone ESC (1s integer timeout) quits.
+        if IFS= read -rsn2 -t 1 rest; then
+          case "$rest" in
+            '[A') sel=$(( (sel - 1 + n) % n )) ;;
+            '[B') sel=$(( (sel + 1) % n )) ;;
+          esac
+        else
+          break
+        fi
+        ;;
+      k) sel=$(( (sel - 1 + n) % n )) ;;
+      j) sel=$(( (sel + 1) % n )) ;;
+      q) break ;;
+      n)
+        sel_cli="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p" | cut -d$'\037' -f2)"
+        _home_tty_leave; trap - EXIT INT TERM
+        _home_new_tank "$sel_cli"
+        return 0
+        ;;
+      ''|$'\n'|$'\r')
+        _home_tty_leave; trap - EXIT INT TERM
+        _home_launch "$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+        return 0
+        ;;
+    esac
+  done
+
+  _home_tty_leave; trap - EXIT INT TERM
+  # On quit, leave the static board in the normal scrollback.
+  _home_render_static "$items"
+}
+
 cmd_home() {
   case "${1:-}" in
     -h|--help)
       cat <<'EOF'
 Usage: clikae            (no arguments)
 
-Opens the home dashboard — your "tank board": every profile grouped by CLI, the
-one active in this shell marked, account + alias name, an "Also available" list
-of relay-capable CLIs/targets you can open without a tank (codex, agy), and the
-fuel-pool order. With no profiles yet it welcomes you and points at the first step.
+Opens the home dashboard — your "tank board". On a real terminal it's an
+interactive launcher: ↑/↓ (or j/k) to move, Enter to open the selected tank,
+`n` to create a new one, `q`/Esc to quit (leaving the board on screen). It lists
+every profile grouped by CLI (the one active in this shell marked, with account
+and alias name) plus an "Also available" section of relay-capable CLIs/targets
+you can open without a tank (codex, agy), and the fuel-pool order.
+
+When output isn't a terminal (a pipe, a script, the GUI), it prints the same
+board as plain text instead. With no profiles yet it welcomes you and points at
+the first step.
 
 The full command reference is at `clikae help`; the machine check at
 `clikae doctor`.
@@ -221,5 +349,12 @@ EOF
     _home_welcome
     return 0
   fi
-  _home_render_static "$(_home_items)"
+
+  local items; items="$(_home_items)"
+  # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
+  if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
+    _home_pick "$items"
+  else
+    _home_render_static "$items"
+  fi
 }
