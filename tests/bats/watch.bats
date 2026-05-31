@@ -24,18 +24,32 @@ _seed() {
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No limit marker"* ]]
+  [[ "$output" == *"No genuine limit marker"* ]]
 }
 
-@test "watch --check finds a limit marker when present" {
+@test "watch --check finds a genuine synthetic limit marker" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"
-  _seed a "$work" '{"type":"error","message":{"content":"reached your usage limit"}}'
+  # The real shape, dogfooded 2026-05-31: a synthetic api-error assistant line.
+  _seed a "$work" '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm"}]}}'
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"limit-like marker IS present"* ]]
-  [[ "$output" == *"usage limit"* ]]
+  [[ "$output" == *"genuine limit marker IS present"* ]]
+  [[ "$output" == *"hit your session limit"* ]]
+}
+
+@test "watch --check ignores a session that only DISCUSSES a limit (dogfood regression)" {
+  # A normal assistant turn (real model, no isApiErrorMessage) that merely talks
+  # about limits — exactly what made the old pure-text match false-fire. Must NOT
+  # be treated as a real limit event.
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed a "$work" '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"lets discuss what happens when you hit your session limit and the usage limit resets"}]}}'
+  cd "$work"
+  CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No genuine limit marker"* ]]
 }
 
 @test "watch --check honours a custom --pattern" {

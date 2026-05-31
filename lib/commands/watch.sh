@@ -33,11 +33,51 @@
 #       NOTE: `clikae watch` does NOT yet read agy's cli.log — wiring watch to
 #       scan it is an unbuilt feature; this only records the confirmed marker.
 # Note "session limit" (claude) vs "usage limit" (codex) — keep both.
-# Caveat: these are text matches, so a transcript that merely *discusses* a limit
-# (e.g. working on clikae itself) can trip them. Override anytime with --pattern /
+# This pattern is now only the TEXT GATE / fallback. Real detection for claude &
+# codex is STRUCTURAL (see _watch_line_is_real_limit) — a transcript that merely
+# *discusses* a limit (e.g. working on clikae itself) no longer trips them, since
+# a genuine event also requires the synthetic/api-error structure. Unknown clis
+# still fall back to a pure text match. Override anytime with --pattern /
 # $CLIKAE_LIMIT_PATTERN.
 _watch_default_pattern() {
   printf '%s' "You've hit your (session|usage) limit|session limit|usage limit|usage_limit|increase your usage limit|\"type\":\"turn.failed\"|rate_limit_error|rate_limited|RESOURCE_EXHAUSTED|Individual quota reached|quota exceeded|Approaching your usage|limit reached|5-hour limit|weekly limit|resets [0-9]|resets at"
+}
+
+# Decide whether ONE transcript line is a GENUINE limit event, not just text that
+# happens to mention a limit. Structure beats text: a real Claude limit is a
+# synthetic API-error message the client injects into the transcript — never a
+# normal model turn. Dogfooded 2026-05-31 off a live Max-20x limit, the real line
+# carries BOTH "isApiErrorMessage":true AND "model":"<synthetic>" (one JSONL
+# object = one physical line), with text like `You've hit your session limit`.
+# Requiring all three kills the false positives a bare text match suffers — a
+# session merely *discussing* a limit (e.g. working on clikae itself) would trip
+# the old regex. Per-cli because each vendor's transcript shape differs; an
+# unknown cli falls back to the text pattern so detection never silently regresses.
+# When the user supplies their own pattern (--pattern / $CLIKAE_LIMIT_PATTERN),
+# that's a deliberate override — honour it as a pure text match and skip the
+# structural logic entirely (the escape hatch for a new vendor or a changed
+# marker). Structural detection only kicks in for the built-in default pattern.
+#   $1 = cli, $2 = line, $3 = text pattern, $4 = pattern_explicit (0/1)
+_watch_line_is_real_limit() {
+  local cli="$1" line="$2" pat="$3" explicit="${4:-0}"
+  if [ "$explicit" -eq 1 ]; then
+    printf '%s' "$line" | grep -qaE "$pat"; return
+  fi
+  case "$cli" in
+    claude)
+      # synthetic + api-error flag are the structural signal; the text gate keeps
+      # other synthetic errors (e.g. interrupts) from counting as a limit.
+      case "$line" in *'"isApiErrorMessage":true'*) ;; *) return 1 ;; esac
+      case "$line" in *'"model":"<synthetic>"'*)    ;; *) return 1 ;; esac
+      printf '%s' "$line" | grep -qaiE "hit your [a-z]+ limit" ;;
+    codex)
+      # codex exec --json emits structured failure objects alongside the message.
+      case "$line" in *'"type":"turn.failed"'*|*'"type":"error"'*) ;; *) return 1 ;; esac
+      printf '%s' "$line" | grep -qaiE "hit your (usage|session) limit|usage limit|rate_limit" ;;
+    *)
+      # Unknown transcript cli: keep the legacy whole-line text match (no regress).
+      printf '%s' "$line" | grep -qaE "$pat" ;;
+  esac
 }
 
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
@@ -48,7 +88,7 @@ _watch_grant_consent() {
 }
 
 cmd_watch() {
-  local cli="" profile="" got_profile=0 to="" auto=0 check=0 pattern=""
+  local cli="" profile="" got_profile=0 to="" auto=0 check=0 pattern="" pattern_explicit=0
   local -a positionals=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -112,7 +152,16 @@ EOF
     *) log_fail "Too many arguments. Usage: clikae watch $cli [<profile>]" ;;
   esac
 
-  [ -n "$pattern" ] || pattern="${CLIKAE_LIMIT_PATTERN:-$(_watch_default_pattern)}"
+  # An explicit pattern (--pattern flag or $CLIKAE_LIMIT_PATTERN) is a deliberate
+  # override → pure text match. Only the built-in default triggers structural
+  # detection (see _watch_line_is_real_limit).
+  if [ -n "$pattern" ]; then
+    pattern_explicit=1
+  elif [ -n "${CLIKAE_LIMIT_PATTERN:-}" ]; then
+    pattern="$CLIKAE_LIMIT_PATTERN"; pattern_explicit=1
+  else
+    pattern="$(_watch_default_pattern)"
+  fi
 
   # Launch-only targets (single-account vendors like antigravity) have no adapter
   # and no per-dir transcript — their only limit signal is a log file. If <cli>
@@ -143,16 +192,30 @@ EOF
   transcript="$(adapter_transcript_path "$dir" || true)"
   [ -n "$transcript" ] || log_fail "No session for this directory under '$cli/$profile' (nothing to watch)."
 
-  # --check: just report whether the pattern fires on the session so far.
+  # --check: report whether a GENUINE limit marker fires on the session so far.
+  # Line-by-line via the structured matcher, so a transcript that merely discusses
+  # a limit (the old whole-file grep's classic false positive) no longer trips it.
   if [ "$check" -eq 1 ]; then
-    if grep -qaE "$pattern" "$transcript"; then
-      log_warn "A limit-like marker IS present in the current session."
-      log_dim "(pattern: $pattern)"
-      grep -aoE "$pattern" "$transcript" | sort -u | sed 's/^/  matched: /'
-      return 0
+    local found=0 line sid
+    sid="$(basename "$transcript" .jsonl)"
+    while IFS= read -r line; do
+      _watch_line_is_real_limit "$cli" "$line" "$pattern" "$pattern_explicit" || continue
+      if [ "$found" -eq 0 ]; then
+        log_warn "A genuine limit marker IS present (session ${sid%%-*}…)."
+        found=1
+      fi
+      # Show a snippet of what matched: the limit phrase if present, else the
+      # custom pattern's hit. Guard every grep so a no-match never aborts under
+      # the caller's pipefail (the display is cosmetic, not control flow).
+      local snip
+      snip="$(printf '%s' "$line" | grep -aoiE "hit your [a-z]+ limit[^\"\\]*" | head -n 1 || true)"
+      [ -n "$snip" ] || snip="$(printf '%s' "$line" | grep -aoE "$pattern" | head -n 1 || true)"
+      [ -z "$snip" ] || printf '  matched: %s\n' "$snip"
+    done < "$transcript"
+    if [ "$found" -eq 0 ]; then
+      log_ok "No genuine limit marker found in the current session."
+      log_dim "(claude requires isApiErrorMessage + model:<synthetic>; override with --pattern / \$CLIKAE_LIMIT_PATTERN)"
     fi
-    log_ok "No limit marker found in the current session."
-    log_dim "(pattern: $pattern — unconfirmed; tune with --pattern / \$CLIKAE_LIMIT_PATTERN)"
     return 0
   fi
 
@@ -160,7 +223,7 @@ EOF
   local target="$to"
   if [ -z "$target" ]; then
     target="$(pool_next "$cli/$profile")"
-    [ -n "$target" ] || log_fail "No next tank: give --to <target>, or add tanks with \`clikae pool add\`."
+    [ -n "$target" ] || log_fail "No next tank: give --to <target>, or fill the pool with \`clikae pool seed\`."
   fi
   validate_handoff_target "$target"
 
@@ -169,10 +232,10 @@ EOF
                     || log_dim "Will ask before switching (use --auto to switch automatically)."
   log_dim "Pattern is a best guess; if it never fires, see \`clikae watch --help\`. Ctrl-C to stop."
 
-  # Tail only NEW lines; stop at the first limit-looking line.
+  # Tail only NEW lines; stop at the first GENUINE limit line (structured match).
   local line=""
   while IFS= read -r line; do
-    printf '%s' "$line" | grep -qaE "$pattern" || continue
+    _watch_line_is_real_limit "$cli" "$line" "$pattern" "$pattern_explicit" || continue
     echo
     log_warn "Looks like $cli/$profile hit its limit."
     _watch_do_handoff "$cli" "$profile" "$target" "$auto"
