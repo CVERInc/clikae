@@ -33,6 +33,18 @@ detect_shell_rc() {
   esac
 }
 
+# detect_shell_kind -> the user's shell family: zsh | bash | fish | sh.
+# Used where the SYNTAX (not just the rc path) differs — notably fish, which
+# has no inline `VAR=val cmd` and a different alias form.
+detect_shell_kind() {
+  case "$(basename "${SHELL:-/bin/bash}")" in
+    zsh)  printf 'zsh\n'  ;;
+    bash) printf 'bash\n' ;;
+    fish) printf 'fish\n' ;;
+    *)    printf 'sh\n'   ;;
+  esac
+}
+
 # Returns 0 if a block with the given id is present in the rc file.
 rc_has_block() {
   local rc_file="$1" id="$2"
@@ -56,10 +68,12 @@ rc_add_block() {
   if rc_has_block "$rc_file" "$id"; then
     log_fail "Block '$id' already exists in $rc_file. Remove it first."
   fi
-  # Back up if file exists.
+  # Back up if file exists; otherwise create it (and any missing parent dir —
+  # fish's ~/.config/fish/ may not exist yet).
   if [ -f "$rc_file" ]; then
     cp "$rc_file" "$rc_file.clikae.bak.$(date +%Y%m%d-%H%M%S)"
   else
+    mkdir -p "$(dirname "$rc_file")"
     touch "$rc_file"
   fi
   rc_wrap_block "$id" >> "$rc_file"

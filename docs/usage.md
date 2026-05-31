@@ -52,6 +52,15 @@ clikae remove claude work
 | `info` | Show install paths and profile counts. |
 | `adapters` | List supported CLIs with descriptions. |
 
+## Shells
+
+`clikae` auto-detects your shell from `$SHELL` and writes the alias to the right
+rc file: **zsh** (`~/.zshrc`), **bash** (`~/.bash_profile` on macOS, else
+`~/.bashrc`), and **fish** (`~/.config/fish/config.fish`). For fish it emits fish
+syntax — `alias <name> 'env VAR=val <binary>'` — because fish has no inline
+`VAR=val cmd`; the result behaves identically. `clikae remove` cleans up the
+block in any of them.
+
 ## Migrating an existing setup
 
 Already juggling accounts by hand — say a `~/.claude-acct-a` / `~/.claude-acct-b`

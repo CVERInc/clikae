@@ -21,7 +21,9 @@ The alias is wrapped in a sentinel block:
   alias <name>='<env vars> <binary>'
   # <<< clikae:<cli>.<profile> <<<
 
-`clikae remove` will clean it up.
+The block is written to your shell's rc file (zsh/bash/fish auto-detected). For
+fish it uses fish syntax (`alias <name> 'env <vars> <binary>'`, since fish has
+no inline VAR=val). `clikae remove` will clean it up regardless of shell.
 EOF
         return 0
         ;;
@@ -48,8 +50,17 @@ EOF
 
   # Build the full command (env prefix + binary + any flag suffix) from the
   # adapter — handles env-dir/env-file/env-var and flag strategies uniformly.
-  local cmd
-  cmd="$(adapter_command "$d")"
+  # fish needs both a different command form (no inline VAR=val) and a different
+  # alias syntax, so branch on the shell family.
+  local cmd shell_kind alias_line
+  shell_kind="$(detect_shell_kind)"
+  if [ "$shell_kind" = "fish" ]; then
+    cmd="$(adapter_command_fish "$d")"
+    alias_line="alias ${name} '${cmd}'"
+  else
+    cmd="$(adapter_command "$d")"
+    alias_line="alias ${name}='${cmd}'"
+  fi
 
   local rc_file rc_id
   rc_file="$(detect_shell_rc)"
@@ -61,7 +72,7 @@ EOF
   fi
 
   rc_add_block "$rc_file" "$rc_id" <<EOF
-alias ${name}='${cmd}'
+${alias_line}
 EOF
 
   log_ok "Added alias '${name}' to $rc_file"

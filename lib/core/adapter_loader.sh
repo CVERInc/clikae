@@ -70,6 +70,26 @@ adapter_command() {
   printf '%s\n' "$cmd"
 }
 
+# adapter_command_fish <profile_dir>  -> the run-command in FISH syntax.
+# fish has no inline `VAR=val cmd` env-setting (it's a syntax error), so when
+# the adapter contributes env vars we route through `env VAR=val … binary`,
+# which fish executes fine. Flag-strategy adapters (no env prefix) are identical
+# to the POSIX form. Used by `clikae alias` when the user's shell is fish.
+adapter_command_fish() {
+  local profile_dir="$1"
+  local prefix suffix binary cmd
+  prefix="$(adapter_env_prefix "$profile_dir")"
+  suffix="$(adapter_cmd_suffix "$profile_dir")"
+  binary="$(adapter_meta_cli_binary)"
+  if [ -n "$prefix" ]; then
+    cmd="env $prefix $binary"
+  else
+    cmd="$binary"
+  fi
+  [ -n "$suffix" ] && cmd="$cmd $suffix"
+  printf '%s\n' "$cmd"
+}
+
 # adapter_label <profile_dir>  -> a human-readable account label for this
 # profile (e.g. the logged-in email), or empty. Optional hook
 # `adapter_account_label`; env adapters that can't tell simply don't define it.
