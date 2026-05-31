@@ -18,7 +18,8 @@ load '../helpers'
   clikae init codex cheap
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"your tanks"* ]]
+  # Header summary: 3 tanks across 2 CLIs.
+  [[ "$output" == *"3 tanks across 2 CLIs"* ]]
   [[ "$output" == *"claude"* ]]
   [[ "$output" == *"work"* ]]
   [[ "$output" == *"personal"* ]]

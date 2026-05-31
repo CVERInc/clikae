@@ -29,15 +29,23 @@ _home_active_for() {
 # list_all_profiles, sorted by cli then profile so we can group as we go.
 _home_tank_board() {
   local rows="$1"
-  log_bold "clikae  ｷﾘｶｴ  ·  your tanks"
+  # Header summary: N tanks across M CLIs.
+  local n_tanks n_clis
+  n_tanks="$(printf '%s\n' "$rows" | grep -c .)"
+  n_clis="$(printf '%s\n' "$rows" | cut -f1 | sort -u | grep -c .)"
+  printf '%bclikae  ｷﾘｶｴ%b  %b·  %s tank%s across %s CLI%s%b\n' \
+    "$__C_BOLD" "$__C_RESET" "$__C_DIM" \
+    "$n_tanks" "$([ "$n_tanks" = 1 ] || echo s)" \
+    "$n_clis"  "$([ "$n_clis" = 1 ] || echo s)" "$__C_RESET"
   echo ""
-  local cur_cli="" active="" cli profile path label
+  local cur_cli="" active="" cli profile path label cli_count
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
     if [ "$cli" != "$cur_cli" ]; then
       cur_cli="$cli"
       active="$(_home_active_for "$cli")"
-      printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
+      cli_count="$(printf '%s\n' "$rows" | awk -F'\t' -v c="$cli" '$1==c{n++} END{print n+0}')"
+      printf '  %b%s%b %b(%s)%b\n' "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$cli_count" "$__C_RESET"
     fi
     label="$(
       load_adapter "$cli" >/dev/null 2>&1 || exit 0
@@ -94,10 +102,10 @@ EOF
     printf '  No tanks yet. clikae supports %d CLIs (none of them detected on PATH here).\n' "$total"
   fi
   echo ""
-  log_bold "Fill your first tank (pick a CLI you use):"
-  log_dim  "  clikae init $example work --alias     # then: source your rc, run $example-work"
+  log_bold "  Fill your first tank (pick a CLI you use):"
+  log_dim  "    clikae init $example work --alias     # then: source your rc, run $example-work"
   echo ""
-  log_dim "See every supported CLI:  clikae adapters        Full machine check:  clikae doctor"
+  log_dim "  See every supported CLI:  clikae adapters     Full machine check:  clikae doctor"
 }
 
 cmd_home() {
