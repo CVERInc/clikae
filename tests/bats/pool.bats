@@ -36,6 +36,45 @@ load '../helpers'
   [[ "$output" == *"Unknown handoff target"* ]]
 }
 
+@test "pool --json emits [] for an empty pool" {
+  run clikae pool --json
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+
+  # `pool list --json` is the same path.
+  run clikae pool list --json
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+}
+
+@test "pool --json emits position/target/cli/profile in priority order" {
+  clikae pool add claude/a
+  clikae pool add codex/work
+  clikae pool add antigravity
+
+  run clikae pool --json
+  [ "$status" -eq 0 ]
+  # Valid JSON.
+  echo "$output" | python3 -m json.tool >/dev/null
+
+  # Positions in priority order.
+  [[ "$output" == *'"position":1,"target":"claude/a","cli":"claude","profile":"a"'* ]]
+  [[ "$output" == *'"position":2,"target":"codex/work","cli":"codex","profile":"work"'* ]]
+  # Launch-only target → profile null.
+  [[ "$output" == *'"position":3,"target":"antigravity","cli":"antigravity","profile":null'* ]]
+
+  # The human list is unchanged alongside --json.
+  run clikae pool list
+  [[ "$output" == *"1. claude/a"* ]]
+  [[ "$output" == *"3. antigravity"* ]]
+}
+
+@test "pool list --json rejects unexpected arguments" {
+  run clikae pool list --bogus
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unexpected argument"* ]]
+}
+
 @test "pool_next advances down the priority list" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/pool.sh"
