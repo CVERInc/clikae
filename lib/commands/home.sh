@@ -276,6 +276,24 @@ EOF
   return 1
 }
 
+# Rename the shell alias for a selected tank row (the `a` key): type a new name,
+# then `clikae alias <cli> <profile> --name <new>` (which replaces the old block).
+_home_rename_alias() {
+  local kind cli profile label alias active note
+  IFS=$'\037' read -r kind cli profile label alias active note <<EOF
+$1
+EOF
+  : "$label" "$active" "$note"
+  [ "$kind" = "tank" ] || return 0   # only tanks have a managed alias
+  printf '\nRename alias for %s/%s' "$cli" "$profile"
+  [ -n "$alias" ] && printf ' (currently: %s)' "$alias"
+  printf '\n'
+  local newname
+  read -rp "  New alias name: " newname || return 0
+  [ -n "$newname" ] || { printf '  Cancelled — alias unchanged.\n'; return 0; }
+  exec "$CLIKAE_BIN" alias "$cli" "$profile" --name "$newname"
+}
+
 # Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
 # the profile name, then `clikae init <cli> <profile> --alias`.
 _home_new_tank() {
@@ -293,7 +311,7 @@ _home_new_tank() {
 _home_pick_draw() {
   local items="$1" sel="$2"
   printf '\033[H\033[2J'
-  printf '%bclikae  ｷﾘｶｴ%b  %b· pick a tank    ↑↓ move · ⏎ open · n new · q quit%b\n\n' \
+  printf '%bclikae  ｷﾘｶｴ%b  %b· pick a tank    ↑↓ move · ⏎ open · n new · a alias · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot
   while IFS=$'\037' read -r kind cli profile label alias active note; do
@@ -334,7 +352,7 @@ _home_pick() {
   trap '_home_tty_leave; exit 130' INT TERM
   printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
 
-  local sel=0 key rest sel_cli
+  local sel=0 key rest sel_cli sel_row
   while :; do
     _home_pick_draw "$items" "$sel"
     IFS= read -rsn1 key || { key="q"; }
@@ -359,6 +377,15 @@ _home_pick() {
         _home_new_tank "$sel_cli"
         return 0
         ;;
+      a)
+        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+        # Only tanks have a managed alias; ignore the key on agents/targets.
+        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
+          _home_tty_leave; trap - EXIT INT TERM
+          _home_rename_alias "$sel_row"
+          return 0
+        fi
+        ;;
       ''|$'\n'|$'\r')
         _home_tty_leave; trap - EXIT INT TERM
         _home_launch "$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
@@ -380,7 +407,8 @@ Usage: clikae            (no arguments)
 
 Opens the home dashboard — your "tank board". On a real terminal it's an
 interactive launcher: ↑/↓ (or j/k) to move, Enter to open the selected tank,
-`n` to create a new one, `q`/Esc to quit (leaving the board on screen). It lists
+`n` to create a new one, `a` to rename a tank's shell alias, `q`/Esc to quit
+(leaving the board on screen). It lists
 every profile grouped by CLI (the one active in this shell marked, with account
 and alias name) plus an "Also available" section of relay-capable CLIs/targets
 you can open without a tank (codex, agy), and the fuel-pool order.
