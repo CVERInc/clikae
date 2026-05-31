@@ -24,13 +24,20 @@
 #   • codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
 #       + `{"type":"error","message":"You've hit your usage limit. … try again at
 #       <date>."}` and exits non-zero.
-#   • agy/Gemini — best-guess (RESOURCE_EXHAUSTED / quota) until captured live.
+#   • agy/Gemini — CONFIRMED: `agy -p` hitting its limit exits 0 with EMPTY
+#       stdout/stderr; the marker lands ONLY in ~/.gemini/antigravity-cli/cli.log
+#       as `agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota
+#       reached. … Resets in <Hh Mm>.` So agy can't be detected via exit code,
+#       stdout, or a transcript — you must scan that cli.log. (Earlier guess
+#       "quota exceeded" was wrong; the real text is "Individual quota reached".)
+#       NOTE: `clikae watch` does NOT yet read agy's cli.log — wiring watch to
+#       scan it is an unbuilt feature; this only records the confirmed marker.
 # Note "session limit" (claude) vs "usage limit" (codex) — keep both.
 # Caveat: these are text matches, so a transcript that merely *discusses* a limit
 # (e.g. working on clikae itself) can trip them. Override anytime with --pattern /
 # $CLIKAE_LIMIT_PATTERN.
 _watch_default_pattern() {
-  printf '%s' "You've hit your (session|usage) limit|session limit|usage limit|usage_limit|increase your usage limit|\"type\":\"turn.failed\"|rate_limit_error|rate_limited|RESOURCE_EXHAUSTED|quota exceeded|Approaching your usage|limit reached|5-hour limit|weekly limit|resets [0-9]|resets at"
+  printf '%s' "You've hit your (session|usage) limit|session limit|usage limit|usage_limit|increase your usage limit|\"type\":\"turn.failed\"|rate_limit_error|rate_limited|RESOURCE_EXHAUSTED|Individual quota reached|quota exceeded|Approaching your usage|limit reached|5-hour limit|weekly limit|resets [0-9]|resets at"
 }
 
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
