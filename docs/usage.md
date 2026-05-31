@@ -49,6 +49,7 @@ clikae remove claude work
 | `handoff <cli> [<profile>] [--out <file>] [--summarizer <cmd>]` | Write a portable handoff brief from the current session for another model/vendor to pick up. |
 | `watch <cli> [<profile>] [--auto] [--to <target>]` | Watch a session and fall through to the next pool tank when it runs dry. |
 | `pool [list] [--json]` / `pool add\|remove <target>` | Manage the fuel pool — the ordered tanks `watch` falls through to. `--json` emits a JSON array ({position, target, cli, profile}) for scripts and the GUI. |
+| `antigravity enable\|add\|use\|list\|disable` | **Opt-in** multi-account for Antigravity (`agy`). agy hardcodes `~/.gemini` and ignores env vars, so the only way to switch accounts is to swap that directory. `enable` is a consciously-enabled power mode (warns, backs up `~/.gemini`, manages it via a symlink); it's **global** (one account active at a time across all terminals) and fully reversible with `disable`. Default clikae never touches `~/.gemini`. |
 | `list [-p\|--paths] [--json]` | List all profiles, with the logged-in account where the adapter can tell. `--json` emits machine-readable output ({cli, profile, account, path}) for scripts and the GUI. |
 | `status [<cli>] [--json]` | Show which profile each CLI is on **in this shell**. `--json` emits machine-readable output (one object per CLI with a `state` enum) for scripts and the GUI. |
 | `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |

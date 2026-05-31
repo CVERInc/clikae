@@ -115,6 +115,18 @@ _fake_bin() {
   [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
 }
 
+@test "antigravity slots render as tanks with the active one marked (multi mode)" {
+  # Simulate the opt-in multi-account state: slots + consent + the ~/.gemini link.
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default" "$CLIKAE_HOME/profiles/antigravity/work"
+  : > "$CLIKAE_HOME/antigravity-multi-consent"
+  ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"antigravity"* ]]
+  [[ "$output" == *"work"* ]]
+  [[ "$output" == *"active here"* ]]          # work is where the symlink points
+}
+
 @test "bare clikae changes nothing on disk (read-only)" {
   clikae init claude work
   before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"

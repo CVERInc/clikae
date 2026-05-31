@@ -16,13 +16,23 @@
 _home_active_for() {
   local cli="$1"
   (
-    load_adapter "$cli" >/dev/null 2>&1 || exit 0
-    local var strategy value
-    var="$(adapter_meta_env_var)"
-    [ -n "$var" ] || exit 0     # flag-strategy CLIs aren't detectable from env
-    strategy="$(adapter_meta_strategy)"
-    value="${!var}"
-    resolve_active_profile "$cli" "$strategy" "$value"
+    # Gate on the adapter FILE existing — load_adapter exit 1s on a miss, which
+    # would kill this subshell before the target branch could run.
+    if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      load_adapter "$cli" >/dev/null 2>&1 || exit 0
+      local var strategy value
+      var="$(adapter_meta_env_var)"
+      [ -n "$var" ] || exit 0     # flag-strategy CLIs aren't detectable from env
+      strategy="$(adapter_meta_strategy)"
+      value="${!var}"
+      resolve_active_profile "$cli" "$strategy" "$value"
+    elif [ -f "$CLIKAE_LIB/targets/$cli.sh" ]; then
+      # Opt-in target tanks (e.g. antigravity multi-account) expose their active
+      # slot via target_active_profile rather than an env var.
+      # shellcheck source=/dev/null
+      source "$CLIKAE_LIB/targets/$cli.sh" 2>/dev/null || exit 0
+      declare -F target_active_profile >/dev/null 2>&1 && target_active_profile
+    fi
   )
 }
 
@@ -63,7 +73,11 @@ _home_items() {
       cur_cli="$cli"
       active_for="$(_home_active_for "$cli")"
     fi
-    label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
+    if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
+    else
+      label=""   # target-backed tanks (e.g. antigravity) have no adapter label
+    fi
     alias="$(_home_alias_for "$cli" "$profile")"
     if [ -n "$active_for" ] && [ "$profile" = "$active_for" ]; then a=1; else a=0; fi
     printf 'tank\037%s\037%s\037%s\037%s\037%d\037\n' "$cli" "$profile" "$label" "$alias" "$a"
@@ -230,7 +244,14 @@ $1
 EOF
   : "$label" "$alias" "$active" "$note"
   case "$kind" in
-    tank)   exec "$CLIKAE_BIN" run "$cli" "$profile" ;;
+    tank)
+      # antigravity tanks aren't env-switchable: select the slot, then run agy.
+      if [ "$cli" = "antigravity" ]; then
+        "$CLIKAE_BIN" antigravity use "$profile" && exec agy
+      else
+        exec "$CLIKAE_BIN" run "$cli" "$profile"
+      fi
+      ;;
     agent)  local bin; bin="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_meta_cli_binary)"; exec "$bin" ;;
     target) exec "$cli" ;;
   esac
@@ -309,6 +330,12 @@ $2
 EOF
   : "$rest"
   [ "$kind" = "tank" ] || return 0
+  if [ "$cli" = "antigravity" ]; then
+    printf 'agy is single-account — relay carries a live session between accounts of\n'
+    printf 'the same CLI, which agy cannot do. Switch slots instead:\n'
+    printf '  clikae antigravity use %s\n' "$profile"
+    return 0
+  fi
   local from
   from="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c && $6=="1"{print $3; exit}')"
   if [ -z "$from" ]; then

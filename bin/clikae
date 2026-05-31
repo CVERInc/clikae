@@ -53,11 +53,12 @@ cmd="${1:-home}"
 shift || true
 
 case "$cmd" in
-  home|dashboard|doctor|demo|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
+  home|dashboard|doctor|demo|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|antigravity|agy|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
     case "$cmd" in
       ls) cmd="list" ;;
       rm) cmd="remove" ;;
       dashboard) cmd="home" ;;
+      agy) cmd="antigravity" ;;
       --help|-h) cmd="help" ;;
       --version|-v) cmd="version" ;;
     esac

@@ -34,6 +34,7 @@ Commands:
   handoff <cli> [profile]          Write a portable handoff brief (--to switches model/vendor)
   watch <cli> [profile]            Watch for a dry tank and offer/auto switch to the next one
   pool [add|remove] [target]       Manage the fuel pool (ordered tanks for watch to fall through)
+  antigravity <cmd>                Opt-in multi-account for agy (enable/add/use/disable)
   list                             List all profiles (with the logged-in account)
   status [cli]                     Show which profile each CLI is on in this shell
   rename <cli> <old> <new>         Rename a profile (dir, alias, login carried over)

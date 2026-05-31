@@ -22,6 +22,16 @@ target_meta_binary() { echo "agy"; }
 # by default it's single-account (launch-only).
 target_meta_note()   { echo "single-account · opens ~/.gemini directly"; }
 
+# When the opt-in multi-account mode is enabled (see `clikae antigravity`), the
+# active account is whichever slot the ~/.gemini symlink points at. The dashboard
+# uses this to mark the active tank. Empty when not enabled / not a clikae slot.
+target_active_profile() {
+  local link="$HOME/.gemini" target slots="$CLIKAE_HOME/profiles/antigravity"
+  [ -L "$link" ] || return 0
+  target="$(readlink "$link")"
+  case "$target" in "$slots"/*) basename "$target" ;; esac
+}
+
 # target_start_with_prompt <prompt> [args...]
 # Start agy seeded with the brief. No per-profile dir (single-account).
 target_start_with_prompt() {

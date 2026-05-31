@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae antigravity` — opt-in, sudo-style multi-account for agy.** Antigravity
+  hardcodes its state under `~/.gemini` and ignores every env var (no config-dir
+  flag), so clikae's clean per-shell model can't switch it — by default it stays
+  single-account (launch-only, shown as its own dashboard group with a `◈`).
+  But rather than withhold the capability, clikae offers it as a consciously
+  enabled **power mode**: `clikae antigravity enable` warns about the tradeoffs
+  (it turns your real `~/.gemini` into a managed symlink; it's **global** — one
+  account active at a time across all terminals; swapping under a running agy can
+  corrupt it), asks first, backs up `~/.gemini`, and migrates it into a `default`
+  slot. Then `add <name>` / `use <name>` switch accounts by repointing the
+  symlink (refusing while an `agy` process is live), `list`/`status` show slots
+  with the active one marked, and `disable` restores a normal single-account
+  `~/.gemini`. When enabled, the slots appear as real tanks on the dashboard
+  (active one marked, Enter launches via `use` + agy). Covered by bats (the full
+  enable→add→use→disable lifecycle, consent gating, and the dashboard marker),
+  all against an isolated sandbox so no real `~/.gemini` is touched.
+
 - **`clikae demo` — a guided tour in a throwaway sandbox.** A non-interactive,
   ~30-second walkthrough that runs entirely under a temp `CLIKAE_HOME`: it shows
   two fully isolated accounts of one CLI, the live tank board (one marked active
