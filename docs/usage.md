@@ -43,6 +43,7 @@ clikae remove claude work
 | `app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
 | `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
 | `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
+| `handoff <cli> [<profile>] [--out <file>] [--summarizer <cmd>]` | Write a portable handoff brief from the current session for another model/vendor to pick up. |
 | `list [-p\|--paths]` | List all profiles, with the logged-in account where the adapter can tell. |
 | `status [<cli>]` | Show which profile each CLI is on **in this shell**. |
 | `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |
@@ -126,6 +127,108 @@ burns the target profile's quota. The source profile is left completely untouche
 > (`<config-dir>/projects/<slug>/<id>.jsonl`) and `--resume`. It's verified
 > against current Claude Code; if a future version changes that layout, relay
 > falls back to a fresh start rather than doing anything destructive.
+
+## Handing off to another model or vendor
+
+`relay` keeps the *same* conversation on another **account of the same CLI**. But
+sometimes the next tank is a different *model* or *vendor* (a cheaper one to do
+the dirty work, or simply the one that still has quota), and there's no shared
+transcript format to resume. The portable answer is a **handoff brief**: a short
+note — what you're doing, what's done, what's next — that any assistant can read
+to pick up where you left off.
+
+```bash
+# Write a brief from the current directory's most recent claude session:
+clikae handoff claude                      # uses this shell's profile
+clikae handoff claude work --out HANDOFF.md # name the profile, save to a file
+```
+
+By default you get a **raw extract** (session metadata + your recent prompts),
+clearly labelled as raw — dependency-free, but not a real summary. For a proper
+brief, point clikae at a **local or cheap model** so writing the brief costs
+nothing on the tank that just ran dry:
+
+```bash
+export CLIKAE_HANDOFF_SUMMARIZER='llm -m my-local-model'   # any command works
+clikae handoff claude                                       # model writes the brief
+```
+
+The summarizer command receives, on stdin, an instruction line followed by the
+tail of the session transcript, and writes the brief to stdout. Anything that
+reads stdin and writes stdout works — a local LLM CLI, an on-device model
+wrapper, etc. If it produces nothing, clikae falls back to the raw extract so a
+handoff is never lost. `handoff` is **read-only**: it never touches the session
+or any profile.
+
+### Handing off in one step with `--to`
+
+Add `--to <target>` and clikae writes the brief *and* starts the next tank with
+it as the opening prompt — the actual "switch model / vendor" move:
+
+```bash
+clikae handoff claude --to codex/work    # dry Claude → continue on Codex
+clikae handoff claude a --to claude/b    # hand off to another Claude account
+clikae handoff claude --to antigravity   # hand off to Google's Antigravity (agy)
+```
+
+A target is one of:
+
+- **`<cli>/<profile>`** — another account of a *switchable* CLI (currently
+  `claude` and `codex` know how to start from a brief). New turns burn that
+  profile's quota.
+- **`antigravity`** — a *handoff target*: a single-account vendor you can hand off
+  *to* but can't profile-switch, because its CLI (`agy`) hardcodes `~/.gemini`
+  with no config-dir override. `--to antigravity` starts `agy -i` with the brief.
+  Such targets live in `lib/targets/`.
+
+`--out` still works alongside `--to` if you also want the brief saved to a file.
+
+- The brief is tied to `$PWD` (like `relay`): it summarises the conversation for
+  the directory you're standing in.
+- Tune how much transcript is fed/scanned with `$CLIKAE_HANDOFF_LINES` (default
+  `60`).
+
+## Ambient relay: notice a dry tank and switch (`watch` + `pool`)
+
+Instead of switching by hand, let clikae watch for the moment a tank runs dry and
+fall through to the next one. First, set up your **fuel pool** — the tanks to use,
+in priority order:
+
+```bash
+clikae pool add claude/a       # most preferred
+clikae pool add claude/b
+clikae pool add codex/work
+clikae pool add antigravity     # last resort
+clikae pool list
+```
+
+Then watch the current session:
+
+```bash
+clikae watch claude            # offer to switch when it looks dry
+clikae watch claude --auto     # switch automatically (asks once for consent)
+clikae watch claude --to codex/work   # ignore the pool; go straight here
+```
+
+When it detects a dry tank it hands off to the next pool entry (the one after the
+profile you're on) via `clikae handoff`. By default it **asks first**; `--auto`
+switches automatically after a **one-time consent** (remembered in
+`$CLIKAE_HOME/auto-relay-consent` — delete that file to revoke), and always tells
+you what it did.
+
+> **Honest caveat.** An interactive CLI hitting its usage limit doesn't exit,
+> returns no code, and fires no hook — so the only thing clikae can watch is what
+> the limit writes into the session transcript, and **that exact marker isn't
+> confirmed yet** (you can't force a real limit without burning a tank). The match
+> pattern is a best guess. Confirm/tune it the first time you actually get limited:
+>
+> ```bash
+> clikae watch claude --check          # would the pattern fire on this session?
+> CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
+> ```
+>
+> If you discover the real marker, set `$CLIKAE_LIMIT_PATTERN` (and please tell the
+> project so the default can be fixed).
 
 ## Seeing which profile you're on
 

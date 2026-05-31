@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae handoff <cli> [<profile>]` — a portable session handoff brief.** The
+  real pain when a tank runs dry mid-task isn't the lost conversation, it's that
+  the *next* tank starts blind. `handoff` reads the current directory's most
+  recent session (read-only) and writes a short, vendor-neutral brief — what's
+  being worked on, what's done, what's next — that any other profile / model /
+  vendor can pick up. With `$CLIKAE_HANDOFF_SUMMARIZER` (or `--summarizer <cmd>`)
+  set to a **local or cheap model**, the session tail is piped to it and its
+  output is the brief, so it costs nothing on the tank that just ran dry; with no
+  summarizer you get a dependency-free raw extract (metadata + recent prompts),
+  clearly labelled as raw. New optional adapter hook `adapter_transcript_path`
+  (claude reads `<dir>/projects/<pwd-slug>/<id>.jsonl`; the slug rule now lives
+  there and `adapter_relay` reuses it). Covered by bats. Pure bash/grep/sed — no
+  jq, python, or network.
+- **`clikae handoff … --to <target>` — switch model or vendor in one command.**
+  After writing the brief, hand it straight to the next tank: it starts that
+  target seeded with the brief as its opening prompt (exec, like `run`/`relay`).
+  Targets are either another account of a *switchable* CLI — `--to codex/work`,
+  `--to claude/b` — via a new optional adapter hook `adapter_start_with_prompt`
+  (claude + codex), or a **handoff target**: a single-account vendor you can hand
+  off to but can't profile-switch. First one: **`antigravity`** (`--to antigravity`
+  starts Google's `agy -i` with the brief). Antigravity's CLI hardcodes `~/.gemini`
+  with no config-dir override (verified on a real install), so it can't be a
+  switchable adapter — handoff targets live in `lib/targets/` and stay out of the
+  profile/adapter machinery (and the cross-language PS parity).
+- **`clikae watch` + `clikae pool` — ambient relay (notice a dry tank, switch).**
+  `watch <cli> [<profile>]` tails the current session's transcript and, when it
+  looks like the tank ran dry, hands off to the next tank — **offering first** by
+  default, or **automatically after a one-time consent** with `--auto` (it asks
+  once, remembers in `$CLIKAE_HOME/auto-relay-consent`, then auto-switches and
+  tells you). Where it goes next comes from the **fuel pool**: an ordered,
+  user-owned list managed by `clikae pool add|remove|list` (or `--to <target>`
+  to override). The handoff reuses `clikae handoff`, so a switchable target keeps
+  going on its own quota. **Honesty caveat, also in the code and `--help`:** an
+  interactive CLI hitting its limit gives no exit code and fires no hook, so the
+  only signal is what the limit writes into the transcript — and the exact marker
+  is *not yet confirmed against a real limit event*. The match pattern is a
+  best guess, fully overridable (`--pattern` / `$CLIKAE_LIMIT_PATTERN`), and
+  `clikae watch --check` reports whether it would fire on the current session so
+  you can confirm/tune it the first time you actually get limited. The live tail
+  loop is smoke-tested; detection, pool fall-through, and consent are bats-covered.
+- **Fixed an adapter-hook leak across adapters.** `load_adapter` now clears all
+  adapter hooks before sourcing the next adapter, so an optional hook one adapter
+  defines (e.g. `adapter_start_with_prompt`) is never inherited by another that
+  doesn't — exposed by `handoff --to`, the first path to load two adapters in one
+  process.
 - **Account labels + `clikae rename` (stop squinting at `a`/`b`).** `clikae list`
   and `clikae status` now show an **ACCOUNT** column with the logged-in account
   where the adapter can read it — for claude, the email from `.claude.json` (via a

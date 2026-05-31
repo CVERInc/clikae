@@ -28,6 +28,9 @@ Commands:
   alias <cli> <profile>            Write a shell alias for the profile
   run <cli> <profile> [-- args]    Run a CLI with the given profile (no alias needed)
   relay <cli> [from] <to>          Hand the current session to another profile (e.g. on a usage limit)
+  handoff <cli> [profile]          Write a portable handoff brief (--to switches model/vendor)
+  watch <cli> [profile]            Watch for a dry tank and offer/auto switch to the next one
+  pool [add|remove] [target]       Manage the fuel pool (ordered tanks for watch to fall through)
   list                             List all profiles (with the logged-in account)
   status [cli]                     Show which profile each CLI is on in this shell
   rename <cli> <old> <new>         Rename a profile (dir, alias, login carried over)

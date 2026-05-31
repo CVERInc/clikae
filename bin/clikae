@@ -37,13 +37,17 @@ source "$CLIKAE_LIB/core/profile_store.sh"
 source "$CLIKAE_LIB/core/shell_rc.sh"
 # shellcheck source=../lib/core/adapter_loader.sh
 source "$CLIKAE_LIB/core/adapter_loader.sh"
+# shellcheck source=../lib/core/handoff.sh
+source "$CLIKAE_LIB/core/handoff.sh"
+# shellcheck source=../lib/core/pool.sh
+source "$CLIKAE_LIB/core/pool.sh"
 
 # Subcommand dispatch
 cmd="${1:-help}"
 shift || true
 
 case "$cmd" in
-  init|app|list|ls|status|remove|rm|run|relay|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
+  init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
     case "$cmd" in
       ls) cmd="list" ;;
       rm) cmd="remove" ;;

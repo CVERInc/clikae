@@ -90,6 +90,18 @@ load_adapter() {
     log_dim "To add your own, see docs/adding-an-adapter.md"
     exit 1
   fi
+  # Clear any adapter hooks left over from a previously loaded adapter before
+  # sourcing this one. Required hooks get redefined by every adapter, but the
+  # OPTIONAL ones (adapter_relay, adapter_start_with_prompt, …) would otherwise
+  # leak across adapters — e.g. `clikae handoff <a> --to <b>` loads two adapters
+  # in one process, and a hook b doesn't define must NOT be inherited from a.
+  unset -f adapter_meta_name adapter_meta_cli_binary adapter_meta_env_var \
+           adapter_meta_strategy adapter_meta_description \
+           adapter_export_env adapter_run adapter_init \
+           adapter_relay adapter_transcript_path adapter_start_with_prompt \
+           adapter_account_label adapter_migrate_credentials adapter_flag_args \
+           2>/dev/null || true
+
   # shellcheck source=/dev/null
   source "$f"
   # Verify required hooks exist.

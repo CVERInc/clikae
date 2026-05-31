@@ -27,6 +27,14 @@ adapter_run() {
   CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$@"
 }
 
+# Optional hook: start a fresh session under this profile, seeded with an initial
+# prompt. Used by `clikae handoff --to` to hand a brief to the next tank. Claude
+# Code takes an initial prompt as a positional argument.
+adapter_start_with_prompt() {
+  local profile_dir="$1" prompt="$2"; shift 2
+  CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$prompt" "$@"
+}
+
 # --- session carry-over for `clikae relay` ----------------------------------
 #
 # Claude Code stores each conversation as a JSONL transcript at
@@ -48,25 +56,34 @@ _claude_project_slug() {
   printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
 }
 
+# Optional hook: print the path to the *current directory's* most recent
+# transcript under the given config dir, or return non-zero if there is none.
+# Used by `clikae relay` (to carry/resume a session) and `clikae handoff` (to
+# summarise a session into a portable brief). Keeping the lookup here means the
+# slug rule lives in exactly one place.
+adapter_transcript_path() {
+  local dir="$1"
+  local proj
+  proj="$dir/projects/$(_claude_project_slug "$PWD")"
+  [ -d "$proj" ] || return 1
+  local latest
+  latest="$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n 1 || true)"
+  [ -n "$latest" ] || return 1
+  printf '%s\n' "$latest"
+}
+
 adapter_relay() {
   local from_dir="$1" to_dir="$2"; shift 2
 
-  local slug from_proj to_proj
-  slug="$(_claude_project_slug "$PWD")"
-  from_proj="$from_dir/projects/$slug"
-  to_proj="$to_dir/projects/$slug"
-
-  if [ ! -d "$from_proj" ]; then
-    log_warn "No Claude history for this directory under the source profile."
-    log_dim "(looked in $from_proj)"
-    return 1
-  fi
+  local to_proj
+  to_proj="$to_dir/projects/$(_claude_project_slug "$PWD")"
 
   # Most recently modified transcript = the conversation you were just in.
   local latest=""
-  latest="$(ls -t "$from_proj"/*.jsonl 2>/dev/null | head -n 1 || true)"
+  latest="$(adapter_transcript_path "$from_dir" || true)"
   if [ -z "$latest" ]; then
     log_warn "No Claude transcript found for this directory under the source profile."
+    log_dim "(looked under $from_dir/projects/$(_claude_project_slug "$PWD"))"
     return 1
   fi
 

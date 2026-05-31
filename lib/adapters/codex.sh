@@ -28,3 +28,10 @@ adapter_run() {
   local profile_dir="$1"; shift
   CODEX_HOME="$profile_dir" exec codex "$@"
 }
+
+# Optional hook: start a session seeded with an initial prompt (for
+# `clikae handoff --to codex/<profile>`). Codex takes a positional prompt.
+adapter_start_with_prompt() {
+  local profile_dir="$1" prompt="$2"; shift 2
+  CODEX_HOME="$profile_dir" exec codex "$prompt" "$@"
+}
