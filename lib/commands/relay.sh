@@ -14,8 +14,23 @@
 #
 # Non-destructive: the source profile is never modified; carry-over copies.
 
+# Render the relay preview card: which session, which direction, what it costs —
+# shown before anything moves so a relay is never a blind leap.
+_relay_preview_card() {
+  local cli="$1" from="$2" to="$3" sid="$4" last="$5" msgs="$6" title="$7"
+  printf '\n  %brelay%b  %b換油箱・接力%b\n\n' "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  printf '    %-9s%b%s%b  %b%s%b  %b──▶%b  %b%s%b\n' \
+    "tanks" "$__C_DIM" "$cli" "$__C_RESET" "$__C_BOLD" "$from" "$__C_RESET" \
+    "$__C_DIM" "$__C_RESET" "$__C_GREEN" "$to" "$__C_RESET"
+  printf '    %-9s%s  %b· ≈%s msgs · last active %s%b\n' \
+    "session" "${sid%%-*}" "$__C_DIM" "$msgs" "$last" "$__C_RESET"
+  printf '    %-9s%b%s%b\n' "carrying" "$__C_DIM" "$title" "$__C_RESET"
+  printf '    %-9snew turns burn %b%s%b · %s untouched %b✓%b\n\n' \
+    "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from" "$__C_GREEN" "$__C_RESET"
+}
+
 cmd_relay() {
-  local cli="" from="" to="" got_from=0
+  local cli="" from="" to="" got_from=0 assume_yes=0 want_fresh=0
   local -a positionals=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -42,6 +57,8 @@ Examples:
 EOF
         return 0
         ;;
+      -y|--yes) assume_yes=1; shift ;;
+      --fresh) want_fresh=1; shift ;;
       --) shift; break ;;
       -*) log_fail "Unknown flag: $1" ;;
       *)
@@ -88,10 +105,48 @@ EOF
   from_dir="$(ensure_profile --require "$cli" "$from")"
   to_dir="$(ensure_profile --require "$cli" "$to")"
 
+  # --fresh means: switch tanks but start a NEW conversation — don't carry the old
+  # session. The deliberate "different account, clean slate" path, kept distinct
+  # from relay's carry so the two intents never get muddled.
+  if [ "$want_fresh" -eq 1 ]; then
+    log_info "Opening $cli fresh under '$to' (no session carried over)."
+    adapter_run "$to_dir" "$@"   # execs
+  fi
+
   # If the adapter knows how to carry session state, let it. It exec's on
   # success; a non-zero return means "couldn't carry over" → fall through to a
   # plain start under <to>.
   if declare -F adapter_relay >/dev/null; then
+    # Preview + confirm: show exactly what's about to be carried, where, and what
+    # it costs — before anything moves. Skipped with --yes, with no TTY to ask on
+    # (automation), or when there's no session to describe.
+    if declare -F adapter_session_meta >/dev/null; then
+      local meta="" m_sid m_last m_msgs m_title
+      meta="$(adapter_session_meta "$from_dir" 2>/dev/null || true)"
+      if [ -n "$meta" ]; then
+        IFS=$'\037' read -r m_sid m_last m_msgs m_title <<EOF
+$meta
+EOF
+        _relay_preview_card "$cli" "$from" "$to" "$m_sid" "$m_last" "$m_msgs" "$m_title"
+        if [ "$assume_yes" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+          local ans=""
+          printf '  %bcarry to %s?%b  [%by%b] carry · [%bf%b] fresh · [%bN%b] cancel  ' \
+            "$__C_BOLD" "$to" "$__C_RESET" \
+            "$__C_GREEN" "$__C_RESET" "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+          IFS= read -r ans </dev/tty || ans=""
+          printf '\n'
+          case "$ans" in
+            y|Y|yes|YES) : ;;
+            f|F|fresh|FRESH)
+              log_info "Opening $cli fresh under '$to' (no session carried over)."
+              adapter_run "$to_dir" "$@" ;;   # execs
+            *)
+              log_dim "Cancelled — nothing carried, no quota spent."
+              return 0 ;;
+          esac
+        fi
+      fi
+    fi
     log_info "Relaying $cli: $from → $to"
     adapter_relay "$from_dir" "$to_dir" "$@" || true
     log_warn "No session was carried over; starting $cli fresh under '$to'."

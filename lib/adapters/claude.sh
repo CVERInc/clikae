@@ -72,6 +72,52 @@ adapter_transcript_path() {
   printf '%s\n' "$latest"
 }
 
+# Optional hook: describe a session for `clikae relay`'s preview card. Prints one
+# US-delimited row
+#   <session-id> \037 <last-active> \037 <approx-msgs> \037 <title>
+# for the current directory's session under <dir> — the newest transcript, or a
+# specific one when <sid> is given. The title is the opening user message. Returns
+# non-zero if there's no such transcript, so the caller can skip the preview.
+adapter_session_meta() {
+  local dir="$1" sid="${2:-}"
+  local f
+  if [ -n "$sid" ]; then
+    f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+    [ -f "$f" ] || return 1
+  else
+    f="$(adapter_transcript_path "$dir" || true)"
+    [ -n "$f" ] || return 1
+    sid="$(basename "$f" .jsonl)"
+  fi
+
+  local mtime nmsgs title
+  # BSD stat first, GNU stat as fallback; a dash if neither answers.
+  mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null \
+        || stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 \
+        || true)"
+  [ -n "$mtime" ] || mtime="?"
+  # Approximate turn count: lines carrying a role marker. Cheap and good enough
+  # for a preview; never let a no-match abort under the caller's pipefail.
+  nmsgs="$(grep -c '"role"' "$f" 2>/dev/null || true)"
+  [ -n "$nmsgs" ] || nmsgs=0
+
+  # Title = the opening user message. Transcripts are JSONL; the first line with a
+  # user role carries the prompt as a "text":"..." field. Pull just that value
+  # (tolerating escaped quotes), flatten newlines, collapse runs of spaces. Left
+  # untruncated — the caller renders it on its own line, so multibyte (CJK) titles
+  # never get sliced mid-character. A 200-byte guard caps a runaway line.
+  title="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null \
+        | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        | head -n 1 \
+        | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//; s/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+        | tr '\t\n' '  ' \
+        | sed -E 's/  +/ /g; s/^ //; s/ $//' || true)"
+  [ -n "$title" ] || title="(no preview)"
+  [ "${#title}" -gt 200 ] && title="${title:0:200}…"
+
+  printf '%s\037%s\037%s\037%s\n' "$sid" "$mtime" "$nmsgs" "$title"
+}
+
 adapter_relay() {
   local from_dir="$1" to_dir="$2"; shift 2
 
