@@ -16,11 +16,21 @@
 #     CLIKAE_LIMIT_PATTERN='...' clikae watch claude
 # When you learn the real marker, set $CLIKAE_LIMIT_PATTERN (or tell the project).
 
-# Best-guess limit markers. Anchored on strings seen in the Claude Code binary
-# (rate_limit_error) plus common public phrasings. UNCONFIRMED against a live
-# limit — see the caveat above.
+# Limit markers, CONFIRMED against real live limits (dogfooded 2026-05-31):
+#   • claude — CONFIRMED, and it IS written to the transcript (so the tail catches
+#       it): a real interactive limit appears as a jsonl line with
+#       "isApiErrorMessage":true and text "You've hit your session limit · resets
+#       <time> (<tz>)". (The TUI also shows "/upgrade to increase your usage limit.")
+#   • codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
+#       + `{"type":"error","message":"You've hit your usage limit. … try again at
+#       <date>."}` and exits non-zero.
+#   • agy/Gemini — best-guess (RESOURCE_EXHAUSTED / quota) until captured live.
+# Note "session limit" (claude) vs "usage limit" (codex) — keep both.
+# Caveat: these are text matches, so a transcript that merely *discusses* a limit
+# (e.g. working on clikae itself) can trip them. Override anytime with --pattern /
+# $CLIKAE_LIMIT_PATTERN.
 _watch_default_pattern() {
-  printf '%s' 'rate_limit_error|rate_limited|usage limit|usage_limit|Approaching your usage|limit reached|5-hour limit|weekly limit|Reset at|resets at'
+  printf '%s' "You've hit your (session|usage) limit|session limit|usage limit|usage_limit|increase your usage limit|\"type\":\"turn.failed\"|rate_limit_error|rate_limited|RESOURCE_EXHAUSTED|quota exceeded|Approaching your usage|limit reached|5-hour limit|weekly limit|resets [0-9]|resets at"
 }
 
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
