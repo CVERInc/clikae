@@ -92,17 +92,23 @@ EOF
   # 3) Targets — installed single-account launch-only targets. Displayed by the
   #    binary you'd type (agy); the profile field carries the target name
   #    (antigravity) so a launcher can resolve it back.
-  local tfile tname
+  local tfile tname troot
   for tfile in "$CLIKAE_LIB"/targets/*.sh; do
     [ -f "$tfile" ] || continue
     tname="$(basename "$tfile" .sh)"
+    # If the target has clikae profiles (opt-in multi-account mode), it's shown
+    # as tanks above — don't also list it as a single-account launch target.
+    troot="$(profiles_root)/$tname"
+    [ -d "$troot" ] && [ -n "$(ls -A "$troot" 2>/dev/null)" ] && continue
     (
       # shellcheck source=/dev/null
       source "$tfile" 2>/dev/null || exit 0
       declare -F target_meta_binary >/dev/null 2>&1 || exit 0
-      local tbin; tbin="$(target_meta_binary)"
+      local tbin note; tbin="$(target_meta_binary)"
       command -v "$tbin" >/dev/null 2>&1 || exit 0
-      printf 'target\037%s\037%s\037\037\0370\037single-account\n' "$tbin" "$tname"
+      note="single-account"
+      declare -F target_meta_note >/dev/null 2>&1 && note="$(target_meta_note)"
+      printf 'target\037%s\037%s\037\037\0370\037%s\n' "$tbin" "$tname" "$note"
     )
   done
 }
@@ -140,7 +146,12 @@ _home_render_static() {
           if [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         fi
         ;;
-      agent|target)
+      target)
+        # Its own group: a single-account launch target (e.g. agy).
+        printf '\n  %b%s%b\n    %b◈%b %b%s%b\n' \
+          "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$note" "$__C_RESET"
+        ;;
+      agent)
         also="$also$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"$'\n'
         ;;
     esac
@@ -363,7 +374,15 @@ _home_pick_draw() {
           printf '  %b %b %-10s %b%-28s %s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET"
         fi
         ;;
-      agent|target)
+      target)
+        printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b◈ %s%b\n' "$mark" "$__C_BOLD" "$note" "$__C_RESET"
+        else
+          printf '  %b ◈ %b%s%b\n' "$mark" "$__C_DIM" "$note" "$__C_RESET"
+        fi
+        ;;
+      agent)
         if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %bAlso available%b\n' "$__C_BOLD" "$__C_RESET"; fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b· %-12s %s%b\n' "$mark" "$__C_BOLD" "$cli" "$note" "$__C_RESET"

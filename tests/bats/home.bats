@@ -91,13 +91,14 @@ _fake_bin() {
   [[ "$output" != *"gh"* ]]
 }
 
-@test "a single-account target on PATH shows under Also available (agy)" {
+@test "a single-account target on PATH shows as its own group (agy)" {
   clikae init claude work
   _fake_bin agy
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]]
   [[ "$output" == *"single-account"* ]]
+  [[ "$output" == *"◈"* ]]                 # rendered as a launch target, not a tank
 }
 
 @test "the launch hint emits real colour escapes, not a literal backslash-033" {

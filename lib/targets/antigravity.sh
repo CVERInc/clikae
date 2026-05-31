@@ -18,6 +18,9 @@
 
 target_meta_name()   { echo "Antigravity (agy)"; }
 target_meta_binary() { echo "agy"; }
+# A one-line note for the dashboard. agy hardcodes ~/.gemini and ignores env, so
+# by default it's single-account (launch-only).
+target_meta_note()   { echo "single-account · opens ~/.gemini directly"; }
 
 # target_start_with_prompt <prompt> [args...]
 # Start agy seeded with the brief. No per-profile dir (single-account).
