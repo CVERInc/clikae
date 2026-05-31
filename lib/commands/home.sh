@@ -130,12 +130,12 @@ _home_render_static() {
           printf '  %b%s%b %b(%s)%b\n' "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$cli_count" "$__C_RESET"
         fi
         if [ "$active" = "1" ]; then
-          printf '    %b●%b %-10s %b%-24s%b %b%s%b  %b← active here%b\n' \
+          printf '    %b●%b %-10s %b%-28s%b %b%s%b  %b← active here%b\n' \
             "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$__C_RESET"
           launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"
         else
-          printf '    %b○%b %-10s %b%-24s%b %b%s%b\n' \
+          printf '    %b○%b %-10s %b%-28s%b %b%s%b\n' \
             "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_DIM" "$alias" "$__C_RESET"
           if [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         fi
@@ -358,9 +358,9 @@ _home_pick_draw() {
         if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
         if [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; else dot="${__C_DIM}○${__C_RESET}"; fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%-10s %-24s %s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET"
+          printf '  %b %b %b%-10s %-28s %s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET"
         else
-          printf '  %b %b %-10s %b%-24s %s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET"
+          printf '  %b %b %-10s %b%-28s %s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET"
         fi
         ;;
       agent|target)

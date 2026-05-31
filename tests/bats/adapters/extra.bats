@@ -45,6 +45,27 @@ load '../../helpers'
   ! grep -qF "alias vercel-prod 'env" "$fishrc"
 }
 
+@test "codex shows the logged-in account (email) from its auth.json id_token" {
+  clikae init codex work
+  local dir="$CLIKAE_HOME/profiles/codex/work"
+  # A JWT whose base64url payload carries {"email":"alice@codex.test"}.
+  local payload
+  payload="$(printf '%s' '{"email":"alice@codex.test","sub":"x"}' | base64 | tr '+/' '-_' | tr -d '=')"
+  printf '{"auth_mode":"chatgpt","tokens":{"id_token":"hdr.%s.sig"}}\n' "$payload" > "$dir/auth.json"
+  run clikae list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"alice@codex.test"* ]]
+}
+
+@test "codex account label is empty (not an error) when there's no id_token" {
+  clikae init codex apikey
+  printf '{"auth_mode":"apikey","OPENAI_API_KEY":"sk-xxxx"}\n' \
+    > "$CLIKAE_HOME/profiles/codex/apikey/auth.json"
+  run clikae list
+  [ "$status" -eq 0 ]            # no crash under set -eo pipefail
+  [[ "$output" == *"codex"* ]]
+}
+
 @test "az adapter reports env-dir + AZURE_CONFIG_DIR" {
   run clikae adapters
   [ "$status" -eq 0 ]
