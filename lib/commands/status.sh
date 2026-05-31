@@ -12,16 +12,7 @@
 # The row producer emits tab-separated fields and never formats for a human, so
 # the two renderers can't drift.
 
-# --- JSON helpers (no jq dependency; bash 3.2 ${//} substitution) -------------
-_json_quote() {  # -> a JSON string literal (quoted, escaped) for $1
-  local s="$1"
-  s="${s//\\/\\\\}"     # backslash first
-  s="${s//\"/\\\"}"     # double quote
-  s="${s//$'\t'/\\t}"   # tab
-  s="${s//$'\n'/\\n}"   # newline (defensive — these fields are single-line)
-  printf '"%s"' "$s"
-}
-_json_or_null() { [ -n "$1" ] && _json_quote "$1" || printf 'null'; }
+# JSON string helpers (json_str / json_or_null) live in lib/core/json.sh.
 
 # _status_row_for <cli>  -> one canonical row, fields separated by ASCII Unit
 # Separator (\037), record terminated by newline:
@@ -87,9 +78,9 @@ _status_render_json() {
     [ -n "$cli" ] || continue
     [ "$first" -eq 1 ] && first=0 || printf ','
     printf '\n  {"cli":%s,"state":%s,"profile":%s,"account":%s,"envVar":%s,"envValue":%s}' \
-      "$(_json_quote "$cli")" "$(_json_quote "$state")" \
-      "$(_json_or_null "$profile")" "$(_json_or_null "$account")" \
-      "$(_json_or_null "$envVar")" "$(_json_or_null "$envValue")"
+      "$(json_str "$cli")" "$(json_str "$state")" \
+      "$(json_or_null "$profile")" "$(json_or_null "$account")" \
+      "$(json_or_null "$envVar")" "$(json_or_null "$envValue")"
   done
   [ "$first" -eq 1 ] && printf ']\n' || printf '\n]\n'
 }

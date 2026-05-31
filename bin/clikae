@@ -31,6 +31,8 @@ export CLIKAE_HOME
 # Load core libs
 # shellcheck source=../lib/core/log.sh
 source "$CLIKAE_LIB/core/log.sh"
+# shellcheck source=../lib/core/json.sh
+source "$CLIKAE_LIB/core/json.sh"
 # shellcheck source=../lib/core/profile_store.sh
 source "$CLIKAE_LIB/core/profile_store.sh"
 # shellcheck source=../lib/core/shell_rc.sh
