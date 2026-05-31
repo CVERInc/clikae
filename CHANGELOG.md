@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **macOS menu bar app skeleton (`gui/ClikaeMenuBar`, v1.0 track).** A SwiftPM +
+  AppKit `NSStatusItem` app that builds with the Command Line Tools (no Xcode):
+  lists profiles grouped by CLI, check-marks the active one (`clikae status`),
+  click-to-launch a profile (`clikae run`), a per-CLI **Relay → …** submenu
+  (`clikae relay`), Refresh, and Quit. The CLI stays the source of truth — the
+  app only shells out to it. Prefers Ghostty for the terminal it opens, falling
+  back to Terminal.app. Build-verified; packaging as a signed `.app` is a future
+  step.
 - **`clikae app --terminal <app>` — choose the terminal the launcher opens.**
   In addition to Terminal.app (default), the generated `.app` can open **iTerm2**
   (`--terminal iterm2`) or **Ghostty** (`--terminal ghostty`). Terminal.app and

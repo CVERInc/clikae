@@ -62,7 +62,7 @@ clikae relay claude b             # carry the current session over to profile `b
 - **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
 - **v0.4** *(current)* — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total). Plus a `migrate` guard against moving an in-use config dir.
-- **v1.0** — SwiftUI menu bar GUI for macOS (click-to-switch active profile).
+- **v1.0** *(in progress)* — macOS menu bar app (`gui/ClikaeMenuBar`): profiles per CLI, active one marked, click-to-launch, per-CLI relay. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing
 

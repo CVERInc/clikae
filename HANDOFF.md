@@ -84,10 +84,25 @@ These mirror how this project was built and must be preserved:
 >   command` needs tweaking, it's all in the one template file. **Warp is still
 >   not supported** (no clean command-launch story) — left as a small follow-up.
 >
-> Still TODO before a v0.5 tag: real-claude relay verification, iTerm2 dogfood,
-> optional Warp target, the PowerShell mirror of status/relay + app terminals,
-> and a roadmap decision on whether relay deserves its own headline in README's
-> roadmap list.
+> - **macOS menu bar app skeleton (`gui/ClikaeMenuBar/`, v1.0 track).** SwiftPM +
+>   AppKit `NSStatusItem` app — **builds with the Command Line Tools, no Xcode
+>   needed** (`cd gui/ClikaeMenuBar && swift build`; verified, `Build complete!`).
+>   `Clikae.swift` shells out to the CLI (`/bin/zsh -lc "clikae …"` so GUI PATH
+>   resolves) and parses `clikae list -p` / `clikae status`; `main.swift` builds
+>   the menu (profiles per CLI, active check-marked, click → `clikae run`, per-CLI
+>   Relay submenu → `clikae relay`, Refresh, Quit). Launches via Ghostty
+>   (`open -na Ghostty.app --args -e /bin/zsh -lc "…"`), Terminal.app fallback.
+>   **NOT runtime-tested here** — it's a menu-bar agent needing a real login /
+>   window-server session, so I only compile-verified it (running it headless
+>   would crash on the WindowServer connection). Next: package as a signed
+>   LSUIElement `.app` bundle, login-item toggle, per-CLI terminal preference.
+>   `.build/` is gitignored.
+>
+> Still TODO before a v0.5 tag: real-claude relay verification, iTerm2 dogfood
+> (partner has iTerm2), optional Warp target, the PowerShell mirror of
+> status/relay + app terminals, GUI runtime dogfood + `.app` packaging, and a
+> roadmap decision on whether relay deserves its own headline in README's roadmap
+> list.
 
 **HEAD state (read this first).** The latest tagged release is **`v0.4.0`**
 (GitHub Release live; both `homebrew/clikae.rb` and the tap's
