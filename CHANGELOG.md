@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae app --terminal <app>` — choose the terminal the launcher opens.**
+  In addition to Terminal.app (default), the generated `.app` can open **iTerm2**
+  (`--terminal iterm2`) or **Ghostty** (`--terminal ghostty`). Terminal.app and
+  iTerm2 are driven via their AppleScript scripting APIs; Ghostty has no
+  window-opening CLI on macOS, so its launcher goes through
+  `open -na Ghostty.app --args --title=… -e /bin/zsh -lc '…'` (env vars and
+  spaces in paths preserved). The default target can be set with the
+  `$CLIKAE_TERMINAL` environment variable. The chosen terminal must be installed;
+  `app` fails with a clear message otherwise. Covered by bats (Ghostty path
+  asserted when installed; the not-found path otherwise).
 - **`clikae relay <cli> [<from>] <to>` — hand a live session to another profile.**
   clikae's origin story is keeping a second account because one account's quota
   runs out mid-task; `relay` makes that switch seamless. For Claude Code it copies

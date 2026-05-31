@@ -1,0 +1,18 @@
+-- clikae iTerm2 launcher template. Two placeholders are substituted by
+-- lib/commands/app.sh: the SHELL_CMD token becomes the env-prefixed CLI command,
+-- and the TITLE token becomes the session name (e.g. claude (work)). The tokens
+-- carry @ delimiters that this comment omits, so substitution only touches the
+-- two code lines below.
+--
+-- Uses iTerm2's scripting API: `create window with default profile command`
+-- opens a new window running the command, then we name the session.
+
+on run
+    tell application "iTerm"
+        activate
+        set newWindow to (create window with default profile command "@SHELL_CMD@")
+        tell current session of newWindow
+            set name to "@TITLE@"
+        end tell
+    end tell
+end run

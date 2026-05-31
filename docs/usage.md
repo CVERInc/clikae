@@ -40,7 +40,7 @@ clikae remove claude work
 |---|---|
 | `init <cli> <profile> [--alias]` | Create the profile directory; with `--alias`, also write a shell alias. |
 | `alias <cli> <profile> [--name <n>]` | Write (or replace) a shell alias. Default name `<cli>-<profile>`. |
-| `app <cli> <profile> [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. |
+| `app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
 | `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
 | `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
 | `list [-p\|--paths]` | List all profiles across all CLIs. |
@@ -156,9 +156,13 @@ For each profile, `clikae`:
    # <<< clikae:claude.work <<<
    ```
    The sentinels make safe, exact removal possible.
-3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens Terminal,
+3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens a terminal,
    runs the env-var-prefixed CLI, and sets the window title to `claude (work)`
-   so you can tell windows apart.
+   so you can tell windows apart. The terminal is **Terminal.app** by default;
+   `--terminal iterm2` and `--terminal ghostty` target those instead (set
+   `$CLIKAE_TERMINAL` to change the default). Terminal.app and iTerm2 are driven
+   by AppleScript; Ghostty has no window-opening CLI on macOS, so its launcher
+   goes through `open -na Ghostty.app --args … -e …`.
 
 No daemons, no global state, no network calls. You can read every line.
 

@@ -61,9 +61,33 @@ These mirror how this project was built and must be preserved:
 >   (used by both status and relay — don't re-inline it).
 >
 > Both are wired into the dispatcher (`bin/clikae`), `help`, and `docs/usage.md`;
-> CHANGELOG `[Unreleased]` describes them. Still TODO before a v0.5 tag: real-claude
-> relay verification, the PowerShell mirror of status/relay, and a roadmap decision
-> on whether relay deserves its own headline in README's roadmap list.
+> CHANGELOG `[Unreleased]` describes them.
+>
+> - **`clikae app --terminal <terminal|iterm2|ghostty>`** — the `.app` launcher
+>   can now open iTerm2 or Ghostty, not just Terminal.app (closes most of §9.2 /
+>   roadmap #6). `lib/commands/app.sh` was refactored: a `_app_render_script`
+>   dispatch picks a per-terminal AppleScript template
+>   (`lib/templates/launcher.{,iterm2.,ghostty.}applescript.tmpl`). Terminal.app &
+>   iTerm2 use their scripting APIs; **Ghostty can't open a window from the CLI on
+>   macOS** (`ghostty` only runs `+actions`), so its launcher is an AppleScript
+>   `do shell script "open -na Ghostty.app --args --title=… -e /bin/zsh -lc '…'"`.
+>   Default target overridable via `$CLIKAE_TERMINAL`. Target must be installed
+>   (checked via /Applications, ~/Applications, then `mdfind` bundle-id) else a
+>   clear failure. **NB on templates:** the existing convention is that a
+>   template's comment must NOT contain the literal `@TOKEN@` (with @ delimiters)
+>   or the `${//}` substitution mangles the comment — I hit this; the new template
+>   comments refer to tokens without the @s. **Ghostty path is fully tested**
+>   (mechanism verified end-to-end incl. a space-containing config path; bats
+>   asserts the generated launcher). **iTerm2 path is NOT machine-verified here**
+>   (iTerm2 isn't installed on the maintainer's Mac) — the maintainer's partner
+>   (profile b) will dogfood it; if iTerm2's `create window with default profile
+>   command` needs tweaking, it's all in the one template file. **Warp is still
+>   not supported** (no clean command-launch story) — left as a small follow-up.
+>
+> Still TODO before a v0.5 tag: real-claude relay verification, iTerm2 dogfood,
+> optional Warp target, the PowerShell mirror of status/relay + app terminals,
+> and a roadmap decision on whether relay deserves its own headline in README's
+> roadmap list.
 
 **HEAD state (read this first).** The latest tagged release is **`v0.4.0`**
 (GitHub Release live; both `homebrew/clikae.rb` and the tap's
