@@ -276,6 +276,42 @@ EOF
   return 1
 }
 
+# Delete a selected TANK (the `d` key): clikae remove prompts to confirm itself.
+_home_remove_tank() {
+  local kind cli profile rest
+  IFS=$'\037' read -r kind cli profile rest <<EOF
+$1
+EOF
+  : "$rest"
+  [ "$kind" = "tank" ] || return 0
+  exec "$CLIKAE_BIN" remove "$cli" "$profile"
+}
+
+# Relay THIS shell's live session of the selected tank's CLI INTO that tank (the
+# `r` key). The source is whichever profile of that CLI is active here (we marked
+# it on the board); with nothing active there's no session to carry, so say so.
+_home_relay() {
+  local items="$1"
+  local kind cli profile rest
+  IFS=$'\037' read -r kind cli profile rest <<EOF
+$2
+EOF
+  : "$rest"
+  [ "$kind" = "tank" ] || return 0
+  local from
+  from="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c && $6=="1"{print $3; exit}')"
+  if [ -z "$from" ]; then
+    printf 'No active %s session in this shell to relay from.\n' "$cli"
+    printf 'Open one first (its alias, or `clikae run %s <profile>`), then relay.\n' "$cli"
+    return 0
+  fi
+  if [ "$from" = "$profile" ]; then
+    printf '%s/%s is already the session you are on — nothing to relay.\n' "$cli" "$profile"
+    return 0
+  fi
+  exec "$CLIKAE_BIN" relay "$cli" "$from" "$profile"
+}
+
 # Rename the shell alias for a selected tank row (the `a` key): type a new name,
 # then `clikae alias <cli> <profile> --name <new>` (which replaces the old block).
 _home_rename_alias() {
@@ -311,7 +347,7 @@ _home_new_tank() {
 _home_pick_draw() {
   local items="$1" sel="$2"
   printf '\033[H\033[2J'
-  printf '%bclikae  ｷﾘｶｴ%b  %b· pick a tank    ↑↓ move · ⏎ open · n new · a alias · q quit%b\n\n' \
+  printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot
   while IFS=$'\037' read -r kind cli profile label alias active note; do
@@ -386,6 +422,22 @@ _home_pick() {
           return 0
         fi
         ;;
+      r)
+        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
+          _home_tty_leave; trap - EXIT INT TERM
+          _home_relay "$items" "$sel_row"
+          return 0
+        fi
+        ;;
+      d)
+        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
+          _home_tty_leave; trap - EXIT INT TERM
+          _home_remove_tank "$sel_row"
+          return 0
+        fi
+        ;;
       ''|$'\n'|$'\r')
         _home_tty_leave; trap - EXIT INT TERM
         _home_launch "$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
@@ -407,8 +459,9 @@ Usage: clikae            (no arguments)
 
 Opens the home dashboard — your "tank board". On a real terminal it's an
 interactive launcher: ↑/↓ (or j/k) to move, Enter to open the selected tank,
-`n` to create a new one, `a` to rename a tank's shell alias, `q`/Esc to quit
-(leaving the board on screen). It lists
+`r` to relay this shell's session to it, `n` to create a new tank, `a` to rename
+a tank's alias, `d` to delete a tank (asks first), `q`/Esc to quit (leaving the
+board on screen). It lists
 every profile grouped by CLI (the one active in this shell marked, with account
 and alias name) plus an "Also available" section of relay-capable CLIs/targets
 you can open without a tank (codex, agy), and the fuel-pool order.

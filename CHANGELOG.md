@@ -26,9 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a tank yet (e.g. `codex`, `agy` — chosen by who can take a handoff, so tools
   like `gh`/`npm` aren't listed), and the fuel-pool fall-through order.
   - On a **real terminal it's an interactive launcher**: ↑/↓ (or j/k) to move,
-    Enter to open the selected tank, `n` to create a new one (arrow-key CLI
-    picker, then name it), `a` to rename a tank's shell alias, `q`/Esc to quit
-    (leaving the board on screen). It uses the alternate screen buffer so your
+    Enter to open the selected tank, `r` to relay this shell's live session into
+    it (from whichever profile is active here), `n` to create a new tank
+    (arrow-key CLI picker, then name it), `a` to rename a tank's shell alias,
+    `d` to delete a tank (confirms first), `q`/Esc to quit (leaving the board on
+    screen). It uses the alternate screen buffer so your
     scrollback is untouched, and falls back to the **plain-text board** whenever
     output isn't a TTY (a pipe, a script, the GUI) — set `CLIKAE_NO_INTERACTIVE`
     to force that.
