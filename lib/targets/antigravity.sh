@@ -13,7 +13,8 @@
 # brief as its opening prompt. agy's `-i/--prompt-interactive` runs an initial
 # prompt and continues the session — exactly what we need.
 #
-# A target file defines just two things: a name and how to start it with a prompt.
+# A target file defines a name, how to start it with a prompt, and (optionally)
+# where it logs a limit event so `clikae watch` can notice the tank ran dry.
 
 target_meta_name()   { echo "Antigravity (agy)"; }
 target_meta_binary() { echo "agy"; }
@@ -24,3 +25,14 @@ target_start_with_prompt() {
   local prompt="$1"; shift
   exec agy -i "$prompt" "$@"
 }
+
+# target_limit_log_path
+# Where agy records a quota/limit event so `clikae watch` can notice a dry tank.
+# CONFIRMED (dogfooded 2026-05-31): `agy -p` hitting its Gemini quota exits 0 with
+# EMPTY stdout/stderr — the ONLY signal is an E-level line in this log:
+#   agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached.
+#   … Resets in <Hh Mm>.
+# This is a symlink that agy repoints to a fresh per-run file each invocation, so
+# watchers must `tail -F` it (follow by name across rotation), not `tail -f` an
+# inode. Single-account vendor → no profile dir, so this takes no argument.
+target_limit_log_path() { echo "$HOME/.gemini/antigravity-cli/cli.log"; }

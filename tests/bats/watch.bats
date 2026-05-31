@@ -68,3 +68,39 @@ _seed() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"nothing to watch"* ]]
 }
+
+# --- launch-only target (antigravity): watch its limit LOG, not a transcript ---
+
+_agy_log() { # write $1 as agy's cli.log under the test HOME
+  mkdir -p "$TEST_HOME/.gemini/antigravity-cli"
+  printf '%s\n' "$1" > "$TEST_HOME/.gemini/antigravity-cli/cli.log"
+}
+
+@test "watch antigravity --check reports no marker on a clean log" {
+  _agy_log "I0531 17:03:01 info: Print mode: silent auth succeeded"
+  run clikae watch antigravity --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No limit marker"* ]]
+}
+
+@test "watch antigravity --check finds the confirmed quota marker" {
+  _agy_log "E0531 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Contact your administrator to enable overages. Resets in 2h23m58s."
+  run clikae watch antigravity --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"marker IS present"* ]]
+  [[ "$output" == *"RESOURCE_EXHAUSTED"* ]]
+  [[ "$output" == *"Individual quota reached"* ]]
+}
+
+@test "watch antigravity rejects a <profile> (single-account target)" {
+  run clikae watch antigravity somelabel --check
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"single-account target"* ]]
+}
+
+@test "watch antigravity errors when there's no log yet" {
+  # No ~/.gemini log seeded; follow mode must fail fast, not hang.
+  run clikae watch antigravity --to codex/work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Nothing to watch"* ]]
+}

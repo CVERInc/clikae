@@ -66,6 +66,13 @@ Where it goes next:
   --to <target>   explicit target (<cli>/<profile> or a launch-only target).
   (otherwise)     the next tank down your fuel pool — see `clikae pool`.
 
+Launch-only targets (single-account vendors, e.g. antigravity): clikae watches
+their LOG instead of a transcript (agy writes its quota error only to
+~/.gemini/antigravity-cli/cli.log; `agy -p` exits 0 with empty output, so the
+log is the only signal). Because such a vendor can't be a handoff *source* (no
+brief can be summarised from it), watching it ALERTS you that the tank is dry
+and names your next tank — it does not auto-relay.
+
 Detecting "ran dry" — IMPORTANT: an interactive CLI hitting its limit gives no
 exit code and fires no hook, so we can only scan the transcript, and the exact
 marker isn't confirmed yet. The pattern is a best guess; verify/tune it:
@@ -83,6 +90,8 @@ Examples:
   clikae watch claude --to codex/work     # offer to switch to a specific tank
   clikae watch claude --auto              # auto-switch (after one-time consent)
   clikae watch claude --check             # would the limit pattern fire right now?
+  clikae watch antigravity                # alert when agy's tank runs dry (log-watch)
+  clikae watch antigravity --check        # is agy's tank already dry?
 EOF
         return 0 ;;
       --to)      shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
@@ -104,6 +113,15 @@ EOF
   esac
 
   [ -n "$pattern" ] || pattern="${CLIKAE_LIMIT_PATTERN:-$(_watch_default_pattern)}"
+
+  # Launch-only targets (single-account vendors like antigravity) have no adapter
+  # and no per-dir transcript — their only limit signal is a log file. If <cli>
+  # resolves to such a target, watch that log instead of an adapter transcript.
+  if [ ! -f "$CLIKAE_LIB/adapters/$cli.sh" ] && [ -f "$CLIKAE_LIB/targets/$cli.sh" ]; then
+    [ "$got_profile" -eq 0 ] || log_fail "'$cli' is a single-account target — drop the <profile>."
+    _watch_target "$cli" "$pattern" "$check" "$to"
+    return
+  fi
 
   load_adapter "$cli"
   if ! declare -F adapter_transcript_path >/dev/null; then
@@ -185,4 +203,62 @@ _watch_do_handoff() {
   fi
 
   exec "$CLIKAE_ROOT/bin/clikae" handoff "$cli" "$profile" --to "$target"
+}
+
+# Watch a launch-only target's limit LOG (e.g. antigravity's cli.log).
+# These are single-account vendors with no transcript clikae can read, so they
+# CAN'T be a handoff source — we can't carry a brief off them. Hence this path
+# only NOTICES a dry tank and tells you to switch; it does not auto-relay.
+# (Wiring an auto-relay would need extracting a brief from the vendor's session
+# store — agy's is opaque binary .pb — so that's a separate, unbuilt feature.)
+_watch_target() {
+  local cli="$1" pattern="$2" check="$3" to="$4"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_LIB/targets/$cli.sh"
+  if ! declare -F target_limit_log_path >/dev/null; then
+    log_fail "'$cli' is a launch-only target with no watchable limit log (no target_limit_log_path)."
+  fi
+  local name logf
+  name="$(target_meta_name)"
+  logf="$(target_limit_log_path)"
+  [ -n "$logf" ] || log_fail "'$cli' gave no limit-log path to watch."
+
+  # --check: scan the current log once and report whether the marker is present.
+  if [ "$check" -eq 1 ]; then
+    if [ -e "$logf" ] && grep -qaE "$pattern" "$logf"; then
+      log_warn "A limit-like marker IS present in $name's log."
+      log_dim "(log: $logf)"
+      grep -aoE "$pattern" "$logf" | sort -u | sed 's/^/  matched: /'
+      return 0
+    fi
+    log_ok "No limit marker found in $name's log."
+    log_dim "(log: ${logf}${logf:+ — }looked for the confirmed RESOURCE_EXHAUSTED / Individual quota reached marker)"
+    return 0
+  fi
+
+  [ -e "$logf" ] || log_fail "Nothing to watch yet at $logf — has $(target_meta_binary) run?"
+
+  local nxt="$to"
+  [ -z "$nxt" ] && nxt="$(pool_next "$cli" 2>/dev/null || true)"
+
+  log_info "Watching $name for a dry tank: $logf"
+  log_dim "$name is single-account — clikae can't summarise a brief FROM it, so on a"
+  log_dim "dry tank it ALERTS you to switch rather than auto-relaying. Ctrl-C to stop."
+  [ -n "$nxt" ] && log_dim "Next tank in your pool: $nxt"
+
+  # tail -F (follow by NAME): agy repoints cli.log to a fresh file each run, so an
+  # inode-following `tail -f` would go stale. -n0 = only lines written from now on.
+  local line=""
+  while IFS= read -r line; do
+    printf '%s' "$line" | grep -qaE "$pattern" || continue
+    echo
+    log_warn "$name hit its limit — this tank is dry."
+    printf '%s' "$line" | grep -aoE "$pattern" | sort -u | sed 's/^/  matched: /'
+    if [ -n "$nxt" ]; then
+      log_info "Switch to your next tank: $nxt  (start it with your alias / \`clikae run\`)."
+    else
+      log_dim "Pick a tank to switch to — see \`clikae pool\` or your aliases."
+    fi
+    return 0
+  done < <(tail -n0 -F "$logf" 2>/dev/null)
 }
