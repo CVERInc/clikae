@@ -10,15 +10,15 @@
 _status_row_for() {
   local cli="$1"
   (
-    load_adapter "$cli" >/dev/null 2>&1 || { printf '%s\t?\t?\t(no adapter)\n' "$cli"; exit 0; }
-    local var strategy value active note
+    load_adapter "$cli" >/dev/null 2>&1 || { printf '%s\t?\t-\t(no adapter)\n' "$cli"; exit 0; }
+    local var strategy value active note account="-"
     var="$(adapter_meta_env_var)"
     strategy="$(adapter_meta_strategy)"
 
     # flag-strategy adapters select the profile via a CLI flag, not an env var,
     # so there's nothing in the environment to read back.
     if [ -z "$var" ]; then
-      printf '%s\t%s\t%s\n' "$cli" "(n/a)" "flag-based — not detectable from the environment"
+      printf '%s\t%s\t%s\t%s\n' "$cli" "(n/a)" "-" "flag-based — not detectable from the environment"
       exit 0
     fi
 
@@ -28,6 +28,10 @@ _status_row_for() {
 
     if [ -n "$active" ]; then
       note="$var=$value"
+      # Whose account is this active profile? (best-effort, from the adapter)
+      local label
+      label="$(adapter_label "$(profile_dir "$cli" "$active")")"
+      [ -n "$label" ] && account="$label"
     elif [ -n "$value" ]; then
       active="(external)"
       note="$var=$value  — not a clikae profile"
@@ -35,7 +39,7 @@ _status_row_for() {
       active="(default)"
       note="$var unset — system default"
     fi
-    printf '%s\t%s\t%s\n' "$cli" "$active" "$note"
+    printf '%s\t%s\t%s\t%s\n' "$cli" "$active" "$account" "$note"
   )
 }
 
@@ -87,12 +91,12 @@ EOF
     fi
   fi
 
-  printf '%b%-12s %-12s %s%b\n' "$__C_BOLD" "CLI" "ACTIVE" "SOURCE" "$__C_RESET"
+  printf '%b%-12s %-12s %-26s %s%b\n' "$__C_BOLD" "CLI" "ACTIVE" "ACCOUNT" "SOURCE" "$__C_RESET"
   local cli
   while IFS= read -r cli; do
     [ -n "$cli" ] || continue
     _status_row_for "$cli"
-  done <<EOF | awk -F'\t' '{printf "%-12s %-12s %s\n", $1, $2, $3}'
+  done <<EOF | awk -F'\t' '{printf "%-12s %-12s %-26s %s\n", $1, $2, $3, $4}'
 $clis
 EOF
 }

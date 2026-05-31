@@ -523,8 +523,20 @@ continues — these are decisions, not musings:
    re-key issue as `migrate`, so it must reuse `adapter_migrate_credentials`
    (the `--keep-login` carry-over). Treat rename like a mini-migrate.
 
-**Not yet built (next session's work, roughly prioritised):** (a) free
-naming/account-label + `clikae rename` (top priority, reuse keychain carry-over);
-(b) ambient relay: detect-and-offer on interactive, auto on headless, behind an
-explicit opt-in; (c) `antigravity` adapter once its config mechanism is known;
-(d) the existing v0.5 TODO list in §2.
+**Built so far (branch `feat/relay-and-status`):** (a) ✅ **naming refactor** —
+`adapter_account_label` hook (claude reads `.claude.json` `oauthAccount.emailAddress`
+via grep/sed, no jq), surfaced as an ACCOUNT column in `clikae list` and `status`;
+new `clikae rename <cli> <old> <new>` = mini-migrate (move dir + rewrite alias,
+preserving a custom alias name else swapping the default; reuse
+`adapter_migrate_credentials` for claude's Keychain; in-use guard not bypassable
+by `--force`). bats in `tests/bats/rename.bats`. Docs updated; a/b purged from the
+*recommended-naming* surface (legacy a/b examples in `docs/claude-on-macos.md` are
+left — they document the real `~/.claude-acct-{a,b}` migration + keychain hashes).
+
+**Still not built (next, roughly prioritised):** (b) **ambient relay** —
+detect-and-offer on interactive, auto on headless, behind an explicit opt-in (the
+maintainer wants best-effort-auto; remember interactive can't be fully automated —
+no usage-limit signal, see point 3 above); (c) **`antigravity` adapter** once its
+config mechanism is known (only a `~/.gemini` symlink today); (d) fish support
+(#5, approved); (e) the existing v0.5 TODO list in §2 (real-claude relay dogfood,
+PS `.psd1`/migrate, GUI `.app` packaging, Warp).

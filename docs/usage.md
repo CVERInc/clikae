@@ -43,8 +43,9 @@ clikae remove claude work
 | `app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
 | `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
 | `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
-| `list [-p\|--paths]` | List all profiles across all CLIs. |
+| `list [-p\|--paths]` | List all profiles, with the logged-in account where the adapter can tell. |
 | `status [<cli>]` | Show which profile each CLI is on **in this shell**. |
+| `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |
 | `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
 | `info` | Show install paths and profile counts. |
@@ -132,16 +133,35 @@ burns the target profile's quota. The source profile is left completely untouche
 clikae status            # every CLI that has a profile
 clikae status claude     # just one
 
-#   CLI          ACTIVE       SOURCE
-#   claude       b            CLAUDE_CONFIG_DIR=…/profiles/claude/b
-#   aws          (default)    AWS_PROFILE unset — system default
+#   CLI          ACTIVE       ACCOUNT          SOURCE
+#   claude       cver         hi@cver.net      CLAUDE_CONFIG_DIR=…/profiles/claude/cver
+#   aws          (default)    -                AWS_PROFILE unset — system default
 ```
 
 `status` reads the **live** value of each adapter's env var in the current shell
 and resolves it back to a clikae profile. It's a per-shell view: another terminal
 (or one launched from a different `clikae app`) can be on a different profile.
 `(default)` means the env var is unset (the CLI's own default); `(external)`
-means it points somewhere that isn't a clikae profile.
+means it points somewhere that isn't a clikae profile. The ACCOUNT column shows
+the logged-in account when the adapter can tell.
+
+## Naming your profiles
+
+Name profiles however makes sense to you — `work`, `personal`, a client name, or
+the account email. You don't have to remember what a bare `a`/`b` meant: both
+`list` and `status` show the logged-in **account** when the adapter can read it.
+
+Changed your mind about a name? `clikae rename` moves the directory, rewrites the
+managed alias, and — for claude on macOS — carries the saved Keychain login
+across so you don't have to log in again:
+
+```bash
+clikae rename claude a cver        # a → cver; login + alias follow
+```
+
+It refuses if the new name is taken or if that CLI is currently using the profile
+in this shell (run it from a fresh shell). A pre-existing `.app` launcher is left
+alone but flagged — recreate it with `clikae app claude cver`.
 
 ## How it works
 

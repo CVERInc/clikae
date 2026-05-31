@@ -10,7 +10,9 @@ cmd_list() {
         cat <<'EOF'
 Usage: clikae list [-p|--paths]
 
-List all profiles across all CLIs.
+List all profiles across all CLIs. The ACCOUNT column shows which account each
+profile is logged in to (when the adapter can tell — e.g. the email for claude),
+so you don't have to remember what a name means.
 
 Options:
   -p, --paths   Also show the profile directory path.
@@ -28,12 +30,27 @@ EOF
     return 0
   fi
 
+  # Enrich each row with the account label from its adapter (best-effort).
+  local enriched="" cli profile path account
+  while IFS="$(printf '\t')" read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    account="$(
+      load_adapter "$cli" >/dev/null 2>&1 || exit 0
+      adapter_label "$path"
+    )"
+    [ -n "$account" ] || account="-"
+    enriched="$enriched$cli	$profile	$account	$path
+"
+  done <<EOF
+$rows
+EOF
+
   # Pretty table.
   if [ "$show_paths" -eq 1 ]; then
-    printf '%b%-12s %-20s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "PATH" "$__C_RESET"
-    printf '%s\n' "$rows" | awk -F'\t' '{printf "%-12s %-20s %s\n", $1, $2, $3}'
+    printf '%b%-12s %-20s %-26s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "ACCOUNT" "PATH" "$__C_RESET"
+    printf '%s' "$enriched" | awk -F'\t' 'NF>=4{printf "%-12s %-20s %-26s %s\n", $1, $2, $3, $4}'
   else
-    printf '%b%-12s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "$__C_RESET"
-    printf '%s\n' "$rows" | awk -F'\t' '{printf "%-12s %s\n", $1, $2}'
+    printf '%b%-12s %-20s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "ACCOUNT" "$__C_RESET"
+    printf '%s' "$enriched" | awk -F'\t' 'NF>=4{printf "%-12s %-20s %s\n", $1, $2, $3}'
   fi
 }

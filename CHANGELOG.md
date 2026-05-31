@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Account labels + `clikae rename` (stop squinting at `a`/`b`).** `clikae list`
+  and `clikae status` now show an **ACCOUNT** column with the logged-in account
+  where the adapter can read it — for claude, the email from `.claude.json` (via a
+  new optional adapter hook `adapter_account_label`, pure grep/sed, no jq). New
+  **`clikae rename <cli> <old> <new>`** renames a profile: moves the directory,
+  rewrites the managed alias (keeping a custom alias name, else swapping the
+  default `<cli>-<old>` → `<cli>-<new>`), and — for claude on macOS — carries the
+  saved Keychain login across (reusing the `--keep-login` mechanism) so you don't
+  re-login. It refuses if the target exists or the profile is in use in this shell
+  (a data-integrity guard, like `migrate`). Covered by bats.
 - **`flag` strategy + two new adapters (now 13).** Adds a `flag` adapter strategy
   for CLIs that have no config-directory env var and instead take a flag — via a
   new optional adapter hook `adapter_flag_args <dir>` that the alias / `.app` /

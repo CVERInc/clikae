@@ -84,6 +84,17 @@ adapter_relay() {
   CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid" "$@"
 }
 
+# Optional hook: a human-readable label for whichever account is logged in to
+# this profile, shown by `clikae list` / `status` so you don't have to remember
+# what "a" vs "b" means. Claude stores the logged-in account in .claude.json as
+# oauthAccount.emailAddress — pull it with grep/sed (no jq/python dependency).
+# Prints nothing if the profile hasn't been logged in yet.
+adapter_account_label() {
+  local dir="$1" f="$1/.claude.json"
+  [ -f "$f" ] || return 0
+  grep -o '"emailAddress":"[^"]*"' "$f" 2>/dev/null | head -n 1 | sed 's/.*:"//; s/"$//'
+}
+
 # --- macOS keychain login carry-over (optional migrate hook) ----------------
 #
 # On macOS, Claude Code stores its OAuth token in the login Keychain, NOT inside

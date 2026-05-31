@@ -70,6 +70,16 @@ adapter_command() {
   printf '%s\n' "$cmd"
 }
 
+# adapter_label <profile_dir>  -> a human-readable account label for this
+# profile (e.g. the logged-in email), or empty. Optional hook
+# `adapter_account_label`; env adapters that can't tell simply don't define it.
+# Requires the adapter to already be loaded.
+adapter_label() {
+  if declare -F adapter_account_label >/dev/null; then
+    adapter_account_label "$1"
+  fi
+}
+
 # Source the adapter file for <cli>. Fails if missing.
 load_adapter() {
   local cli="$1"
