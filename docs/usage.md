@@ -51,7 +51,7 @@ clikae remove claude work
 | `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |
 | `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
-| `info` | Show install paths and profile counts. |
+| `info [--json]` | Show install paths, platform, adapters, and profile count. `--json` emits a single object ({version, installRoot, profileStore, shellRc, platform, adapters, profiles}) for scripts and the GUI. |
 | `adapters` | List supported CLIs with descriptions. |
 
 ## Shells
