@@ -460,10 +460,11 @@ path. Lint workflow edits locally with `actionlint .github/workflows/ci.yml`.
 
 Still genuinely open (an assistant should **ask first**, not decide):
 
-1. **fish shell support** — list it as "PRs welcome" or commit to it? Fish syntax for aliases is different (`alias name 'cmd'`, no `=`).
-2. **`clikae app` for non-Terminal users** — some macOS folks use iTerm2 or Warp. Idea: detect default terminal and pick the right `tell application` target, or accept a `--terminal-app` flag.
+1. **`clikae app` for non-Terminal users** — some macOS folks use iTerm2 or Warp. Idea: detect default terminal and pick the right `tell application` target, or accept a `--terminal-app` flag. (Partly addressed: `clikae app --terminal` already supports `terminal`/`iterm2`/`ghostty`; Warp + auto-detect still open.)
 
 Already resolved (kept for the record):
+
+- ~~**fish shell support**~~ → **DONE (2026-05-31).** `clikae alias` detects fish via `detect_shell_kind` and emits fish syntax `alias <name> 'env VAR=val <binary>'` (fish has no inline `VAR=val cmd`; `adapter_command_fish` routes through `env`). rc path + sentinel removal already worked. `rc_add_block` now `mkdir -p`s the rc's parent (fish's `~/.config/fish/`). Tests in `tests/bats/alias.bats`.
 
 - ~~**AWS adapter strategy**~~ → `env-var` / `AWS_PROFILE` (the `env-file` /
   `AWS_CONFIG_FILE` alternative is documented in `lib/adapters/aws.sh`).
@@ -537,6 +538,19 @@ left — they document the real `~/.claude-acct-{a,b}` migration + keychain hash
 detect-and-offer on interactive, auto on headless, behind an explicit opt-in (the
 maintainer wants best-effort-auto; remember interactive can't be fully automated —
 no usage-limit signal, see point 3 above); (c) **`antigravity` adapter** once its
-config mechanism is known (only a `~/.gemini` symlink today); (d) fish support
-(#5, approved); (e) the existing v0.5 TODO list in §2 (real-claude relay dogfood,
-PS `.psd1`/migrate, GUI `.app` packaging, Warp).
+config mechanism is known (only a `~/.gemini` symlink today); (d) ~~fish support~~
+**DONE 2026-05-31** (see §9); (e) the existing v0.5 TODO list in §2 (PS
+`.psd1`/migrate, GUI `.app` packaging, Warp).
+
+**Update 2026-05-31 (later session) — several "still not built" items above are now DONE.**
+Confirmed via real dogfooding and shipped on `feat/relay-and-status`:
+- (b) **ambient relay** — `clikae watch` + `pool` SHIPPED (detect→offer, auto-after-consent).
+- **All three limit markers CONFIRMED** (claude/codex/agy) and encoded; agy's is special —
+  `agy -p` exits 0 with empty output, marker only in `~/.gemini/antigravity-cli/cli.log`.
+- **`watch antigravity`** (log-scan detection of a dry agy tank) SHIPPED — alert-only, since
+  agy can't be a handoff *source* (opaque `.pb`); auto-relay-from-agy remains unbuilt.
+- **Real claude cross-account `relay` DOGFOOD-CONFIRMED** — A→B carried a live session and
+  resumed on B's quota with context intact (was previously only stub-verified).
+- (d) **fish support** SHIPPED.
+Still genuinely open: antigravity full adapter (likely stays launch-only), vercel adapter,
+`status` polish + v1.0 GUI, Windows follow-ups (PS `.psd1`/migrate, mirror watch/pool), Warp.
