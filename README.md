@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.3-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.4-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -20,7 +20,8 @@ You probably have more than one account on at least one CLI tool. Two GitHub acc
 1. Creates **isolated profile directories** for each CLI tool (one folder per (CLI, profile) pair).
 2. Generates **shell aliases** (`claude-work`, `gh-personal`, …) you can use in a new terminal.
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
-4. Cleans up after itself when you're done with a profile.
+4. **Relays a live session to another profile** when one account hits its usage limit — for Claude Code it carries the current conversation over and resumes it on the other account's quota (`clikae relay`).
+5. Cleans up after itself when you're done with a profile.
 
 It works for any CLI that respects an environment variable for its config location, ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, and Pulumi**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
@@ -38,6 +39,13 @@ Or from source / `curl | bash` — see [docs/installation.md](docs/installation.
 clikae init claude work --alias   # create profile + add `claude-work` alias
 source ~/.zshrc                   # pick up the alias
 claude-work                       # go
+```
+
+Hit a usage limit mid-task? Swap to your other account and keep the same
+conversation going on its quota:
+
+```bash
+clikae relay claude b             # carry the current session over to profile `b`
 ```
 
 ## Documentation

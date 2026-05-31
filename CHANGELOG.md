@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae relay <cli> [<from>] <to>` — hand a live session to another profile.**
+  clikae's origin story is keeping a second account because one account's quota
+  runs out mid-task; `relay` makes that switch seamless. For Claude Code it copies
+  the current directory's most recent transcript from the source profile into the
+  target profile and resumes it (`claude --resume <id>`), so the conversation
+  continues but new turns burn the target profile's quota. The source profile is
+  never modified (relay copies, never moves), and with no transcript to carry it
+  just starts a fresh session. The source profile is auto-detected from this
+  shell's env var when only the target is given. Implemented via a new optional
+  adapter hook `adapter_relay <from_dir> <to_dir>` (Claude-only; other adapters
+  fall back to a plain start under the target). Covered by bats.
+- **`clikae status [<cli>]` — show which profile each CLI is on in this shell.**
+  Reads the live value of each adapter's env var and resolves it back to a clikae
+  profile. Reports `(default)` when the var is unset and `(external)` when it
+  points outside the clikae profile store. Foundational for the planned menu-bar
+  GUI. Covered by bats.
+
 ## [0.4.0] — 2026-05-30
 
 ### Added

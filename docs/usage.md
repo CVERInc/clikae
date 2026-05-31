@@ -42,7 +42,9 @@ clikae remove claude work
 | `alias <cli> <profile> [--name <n>]` | Write (or replace) a shell alias. Default name `<cli>-<profile>`. |
 | `app <cli> <profile> [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. |
 | `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
+| `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
 | `list [-p\|--paths]` | List all profiles across all CLIs. |
+| `status [<cli>]` | Show which profile each CLI is on **in this shell**. |
 | `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
 | `info` | Show install paths and profile counts. |
@@ -91,6 +93,55 @@ migrate a different tool's aliases. Default is `claude`.
 > `--keep-login`, which copies the saved token from the old path's keychain entry
 > to the new one (macOS only; it never reads or transmits the token anywhere — it
 > stays in your Keychain). macOS may prompt you to allow keychain access.
+
+## Relaying a session when you hit a usage limit
+
+This is clikae's origin story: you keep a second account precisely because one
+account's quota runs out mid-task. `clikae relay` lets you swap to the other
+account — like swapping a fuel tank — and **keep the same conversation going** on
+the fresh quota.
+
+```bash
+# You're working as profile `a` and just hit its limit. From the same project
+# directory, hand the conversation to profile `b` and carry on:
+clikae relay claude b           # from = whatever this shell is on, to = b
+clikae relay claude a b         # or name both ends explicitly
+```
+
+For Claude Code, relay finds the **current directory's** most recent transcript
+under the source profile, copies it into the target profile, and runs
+`claude --resume <id>` there — so the conversation continues, but every new turn
+burns the target profile's quota. The source profile is left completely untouched
+(relay copies, never moves), so you can always go back to it.
+
+- The source profile is auto-detected from this shell's `$CLAUDE_CONFIG_DIR` when
+  you give only the target; name both ends if it can't be detected.
+- If there's no transcript to carry (e.g. a directory you've never used Claude
+  in), relay just starts a fresh session under the target profile.
+- Other CLIs have no conversation to carry, so for them `relay` simply starts the
+  CLI under the target profile.
+
+> Carry-over relies on Claude Code's on-disk transcript layout
+> (`<config-dir>/projects/<slug>/<id>.jsonl`) and `--resume`. It's verified
+> against current Claude Code; if a future version changes that layout, relay
+> falls back to a fresh start rather than doing anything destructive.
+
+## Seeing which profile you're on
+
+```bash
+clikae status            # every CLI that has a profile
+clikae status claude     # just one
+
+#   CLI          ACTIVE       SOURCE
+#   claude       b            CLAUDE_CONFIG_DIR=…/profiles/claude/b
+#   aws          (default)    AWS_PROFILE unset — system default
+```
+
+`status` reads the **live** value of each adapter's env var in the current shell
+and resolves it back to a clikae profile. It's a per-shell view: another terminal
+(or one launched from a different `clikae app`) can be on a different profile.
+`(default)` means the env var is unset (the CLI's own default); `(external)`
+means it points somewhere that isn't a clikae profile.
 
 ## How it works
 

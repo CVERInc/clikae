@@ -61,6 +61,37 @@ list_all_profiles() {
   done | sort
 }
 
+# resolve_active_profile <cli> <strategy> <value>
+# Given the live value of an adapter's env var, echo the clikae profile it
+# corresponds to (or nothing). Used by `clikae status` and `clikae relay` to
+# answer "which profile is this CLI on right now?".
+#   env-var strategy  -> the value IS the profile name (e.g. AWS_PROFILE=work)
+#   everything else   -> the value is a path; match it to a profile dir (a
+#                        profile dir, or a file/subpath seeded inside one)
+resolve_active_profile() {
+  local cli="$1" strategy="$2" value="$3"
+  [ -n "$value" ] || return 0
+  case "$strategy" in
+    env-var)
+      profile_exists "$cli" "$value" && printf '%s\n' "$value"
+      ;;
+    *)
+      local norm="${value%/}" pdir profile root
+      root="$(profiles_root)/$cli"
+      [ -d "$root" ] || return 0
+      for pdir in "$root"/*/; do
+        [ -d "$pdir" ] || continue
+        profile="$(basename "$pdir")"
+        pdir="${pdir%/}"
+        if [ "$norm" = "$pdir" ] || case "$norm" in "$pdir"/*) true ;; *) false ;; esac; then
+          printf '%s\n' "$profile"
+          return 0
+        fi
+      done
+      ;;
+  esac
+}
+
 # Ensure profile_dir exists. Pass --create to mkdir, --require to fail if missing.
 ensure_profile() {
   local mode="$1" cli="$2" profile="$3"

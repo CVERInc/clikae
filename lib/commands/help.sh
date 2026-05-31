@@ -27,7 +27,9 @@ Commands:
   app <cli> <profile>              Generate a macOS launcher .app
   alias <cli> <profile>            Write a shell alias for the profile
   run <cli> <profile> [-- args]    Run a CLI with the given profile (no alias needed)
+  relay <cli> [from] <to>          Hand the current session to another profile (e.g. on a usage limit)
   list                             List all profiles
+  status [cli]                     Show which profile each CLI is on in this shell
   remove <cli> <profile>           Remove a profile (dir, alias, .app)
   migrate [cli]                    Adopt a hand-rolled config-dir + alias setup
   info                             Show install paths and counts

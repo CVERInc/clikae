@@ -43,7 +43,7 @@ cmd="${1:-help}"
 shift || true
 
 case "$cmd" in
-  init|app|list|ls|remove|rm|run|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
+  init|app|list|ls|status|remove|rm|run|relay|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
     case "$cmd" in
       ls) cmd="list" ;;
       rm) cmd="remove" ;;

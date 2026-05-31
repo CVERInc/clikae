@@ -34,6 +34,37 @@ These mirror how this project was built and must be preserved:
 
 ## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30)
 
+> **UNRELEASED work on branch `feat/relay-and-status` (not yet tagged).** Two new
+> commands landed since v0.4.0, fully bats-covered (suite now **83 tests**, was
+> 71) and shellcheck-clean at `warning`:
+>
+> - **`clikae relay <cli> [<from>] <to>`** — the headline. Hand a live session to
+>   another profile and keep going on *its* quota (clikae's origin story: a second
+>   account exists because one runs out mid-task). New optional adapter hook
+>   `adapter_relay <from_dir> <to_dir>` in `lib/adapters/claude.sh`: it slugs `$PWD`
+>   the way Claude Code does (`[^A-Za-z0-9]`→`-`), finds the current dir's most
+>   recent `projects/<slug>/<id>.jsonl` transcript under the source profile, copies
+>   it into the target profile, and `exec`s `claude --resume <id>` under the target
+>   `CLAUDE_CONFIG_DIR`. Non-destructive (copy, never move). Adapters without the
+>   hook fall back to a plain start under the target. `cmd_relay` auto-detects
+>   `<from>` from the live env var when only the target is given.
+>   **⚠️ NEEDS REAL-CLAUDE DOGFOOD:** the resume path was verified with a stubbed
+>   `claude` binary (transcript copy + correct `--resume <id>`/`CLAUDE_CONFIG_DIR`
+>   argv), NOT yet against the real CLI resuming a transcript copied across config
+>   dirs. Confirm `claude --resume <id>` actually picks up a cross-profile-copied
+>   transcript before tagging. If a claude version needs more than the jsonl (e.g.
+>   a `.claude.json` index entry), extend `adapter_relay`.
+> - **`clikae status [<cli>]`** — shows which profile each CLI is on *in this
+>   shell* by resolving the live env var back to a profile (`(default)` = unset,
+>   `(external)` = points outside the store). Foundational for the v1.0 GUI.
+>   Shared resolver `resolve_active_profile` lives in `lib/core/profile_store.sh`
+>   (used by both status and relay — don't re-inline it).
+>
+> Both are wired into the dispatcher (`bin/clikae`), `help`, and `docs/usage.md`;
+> CHANGELOG `[Unreleased]` describes them. Still TODO before a v0.5 tag: real-claude
+> relay verification, the PowerShell mirror of status/relay, and a roadmap decision
+> on whether relay deserves its own headline in README's roadmap list.
+
 **HEAD state (read this first).** The latest tagged release is **`v0.4.0`**
 (GitHub Release live; both `homebrew/clikae.rb` and the tap's
 `Formula/clikae.rb` track v0.4.0, sha256 `e2d6fdcb…0fa0`, verified via

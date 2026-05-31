@@ -27,6 +27,63 @@ adapter_run() {
   CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$@"
 }
 
+# --- session carry-over for `clikae relay` ----------------------------------
+#
+# Claude Code stores each conversation as a JSONL transcript at
+#   <CLAUDE_CONFIG_DIR>/projects/<slug>/<session-id>.jsonl
+# where <slug> is the absolute working directory with every non-alphanumeric
+# character replaced by "-" (so /Users/me/dev → -Users-me-dev). `claude --resume
+# <session-id>` resumes a transcript by id within the current directory.
+#
+# So to hand the *current directory's* live conversation from one profile to
+# another (e.g. when the first profile hit its usage limit), we copy that
+# directory's most recent transcript into the target profile's matching project
+# dir, then resume it under the target profile — new turns burn the target's
+# quota. The source profile is never touched.
+#
+# Returns non-zero (without exec'ing) if there's no transcript to carry, so the
+# caller can fall back to starting a fresh session.
+_claude_project_slug() {
+  # Mirror Claude Code's own slugify: [^A-Za-z0-9] -> '-'.
+  printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
+}
+
+adapter_relay() {
+  local from_dir="$1" to_dir="$2"; shift 2
+
+  local slug from_proj to_proj
+  slug="$(_claude_project_slug "$PWD")"
+  from_proj="$from_dir/projects/$slug"
+  to_proj="$to_dir/projects/$slug"
+
+  if [ ! -d "$from_proj" ]; then
+    log_warn "No Claude history for this directory under the source profile."
+    log_dim "(looked in $from_proj)"
+    return 1
+  fi
+
+  # Most recently modified transcript = the conversation you were just in.
+  local latest=""
+  latest="$(ls -t "$from_proj"/*.jsonl 2>/dev/null | head -n 1 || true)"
+  if [ -z "$latest" ]; then
+    log_warn "No Claude transcript found for this directory under the source profile."
+    return 1
+  fi
+
+  local sid
+  sid="$(basename "$latest" .jsonl)"
+
+  mkdir -p "$to_proj"
+  if ! cp "$latest" "$to_proj/$sid.jsonl"; then
+    log_warn "Couldn't copy the transcript into the target profile."
+    return 1
+  fi
+
+  log_ok "Carried session ${sid%%-*}… into the target profile."
+  log_dim "Resuming on the new profile's quota; the original session is untouched."
+  CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid" "$@"
+}
+
 # --- macOS keychain login carry-over (optional migrate hook) ----------------
 #
 # On macOS, Claude Code stores its OAuth token in the login Keychain, NOT inside
