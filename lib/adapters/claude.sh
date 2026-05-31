@@ -72,25 +72,16 @@ adapter_transcript_path() {
   printf '%s\n' "$latest"
 }
 
-# Optional hook: describe a session for `clikae relay`'s preview card. Prints one
-# US-delimited row
+# Build a relay-preview row for one transcript FILE:
 #   <session-id> \037 <last-active> \037 <approx-msgs> \037 <title>
-# for the current directory's session under <dir> — the newest transcript, or a
-# specific one when <sid> is given. The title is the opening user message. Returns
-# non-zero if there's no such transcript, so the caller can skip the preview.
-adapter_session_meta() {
-  local dir="$1" sid="${2:-}"
-  local f
-  if [ -n "$sid" ]; then
-    f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
-    [ -f "$f" ] || return 1
-  else
-    f="$(adapter_transcript_path "$dir" || true)"
-    [ -n "$f" ] || return 1
-    sid="$(basename "$f" .jsonl)"
-  fi
-
-  local mtime nmsgs title
+# The title is the opening user message, left untruncated so multibyte (CJK)
+# titles never get sliced mid-character (a 200-byte guard caps a runaway line).
+# One place owns this format so the single-session and list views can't drift.
+_claude_meta_for_file() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+  local sid mtime nmsgs title
+  sid="$(basename "$f" .jsonl)"
   # BSD stat first, GNU stat as fallback; a dash if neither answers.
   mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null \
         || stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 \
@@ -100,12 +91,9 @@ adapter_session_meta() {
   # for a preview; never let a no-match abort under the caller's pipefail.
   nmsgs="$(grep -c '"role"' "$f" 2>/dev/null || true)"
   [ -n "$nmsgs" ] || nmsgs=0
-
-  # Title = the opening user message. Transcripts are JSONL; the first line with a
-  # user role carries the prompt as a "text":"..." field. Pull just that value
-  # (tolerating escaped quotes), flatten newlines, collapse runs of spaces. Left
-  # untruncated — the caller renders it on its own line, so multibyte (CJK) titles
-  # never get sliced mid-character. A 200-byte guard caps a runaway line.
+  # Title = the opening user message. The first line with a user role carries the
+  # prompt as a "text":"..." field; pull just that value (tolerating escaped
+  # quotes), flatten newlines, collapse runs of spaces.
   title="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null \
         | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
         | head -n 1 \
@@ -114,19 +102,59 @@ adapter_session_meta() {
         | sed -E 's/  +/ /g; s/^ //; s/ $//' || true)"
   [ -n "$title" ] || title="(no preview)"
   [ "${#title}" -gt 200 ] && title="${title:0:200}…"
-
   printf '%s\037%s\037%s\037%s\n' "$sid" "$mtime" "$nmsgs" "$title"
+}
+
+# Optional hook: describe ONE session for `clikae relay`'s preview card — the
+# current directory's newest transcript under <dir>, or a specific one when <sid>
+# is given. Returns non-zero if there's no such transcript.
+adapter_session_meta() {
+  local dir="$1" sid="${2:-}" f
+  if [ -n "$sid" ]; then
+    f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+  else
+    f="$(adapter_transcript_path "$dir" || true)"
+  fi
+  [ -n "$f" ] || return 1
+  _claude_meta_for_file "$f"
+}
+
+# Optional hook: list recent sessions for the current dir under <dir>, newest
+# first, one preview row each (same columns as adapter_session_meta), capped at
+# [limit] (default 10). Powers relay's "pick another session" chooser. Returns
+# non-zero when there are none.
+adapter_list_sessions() {
+  local dir="$1" limit="${2:-10}" proj f any=0
+  proj="$dir/projects/$(_claude_project_slug "$PWD")"
+  [ -d "$proj" ] || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    _claude_meta_for_file "$f" && any=1
+  done <<EOF
+$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
+EOF
+  [ "$any" -eq 1 ] || return 1
 }
 
 adapter_relay() {
   local from_dir="$1" to_dir="$2"; shift 2
+
+  # Optional: carry a SPECIFIC session (relay's session picker passes this);
+  # without it, fall back to the current directory's newest transcript.
+  local want_sid=""
+  if [ "${1:-}" = "--session" ]; then want_sid="$2"; shift 2; fi
 
   local to_proj
   to_proj="$to_dir/projects/$(_claude_project_slug "$PWD")"
 
   # Most recently modified transcript = the conversation you were just in.
   local latest=""
-  latest="$(adapter_transcript_path "$from_dir" || true)"
+  if [ -n "$want_sid" ]; then
+    latest="$from_dir/projects/$(_claude_project_slug "$PWD")/$want_sid.jsonl"
+    [ -f "$latest" ] || latest=""
+  else
+    latest="$(adapter_transcript_path "$from_dir" || true)"
+  fi
   if [ -z "$latest" ]; then
     log_warn "No Claude transcript found for this directory under the source profile."
     log_dim "(looked under $from_dir/projects/$(_claude_project_slug "$PWD"))"

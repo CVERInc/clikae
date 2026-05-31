@@ -29,8 +29,66 @@ _relay_preview_card() {
     "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from" "$__C_GREEN" "$__C_RESET"
 }
 
+# Arrow-key chooser for WHICH session to carry — the cure for the home-dir slug
+# ambiguity (everything you run from ~ shares one slug, so "newest" is a guess).
+# Lists recent sessions under <from_dir>; echoes the chosen session id (return 0),
+# or returns nonzero if cancelled. Drawn on /dev/tty so stdout stays the result.
+_relay_pick_session() {
+  local from_dir="$1"
+  declare -F adapter_list_sessions >/dev/null || return 1
+  local rows
+  rows="$(adapter_list_sessions "$from_dir" 10 2>/dev/null || true)"
+  [ -n "$rows" ] || return 1
+
+  local -a sids=() labels=()
+  local sid last msgs title
+  while IFS=$'\037' read -r sid last msgs title; do
+    [ -n "$sid" ] || continue
+    sids+=("$sid")
+    labels+=("$(printf '%-44s  %s msgs · %s' "$title" "$msgs" "$last")")
+  done <<EOF
+$rows
+EOF
+  local n=${#sids[@]}
+  [ "$n" -gt 0 ] || return 1
+
+  # Read-write fd so we can both draw to and read keys from the terminal.
+  exec 3<>/dev/tty 2>/dev/null || return 1
+  local sel=0 i key rest
+  printf '\033[?1049h\033[?25l' >&3
+  # shellcheck disable=SC2064
+  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" RETURN
+  while :; do
+    {
+      printf '\033[H\033[2J'
+      printf '%bPick a session to carry%b   %b↑↓ move · ⏎ select · q cancel%b\n\n' \
+        "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+      for ((i = 0; i < n; i++)); do
+        if [ "$i" -eq "$sel" ]; then printf '  %b❯ %s%b\n' "$__C_GREEN" "${labels[$i]}" "$__C_RESET"
+        else printf '    %b%s%b\n' "$__C_DIM" "${labels[$i]}" "$__C_RESET"; fi
+      done
+    } >&3
+    IFS= read -rsn1 key <&3 || break
+    case "$key" in
+      $'\e')
+        if IFS= read -rsn2 -t 1 rest <&3; then
+          case "$rest" in '[A') sel=$(((sel - 1 + n) % n)) ;; '[B') sel=$(((sel + 1) % n)) ;; esac
+        else break; fi ;;
+      k) sel=$(((sel - 1 + n) % n)) ;;
+      j) sel=$(((sel + 1) % n)) ;;
+      q) break ;;
+      ''|$'\n'|$'\r')
+        printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+        printf '%s\n' "${sids[$sel]}"
+        return 0 ;;
+    esac
+  done
+  printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+  return 1
+}
+
 cmd_relay() {
-  local cli="" from="" to="" got_from=0 assume_yes=0 want_fresh=0
+  local cli="" from="" to="" got_from=0 assume_yes=0 want_fresh=0 chosen_sid=""
   local -a positionals=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,15 +108,30 @@ For Claude Code, relay copies the *current directory's* most recent transcript
 from <from> into <to>, then resumes it — so the conversation continues, but the
 new turns burn <to>'s quota. The original session is left intact.
 
+Before anything moves it shows a preview (which session, from ──▶ to, the quota
+note) and asks to confirm:  [y] carry · [s] pick another session · [f] fresh ·
+[N] cancel.  `s` opens an arrow-key picker of recent sessions — handy when you
+work from one directory and several conversations share it.
+
+Options:
+  -y, --yes            skip the preview/confirm (also auto-skipped with no TTY)
+      --session <id>   carry a specific session instead of the newest
+      --fresh          switch tanks but start a NEW conversation (don't carry)
+
 Examples:
-  clikae relay claude b           # from = whatever this shell is on, to = b
-  clikae relay claude a b         # explicit: from a, to b
+  clikae relay claude b              # from = whatever this shell is on, to = b
+  clikae relay claude a b            # explicit: from a, to b
+  clikae relay claude a b --fresh    # open b on a clean slate (no carry)
+  clikae relay claude a b -y         # carry the newest, no prompt
   clikae relay claude a b -- --model opus
 EOF
         return 0
         ;;
       -y|--yes) assume_yes=1; shift ;;
       --fresh) want_fresh=1; shift ;;
+      --session)
+        [ $# -ge 2 ] || log_fail "--session needs a session id"
+        chosen_sid="$2"; shift 2 ;;
       --) shift; break ;;
       -*) log_fail "Unknown flag: $1" ;;
       *)
@@ -119,36 +192,49 @@ EOF
   if declare -F adapter_relay >/dev/null; then
     # Preview + confirm: show exactly what's about to be carried, where, and what
     # it costs — before anything moves. Skipped with --yes, with no TTY to ask on
-    # (automation), or when there's no session to describe.
+    # (automation), or when there's no session to describe. The loop lets `s` swap
+    # which session is carried (the picker) and redraw without restarting relay.
     if declare -F adapter_session_meta >/dev/null; then
-      local meta="" m_sid m_last m_msgs m_title
-      meta="$(adapter_session_meta "$from_dir" 2>/dev/null || true)"
-      if [ -n "$meta" ]; then
+      local meta="" m_sid m_last m_msgs m_title ans="" picked=""
+      while :; do
+        if [ -n "$chosen_sid" ]; then
+          meta="$(adapter_session_meta "$from_dir" "$chosen_sid" 2>/dev/null || true)"
+        else
+          meta="$(adapter_session_meta "$from_dir" 2>/dev/null || true)"
+        fi
+        [ -n "$meta" ] || break
         IFS=$'\037' read -r m_sid m_last m_msgs m_title <<EOF
 $meta
 EOF
         _relay_preview_card "$cli" "$from" "$to" "$m_sid" "$m_last" "$m_msgs" "$m_title"
-        if [ "$assume_yes" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
-          local ans=""
-          printf '  %bcarry to %s?%b  [%by%b] carry · [%bf%b] fresh · [%bN%b] cancel  ' \
-            "$__C_BOLD" "$to" "$__C_RESET" \
-            "$__C_GREEN" "$__C_RESET" "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-          IFS= read -r ans </dev/tty || ans=""
-          printf '\n'
-          case "$ans" in
-            y|Y|yes|YES) : ;;
-            f|F|fresh|FRESH)
-              log_info "Opening $cli fresh under '$to' (no session carried over)."
-              adapter_run "$to_dir" "$@" ;;   # execs
-            *)
-              log_dim "Cancelled — nothing carried, no quota spent."
-              return 0 ;;
-          esac
-        fi
-      fi
+        # Non-interactive (or --yes): accept the shown session and carry it.
+        if [ "$assume_yes" -eq 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; then break; fi
+        printf '  %bcarry to %s?%b  [%by%b] carry · [%bs%b] pick · [%bf%b] fresh · [%bN%b] cancel  ' \
+          "$__C_BOLD" "$to" "$__C_RESET" \
+          "$__C_GREEN" "$__C_RESET" "$__C_BOLD" "$__C_RESET" \
+          "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+        IFS= read -r ans </dev/tty || ans=""
+        printf '\n'
+        case "$ans" in
+          y|Y|yes|YES) break ;;
+          s|S|pick)
+            picked="$(_relay_pick_session "$from_dir" || true)"
+            [ -n "$picked" ] && chosen_sid="$picked"
+            continue ;;
+          f|F|fresh|FRESH)
+            log_info "Opening $cli fresh under '$to' (no session carried over)."
+            adapter_run "$to_dir" "$@" ;;   # execs
+          *)
+            log_dim "Cancelled — nothing carried, no quota spent."
+            return 0 ;;
+        esac
+      done
     fi
     log_info "Relaying $cli: $from → $to"
-    adapter_relay "$from_dir" "$to_dir" "$@" || true
+    # sid is a UUID (no spaces); the conditional expansion passes --session only
+    # when a specific session was chosen, else relay carries the newest.
+    # shellcheck disable=SC2086
+    adapter_relay "$from_dir" "$to_dir" ${chosen_sid:+--session "$chosen_sid"} "$@" || true
     log_warn "No session was carried over; starting $cli fresh under '$to'."
   else
     log_info "$cli has no session carry-over; starting fresh under '$to'."

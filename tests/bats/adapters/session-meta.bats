@@ -9,7 +9,7 @@ load '../../helpers'
 # slugs $PWD, so we cd into a stable working dir whose slug we mirror.
 _setup_session_meta() {
   # shellcheck source=/dev/null
-  . "$REPO_ROOT/lib/adapters/claude.sh"
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
   WORK="$TEST_HOME/work"
   mkdir -p "$WORK"
   cd "$WORK" || return 1
@@ -75,4 +75,42 @@ seed_session() {
   run adapter_session_meta "$PROFILE"
   assert_success
   assert_contains "(no preview)"
+}
+
+@test "list_sessions returns rows newest-first" {
+  _setup_session_meta
+  seed_session aaa00000-0000-0000-0000-000000000000 "older one"
+  sleep 1
+  seed_session bbb00000-0000-0000-0000-000000000000 "newer one"
+  run adapter_list_sessions "$PROFILE"
+  assert_success
+  # newest ("newer one") must be on the first line; older one still listed
+  [[ "${lines[0]}" == *"newer one"* ]]
+  assert_contains "older one"
+}
+
+@test "list_sessions honours a limit" {
+  _setup_session_meta
+  seed_session aaa00000-0000-0000-0000-000000000000 "one"
+  sleep 1
+  seed_session bbb00000-0000-0000-0000-000000000000 "two"
+  sleep 1
+  seed_session ccc00000-0000-0000-0000-000000000000 "three"
+  run adapter_list_sessions "$PROFILE" 2
+  assert_success
+  [ "${#lines[@]}" -eq 2 ]
+}
+
+@test "list_sessions keeps CJK titles intact" {
+  _setup_session_meta
+  seed_session cjk11111-0000-0000-0000-000000000000 "接力這場對話到另一個帳號"
+  run adapter_list_sessions "$PROFILE"
+  assert_success
+  assert_contains "接力這場對話到另一個帳號"
+}
+
+@test "list_sessions returns nonzero when there are no sessions" {
+  _setup_session_meta
+  run adapter_list_sessions "$TEST_HOME/does-not-exist"
+  assert_failure
 }
