@@ -25,6 +25,7 @@ Usage:
 
 Commands:
   doctor                           Read-only health check: what clikae can do here
+  demo                             A 30-second guided tour in a throwaway sandbox
   init <cli> <profile>             Create a new profile for a CLI tool
   app <cli> <profile>              Generate a macOS launcher .app
   alias <cli> <profile>            Write a shell alias for the profile

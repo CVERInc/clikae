@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae demo` — a guided tour in a throwaway sandbox.** A non-interactive,
+  ~30-second walkthrough that runs entirely under a temp `CLIKAE_HOME`: it shows
+  two fully isolated accounts of one CLI, the live tank board (one marked active
+  in the shell), a fuel pool, and the relay payoff — then deletes the sandbox.
+  Touches nothing real (not your `~/.clikae`, logins, or shell rc); the accounts
+  are simulated (fake `.claude.json` labels), so it needs no installed CLI and no
+  second account. The first thing you can safely hand a newcomer. Covered by bats
+  (the tour runs, the real home is untouched, the sandbox is cleaned up).
 - **Bare `clikae` now opens a home dashboard — your "tank board".** Typing
   `clikae` with no arguments used to print the help wall; it now opens a
   glanceable dashboard: every profile (tank) grouped by CLI, the one **active in

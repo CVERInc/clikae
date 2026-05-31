@@ -22,7 +22,8 @@ __resolve_self() {
 CLIKAE_BIN_DIR="$(__resolve_self)"
 CLIKAE_ROOT="$(cd "$CLIKAE_BIN_DIR/.." && pwd)"
 CLIKAE_LIB="$CLIKAE_ROOT/lib"
-export CLIKAE_VERSION CLIKAE_ROOT CLIKAE_LIB
+CLIKAE_BIN="$CLIKAE_BIN_DIR/clikae"   # this very binary, for self-invocation (e.g. `demo`)
+export CLIKAE_VERSION CLIKAE_ROOT CLIKAE_LIB CLIKAE_BIN
 
 # Profile store layout. Override with $CLIKAE_HOME if you want.
 CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}"
@@ -52,7 +53,7 @@ cmd="${1:-home}"
 shift || true
 
 case "$cmd" in
-  home|dashboard|doctor|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
+  home|dashboard|doctor|demo|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
     case "$cmd" in
       ls) cmd="list" ;;
       rm) cmd="remove" ;;

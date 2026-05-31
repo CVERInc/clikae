@@ -105,7 +105,7 @@ EOF
   log_bold "  Fill your first tank (pick a CLI you use):"
   log_dim  "    clikae init $example work --alias     # then: source your rc, run $example-work"
   echo ""
-  log_dim "  See every supported CLI:  clikae adapters     Full machine check:  clikae doctor"
+  log_dim "  Curious first?  clikae demo   (a 30-second sandbox tour — touches nothing)"
 }
 
 cmd_home() {

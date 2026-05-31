@@ -83,5 +83,5 @@ EOF
     log_dim "  • aliases aren't loaded in this shell yet:  source $rc"
   fi
   log_dim "  • See your tanks at a glance:  clikae"
-  log_dim "  • Every supported CLI:         clikae adapters"
+  log_dim "  • Take a risk-free tour:       clikae demo"
 }
