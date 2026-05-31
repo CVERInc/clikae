@@ -6,8 +6,9 @@ same model with PowerShell mechanics:
 
 - isolated profile dirs at `%USERPROFILE%\.clikae\profiles\<cli>\<profile>\`
   (override the root with `$env:CLIKAE_HOME`),
-- the same 11 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws,
-  az, npm, terraform, pulumi), kept in sync with `lib/adapters/*.sh`,
+- the same 13 built-in adapters (claude, codex, gh, gcloud, docker, helm,
+  kubectl, aws, az, npm, terraform, pulumi, vercel), kept in sync with
+  `lib/adapters/*.sh`,
 - instead of a shell alias (PowerShell aliases can't carry env vars) it writes a
   **sentinel-wrapped function** into your `$PROFILE`, e.g. `claude-work`,
 - optional `.lnk` shortcuts you can pin to the Start menu / Taskbar.
@@ -28,6 +29,9 @@ New-ClikaeProfile -Cli claude -Profile work -Alias
 claude-work       # runs claude with CLAUDE_CONFIG_DIR set to that profile
 
 Get-ClikaeProfile                       # list profiles
+Get-ClikaeProfile -Json                 # … as a JSON array (for the GUI / scripts)
+Get-ClikaeStatus                         # which profile each CLI is on in THIS session
+Get-ClikaeStatus -Cli claude -Json       # … as a JSON array with a `state` field
 Get-ClikaeAdapter                       # list built-in adapters
 Invoke-ClikaeProfile -Cli gh -Profile personal status   # one-off run, no alias
 New-ClikaeShortcut -Cli claude -Profile work             # a pinnable .lnk
@@ -40,7 +44,8 @@ Remove-ClikaeProfile -Cli claude -Profile work -Force    # clean up dir + functi
 |---|---|
 | `New-ClikaeProfile -Cli -Profile [-Alias]` | Create a profile dir; `-Alias` also adds the `$PROFILE` function. |
 | `Add-ClikaeFunction -Cli -Profile` | Write/replace just the `$PROFILE` function (idempotent). |
-| `Get-ClikaeProfile [-Cli]` | List profiles. |
+| `Get-ClikaeProfile [-Cli] [-Json]` | List profiles. `-Json` emits a JSON array of `{Cli, Profile, Path}`. |
+| `Get-ClikaeStatus [-Cli] [-Json]` | Show which profile each CLI is on **in this session** (`active`/`external`/`default`/`flag`). `-Json` emits a JSON array. The `clikae status` equivalent. |
 | `Remove-ClikaeProfile -Cli -Profile [-Force] [-KeepData]` | Remove the dir + function (`-KeepData` keeps the dir). |
 | `Invoke-ClikaeProfile -Cli -Profile [args…]` | Run the CLI once with the profile env applied. |
 | `Get-ClikaeAdapter [-Cli]` | List/inspect built-in adapters. |

@@ -167,6 +167,118 @@ function Get-ClikaeFlagArgs {
     return @($a.Flag, $dir)
 }
 
+# --- machine-readable JSON (mirrors lib/core/json.sh + the --json modes) ----
+
+function ConvertTo-ClikaeJsonArray {
+    <#
+    .SYNOPSIS  Render objects as a JSON ARRAY, always.
+    .DESCRIPTION
+      Windows PowerShell 5.1's ConvertTo-Json drops the [] wrapper for a single
+      object (and -AsArray doesn't exist before PS 7), so we convert each element
+      and join. This keeps `-Json` output a real array on every edition, matching
+      the bash `--json` contract (empty -> [], one row -> [ {…} ]).
+    #>
+    [CmdletBinding()]
+    param([object[]]$Items)
+    $arr = @($Items | Where-Object { $null -ne $_ })
+    if ($arr.Count -eq 0) { return '[]' }
+    $parts = foreach ($it in $arr) { $it | ConvertTo-Json -Depth 6 -Compress }
+    return '[' + ($parts -join ',') + ']'
+}
+
+# --- status (mirrors `clikae status`) --------------------------------------
+
+function Resolve-ClikaeActiveProfile {
+    <#
+    .SYNOPSIS  Resolve a live env-var value back to a clikae profile name, or $null.
+    .DESCRIPTION
+      Mirrors bash resolve_active_profile: for env-var strategy the value IS the
+      profile name (active when that profile dir exists); for path strategies
+      (env-dir / env-file) the value is matched against each profiles\<cli>\<p>
+      dir — an exact match, or a path *inside* it (e.g. env-file's <dir>\config).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Cli,
+        [Parameter(Mandatory)][string]$Strategy,
+        [AllowEmptyString()][string]$Value
+    )
+    if ([string]::IsNullOrEmpty($Value)) { return $null }
+    if ($Strategy -eq 'env-var') {
+        if (Test-Path -LiteralPath (Get-ClikaeProfileDir -Cli $Cli -Profile $Value)) { return $Value }
+        return $null
+    }
+    $norm = $Value.TrimEnd('\', '/')
+    $root = Join-Path (Join-Path (Get-ClikaeHome) 'profiles') $Cli
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    foreach ($pd in (Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $pdir = $pd.FullName.TrimEnd('\', '/')
+        if ($norm -eq $pdir -or
+            $norm.StartsWith($pdir + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $norm.StartsWith($pdir + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $pd.Name
+        }
+    }
+    return $null
+}
+
+function Get-ClikaeStatus {
+    <#
+    .SYNOPSIS  Show which profile each CLI is currently on *in this session*.
+    .DESCRIPTION
+      The `clikae status` equivalent. Reads each adapter's live env var (e.g.
+      $env:CLAUDE_CONFIG_DIR) and resolves it back to a clikae profile. Emits one
+      object per CLI with a State of:
+        active   — the env var points at a clikae profile (Profile is set)
+        external — the env var is set but not to a clikae profile
+        default  — the env var is unset (the CLI's own system default)
+        flag     — flag-strategy adapter; not detectable from the environment
+      With no -Cli, reports every CLI that has at least one profile (matching bash).
+    .PARAMETER Json
+      Emit a JSON array (one object per CLI) instead of objects. Otherwise returns
+      rich objects — pipe to ConvertTo-Json yourself if you prefer.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Cli,
+        [switch]$Json
+    )
+    $clis = @()
+    if ($PSBoundParameters.ContainsKey('Cli')) {
+        Assert-ClikaeName -Kind 'cli' -Name $Cli
+        if (-not $script:ClikaeAdapters.Contains($Cli)) {
+            throw "No adapter for '$Cli'. Known: $($script:ClikaeAdapters.Keys -join ', ')."
+        }
+        $clis = @($Cli)
+    } else {
+        $clis = @(Get-ClikaeProfile | Select-Object -ExpandProperty Cli -Unique)
+    }
+
+    $rows = foreach ($c in $clis) {
+        if (-not $script:ClikaeAdapters.Contains($c)) { continue }
+        $a = $script:ClikaeAdapters[$c]
+        if ($a.Strategy -eq 'flag') {
+            [pscustomobject]([ordered]@{ Cli = $c; State = 'flag'; Profile = $null; Account = $null; EnvVar = $null; EnvValue = $null })
+            continue
+        }
+        $var   = $a.EnvVar
+        $value = [Environment]::GetEnvironmentVariable($var)
+        if ([string]::IsNullOrEmpty($value)) {
+            [pscustomobject]([ordered]@{ Cli = $c; State = 'default'; Profile = $null; Account = $null; EnvVar = $var; EnvValue = $null })
+            continue
+        }
+        $active = Resolve-ClikaeActiveProfile -Cli $c -Strategy $a.Strategy -Value $value
+        if ($active) {
+            [pscustomobject]([ordered]@{ Cli = $c; State = 'active'; Profile = $active; Account = $null; EnvVar = $var; EnvValue = $value })
+        } else {
+            [pscustomobject]([ordered]@{ Cli = $c; State = 'external'; Profile = $null; Account = $null; EnvVar = $var; EnvValue = $value })
+        }
+    }
+
+    if ($Json) { return (ConvertTo-ClikaeJsonArray -Items $rows) }
+    return $rows
+}
+
 # --- $PROFILE function blocks ----------------------------------------------
 
 function Get-ClikaeFunctionName {
@@ -295,18 +407,29 @@ function Add-ClikaeFunction {
 }
 
 function Get-ClikaeProfile {
-    <#.SYNOPSIS List profiles (optionally for one -Cli).#>
+    <#
+    .SYNOPSIS List profiles (optionally for one -Cli).
+    .PARAMETER Json
+      Emit a JSON array (one object per profile) instead of objects — the bash
+      `clikae list --json` equivalent. Otherwise returns rich objects you can pipe
+      to ConvertTo-Json yourself.
+    #>
     [CmdletBinding()]
-    param([string]$Cli)
+    param([string]$Cli, [switch]$Json)
+    $filterCli = $PSBoundParameters.ContainsKey('Cli')
+    $rows = New-Object System.Collections.Generic.List[object]
     $root = Join-Path (Get-ClikaeHome) 'profiles'
-    if (-not (Test-Path -LiteralPath $root)) { return }
-    $cliDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue
-    foreach ($cd in $cliDirs | Sort-Object Name) {
-        if ($PSBoundParameters.ContainsKey('Cli') -and $cd.Name -ne $Cli) { continue }
-        foreach ($pd in (Get-ChildItem -LiteralPath $cd.FullName -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
-            [pscustomobject]@{ Cli = $cd.Name; Profile = $pd.Name; Path = $pd.FullName }
+    if (Test-Path -LiteralPath $root) {
+        $cliDirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue
+        foreach ($cd in $cliDirs | Sort-Object Name) {
+            if ($filterCli -and $cd.Name -ne $Cli) { continue }
+            foreach ($pd in (Get-ChildItem -LiteralPath $cd.FullName -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                $rows.Add([pscustomobject]([ordered]@{ Cli = $cd.Name; Profile = $pd.Name; Path = $pd.FullName }))
+            }
         }
     }
+    if ($Json) { return (ConvertTo-ClikaeJsonArray -Items $rows.ToArray()) }
+    return $rows.ToArray()
 }
 
 function Remove-ClikaeProfile {
@@ -417,5 +540,6 @@ function New-ClikaeShortcut {
 Export-ModuleMember -Function `
     Get-ClikaeHome, Get-ClikaeProfileDir, Test-ClikaeName, Test-ClikaeWindows, Get-ClikaeAdapter, `
     Get-ClikaeProfileEnv, Get-ClikaeFlagArgs, Get-ClikaeFunctionName, Get-ClikaeFunctionBlock, `
+    ConvertTo-ClikaeJsonArray, Resolve-ClikaeActiveProfile, Get-ClikaeStatus, `
     New-ClikaeProfile, Add-ClikaeFunction, Get-ClikaeProfile, Remove-ClikaeProfile, `
     Invoke-ClikaeProfile, New-ClikaeShortcut

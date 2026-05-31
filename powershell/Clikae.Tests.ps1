@@ -195,3 +195,111 @@ Describe 'Invoke-ClikaeProfile' {
         { Invoke-ClikaeProfile -Cli claude -Profile work } | Should -Throw '*not on PATH*'
     }
 }
+
+Describe 'ConvertTo-ClikaeJsonArray' {
+    It 'renders an empty input as []' {
+        ConvertTo-ClikaeJsonArray -Items @()   | Should -Be '[]'
+        ConvertTo-ClikaeJsonArray -Items $null | Should -Be '[]'
+    }
+    It 'wraps a SINGLE object in an array (the WinPS 5.1 trap)' {
+        $json = ConvertTo-ClikaeJsonArray -Items @([pscustomobject]@{ a = 1 })
+        $json | Should -Match '^\['
+        $json | Should -Match '\]$'
+        $parsed = @($json | ConvertFrom-Json)
+        $parsed.Count | Should -Be 1
+        $parsed[0].a  | Should -Be 1
+    }
+    It 'renders multiple objects as a 2-element array' {
+        $json = ConvertTo-ClikaeJsonArray -Items @(
+            [pscustomobject]@{ a = 1 }, [pscustomobject]@{ a = 2 })
+        $parsed = @($json | ConvertFrom-Json)
+        $parsed.Count | Should -Be 2
+    }
+}
+
+Describe 'Get-ClikaeProfile -Json' {
+    It 'emits [] when no profiles match' {
+        Get-ClikaeProfile -Cli no-such-cli -Json | Should -Be '[]'
+    }
+    It 'emits a JSON array of {Cli, Profile, Path}' {
+        New-ClikaeProfile -Cli gh -Profile jsontest -ProfilePath $script:ProfileScript | Out-Null
+        $json   = Get-ClikaeProfile -Cli gh -Json
+        $json | Should -Match '^\['
+        $parsed = @($json | ConvertFrom-Json)
+        ($parsed | Where-Object Profile -eq 'jsontest') | Should -Not -BeNullOrEmpty
+        ($parsed | Where-Object Profile -eq 'jsontest').Cli | Should -Be 'gh'
+    }
+}
+
+Describe 'Get-ClikaeStatus (status equivalent)' {
+    BeforeAll {
+        # Save any real values so we can restore them; these tests mutate env vars.
+        $script:SavedClaude = $env:CLAUDE_CONFIG_DIR
+        $script:SavedAws    = $env:AWS_PROFILE
+        $script:SavedHelm   = $env:HELM_CONFIG_HOME
+    }
+    AfterAll {
+        $env:CLAUDE_CONFIG_DIR = $script:SavedClaude
+        $env:AWS_PROFILE       = $script:SavedAws
+        $env:HELM_CONFIG_HOME  = $script:SavedHelm
+    }
+    BeforeEach {
+        Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:AWS_PROFILE       -ErrorAction SilentlyContinue
+        Remove-Item Env:HELM_CONFIG_HOME  -ErrorAction SilentlyContinue
+    }
+
+    It 'reports a flag-strategy adapter as state=flag with a null env var' {
+        $s = Get-ClikaeStatus -Cli vercel
+        $s.State  | Should -Be 'flag'
+        $s.EnvVar | Should -BeNullOrEmpty
+    }
+
+    It 'reports an unset env var as state=default' {
+        $s = Get-ClikaeStatus -Cli helm
+        $s.State  | Should -Be 'default'
+        $s.EnvVar | Should -Be 'HELM_CONFIG_HOME'
+    }
+
+    It 'resolves an env-dir value pointing at a clikae profile to state=active' {
+        New-ClikaeProfile -Cli claude -Profile statusdir -ProfilePath $script:ProfileScript | Out-Null
+        $env:CLAUDE_CONFIG_DIR = Get-ClikaeProfileDir -Cli claude -Profile statusdir
+        $s = Get-ClikaeStatus -Cli claude
+        $s.State   | Should -Be 'active'
+        $s.Profile | Should -Be 'statusdir'
+    }
+
+    It 'reports an env var pointing somewhere unknown as state=external' {
+        $env:CLAUDE_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'not-a-clikae-profile'
+        $s = Get-ClikaeStatus -Cli claude
+        $s.State   | Should -Be 'external'
+        $s.Profile | Should -BeNullOrEmpty
+    }
+
+    It 'env-var strategy: an existing profile name resolves to active' {
+        New-ClikaeProfile -Cli aws -Profile staging -ProfilePath $script:ProfileScript | Out-Null
+        $env:AWS_PROFILE = 'staging'
+        $s = Get-ClikaeStatus -Cli aws
+        $s.State   | Should -Be 'active'
+        $s.Profile | Should -Be 'staging'
+    }
+
+    It 'env-var strategy: an unknown profile name is external' {
+        $env:AWS_PROFILE = 'ghost-profile'
+        $s = Get-ClikaeStatus -Cli aws
+        $s.State | Should -Be 'external'
+    }
+
+    It '-Json always emits a JSON array, even for a single CLI' {
+        $json = Get-ClikaeStatus -Cli vercel -Json
+        $json | Should -Match '^\['
+        $json | Should -Match '\]$'
+        $parsed = @($json | ConvertFrom-Json)
+        $parsed.Count    | Should -Be 1
+        $parsed[0].State | Should -Be 'flag'
+    }
+
+    It 'rejects an unknown CLI' {
+        { Get-ClikaeStatus -Cli nope } | Should -Throw
+    }
+}
