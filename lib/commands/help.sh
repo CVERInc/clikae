@@ -20,9 +20,11 @@ cmd_help() {
 clikae - CLI profile switcher  /  ｷﾘｶｴ (切り替え)
 
 Usage:
+  clikae                           Open the home dashboard (your tanks)
   clikae <command> [args...]
 
 Commands:
+  doctor                           Read-only health check: what clikae can do here
   init <cli> <profile>             Create a new profile for a CLI tool
   app <cli> <profile>              Generate a macOS launcher .app
   alias <cli> <profile>            Write a shell alias for the profile

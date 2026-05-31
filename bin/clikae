@@ -43,16 +43,20 @@ source "$CLIKAE_LIB/core/adapter_loader.sh"
 source "$CLIKAE_LIB/core/handoff.sh"
 # shellcheck source=../lib/core/pool.sh
 source "$CLIKAE_LIB/core/pool.sh"
+# shellcheck source=../lib/core/scan.sh
+source "$CLIKAE_LIB/core/scan.sh"
 
-# Subcommand dispatch
-cmd="${1:-help}"
+# Subcommand dispatch. Bare `clikae` opens the home dashboard (your tanks); the
+# full command reference lives one keystroke away at `clikae help`.
+cmd="${1:-home}"
 shift || true
 
 case "$cmd" in
-  init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
+  home|dashboard|doctor|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
     case "$cmd" in
       ls) cmd="list" ;;
       rm) cmd="remove" ;;
+      dashboard) cmd="home" ;;
       --help|-h) cmd="help" ;;
       --version|-v) cmd="version" ;;
     esac

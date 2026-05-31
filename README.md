@@ -48,6 +48,13 @@ conversation going on its quota:
 clikae relay claude b             # carry the current session over to profile `b`
 ```
 
+Type **`clikae`** any time to see all your tanks — which accounts you have per
+CLI, and which one each terminal is currently on:
+
+```bash
+clikae                            # your home dashboard (run `clikae doctor` for a health check)
+```
+
 ## Documentation
 
 - **[Installation](docs/installation.md)** — Homebrew, from source, `curl | bash`, PATH setup.

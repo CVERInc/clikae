@@ -38,6 +38,8 @@ clikae remove claude work
 
 | Command | What it does |
 |---|---|
+| *(no args)* / `dashboard` | Open the **home dashboard** — your "tank board": every profile grouped by CLI, the one active in this shell marked, account labels, and the fuel-pool order. With no profiles yet, it welcomes you and points at the first step. |
+| `doctor` | Read-only health check: which supported CLIs are installed and logged in, how many profiles each has, the environment (`CLIKAE_HOME`, shell rc, PATH), and what to do next. Changes nothing. |
 | `init <cli> <profile> [--alias]` | Create the profile directory; with `--alias`, also write a shell alias. |
 | `alias <cli> <profile> [--name <n>]` | Write (or replace) a shell alias. Default name `<cli>-<profile>`. |
 | `app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
