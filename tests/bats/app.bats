@@ -31,6 +31,17 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   [ -d "$TEST_HOME/Apps/claude (work).app" ]
 }
 
+@test "app embeds the --global-config flag for a flag-strategy adapter (vercel)" {
+  macos_only
+  clikae init vercel prod
+  run clikae app vercel prod --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  [ -d "$TEST_HOME/Apps/vercel (prod).app" ]
+  run osadecompile "$TEST_HOME/Apps/vercel (prod).app"
+  [[ "$output" == *"vercel --global-config"* ]]
+  [[ "$output" == *"profiles/vercel/prod"* ]]
+}
+
 @test "app fails for a missing profile" {
   macos_only
   run clikae app claude ghost --out "$TEST_HOME/Apps"

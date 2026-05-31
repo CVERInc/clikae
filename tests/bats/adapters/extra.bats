@@ -36,6 +36,15 @@ load '../../helpers'
   grep -qF "vercel --global-config \"$CLIKAE_HOME/profiles/vercel/prod\"" "$RC_FILE"
 }
 
+@test "vercel fish alias injects the flag with no env wrapper (flag strategy)" {
+  clikae init vercel prod
+  SHELL=/usr/bin/fish clikae alias vercel prod
+  local fishrc="$TEST_HOME/.config/fish/config.fish"
+  # flag-only adapter: binary + flag, no leading `env VAR=…` (there are no vars).
+  grep -qF "alias vercel-prod 'vercel --global-config \"$CLIKAE_HOME/profiles/vercel/prod\"'" "$fishrc"
+  ! grep -qF "alias vercel-prod 'env" "$fishrc"
+}
+
 @test "az adapter reports env-dir + AZURE_CONFIG_DIR" {
   run clikae adapters
   [ "$status" -eq 0 ]
