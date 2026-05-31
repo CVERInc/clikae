@@ -19,3 +19,6 @@
 
 # Backups created by clikae itself (shouldn't be in repo, but just in case someone runs it inside the checkout)
 *.clikae.bak.*
+
+# Internal conversation backups — never publish
+conversations/
