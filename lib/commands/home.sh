@@ -225,14 +225,67 @@ EOF
   esac
 }
 
-# Guided new-tank flow (the `n` key). Line-mode prompts, then init --alias.
+# _home_choose <title> <newline-options> [preselect]  -> echo the chosen option
+# to stdout (return 0), or return 1 if cancelled. An arrow-key sub-menu drawn on
+# the controlling terminal (/dev/tty), so stdout stays clean for the result —
+# call as:  choice="$(_home_choose ...)".
+_home_choose() {
+  local title="$1" optstr="$2" pre="${3:-}"
+  local -a opts=()
+  local o
+  while IFS= read -r o; do [ -n "$o" ] && opts+=("$o"); done <<EOF
+$optstr
+EOF
+  local n=${#opts[@]}
+  [ "$n" -gt 0 ] || return 1
+  # Read-write (<>) so we can both draw to and read keys from the terminal; a
+  # write-only (3>) fd would EOF on the first read and cancel instantly.
+  exec 3<>/dev/tty 2>/dev/null || return 1
+
+  local sel=0 i key rest
+  for ((i = 0; i < n; i++)); do [ "${opts[$i]}" = "$pre" ] && sel=$i; done
+
+  printf '\033[?1049h\033[?25l' >&3
+  # shellcheck disable=SC2064
+  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" EXIT INT TERM
+  while :; do
+    {
+      printf '\033[H\033[2J'
+      printf '%b%s%b\n\n' "$__C_BOLD" "$title" "$__C_RESET"
+      for ((i = 0; i < n; i++)); do
+        if [ "$i" -eq "$sel" ]; then printf '  %b❯ %s%b\n' "$__C_GREEN" "${opts[$i]}" "$__C_RESET"
+        else printf '    %s\n' "${opts[$i]}"; fi
+      done
+    } >&3
+    IFS= read -rsn1 key <&3 || break
+    case "$key" in
+      $'\e')
+        if IFS= read -rsn2 -t 1 rest <&3; then
+          case "$rest" in '[A') sel=$(((sel - 1 + n) % n)) ;; '[B') sel=$(((sel + 1) % n)) ;; esac
+        else break; fi ;;
+      k) sel=$(((sel - 1 + n) % n)) ;;
+      j) sel=$(((sel + 1) % n)) ;;
+      q) break ;;
+      ''|$'\n'|$'\r')
+        printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+        printf '%s\n' "${opts[$sel]}"
+        return 0 ;;
+    esac
+  done
+  printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+  return 1
+}
+
+# Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
+# the profile name, then `clikae init <cli> <profile> --alias`.
 _home_new_tank() {
   local def_cli="$1" cli profile
-  printf '\nNew tank.\n'
-  read -rp "  CLI [${def_cli:-claude}]: " cli || return 0
-  cli="${cli:-${def_cli:-claude}}"
-  read -rp "  Profile name: " profile || return 0
-  [ -n "$profile" ] || { printf '  Cancelled.\n'; return 0; }
+  cli="$(_home_choose "New tank — pick a CLI    ↑↓ move · ⏎ select · q cancel" "$(list_adapters)" "$def_cli")" \
+    || { printf 'Cancelled — no tank created.\n'; return 0; }
+  [ -n "$cli" ] || return 0
+  printf '\n'
+  read -rp "Profile name for ${cli} (e.g. work, personal): " profile || return 0
+  [ -n "$profile" ] || { printf 'Cancelled — no name given.\n'; return 0; }
   exec "$CLIKAE_BIN" init "$cli" "$profile" --alias
 }
 
