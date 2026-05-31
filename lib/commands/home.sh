@@ -309,6 +309,7 @@ EOF
 }
 
 # Delete a selected TANK (the `d` key): clikae remove prompts to confirm itself.
+# Runs (not exec) so the launcher can resume afterwards.
 _home_remove_tank() {
   local kind cli profile rest
   IFS=$'\037' read -r kind cli profile rest <<EOF
@@ -316,7 +317,7 @@ $1
 EOF
   : "$rest"
   [ "$kind" = "tank" ] || return 0
-  exec "$CLIKAE_BIN" remove "$cli" "$profile"
+  "$CLIKAE_BIN" remove "$cli" "$profile" || true
 }
 
 # Relay THIS shell's live session of the selected tank's CLI INTO that tank (the
@@ -365,7 +366,7 @@ EOF
   local newname
   read -rp "  New alias name: " newname || return 0
   [ -n "$newname" ] || { printf '  Cancelled — alias unchanged.\n'; return 0; }
-  exec "$CLIKAE_BIN" alias "$cli" "$profile" --name "$newname"
+  "$CLIKAE_BIN" alias "$cli" "$profile" --name "$newname" || true
 }
 
 # Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
@@ -378,7 +379,7 @@ _home_new_tank() {
   printf '\n'
   read -rp "Profile name for ${cli} (e.g. work, personal): " profile || return 0
   [ -n "$profile" ] || { printf 'Cancelled — no name given.\n'; return 0; }
-  exec "$CLIKAE_BIN" init "$cli" "$profile" --alias
+  "$CLIKAE_BIN" init "$cli" "$profile" --alias || true
 }
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
@@ -424,20 +425,37 @@ $items
 EOF
 }
 
+# Run a non-launching action (rename/new/delete) in the NORMAL screen, then wait
+# for Enter and resume the picker — so a single op doesn't drop you back to the
+# shell. The EXIT trap stays armed throughout; we only leave/re-enter the alt
+# screen around the action's own prompts.
+_home_stay() {
+  _home_tty_leave                 # drop to the normal screen for prompts/output
+  "$@" || true
+  printf '\n  %b↵ back to clikae%b ' "$__C_DIM" "$__C_RESET"
+  local _discard; IFS= read -r _discard || true
+  printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
+}
+
 _home_pick() {
   local items="$1"
-  local n; n="$(printf '%s\n' "$items" | grep -c .)"
-  [ "$n" -gt 0 ] || { _home_render_static "$items"; return 0; }
 
   # Restore the terminal on any abnormal exit.
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
 
-  local sel=0 key rest sel_cli sel_row
+  local sel=0 key rest n sel_row sel_kind sel_cli
   while :; do
+    n="$(printf '%s\n' "$items" | grep -c .)"
+    [ "$n" -gt 0 ] || break                 # nothing left to pick
+    [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete
+    [ "$sel" -lt 0 ] && sel=0
     _home_pick_draw "$items" "$sel"
     IFS= read -rsn1 key || { key="q"; }
+    sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+    sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
+    sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
     case "$key" in
       $'\e')
         # Arrow keys arrive as ESC [ A/B; a lone ESC (1s integer timeout) quits.
@@ -453,41 +471,37 @@ _home_pick() {
       k) sel=$(( (sel - 1 + n) % n )) ;;
       j) sel=$(( (sel + 1) % n )) ;;
       q) break ;;
-      n)
-        sel_cli="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p" | cut -d$'\037' -f2)"
+
+      # --- leave actions: these launch a CLI, so exiting the picker is expected
+      ''|$'\n'|$'\r')
         _home_tty_leave; trap - EXIT INT TERM
-        _home_new_tank "$sel_cli"
+        _home_launch "$sel_row"
         return 0
         ;;
-      a)
-        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
-        # Only tanks have a managed alias; ignore the key on agents/targets.
-        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
-          _home_rename_alias "$sel_row"
-          return 0
-        fi
-        ;;
       r)
-        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
-        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
+        if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
           _home_relay "$items" "$sel_row"
           return 0
         fi
         ;;
-      d)
-        sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
-        if [ "$(printf '%s' "$sel_row" | cut -d$'\037' -f1)" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
-          _home_remove_tank "$sel_row"
-          return 0
+
+      # --- stay actions: mutate, then return to the live menu ---
+      n)
+        _home_stay _home_new_tank "$sel_cli"
+        items="$(_home_items)"
+        ;;
+      a)
+        if [ "$sel_kind" = "tank" ]; then
+          _home_stay _home_rename_alias "$sel_row"
+          items="$(_home_items)"
         fi
         ;;
-      ''|$'\n'|$'\r')
-        _home_tty_leave; trap - EXIT INT TERM
-        _home_launch "$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
-        return 0
+      d)
+        if [ "$sel_kind" = "tank" ]; then
+          _home_stay _home_remove_tank "$sel_row"
+          items="$(_home_items)"
+        fi
         ;;
     esac
   done

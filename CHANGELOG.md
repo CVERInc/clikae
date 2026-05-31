@@ -47,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     it (from whichever profile is active here), `n` to create a new tank
     (arrow-key CLI picker, then name it), `a` to rename a tank's shell alias,
     `d` to delete a tank (confirms first), `q`/Esc to quit (leaving the board on
-    screen). It uses the alternate screen buffer so your
+    screen). The mutating keys (`n`/`a`/`d`) run their action and **return to the
+    menu** rather than dropping you back to the shell, so you can do several in a
+    row; only the launching keys (Enter / `r`) leave. It uses the alternate
+    screen buffer so your
     scrollback is untouched, and falls back to the **plain-text board** whenever
     output isn't a TTY (a pipe, a script, the GUI) — set `CLIKAE_NO_INTERACTIVE`
     to force that.
