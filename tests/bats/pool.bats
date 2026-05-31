@@ -75,6 +75,54 @@ load '../helpers'
   [[ "$output" == *"Unexpected argument"* ]]
 }
 
+@test "pool seed fills an empty pool from existing profiles, in name order" {
+  clikae init claude a
+  clikae init claude b
+  clikae init codex work
+
+  run clikae pool seed
+  [ "$status" -eq 0 ]
+
+  run clikae pool list
+  [ "$status" -eq 0 ]
+  # All switchable profiles added, sorted (claude/a, claude/b, codex/work).
+  [[ "$output" == *"1. claude/a"* ]]
+  [[ "$output" == *"2. claude/b"* ]]
+  [[ "$output" == *"3. codex/work"* ]]
+}
+
+@test "pool seed <cli> only adds that cli's profiles" {
+  clikae init claude a
+  clikae init codex work
+
+  run clikae pool seed claude
+  [ "$status" -eq 0 ]
+
+  run clikae pool list
+  [[ "$output" == *"claude/a"* ]]
+  [[ "$output" != *"codex/work"* ]]
+}
+
+@test "pool seed is idempotent and skips what's already pooled" {
+  clikae init claude a
+  clikae pool add claude/a
+
+  run clikae pool seed
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already covers"* ]]
+
+  # claude/a appears exactly once.
+  run clikae pool list
+  local n; n="$(printf '%s\n' "$output" | grep -c 'claude/a')"
+  [ "$n" -eq 1 ]
+}
+
+@test "pool seed with no profiles says so" {
+  run clikae pool seed
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No profiles to seed"* ]]
+}
+
 @test "pool_next advances down the priority list" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/pool.sh"

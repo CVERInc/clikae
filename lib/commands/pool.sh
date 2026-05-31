@@ -60,6 +60,7 @@ cmd_pool() {
     -h|--help|help)
       cat <<EOF
 Usage: clikae pool [list] [--json]
+       clikae pool seed [<cli>]
        clikae pool add <target>
        clikae pool remove <target>
 
@@ -67,6 +68,10 @@ The fuel pool is your ordered list of tanks (top = most preferred). When a tank
 runs dry, \`clikae watch\` hands off to the next one down the list. Targets use the
 same grammar as \`handoff --to\`: <cli>/<profile> (e.g. claude/a, codex/work) or a
 launch-only target (e.g. antigravity).
+
+\`pool seed\` fills an empty pool fast: it adds every existing switchable profile
+(optionally just one cli's) in name order, so \`watch\` has somewhere to fall
+through to. Reorder afterwards by editing the file or with add/remove.
 
 Stored as a plain text file you can also edit by hand:
   $(pool_file)
@@ -77,6 +82,8 @@ Options:
           a launch-only target like antigravity). For the menu-bar GUI / scripts.
 
 Examples:
+  clikae pool seed              # add every existing profile (all clis)
+  clikae pool seed claude       # add just claude's profiles
   clikae pool add claude/a
   clikae pool add claude/b
   clikae pool add codex/work
@@ -100,7 +107,7 @@ EOF
       if [ -z "$entries" ]; then
         [ "$as_json" -eq 1 ] && { printf '[]\n'; return 0; }
         log_info "The fuel pool is empty."
-        log_dim "Add tanks in priority order:  clikae pool add claude/a"
+        log_dim "Fill it fast:  clikae pool seed   (or add one:  clikae pool add claude/a)"
         return 0
       fi
       if [ "$as_json" -eq 1 ]; then
@@ -108,6 +115,36 @@ EOF
       else
         log_bold "Fuel pool (priority order):"
         _pool_rows | _pool_render_table
+      fi
+      ;;
+    seed)
+      shift
+      local only_cli=""
+      if [ $# -ge 1 ]; then only_cli="$1"; validate_name cli "$only_cli"; shift; fi
+      [ $# -eq 0 ] || log_fail "Usage: clikae pool seed [<cli>]"
+      local rows scli sprofile spath added=0
+      rows="$(list_all_profiles || true)"
+      if [ -z "$rows" ]; then
+        log_info "No profiles to seed from. Create one with:  clikae init <cli> <profile>"
+        return 0
+      fi
+      # Add every discovered SWITCHABLE profile (one with an adapter) not already
+      # pooled, in list_all_profiles' sorted order. Launch-only targets (e.g.
+      # antigravity) have no profile dir, so add those by hand.
+      while IFS=$'\t' read -r scli sprofile spath; do
+        [ -n "$scli" ] || continue
+        : "$spath"   # 3rd column consumed only to keep the read aligned
+        [ -z "$only_cli" ] || [ "$scli" = "$only_cli" ] || continue
+        [ -f "$CLIKAE_LIB/adapters/$scli.sh" ] || continue
+        pool_list | grep -qxF "$scli/$sprofile" && continue
+        pool_add "$scli/$sprofile" && added=$((added + 1))
+      done <<EOF
+$rows
+EOF
+      if [ "$added" -eq 0 ]; then
+        log_info "Nothing to add — the pool already covers your profiles."
+      else
+        log_dim "Reorder anytime (top = preferred): edit $(pool_file), or pool add/remove."
       fi
       ;;
     add)
@@ -119,6 +156,6 @@ EOF
       [ $# -ge 1 ] || log_fail "Usage: clikae pool remove <target>"
       pool_remove "$1" ;;
     *)
-      log_fail "Unknown subcommand: $sub  (try: list, add, remove)" ;;
+      log_fail "Unknown subcommand: $sub  (try: list, seed, add, remove)" ;;
   esac
 }

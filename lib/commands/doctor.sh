@@ -62,12 +62,13 @@ EOF
 
   # Targeted next steps, derived from the scan. We only need cli/installed/count;
   # binary/strategy/label are read to reach the right columns.
-  local installed_no_profile="" any_profiles=0
+  local installed_no_profile="" any_profiles=0 total_profiles=0
   local cli installed binary strategy count label
   while IFS=$'\037' read -r cli installed binary strategy count label; do
     [ -n "$cli" ] || continue
     : "$binary" "$strategy" "$label"   # consumed only to position $count
     [ "$count" -gt 0 ] && any_profiles=1
+    total_profiles=$((total_profiles + count))
     if [ "$installed" -eq 1 ] && [ "$count" -eq 0 ] && [ -z "$installed_no_profile" ]; then
       installed_no_profile="$cli"
     fi
@@ -75,12 +76,20 @@ EOF
 $rows
 EOF
 
+  # A fall-through pool only helps if there are ≥2 tanks to fall between. If the
+  # user has the tanks but an empty pool, `watch` has nowhere to go — nudge seed.
+  local pool_empty=0
+  [ -z "$(pool_list)" ] && pool_empty=1
+
   log_bold "Next:"
   if [ -n "$installed_no_profile" ]; then
     log_dim "  • $installed_no_profile is installed with no profile yet:  clikae init $installed_no_profile work --alias"
   fi
   if [ "$rc_loaded" = "no" ] && [ "$any_profiles" -eq 1 ]; then
     log_dim "  • aliases aren't loaded in this shell yet:  source $rc"
+  fi
+  if [ "$pool_empty" -eq 1 ] && [ "$total_profiles" -ge 2 ]; then
+    log_dim "  • your fuel pool is empty so \`watch\` can't fall through:  clikae pool seed"
   fi
   log_dim "  • See your tanks at a glance:  clikae"
   log_dim "  • Take a risk-free tour:       clikae demo"
