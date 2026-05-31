@@ -45,7 +45,7 @@ clikae remove claude work
 | `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
 | `handoff <cli> [<profile>] [--out <file>] [--summarizer <cmd>]` | Write a portable handoff brief from the current session for another model/vendor to pick up. |
 | `list [-p\|--paths]` | List all profiles, with the logged-in account where the adapter can tell. |
-| `status [<cli>]` | Show which profile each CLI is on **in this shell**. |
+| `status [<cli>] [--json]` | Show which profile each CLI is on **in this shell**. `--json` emits machine-readable output (one object per CLI with a `state` enum) for scripts and the GUI. |
 | `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |
 | `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
