@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Machine-readable `--json` across the read commands (for the v1.0 GUI).**
+  `clikae list --json`, `status --json`, `pool --json`, and `info --json` now
+  emit structured output for the planned menu-bar app and for scripting. The
+  three inventory/state views form a data trio: `list` (every profile across
+  CLIs: `{cli, profile, account, path}`), `status` (active profile per CLI in
+  this shell, with a `state` enum: active | default | external | flag |
+  noadapter), and `pool` (the fall-through order: `{position, target, cli,
+  profile}`). Each command builds **one canonical record** rendered by either
+  the human table or the JSON array, so the two can't drift; JSON is escaped by a
+  shared `lib/core/json.sh` (no jq). The PowerShell module gains the matching
+  surface — a new **`Get-ClikaeStatus`** (the `clikae status` equivalent) plus a
+  `-Json` switch on it and on `Get-ClikaeProfile`, with array output that holds
+  up on Windows PowerShell 5.1. (`info`'s human view also stopped mangling the
+  adapter list — `paste`'s alternating-delimiter quirk.)
 - **`clikae handoff <cli> [<profile>]` — a portable session handoff brief.** The
   real pain when a tank runs dry mid-task isn't the lost conversation, it's that
   the *next* tank starts blind. `handoff` reads the current directory's most

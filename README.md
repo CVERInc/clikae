@@ -23,7 +23,7 @@ You probably have more than one account on at least one CLI tool. Two GitHub acc
 4. **Relays a live session to another profile** when one account hits its usage limit — for Claude Code it carries the current conversation over and resumes it on the other account's quota (`clikae relay`).
 5. Cleans up after itself when you're done with a profile.
 
-It works for any CLI that respects an environment variable for its config location, ships with built-in adapters for **Claude Code, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, and Pulumi**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
+It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
 ## Install
 

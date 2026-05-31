@@ -106,7 +106,7 @@ load_adapter() {
   local f="$CLIKAE_LIB/adapters/$cli.sh"
   if [ ! -f "$f" ]; then
     log_err "No built-in adapter for '$cli'."
-    log_dim "Available: $(list_adapters | paste -sd ', ' -)"
+    log_dim "Available: $(list_adapters | paste -sd , - | sed 's/,/, /g')"
     log_dim "To add your own, see docs/adding-an-adapter.md"
     exit 1
   fi
