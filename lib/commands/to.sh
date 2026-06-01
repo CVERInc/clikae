@@ -48,17 +48,28 @@ clikae picks the mechanism and tells you which:
 
 The target resolves engine-name-first: a known engine crosses to it; anything
 else is a tank of your current engine. Hidden aliases: relay, continue, handoff.
+
+Options (same-engine carries only — forwarded to relay):
+  -y, --yes          skip relay's preview/confirm
+      --fresh        switch tanks but start a NEW conversation (don't carry)
+      --session <id> carry a specific session instead of the newest
 EOF
 }
 
 cmd_to() {
-  local -a positionals=() passthru=()
+  local -a positionals=() passthru=() relay_flags=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      -h|--help) _to_help; return 0 ;;
-      --)        shift; passthru=("$@"); break ;;
-      -*)        log_fail "Unknown flag: $1" ;;
-      *)         positionals+=("$1"); shift ;;
+      -h|--help)    _to_help; return 0 ;;
+      # Same-engine carries are relays under the hood — forward relay's control
+      # flags so `to` is at least as capable as the hidden `relay` alias.
+      -y|--yes)     relay_flags+=("$1"); shift ;;
+      --fresh)      relay_flags+=("$1"); shift ;;
+      --session)    [ $# -ge 2 ] || log_fail "--session needs a session id"
+                    relay_flags+=("$1" "$2"); shift 2 ;;
+      --)           shift; passthru=("$@"); break ;;
+      -*)           log_fail "Unknown flag: $1" ;;
+      *)            positionals+=("$1"); shift ;;
     esac
   done
 
@@ -88,10 +99,11 @@ EOF
   # Normalise the agy long name for the target lookup (canonical engine = agy).
   local tnorm="$target"; [ "$target" = "agy" ] && tnorm="antigravity"
 
-  local -a cmd
+  local -a cmd; local is_relay=0
   if [ -f "$CLIKAE_LIB/adapters/$tnorm.sh" ] || [ -f "$CLIKAE_LIB/targets/$tnorm.sh" ]; then
     if [ "$tnorm" = "$src_engine" ]; then
       # Same engine named explicitly -> relay to another of its tanks (resume).
+      is_relay=1
       log_info "to: same engine ($src_engine) — carrying your live session (resume)."
       if [ -n "$target_tank" ]; then
         cmd=("$CLIKAE_BIN" relay "$src_engine" "$src_tank" "$target_tank")
@@ -107,8 +119,16 @@ EOF
   else
     # Not an engine -> a tank of the current engine -> relay (resume).
     [ -z "$target_tank" ] || log_fail "'$target' isn't an engine, so a second name ('$target_tank') doesn't apply. Did you mean:  clikae to <engine> $target ?"
+    is_relay=1
     log_info "to: carrying your live session onto $src_engine/$target (resume)."
     cmd=("$CLIKAE_BIN" relay "$src_engine" "$src_tank" "$target")
+  fi
+
+  # Relay control flags only apply to a same-engine carry. A cross-engine handoff
+  # has no live session to resume, so they'd be meaningless there.
+  if [ "${#relay_flags[@]}" -gt 0 ]; then
+    [ "$is_relay" -eq 1 ] || log_fail "${relay_flags[0]} only applies to a same-engine carry; '$target' is a different engine (a written brief, not a resume)."
+    cmd+=("${relay_flags[@]}")
   fi
 
   [ "${#passthru[@]}" -eq 0 ] || cmd+=(-- "${passthru[@]}")
