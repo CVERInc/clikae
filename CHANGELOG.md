@@ -7,26 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-01
+
 ### Fixed
 
 - **`clikae to` / `relay` / `handoff` now auto-detect the source after a bare
   switch.** The switch, the aliases, and the `.app` all run the engine with a
   prefix assignment that never reaches the parent shell, so after a session
   `$CLAUDE_CONFIG_DIR` was unset and `clikae to <other>` couldn't tell which tank
-  you were on (surfaced by the v0.5.0 dogfood). Source detection now falls back,
-  when no env var is set, to **the tank with this directory's most recent
+  you were on (surfaced by the real-claude dogfood). Source detection now falls
+  back, when no env var is set, to **the tank with this directory's most recent
   transcript** — "the session I was just in here" — so the headline
   switch → work → `to` flow works from one shell. Stateless (no breadcrumb);
   works regardless of how the session was launched.
-
-### Added
-
-- **`clikae env <engine> <tank>`** — print `export VAR="value"` lines to `eval`,
-  the explicit way to put the current shell *on* a tank so the engine's own
-  command and `clikae status` / `to` see it: `eval "$(clikae env claude work)"`.
-  Flag-strategy engines (no config env var) say there's nothing to export.
-
-## [0.5.0] — 2026-06-01
+- **Dogfood cleanups (v0.5.0 real-claude pass):** the home board's launch hint
+  teaches the bare switch instead of `run`; the relay preview shows a real title
+  for sessions whose opening message is a plain `"content"` string (current
+  Claude Code stored it as a string, not a `text` array, so it read
+  "(no preview)"); and the agy takeover is described honestly as one `[y/N]`
+  confirmation (not "multi-confirm").
 
 ### Changed
 
@@ -40,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `set -e` + `|| false` on `[[ … ]]`, see `tests/README.md`).
 
 ### Added
+
+- **`clikae env <engine> <tank>`** — print `export VAR="value"` lines to `eval`,
+  the explicit way to put the current shell *on* a tank so the engine's own
+  command and `clikae status` / `to` see it: `eval "$(clikae env claude work)"`.
+  Flag-strategy engines (no config env var) say there's nothing to export.
 
 - **`clikae <engine> <tank> --ephemeral` — run with throwaway memory.** For the
   leave-no-trace run: the engine's long-term memory is pointed at a `mktemp -d`
