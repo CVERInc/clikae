@@ -46,6 +46,8 @@ source "$CLIKAE_LIB/core/handoff.sh"
 source "$CLIKAE_LIB/core/pool.sh"
 # shellcheck source=../lib/core/scan.sh
 source "$CLIKAE_LIB/core/scan.sh"
+# shellcheck source=../lib/core/limit.sh
+source "$CLIKAE_LIB/core/limit.sh"
 
 # Subcommand dispatch. Bare `clikae` opens the home dashboard (your tanks); the
 # full command reference lives one keystroke away at `clikae help`.
