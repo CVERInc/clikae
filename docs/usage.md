@@ -1,62 +1,103 @@
 # Using clikae
 
-Every command takes a `<cli>` (a tool with an adapter — run `clikae adapters`)
-and a `<profile>` (a name you choose; `A-Z a-z 0-9 . _ -` are allowed).
+**clikae is a verb** (切り替え, *switching*). The headline action carries no verb
+of its own — the program name is the verb:
 
-Run `clikae help <command>` for the full per-command reference.
+```bash
+clikae <engine> <tank>      # switch <engine> to <tank> and run it
+```
+
+An `<engine>` is a CLI with an adapter (run `clikae adapters`); a `<tank>` is a
+name you choose (`A-Z a-z 0-9 . _ -` allowed) for one account/config. The fuel
+metaphor runs throughout: a tank holds an engine's quota (its *fuel*); when a
+tank runs *dry* you carry your work onward with `clikae to`.
+
+Run `clikae help <command>` for the full per-command reference. The full design
+of the language is in [grammar.md](grammar.md).
 
 ## Quick tour
 
 ```bash
-# Create a profile for Claude Code, and add the matching shell alias
+# Create a tank for Claude Code, and add the matching shell alias
 clikae init claude work --alias
 
-# Pick up the new alias in the current shell
-source ~/.zshrc            # or your rc file
+# Switch to it and run — the bare verb (no `run` needed)
+clikae claude work
+clikae claude work -- --help    # args after -- go straight to the engine
 
-# Use it
+# Or pick up the alias and use that
+source ~/.zshrc                 # or your rc file
 claude-work
 
 # Generate a macOS launcher you can double-click from ~/Applications
 clikae app claude work
 
 # See what you've got
-clikae list
-#   CLI          PROFILE
+clikae tanks                    # alias: clikae list
+#   ENGINE       TANK
 #   claude       work
-clikae list -p             # also print the profile directory paths
+clikae tanks -p                 # also print the tank directory paths
 
-# Run a profile without an alias
-clikae run claude work
-clikae run claude work -- --help     # args after -- go straight to the CLI
-
-# Tear it all down (profile dir + alias + .app, asks to confirm)
+# Tear it all down (tank dir + alias + .app, asks to confirm)
 clikae remove claude work
 ```
 
 ## Commands
 
+clikae is the verb, so **switching needs no verb**; management commands keep
+plain, conventional verbs.
+
+### Switch (the main thing)
+
 | Command | What it does |
 |---|---|
-| *(no args)* / `dashboard` | Open the **home dashboard** — your "tank board": every profile grouped by CLI, the one active in this shell marked, account + alias name, an "Also available" list of relay-capable CLIs/targets you can open without a tank (e.g. `codex`, `agy`), and the fuel-pool order. On a terminal it's an **interactive launcher** (↑/↓ move, ⏎ open, `n` new, `q` quit); piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). With no profiles yet, it welcomes you and points at the first step. |
-| `doctor` | Read-only health check: which supported CLIs are installed and logged in, how many profiles each has, the environment (`CLIKAE_HOME`, shell rc, PATH), and what to do next. Changes nothing. |
-| `demo` | A 30-second guided tour in a throwaway sandbox — shows isolated profiles, the tank board, the fuel pool, and the relay idea, then cleans up. Touches nothing real (not your `~/.clikae`, logins, or shell rc); the CLI accounts are simulated, so it needs no installed CLI or second account. |
-| `init <cli> <profile> [--alias]` | Create the profile directory; with `--alias`, also write a shell alias. |
-| `alias <cli> <profile> [--name <n>]` | Write (or replace) a shell alias. Default name `<cli>-<profile>`. |
-| `app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
-| `run <cli> <profile> [-- args...]` | Run the CLI with the profile applied, no alias needed. |
-| `relay <cli> [<from>] <to> [-- args...]` | Hand the current session to another profile and continue on its quota. |
-| `handoff <cli> [<profile>] [--out <file>] [--summarizer <cmd>]` | Write a portable handoff brief from the current session for another model/vendor to pick up. |
-| `watch <cli> [<profile>] [--auto] [--to <target>]` | Watch a session and fall through to the next pool tank when it runs dry. |
-| `pool [list] [--json]` / `pool add\|remove <target>` | Manage the fuel pool — the ordered tanks `watch` falls through to. `--json` emits a JSON array ({position, target, cli, profile}) for scripts and the GUI. |
-| `antigravity enable\|add\|use\|list\|disable` | **Opt-in** multi-account for Antigravity (`agy`). agy hardcodes `~/.gemini` and ignores env vars, so the only way to switch accounts is to swap that directory. `enable` is a consciously-enabled power mode (warns, backs up `~/.gemini`, manages it via a symlink); it's **global** (one account active at a time across all terminals) and fully reversible with `disable`. Default clikae never touches `~/.gemini`. |
-| `list [-p\|--paths] [--json]` | List all profiles, with the logged-in account where the adapter can tell. `--json` emits machine-readable output ({cli, profile, account, path}) for scripts and the GUI. |
-| `status [<cli>] [--json]` | Show which profile each CLI is on **in this shell**. `--json` emits machine-readable output (one object per CLI with a `state` enum) for scripts and the GUI. |
-| `rename <cli> <old> <new> [--force]` | Rename a profile (moves the dir, rewrites the alias, carries the login). |
-| `remove <cli> <profile> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
-| `migrate [<cli>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
-| `info [--json]` | Show install paths, platform, adapters, and profile count. `--json` emits a single object ({version, installRoot, profileStore, shellRc, platform, adapters, profiles}) for scripts and the GUI. |
-| `adapters` | List supported CLIs with descriptions. |
+| `<engine> <tank> [-- args]` | Switch `<engine>` to `<tank>` and run it. The bare verb. (`run` is a hidden alias.) |
+| `<engine>` | One tank → use it; several → list them; none → offer to create. |
+| `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
+
+### Make & manage tanks
+
+| Command | What it does |
+|---|---|
+| `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. |
+| `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
+| `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
+| `migrate [<engine>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
+| `alias <engine> <tank> [--name <n>]` | Write (or replace) a shell alias. Default name `<engine>-<tank>`. |
+| `app <engine> <tank> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
+
+### Keep burning when a tank runs dry
+
+| Command | What it does |
+|---|---|
+| `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next pool tank when it runs dry. |
+| `pool [list] [--json]` / `pool add\|remove <target>` / `pool seed [<engine>]` | Manage the fuel pool — the ordered tanks `watch` falls through to. `--json` emits a JSON array for scripts and the GUI. |
+
+### Inspect
+
+| Command | What it does |
+|---|---|
+| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`), and the fuel-pool order. On a terminal it's an **interactive launcher** (↑/↓ move, ⏎ open, `r` carry session, `n` new, `q` quit); piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
+| `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output ({cli, profile, account, path}) for scripts and the GUI. |
+| `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
+| `doctor` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next. |
+| `info [--json]` | Show install paths, platform, adapters, and tank count. |
+| `adapters` | List supported engines with descriptions. |
+| `demo` | A 30-second guided tour in a throwaway sandbox — shows isolated tanks, the tank board, the fuel pool, and the `to` idea, then cleans up. Touches nothing real; the accounts are simulated, so it needs no installed engine. |
+
+### Antigravity (agy) — same verbs, one power mode
+
+agy hardcodes `~/.gemini` and ignores env vars, so clikae can't switch it
+per-shell like other engines. It folds into the **same verbs** anyway, via an
+opt-in symlink-swap power mode (global: one tank active at a time across all
+terminals; reversible):
+
+| Command | What it does |
+|---|---|
+| `init agy <tank>` | First time: warns and asks before taking `~/.gemini` over (backs it up, migrates your current login into a `default` tank), then creates `<tank>`. After: just creates the tank. |
+| `agy <tank>` | Switch the active tank (refuses if agy is running) and start agy. Prints a global-switch notice. |
+| `remove agy <tank>` | Remove the tank. Removing the **last** tank offers to restore a normal `~/.gemini` and turn the power mode off. |
+| `agy --release` | Restore a normal single-account `~/.gemini` from the active tank, keep the tank dirs. |
 
 ## Shells
 
@@ -77,14 +118,14 @@ clikae migrate --dry-run   # preview: which dirs move where, which aliases chang
 clikae migrate             # do it (asks to confirm first)
 ```
 
-It scans your shell rc for aliases that set the CLI's config env var and invoke
-the CLI. For each one it:
+It scans your shell rc for aliases that set the engine's config env var and
+invoke the engine. For each one it:
 
-1. moves the referenced config directory under `~/.clikae/profiles/<cli>/<p>/`,
+1. moves the referenced config directory under `~/.clikae/profiles/<engine>/<p>/`,
 2. rewrites the alias into clikae's managed sentinel block.
 
 The rc file is backed up to `<rc>.clikae.bak.<timestamp>` first, and an existing
-clikae profile is never overwritten. Pass a CLI name (`clikae migrate gh`) to
+clikae tank is never overwritten. Pass an engine name (`clikae migrate gh`) to
 migrate a different tool's aliases. Default is `claude`.
 
 > ⚠️ **Don't migrate a config dir that's currently in use.** `migrate` *moves*
@@ -93,7 +134,7 @@ migrate a different tool's aliases. Default is `claude`.
 > `CLAUDE_CONFIG_DIR` points at the dir being moved), you pull the directory out
 > from under that live process — it can fail to write, or recreate an empty dir
 > at the old path and leave you with two half-states. Run `migrate` from a fresh
-> shell with no instance of that CLI active. `--dry-run` is always safe.
+> shell with no instance of that engine active. `--dry-run` is always safe.
 >
 > As of v0.4, `migrate` guards against the most common form of this: if
 > `$CLAUDE_CONFIG_DIR` (or whichever env var the adapter uses) currently points
@@ -101,109 +142,74 @@ migrate a different tool's aliases. Default is `claude`.
 > shell. The guard is not bypassed by `--force` — it protects your data, it
 > isn't a confirmation prompt.
 
-> 🔑 **macOS + claude: expect a one-time re-login per migrated profile.** On
+> 🔑 **macOS + claude: expect a one-time re-login per migrated tank.** On
 > macOS, Claude Code keeps its login token in the **login Keychain**, not inside
 > `CLAUDE_CONFIG_DIR` — and the keychain entry is keyed by the config-dir path.
 > Because `migrate` moves the dir to a new path, claude no longer finds the token
-> and asks you to log in once for each migrated profile. Your data is intact;
+> and asks you to log in once for each migrated tank. Your data is intact;
 > only the saved login doesn't follow the move. To avoid the re-login, pass
 > `--keep-login`, which copies the saved token from the old path's keychain entry
 > to the new one (macOS only; it never reads or transmits the token anywhere — it
 > stays in your Keychain). macOS may prompt you to allow keychain access.
 
-## Relaying a session when you hit a usage limit
+## Carrying a session when you hit a usage limit — `clikae to`
 
 This is clikae's origin story: you keep a second account precisely because one
-account's quota runs out mid-task. `clikae relay` lets you swap to the other
-account — like swapping a fuel tank — and **keep the same conversation going** on
-the fresh quota.
+account's quota runs out mid-task. `clikae to` lets you carry the work onward —
+like swapping a fuel tank — and **keep the same conversation going** on a fresh
+quota.
 
 ```bash
-# You're working as profile `a` and just hit its limit. From the same project
-# directory, hand the conversation to profile `b` and carry on:
-clikae relay claude b           # from = whatever this shell is on, to = b
-clikae relay claude a b         # or name both ends explicitly
+# You're working on claude tank `a` and just hit its limit. From the same project
+# directory, carry the conversation onto another tank and keep going:
+clikae to b                     # same engine → a real resume, on b's quota
+clikae to codex                 # a different engine → a written brief (cold start)
+clikae to codex work            # cross to a specific tank of another engine
 ```
 
-For Claude Code, relay finds the **current directory's** most recent transcript
-under the source profile, copies it into the target profile, and runs
-`claude --resume <id>` there — so the conversation continues, but every new turn
-burns the target profile's quota. The source profile is left completely untouched
-(relay copies, never moves), so you can always go back to it.
+clikae auto-detects which engine + tank this shell is on. The target resolves
+**engine-name-first**: a known engine name crosses to it; anything else is a tank
+of your current engine. clikae always **announces which mechanism it used** so
+the resume-vs-brief difference is never a guess.
 
-- The source profile is auto-detected from this shell's `$CLAUDE_CONFIG_DIR` when
-  you give only the target; name both ends if it can't be detected.
-- If there's no transcript to carry (e.g. a directory you've never used Claude
-  in), relay just starts a fresh session under the target profile.
-- Other CLIs have no conversation to carry, so for them `relay` simply starts the
-  CLI under the target profile.
+**Same engine (a resume).** For Claude Code, clikae finds the **current
+directory's** most recent transcript under the source tank, copies it into the
+target tank, and runs `claude --resume <id>` there — so the conversation
+continues, but every new turn burns the target tank's quota. The source tank is
+left completely untouched (it copies, never moves), so you can always go back.
+A preview + confirm is shown before anything moves; `-y` skips it, `--fresh`
+switches tanks without carrying, `--session <id>` carries a specific session.
 
 > Carry-over relies on Claude Code's on-disk transcript layout
 > (`<config-dir>/projects/<slug>/<id>.jsonl`) and `--resume`. It's verified
-> against current Claude Code; if a future version changes that layout, relay
-> falls back to a fresh start rather than doing anything destructive.
+> against current Claude Code; if a future version changes that layout, it falls
+> back to a fresh start rather than doing anything destructive.
 
-## Handing off to another model or vendor
-
-`relay` keeps the *same* conversation on another **account of the same CLI**. But
-sometimes the next tank is a different *model* or *vendor* (a cheaper one to do
-the dirty work, or simply the one that still has quota), and there's no shared
-transcript format to resume. The portable answer is a **handoff brief**: a short
-note — what you're doing, what's done, what's next — that any assistant can read
-to pick up where you left off.
-
-```bash
-# Write a brief from the current directory's most recent claude session:
-clikae handoff claude                      # uses this shell's profile
-clikae handoff claude work --out HANDOFF.md # name the profile, save to a file
-```
-
-By default you get a **raw extract** (session metadata + your recent prompts),
-clearly labelled as raw — dependency-free, but not a real summary. For a proper
-brief, point clikae at a **local or cheap model** so writing the brief costs
-nothing on the tank that just ran dry:
+**A different engine (a brief).** A different *model* or *vendor* can't resume a
+foreign session — there's no shared transcript format. So clikae writes a
+**handoff brief** (what you're doing, what's done, what's next) and starts the
+target engine seeded with it as the opening prompt. By default the brief is a
+**raw extract** (session metadata + your recent prompts), clearly labelled as
+raw. For a proper summary, point clikae at a **local or cheap model** so writing
+the brief costs nothing on the tank that just ran dry:
 
 ```bash
-export CLIKAE_HANDOFF_SUMMARIZER='llm -m my-local-model'   # any command works
-clikae handoff claude                                       # model writes the brief
+export CLIKAE_HANDOFF_SUMMARIZER='llm -m my-local-model'   # any stdin→stdout command
+clikae to codex                                            # the model writes the brief
 ```
 
-The summarizer command receives, on stdin, an instruction line followed by the
-tail of the session transcript, and writes the brief to stdout. Anything that
-reads stdin and writes stdout works — a local LLM CLI, an on-device model
-wrapper, etc. If it produces nothing, clikae falls back to the raw extract so a
-handoff is never lost. `handoff` is **read-only**: it never touches the session
-or any profile.
+The summarizer receives, on stdin, an instruction line followed by the tail of
+the session transcript, and writes the brief to stdout. If it produces nothing,
+clikae falls back to the raw extract so a handoff is never lost. Tune how much
+transcript is fed with `$CLIKAE_HANDOFF_LINES` (default `60`). Carrying onward is
+**read-only** on the source — it never touches the source session or any tank.
 
-### Handing off in one step with `--to`
+> Under the hood, `clikae to` delegates to `relay` (same engine) or `handoff`
+> (different engine). Both remain available as hidden aliases — e.g. `clikae
+> handoff claude --out HANDOFF.md` just writes a brief to a file without starting
+> anything. Run `clikae help to` / `help relay` / `help handoff` for details.
 
-Add `--to <target>` and clikae writes the brief *and* starts the next tank with
-it as the opening prompt — the actual "switch model / vendor" move:
-
-```bash
-clikae handoff claude --to codex/work    # dry Claude → continue on Codex
-clikae handoff claude a --to claude/b    # hand off to another Claude account
-clikae handoff claude --to antigravity   # hand off to Google's Antigravity (agy)
-```
-
-A target is one of:
-
-- **`<cli>/<profile>`** — another account of a *switchable* CLI (currently
-  `claude` and `codex` know how to start from a brief). New turns burn that
-  profile's quota.
-- **`antigravity`** — a *handoff target*: a single-account vendor you can hand off
-  *to* but can't profile-switch, because its CLI (`agy`) hardcodes `~/.gemini`
-  with no config-dir override. `--to antigravity` starts `agy -i` with the brief.
-  Such targets live in `lib/targets/`.
-
-`--out` still works alongside `--to` if you also want the brief saved to a file.
-
-- The brief is tied to `$PWD` (like `relay`): it summarises the conversation for
-  the directory you're standing in.
-- Tune how much transcript is fed/scanned with `$CLIKAE_HANDOFF_LINES` (default
-  `60`).
-
-## Ambient relay: notice a dry tank and switch (`watch` + `pool`)
+## Ambient: notice a dry tank and switch (`watch` + `pool`)
 
 Instead of switching by hand, let clikae watch for the moment a tank runs dry and
 fall through to the next one. First, set up your **fuel pool** — the tanks to use,
@@ -215,7 +221,7 @@ clikae pool add claude/b
 clikae pool add codex/work
 clikae pool add antigravity     # last resort
 clikae pool list
-clikae pool list --json         # machine-readable, for scripts / the GUI
+clikae pool seed                # or: add every existing tank at once
 ```
 
 Then watch the current session:
@@ -226,49 +232,48 @@ clikae watch claude --auto     # switch automatically (asks once for consent)
 clikae watch claude --to codex/work   # ignore the pool; go straight here
 ```
 
-When it detects a dry tank it hands off to the next pool entry (the one after the
-profile you're on) via `clikae handoff`. By default it **asks first**; `--auto`
-switches automatically after a **one-time consent** (remembered in
+When it detects a dry tank it carries onward to the next pool entry (the one
+after the tank you're on). By default it **asks first**; `--auto` switches
+automatically after a **one-time consent** (remembered in
 `$CLIKAE_HOME/auto-relay-consent` — delete that file to revoke), and always tells
 you what it did.
 
-> **Honest caveat.** An interactive CLI hitting its usage limit doesn't exit,
+> **Honest caveat.** An interactive engine hitting its usage limit doesn't exit,
 > returns no code, and fires no hook — so the only thing clikae can watch is what
-> the limit writes into the session transcript, and **that exact marker isn't
-> confirmed yet** (you can't force a real limit without burning a tank). The match
-> pattern is a best guess. Confirm/tune it the first time you actually get limited:
+> the limit writes to disk. For claude that's the session transcript; for agy
+> it's `~/.gemini/antigravity-cli/cli.log` (agy's `-p` run exits 0 with empty
+> output, so the log line is the only signal). codex's limit is **proven not
+> persisted** to its transcript, so a dry tank can't be detected for codex from
+> disk. Confirm/tune the match the first time you actually get limited:
 >
 > ```bash
 > clikae watch claude --check          # would the pattern fire on this session?
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
->
-> If you discover the real marker, set `$CLIKAE_LIMIT_PATTERN` (and please tell the
-> project so the default can be fixed).
 
-## Seeing which profile you're on
+## Seeing which tank you're on
 
 ```bash
-clikae status            # every CLI that has a profile
+clikae status            # every engine that has a tank
 clikae status claude     # just one
 
-#   CLI          ACTIVE       ACCOUNT          SOURCE
+#   ENGINE       TANK         ACCOUNT          SOURCE
 #   claude       cver         hi@cver.net      CLAUDE_CONFIG_DIR=…/profiles/claude/cver
 #   aws          (default)    -                AWS_PROFILE unset — system default
 ```
 
 `status` reads the **live** value of each adapter's env var in the current shell
-and resolves it back to a clikae profile. It's a per-shell view: another terminal
-(or one launched from a different `clikae app`) can be on a different profile.
-`(default)` means the env var is unset (the CLI's own default); `(external)`
-means it points somewhere that isn't a clikae profile. The ACCOUNT column shows
+and resolves it back to a clikae tank. It's a per-shell view: another terminal
+(or one launched from a different `clikae app`) can be on a different tank.
+`(default)` means the env var is unset (the engine's own default); `(external)`
+means it points somewhere that isn't a clikae tank. The ACCOUNT column shows
 the logged-in account when the adapter can tell.
 
-## Naming your profiles
+## Naming your tanks
 
-Name profiles however makes sense to you — `work`, `personal`, a client name, or
+Name tanks however makes sense to you — `work`, `personal`, a client name, or
 the account email. You don't have to remember what a bare `a`/`b` meant: both
-`list` and `status` show the logged-in **account** when the adapter can read it.
+`tanks` and `status` show the logged-in **account** when the adapter can read it.
 
 Changed your mind about a name? `clikae rename` moves the directory, rewrites the
 managed alias, and — for claude on macOS — carries the saved Keychain login
@@ -278,16 +283,17 @@ across so you don't have to log in again:
 clikae rename claude a cver        # a → cver; login + alias follow
 ```
 
-It refuses if the new name is taken or if that CLI is currently using the profile
+It refuses if the new name is taken or if that engine is currently using the tank
 in this shell (run it from a fresh shell). A pre-existing `.app` launcher is left
 alone but flagged — recreate it with `clikae app claude cver`.
 
 ## How it works
 
-For each profile, `clikae`:
+For each tank, `clikae`:
 
-1. Creates `~/.clikae/profiles/<cli>/<profile>/` — the directory the CLI's env
-   var (e.g. `CLAUDE_CONFIG_DIR`) points at.
+1. Creates `~/.clikae/profiles/<engine>/<tank>/` — the directory the engine's env
+   var (e.g. `CLAUDE_CONFIG_DIR`) points at. (The on-disk path keeps the word
+   `profiles` for stability; you only ever type/​see *tank*.)
 2. (`alias`) Appends a sentinel-wrapped block to your shell rc:
    ```
    # >>> clikae:claude.work >>>
@@ -296,7 +302,7 @@ For each profile, `clikae`:
    ```
    The sentinels make safe, exact removal possible.
 3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens a terminal,
-   runs the env-var-prefixed CLI, and sets the window title to `claude (work)`
+   runs the env-var-prefixed engine, and sets the window title to `claude (work)`
    so you can tell windows apart. The terminal is **Terminal.app** by default;
    `--terminal iterm2` and `--terminal ghostty` target those instead (set
    `$CLIKAE_TERMINAL` to change the default). Terminal.app and iTerm2 are driven
@@ -305,9 +311,9 @@ For each profile, `clikae`:
 
 No daemons, no global state, no network calls. You can read every line.
 
-## Supported CLIs
+## Supported engines
 
-| CLI | Strategy | Env var |
+| Engine | Strategy | Env var |
 |---|---|---|
 | `claude` (Anthropic Claude Code) | `env-dir` | `CLAUDE_CONFIG_DIR` |
 | `codex` (OpenAI Codex CLI) | `env-dir` | `CODEX_HOME` |
@@ -322,12 +328,13 @@ No daemons, no global state, no network calls. You can read every line.
 | `terraform` | `env-file` | `TF_CLI_CONFIG_FILE` |
 | `pulumi` | `env-dir` | `PULUMI_HOME` |
 | `vercel` (Vercel CLI) | `flag` | — (`--global-config <dir>`) |
+| `agy` (Google Antigravity) | opt-in symlink | — (hardcoded `~/.gemini`; see above) |
 
-The `flag` strategy is for CLIs with no config-directory env var: the profile
+The `flag` strategy is for engines with no config-directory env var: the tank
 directory is injected as a command-line flag (e.g. vercel's `--global-config`)
-in the generated alias / `.app` / `run` command instead of an exported variable.
-Such a CLI shows `(n/a)` in `clikae status` (there's nothing in the environment
-to read back).
+in the generated alias / `.app` / run command instead of an exported variable.
+Such an engine shows `(n/a)` in `clikae status` (there's nothing in the
+environment to read back).
 
 Run `clikae adapters` to see them with descriptions. Adding your own is ~10
 lines of bash — see [adding-an-adapter.md](adding-an-adapter.md).

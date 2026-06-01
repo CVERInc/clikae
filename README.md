@@ -1,6 +1,6 @@
 # clikae · ｷﾘｶｴ
 
-> CLI profile switcher. One tool to juggle multiple accounts / configs for any CLI that uses an environment variable for its settings.
+> Switch any CLI between accounts. One tool to juggle multiple accounts / configs for any CLI that selects its settings from an environment variable.
 >
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
@@ -15,15 +15,20 @@
 
 You probably have more than one account on at least one CLI tool. Two GitHub accounts (personal + work). Two `gcloud` configurations (client A + client B). Two Anthropic Claude subscriptions because one Max plan didn't have enough quota. And now you're juggling shell aliases, env vars, and `--profile` flags by hand, and you keep logging into the wrong one.
 
-`clikae` is a small, pure-bash tool that:
+`clikae` is a small, pure-bash tool. The name is 切り替え — *switching* — so
+**clikae is the verb**: `clikae <engine> <tank>` points an engine (a CLI like
+claude, codex, gh) at one of your tanks (an account/config) and runs it. No verb
+to memorise; the program name *is* the verb.
 
-1. Creates **isolated profile directories** for each CLI tool (one folder per (CLI, profile) pair).
+It:
+
+1. Creates **isolated tank directories** for each engine (one folder per engine + tank).
 2. Generates **shell aliases** (`claude-work`, `gh-personal`, …) you can use in a new terminal.
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
-4. **Relays a live session to another profile** when one account hits its usage limit — for Claude Code it carries the current conversation over and resumes it on the other account's quota (`clikae relay`).
-5. Cleans up after itself when you're done with a profile.
+4. **Carries a live session to another tank** when one runs dry — `clikae to <tank>` keeps the same conversation going on the other account's quota (and `clikae to <other-engine>` hands a written brief across vendors).
+5. Cleans up after itself when you're done with a tank.
 
-It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel**, and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
+It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus opt-in multi-account for **Antigravity / agy**), and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
 ## Install
 
@@ -36,20 +41,20 @@ Or from source / `curl | bash` — see [docs/installation.md](docs/installation.
 ## 30 seconds
 
 ```bash
-clikae init claude work --alias   # create profile + add `claude-work` alias
-source ~/.zshrc                   # pick up the alias
-claude-work                       # go
+clikae init claude work --alias   # create a tank (+ a `claude-work` alias)
+clikae claude work                # switch to it and run — the bare verb
 ```
 
-Hit a usage limit mid-task? Swap to your other account and keep the same
-conversation going on its quota:
+Hit a usage limit mid-task? Carry the same conversation to your other tank and
+keep going on its quota:
 
 ```bash
-clikae relay claude b             # carry the current session over to profile `b`
+clikae to personal                # carry the live session to tank `personal`
+clikae to codex                   # or across engines (a written brief)
 ```
 
 Type **`clikae`** any time to see all your tanks — which accounts you have per
-CLI, and which one each terminal is currently on:
+engine, and which one each terminal is currently on:
 
 ```bash
 clikae                            # your home dashboard (run `clikae doctor` for a health check)
@@ -59,6 +64,7 @@ clikae                            # your home dashboard (run `clikae doctor` for
 
 - **[Installation](docs/installation.md)** — Homebrew, from source, `curl | bash`, PATH setup.
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
+- **[Grammar](docs/grammar.md)** — the language clikae speaks: why it's a verb, engine/tank/fuel, `clikae to`, agy.
 - **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
 - **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
@@ -68,8 +74,9 @@ clikae                            # your home dashboard (run `clikae doctor` for
 - **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
 - **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
-- **v0.4** *(current)* — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total). Plus a `migrate` guard against moving an in-use config dir.
-- **v1.0** *(in progress)* — macOS menu bar app (`gui/ClikaeMenuBar`): profiles per CLI, active one marked, click-to-launch, per-CLI relay. Build-verified AppKit skeleton; signed `.app` packaging next.
+- **v0.4** — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total). Plus a `migrate` guard against moving an in-use config dir.
+- **v0.5** *(in progress)* — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` for carrying a session onward (same engine resumes, another engine gets a brief), Antigravity/agy folded into the same verbs, and an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
+- **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing
 
