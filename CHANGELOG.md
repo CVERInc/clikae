@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The interactive board leads with "continue".** When this directory has a
+  recent session you can resume, `clikae` now shows a **續上次 / continue
+  headline** at the top — the most recent session across all your tanks, titled
+  by Claude's own ai-title, with `⏎ 接回` to reopen it (`clikae <engine> <tank>
+  -- --resume <id>` under the hood). It only appears for an engine that can
+  actually resume by id (new optional `adapter_resume_args` hook), so the
+  affordance never lies, and it's absent in a brand-new directory. The board also
+  pins the logo top-right on wide terminals, and no longer flickers on each
+  keypress (homes + overwrites in place instead of a full-screen clear).
 - **On-device handoff briefs — local-first, private, free.** When you carry a
   session across engines (`clikae to <other-engine>`, `clikae handoff`), clikae
   now auto-detects a LOCAL model already on your machine — `apfel` (Apple's

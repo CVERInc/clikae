@@ -209,3 +209,30 @@ _agy_log() { # <line>
   [[ "$output" == *"Unknown command"* ]] || false
   [[ "$output" == *"switch <engine> to <tank>"* ]] || false
 }
+
+@test "the board shows a continue headline for this dir's most recent session" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  {
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"raw first prompt"}]}}\n'
+    printf '{"type":"ai-title","aiTitle":"Resume me please","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
+  } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  # Headline present, titled by Claude's ai-title, naming the engine/tank to resume.
+  [[ "$output" == *"續上次"* ]] || false
+  [[ "$output" == *"Resume me please"* ]] || false
+  [[ "$output" == *"claude/a"* ]] || false
+}
+
+@test "the board shows NO continue headline in a dir with no session" {
+  clikae init claude a
+  local empty="$TEST_HOME/empty"; mkdir -p "$empty"
+  cd "$empty"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"續上次"* ]] || false
+}
