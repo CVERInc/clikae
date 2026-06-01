@@ -6,7 +6,7 @@ load '../helpers'
 @test "list reports nothing when there are no profiles" {
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No profiles yet"* ]]
+  [[ "$output" == *"No tanks yet"* ]]
 }
 
 @test "list shows created profiles" {

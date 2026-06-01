@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/app.sh — `clikae app <cli> <profile>` (macOS only)
+# lib/commands/app.sh — `clikae app <engine> <tank>` (macOS only)
 #
 # Generates a double-clickable .app that opens a new terminal window and runs the
 # CLI with the given profile's env vars applied. The terminal can be Terminal.app
@@ -87,7 +87,7 @@ cmd_app() {
       -t|--terminal) target="$2"; shift 2 ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae app <cli> <profile> [--terminal <app>] [--force] [--out <dir>]
+Usage: clikae app <engine> <tank> [--terminal <app>] [--force] [--out <dir>]
 
 Generate a macOS .app launcher for a profile. Double-clicking the .app opens a
 new terminal window with the given profile active.
@@ -98,7 +98,7 @@ Options:
   -f, --force           Overwrite an existing .app at the destination.
   -o, --out <dir>       Where to put the .app. Default: ~/Applications
 
-The window's title is set to "<CLI> (<profile>)" so you can tell windows apart.
+The window's title is set to "<CLI> (<tank>)" so you can tell windows apart.
 
 macOS only.
 EOF
@@ -118,8 +118,8 @@ EOF
   [ "$(uname -s)" = "Darwin" ] || log_fail "clikae app is macOS-only. Use \`clikae alias\` on Linux/Windows."
   command -v osacompile >/dev/null 2>&1 || log_fail "osacompile not found (it's a macOS built-in — this is unexpected)."
 
-  [ -n "$cli" ]     || log_fail "Missing <cli>. See: clikae app --help"
-  [ -n "$profile" ] || log_fail "Missing <profile>. See: clikae app --help"
+  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae app --help"
+  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae app --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
 

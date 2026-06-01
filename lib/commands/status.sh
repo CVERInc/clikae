@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/status.sh — `clikae status [<cli>] [--json]`
+# lib/commands/status.sh — `clikae status [<engine>] [--json]`
 #
 # Shows which profile each CLI is *currently* pointed at **in this shell**, by
 # reading the live value of each adapter's env var and resolving it back to a
@@ -14,7 +14,7 @@
 
 # JSON string helpers (json_str / json_or_null) live in lib/core/json.sh.
 
-# _status_row_for <cli>  -> one canonical row, fields separated by ASCII Unit
+# _status_row_for <engine>  -> one canonical row, fields separated by ASCII Unit
 # Separator (\037), record terminated by newline:
 #   cli ␟ state ␟ profile ␟ account ␟ envVar ␟ envValue
 # state ∈ active | default | external | flag | noadapter. Empty fields ARE empty.
@@ -53,14 +53,14 @@ _status_row_for() {
 
 # Render the canonical rows (on stdin) as an aligned human table.
 _status_render_table() {
-  printf '%b%-12s %-12s %-26s %s%b\n' "$__C_BOLD" "CLI" "ACTIVE" "ACCOUNT" "SOURCE" "$__C_RESET"
+  printf '%b%-12s %-12s %-26s %s%b\n' "$__C_BOLD" "ENGINE" "TANK" "ACCOUNT" "SOURCE" "$__C_RESET"
   local cli state profile account envVar envValue active_col account_col source_col
   while IFS=$'\037' read -r cli state profile account envVar envValue; do
     [ -n "$cli" ] || continue
     account_col="${account:--}"
     case "$state" in
       active)    active_col="$profile";     source_col="$envVar=$envValue" ;;
-      external)  active_col="(external)";    source_col="$envVar=$envValue  — not a clikae profile" ;;
+      external)  active_col="(external)";    source_col="$envVar=$envValue  — not a clikae tank" ;;
       default)   active_col="(default)";     source_col="$envVar unset — system default" ;;
       flag)      active_col="(n/a)";         source_col="flag-based — not detectable from the environment" ;;
       noadapter) active_col="?";             source_col="(no adapter)" ;;
@@ -91,22 +91,22 @@ cmd_status() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: clikae status [<cli>] [--json]
+Usage: clikae status [<engine>] [--json]
 
-Show which profile each CLI is currently using *in this shell*, by reading the
+Show which tank each engine is currently using *in this shell*, by reading the
 live value of each adapter's env var (e.g. $CLAUDE_CONFIG_DIR) and resolving it
-back to a clikae profile.
+back to a clikae tank.
 
 This is a per-shell view: another terminal — or one started from a different
-`clikae app` launcher — may be on a different profile. A CLI shows "(default)"
-when its env var is unset (the CLI's own system default), or "(external)" when
-the var points somewhere that isn't a clikae profile.
+`clikae app` launcher — may be on a different tank. An engine shows "(default)"
+when its env var is unset (the engine's own system default), or "(external)"
+when the var points somewhere that isn't a clikae tank.
 
 Arguments:
-  <cli>   Only show status for this CLI (e.g. claude). Omit for all.
+  <engine>   Only show status for this engine (e.g. claude). Omit for all.
 
 Options:
-  --json  Emit a JSON array instead of a table — one object per CLI with fields
+  --json  Emit a JSON array instead of a table — one object per engine with fields
           {cli, state, profile, account, envVar, envValue}, where state is one of
           active | default | external | flag | noadapter (profile/account/envValue
           are null when not applicable). For the menu-bar GUI and scripts.
@@ -127,7 +127,7 @@ EOF
     esac
   done
 
-  # Which CLIs to report on. With an explicit <cli>, just that one. Otherwise
+  # Which CLIs to report on. With an explicit <engine>, just that one. Otherwise
   # every CLI that has at least one profile.
   local clis=""
   if [ -n "$only_cli" ]; then
@@ -137,7 +137,7 @@ EOF
     clis="$(list_all_profiles | awk -F'\t' '{print $1}' | sort -u)"
     if [ -z "$clis" ]; then
       [ "$as_json" -eq 1 ] && { printf '[]\n'; return 0; }
-      log_info "No profiles yet. Create one with:  clikae init <cli> <profile>"
+      log_info "No tanks yet. Create one with:  clikae init <engine> <tank>"
       return 0
     fi
   fi

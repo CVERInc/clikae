@@ -6,7 +6,7 @@ load '../helpers'
 @test "status reports nothing when there are no profiles" {
   run clikae status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No profiles yet"* ]]
+  [[ "$output" == *"No tanks yet"* ]]
 }
 
 @test "status shows (default) when the env var is unset" {

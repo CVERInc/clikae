@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/handoff.sh — `clikae handoff <cli> [<profile>] [--out <file>]`
+# lib/commands/handoff.sh — `clikae handoff <engine> [<tank>] [--out <file>]`
 #
 # Produce a portable handoff brief from the *current directory's* most recent
 # session under a profile — so when a tank runs dry, the next tank (any profile,
@@ -14,15 +14,15 @@ cmd_handoff() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: clikae handoff <cli> [<profile>] [--to <cli>[/<profile>]]
+Usage: clikae handoff <engine> [<tank>] [--to <engine>[/<tank>]]
                        [--out <file>] [--summarizer <cmd>]
 
 Write a portable handoff brief from the current directory's most recent session
-under <profile> — what's being worked on, what's done, what's next — so another
+under <tank> — what's being worked on, what's done, what's next — so another
 profile / model / vendor can continue instead of starting blind when a tank runs
 dry. Read-only: the session is never modified.
 
-With no <profile>, it uses whichever profile this shell is on (resolved from the
+With no <tank>, it uses whichever profile this shell is on (resolved from the
 CLI's live env var, e.g. $CLAUDE_CONFIG_DIR).
 
 How the brief is written:
@@ -39,7 +39,7 @@ Options:
                           the target seeded with the brief as its opening prompt.
                           This is how you switch model or vendor — e.g. a dry
                           Claude → Codex. Replaces this process (exec). <target> is:
-                            <cli>/<profile>  another account of a switchable CLI
+                            <engine>/<tank>  another account of a switchable CLI
                                              (claude, codex)
                             antigravity      Google's agy — a single-account vendor
                                              you can hand off to but can't profile-switch
@@ -56,7 +56,7 @@ EOF
         return 0
         ;;
       --to)
-        shift; [ $# -gt 0 ] || log_fail "--to needs a target (<cli>[/<profile>])"
+        shift; [ $# -gt 0 ] || log_fail "--to needs a target (<engine>[/<tank>])"
         to="$1"; shift ;;
       --out)
         shift; [ $# -gt 0 ] || log_fail "--out needs a file path"
@@ -70,14 +70,14 @@ EOF
     esac
   done
 
-  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <cli>. See: clikae handoff --help"
+  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <engine>. See: clikae handoff --help"
   cli="${positionals[0]}"
   validate_name cli "$cli"
 
   case "${#positionals[@]}" in
     1) ;;
     2) profile="${positionals[1]}"; got_profile=1 ;;
-    *) log_fail "Too many arguments. Usage: clikae handoff $cli [<profile>]" ;;
+    *) log_fail "Too many arguments. Usage: clikae handoff $cli [<tank>]" ;;
   esac
 
   load_adapter "$cli"
@@ -88,7 +88,7 @@ EOF
     exit 1
   fi
 
-  # Auto-detect <profile> from this shell's live env var when not given.
+  # Auto-detect <tank> from this shell's live env var when not given.
   if [ "$got_profile" -eq 0 ]; then
     local var strategy value
     var="$(adapter_meta_env_var)"
@@ -97,7 +97,7 @@ EOF
     profile="$(resolve_active_profile "$cli" "$strategy" "$value")"
     if [ -z "$profile" ]; then
       log_err "Couldn't tell which profile '$cli' is on (\$$var is unset or not a clikae profile)."
-      log_dim "Name it explicitly:  clikae handoff $cli <profile>"
+      log_dim "Name it explicitly:  clikae handoff $cli <tank>"
       exit 1
     fi
     log_dim "Using current profile: $profile  (\$$var)" >&2
@@ -137,7 +137,7 @@ EOF
     log_ok "Handoff also written to $out"
   fi
 
-  # Parse <cli>[/<profile>].
+  # Parse <engine>[/<tank>].
   local to_cli="${to%%/*}" to_profile=""
   case "$to" in */*) to_profile="${to#*/}" ;; esac
   validate_name cli "$to_cli"
@@ -173,7 +173,7 @@ EOF
 
   else
     log_err "Unknown handoff target: '$to_cli'."
-    log_dim "Use an adapter (e.g. codex, optionally codex/<profile>) or a target (antigravity)."
+    log_dim "Use an adapter (e.g. codex, optionally codex/<tank>) or a target (antigravity)."
     exit 1
   fi
 }

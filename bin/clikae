@@ -49,28 +49,41 @@ source "$CLIKAE_LIB/core/scan.sh"
 # shellcheck source=../lib/core/limit.sh
 source "$CLIKAE_LIB/core/limit.sh"
 
-# Subcommand dispatch. Bare `clikae` opens the home dashboard (your tanks); the
-# full command reference lives one keystroke away at `clikae help`.
-cmd="${1:-home}"
-shift || true
+# Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
+#   1. a reserved command (or alias) -> run it directly;
+#   2. an installed engine (an adapter) -> the BARE SWITCH, `clikae <engine>
+#      [tank]` (the verb is the program name, so none is typed);
+#   3. anything else -> unknown.
+# Bare `clikae` opens the home dashboard; the full reference is at `clikae help`.
+raw="${1:-home}"
 
-case "$cmd" in
-  home|dashboard|doctor|demo|init|app|list|ls|status|remove|rm|run|relay|handoff|watch|pool|antigravity|agy|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v)
-    case "$cmd" in
-      ls) cmd="list" ;;
-      rm) cmd="remove" ;;
-      dashboard) cmd="home" ;;
-      agy) cmd="antigravity" ;;
-      --help|-h) cmd="help" ;;
-      --version|-v) cmd="version" ;;
-    esac
-    ;;
-  *)
-    log_err "Unknown command: $cmd"
-    echo ""
-    cmd="help"
-    ;;
-esac
+__clikae_is_reserved() {
+  case "$1" in
+    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|to|continue|relay|handoff|watch|pool|antigravity|agy|rename|alias|migrate|info|adapters|help|--help|-h|version|--version|-v) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if __clikae_is_reserved "$raw"; then
+  cmd="$raw"; shift || true
+  case "$cmd" in
+    tanks|ls)     cmd="list" ;;
+    continue)     cmd="to" ;;
+    rm)           cmd="remove" ;;
+    dashboard)    cmd="home" ;;
+    agy)          cmd="antigravity" ;;
+    --help|-h)    cmd="help" ;;
+    --version|-v) cmd="version" ;;
+  esac
+elif [ -f "$CLIKAE_LIB/adapters/$raw.sh" ]; then
+  # Bare switch — keep "$@" intact: the engine is cmd_switch's first argument.
+  cmd="switch"
+else
+  log_err "Unknown command or engine: $raw"
+  echo ""
+  set --
+  cmd="help"
+fi
 
 if [ "$cmd" = "version" ]; then
   echo "clikae $CLIKAE_VERSION"

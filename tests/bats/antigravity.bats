@@ -1,63 +1,93 @@
 #!/usr/bin/env bats
-# tests/bats/antigravity.bats — `clikae antigravity`, the opt-in symlink-swap
-# multi-account power mode. All runs against the isolated $HOME/$CLIKAE_HOME from
-# helpers.bash, so it never touches a real ~/.gemini.
+# tests/bats/antigravity.bats — Antigravity (agy) folded into the standard
+# grammar (docs/grammar.md §6): init/agy<tank>/remove/--release, no subcommand
+# tree. All runs against the isolated $HOME/$CLIKAE_HOME from helpers.bash, so it
+# never touches a real ~/.gemini.
 
 load '../helpers'
 
-@test "antigravity status is OFF by default" {
-  run clikae antigravity
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"OFF"* ]]
-  [[ "$output" == *"clikae antigravity enable"* ]]
+# Put a no-op `agy` on PATH so the exec at the end of a switch succeeds cleanly.
+_stub_agy() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$BATS_TEST_TMPDIR/bin/agy"
+  chmod +x "$BATS_TEST_TMPDIR/bin/agy"
 }
 
-@test "enable backs up + migrates ~/.gemini into a 'default' slot symlink" {
+@test "agy: no tanks by default, points at init" {
+  run clikae agy
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No agy tanks yet"* ]]
+  [[ "$output" == *"clikae init agy"* ]]
+}
+
+@test "init agy: first time takes ~/.gemini over into a 'default' tank + makes the tank" {
   mkdir -p "$HOME/.gemini"
   echo "LOGIN" > "$HOME/.gemini/auth.txt"
-  run bash -c "printf 'y\n' | '$CLIKAE_BIN' antigravity enable"
+  run bash -c "printf 'y\n' | '$CLIKAE_BIN' init agy work"
   [ "$status" -eq 0 ]
   [ -L "$HOME/.gemini" ]                                              # now a symlink
   [ -f "$CLIKAE_HOME/profiles/antigravity/default/auth.txt" ]         # login migrated
+  [ -d "$CLIKAE_HOME/profiles/antigravity/work" ]                     # new tank made
   [ -f "$CLIKAE_HOME/antigravity-multi-consent" ]                     # consent recorded
-  # The backup exists alongside.
-  ls "$HOME"/.gemini.clikae.bak.* >/dev/null
-  # Login still readable through the symlink.
-  [ "$(cat "$HOME/.gemini/auth.txt")" = "LOGIN" ]
+  ls "$HOME"/.gemini.clikae.bak.* >/dev/null                          # backup alongside
+  [ "$(cat "$HOME/.gemini/auth.txt")" = "LOGIN" ]                     # login still readable
 }
 
-@test "enable does nothing without consent (answer N)" {
+@test "init agy: declined (answer N) changes nothing" {
   mkdir -p "$HOME/.gemini"
-  run bash -c "printf 'n\n' | '$CLIKAE_BIN' antigravity enable"
+  run bash -c "printf 'n\n' | '$CLIKAE_BIN' init agy work"
   [ "$status" -eq 0 ]
   [ ! -L "$HOME/.gemini" ]                                            # untouched
+  [ ! -d "$CLIKAE_HOME/profiles/antigravity/work" ]
   [ ! -f "$CLIKAE_HOME/antigravity-multi-consent" ]
 }
 
-@test "add + use repoint the active slot" {
+@test "init agy: second tank is a plain mkdir, no ceremony" {
   mkdir -p "$HOME/.gemini"
-  printf 'y\n' | "$CLIKAE_BIN" antigravity enable >/dev/null 2>&1
-  clikae antigravity add work
-  [ -d "$CLIKAE_HOME/profiles/antigravity/work" ]
-  clikae antigravity use work
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  # No stdin piped: if it tried to confirm again it would block/fail, not pass.
+  run clikae init agy personal
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/antigravity/personal" ]
+  [[ "$output" == *"Created agy tank: personal"* ]]
+}
+
+@test "agy <tank> repoints the active symlink" {
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
   [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]
-  run clikae antigravity status
-  [[ "$output" == *"● work  (active)"* ]] || [[ "$output" == *"work  (active)"* ]]
+  [[ "$output" == *"agy is now on tank: work"* ]]
 }
 
-@test "use rejects an unknown slot" {
+@test "agy <tank> rejects an unknown tank" {
   mkdir -p "$HOME/.gemini"
-  printf 'y\n' | "$CLIKAE_BIN" antigravity enable >/dev/null 2>&1
-  run clikae antigravity use nope
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae agy nope
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No such slot"* ]]
+  [[ "$output" == *"No such agy tank"* ]]
 }
 
-@test "disable restores a real ~/.gemini from the active slot and clears consent" {
+@test "agy --release restores a real ~/.gemini from the active tank, keeps tanks, clears consent" {
   mkdir -p "$HOME/.gemini"
   echo "LOGIN" > "$HOME/.gemini/auth.txt"
-  printf 'y\n' | "$CLIKAE_BIN" antigravity enable >/dev/null 2>&1
-  run clikae antigravity disable
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae agy --release
+  [ "$status" -eq 0 ]
+  [ ! -L "$HOME/.gemini" ]
+  [ -d "$HOME/.gemini" ]
+  [ "$(cat "$HOME/.gemini/auth.txt")" = "LOGIN" ]                     # login preserved
+  [ ! -f "$CLIKAE_HOME/antigravity-multi-consent" ]
+  [ -d "$CLIKAE_HOME/profiles/antigravity/default" ]                  # tanks kept
+}
+
+@test "remove agy: removing the LAST tank restores ~/.gemini and ends multi-account" {
+  mkdir -p "$HOME/.gemini"
+  echo "LOGIN" > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  clikae remove agy work -f >/dev/null 2>&1                           # leaves only 'default' (active)
+  run bash -c "printf 'y\n' | '$CLIKAE_BIN' remove agy default"
   [ "$status" -eq 0 ]
   [ ! -L "$HOME/.gemini" ]
   [ -d "$HOME/.gemini" ]
@@ -65,8 +95,19 @@ load '../helpers'
   [ ! -f "$CLIKAE_HOME/antigravity-multi-consent" ]
 }
 
-@test "add/use require enabling first" {
-  run clikae antigravity add work
+@test "remove agy refuses the active tank while others remain" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1          # default active, work exists
+  run clikae remove agy default -f
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Enable first"* ]]
+  [[ "$output" == *"active agy tank"* ]]
+}
+
+@test "clikae tanks lists agy tanks without crashing (no adapter regression)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy"* ]]          # canonical engine name, not 'antigravity'
+  [[ "$output" == *"work"* ]]
 }

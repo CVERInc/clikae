@@ -60,17 +60,17 @@ cmd_pool() {
     -h|--help|help)
       cat <<EOF
 Usage: clikae pool [list] [--json]
-       clikae pool seed [<cli>]
+       clikae pool seed [<engine>]
        clikae pool add <target>
        clikae pool remove <target>
 
 The fuel pool is your ordered list of tanks (top = most preferred). When a tank
 runs dry, \`clikae watch\` hands off to the next one down the list. Targets use the
-same grammar as \`handoff --to\`: <cli>/<profile> (e.g. claude/a, codex/work) or a
+same grammar as \`handoff --to\`: <engine>/<tank> (e.g. claude/a, codex/work) or a
 launch-only target (e.g. antigravity).
 
-\`pool seed\` fills an empty pool fast: it adds every existing switchable profile
-(optionally just one cli's) in name order, so \`watch\` has somewhere to fall
+\`pool seed\` fills an empty pool fast: it adds every existing switchable tank
+(optionally just one engine's) in name order, so \`watch\` has somewhere to fall
 through to. Reorder afterwards by editing the file or with add/remove.
 
 Stored as a plain text file you can also edit by hand:
@@ -82,8 +82,8 @@ Options:
           a launch-only target like antigravity). For the menu-bar GUI / scripts.
 
 Examples:
-  clikae pool seed              # add every existing profile (all clis)
-  clikae pool seed claude       # add just claude's profiles
+  clikae pool seed              # add every existing tank (all engines)
+  clikae pool seed claude       # add just claude's tanks
   clikae pool add claude/a
   clikae pool add claude/b
   clikae pool add codex/work
@@ -121,11 +121,11 @@ EOF
       shift
       local only_cli=""
       if [ $# -ge 1 ]; then only_cli="$1"; validate_name cli "$only_cli"; shift; fi
-      [ $# -eq 0 ] || log_fail "Usage: clikae pool seed [<cli>]"
+      [ $# -eq 0 ] || log_fail "Usage: clikae pool seed [<engine>]"
       local rows scli sprofile spath added=0
       rows="$(list_all_profiles || true)"
       if [ -z "$rows" ]; then
-        log_info "No profiles to seed from. Create one with:  clikae init <cli> <profile>"
+        log_info "No tanks to seed from. Create one with:  clikae init <engine> <tank>"
         return 0
       fi
       # Add every discovered SWITCHABLE profile (one with an adapter) not already
@@ -142,7 +142,7 @@ EOF
 $rows
 EOF
       if [ "$added" -eq 0 ]; then
-        log_info "Nothing to add — the pool already covers your profiles."
+        log_info "Nothing to add — the pool already covers your tanks."
       else
         log_dim "Reorder anytime (top = preferred): edit $(pool_file), or pool add/remove."
       fi

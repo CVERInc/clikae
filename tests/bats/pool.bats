@@ -120,7 +120,7 @@ load '../helpers'
 @test "pool seed with no profiles says so" {
   run clikae pool seed
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No profiles to seed"* ]]
+  [[ "$output" == *"No tanks to seed"* ]]
 }
 
 @test "pool_next advances down the priority list" {

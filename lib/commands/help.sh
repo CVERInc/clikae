@@ -17,46 +17,51 @@ cmd_help() {
   fi
 
   cat <<'EOF'
-clikae - CLI profile switcher  /  ｷﾘｶｴ (切り替え)
+clikae - switch your CLIs between accounts  /  ｷﾘｶｴ (切り替え)
 
-Usage:
-  clikae                           Open the home dashboard (your tanks)
-  clikae <command> [args...]
+clikae is a verb: it switches an ENGINE (a CLI like claude, codex, agy) between
+TANKS (accounts/configs you can burn). The main action carries no verb of its
+own — the program name IS the verb.
 
-Commands:
-  doctor                           Read-only health check: what clikae can do here
-  demo                             A 30-second guided tour in a throwaway sandbox
-  init <cli> <profile>             Create a new profile for a CLI tool
-  app <cli> <profile>              Generate a macOS launcher .app
-  alias <cli> <profile>            Write a shell alias for the profile
-  run <cli> <profile> [-- args]    Run a CLI with the given profile (no alias needed)
-  relay <cli> [from] <to>          Hand the current session to another profile (e.g. on a usage limit)
-  handoff <cli> [profile]          Write a portable handoff brief (--to switches model/vendor)
-  watch <cli> [profile]            Watch for a dry tank and offer/auto switch to the next one
-  pool [add|remove] [target]       Manage the fuel pool (ordered tanks for watch to fall through)
-  antigravity <cmd>                Opt-in multi-account for agy (enable/add/use/disable)
-  list                             List all profiles (with the logged-in account)
-  status [cli]                     Show which profile each CLI is on in this shell
-  rename <cli> <old> <new>         Rename a profile (dir, alias, login carried over)
-  remove <cli> <profile>           Remove a profile (dir, alias, .app)
-  migrate [cli]                    Adopt a hand-rolled config-dir + alias setup
-  info                             Show install paths and counts
-  adapters                         List supported CLIs
-  help [command]                   Show help (run `clikae help <cmd>` for details)
-  version                          Print clikae version
+Switch (the main thing — no verb needed):
+  clikae <engine> <tank>           switch <engine> to <tank> and run it
+  clikae <engine>                  one tank → use it; several → list them
+  clikae to <target> [tank]        carry your CURRENT session onto another tank
+                                   (same engine → resume; another → a brief)
+
+Make & manage tanks:
+  init <engine> <tank>             create a new tank   (--alias adds a shell alias)
+  remove <engine> <tank>           remove a tank (dir, alias, .app)
+  rename <engine> <old> <new>      rename a tank (login carried over)
+  migrate [engine]                 adopt a hand-rolled config-dir + alias setup
+
+Keep burning when a tank runs dry:
+  watch <engine> [tank]            watch for a dry tank and switch onward
+  pool [add|remove] [target]       the reserve order watch falls through
+
+Use & inspect:
+  app <engine> <tank>              generate a macOS launcher .app
+  alias <engine> <tank>            write a shell alias for the tank
+  tanks                            list all tanks (with the logged-in account)
+  status [engine]                  which tank each engine is on in this shell
+  doctor                           read-only health check: what clikae can do here
+  adapters                         list supported engines
+  demo                             a 30-second guided tour in a throwaway sandbox
+
+Meta:
+  help [command]                   show help (run `clikae help <cmd>` for details)
+  version                          print clikae version
+
+Antigravity (agy) is global single-account, but folds into the same verbs:
+  clikae init agy <tank> · clikae agy <tank> · clikae remove agy <tank>
+  clikae agy --release             restore a normal ~/.gemini, keep your tanks
 
 Common flow:
-  clikae init claude work --alias  # creates ~/.clikae/profiles/claude/work + adds claude-work alias
-  clikae app claude work           # creates ~/Applications/claude (work).app
-  source ~/.zshrc                  # pick up the new alias
-  claude-work                      # go!
+  clikae init claude work --alias  # make a tank (+ a claude-work alias)
+  clikae claude work               # switch to it and run
+  clikae to personal               # hit a limit? carry the session to another tank
 
-For details on any command:
-  clikae help <command>      OR      clikae <command> --help
-
-Docs:
-  README              .../clikae/README.md
-  Add your own CLI    .../clikae/docs/adding-an-adapter.md
+For details on any command:  clikae help <command>   OR   clikae <command> --help
 
 clikae is an unofficial community tool. It is not affiliated with or endorsed
 by any of the CLI vendors it integrates with.

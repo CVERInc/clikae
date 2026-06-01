@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/rename.sh — `clikae rename <cli> <old> <new>`
+# lib/commands/rename.sh — `clikae rename <engine> <old> <new>`
 #
 # Rename a profile (e.g. the meaningless "a" → "cver"). This is a mini-migrate:
 # it MOVES the profile directory, rewrites the managed shell alias, and — for
@@ -34,22 +34,23 @@ cmd_rename() {
       -f|--force) force=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae rename <cli> <old> <new> [--force]
+Usage: clikae rename <engine> <old> <new> [--force]
 
-Rename a profile: move its directory, rewrite its managed shell alias, and (for
+Rename a tank: move its directory, rewrite its managed shell alias, and (for
 claude on macOS) carry the saved Keychain login across so you don't re-login.
 
-Give your profiles meaningful names instead of a/b — e.g.:
+Give your tanks meaningful names instead of a/b — e.g.:
   clikae rename claude a cver
   clikae rename claude b personal
 
 Options:
   -f, --force   Skip the confirmation prompt.
 
-Refuses if <new> already exists, or if the CLI is currently using <old> in this
-shell (run it from a fresh shell with that CLI idle). The rc file is backed up
+Refuses if <new> already exists, or if the engine is currently using <old> in
+this shell (run it from a fresh shell with that engine idle). The rc file is
+backed up
 before editing. A pre-existing `.app` launcher for <old> is left alone but
-flagged — regenerate it with `clikae app <cli> <new>`.
+flagged — regenerate it with `clikae app <engine> <new>`.
 EOF
         return 0
         ;;
@@ -58,7 +59,7 @@ EOF
     esac
   done
 
-  [ "${#positionals[@]}" -eq 3 ] || log_fail "Usage: clikae rename <cli> <old> <new>. See --help."
+  [ "${#positionals[@]}" -eq 3 ] || log_fail "Usage: clikae rename <engine> <old> <new>. See --help."
   cli="${positionals[0]}"; old="${positionals[1]}"; new="${positionals[2]}"
   validate_name cli "$cli"
   validate_name profile "$old"
@@ -71,14 +72,14 @@ EOF
   binary="$(adapter_meta_cli_binary)"
   old_dir="$(ensure_profile --require "$cli" "$old")"
   new_dir="$(profile_dir "$cli" "$new")"
-  [ ! -e "$new_dir" ] || log_fail "Target profile already exists: $cli/$new ($new_dir)."
+  [ ! -e "$new_dir" ] || log_fail "Target tank already exists: $cli/$new ($new_dir)."
 
   # In-use guard (not bypassable by --force — a data-integrity guard, like
   # migrate). If the live env var points at the dir we're about to move, bail.
   if [ -n "$envvar" ]; then
     local live_dir="${!envvar:-}"
     if [ -n "$live_dir" ] && [ "${live_dir%/}" = "${old_dir%/}" ]; then
-      log_err "\$$envvar currently points at the profile you're renaming:"
+      log_err "\$$envvar currently points at the tank you're renaming:"
       log_err "    $live_dir"
       log_fail "Open a fresh shell with $binary idle (and \$$envvar unset), then retry."
     fi

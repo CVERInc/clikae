@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/relay.sh — `clikae relay <cli> [<from>] <to> [-- args...]`
+# lib/commands/relay.sh — `clikae relay <engine> [<from>] <to> [-- args...]`
 #
 # "Swap the fuel tank and keep burning." When one profile hits its usage limit
 # mid-task, hand the *current* conversation/session over to another profile and
@@ -100,7 +100,7 @@ EOF
   printf '%s\n' "${sids[$idx]}"
 }
 
-# Chooser for the TARGET tank when `clikae relay <cli>` is run without a target —
+# Chooser for the TARGET tank when `clikae relay <engine>` is run without a target —
 # so a relay never dead-ends on "missing target", it just asks. Lists the cli's
 # other profiles (the source is excluded), annotated with the logged-in account
 # when the adapter can tell. Echoes the chosen profile name, or nonzero/cancel.
@@ -136,7 +136,7 @@ cmd_relay() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: clikae relay <cli> [<from>] <to> [-- args...]
+Usage: clikae relay <engine> [<from>] <to> [-- args...]
 
 Hand the current session over to another profile and continue on its quota —
 for when the profile you're on hits its usage limit mid-task.
@@ -187,7 +187,7 @@ EOF
   done
 
   # First positional is always the CLI.
-  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <cli>. See: clikae relay --help"
+  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <engine>. See: clikae relay --help"
   cli="${positionals[0]}"
   validate_name cli "$cli"
 

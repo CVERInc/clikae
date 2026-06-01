@@ -9,7 +9,7 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"No tanks yet"* ]]
   [[ "$output" == *"clikae init"* ]]
-  [[ "$output" == *"13 CLIs"* ]]
+  [[ "$output" == *"13 engines"* ]]
 }
 
 @test "bare clikae with profiles shows the tank board grouped by CLI" {
@@ -178,5 +178,5 @@ _seed_tx() { # <profile> <jsonl-line>
 @test "an unknown subcommand still falls back to help" {
   run clikae definitely-not-a-command
   [[ "$output" == *"Unknown command"* ]]
-  [[ "$output" == *"Commands:"* ]]
+  [[ "$output" == *"switch <engine> to <tank>"* ]]
 }

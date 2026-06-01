@@ -10,9 +10,9 @@
 _list_render_table() {
   local show_paths="$1" cli profile account path
   if [ "$show_paths" -eq 1 ]; then
-    printf '%b%-12s %-20s %-26s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "ACCOUNT" "PATH" "$__C_RESET"
+    printf '%b%-12s %-20s %-26s %s%b\n' "$__C_BOLD" "ENGINE" "TANK" "ACCOUNT" "PATH" "$__C_RESET"
   else
-    printf '%b%-12s %-20s %s%b\n' "$__C_BOLD" "CLI" "PROFILE" "ACCOUNT" "$__C_RESET"
+    printf '%b%-12s %-20s %s%b\n' "$__C_BOLD" "ENGINE" "TANK" "ACCOUNT" "$__C_RESET"
   fi
   while IFS=$'\037' read -r cli profile account path; do
     [ -n "$cli" ] || continue
@@ -45,15 +45,15 @@ cmd_list() {
       --json)     as_json=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae list [-p|--paths] [--json]
+Usage: clikae tanks [-p|--paths] [--json]      (alias: clikae list / ls)
 
-List all profiles across all CLIs. The ACCOUNT column shows which account each
-profile is logged in to (when the adapter can tell — e.g. the email for claude),
+List all tanks across all engines. The ACCOUNT column shows which account each
+tank is logged in to (when the adapter can tell — e.g. the email for claude),
 so you don't have to remember what a name means.
 
 Options:
-  -p, --paths   Also show the profile directory path.
-  --json        Emit a JSON array instead of a table — one object per profile
+  -p, --paths   Also show the tank directory path.
+  --json        Emit a JSON array instead of a table — one object per tank
                 {cli, profile, account, path} (account is null when unknown).
                 For the menu-bar GUI and scripts; --paths is implied (path is
                 always included).
@@ -68,20 +68,26 @@ EOF
   rows="$(list_all_profiles || true)"
   if [ -z "$rows" ]; then
     [ "$as_json" -eq 1 ] && { printf '[]\n'; return 0; }
-    log_info "No profiles yet. Create one with:  clikae init <cli> <profile>"
+    log_info "No tanks yet. Create one with:  clikae init <engine> <tank>"
     return 0
   fi
 
-  # Enrich each profile with its account label (best-effort, from the adapter),
-  # into US-delimited rows so empty account fields survive (tab would collapse).
-  local enriched="" cli profile path account
+  # Enrich each tank with its account label (best-effort, from the adapter), into
+  # US-delimited rows so empty account fields survive (tab would collapse).
+  local enriched="" cli profile path account dcli
   while IFS="$(printf '\t')" read -r cli profile path; do
     [ -n "$cli" ] || continue
-    account="$(
-      load_adapter "$cli" >/dev/null 2>&1 || exit 0
-      adapter_label "$path"
-    )"
-    enriched="$enriched$cli"$'\037'"$profile"$'\037'"$account"$'\037'"$path"$'\n'
+    # Gate on the adapter FILE: load_adapter log_fails (exit 1) on a miss, which
+    # under `set -e` would kill cmd_list. target-backed tanks (e.g. agy) have no
+    # adapter, so they list with an empty account.
+    account=""
+    if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      account="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
+    fi
+    # Display the canonical engine name: the on-disk dir is 'antigravity', the
+    # engine you type is 'agy' (docs/grammar.md §6).
+    dcli="$cli"; [ "$cli" = "antigravity" ] && dcli="agy"
+    enriched="$enriched$dcli"$'\037'"$profile"$'\037'"$account"$'\037'"$path"$'\n'
   done <<EOF
 $rows
 EOF

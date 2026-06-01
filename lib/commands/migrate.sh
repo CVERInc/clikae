@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/migrate.sh — `clikae migrate [<cli>] [--dry-run] [--force]`
+# lib/commands/migrate.sh — `clikae migrate [<engine>] [--dry-run] [--force]`
 #
 # Adopts a hand-rolled "config dir + shell alias" setup into clikae. The classic
 # case is Claude dual accounts created by setup-claude-dual-accounts.sh:
@@ -9,7 +9,7 @@
 #   alias claude-b='CLAUDE_CONFIG_DIR="$HOME/.claude-acct-b" claude'
 #   # <<< claude dual accounts <<<
 #
-# For each such alias we MOVE its config dir under ~/.clikae/profiles/<cli>/<p>/
+# For each such alias we MOVE its config dir under ~/.clikae/profiles/<engine>/<p>/
 # and rewrite the alias into clikae's sentinel format. Everything is previewed
 # and confirmed first; the rc file is backed up once; nothing is overwritten.
 
@@ -41,7 +41,7 @@ _migrate_extract_value() {
   esac
 }
 
-# Derive a clikae profile name from an alias name (strip a leading "<cli>-/_").
+# Derive a clikae profile name from an alias name (strip a leading "<engine>-/_").
 _migrate_profile_from_alias() {
   local cli="$1" name="$2"
   case "$name" in
@@ -60,17 +60,17 @@ cmd_migrate() {
       -k|--keep-login) keep_login=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae migrate [<cli>] [--dry-run] [--force] [--keep-login]
+Usage: clikae migrate [<engine>] [--dry-run] [--force] [--keep-login]
 
 Adopt a hand-rolled "config dir + shell alias" setup into clikae.
 
 clikae scans your shell rc for aliases that set the CLI's config env var (e.g.
 CLAUDE_CONFIG_DIR) and invoke the CLI. For each one it will:
-  1. move the referenced config directory under ~/.clikae/profiles/<cli>/<p>/
+  1. move the referenced config directory under ~/.clikae/profiles/<engine>/<p>/
   2. rewrite the alias into clikae's managed sentinel block
 
 Arguments:
-  <cli>        CLI to migrate (must have an adapter). Default: claude.
+  <engine>        CLI to migrate (must have an adapter). Default: claude.
 
 Options:
   -n, --dry-run     Show the plan without changing anything.

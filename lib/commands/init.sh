@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/init.sh — `clikae init <cli> <profile> [--alias]`
+# lib/commands/init.sh — `clikae init <engine> <tank> [--alias]`
 
 cmd_init() {
   local with_alias=0 cli="" profile=""
@@ -8,20 +8,20 @@ cmd_init() {
       --alias) with_alias=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae init <cli> <profile> [--alias]
+Usage: clikae init <engine> <tank> [--alias]
 
-Create a new profile for a CLI tool.
+Create a new tank (account/config) for an engine.
 
 Arguments:
-  <cli>      CLI tool name (must have an adapter). Run `clikae adapters` to list.
-  <profile>  Profile name. A-Z a-z 0-9 . _ - allowed.
+  <engine>   Engine name (a CLI with an adapter). Run `clikae adapters` to list.
+  <tank>     Tank name. A-Z a-z 0-9 . _ - allowed.
 
 Options:
   --alias    Also add a shell alias to your shell rc:
-               <cli>-<profile>   (e.g. claude-work)
+               <engine>-<tank>   (e.g. claude-work)
 
 Example:
-  clikae init claude work --alias
+  clikae init claude work --alias       # then:  clikae claude work
 EOF
         return 0
         ;;
@@ -37,20 +37,29 @@ EOF
     esac
   done
 
-  [ -n "$cli" ]     || log_fail "Missing <cli>. See: clikae init --help"
-  [ -n "$profile" ] || log_fail "Missing <profile>. See: clikae init --help"
+  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae init --help"
+  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae init --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
+
+  # agy is opt-in symlink-swap, not an env adapter — it has no lib/adapters file,
+  # so handle it before load_adapter (which would fail). See docs/grammar.md §6.
+  if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
+    # shellcheck source=./antigravity.sh
+    source "$CLIKAE_LIB/commands/antigravity.sh"
+    _agy_init "$profile"
+    return $?
+  fi
 
   load_adapter "$cli"
 
   if profile_exists "$cli" "$profile"; then
-    log_fail "Profile already exists: $cli/$profile  ($(profile_dir "$cli" "$profile"))"
+    log_fail "Tank already exists: $cli/$profile  ($(profile_dir "$cli" "$profile"))"
   fi
 
   local d
   d="$(ensure_profile --create "$cli" "$profile")"
-  log_ok "Created profile dir: $d"
+  log_ok "Created tank: $cli/$profile  ($d)"
 
   if declare -F adapter_init >/dev/null; then
     adapter_init "$d"
@@ -67,7 +76,7 @@ EOF
 
   echo ""
   log_bold "Next steps:"
-  echo "  clikae run $cli $profile           # try it now"
-  echo "  clikae app $cli $profile           # generate a macOS .app launcher"
-  echo "  clikae alias $cli $profile         # add a shell alias"
+  echo "  clikae $cli $profile           # switch to it and run"
+  echo "  clikae app $cli $profile       # generate a macOS .app launcher"
+  echo "  clikae alias $cli $profile     # add a shell alias"
 }

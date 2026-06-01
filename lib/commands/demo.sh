@@ -84,7 +84,7 @@ EOF
 
   # --- Outro ---------------------------------------------------------------
   log_bold "That's clikae. The sandbox is now gone — your machine is untouched."
-  log_dim  "Start for real:   clikae init <cli> <profile> --alias"
+  log_dim  "Start for real:   clikae init <engine> <tank> --alias"
   log_dim  "See your setup:   clikae        ·   health check:   clikae doctor"
   # trap removes $sb on exit.
 }

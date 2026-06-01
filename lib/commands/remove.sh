@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/remove.sh — `clikae remove <cli> <profile> [--force] [--keep-data]`
+# lib/commands/remove.sh — `clikae remove <engine> <tank> [--force] [--keep-data]`
 
 cmd_remove() {
   local force=0 keep_data=0 cli="" profile=""
@@ -9,14 +9,14 @@ cmd_remove() {
       --keep-data) keep_data=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae remove <cli> <profile> [--force] [--keep-data]
+Usage: clikae remove <engine> <tank> [--force] [--keep-data]
 
-Remove a profile. By default removes the profile directory, the shell alias
-block (if any), and the macOS launcher .app (if any).
+Remove a tank. By default removes the tank directory, the shell alias block
+(if any), and the macOS launcher .app (if any).
 
 Options:
   -f, --force      Don't prompt for confirmation.
-  --keep-data      Don't delete the profile directory; only remove alias + .app.
+  --keep-data      Don't delete the tank directory; only remove alias + .app.
 EOF
         return 0
         ;;
@@ -31,10 +31,19 @@ EOF
     esac
   done
 
-  [ -n "$cli" ]     || log_fail "Missing <cli>. See: clikae remove --help"
-  [ -n "$profile" ] || log_fail "Missing <profile>. See: clikae remove --help"
+  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae remove --help"
+  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae remove --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
+
+  # agy tanks aren't env profiles — they're symlink-swapped dirs. Removing the
+  # last one also tears down the takeover. See docs/grammar.md §6.
+  if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
+    # shellcheck source=./antigravity.sh
+    source "$CLIKAE_LIB/commands/antigravity.sh"
+    _agy_remove "$profile" "$force"
+    return $?
+  fi
 
   local d
   d="$(profile_dir "$cli" "$profile")"
@@ -44,7 +53,7 @@ EOF
   local app_path="$HOME/Applications/${cli} (${profile}).app"
 
   echo "About to remove:"
-  [ "$keep_data" -eq 0 ] && [ -d "$d" ] && echo "  - profile dir : $d"
+  [ "$keep_data" -eq 0 ] && [ -d "$d" ] && echo "  - tank dir    : $d"
   rc_has_block "$rc_file" "$rc_id" && echo "  - shell alias : block 'clikae:$rc_id' in $rc_file"
   [ -d "$app_path" ] && echo "  - launcher    : $app_path"
   echo ""
@@ -55,7 +64,7 @@ EOF
 
   if [ "$keep_data" -eq 0 ] && [ -d "$d" ]; then
     rm -rf "$d"
-    log_ok "Removed profile dir."
+    log_ok "Removed tank dir."
     # If the cli dir under profiles/ is now empty, clean it up.
     local cli_dir
     cli_dir="$(dirname "$d")"

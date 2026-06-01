@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/alias.sh — `clikae alias <cli> <profile>`
+# lib/commands/alias.sh — `clikae alias <engine> <tank>`
 
 cmd_alias() {
   local cli="" profile="" name=""
@@ -8,18 +8,18 @@ cmd_alias() {
       --name) name="$2"; shift 2 ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae alias <cli> <profile> [--name <alias_name>]
+Usage: clikae alias <engine> <tank> [--name <alias_name>]
 
 Write a shell alias to your shell rc file so you can invoke the CLI with the
 given profile in one word.
 
-By default the alias is named "<cli>-<profile>" (e.g. claude-work). Override
+By default the alias is named "<engine>-<tank>" (e.g. claude-work). Override
 with --name.
 
 The alias is wrapped in a sentinel block:
-  # >>> clikae:<cli>.<profile> >>>
+  # >>> clikae:<engine>.<tank> >>>
   alias <name>='<env vars> <binary>'
-  # <<< clikae:<cli>.<profile> <<<
+  # <<< clikae:<engine>.<tank> <<<
 
 The block is written to your shell's rc file (zsh/bash/fish auto-detected). For
 fish it uses fish syntax (`alias <name> 'env <vars> <binary>'`, since fish has
@@ -38,8 +38,8 @@ EOF
     esac
   done
 
-  [ -n "$cli" ]     || log_fail "Missing <cli>. See: clikae alias --help"
-  [ -n "$profile" ] || log_fail "Missing <profile>. See: clikae alias --help"
+  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae alias --help"
+  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae alias --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
   [ -n "$name" ] || name="${cli}-${profile}"

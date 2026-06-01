@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/watch.sh — `clikae watch <cli> [<profile>] [--auto] [--to <t>]`
+# lib/commands/watch.sh — `clikae watch <engine> [<tank>] [--auto] [--to <t>]`
 #
 # Ambient relay: watch the current session's transcript and, when it looks like
 # the tank ran dry, hand off to the next tank — offering first (default), or
@@ -60,7 +60,7 @@ cmd_watch() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: clikae watch <cli> [<profile>] [--to <target>] [--auto] [--check]
+Usage: clikae watch <engine> [<tank>] [--to <target>] [--auto] [--check]
                      [--pattern <regex>]
 
 Watch the current directory's session and, when it looks like the tank ran dry,
@@ -69,7 +69,7 @@ switches automatically after a one-time consent. The brief + handoff reuse
 `clikae handoff` under the hood, so a switchable target continues on its quota.
 
 Where it goes next:
-  --to <target>   explicit target (<cli>/<profile> or a launch-only target).
+  --to <target>   explicit target (<engine>/<tank> or a launch-only target).
   (otherwise)     the next tank down your fuel pool — see `clikae pool`.
 
 Launch-only targets (single-account vendors, e.g. antigravity): clikae watches
@@ -110,12 +110,12 @@ EOF
     esac
   done
 
-  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <cli>. See: clikae watch --help"
+  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing <engine>. See: clikae watch --help"
   cli="${positionals[0]}"; validate_name cli "$cli"
   case "${#positionals[@]}" in
     1) ;;
     2) profile="${positionals[1]}"; got_profile=1 ;;
-    *) log_fail "Too many arguments. Usage: clikae watch $cli [<profile>]" ;;
+    *) log_fail "Too many arguments. Usage: clikae watch $cli [<tank>]" ;;
   esac
 
   # An explicit pattern (--pattern flag or $CLIKAE_LIMIT_PATTERN) is a deliberate
@@ -130,10 +130,10 @@ EOF
   fi
 
   # Launch-only targets (single-account vendors like antigravity) have no adapter
-  # and no per-dir transcript — their only limit signal is a log file. If <cli>
+  # and no per-dir transcript — their only limit signal is a log file. If <engine>
   # resolves to such a target, watch that log instead of an adapter transcript.
   if [ ! -f "$CLIKAE_LIB/adapters/$cli.sh" ] && [ -f "$CLIKAE_LIB/targets/$cli.sh" ]; then
-    [ "$got_profile" -eq 0 ] || log_fail "'$cli' is a single-account target — drop the <profile>."
+    [ "$got_profile" -eq 0 ] || log_fail "'$cli' is a single-account target — drop the <tank>."
     _watch_target "$cli" "$pattern" "$check" "$to"
     return
   fi
@@ -148,8 +148,8 @@ EOF
     local var strategy value
     var="$(adapter_meta_env_var)"; strategy="$(adapter_meta_strategy)"; value="${!var}"
     profile="$(resolve_active_profile "$cli" "$strategy" "$value")"
-    [ -n "$profile" ] || log_fail "Couldn't tell which '$cli' profile this shell is on; name it: clikae watch $cli <profile>"
-    log_dim "Watching current profile: $profile  (\$$var)"
+    [ -n "$profile" ] || log_fail "Couldn't tell which '$cli' tank this shell is on; name it: clikae watch $cli <tank>"
+    log_dim "Watching current tank: $profile  (\$$var)"
   fi
   validate_name profile "$profile"
 

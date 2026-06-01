@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/commands/run.sh — `clikae run <cli> <profile> [-- args...]`
+# lib/commands/run.sh — `clikae run <engine> <tank> [-- args...]`
 
 cmd_run() {
   local cli="" profile=""
@@ -7,7 +7,7 @@ cmd_run() {
     case "$1" in
       -h|--help)
         cat <<'EOF'
-Usage: clikae run <cli> <profile> [-- args...]
+Usage: clikae run <engine> <tank> [-- args...]
 
 Run a CLI with a given profile, without needing an alias.
 
@@ -31,8 +31,8 @@ EOF
     esac
   done
 
-  [ -n "$cli" ]     || log_fail "Missing <cli>. See: clikae run --help"
-  [ -n "$profile" ] || log_fail "Missing <profile>. See: clikae run --help"
+  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae run --help"
+  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae run --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
 

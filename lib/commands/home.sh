@@ -11,7 +11,7 @@
 # The full command reference is one keystroke away at `clikae help`; the deep
 # machine check at `clikae doctor`. All read-only.
 
-# _home_active_for <cli>  -> the profile active for <cli> in THIS shell, or empty.
+# _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.
 _home_active_for() {
   local cli="$1"
@@ -36,8 +36,8 @@ _home_active_for() {
   )
 }
 
-# _home_alias_for <cli> <profile>  -> the managed alias NAME from the shell rc,
-# or empty. The block opens with `# >>> clikae:<cli>.<profile> >>>` and the alias
+# _home_alias_for <engine> <tank>  -> the managed alias NAME from the shell rc,
+# or empty. The block opens with `# >>> clikae:<engine>.<tank> >>>` and the alias
 # line is `alias <name>=...` (zsh/bash) or `alias <name> ...` (fish).
 _home_alias_for() {
   local cli="$1" profile="$2" rc id
@@ -145,7 +145,7 @@ $(list_all_profiles)
 EOF
 }
 
-# Is <cli>/<profile> in the dry set ($1)? Prints its reset phrase (maybe empty)
+# Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
 # and returns 0 when dry, 1 when not — so:  if r="$(_home_is_dry "$dry" c p)"; then
 _home_is_dry() {
   printf '%s\n' "$1" | awk -F'\037' -v c="$2" -v p="$3" \
@@ -159,7 +159,7 @@ _home_render_static() {
   local n_tanks n_clis
   n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c .)"
   n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c .)"
-  printf '%bclikae  ｷﾘｶｴ%b  %b·  %s tank%s across %s CLI%s%b\n\n' \
+  printf '%bclikae  ｷﾘｶｴ%b  %b·  %s tank%s across %s engine%s%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" \
     "$n_tanks" "$([ "$n_tanks" = 1 ] || echo s)" \
     "$n_clis"  "$([ "$n_clis" = 1 ] || echo s)" "$__C_RESET"
@@ -253,11 +253,11 @@ EOF
 
   local example="claude"
   if [ -n "$installed" ]; then
-    printf '  No tanks yet. clikae supports %d CLIs; installed on this machine:\n' "$total"
+    printf '  No tanks yet. clikae supports %d engines; installed on this machine:\n' "$total"
     printf '    %b%s%b\n' "$__C_GREEN" "$installed" "$__C_RESET"
     example="$(printf '%s' "$installed" | awk '{print $1}')"
   else
-    printf '  No tanks yet. clikae supports %d CLIs (none of them detected on PATH here).\n' "$total"
+    printf '  No tanks yet. clikae supports %d engines (none of them detected on PATH here).\n' "$total"
   fi
   echo ""
   log_bold "  Fill your first tank (pick a CLI you use):"
@@ -273,7 +273,7 @@ EOF
 _home_tty_leave() { printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
 
 # Resolve and EXEC the launch for one item row (replaces this process).
-#   tank   -> clikae run <cli> <profile>   (applies the profile env, then execs)
+#   tank   -> clikae run <engine> <tank>   (applies the profile env, then execs)
 #   agent  -> the CLI's own binary, default config (no tank)
 #   target -> the target's binary (already in the cli field)
 _home_launch() {
@@ -284,11 +284,12 @@ EOF
   : "$label" "$alias" "$active" "$note"
   case "$kind" in
     tank)
-      # antigravity tanks aren't env-switchable: select the slot, then run agy.
+      # antigravity tanks aren't env-switchable: `clikae agy <tank>` repoints the
+      # symlink and execs agy. Everything else is the bare switch.
       if [ "$cli" = "antigravity" ]; then
-        "$CLIKAE_BIN" antigravity use "$profile" && exec agy
+        exec "$CLIKAE_BIN" agy "$profile"
       else
-        exec "$CLIKAE_BIN" run "$cli" "$profile"
+        exec "$CLIKAE_BIN" "$cli" "$profile"
       fi
       ;;
     agent)  local bin; bin="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_meta_cli_binary)"; exec "$bin" ;;
@@ -371,16 +372,16 @@ EOF
   : "$rest"
   [ "$kind" = "tank" ] || return 0
   if [ "$cli" = "antigravity" ]; then
-    printf 'agy is single-account — relay carries a live session between accounts of\n'
-    printf 'the same CLI, which agy cannot do. Switch slots instead:\n'
-    printf '  clikae antigravity use %s\n' "$profile"
+    printf 'agy is global single-account — `to` carries a live session between tanks of\n'
+    printf 'the same engine, which agy cannot do. Switch tanks instead:\n'
+    printf '  clikae agy %s\n' "$profile"
     return 0
   fi
   local from
   from="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c && $6=="1"{print $3; exit}')"
   if [ -z "$from" ]; then
     printf 'No active %s session in this shell to relay from.\n' "$cli"
-    printf 'Open one first (its alias, or `clikae run %s <profile>`), then relay.\n' "$cli"
+    printf 'Open one first (its alias, or `clikae run %s <tank>`), then relay.\n' "$cli"
     return 0
   fi
   if [ "$from" = "$profile" ]; then
@@ -391,7 +392,7 @@ EOF
 }
 
 # Rename the shell alias for a selected tank row (the `a` key): type a new name,
-# then `clikae alias <cli> <profile> --name <new>` (which replaces the old block).
+# then `clikae alias <engine> <tank> --name <new>` (which replaces the old block).
 _home_rename_alias() {
   local kind cli profile label alias active note
   IFS=$'\037' read -r kind cli profile label alias active note <<EOF
@@ -409,7 +410,7 @@ EOF
 }
 
 # Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
-# the profile name, then `clikae init <cli> <profile> --alias`.
+# the profile name, then `clikae init <engine> <tank> --alias`.
 _home_new_tank() {
   local def_cli="$1" cli profile
   cli="$(_home_choose "New tank — pick a CLI    ↑↓ move · ⏎ select · q cancel" "$(list_adapters)" "$def_cli")" \
