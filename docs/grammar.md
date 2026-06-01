@@ -196,7 +196,7 @@ uses the *same verbs as everything else*, with **zero special subcommands**.
 
 | You type | agy behaviour |
 |---|---|
-| `clikae init agy work` | **First time:** multi-confirm that clikae may take over `~/.gemini`, back it up, migrate the current login into a `default` tank, then create `work`. **After:** just creates the tank (no ceremony — the dangerous one-time takeover already happened). |
+| `clikae init agy work` | **First time:** warn about the tradeoffs and ask one explicit `[y/N]` before clikae takes `~/.gemini` over, then back it up, migrate the current login into a `default` tank, and create `work`. **After:** just creates the tank (no ceremony — the dangerous one-time takeover already happened). |
 | `clikae agy work` | Switch the active tank to `work` (refuses if agy is live), then start agy. Prints `agy is global — switched all terminals to work`, because the side-effect is machine-wide. |
 | `clikae list` / `status` | agy tanks appear alongside the rest; `●` marks the one active tank; labelled `(global)`. |
 | `clikae remove agy work` | Remove the tank. **Removing the last tank** offers to also restore a vanilla `~/.gemini` and release the takeover — that's the teardown, folded into `remove`. |
@@ -210,7 +210,7 @@ Key points:
 - agy **can have many tanks** (store as many as you like). It can only have
   **one active at a time** across the whole machine — agy's engine has a single
   hardcoded fuel line (`~/.gemini`). The board's `●` makes that visible.
-- The "multi-confirm" lives on the **first-ever takeover only** (turning your
+- The warn-and-confirm lives on the **first-ever takeover only** (turning your
   real `~/.gemini` into a managed symlink). Subsequent `init agy <tank>` is a
   plain `mkdir` — same friction as `init claude`.
 - agy can be a relay/`to` **target** (`clikae to agy` → brief + launch) but not
@@ -263,7 +263,7 @@ clikae help                full command reference
       `relay` + `handoff` behind it.
 - [ ] **agy**: intercept `cli ∈ {agy, antigravity}` in `init` / bare-switch /
       `remove` **before** `load_adapter` (agy has no adapter). First `init agy`
-      runs the multi-confirm takeover; bare-switch does select-slot + launch +
+      runs the warn-and-confirm takeover; bare-switch does select-slot + launch +
       the global notice; **remove of the last tank offers teardown**, and
       `clikae agy --release` handles keep-tanks-but-release. **No `disable`
       subcommand** (collides with bare switch). Canonical engine name is `agy`;

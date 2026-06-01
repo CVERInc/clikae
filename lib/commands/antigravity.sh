@@ -12,7 +12,7 @@
 #
 # The user types the SAME verbs as every other engine — there is no `agy enable`
 # / `add` / `use` / `disable` subcommand tree any more:
-#   clikae init agy <tank>     create a tank (first time: multi-confirm takeover)
+#   clikae init agy <tank>     create a tank (first time: warns + confirms takeover)
 #   clikae agy [tank]          switch to a tank and run agy (this file's cmd_*)
 #   clikae remove agy <tank>   remove a tank (last one offers teardown)
 #   clikae agy --release       restore a normal ~/.gemini, keep the tank dirs

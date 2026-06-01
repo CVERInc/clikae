@@ -103,12 +103,24 @@ _claude_meta_for_file() {
   # Title = the opening user message. The first line with a user role carries the
   # prompt as a "text":"..." field; pull just that value (tolerating escaped
   # quotes), flatten newlines, collapse runs of spaces.
-  title="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null \
-        | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
-        | head -n 1 \
-        | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//; s/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+  # The opening user message stores its text in one of two shapes, depending on
+  # the Claude Code version:
+  #   "content":"…"                         (current — a plain string)
+  #   "content":[{"type":"text","text":"…"}]  (older / tool-augmented — an array)
+  # Take the first user line, then try the array's "text" field, falling back to
+  # the plain "content" string. (No jq/python — grep+sed only.)
+  local _uline
+  _uline="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null || true)"
+  title="$(printf '%s' "$_uline" \
+        | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+        | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  [ -n "$title" ] || title="$(printf '%s' "$_uline" \
+        | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+        | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  title="$(printf '%s' "$title" \
+        | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
         | tr '\t\n' '  ' \
-        | sed -E 's/  +/ /g; s/^ //; s/ $//' || true)"
+        | sed -E 's/  +/ /g; s/^ //; s/ $//')"
   [ -n "$title" ] || title="(no preview)"
   [ "${#title}" -gt 200 ] && title="${title:0:200}…"
   printf '%s\037%s\037%s\037%s\n' "$sid" "$mtime" "$nmsgs" "$title"

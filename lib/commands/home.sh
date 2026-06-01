@@ -263,10 +263,10 @@ EOF
     # Colour via %b args, never embedded in a %s string (the codes are literal
     # \033 sequences and only printf %b interprets them).
     if [ -n "$launch_alias" ]; then
-      printf '  %-9s clikae run %s %s   %b(or your alias: %s)%b\n' \
+      printf '  %-9s clikae %s %s   %b(or your alias: %s)%b\n' \
         "launch" "$launch_cli" "$launch_profile" "$__C_DIM" "$launch_alias" "$__C_RESET"
     else
-      printf '  %-9s clikae run %s %s\n' "launch" "$launch_cli" "$launch_profile"
+      printf '  %-9s clikae %s %s\n' "launch" "$launch_cli" "$launch_profile"
     fi
   fi
   printf '  %-9s %s\n' "more" "clikae status · clikae doctor · clikae demo · clikae help"
@@ -310,7 +310,7 @@ EOF
 _home_tty_leave() { printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
 
 # Resolve and EXEC the launch for one item row (replaces this process).
-#   tank   -> clikae run <engine> <tank>   (applies the profile env, then execs)
+#   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
 #   agent  -> the CLI's own binary, default config (no tank)
 #   target -> the target's binary (already in the cli field)
 _home_launch() {
@@ -418,7 +418,7 @@ EOF
   from="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c && $6=="1"{print $3; exit}')"
   if [ -z "$from" ]; then
     printf 'No active %s session in this shell to relay from.\n' "$cli"
-    printf 'Open one first (its alias, or `clikae run %s <tank>`), then relay.\n' "$cli"
+    printf 'Open one first (its alias, or `clikae %s <tank>`), then relay.\n' "$cli"
     return 0
   fi
   if [ "$from" = "$profile" ]; then
