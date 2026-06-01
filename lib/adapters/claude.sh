@@ -101,23 +101,31 @@ _claude_meta_for_file() {
   # for a preview; never let a no-match abort under the caller's pipefail.
   nmsgs="$(grep -c '"role"' "$f" 2>/dev/null || true)"
   [ -n "$nmsgs" ] || nmsgs=0
-  # Title = the opening user message. The first line with a user role carries the
-  # prompt as a "text":"..." field; pull just that value (tolerating escaped
-  # quotes), flatten newlines, collapse runs of spaces.
-  # The opening user message stores its text in one of two shapes, depending on
-  # the Claude Code version:
-  #   "content":"…"                         (current — a plain string)
-  #   "content":[{"type":"text","text":"…"}]  (older / tool-augmented — an array)
+  # Title: prefer Claude's OWN ai-generated session title. The transcript carries
+  # a  {"type":"ai-title","aiTitle":"…"}  line — the same human-readable name
+  # Claude shows in its session list (e.g. "Lucky number confirmation"). It's
+  # already in the file, so a real title costs nothing: no local model needed.
+  # Take the LAST one (a session can be re-titled). Sessions/engines without such
+  # a line fall through to the opening user message below.
+  title="$(grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' "$f" 2>/dev/null \
+        | tail -n 1 \
+        | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  # Fallback = the opening user message. The first line with a user role carries
+  # the prompt in one of two shapes, depending on the Claude Code version:
+  #   "content":"…"                          (current — a plain string)
+  #   "content":[{"type":"text","text":"…"}]   (older / tool-augmented — an array)
   # Take the first user line, then try the array's "text" field, falling back to
   # the plain "content" string. (No jq/python — grep+sed only.)
-  local _uline
-  _uline="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null || true)"
-  title="$(printf '%s' "$_uline" \
-        | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
-        | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//')"
-  [ -n "$title" ] || title="$(printf '%s' "$_uline" \
-        | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
-        | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  if [ -z "$title" ]; then
+    local _uline
+    _uline="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null || true)"
+    title="$(printf '%s' "$_uline" \
+          | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+          | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+    [ -n "$title" ] || title="$(printf '%s' "$_uline" \
+          | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+          | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  fi
   title="$(printf '%s' "$title" \
         | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
         | tr '\t\n' '  ' \

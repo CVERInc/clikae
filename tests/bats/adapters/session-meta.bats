@@ -30,6 +30,18 @@ seed_session() {
   } > "$PROJ/$sid.jsonl"
 }
 
+# seed_session_titled <sid> <opening-user-text> <ai-title>
+# Like seed_session, plus Claude's own {"type":"ai-title","aiTitle":"…"} line.
+seed_session_titled() {
+  local sid="$1" text="$2" aititle="$3"
+  {
+    echo '{"type":"summary","summary":"x"}'
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"%s"}]}}\n' "$text"
+    printf '{"type":"ai-title","aiTitle":"%s","sessionId":"%s"}\n' "$aititle" "$sid"
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}'
+  } > "$PROJ/$sid.jsonl"
+}
+
 @test "session_meta finds the newest transcript and extracts the opening title" {
   _setup_session_meta
   seed_session abc12345-0000-0000-0000-000000000000 "hello world"
@@ -45,6 +57,36 @@ seed_session() {
   run adapter_session_meta "$PROFILE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"換油箱測試：接力這場對話"* ]] || false
+}
+
+@test "session_meta prefers Claude's ai-title over the opening prompt" {
+  _setup_session_meta
+  seed_session_titled tit00000-0000-0000-0000-000000000000 "lucky number 65535?" "Lucky number confirmation"
+  run adapter_session_meta "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lucky number confirmation"* ]] || false
+  [[ "$output" != *"lucky number 65535"* ]] || false
+}
+
+@test "session_meta uses the LAST ai-title when a session was re-titled" {
+  _setup_session_meta
+  {
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"start"}]}}\n'
+    printf '{"type":"ai-title","aiTitle":"First title","sessionId":"x"}\n'
+    printf '{"type":"ai-title","aiTitle":"Renamed title","sessionId":"x"}\n'
+  } > "$PROJ/ret00000-0000-0000-0000-000000000000.jsonl"
+  run adapter_session_meta "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Renamed title"* ]] || false
+  [[ "$output" != *"First title"* ]] || false
+}
+
+@test "session_meta keeps an ai-title's CJK intact" {
+  _setup_session_meta
+  seed_session_titled cjt00000-0000-0000-0000-000000000000 "raw prompt" "換油箱續接驗證"
+  run adapter_session_meta "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"換油箱續接驗證"* ]] || false
 }
 
 @test "session_meta can target a specific session id" {

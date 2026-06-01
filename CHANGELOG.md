@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Session titles now use Claude's own AI-generated name.** Claude Code writes
+  a human-readable title into each transcript (`{"type":"ai-title",…}`, e.g.
+  _"Lucky number confirmation"_) — the same name it shows in its session list.
+  `clikae relay`'s preview card and session picker now prefer that title over
+  the raw opening prompt, for free (no local model). Sessions without one — and
+  other engines — fall back to the opening user message as before.
+
 ## [0.5.1] — 2026-06-01
 
 ### Added
