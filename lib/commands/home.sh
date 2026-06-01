@@ -58,6 +58,37 @@ _home_alias_for() {
   ' "$rc"
 }
 
+# _home_recent_row -> the "continue" headline: THIS directory's single most-recent
+# session across ALL engines+tanks, as a launchable row — but only for an engine
+# that can actually RESUME a session by id (defines adapter_resume_args), so the
+# "⏎ 接回" affordance never lies. Title comes from adapter_session_meta (Claude's
+# ai-title when present). Emits one row, or nothing (new dir / not resumable):
+#   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ ␟ ␟ <session-id>
+_home_recent_row() {
+  local name r tank mt best_e="" best_t="" best_mt=0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    r="$(newest_transcript_tank "$name" 2>/dev/null || true)"   # "tank<TAB>mtime" or empty
+    [ -n "$r" ] || continue
+    tank="$(printf '%s' "$r" | cut -f1)"; mt="$(printf '%s' "$r" | cut -f2)"
+    [ -n "$mt" ] || mt=0
+    if [ "$mt" -gt "$best_mt" ] 2>/dev/null; then best_mt="$mt"; best_e="$name"; best_t="$tank"; fi
+  done <<EOF
+$(list_adapters)
+EOF
+  [ -n "$best_e" ] || return 0
+  # Only surface it when that engine can resume a session by id.
+  ( load_adapter "$best_e" >/dev/null 2>&1 && declare -F adapter_resume_args >/dev/null 2>&1 ) || return 0
+  local dir meta sid title
+  dir="$(profile_dir "$best_e" "$best_t")"
+  meta="$( load_adapter "$best_e" >/dev/null 2>&1 && adapter_session_meta "$dir" 2>/dev/null || true )"
+  [ -n "$meta" ] || return 0
+  sid="$(printf '%s' "$meta" | cut -d$'\037' -f1)"
+  title="$(printf '%s' "$meta" | cut -d$'\037' -f4)"
+  [ -n "$sid" ] || return 0
+  printf 'resume\037%s\037%s\037%s\037\037\037%s\n' "$best_e" "$best_t" "$title" "$sid"
+}
+
 # _home_items  -> one canonical launchable row per "thing you can open", fields
 # separated by ASCII Unit Separator (\037):
 #   kind ␟ cli ␟ profile ␟ label ␟ alias ␟ active(1|0) ␟ note
@@ -65,6 +96,9 @@ _home_alias_for() {
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
+  # 0) Continue headline — this dir's most recent resumable session, if any.
+  _home_recent_row
+
   # 1) Tanks — every profile.
   local cli profile path label alias active cur_cli="" active_for="" a
   while IFS=$'\t' read -r cli profile path; do
@@ -197,6 +231,12 @@ _home_render_static() {
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
+      resume)
+        # The "continue" headline: this dir's most recent resumable session.
+        printf '  %b⮡ 續上次%b  %b%s/%s%b · %b"%s"%b · %b⏎ 接回%b\n\n' \
+          "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" \
+          "$__C_DIM" "$label" "$__C_RESET" "$__C_GREEN" "$__C_RESET"
+        ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then
           cur_cli="$cli"
@@ -381,6 +421,21 @@ $1
 EOF
   : "$label" "$alias" "$active" "$note"
   case "$kind" in
+    resume)
+      # Reopen this dir's most recent session: clikae <engine> <tank> -- <resume-args>.
+      # note carries the session id; the engine's adapter_resume_args turns it into
+      # the right flags (Claude: --resume <sid>). cmd_switch forwards everything
+      # after `--` straight to the engine.
+      local -a _rargs=(); local _ra
+      while IFS= read -r _ra; do [ -n "$_ra" ] && _rargs+=("$_ra"); done <<EOF
+$(load_adapter "$cli" >/dev/null 2>&1 && adapter_resume_args "$note" 2>/dev/null || true)
+EOF
+      if [ "${#_rargs[@]}" -gt 0 ]; then
+        exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
+      else
+        exec "$CLIKAE_BIN" "$cli" "$profile"
+      fi
+      ;;
     tank)
       # antigravity tanks aren't env-switchable: `clikae agy <tank>` repoints the
       # symlink and execs agy. Everything else is the bare switch.
@@ -536,6 +591,17 @@ _home_pick_draw() {
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
+      resume)
+        # The "continue" headline — this dir's most recent resumable session, top
+        # of the board so ⏎ reopens it. Title is Claude's ai-title when present.
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b⮡ 續上次%b  %b%s/%s%b · "%s"  %b⏎ 接回%b\n\n' \
+            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label" "$__C_GREEN" "$__C_RESET"
+        else
+          printf '  %b %b⮡ 續上次%b  %b%s/%s · "%s"%b\n\n' \
+            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
+        fi
+        ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}⚠${__C_RESET}"

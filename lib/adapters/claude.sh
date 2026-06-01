@@ -35,6 +35,18 @@ adapter_start_with_prompt() {
   CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$prompt" "$@"
 }
 
+# Optional hook: the CLI flags to RESUME a specific session by id, one per line
+# (each line becomes a separate argv item). The home board's "continue" headline
+# uses this to reopen this directory's most recent session — effectively
+# `clikae claude <tank> -- --resume <sid>`. Defining this hook is what marks an
+# engine as resume-capable on the board, so the "⏎ 接回" affordance only shows up
+# when the session can really be resumed.
+adapter_resume_args() {
+  local sid="$1"
+  [ -n "$sid" ] || return 1
+  printf -- '--resume\n%s\n' "$sid"
+}
+
 # --- session carry-over for `clikae relay` ----------------------------------
 #
 # Claude Code stores each conversation as a JSONL transcript at
