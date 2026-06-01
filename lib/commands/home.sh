@@ -584,7 +584,7 @@ _home_pick_draw() {
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
   printf '\033[H'
-  printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · n new · a alias · d delete · q quit%b\n\n' \
+  printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · x 無痕 · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset
   while IFS=$'\037' read -r kind cli profile label alias active note; do
@@ -715,6 +715,14 @@ _home_pick() {
           return 0
         fi
         ;;
+      x)
+        # 無痕 — open the selected tank with throwaway memory (--ephemeral). A
+        # clean, amnesiac session: this run's long-term memory evaporates on exit.
+        if [ "$sel_kind" = "tank" ]; then
+          _home_tty_leave; trap - EXIT INT TERM
+          exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
+        fi
+        ;;
 
       # --- stay actions: mutate, then return to the live menu ---
       n)
@@ -749,8 +757,9 @@ Usage: clikae            (no arguments)
 
 Opens the home dashboard — your "tank board". On a real terminal it's an
 interactive launcher: ↑/↓ (or j/k) to move, Enter to open the selected tank,
-`r` to relay this shell's session to it, `n` to create a new tank, `a` to rename
-a tank's alias, `d` to delete a tank (asks first), `q`/Esc to quit (leaving the
+`r` to relay this shell's session to it, `x` to open it 無痕 (with throwaway
+memory — a clean, amnesiac session), `n` to create a new tank, `a` to rename a
+tank's alias, `d` to delete a tank (asks first), `q`/Esc to quit (leaving the
 board on screen). It lists
 every profile grouped by CLI (the one active in this shell marked, with account
 and alias name) plus an "Also available" section of relay-capable CLIs/targets
