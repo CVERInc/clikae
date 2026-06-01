@@ -127,6 +127,45 @@ _fake_bin() {
   [[ "$output" == *"active here"* ]]          # work is where the symlink points
 }
 
+# --- L4: over-quota (dry) tank awareness on the board ---------------------------
+
+# Seed a transcript line under a profile's project dir.
+_seed_tx() { # <profile> <jsonl-line>
+  local p="$CLIKAE_HOME/profiles/claude/$1/projects/-Users-x"
+  mkdir -p "$p"
+  printf '%s\n' "$2" >> "$p/s.jsonl"
+}
+
+@test "the board badges an over-quota tank with ⚠ and its reset time" {
+  clikae init claude dry
+  clikae init claude ok
+  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}'
+  _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"⚠"* ]]
+  [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]]
+  [[ "$output" == *"over quota"* ]]
+}
+
+@test "a tank whose limit was superseded by a later success is NOT badged (self-clear)" {
+  clikae init claude back
+  _seed_tx back '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm"}]},"timestamp":"2026-06-01T10:05:00Z"}'
+  _seed_tx back '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"back to work"}]},"timestamp":"2026-06-01T10:10:00Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"⚠"* ]]
+  [[ "$output" != *"over quota"* ]]
+}
+
+@test "a tank that only DISCUSSES a limit is NOT badged (dogfood regression)" {
+  clikae init claude chatty
+  _seed_tx chatty '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"lets talk about what hit your session limit means"}]},"timestamp":"2026-06-01T10:00:00Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"⚠"* ]]
+}
+
 @test "bare clikae changes nothing on disk (read-only)" {
   clikae init claude work
   before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"

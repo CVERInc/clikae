@@ -127,9 +127,35 @@ EOF
   done
 }
 
-# Render the launchable items (passed as $1) as the static tank board.
+# Which tanks are currently over quota? Emit one row per DRY tank:
+#   cli ␟ profile ␟ reset-phrase
+# Backed by limit_profile_dry (lib/core/limit.sh), which scans transcripts — so
+# compute this ONCE per board render, never per keypress. Only claude is scannable
+# today; other clis are never marked dry (we don't guess).
+_home_dry_set() {
+  local cli profile path reset
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    [ "$cli" = "claude" ] || continue
+    if reset="$(limit_profile_dry "$cli" "$path")"; then
+      printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
+    fi
+  done <<EOF
+$(list_all_profiles)
+EOF
+}
+
+# Is <cli>/<profile> in the dry set ($1)? Prints its reset phrase (maybe empty)
+# and returns 0 when dry, 1 when not — so:  if r="$(_home_is_dry "$dry" c p)"; then
+_home_is_dry() {
+  printf '%s\n' "$1" | awk -F'\037' -v c="$2" -v p="$3" \
+    '$1==c && $2==p{print $3; found=1} END{exit !found}'
+}
+
+# Render the launchable items (passed as $1) as the static tank board. The dry
+# set ($2, from _home_dry_set) badges over-quota tanks with ⚠.
 _home_render_static() {
-  local items="$1"
+  local items="$1" dry="$2" any_dry=""
   local n_tanks n_clis
   n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c .)"
   n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c .)"
@@ -149,7 +175,15 @@ _home_render_static() {
           cli_count="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c' | grep -c .)"
           printf '  %b%s%b %b(%s)%b\n' "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$cli_count" "$__C_RESET"
         fi
-        if [ "$active" = "1" ]; then
+        local _reset
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
+          # Over quota: ⚠ badge + the vendor's own reset phrase (a poor relay target).
+          printf '    %b⚠%b %-10s %b%-28s%b %b%s%b  %b%s%b\n' \
+            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
+            "$__C_DIM" "$alias" "$__C_RESET" "$__C_YELLOW" "${_reset:-over quota}" "$__C_RESET"
+          any_dry=1
+          if [ "$active" = "1" ] || [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
+        elif [ "$active" = "1" ]; then
           printf '    %b●%b %-10s %b%-28s%b %b%s%b  %b← active here%b\n' \
             "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$__C_RESET"
@@ -182,6 +216,11 @@ EOF
   local pool
   pool="$(pool_list | awk 'NR>1{printf " → "} {printf "%s", $0} END{ if (NR) print "" }')"
   [ -n "$pool" ] && printf '  %-9s %s\n' "fuel pool" "$pool"
+
+  if [ -n "$any_dry" ]; then
+    printf '  %b⚠ over quota%b — a dry tank is a poor relay target. Open a %b○%b tank, or relay your session onto a fresh one (%bclikae relay%b / the %br%b key).\n' \
+      "$__C_YELLOW" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
+  fi
 
   if [ -n "$launch_cli" ]; then
     # Colour via %b args, never embedded in a %s string (the codes are literal
@@ -384,22 +423,24 @@ _home_new_tank() {
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
 _home_pick_draw() {
-  local items="$1" sel="$2"
+  local items="$1" sel="$2" dry="$3"
   printf '\033[H\033[2J'
   printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
       tank)
         if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
-        if [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; else dot="${__C_DIM}○${__C_RESET}"; fi
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}⚠${__C_RESET}"
+        elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
+        else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%-10s %-28s %s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET"
+          printf '  %b %b %b%-10s %-28s %s%b  %b%s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         else
-          printf '  %b %b %-10s %b%-28s %s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET"
+          printf '  %b %b %-10s %b%-28s %s%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         fi
         ;;
       target)
@@ -438,7 +479,7 @@ _home_stay() {
 }
 
 _home_pick() {
-  local items="$1"
+  local items="$1" dry="$2"
 
   # Restore the terminal on any abnormal exit.
   trap '_home_tty_leave' EXIT
@@ -451,7 +492,7 @@ _home_pick() {
     [ "$n" -gt 0 ] || break                 # nothing left to pick
     [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete
     [ "$sel" -lt 0 ] && sel=0
-    _home_pick_draw "$items" "$sel"
+    _home_pick_draw "$items" "$sel" "$dry"
     IFS= read -rsn1 key || { key="q"; }
     sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
@@ -489,18 +530,18 @@ _home_pick() {
       # --- stay actions: mutate, then return to the live menu ---
       n)
         _home_stay _home_new_tank "$sel_cli"
-        items="$(_home_items)"
+        items="$(_home_items)"; dry="$(_home_dry_set)"
         ;;
       a)
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_rename_alias "$sel_row"
-          items="$(_home_items)"
+          items="$(_home_items)"; dry="$(_home_dry_set)"
         fi
         ;;
       d)
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_remove_tank "$sel_row"
-          items="$(_home_items)"
+          items="$(_home_items)"; dry="$(_home_dry_set)"
         fi
         ;;
     esac
@@ -508,7 +549,7 @@ _home_pick() {
 
   _home_tty_leave; trap - EXIT INT TERM
   # On quit, leave the static board in the normal scrollback.
-  _home_render_static "$items"
+  _home_render_static "$items" "$dry"
 }
 
 cmd_home() {
@@ -544,11 +585,11 @@ EOF
     return 0
   fi
 
-  local items; items="$(_home_items)"
+  local items dry; items="$(_home_items)"; dry="$(_home_dry_set)"
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
-    _home_pick "$items"
+    _home_pick "$items" "$dry"
   else
-    _home_render_static "$items"
+    _home_render_static "$items" "$dry"
   fi
 }
