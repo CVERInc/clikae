@@ -25,26 +25,26 @@ load '../helpers'
 @test "init fails for an unknown CLI" {
   run clikae init nosuchcli work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No built-in adapter"* ]]
+  [[ "$output" == *"No built-in adapter"* ]] || false
 }
 
 @test "init fails when the profile already exists" {
   clikae init claude work
   run clikae init claude work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"already exists"* ]]
+  [[ "$output" == *"already exists"* ]] || false
 }
 
 @test "init rejects a profile name with a leading dot" {
   run clikae init claude .hidden
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Invalid profile name"* ]]
+  [[ "$output" == *"Invalid profile name"* ]] || false
 }
 
 @test "init rejects a profile name with a slash" {
   run clikae init claude a/b
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Invalid profile name"* ]]
+  [[ "$output" == *"Invalid profile name"* ]] || false
 }
 
 @test "init accepts a dotted profile name" {

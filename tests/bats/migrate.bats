@@ -22,8 +22,8 @@ EOF
   seed_legacy
   run clikae migrate --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Migration plan"* ]]
-  [[ "$output" == *"Dry run"* ]]
+  [[ "$output" == *"Migration plan"* ]] || false
+  [[ "$output" == *"Dry run"* ]] || false
   # untouched
   [ -d "$TEST_HOME/.claude-acct-a" ]
   [ ! -d "$CLIKAE_HOME/profiles/claude/a" ]
@@ -79,14 +79,14 @@ EOF
   clikae migrate --force
   run clikae migrate --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no"*"aliases to migrate"* ]] || [[ "$output" == *"No migratable"* ]]
+  [[ "$output" == *"no"*"aliases to migrate"* ]] || [[ "$output" == *"No migratable"* ]] || false
   [ "$(rc_block_count claude.a)" -eq 1 ]
 }
 
 @test "migrate reports nothing to do when there is no rc file" {
   run clikae migrate --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"nothing to migrate"* ]]
+  [[ "$output" == *"nothing to migrate"* ]] || false
 }
 
 @test "migrate refuses to move the dir the CLI is currently using (guard)" {
@@ -95,7 +95,7 @@ EOF
   # of the dirs slated to move — moving it would pull it out from under claude.
   CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a" run clikae migrate --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"slated to move"* ]]
+  [[ "$output" == *"slated to move"* ]] || false
   # The guard fires before anything is touched.
   [ -d "$TEST_HOME/.claude-acct-a" ]
   [ -d "$TEST_HOME/.claude-acct-b" ]
@@ -107,14 +107,14 @@ EOF
   seed_legacy
   CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a/" run clikae migrate --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"slated to move"* ]]
+  [[ "$output" == *"slated to move"* ]] || false
 }
 
 @test "migrate guard still allows a dry run from inside a live session" {
   seed_legacy
   CLAUDE_CONFIG_DIR="$TEST_HOME/.claude-acct-a" run clikae migrate --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Dry run"* ]]
+  [[ "$output" == *"Dry run"* ]] || false
   [ -d "$TEST_HOME/.claude-acct-a" ]
 }
 
@@ -131,7 +131,7 @@ EOF
   clikae init claude a            # pre-existing profile 'a'
   run clikae migrate --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already exists"* ]]
+  [[ "$output" == *"already exists"* ]] || false
   # The pre-existing 'a' profile dir must remain (not overwritten by the move).
   [ -d "$CLIKAE_HOME/profiles/claude/a" ]
   # 'b' still migrates.
@@ -144,7 +144,7 @@ alias claude-gone='CLAUDE_CONFIG_DIR="$HOME/.claude-acct-gone" claude'
 EOF
   run clikae migrate --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"missing"* ]]
+  [[ "$output" == *"missing"* ]] || false
   [ -d "$CLIKAE_HOME/profiles/claude/gone" ]
 }
 
@@ -152,7 +152,7 @@ EOF
   seed_legacy
   run clikae migrate --keep-login --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"carry over each tank's saved login"* ]]
+  [[ "$output" == *"carry over each tank's saved login"* ]] || false
   # still a dry run — nothing moved
   [ -d "$TEST_HOME/.claude-acct-a" ]
 }
@@ -164,7 +164,7 @@ EOF
   mkdir -p "$TEST_HOME/.gh-work"
   run clikae migrate gh --keep-login --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no effect for 'gh'"* ]]
+  [[ "$output" == *"no effect for 'gh'"* ]] || false
 }
 
 @test "migrate --keep-login carries the saved login to the new keychain slot (macOS, stubbed security)" {
@@ -212,7 +212,7 @@ STUB
 
   run clikae migrate --keep-login --force
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Carried over saved login for claude/a"* ]]
+  [[ "$output" == *"Carried over saved login for claude/a"* ]] || false
 
   # The token now lives under the NEW path's slot, unchanged.
   new_svc="Claude Code-credentials-$(printf '%s' "$CLIKAE_HOME/profiles/claude/a" | shasum -a 256 | cut -c1-8)"
@@ -220,5 +220,5 @@ STUB
   [ "$(cat "$STUB_STATE/$new_svc")" = "secret-token-a" ]
 
   # Profile b had no saved login → reported as nothing to carry over.
-  [[ "$output" == *"No saved login to carry over for claude/b"* ]]
+  [[ "$output" == *"No saved login to carry over for claude/b"* ]] || false
 }

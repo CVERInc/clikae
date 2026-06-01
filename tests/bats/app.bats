@@ -19,7 +19,7 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   clikae app claude work --out "$TEST_HOME/Apps"
   run clikae app claude work --out "$TEST_HOME/Apps"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"already exists"* ]]
+  [[ "$output" == *"already exists"* ]] || false
 }
 
 @test "app overwrites an existing .app with --force" {
@@ -38,15 +38,15 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/vercel (prod).app" ]
   run osadecompile "$TEST_HOME/Apps/vercel (prod).app"
-  [[ "$output" == *"vercel --global-config"* ]]
-  [[ "$output" == *"profiles/vercel/prod"* ]]
+  [[ "$output" == *"vercel --global-config"* ]] || false
+  [[ "$output" == *"profiles/vercel/prod"* ]] || false
 }
 
 @test "app fails for a missing profile" {
   macos_only
   run clikae app claude ghost --out "$TEST_HOME/Apps"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Profile not found"* ]]
+  [[ "$output" == *"Profile not found"* ]] || false
 }
 
 @test "app rejects an unknown --terminal target" {
@@ -54,7 +54,7 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   clikae init claude work
   run clikae app claude work --terminal bogus --out "$TEST_HOME/Apps"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unknown --terminal"* ]]
+  [[ "$output" == *"Unknown --terminal"* ]] || false
 }
 
 @test "app --terminal ghostty generates a launcher that goes through open" {
@@ -65,8 +65,8 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/claude (work).app" ]
   run osadecompile "$TEST_HOME/Apps/claude (work).app"
-  [[ "$output" == *"open -na Ghostty.app --args"* ]]
-  [[ "$output" == *"--title='claude (work)'"* ]]
+  [[ "$output" == *"open -na Ghostty.app --args"* ]] || false
+  [[ "$output" == *"--title='claude (work)'"* ]] || false
 }
 
 @test "app respects \$CLIKAE_TERMINAL as the default target" {
@@ -76,7 +76,7 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   CLIKAE_TERMINAL=ghostty run clikae app claude work --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]
   run osadecompile "$TEST_HOME/Apps/claude (work).app"
-  [[ "$output" == *"open -na Ghostty.app"* ]]
+  [[ "$output" == *"open -na Ghostty.app"* ]] || false
 }
 
 @test "app --terminal iterm2 errors clearly when iTerm2 is absent" {
@@ -86,5 +86,5 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   clikae init claude work
   run clikae app claude work --terminal iterm2 --out "$TEST_HOME/Apps"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"iTerm2 not found"* ]]
+  [[ "$output" == *"iTerm2 not found"* ]] || false
 }

@@ -15,7 +15,7 @@ load '../../helpers'
 @test "codex adapter reports env-dir + CODEX_HOME" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"codex"*"env-dir"*"CODEX_HOME"* ]]
+  [[ "$output" == *"codex"*"env-dir"*"CODEX_HOME"* ]] || false
 }
 
 @test "codex alias exports CODEX_HOME at the profile dir" {
@@ -27,7 +27,7 @@ load '../../helpers'
 @test "vercel adapter reports the flag strategy" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"vercel"*"flag"* ]]
+  [[ "$output" == *"vercel"*"flag"* ]] || false
 }
 
 @test "vercel alias injects --global-config after the binary (flag strategy)" {
@@ -54,7 +54,7 @@ load '../../helpers'
   printf '{"auth_mode":"chatgpt","tokens":{"id_token":"hdr.%s.sig"}}\n' "$payload" > "$dir/auth.json"
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"alice@codex.test"* ]]
+  [[ "$output" == *"alice@codex.test"* ]] || false
 }
 
 @test "codex account label is empty (not an error) when there's no id_token" {
@@ -63,31 +63,31 @@ load '../../helpers'
     > "$CLIKAE_HOME/profiles/codex/apikey/auth.json"
   run clikae list
   [ "$status" -eq 0 ]            # no crash under set -eo pipefail
-  [[ "$output" == *"codex"* ]]
+  [[ "$output" == *"codex"* ]] || false
 }
 
 @test "az adapter reports env-dir + AZURE_CONFIG_DIR" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"az"*"env-dir"*"AZURE_CONFIG_DIR"* ]]
+  [[ "$output" == *"az"*"env-dir"*"AZURE_CONFIG_DIR"* ]] || false
 }
 
 @test "pulumi adapter reports env-dir + PULUMI_HOME" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pulumi"*"env-dir"*"PULUMI_HOME"* ]]
+  [[ "$output" == *"pulumi"*"env-dir"*"PULUMI_HOME"* ]] || false
 }
 
 @test "npm adapter reports env-file + NPM_CONFIG_USERCONFIG" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"npm"*"env-file"*"NPM_CONFIG_USERCONFIG"* ]]
+  [[ "$output" == *"npm"*"env-file"*"NPM_CONFIG_USERCONFIG"* ]] || false
 }
 
 @test "terraform adapter reports env-file + TF_CLI_CONFIG_FILE" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"terraform"*"env-file"*"TF_CLI_CONFIG_FILE"* ]]
+  [[ "$output" == *"terraform"*"env-file"*"TF_CLI_CONFIG_FILE"* ]] || false
 }
 
 @test "az alias exports AZURE_CONFIG_DIR at the profile dir" {

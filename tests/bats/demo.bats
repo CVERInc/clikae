@@ -6,12 +6,12 @@ load '../helpers'
 @test "demo runs the full tour end to end" {
   run clikae demo
   [ "$status" -eq 0 ]
-  [[ "$output" == *"guided tour"* ]]
-  [[ "$output" == *"alice@studio.dev"* ]]
-  [[ "$output" == *"bob@studio.dev"* ]]
+  [[ "$output" == *"guided tour"* ]] || false
+  [[ "$output" == *"alice@studio.dev"* ]] || false
+  [[ "$output" == *"bob@studio.dev"* ]] || false
   [[ "$output" == *"active here"* ]]          # the live tank board, alice active
-  [[ "$output" == *"Fuel pool"* ]]
-  [[ "$output" == *"clikae to bob"* ]]
+  [[ "$output" == *"Fuel pool"* ]] || false
+  [[ "$output" == *"clikae to bob"* ]] || false
 }
 
 @test "demo touches nothing in the real CLIKAE_HOME" {
@@ -38,11 +38,11 @@ load '../helpers'
 @test "demo --help explains the sandbox" {
   run clikae demo --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"sandbox"* ]]
+  [[ "$output" == *"sandbox"* ]] || false
 }
 
 @test "demo rejects unexpected arguments" {
   run clikae demo bogus
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unexpected argument"* ]]
+  [[ "$output" == *"Unexpected argument"* ]] || false
 }

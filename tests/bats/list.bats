@@ -6,7 +6,7 @@ load '../helpers'
 @test "list reports nothing when there are no profiles" {
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No tanks yet"* ]]
+  [[ "$output" == *"No tanks yet"* ]] || false
 }
 
 @test "list shows created profiles" {
@@ -14,17 +14,17 @@ load '../helpers'
   clikae init gh personal
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude"* ]]
-  [[ "$output" == *"work"* ]]
-  [[ "$output" == *"gh"* ]]
-  [[ "$output" == *"personal"* ]]
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"work"* ]] || false
+  [[ "$output" == *"gh"* ]] || false
+  [[ "$output" == *"personal"* ]] || false
 }
 
 @test "list -p includes the profile path" {
   clikae init claude work
   run clikae list -p
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$CLIKAE_HOME/profiles/claude/work"* ]]
+  [[ "$output" == *"$CLIKAE_HOME/profiles/claude/work"* ]] || false
 }
 
 @test "list output is sorted" {
@@ -33,7 +33,7 @@ load '../helpers'
   run clikae list
   [ "$status" -eq 0 ]
   # aaa must appear before zzz
-  [[ "$output" == *aaa*zzz* ]]
+  [[ "$output" == *aaa*zzz* ]] || false
 }
 
 # --- --json: machine-readable output for the GUI / scripts --------------------
@@ -48,9 +48,9 @@ load '../helpers'
   clikae init claude work
   run clikae list --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"cli":"claude"'* ]]
-  [[ "$output" == *'"profile":"work"'* ]]
-  [[ "$output" == *"\"path\":\"$CLIKAE_HOME/profiles/claude/work\""* ]]
+  [[ "$output" == *'"cli":"claude"'* ]] || false
+  [[ "$output" == *'"profile":"work"'* ]] || false
+  [[ "$output" == *"\"path\":\"$CLIKAE_HOME/profiles/claude/work\""* ]] || false
   [[ "$output" == *'"account":null'* ]]      # not logged in in the test env
 }
 
@@ -60,7 +60,7 @@ load '../helpers'
     > "$CLIKAE_HOME/profiles/claude/work/.claude.json"
   run clikae list --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"account":"me@example.com"'* ]]
+  [[ "$output" == *'"account":"me@example.com"'* ]] || false
 }
 
 @test "list --json output parses as valid JSON" {

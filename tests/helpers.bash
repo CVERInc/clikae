@@ -16,6 +16,12 @@ setup() {
   export SHELL="/bin/zsh"
   export NO_COLOR=1
   RC_FILE="$TEST_HOME/.zshrc"
+  # Make EVERY assertion count. bats only enforces a test's LAST command, so an
+  # intermediate `[ … ]` (or command) that fails is otherwise silently ignored.
+  # set -e (which persists into the test body — same shell) makes `[ … ]` and
+  # command failures abort the test. NB: bash EXEMPTS `[[ … ]]` from set -e, so
+  # those assertions also carry an explicit `|| false`. See tests/README.md.
+  set -e
 }
 
 teardown() {

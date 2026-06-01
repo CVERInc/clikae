@@ -35,8 +35,8 @@ seed_session() {
   seed_session abc12345-0000-0000-0000-000000000000 "hello world"
   run adapter_session_meta "$PROFILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"abc12345"* ]]
-  [[ "$output" == *"hello world"* ]]
+  [[ "$output" == *"abc12345"* ]] || false
+  [[ "$output" == *"hello world"* ]] || false
 }
 
 @test "session_meta keeps a CJK title intact (no mid-character slicing)" {
@@ -44,7 +44,7 @@ seed_session() {
   seed_session cjc00000-0000-0000-0000-000000000000 "換油箱測試：接力這場對話"
   run adapter_session_meta "$PROFILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"換油箱測試：接力這場對話"* ]]
+  [[ "$output" == *"換油箱測試：接力這場對話"* ]] || false
 }
 
 @test "session_meta can target a specific session id" {
@@ -53,7 +53,7 @@ seed_session() {
   seed_session bbb00000-0000-0000-0000-000000000000 "the second one"
   run adapter_session_meta "$PROFILE" "aaa00000-0000-0000-0000-000000000000"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"the first one"* ]]
+  [[ "$output" == *"the first one"* ]] || false
 }
 
 @test "session_meta returns nonzero when there is no transcript" {
@@ -75,7 +75,7 @@ seed_session() {
     > "$PROJ/nouser00-0000-0000-0000-000000000000.jsonl"
   run adapter_session_meta "$PROFILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"(no preview)"* ]]
+  [[ "$output" == *"(no preview)"* ]] || false
 }
 
 @test "list_sessions returns rows newest-first" {
@@ -86,8 +86,8 @@ seed_session() {
   run adapter_list_sessions "$PROFILE"
   [ "$status" -eq 0 ]
   # newest ("newer one") must be on the first line; older one still listed
-  [[ "${lines[0]}" == *"newer one"* ]]
-  [[ "$output" == *"older one"* ]]
+  [[ "${lines[0]}" == *"newer one"* ]] || false
+  [[ "$output" == *"older one"* ]] || false
 }
 
 @test "list_sessions honours a limit" {
@@ -107,7 +107,7 @@ seed_session() {
   seed_session cjk11111-0000-0000-0000-000000000000 "接力這場對話到另一個帳號"
   run adapter_list_sessions "$PROFILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"接力這場對話到另一個帳號"* ]]
+  [[ "$output" == *"接力這場對話到另一個帳號"* ]] || false
 }
 
 @test "list_sessions returns nonzero when there are no sessions" {

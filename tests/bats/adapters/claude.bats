@@ -14,7 +14,7 @@ load '../../helpers'
 @test "claude adapter reports the env-dir strategy and its env var" {
   run clikae adapters
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude"*"env-dir"*"CLAUDE_CONFIG_DIR"* ]]
+  [[ "$output" == *"claude"*"env-dir"*"CLAUDE_CONFIG_DIR"* ]] || false
 }
 
 @test "info reports a profile count that tracks init" {
@@ -22,7 +22,7 @@ load '../../helpers'
   clikae init gh personal
   run clikae info
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tanks"*"2"* ]]
+  [[ "$output" == *"tanks"*"2"* ]] || false
 }
 
 @test "claude alias exports CLAUDE_CONFIG_DIR at the profile path" {

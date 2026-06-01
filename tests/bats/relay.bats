@@ -91,7 +91,7 @@ _seed_transcript() {
   clikae init claude a
   run clikae relay claude a a
   [ "$status" -ne 0 ]
-  [[ "$output" == *"same tank"* ]]
+  [[ "$output" == *"same tank"* ]] || false
 }
 
 @test "relay errors when a named profile does not exist" {
@@ -99,7 +99,7 @@ _seed_transcript() {
   clikae init claude a
   run clikae relay claude a nope
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not found"* ]]
+  [[ "$output" == *"not found"* ]] || false
 }
 
 @test "relay can't auto-detect source errors helpfully" {
@@ -109,5 +109,5 @@ _seed_transcript() {
   unset CLAUDE_CONFIG_DIR
   run clikae relay claude b
   [ "$status" -ne 0 ]
-  [[ "$output" == *"explicitly"* ]]
+  [[ "$output" == *"explicitly"* ]] || false
 }

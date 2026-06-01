@@ -46,7 +46,7 @@ load '../helpers'
 @test "alias fails when the profile does not exist" {
   run clikae alias claude ghost
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Profile not found"* ]]
+  [[ "$output" == *"Profile not found"* ]] || false
 }
 
 @test "alias backs up an existing rc file before editing" {

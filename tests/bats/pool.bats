@@ -6,7 +6,7 @@ load '../helpers'
 @test "pool add / list / remove round-trips, preserving priority order" {
   run clikae pool list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"empty"* ]]
+  [[ "$output" == *"empty"* ]] || false
 
   clikae pool add claude/a
   clikae pool add claude/b
@@ -14,26 +14,26 @@ load '../helpers'
   run clikae pool list
   [ "$status" -eq 0 ]
   # Order preserved (a before b before codex).
-  [[ "$output" == *"1. claude/a"* ]]
-  [[ "$output" == *"2. claude/b"* ]]
-  [[ "$output" == *"3. codex/work"* ]]
+  [[ "$output" == *"1. claude/a"* ]] || false
+  [[ "$output" == *"2. claude/b"* ]] || false
+  [[ "$output" == *"3. codex/work"* ]] || false
 
   clikae pool remove claude/b
   run clikae pool list
-  [[ "$output" == *"claude/a"* ]]
-  [[ "$output" != *"claude/b"* ]]
-  [[ "$output" == *"codex/work"* ]]
+  [[ "$output" == *"claude/a"* ]] || false
+  [[ "$output" != *"claude/b"* ]] || false
+  [[ "$output" == *"codex/work"* ]] || false
 }
 
 @test "pool add is idempotent and rejects unknown targets" {
   clikae pool add claude/a
   run clikae pool add claude/a
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Already in the pool"* ]]
+  [[ "$output" == *"Already in the pool"* ]] || false
 
   run clikae pool add nosuchcli/x
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unknown handoff target"* ]]
+  [[ "$output" == *"Unknown handoff target"* ]] || false
 }
 
 @test "pool --json emits [] for an empty pool" {
@@ -58,21 +58,21 @@ load '../helpers'
   echo "$output" | python3 -m json.tool >/dev/null
 
   # Positions in priority order.
-  [[ "$output" == *'"position":1,"target":"claude/a","cli":"claude","profile":"a"'* ]]
-  [[ "$output" == *'"position":2,"target":"codex/work","cli":"codex","profile":"work"'* ]]
+  [[ "$output" == *'"position":1,"target":"claude/a","cli":"claude","profile":"a"'* ]] || false
+  [[ "$output" == *'"position":2,"target":"codex/work","cli":"codex","profile":"work"'* ]] || false
   # Launch-only target → profile null.
-  [[ "$output" == *'"position":3,"target":"antigravity","cli":"antigravity","profile":null'* ]]
+  [[ "$output" == *'"position":3,"target":"antigravity","cli":"antigravity","profile":null'* ]] || false
 
   # The human list is unchanged alongside --json.
   run clikae pool list
-  [[ "$output" == *"1. claude/a"* ]]
-  [[ "$output" == *"3. antigravity"* ]]
+  [[ "$output" == *"1. claude/a"* ]] || false
+  [[ "$output" == *"3. antigravity"* ]] || false
 }
 
 @test "pool list --json rejects unexpected arguments" {
   run clikae pool list --bogus
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unexpected argument"* ]]
+  [[ "$output" == *"Unexpected argument"* ]] || false
 }
 
 @test "pool seed fills an empty pool from existing profiles, in name order" {
@@ -86,9 +86,9 @@ load '../helpers'
   run clikae pool list
   [ "$status" -eq 0 ]
   # All switchable profiles added, sorted (claude/a, claude/b, codex/work).
-  [[ "$output" == *"1. claude/a"* ]]
-  [[ "$output" == *"2. claude/b"* ]]
-  [[ "$output" == *"3. codex/work"* ]]
+  [[ "$output" == *"1. claude/a"* ]] || false
+  [[ "$output" == *"2. claude/b"* ]] || false
+  [[ "$output" == *"3. codex/work"* ]] || false
 }
 
 @test "pool seed <cli> only adds that cli's profiles" {
@@ -99,8 +99,8 @@ load '../helpers'
   [ "$status" -eq 0 ]
 
   run clikae pool list
-  [[ "$output" == *"claude/a"* ]]
-  [[ "$output" != *"codex/work"* ]]
+  [[ "$output" == *"claude/a"* ]] || false
+  [[ "$output" != *"codex/work"* ]] || false
 }
 
 @test "pool seed is idempotent and skips what's already pooled" {
@@ -109,7 +109,7 @@ load '../helpers'
 
   run clikae pool seed
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already covers"* ]]
+  [[ "$output" == *"already covers"* ]] || false
 
   # claude/a appears exactly once.
   run clikae pool list
@@ -120,7 +120,7 @@ load '../helpers'
 @test "pool seed with no profiles says so" {
   run clikae pool seed
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No tanks to seed"* ]]
+  [[ "$output" == *"No tanks to seed"* ]] || false
 }
 
 @test "pool_next advances down the priority list" {

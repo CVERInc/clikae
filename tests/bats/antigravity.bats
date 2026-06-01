@@ -16,8 +16,8 @@ _stub_agy() {
 @test "agy: no tanks by default, points at init" {
   run clikae agy
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No agy tanks yet"* ]]
-  [[ "$output" == *"clikae init agy"* ]]
+  [[ "$output" == *"No agy tanks yet"* ]] || false
+  [[ "$output" == *"clikae init agy"* ]] || false
 }
 
 @test "init agy: first time takes ~/.gemini over into a 'default' tank + makes the tank" {
@@ -49,7 +49,7 @@ _stub_agy() {
   run clikae init agy personal
   [ "$status" -eq 0 ]
   [ -d "$CLIKAE_HOME/profiles/antigravity/personal" ]
-  [[ "$output" == *"Created agy tank: personal"* ]]
+  [[ "$output" == *"Created agy tank: personal"* ]] || false
 }
 
 @test "agy <tank> repoints the active symlink" {
@@ -58,7 +58,7 @@ _stub_agy() {
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
   [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]
-  [[ "$output" == *"agy is now on tank: work"* ]]
+  [[ "$output" == *"agy is now on tank: work"* ]] || false
 }
 
 @test "agy <tank> rejects an unknown tank" {
@@ -66,7 +66,7 @@ _stub_agy() {
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
   run clikae agy nope
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No such agy tank"* ]]
+  [[ "$output" == *"No such agy tank"* ]] || false
 }
 
 @test "agy --release restores a real ~/.gemini from the active tank, keeps tanks, clears consent" {
@@ -100,7 +100,7 @@ _stub_agy() {
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1          # default active, work exists
   run clikae remove agy default -f
   [ "$status" -ne 0 ]
-  [[ "$output" == *"active agy tank"* ]]
+  [[ "$output" == *"active agy tank"* ]] || false
 }
 
 @test "clikae tanks lists agy tanks without crashing (no adapter regression)" {
@@ -109,5 +109,5 @@ _stub_agy() {
   run clikae tanks
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]]          # canonical engine name, not 'antigravity'
-  [[ "$output" == *"work"* ]]
+  [[ "$output" == *"work"* ]] || false
 }

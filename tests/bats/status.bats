@@ -6,7 +6,7 @@ load '../helpers'
 @test "status reports nothing when there are no profiles" {
   run clikae status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No tanks yet"* ]]
+  [[ "$output" == *"No tanks yet"* ]] || false
 }
 
 @test "status shows (default) when the env var is unset" {
@@ -14,31 +14,31 @@ load '../helpers'
   unset CLAUDE_CONFIG_DIR
   run clikae status claude
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude"* ]]
-  [[ "$output" == *"(default)"* ]]
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"(default)"* ]] || false
 }
 
 @test "status resolves a path env var to its profile (env-dir)" {
   clikae init claude work
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/work" run clikae status claude
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude"* ]]
-  [[ "$output" == *"work"* ]]
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"work"* ]] || false
 }
 
 @test "status reports (external) when the path is not a clikae profile" {
   clikae init claude work
   CLAUDE_CONFIG_DIR="/tmp/not-a-clikae-profile" run clikae status claude
   [ "$status" -eq 0 ]
-  [[ "$output" == *"(external)"* ]]
+  [[ "$output" == *"(external)"* ]] || false
 }
 
 @test "status resolves an env-var strategy (aws) to the profile name" {
   clikae init aws work
   AWS_PROFILE="work" run clikae status aws
   [ "$status" -eq 0 ]
-  [[ "$output" == *"aws"* ]]
-  [[ "$output" == *"work"* ]]
+  [[ "$output" == *"aws"* ]] || false
+  [[ "$output" == *"work"* ]] || false
 }
 
 @test "status with no args lists every CLI that has a profile" {
@@ -47,8 +47,8 @@ load '../helpers'
   unset CLAUDE_CONFIG_DIR GH_CONFIG_DIR
   run clikae status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude"* ]]
-  [[ "$output" == *"gh"* ]]
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"gh"* ]] || false
 }
 
 # --- --json: machine-readable output for the GUI / scripts --------------------
@@ -64,10 +64,10 @@ load '../helpers'
   unset CLAUDE_CONFIG_DIR
   run clikae status claude --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"state":"default"'* ]]
-  [[ "$output" == *'"profile":null'* ]]
-  [[ "$output" == *'"envVar":"CLAUDE_CONFIG_DIR"'* ]]
-  [[ "$output" == *'"envValue":null'* ]]
+  [[ "$output" == *'"state":"default"'* ]] || false
+  [[ "$output" == *'"profile":null'* ]] || false
+  [[ "$output" == *'"envVar":"CLAUDE_CONFIG_DIR"'* ]] || false
+  [[ "$output" == *'"envValue":null'* ]] || false
 }
 
 @test "status --json: active state resolves profile + account label" {
@@ -76,26 +76,26 @@ load '../helpers'
   printf '{\n  "oauthAccount": { "emailAddress": "me@example.com" }\n}\n' > "$d/.claude.json"
   CLAUDE_CONFIG_DIR="$d" run clikae status claude --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"state":"active"'* ]]
-  [[ "$output" == *'"profile":"work"'* ]]
-  [[ "$output" == *'"account":"me@example.com"'* ]]
-  [[ "$output" == *"\"envValue\":\"$d\""* ]]
+  [[ "$output" == *'"state":"active"'* ]] || false
+  [[ "$output" == *'"profile":"work"'* ]] || false
+  [[ "$output" == *'"account":"me@example.com"'* ]] || false
+  [[ "$output" == *"\"envValue\":\"$d\""* ]] || false
 }
 
 @test "status --json: external state when var points outside clikae" {
   clikae init claude work
   CLAUDE_CONFIG_DIR="/tmp/not-a-clikae-profile" run clikae status claude --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"state":"external"'* ]]
-  [[ "$output" == *'"profile":null'* ]]
+  [[ "$output" == *'"state":"external"'* ]] || false
+  [[ "$output" == *'"profile":null'* ]] || false
 }
 
 @test "status --json: flag-strategy adapter reports flag state, null envVar" {
   clikae init vercel prod
   run clikae status vercel --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"state":"flag"'* ]]
-  [[ "$output" == *'"envVar":null'* ]]
+  [[ "$output" == *'"state":"flag"'* ]] || false
+  [[ "$output" == *'"envVar":null'* ]] || false
 }
 
 @test "status --json output parses as valid JSON" {

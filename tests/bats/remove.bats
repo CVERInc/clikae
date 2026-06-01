@@ -50,7 +50,7 @@ load '../helpers'
   clikae init claude work
   run clikae remove claude work </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Aborted"* ]]
+  [[ "$output" == *"Aborted"* ]] || false
   [ -d "$CLIKAE_HOME/profiles/claude/work" ]
 }
 

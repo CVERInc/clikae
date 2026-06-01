@@ -24,7 +24,7 @@ _seed() {
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No genuine limit marker"* ]]
+  [[ "$output" == *"No genuine limit marker"* ]] || false
 }
 
 @test "watch --check finds a genuine synthetic limit marker" {
@@ -35,8 +35,8 @@ _seed() {
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"genuine limit marker IS present"* ]]
-  [[ "$output" == *"hit your session limit"* ]]
+  [[ "$output" == *"genuine limit marker IS present"* ]] || false
+  [[ "$output" == *"hit your session limit"* ]] || false
 }
 
 @test "watch --check ignores a session that only DISCUSSES a limit (dogfood regression)" {
@@ -49,7 +49,7 @@ _seed() {
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No genuine limit marker"* ]]
+  [[ "$output" == *"No genuine limit marker"* ]] || false
 }
 
 @test "watch --check honours a custom --pattern" {
@@ -60,7 +60,7 @@ _seed() {
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
     run clikae watch claude --check --pattern 'FUEL_EMPTY_XYZ'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"marker IS present"* ]]
+  [[ "$output" == *"marker IS present"* ]] || false
 }
 
 @test "watch errors when there's no next tank and no --to" {
@@ -71,7 +71,7 @@ _seed() {
   # Pool empty and claude/a not in it -> pool_next returns first (none) -> error.
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No next tank"* ]]
+  [[ "$output" == *"No next tank"* ]] || false
 }
 
 @test "watch errors when there's no session to watch" {
@@ -80,7 +80,7 @@ _seed() {
   cd "$empty"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --to codex/work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"nothing to watch"* ]]
+  [[ "$output" == *"nothing to watch"* ]] || false
 }
 
 # --- launch-only target (antigravity): watch its limit LOG, not a transcript ---
@@ -94,27 +94,27 @@ _agy_log() { # write $1 as agy's cli.log under the test HOME
   _agy_log "I0531 17:03:01 info: Print mode: silent auth succeeded"
   run clikae watch antigravity --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No limit marker"* ]]
+  [[ "$output" == *"No limit marker"* ]] || false
 }
 
 @test "watch antigravity --check finds the confirmed quota marker" {
   _agy_log "E0531 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Contact your administrator to enable overages. Resets in 2h23m58s."
   run clikae watch antigravity --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"marker IS present"* ]]
-  [[ "$output" == *"RESOURCE_EXHAUSTED"* ]]
-  [[ "$output" == *"Individual quota reached"* ]]
+  [[ "$output" == *"marker IS present"* ]] || false
+  [[ "$output" == *"RESOURCE_EXHAUSTED"* ]] || false
+  [[ "$output" == *"Individual quota reached"* ]] || false
 }
 
 @test "watch antigravity rejects a <profile> (single-account target)" {
   run clikae watch antigravity somelabel --check
   [ "$status" -ne 0 ]
-  [[ "$output" == *"single-account target"* ]]
+  [[ "$output" == *"single-account target"* ]] || false
 }
 
 @test "watch antigravity errors when there's no log yet" {
   # No ~/.gemini log seeded; follow mode must fail fast, not hang.
   run clikae watch antigravity --to codex/work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Nothing to watch"* ]]
+  [[ "$output" == *"Nothing to watch"* ]] || false
 }

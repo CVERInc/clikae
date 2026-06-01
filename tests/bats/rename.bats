@@ -33,27 +33,27 @@ load '../helpers'
   clikae init claude cver
   run clikae rename claude a cver --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"already exists"* ]]
+  [[ "$output" == *"already exists"* ]] || false
 }
 
 @test "rename refuses when the source is missing" {
   run clikae rename claude ghost cver --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not found"* ]]
+  [[ "$output" == *"not found"* ]] || false
 }
 
 @test "rename refuses the same name" {
   clikae init claude a
   run clikae rename claude a a --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"same"* ]]
+  [[ "$output" == *"same"* ]] || false
 }
 
 @test "rename refuses to move a profile in use in this shell" {
   clikae init claude a
   run env CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" "$CLIKAE_BIN" rename claude a cver --force
   [ "$status" -ne 0 ]
-  [[ "$output" == *"currently points"* ]]
+  [[ "$output" == *"currently points"* ]] || false
   # nothing moved
   [ -d "$CLIKAE_HOME/profiles/claude/a" ]
 }
@@ -70,7 +70,7 @@ load '../helpers'
   printf '{"oauthAccount":{"emailAddress":"hi@cver.net"}}' > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"hi@cver.net"* ]]
+  [[ "$output" == *"hi@cver.net"* ]] || false
 }
 
 @test "list reads the account label from pretty-printed .claude.json (real format)" {
@@ -84,12 +84,12 @@ load '../helpers'
   printf '{\n  "numStartups": 3\n}\n' > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"spaced@cver.net"* ]]
+  [[ "$output" == *"spaced@cver.net"* ]] || false
 }
 
 @test "list shows a dash when no account is detectable" {
   clikae init gh personal
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"gh"*"personal"*"-"* ]]
+  [[ "$output" == *"gh"*"personal"*"-"* ]] || false
 }

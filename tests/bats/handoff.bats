@@ -34,15 +34,15 @@ _seed_transcript() {
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude
   [ "$status" -eq 0 ]
   # Real prompts present, in order.
-  [[ "$output" == *"first real prompt"* ]]
-  [[ "$output" == *"second real prompt"* ]]
+  [[ "$output" == *"first real prompt"* ]] || false
+  [[ "$output" == *"second real prompt"* ]] || false
   # Noise filtered out.
-  [[ "$output" != *"SHOULD NOT APPEAR"* ]]
-  [[ "$output" != *"/clear"* ]]
+  [[ "$output" != *"SHOULD NOT APPEAR"* ]] || false
+  [[ "$output" != *"/clear"* ]] || false
   # Reliable metadata.
-  [[ "$output" == *"$work"* ]]
-  [[ "$output" == *"main"* ]]
-  [[ "$output" == *"2.1.158"* ]]
+  [[ "$output" == *"$work"* ]] || false
+  [[ "$output" == *"main"* ]] || false
+  [[ "$output" == *"2.1.158"* ]] || false
 }
 
 @test "handoff auto-detects the profile from CLAUDE_CONFIG_DIR" {
@@ -52,7 +52,7 @@ _seed_transcript() {
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude
   [ "$status" -eq 0 ]
-  [[ "$output" == *"second real prompt"* ]]
+  [[ "$output" == *"second real prompt"* ]] || false
 }
 
 @test "handoff pipes the session to a summarizer and uses its output" {
@@ -64,9 +64,9 @@ _seed_transcript() {
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
     run clikae handoff claude --summarizer 'cat >/dev/null; echo BRIEF_FROM_MODEL'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BRIEF_FROM_MODEL"* ]]
+  [[ "$output" == *"BRIEF_FROM_MODEL"* ]] || false
   # The model output replaces the raw extract entirely.
-  [[ "$output" != *"raw extract"* ]]
+  [[ "$output" != *"raw extract"* ]] || false
 }
 
 @test "handoff falls back to raw when the summarizer emits nothing" {
@@ -77,8 +77,8 @@ _seed_transcript() {
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
     run clikae handoff claude --summarizer 'true'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"raw extract"* ]]
-  [[ "$output" == *"second real prompt"* ]]
+  [[ "$output" == *"raw extract"* ]] || false
+  [[ "$output" == *"second real prompt"* ]] || false
 }
 
 @test "handoff writes to --out" {
@@ -148,7 +148,7 @@ STUB
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude --to antigravity/foo
   [ "$status" -ne 0 ]
-  [[ "$output" == *"single-account handoff target"* ]]
+  [[ "$output" == *"single-account handoff target"* ]] || false
 }
 
 @test "handoff --to an unknown target errors clearly" {
@@ -158,7 +158,7 @@ STUB
   cd "$work"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude --to nosuchcli
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unknown handoff target"* ]]
+  [[ "$output" == *"Unknown handoff target"* ]] || false
 }
 
 @test "handoff --to errors when the target can't be seeded with a prompt" {
@@ -170,7 +170,7 @@ STUB
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
     run clikae handoff claude --to aws/work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"can't be started from a handoff brief"* ]]
+  [[ "$output" == *"can't be started from a handoff brief"* ]] || false
 }
 
 @test "handoff errors when there's no session for this directory" {
@@ -179,5 +179,5 @@ STUB
   cd "$empty"
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No session for this directory"* ]]
+  [[ "$output" == *"No session for this directory"* ]] || false
 }

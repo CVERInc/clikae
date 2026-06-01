@@ -7,9 +7,9 @@ load '../helpers'
 @test "bare clikae with no profiles shows the welcome + first step" {
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No tanks yet"* ]]
-  [[ "$output" == *"clikae init"* ]]
-  [[ "$output" == *"13 engines"* ]]
+  [[ "$output" == *"No tanks yet"* ]] || false
+  [[ "$output" == *"clikae init"* ]] || false
+  [[ "$output" == *"13 engines"* ]] || false
 }
 
 @test "bare clikae with profiles shows the tank board grouped by CLI" {
@@ -19,20 +19,20 @@ load '../helpers'
   run clikae
   [ "$status" -eq 0 ]
   # Header summary: 3 tanks across 2 engines.
-  [[ "$output" == *"3 tanks across 2 engines"* ]]
-  [[ "$output" == *"claude"* ]]
-  [[ "$output" == *"work"* ]]
-  [[ "$output" == *"personal"* ]]
-  [[ "$output" == *"codex"* ]]
+  [[ "$output" == *"3 tanks across 2 engines"* ]] || false
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"work"* ]] || false
+  [[ "$output" == *"personal"* ]] || false
+  [[ "$output" == *"codex"* ]] || false
   # No tank is active in this clean shell — nothing marked "active here".
-  [[ "$output" != *"active here"* ]]
+  [[ "$output" != *"active here"* ]] || false
 }
 
 @test "the tank active in THIS shell is marked" {
   clikae init claude work
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/work" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"active here"* ]]
+  [[ "$output" == *"active here"* ]] || false
 }
 
 @test "the fuel-pool order is shown when a pool is set" {
@@ -41,18 +41,18 @@ load '../helpers'
   clikae pool add claude/spare
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"fuel pool"* ]]
-  [[ "$output" == *"claude/work → claude/spare"* ]]
+  [[ "$output" == *"fuel pool"* ]] || false
+  [[ "$output" == *"claude/work → claude/spare"* ]] || false
 }
 
 @test "dashboard is reachable by name and via --help" {
   run clikae dashboard
   [ "$status" -eq 0 ]
-  [[ "$output" == *"No tanks yet"* ]]
+  [[ "$output" == *"No tanks yet"* ]] || false
 
   run clikae home --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"home dashboard"* ]]
+  [[ "$output" == *"home dashboard"* ]] || false
 }
 
 # A fake executable on PATH, so "installed?" checks are deterministic in CI.
@@ -68,8 +68,8 @@ _fake_bin() {
   clikae alias claude solo --name mysolo     # custom alias name
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude-work"* ]]
-  [[ "$output" == *"mysolo"* ]]
+  [[ "$output" == *"claude-work"* ]] || false
+  [[ "$output" == *"mysolo"* ]] || false
 }
 
 @test "Also available lists a relay-capable CLI with no tank (codex)" {
@@ -77,9 +77,9 @@ _fake_bin() {
   _fake_bin codex                            # codex installed, no profile
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Also available"* ]]
-  [[ "$output" == *"codex"* ]]
-  [[ "$output" == *"opens default"* ]]
+  [[ "$output" == *"Also available"* ]] || false
+  [[ "$output" == *"codex"* ]] || false
+  [[ "$output" == *"opens default"* ]] || false
 }
 
 @test "Also available excludes non-agent tools (gh) even if installed" {
@@ -88,7 +88,7 @@ _fake_bin() {
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   # gh is a tool, not a session tank — it must not be offered as launchable.
-  [[ "$output" != *"gh"* ]]
+  [[ "$output" != *"gh"* ]] || false
 }
 
 @test "a single-account target on PATH shows as its own group (agy)" {
@@ -96,8 +96,8 @@ _fake_bin() {
   _fake_bin agy
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"agy"* ]]
-  [[ "$output" == *"single-account"* ]]
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" == *"single-account"* ]] || false
   [[ "$output" == *"◈"* ]]                 # rendered as a launch target, not a tank
 }
 
@@ -111,7 +111,7 @@ _fake_bin() {
   local items; items="$(printf 'tank\037claude\037work\037me@x\037claude-work\0371\037\n')"
   run _home_render_static "$items"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"launch"* ]]
+  [[ "$output" == *"launch"* ]] || false
   [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
 }
 
@@ -122,8 +122,8 @@ _fake_bin() {
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"antigravity"* ]]
-  [[ "$output" == *"work"* ]]
+  [[ "$output" == *"antigravity"* ]] || false
+  [[ "$output" == *"work"* ]] || false
   [[ "$output" == *"active here"* ]]          # work is where the symlink points
 }
 
@@ -143,9 +143,9 @@ _seed_tx() { # <profile> <jsonl-line>
   _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"⚠"* ]]
-  [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]]
-  [[ "$output" == *"over quota"* ]]
+  [[ "$output" == *"⚠"* ]] || false
+  [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"over quota"* ]] || false
 }
 
 @test "a tank whose limit was superseded by a later success is NOT badged (self-clear)" {
@@ -154,8 +154,8 @@ _seed_tx() { # <profile> <jsonl-line>
   _seed_tx back '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"back to work"}]},"timestamp":"2026-06-01T10:10:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"⚠"* ]]
-  [[ "$output" != *"over quota"* ]]
+  [[ "$output" != *"⚠"* ]] || false
+  [[ "$output" != *"over quota"* ]] || false
 }
 
 @test "a tank that only DISCUSSES a limit is NOT badged (dogfood regression)" {
@@ -163,7 +163,7 @@ _seed_tx() { # <profile> <jsonl-line>
   _seed_tx chatty '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"lets talk about what hit your session limit means"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"⚠"* ]]
+  [[ "$output" != *"⚠"* ]] || false
 }
 
 # Seed agy's limit log (cli.log) under the test HOME — agy records its quota
@@ -179,8 +179,8 @@ _agy_log() { # <line>
   _agy_log "E0531 log.go:398] RESOURCE_EXHAUSTED (code 429): Individual quota reached. Contact your administrator to enable overages. Resets in 3h32m48s."
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"agy"* ]]
-  [[ "$output" == *"⚠"* ]]
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" == *"⚠"* ]] || false
   [[ "$output" == *"Resets in 3h32m48s"* ]]   # the vendor's verbatim reset phrase
 }
 
@@ -190,8 +190,8 @@ _agy_log() { # <line>
   _agy_log "I0531 log.go:1] starting conversation update stream — all normal"
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"agy"* ]]
-  [[ "$output" != *"⚠"* ]]
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" != *"⚠"* ]] || false
   [[ "$output" == *"◈"* ]]                     # plain launch glyph, not a warning
 }
 
@@ -206,6 +206,6 @@ _agy_log() { # <line>
 
 @test "an unknown subcommand still falls back to help" {
   run clikae definitely-not-a-command
-  [[ "$output" == *"Unknown command"* ]]
-  [[ "$output" == *"switch <engine> to <tank>"* ]]
+  [[ "$output" == *"Unknown command"* ]] || false
+  [[ "$output" == *"switch <engine> to <tank>"* ]] || false
 }
