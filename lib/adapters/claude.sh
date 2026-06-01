@@ -56,6 +56,15 @@ _claude_project_slug() {
   printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
 }
 
+# Optional hook: where Claude Code keeps THIS directory's long-term memory, for
+# `clikae <engine> <tank> --ephemeral`. Same projects/<slug> layout as transcripts
+# (slug = $PWD slugified); memory lives in a `memory/` subdir. Defining this hook
+# is what marks an engine as ephemeral-capable.
+adapter_memory_dir() {
+  local dir="$1"
+  printf '%s\n' "$dir/projects/$(_claude_project_slug "$PWD")/memory"
+}
+
 # Optional hook: print the path to the *current directory's* most recent
 # transcript under the given config dir, or return non-zero if there is none.
 # Used by `clikae relay` (to carry/resume a session) and `clikae handoff` (to

@@ -63,6 +63,17 @@ The verb is the program name (clikae = "switch"), so none is typed.
   clikae claude work            switch claude to the 'work' tank and run it
   clikae claude                 if claude has one tank, use it; else list them
   clikae claude work -- --help  pass everything after -- straight to the engine
+  clikae claude work --ephemeral  run with throwaway memory (see below)
+
+Options:
+  --ephemeral   Run with EPHEMERAL memory: this session's long-term memory goes
+                to a throwaway that's discarded on exit, and the tank's real
+                memory is left untouched. Login and transcripts are normal — only
+                the memory store is throwaway. (Honest scope: clikae guarantees
+                the memory dir is throwaway; it can't promise the engine remembers
+                nothing *anywhere* — caches, shell history, etc. are out of reach.)
+                Supported only for engines clikae knows the memory layout of
+                (claude). Runs the engine as a child (not exec) so cleanup runs.
 
 To carry your current session onto another tank instead of starting fresh,
 use `clikae to` (see: clikae help to).
@@ -71,14 +82,15 @@ EOF
 
 cmd_switch() {
   local engine="$1"; shift || true
-  local tank=""
+  local tank="" ephemeral=0
   local -a passthru=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --)        shift; passthru=("$@"); break ;;
-      -h|--help) _switch_help; return 0 ;;
-      -*)        log_fail "Unknown flag: $1  (engine flags go after --)" ;;
-      *)         if [ -z "$tank" ]; then tank="$1"; shift; else break; fi ;;
+      --)          shift; passthru=("$@"); break ;;
+      -h|--help)   _switch_help; return 0 ;;
+      --ephemeral) ephemeral=1; shift ;;
+      -*)          log_fail "Unknown flag: $1  (engine flags go after --)" ;;
+      *)           if [ -z "$tank" ]; then tank="$1"; shift; else break; fi ;;
     esac
   done
 
@@ -115,9 +127,50 @@ cmd_switch() {
     _switch_dry_guard "$engine" "$current" "$tank"
   fi
 
-  # Fresh switch: apply the tank's env and exec the engine.
+  # Fresh switch: apply the tank's env and run the engine.
   local d
   d="$(ensure_profile --require "$engine" "$tank")"
   load_adapter "$engine"
-  adapter_run "$d" "${passthru[@]}"
+
+  if [ "$ephemeral" -eq 1 ]; then
+    _switch_run_ephemeral "$engine" "$d" "${passthru[@]}"
+    return $?
+  fi
+
+  adapter_run "$d" "${passthru[@]}"   # execs
+}
+
+# Run the engine with EPHEMERAL memory: point its memory dir at a throwaway that's
+# discarded on exit; the tank's real memory is stashed aside and restored. Unlike
+# the normal switch we DON'T exec — clikae stays as the parent so cleanup can run
+# when the engine quits. See docs/grammar.md §10.4.
+_switch_run_ephemeral() {
+  local engine="$1" d="$2"; shift 2
+  declare -F adapter_memory_dir >/dev/null \
+    || log_fail "--ephemeral isn't supported for '$engine' (clikae doesn't know its memory layout)."
+  local mem stash throwaway
+  mem="$(adapter_memory_dir "$d")"
+  [ -n "$mem" ] || log_fail "--ephemeral: '$engine' reported no memory dir for this directory."
+  stash="$mem.clikae-ephemeral-stash"
+
+  mkdir -p "$(dirname "$mem")"
+  # Self-heal a crashed prior run: a leftover symlink + a stash holding the real
+  # memory. Remove the dangling link and put the real memory back first.
+  [ -L "$mem" ] && rm -f "$mem"
+  [ -d "$stash" ] && [ ! -e "$mem" ] && mv "$stash" "$mem"
+  # Stash the real memory (if any) and point at a throwaway.
+  [ -e "$mem" ] && [ ! -L "$mem" ] && mv "$mem" "$stash"
+  throwaway="$(mktemp -d "${TMPDIR:-/tmp}/clikae-ephemeral.XXXXXX")"
+  ln -s "$throwaway" "$mem"
+
+  # Cleanup on exit, with literal paths captured now (survives scope). The parent
+  # ignores INT so Ctrl-C reaches the engine; cleanup fires on the parent's exit.
+  # shellcheck disable=SC2064
+  trap "rm -f '$mem'; [ -d '$stash' ] && mv '$stash' '$mem'; rm -rf '$throwaway'" EXIT
+  trap '' INT
+
+  log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
+  log_dim "(login & transcript are normal; the tank's real memory is untouched.)"
+  # Run as a CHILD (subshell exec), so the parent resumes and the EXIT trap fires.
+  ( adapter_run "$d" "$@" ) || true
 }

@@ -388,25 +388,31 @@ reviewable + reversible, never a silent background rewrite.
   doesn't escape translation; it minimises it by picking the most-neutral format
   as the anchor. (B is the heavy version reached from another door.)
 
-### 10.4 Ephemeral memory (the "evaporate" mode)
+### 10.4 Ephemeral memory (the "evaporate" mode) — ✅ SHIPPED
 
 The surgical power user wants a model that **remembers nothing**. clikae already
 owns the config-dir indirection, so pointing the `memory` subdir at a throwaway
-(tmpfs / wiped-on-exit dir) is trivial — same primitive, third direction. Sweet
-spot: **logged-in but amnesiac** — keep auth (Keychain + `.claude.json`), overlay
-only `projects/<slug>/memory` as ephemeral.
+is trivial — same primitive, third direction. **Shipped as
+`clikae <engine> <tank> --ephemeral`** (`lib/commands/switch.sh`): it stashes the
+tank's real `projects/<slug>/memory` aside, symlinks a `mktemp -d` throwaway in
+its place, runs the engine **as a child** (not `exec`, so cleanup runs), and on
+exit restores the real memory + wipes the throwaway. A crashed run self-heals on
+the next `--ephemeral`. Login + transcripts are normal — **only memory is
+throwaway**. Engine-gated by a new optional hook `adapter_memory_dir <dir>`
+(claude defines it; others reject `--ephemeral` cleanly). bats in
+`tests/bats/ephemeral.bats`.
 
-**Honest framing (don't overclaim):** clikae can guarantee *the memory subdir is
-throwaway* — call it **ephemeral memory**. It can NOT guarantee "the model
-remembers nothing anywhere" (caches, shell history, telemetry, Keychain live
-outside clikae's reach). Promise only what's kept.
+**Honest framing (shipped as written):** clikae guarantees *the memory dir is
+throwaway* — it's **ephemeral memory**, NOT "remembers nothing anywhere" (caches,
+shell history, telemetry, Keychain are outside reach). The `--help`/docs promise
+only what's kept.
 
 ### 10.5 Shipping order
 
-1. **Ephemeral memory** first — smallest, zero model/translation (pure config-dir
-   indirection, clikae's home turf), immediate value for the surgical user.
+1. ✅ **Ephemeral memory** — SHIPPED (`--ephemeral`; smallest, zero
+   model/translation, immediate value for the surgical user).
 2. **Light per-`to` memory injection** — the local-translator proving ground
-   (`handoff`++).
+   (`handoff`++). NEXT.
 3. **Heavy canonical store** (= idea B) — only once the local bridge is proven
    reliable and the disposable slice turns out not to be enough.
 

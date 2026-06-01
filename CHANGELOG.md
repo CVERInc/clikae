@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae <engine> <tank> --ephemeral` — run with throwaway memory.** For the
+  leave-no-trace run: the engine's long-term memory is pointed at a `mktemp -d`
+  throwaway that's discarded on exit, while the tank's real memory is stashed
+  aside and restored untouched. Login and transcripts are normal — only the
+  memory store is throwaway. Runs the engine as a child (not `exec`) so cleanup
+  fires; a crashed run self-heals on the next `--ephemeral`. Engine-gated by a new
+  optional adapter hook `adapter_memory_dir` (claude defines it; others reject it
+  cleanly). Honest scope: clikae guarantees the *memory dir* is throwaway, not
+  that the engine "remembers nothing anywhere" (caches/history/Keychain are out of
+  reach). First of the §10 "memory control plane" (docs/grammar.md §10.4); bats in
+  `tests/bats/ephemeral.bats`.
+
 - **The fuel-tank grammar — clikae is now the verb.** The name is 切り替え
   (*switching*), so the headline action carries no verb of its own: **`clikae
   <engine> <tank>`** switches an engine to one of your tanks and runs it (`run` is

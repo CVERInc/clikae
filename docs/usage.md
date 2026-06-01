@@ -52,6 +52,7 @@ plain, conventional verbs.
 | Command | What it does |
 |---|---|
 | `<engine> <tank> [-- args]` | Switch `<engine>` to `<tank>` and run it. The bare verb. (`run` is a hidden alias.) |
+| `<engine> <tank> --ephemeral` | Switch and run with **ephemeral memory** — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below. |
 | `<engine>` | One tank → use it; several → list them; none → offer to create. |
 | `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
 
@@ -286,6 +287,29 @@ clikae rename claude a cver        # a → cver; login + alias follow
 It refuses if the new name is taken or if that engine is currently using the tank
 in this shell (run it from a fresh shell). A pre-existing `.app` launcher is left
 alone but flagged — recreate it with `clikae app claude cver`.
+
+## Ephemeral memory (`--ephemeral`)
+
+For the surgical, leave-no-trace run: `clikae claude work --ephemeral` switches to
+the tank and runs it, but points the engine's **long-term memory** at a throwaway
+directory that's discarded when the engine quits. The tank's real memory is
+stashed aside and restored, untouched.
+
+```bash
+clikae claude work --ephemeral     # incognito: nothing learned this session is kept
+```
+
+- **Login and transcripts are normal** — only the *memory store* is throwaway
+  (you're still you, the conversation is still logged/resumable).
+- **Honest scope:** clikae guarantees the *memory directory* is a throwaway. It
+  can't promise the engine "remembers nothing anywhere" — caches, shell history,
+  telemetry, the macOS Keychain are outside clikae's reach. So it's *ephemeral
+  memory*, not guaranteed total amnesia.
+- Supported only for engines whose memory layout clikae knows (currently
+  **claude**); others say so and exit.
+- Unlike a normal switch (which `exec`s the engine), `--ephemeral` runs it as a
+  child so cleanup can run on exit. A crashed run self-heals on the next
+  `--ephemeral` (the real memory is recovered from its stash).
 
 ## How it works
 
