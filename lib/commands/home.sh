@@ -127,11 +127,16 @@ EOF
   done
 }
 
-# Which tanks are currently over quota? Emit one row per DRY tank:
+# Which tanks/targets are currently over quota? Emit one row per DRY thing:
 #   cli ␟ profile ␟ reset-phrase
-# Backed by limit_profile_dry (lib/core/limit.sh), which scans transcripts — so
-# compute this ONCE per board render, never per keypress. Only claude is scannable
-# today; other clis are never marked dry (we don't guess).
+# Backed by lib/core/limit.sh, which scans transcripts/logs — so compute this ONCE
+# per board render, never per keypress. Two sources:
+#   • claude tanks    — limit_profile_dry scans transcripts (codex can't: its limit
+#                       is exec-stdout-only, never persisted — see limit.sh).
+#   • log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
+# Rows key on the SAME (cli, profile) pair the renderer uses, so for a target the
+# key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
+# profile=$tname). Anything not scannable is simply never marked dry (no guessing).
 _home_dry_set() {
   local cli profile path reset
   while IFS=$'\t' read -r cli profile path; do
@@ -143,6 +148,29 @@ _home_dry_set() {
   done <<EOF
 $(list_all_profiles)
 EOF
+
+  # Log-only targets (single-account vendors like agy): scan the limit log the
+  # same once-per-render way. Gate on the binary being installed, mirroring
+  # _home_items, so an uninstalled vendor's stale log can't badge a row that
+  # isn't even shown.
+  local tfile tname
+  for tfile in "$CLIKAE_LIB"/targets/*.sh; do
+    [ -f "$tfile" ] || continue
+    tname="$(basename "$tfile" .sh)"
+    (
+      # shellcheck source=/dev/null
+      source "$tfile" 2>/dev/null || exit 0
+      declare -F target_limit_log_path >/dev/null 2>&1 || exit 0
+      declare -F target_meta_binary    >/dev/null 2>&1 || exit 0
+      local tbin logf tre
+      tbin="$(target_meta_binary)"
+      command -v "$tbin" >/dev/null 2>&1 || exit 0
+      logf="$(target_limit_log_path)"
+      if tre="$(limit_log_dry "$logf")"; then
+        printf '%s\037%s\037%s\n' "$tbin" "$tname" "$tre"
+      fi
+    )
+  done
 }
 
 # Is <cli>/<profile> in the dry set ($1)? Prints its reset phrase (maybe empty)
@@ -195,9 +223,18 @@ _home_render_static() {
         fi
         ;;
       target)
-        # Its own group: a single-account launch target (e.g. agy).
-        printf '\n  %b%s%b\n    %b◈%b %b%s%b\n' \
-          "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$note" "$__C_RESET"
+        # Its own group: a single-account launch target (e.g. agy). Badge it ⚠ +
+        # the vendor's verbatim reset phrase when its limit log says it's dry.
+        local _treset
+        if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
+          printf '\n  %b%s%b\n    %b⚠%b %b%s%b  %b%s%b\n' \
+            "$__C_BOLD" "$cli" "$__C_RESET" "$__C_YELLOW" "$__C_RESET" \
+            "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET"
+          any_dry=1
+        else
+          printf '\n  %b%s%b\n    %b◈%b %b%s%b\n' \
+            "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$note" "$__C_RESET"
+        fi
         ;;
       agent)
         also="$also$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"$'\n'
@@ -445,10 +482,13 @@ _home_pick_draw() {
         ;;
       target)
         printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
+        local tdot
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}⚠${__C_RESET}"
+        else tdot="${__C_DIM}◈${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b◈ %s%b\n' "$mark" "$__C_BOLD" "$note" "$__C_RESET"
+          printf '  %b %b %b%s %b%s%b\n' "$mark" "$tdot" "$__C_BOLD" "$note" "$__C_YELLOW" "$_reset" "$__C_RESET"
         else
-          printf '  %b ◈ %b%s%b\n' "$mark" "$__C_DIM" "$note" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%s%b\n' "$mark" "$tdot" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         fi
         ;;
       agent)

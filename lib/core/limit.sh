@@ -29,6 +29,18 @@ limit_line_is_real() {
       printf '%s' "$line" | grep -qaiE "hit your [a-z]+ limit" ;;
     codex)
       # codex exec --json emits structured failure objects alongside the message.
+      # CONFIRMED by a real burn (2026-06-01): a genuine limit is a clean event in
+      # the `codex exec --json` STDOUT stream —
+      #   {"type":"error","message":"You've hit your usage limit. … try again at
+      #    Jun 7th, 2026 2:17 PM."}
+      #   {"type":"turn.failed","error":{"message":"You've hit your usage limit…"}}
+      # IMPORTANT: that shape lives ONLY in the exec stdout stream. It is NEVER
+      # persisted to codex's rollout transcript — verified on the burned rollout:
+      # it ends in a token_count with rate_limit_reached_type:null, then a
+      # task_complete with last_agent_message:null, and no structured limit line.
+      # So this matcher is correct for a tail of an exec stream, but the home
+      # dashboard cannot detect a codex limit from a transcript (see
+      # limit_profile_dry's note).
       case "$line" in *'"type":"turn.failed"'*|*'"type":"error"'*) ;; *) return 1 ;; esac
       printf '%s' "$line" | grep -qaiE "hit your (usage|session) limit|usage limit|rate_limit" ;;
     *)
@@ -52,8 +64,13 @@ limit_line_is_real() {
 # limit resets and any session completes a real turn, the newer success timestamp
 # clears the badge automatically.
 #
-# Only claude transcripts are scanned today (codex/agy store limits elsewhere);
-# other clis return "not dry" rather than guess.
+# Only claude transcripts are scanned here. Confirmed reasons the others aren't:
+#   • codex — a real limit is an exec-stdout-only event, NEVER written to the
+#     rollout transcript (burn-verified 2026-06-01; see limit_line_is_real). There
+#     is nothing in a transcript to scan, so codex is correctly absent.
+#   • agy   — records its limit in a log file, not a transcript. That path is
+#     handled separately by limit_log_dry (below), used for log-only targets.
+# Any other cli returns "not dry" rather than guess.
 limit_profile_dry() {
   local cli="$1" dir="$2"
   [ "$cli" = "claude" ] || return 1
@@ -103,5 +120,29 @@ limit_profile_dry() {
         | grep -a '"isApiErrorMessage":true' \
         | grep -oaiE 'resets [^"]+'
     done | head -n 1
+  return 0
+}
+
+# limit_log_dry <logfile>
+# Is a log-only target's CURRENT limit log showing a genuine quota event?
+# Returns 0 (dry) and echoes the vendor's verbatim reset phrase, or 1 (fine).
+#
+# For single-account vendors (antigravity/agy) whose limit lands ONLY in a log,
+# never a transcript: `agy -p` hitting its Gemini quota exits 0 with empty output
+# — the sole signal is an E-level line in cli.log. CONFIRMED against a real limit
+# (dogfooded 2026-05-31, re-verified from the rotated logs 2026-06-01):
+#   RESOURCE_EXHAUSTED (code 429): Individual quota reached. … Resets in 3h32m48s.
+# The path passed in is agy's cli.log SYMLINK, which agy repoints to a fresh
+# per-run file each invocation — so its content IS the latest run's state. A
+# marker present = the most recent run hit the limit; it self-clears when the next
+# run rotates in a clean log (no timezone math, same spirit as limit_profile_dry).
+limit_log_dry() {
+  local logf="$1"
+  [ -n "$logf" ] && [ -e "$logf" ] || return 1
+  grep -qaE 'RESOURCE_EXHAUSTED|Individual quota reached' "$logf" 2>/dev/null || return 1
+  # Echo the vendor's own reset phrase verbatim (never a computed countdown); the
+  # LAST occurrence is this run's most recent limit line. Guard the no-match so it
+  # never aborts the caller under `set -eo pipefail`.
+  grep -aoE 'Resets in [0-9hdms]+' "$logf" 2>/dev/null | tail -n 1 || true
   return 0
 }
