@@ -524,6 +524,22 @@ _home_new_tank() {
 _home_pick_draw() {
   local items="$1" sel="$2" dry="$3"
   printf '\033[H\033[2J'
+  # Responsive logo, pinned top-RIGHT when the board is wide enough — so people
+  # WITH tanks get the brand mark too, in the otherwise-empty right. Safe here:
+  # the picker is on the alternate screen, so absolute cursor positioning lands
+  # correctly (unlike the scroll-flow static board). `stty size </dev/tty` reads
+  # the live width even inside $(...), and it's recomputed each draw, so resizing
+  # mid-navigation reflows it. Skipped on narrower terminals (would crowd tanks).
+  local _llogo="$CLIKAE_ROOT/assets/logo.txt" _lcols
+  _lcols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+  if [ -f "$_llogo" ] && [ "${_lcols:-0}" -ge 100 ]; then
+    local _ll _lr=2 _lc=$(( _lcols - 39 ))
+    while IFS= read -r _ll || [ -n "$_ll" ]; do
+      printf '\033[%d;%dH%b%s%b' "$_lr" "$_lc" "$__C_BCYAN" "$_ll" "$__C_RESET"
+      _lr=$(( _lr + 1 ))
+    done < "$_llogo"
+    printf '\033[H'   # home, so the board content fills the left as usual
+  fi
   printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset
