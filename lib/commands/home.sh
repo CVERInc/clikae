@@ -583,10 +583,15 @@ _home_pick_draw() {
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset tdot _line
   printf '\033[H'
+  # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
+  # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
+  # tail. The logo is drawn AFTER this, so the full-width erase here can't clip it.
+  # (Vars are declared above, outside this pipe's subshell, so no `local` here.)
+  {
   printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · x 無痕 · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -608,14 +613,18 @@ _home_pick_draw() {
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
+          # Selected → EXPANDED: account label, alias, and any reset time (hover detail).
           printf '  %b %b %b%-10s %-28s %s%b  %b%s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+        elif [ -n "$_reset" ]; then
+          # Unselected but DRY → collapsed name + reset time (the warning still shows).
+          printf '  %b %b %s  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_YELLOW" "$_reset" "$__C_RESET"
         else
-          printf '  %b %b %-10s %b%-28s %s%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          # Unselected → COLLAPSED: just the status dot + tank name. Hover to expand.
+          printf '  %b %b %s\n' "$mark" "$dot" "$profile"
         fi
         ;;
       target)
         printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
-        local tdot
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}⚠${__C_RESET}"
         else tdot="${__C_DIM}◈${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
@@ -637,6 +646,7 @@ _home_pick_draw() {
   done <<EOF
 $items
 EOF
+  } | while IFS= read -r _line || [ -n "$_line" ]; do printf '%s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
 
   # Logo LAST, pinned top-RIGHT when wide enough — drawn AFTER the \033[J erase so
