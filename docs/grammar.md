@@ -322,6 +322,97 @@ down to "agy folds into the same *state-control model*, no special mechanism."
 
 Full write-up: `~/clikae-handoff-state-mapping.md`.
 
+> The rest of §10 is a maintainer design session (2026-06-01) building on that
+> gift. Still a frontier, not a shipped decision — but the shape is agreed.
+
+### 10.1 The synthesis: clikae is the control plane for the engine's *brain*
+
+The tension above resolves into a single idea. clikae already controls **where
+the engine's fuel comes from** (which account/quota). The same lever — filesystem
+indirection on the config dir — also controls **the engine's memory**. So memory
+is just another dial, with a spectrum:
+
+| Mode | Memory mapping | For whom |
+|---|---|---|
+| **share** | N tanks → **1** store (fan-in) | aggregate your own brain across accounts |
+| **isolate** | N → **N** (today's default) | the current behaviour; blast-radius containment |
+| **evaporate** | N → **0** (redirect to throwaway) | the surgical/ephemeral power user |
+
+Same primitive as agy's symlink, pointed at three purposes. **clikae's essence,
+stated once: control where state lives, how long, and how widely shared** — for
+auth/config (today), for fuel (the reframe), and now for memory.
+
+**Guiding value (maintainer, locked):** *aggregate, never mutate the source.* Any
+memory move/share/translate operates on a COPY going outward; the source tank's
+memory is never rewritten in place. Same DNA as relay's "copy, never move; source
+untouched."
+
+### 10.2 The bridge — a pluggable, local-first translator
+
+Cross-**engine** memory is NOT a symlink: claude / codex / agy store memory in
+incompatible formats. The fix mirrors `handoff`'s existing
+`CLIKAE_HANDOFF_SUMMARIZER` — a pluggable, local/cheap model does the semantic
+work, clikae just runs plumbing. Propose **`CLIKAE_MEMORY_TRANSLATOR='<cmd>'`**:
+model-agnostic, **local-first** (no quota burned, nothing leaves the machine —
+memory is sensitive). Apple Intelligence is one backend (its on-device model is
+reachable only via Swift `FoundationModels`, so a small `clikae-translate` shim —
+the GUI is already Swift); `llm`/`ollama` another.
+
+**The objection MOVES from format to *loss*.** A summarizer for a one-shot
+handoff brief is safe because the brief is **disposable**. Memory is the opposite
+— authoritative, accumulative, trusted across sessions. An LLM rewriting memory
+on every sync drifts (a telephone game). So memory translation must be treated as
+reviewable + reversible, never a silent background rewrite.
+
+### 10.3 Light vs heavy — and idea B
+
+- **Light — per-`to` memory injection (disposable).** On `clikae to codex`, the
+  translator renders the *relevant slice* of the source tank's memory into a form
+  codex can use, injected **once** alongside the handoff brief. codex doesn't
+  permanently grow a claude-brain; it just knows enough for *this* continuation.
+  No canonical store, no telephone game, no concurrency. It is literally
+  `handoff` ++ : the brief carries the thread, this carries a brain-slice. **Do
+  this first.**
+- **Heavy — a persistent canonical store.** clikae keeps ONE canonical memory
+  store; the translator does canonical↔each-engine; all tools share long-term.
+  The endgame, but it needs a canonical schema, **reviewable sync (show the diff,
+  approve)**, drift control, and concurrency handling.
+- **Idea B (engines read/write clikae natively) — half true, half walled.**
+  *Already true:* clikae's config-dir indirection ALREADY puts the memory
+  physically in its own tree — this very file's `MEMORY.md` lives under
+  `…/profiles/claude/b/…/memory/`. *Walled:* engines expose a memory *location*
+  hook (the env var) but **not a memory *format* hook** — you can relocate
+  claude's memory, you can't make it write clikae's schema or make codex read
+  claude's files. So the clean form of B = **adopt claude's near-neutral markdown
+  AS the canonical**, claude is ~native, others bridged by the translator. B
+  doesn't escape translation; it minimises it by picking the most-neutral format
+  as the anchor. (B is the heavy version reached from another door.)
+
+### 10.4 Ephemeral memory (the "evaporate" mode)
+
+The surgical power user wants a model that **remembers nothing**. clikae already
+owns the config-dir indirection, so pointing the `memory` subdir at a throwaway
+(tmpfs / wiped-on-exit dir) is trivial — same primitive, third direction. Sweet
+spot: **logged-in but amnesiac** — keep auth (Keychain + `.claude.json`), overlay
+only `projects/<slug>/memory` as ephemeral.
+
+**Honest framing (don't overclaim):** clikae can guarantee *the memory subdir is
+throwaway* — call it **ephemeral memory**. It can NOT guarantee "the model
+remembers nothing anywhere" (caches, shell history, telemetry, Keychain live
+outside clikae's reach). Promise only what's kept.
+
+### 10.5 Shipping order
+
+1. **Ephemeral memory** first — smallest, zero model/translation (pure config-dir
+   indirection, clikae's home turf), immediate value for the surgical user.
+2. **Light per-`to` memory injection** — the local-translator proving ground
+   (`handoff`++).
+3. **Heavy canonical store** (= idea B) — only once the local bridge is proven
+   reliable and the disposable slice turns out not to be enough.
+
+All three are one `link/overlay` strategy (§10 intro) — clikae as the dial on the
+engine's brain.
+
 ---
 
 *This grammar is a decision, not a sketch. Change it here first, with the
