@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
-# tests/bats/adapters/session-meta.bats — adapter_session_meta, the data behind
-# `clikae relay`'s preview card. Sources the adapter directly and feeds it
-# fabricated JSONL transcripts; no network, no real claude.
+# tests/bats/adapters/session-meta.bats — adapter_session_meta + adapter_list_sessions,
+# the data behind `clikae relay`'s preview card and session picker. Sources the
+# adapter directly and feeds it fabricated JSONL transcripts; no network, no real
+# claude.
 
 load '../../helpers'
 
@@ -33,17 +34,17 @@ seed_session() {
   _setup_session_meta
   seed_session abc12345-0000-0000-0000-000000000000 "hello world"
   run adapter_session_meta "$PROFILE"
-  assert_success
-  assert_contains "abc12345"
-  assert_contains "hello world"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"abc12345"* ]]
+  [[ "$output" == *"hello world"* ]]
 }
 
 @test "session_meta keeps a CJK title intact (no mid-character slicing)" {
   _setup_session_meta
   seed_session cjc00000-0000-0000-0000-000000000000 "換油箱測試：接力這場對話"
   run adapter_session_meta "$PROFILE"
-  assert_success
-  assert_contains "換油箱測試：接力這場對話"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"換油箱測試：接力這場對話"* ]]
 }
 
 @test "session_meta can target a specific session id" {
@@ -51,21 +52,21 @@ seed_session() {
   seed_session aaa00000-0000-0000-0000-000000000000 "the first one"
   seed_session bbb00000-0000-0000-0000-000000000000 "the second one"
   run adapter_session_meta "$PROFILE" "aaa00000-0000-0000-0000-000000000000"
-  assert_success
-  assert_contains "the first one"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the first one"* ]]
 }
 
 @test "session_meta returns nonzero when there is no transcript" {
   _setup_session_meta
   run adapter_session_meta "$TEST_HOME/does-not-exist"
-  assert_failure
+  [ "$status" -ne 0 ]
 }
 
 @test "session_meta returns nonzero for a missing specific session id" {
   _setup_session_meta
   seed_session aaa00000-0000-0000-0000-000000000000 "present"
   run adapter_session_meta "$PROFILE" "nope0000-0000-0000-0000-000000000000"
-  assert_failure
+  [ "$status" -ne 0 ]
 }
 
 @test "session_meta falls back to a placeholder when there is no user text" {
@@ -73,8 +74,8 @@ seed_session() {
   printf '%s\n' '{"type":"summary","summary":"x"}' \
     > "$PROJ/nouser00-0000-0000-0000-000000000000.jsonl"
   run adapter_session_meta "$PROFILE"
-  assert_success
-  assert_contains "(no preview)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(no preview)"* ]]
 }
 
 @test "list_sessions returns rows newest-first" {
@@ -83,10 +84,10 @@ seed_session() {
   sleep 1
   seed_session bbb00000-0000-0000-0000-000000000000 "newer one"
   run adapter_list_sessions "$PROFILE"
-  assert_success
+  [ "$status" -eq 0 ]
   # newest ("newer one") must be on the first line; older one still listed
   [[ "${lines[0]}" == *"newer one"* ]]
-  assert_contains "older one"
+  [[ "$output" == *"older one"* ]]
 }
 
 @test "list_sessions honours a limit" {
@@ -97,7 +98,7 @@ seed_session() {
   sleep 1
   seed_session ccc00000-0000-0000-0000-000000000000 "three"
   run adapter_list_sessions "$PROFILE" 2
-  assert_success
+  [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]
 }
 
@@ -105,12 +106,12 @@ seed_session() {
   _setup_session_meta
   seed_session cjk11111-0000-0000-0000-000000000000 "接力這場對話到另一個帳號"
   run adapter_list_sessions "$PROFILE"
-  assert_success
-  assert_contains "接力這場對話到另一個帳號"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"接力這場對話到另一個帳號"* ]]
 }
 
 @test "list_sessions returns nonzero when there are no sessions" {
   _setup_session_meta
   run adapter_list_sessions "$TEST_HOME/does-not-exist"
-  assert_failure
+  [ "$status" -ne 0 ]
 }
