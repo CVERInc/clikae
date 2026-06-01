@@ -138,15 +138,15 @@ cmd_relay() {
         cat <<'EOF'
 Usage: clikae relay <engine> [<from>] <to> [-- args...]
 
-Hand the current session over to another profile and continue on its quota —
-for when the profile you're on hits its usage limit mid-task.
+Hand the current session over to another tank and continue on its quota —
+for when the tank you're on hits its usage limit mid-task.
 
-With one profile name, <from> is auto-detected from the CLI's live env var
-(e.g. $CLAUDE_CONFIG_DIR in this shell). Give both to be explicit. With no
-profile at all, you pick the target from an arrow-key list (a TTY is required;
-scripts must name the target).
+(Hidden alias — the canonical verb is `clikae to`.) With one tank name, <from> is
+auto-detected from the engine's live env var (e.g. $CLAUDE_CONFIG_DIR in this
+shell). Give both to be explicit. With no tank at all, you pick the target from
+an arrow-key list (a TTY is required; scripts must name the target).
 
-Arguments after `--` are passed straight through to the CLI.
+Arguments after `--` are passed straight through to the engine.
 
 For Claude Code, relay copies the *current directory's* most recent transcript
 from <from> into <to>, then resumes it — so the conversation continues, but the
@@ -208,11 +208,11 @@ EOF
     value="${!var}"
     from="$(resolve_active_profile "$cli" "$strategy" "$value")"
     if [ -z "$from" ]; then
-      log_err "Couldn't tell which profile '$cli' is currently on (\$$var is unset or not a clikae profile)."
+      log_err "Couldn't tell which tank '$cli' is currently on (\$$var is unset or not a clikae tank)."
       log_dim "Name the source explicitly:  clikae relay $cli <from> $to"
       exit 1
     fi
-    log_dim "Detected current profile: $from  (\$$var)"
+    log_dim "Detected current tank: $from  (\$$var)"
   fi
 
   # No target given → ask, rather than dead-ending on an error. Needs a TTY;
@@ -222,13 +222,13 @@ EOF
       to="$(_relay_pick_target "$cli" "$from" || true)"
       [ -n "$to" ] || { log_dim "Cancelled — no target tank chosen."; return 0; }
     else
-      log_fail "Missing target profile. Usage: clikae relay $cli [<from>] <to>"
+      log_fail "Missing target tank. Usage: clikae relay $cli [<from>] <to>"
     fi
   fi
 
   validate_name profile "$from"
   validate_name profile "$to"
-  [ "$from" != "$to" ] || log_fail "Source and target are the same profile ('$from'). Nothing to relay."
+  [ "$from" != "$to" ] || log_fail "Source and target are the same tank ('$from'). Nothing to relay."
 
   local from_dir to_dir
   from_dir="$(ensure_profile --require "$cli" "$from")"

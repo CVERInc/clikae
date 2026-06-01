@@ -19,11 +19,12 @@ Usage: clikae handoff <engine> [<tank>] [--to <engine>[/<tank>]]
 
 Write a portable handoff brief from the current directory's most recent session
 under <tank> — what's being worked on, what's done, what's next — so another
-profile / model / vendor can continue instead of starting blind when a tank runs
+tank / model / vendor can continue instead of starting blind when a tank runs
 dry. Read-only: the session is never modified.
 
-With no <tank>, it uses whichever profile this shell is on (resolved from the
-CLI's live env var, e.g. $CLAUDE_CONFIG_DIR).
+(Hidden alias — the canonical verb is `clikae to <other-engine>`.) With no <tank>,
+it uses whichever tank this shell is on (resolved from the engine's live env var,
+e.g. $CLAUDE_CONFIG_DIR).
 
 How the brief is written:
   • If a summarizer is set, the session tail is piped to it and its output is the
@@ -96,11 +97,11 @@ EOF
     value="${!var}"
     profile="$(resolve_active_profile "$cli" "$strategy" "$value")"
     if [ -z "$profile" ]; then
-      log_err "Couldn't tell which profile '$cli' is on (\$$var is unset or not a clikae profile)."
+      log_err "Couldn't tell which tank '$cli' is on (\$$var is unset or not a clikae tank)."
       log_dim "Name it explicitly:  clikae handoff $cli <tank>"
       exit 1
     fi
-    log_dim "Using current profile: $profile  (\$$var)" >&2
+    log_dim "Using current tank: $profile  (\$$var)" >&2
   fi
 
   validate_name profile "$profile"

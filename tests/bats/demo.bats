@@ -11,7 +11,7 @@ load '../helpers'
   [[ "$output" == *"bob@studio.dev"* ]]
   [[ "$output" == *"active here"* ]]          # the live tank board, alice active
   [[ "$output" == *"Fuel pool"* ]]
-  [[ "$output" == *"clikae relay claude bob"* ]]
+  [[ "$output" == *"clikae to bob"* ]]
 }
 
 @test "demo touches nothing in the real CLIKAE_HOME" {

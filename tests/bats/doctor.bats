@@ -10,7 +10,7 @@ load '../helpers'
   [[ "$output" == *"CLIKAE_HOME"* ]]
   [[ "$output" == *"$CLIKAE_HOME"* ]]
   [[ "$output" == *"INSTALLED"* ]]
-  [[ "$output" == *"PROFILES"* ]]
+  [[ "$output" == *"TANKS"* ]]
 }
 
 @test "doctor lists ALL adapters including the last one (vercel)" {

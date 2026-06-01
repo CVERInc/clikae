@@ -91,7 +91,7 @@ _seed_transcript() {
   clikae init claude a
   run clikae relay claude a a
   [ "$status" -ne 0 ]
-  [[ "$output" == *"same profile"* ]]
+  [[ "$output" == *"same tank"* ]]
 }
 
 @test "relay errors when a named profile does not exist" {

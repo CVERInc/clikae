@@ -10,7 +10,7 @@
 # Render the scan rows (on stdin) as an aligned table. Plain cells (no colour):
 # escape codes count toward printf's field width and break alignment.
 _doctor_render_table() {
-  printf '%b%-12s %-11s %-9s %s%b\n' "$__C_BOLD" "CLI" "INSTALLED" "PROFILES" "LOGGED IN" "$__C_RESET"
+  printf '%b%-12s %-11s %-9s %s%b\n' "$__C_BOLD" "ENGINE" "INSTALLED" "TANKS" "LOGGED IN" "$__C_RESET"
   local cli installed binary strategy count label inst
   while IFS=$'\037' read -r cli installed binary strategy count label; do
     [ -n "$cli" ] || continue
@@ -25,8 +25,8 @@ cmd_doctor() {
       cat <<'EOF'
 Usage: clikae doctor
 
-A read-only health check: which supported CLIs are installed and logged in, how
-many profiles each has, and what to do next. It changes nothing on disk.
+A read-only health check: which supported engines are installed and logged in,
+how many tanks each has, and what to do next. It changes nothing on disk.
 EOF
       return 0 ;;
     "") : ;;
@@ -83,7 +83,7 @@ EOF
 
   log_bold "Next:"
   if [ -n "$installed_no_profile" ]; then
-    log_dim "  • $installed_no_profile is installed with no profile yet:  clikae init $installed_no_profile work --alias"
+    log_dim "  • $installed_no_profile is installed with no tank yet:  clikae init $installed_no_profile work --alias"
   fi
   if [ "$rc_loaded" = "no" ] && [ "$any_profiles" -eq 1 ]; then
     log_dim "  • aliases aren't loaded in this shell yet:  source $rc"

@@ -64,25 +64,25 @@ Usage: clikae migrate [<engine>] [--dry-run] [--force] [--keep-login]
 
 Adopt a hand-rolled "config dir + shell alias" setup into clikae.
 
-clikae scans your shell rc for aliases that set the CLI's config env var (e.g.
-CLAUDE_CONFIG_DIR) and invoke the CLI. For each one it will:
+clikae scans your shell rc for aliases that set the engine's config env var (e.g.
+CLAUDE_CONFIG_DIR) and invoke the engine. For each one it will:
   1. move the referenced config directory under ~/.clikae/profiles/<engine>/<p>/
   2. rewrite the alias into clikae's managed sentinel block
 
 Arguments:
-  <engine>        CLI to migrate (must have an adapter). Default: claude.
+  <engine>        Engine to migrate (must have an adapter). Default: claude.
 
 Options:
   -n, --dry-run     Show the plan without changing anything.
   -f, --force       Skip the confirmation prompt.
-  -k, --keep-login  Carry over each profile's saved login so you don't have to
+  -k, --keep-login  Carry over each tank's saved login so you don't have to
                     log in again (macOS/claude only — claude stores its token in
                     the Keychain keyed by the config-dir path, which the move
                     changes). Off by default; without it, expect a one-time
-                    re-login per migrated profile.
+                    re-login per migrated tank.
 
 The rc file is backed up to <rc>.clikae.bak.<timestamp> before editing, and an
-existing clikae profile is never overwritten.
+existing clikae tank is never overwritten.
 EOF
         return 0
         ;;
@@ -136,7 +136,7 @@ EOF
 
     # Skip names we can't turn into a valid profile.
     if ! printf '%s' "$profile" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]+$'; then
-      log_warn "Skipping alias '$name': can't derive a valid profile name."
+      log_warn "Skipping alias '$name': can't derive a valid tank name."
       skipped=$((skipped + 1))
       continue
     fi
@@ -145,7 +145,7 @@ EOF
 
     # Don't clobber an existing clikae profile.
     if [ "$old_dir" != "$new_dir" ] && [ -e "$new_dir" ]; then
-      log_warn "Skipping '$name': target profile already exists ($cli/$profile)."
+      log_warn "Skipping '$name': target tank already exists ($cli/$profile)."
       skipped=$((skipped + 1))
       continue
     fi
@@ -175,12 +175,12 @@ EOF
   echo ""
   local i
   for ((i = 0; i < n; i++)); do
-    printf '  %s  (profile: %s)\n' "${c_name[$i]}" "${c_profile[$i]}"
+    printf '  %s  (tank: %s)\n' "${c_name[$i]}" "${c_profile[$i]}"
     if [ -d "${c_old[$i]}" ]; then
       printf '    move dir : %s\n' "${c_old[$i]}"
       printf '            -> %s\n' "${c_new[$i]}"
     else
-      printf '    dir      : %s (missing — will create an empty profile)\n' "${c_old[$i]}"
+      printf '    dir      : %s (missing — will create an empty tank)\n' "${c_old[$i]}"
     fi
     printf '    alias    : rewrite into clikae block "clikae:%s.%s"\n' "$cli" "${c_profile[$i]}"
     echo ""
@@ -289,5 +289,5 @@ EOF
   echo ""
   log_bold "Done. Next steps:"
   echo "  source $rc_file        # pick up the rewritten aliases"
-  echo "  clikae list            # confirm your migrated profiles"
+  echo "  clikae tanks           # confirm your migrated tanks"
 }

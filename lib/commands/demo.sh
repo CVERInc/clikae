@@ -27,8 +27,8 @@ cmd_demo() {
       cat <<'EOF'
 Usage: clikae demo
 
-A 30-second guided tour in a throwaway sandbox — it shows isolated profiles, the
-tank board, the fuel pool, and the relay idea, then cleans up. Touches nothing
+A 30-second guided tour in a throwaway sandbox — it shows isolated tanks, the
+tank board, the fuel pool, and the `to` idea, then cleans up. Touches nothing
 real: not your ~/.clikae, not your logins, not your shell rc.
 EOF
       return 0 ;;
@@ -48,7 +48,7 @@ EOF
   echo ""
 
   # --- Act 1: two accounts of one CLI, fully isolated ----------------------
-  _demo_act "One CLI, two accounts — each in its own directory"
+  _demo_act "One engine, two accounts — each in its own tank"
   env CLIKAE_HOME="$sb" "$CLIKAE_BIN" init claude alice >/dev/null 2>&1 || true
   env CLIKAE_HOME="$sb" "$CLIKAE_BIN" init claude bob   >/dev/null 2>&1 || true
   # Simulate a logged-in account in each (clikae reads the email from .claude.json).
@@ -71,12 +71,12 @@ EOF
   env CLIKAE_HOME="$sb" "$CLIKAE_BIN" pool add claude/bob   >/dev/null 2>&1 || true
   _demo_cmd "$sb" -- pool list
 
-  # --- Act 4: the magic (narrated — relay carries a live session) ----------
+  # --- Act 4: the magic (narrated — `to` carries a live session) -----------
   _demo_act "The payoff: hit a limit mid-task? Swap the tank, keep burning"
   log_dim "  alice runs out of quota in the middle of a task. Instead of"
   log_dim "  re-logging into bob and re-explaining everything:"
   echo ""
-  printf '    %b$ clikae relay claude bob%b   %b# carry the LIVE session over, resume on bob quota%b\n' \
+  printf '    %b$ clikae to bob%b              %b# carry the LIVE session over, resume on bob quota%b\n' \
     "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   printf '    %b$ clikae watch claude --auto%b %b# or let clikae notice and fall through the pool for you%b\n' \
     "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET"

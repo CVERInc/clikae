@@ -26,7 +26,7 @@ cmd_info() {
         cat <<'EOF'
 Usage: clikae info [--json]
 
-Show install paths, platform, supported adapters, and how many profiles exist.
+Show install paths, platform, supported engines, and how many tanks exist.
 
 Options:
   --json  Emit a single JSON object {version, installRoot, profileStore, shellRc,
@@ -57,10 +57,10 @@ EOF
   echo "clikae $CLIKAE_VERSION"
   echo ""
   printf '  %-20s %s\n' "install root" "$CLIKAE_ROOT"
-  printf '  %-20s %s\n' "profile store" "$CLIKAE_HOME"
+  printf '  %-20s %s\n' "tank store"    "$CLIKAE_HOME"
   printf '  %-20s %s\n' "shell rc"      "$(detect_shell_rc)"
   printf '  %-20s %s\n' "platform"      "$(uname -s)"
   echo ""
   printf '  %-20s %s\n' "adapters"      "$(list_adapters | paste -sd , - | sed 's/,/, /g')"
-  printf '  %-20s %s\n' "profiles"      "$count"
+  printf '  %-20s %s\n' "tanks"         "$count"
 }

@@ -22,7 +22,7 @@ load '../../helpers'
   clikae init gh personal
   run clikae info
   [ "$status" -eq 0 ]
-  [[ "$output" == *"profiles"*"2"* ]]
+  [[ "$output" == *"tanks"*"2"* ]]
 }
 
 @test "claude alias exports CLAUDE_CONFIG_DIR at the profile path" {
