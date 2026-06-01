@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **clikae is a macOS / Linux tool; Windows support is now community/unsupported.**
+  It's bash, and that's the pitch ("every line is auditable"). The PowerShell
+  module in `powershell/` is no longer part of the maintained grammar (it lacks
+  the v0.5 fuel-tank grammar) — kept as a community-contributed port, with its
+  Windows CI job made informational (`continue-on-error`, never gates a release).
+  Windows contributors are welcome to carry it forward. README/`powershell/README`
+  updated; the maintained suite is bats (now with every assertion enforced —
+  `set -e` + `|| false` on `[[ … ]]`, see `tests/README.md`).
+
 ### Added
 
 - **The fuel-tank grammar — clikae is now the verb.** The name is 切り替え

@@ -38,6 +38,12 @@ brew install CVERInc/clikae/clikae
 
 Or from source / `curl | bash` — see [docs/installation.md](docs/installation.md).
 
+> **Platform.** clikae is a **macOS / Linux** tool — it's bash, and that's the
+> point ("every line is auditable"). A **PowerShell module** lives in
+> [`powershell/`](powershell/) but is **community-contributed and unsupported**:
+> it isn't part of the maintained grammar and its CI is informational only.
+> Windows users very welcome to drive it — PRs appreciated.
+
 ## 30 seconds
 
 ```bash
@@ -74,7 +80,7 @@ clikae                            # your home dashboard (run `clikae doctor` for
 - **v0.1** — core CLI, claude adapter, macOS `.app` launchers, install script.
 - **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
-- **v0.4** — Windows PowerShell module (`powershell/Clikae.psm1`): profile dirs + `$PROFILE` functions + optional `.lnk` shortcuts, Pester-tested on PS 7 and Windows PowerShell 5.1. Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total). Plus a `migrate` guard against moving an in-use config dir.
+- **v0.4** — Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total) and a `migrate` guard against moving an in-use config dir.
 - **v0.5** *(in progress)* — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` for carrying a session onward (same engine resumes, another engine gets a brief), Antigravity/agy folded into the same verbs, and an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 

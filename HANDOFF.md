@@ -46,12 +46,14 @@ These mirror how this project was built and must be preserved:
 > translator). bats **200/200**, shellcheck clean. The prose below predates this
 > and describes the relay/status/app work it's built on; still accurate as history.
 >
-> Open at this boundary (need a decision / can't verify locally): (a) **PowerShell
-> mirror** of the new grammar (no local pwsh — windows CI verifies, which needs a
-> push); (b) **merge `feat/agy-limit-detection`** (a concurrent session's worktree
-> `~/Desktop/GitHub/clikae-agy` @ `a44a303`; `limit_log_dry` feeds §5's agy
-> dry-aware switch; one `home.sh` overlap to reconcile by hand); (c) **implement**
-> any §10 memory mode (designed, not greenlit).
+> Resolved since: ✅ **`feat/agy-limit-detection` merged** (`bd05f75`); ✅ **bats
+> hardened** so every assertion counts (`set -e` + `|| false` on `[[ … ]]`, see
+> `tests/README.md`); ✅ **Windows is now community/unsupported** — clikae is a
+> macOS/Linux bash tool, the PowerShell module is an unsupported community port
+> (its CI job is `continue-on-error`, never gates), so **don't spend effort
+> syncing PS to the grammar**. Still open (needs a greenlight, not a guess):
+> **implement** any §10 memory mode (ephemeral / per-`to` injection / canonical —
+> designed + ship-order agreed, not yet built).
 
 > **UNRELEASED work on branch `feat/relay-and-status` (not yet tagged).** Two new
 > commands landed since v0.4.0, fully bats-covered (suite now **83 tests**, was

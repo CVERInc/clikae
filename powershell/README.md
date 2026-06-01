@@ -1,5 +1,12 @@
 # clikae for Windows (PowerShell)
 
+> ⚠️ **Community-contributed & unsupported.** clikae is a macOS / Linux bash tool;
+> this PowerShell port is **not part of the maintained grammar** and may lag the
+> bash CLI (it doesn't have the v0.5 fuel-tank grammar — bare switch, `clikae to`,
+> agy folding). Its CI is informational only and never gates a release. It works
+> for the basic job below, and **Windows contributors are very welcome** to carry
+> it forward — PRs appreciated.
+
 `Clikae.psm1` is the Windows-native port of the bash `clikae` CLI. There's no
 bash on a stock Windows box and no `.app` launcher, so this module keeps the
 same model with PowerShell mechanics:

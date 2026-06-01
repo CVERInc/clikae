@@ -59,8 +59,13 @@ jobs:
         run: bats -r --print-output-on-failure tests/bats
 
   pester:
-    name: pester (windows-latest)
+    # clikae is a macOS/Linux bash tool; the PowerShell module is a
+    # community-contributed, UNSUPPORTED port. This job runs Pester for the
+    # benefit of PS contributors but is informational only — it never gates a
+    # merge (continue-on-error), so Windows never blocks the bash work.
+    name: pester (windows, community/unsupported)
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       # The `shell:` key can't take a matrix expression, so the two PowerShell
