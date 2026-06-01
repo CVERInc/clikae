@@ -200,19 +200,27 @@ EOF
 
   load_adapter "$cli"
 
-  # Auto-detect <from> from this shell's live env var when not given explicitly.
+  # Auto-detect <from> when not given explicitly: first this shell's live env var,
+  # then (the common case — the switch/alias/.app never export it) the tank with
+  # this directory's most recent transcript.
   if [ "$got_from" -eq 0 ]; then
     local var strategy value
     var="$(adapter_meta_env_var)"
     strategy="$(adapter_meta_strategy)"
     value="${!var}"
     from="$(resolve_active_profile "$cli" "$strategy" "$value")"
-    if [ -z "$from" ]; then
-      log_err "Couldn't tell which tank '$cli' is currently on (\$$var is unset or not a clikae tank)."
-      log_dim "Name the source explicitly:  clikae relay $cli <from> $to"
-      exit 1
+    if [ -n "$from" ]; then
+      log_dim "Detected current tank: $from  (\$$var)"
+    else
+      from="$(newest_transcript_tank "$cli" | cut -f1 || true)"
+      if [ -n "$from" ]; then
+        log_dim "Detected from this directory's most recent $cli session: $from"
+      else
+        log_err "Couldn't tell which tank '$cli' is currently on (\$$var is unset, and no $cli session here)."
+        log_dim "Name the source explicitly:  clikae relay $cli <from> $to"
+        exit 1
+      fi
     fi
-    log_dim "Detected current tank: $from  (\$$var)"
   fi
 
   # No target given → ask, rather than dead-ending on an error. Needs a TTY;

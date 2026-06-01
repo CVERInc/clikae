@@ -89,19 +89,26 @@ EOF
     exit 1
   fi
 
-  # Auto-detect <tank> from this shell's live env var when not given.
+  # Auto-detect <tank> when not given: this shell's live env var, then (the common
+  # case) the tank with this directory's most recent transcript.
   if [ "$got_profile" -eq 0 ]; then
     local var strategy value
     var="$(adapter_meta_env_var)"
     strategy="$(adapter_meta_strategy)"
     value="${!var}"
     profile="$(resolve_active_profile "$cli" "$strategy" "$value")"
-    if [ -z "$profile" ]; then
-      log_err "Couldn't tell which tank '$cli' is on (\$$var is unset or not a clikae tank)."
-      log_dim "Name it explicitly:  clikae handoff $cli <tank>"
-      exit 1
+    if [ -n "$profile" ]; then
+      log_dim "Using current tank: $profile  (\$$var)" >&2
+    else
+      profile="$(newest_transcript_tank "$cli" | cut -f1 || true)"
+      if [ -n "$profile" ]; then
+        log_dim "Using this directory's most recent $cli session: $profile" >&2
+      else
+        log_err "Couldn't tell which tank '$cli' is on (\$$var is unset, and no $cli session here)."
+        log_dim "Name it explicitly:  clikae handoff $cli <tank>"
+        exit 1
+      fi
     fi
-    log_dim "Using current tank: $profile  (\$$var)" >&2
   fi
 
   validate_name profile "$profile"

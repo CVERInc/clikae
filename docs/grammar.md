@@ -85,7 +85,11 @@ core functions. Users see exactly one word: *tank*.
 | `clikae to <tank>` | Carry this shell's current session onto another **tank of the same CLI** → a real `--resume`. | `relay` |
 | `clikae to <engine> [tank]` | Carry it to a **different CLI** → that engine can't resume a foreign session, so clikae hands it a written **brief** (cold start). | `handoff` |
 
-The source is auto-detected from the active session in this shell. clikae always
+The source is auto-detected: first the live env var, then — because the bare
+switch / aliases / `.app` run the engine with a prefix assignment that never
+reaches the parent shell — **the tank with this directory's most recent
+transcript** (stateless; "the session I was just in here"). To pin a shell to a
+tank explicitly, `eval "$(clikae env <engine> <tank>)"`. clikae always
 **announces which mechanism it used**, so the resume-vs-brief difference is
 surfaced at runtime, never memorised:
 

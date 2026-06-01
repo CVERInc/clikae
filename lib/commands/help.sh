@@ -28,6 +28,7 @@ Switch (the main thing — no verb needed):
   clikae <engine>                  one tank → use it; several → list them
   clikae to <target> [tank]        carry your CURRENT session onto another tank
                                    (same engine → resume; another → a brief)
+  eval "$(clikae env <engine> <tank>)"   put THIS shell on a tank (so to/status see it)
 
 Make & manage tanks:
   init <engine> <tank>             create a new tank   (--alias adds a shell alias)

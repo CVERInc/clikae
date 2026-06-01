@@ -54,7 +54,8 @@ plain, conventional verbs.
 | `<engine> <tank> [-- args]` | Switch `<engine>` to `<tank>` and run it. The bare verb. (`run` is a hidden alias.) |
 | `<engine> <tank> --ephemeral` | Switch and run with **ephemeral memory** — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below. |
 | `<engine>` | One tank → use it; several → list them; none → offer to create. |
-| `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
+| `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Source is auto-detected (env var, else this directory's most recent session). Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
+| `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
 ### Make & manage tanks
 
@@ -168,10 +169,15 @@ clikae to codex                 # a different engine → a written brief (cold s
 clikae to codex work            # cross to a specific tank of another engine
 ```
 
-clikae auto-detects which engine + tank this shell is on. The target resolves
-**engine-name-first**: a known engine name crosses to it; anything else is a tank
-of your current engine. clikae always **announces which mechanism it used** so
-the resume-vs-brief difference is never a guess.
+clikae auto-detects which engine + tank this shell is on: first the live env var,
+then — since the bare switch / aliases / `.app` run the engine with a prefix
+assignment that never reaches the parent shell — **the tank with this directory's
+most recent session** (the one you were just in here). So `switch → work → to`
+works from one shell. To pin a shell to a tank explicitly instead, use
+`eval "$(clikae env <engine> <tank>)"`. The target resolves **engine-name-first**:
+a known engine name crosses to it; anything else is a tank of your current engine.
+clikae always **announces which mechanism it used** so resume-vs-brief is never a
+guess.
 
 **Same engine (a resume).** For Claude Code, clikae finds the **current
 directory's** most recent transcript under the source tank, copies it into the

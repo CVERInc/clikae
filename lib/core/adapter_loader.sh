@@ -26,6 +26,39 @@ list_adapters() {
   done | sort
 }
 
+# Portable file mtime in epoch seconds (BSD/macOS, then GNU/Linux).
+_clikae_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo 0; }
+
+# newest_transcript_tank <engine>  ->  "<tank>\t<mtime-epoch>"  for the tank of
+# <engine> whose transcript for $PWD is the newest, or nothing.
+#
+# Source-detection fallback for to/relay/handoff: the bare switch, the aliases,
+# and the .app all run the engine with a PREFIX assignment (never exported), so
+# `$CLAUDE_CONFIG_DIR` isn't in the parent shell after the engine exits — but the
+# session we just had left a transcript in this directory. The tank with the
+# newest transcript here is the one we were just working in. Runs in a subshell
+# (loads the adapter) so it's safe to call across engines without leaking hooks.
+newest_transcript_tank() {
+  local engine="$1"
+  [ -f "$CLIKAE_LIB/adapters/$engine.sh" ] || return 0
+  local root; root="$(profiles_root)/$engine"
+  [ -d "$root" ] || return 0
+  (
+    load_adapter "$engine" >/dev/null 2>&1 || exit 0
+    declare -F adapter_transcript_path >/dev/null 2>&1 || exit 0
+    local pdir tank tpath mt best="" best_mt=0
+    for pdir in "$root"/*/; do
+      [ -d "$pdir" ] || continue
+      tank="$(basename "$pdir")"
+      tpath="$(adapter_transcript_path "${pdir%/}" 2>/dev/null || true)"
+      [ -n "$tpath" ] && [ -f "$tpath" ] || continue
+      mt="$(_clikae_mtime "$tpath")"
+      if [ "$mt" -gt "$best_mt" ]; then best_mt="$mt"; best="$tank"; fi
+    done
+    if [ -n "$best" ]; then printf '%s\t%s\n' "$best" "$best_mt"; fi
+  )
+}
+
 # adapter_env_prefix <profile_dir>  -> one line: KEY="VAL" KEY2="VAL2" ...
 # Renders the adapter's env vars as a shell-quoted prefix string, used to build
 # both the alias body (`clikae alias`) and the .app command (`clikae app`).

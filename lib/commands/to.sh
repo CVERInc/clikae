@@ -29,6 +29,24 @@ $(list_adapters)
 EOF
 }
 
+# _to_detect_recent  -> "engine\ttank" for the engine+tank with this directory's
+# globally newest transcript, or empty. The fallback when no env var is set (the
+# switch/alias/.app never export it): "the session I was just in here".
+_to_detect_recent() {
+  local name r tank mt best_engine="" best_tank="" best_mt=0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    r="$(newest_transcript_tank "$name")"        # tab-separated "tank<TAB>mtime", or empty
+    [ -n "$r" ] || continue
+    tank="$(printf '%s' "$r" | cut -f1)"; mt="$(printf '%s' "$r" | cut -f2)"
+    [ -n "$mt" ] || mt=0
+    if [ "$mt" -gt "$best_mt" ]; then best_mt="$mt"; best_engine="$name"; best_tank="$tank"; fi
+  done <<EOF
+$(list_adapters)
+EOF
+  if [ -n "$best_engine" ]; then printf '%s\t%s\n' "$best_engine" "$best_tank"; fi
+}
+
 _to_help() {
   cat <<'EOF'
 Usage: clikae to <target> [tank] [-- args...]
@@ -77,13 +95,20 @@ cmd_to() {
   [ "${#positionals[@]}" -le 2 ] || log_fail "Too many arguments. Usage: clikae to <target> [tank]"
   local target="${positionals[0]}" target_tank="${positionals[1]:-}"
 
-  # Auto-detect the source engine + tank from this shell.
-  local src srcn
-  src="$(_to_detect_source)"
+  # Auto-detect the source engine + tank. First this shell's live env var; then
+  # (the common case — the switch/alias/.app never export it) the engine+tank
+  # with this directory's most recent transcript: "the session I was just in".
+  local src srcn from_recent=0
+  src="$(_to_detect_source || true)"
   srcn="$(printf '%s\n' "$src" | grep -c . || true)"
   if [ "$srcn" -eq 0 ]; then
-    log_err "Couldn't tell which engine/tank this shell is on (no engine's env var points at a clikae tank)."
-    log_dim "Run it from the shell you're burning in, or be explicit:  clikae relay <engine> <from> <to>  /  clikae handoff <engine> <from> --to <target>"
+    src="$(_to_detect_recent || true)"
+    srcn="$(printf '%s\n' "$src" | grep -c . || true)"
+    [ "$srcn" -ge 1 ] && from_recent=1
+  fi
+  if [ "$srcn" -eq 0 ]; then
+    log_err "Couldn't tell which engine/tank this shell is on, and found no recent session in this directory."
+    log_dim "Run it from the directory you were working in, or be explicit:  clikae relay <engine> <from> <to>  /  clikae handoff <engine> <from> --to <target>"
     exit 1
   elif [ "$srcn" -gt 1 ]; then
     log_err "This shell is on more than one engine — can't tell which to carry:"
@@ -95,6 +120,7 @@ cmd_to() {
   IFS=$'\t' read -r src_engine src_tank <<EOF
 $src
 EOF
+  [ "$from_recent" -eq 1 ] && log_dim "source: this directory's most recent session — $src_engine/$src_tank"
 
   # Normalise the agy long name for the target lookup (canonical engine = agy).
   local tnorm="$target"; [ "$target" = "agy" ] && tnorm="antigravity"
