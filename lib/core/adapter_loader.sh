@@ -26,8 +26,11 @@ list_adapters() {
   done | sort
 }
 
-# Portable file mtime in epoch seconds (BSD/macOS, then GNU/Linux).
-_clikae_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo 0; }
+# Portable file mtime in epoch seconds. GNU stat FIRST: on Linux `stat -f` means
+# --file-system (it silently prints garbage instead of failing), so the BSD form
+# must never be tried first there. BSD/macoS stat rejects `-c`, failing cleanly to
+# the fallback.
+_clikae_mtime() { stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || echo 0; }
 
 # newest_transcript_tank <engine>  ->  "<tank>\t<mtime-epoch>"  for the tank of
 # <engine> whose transcript for $PWD is the newest, or nothing.

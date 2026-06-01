@@ -91,9 +91,10 @@ _claude_meta_for_file() {
   [ -f "$f" ] || return 1
   local sid mtime nmsgs title
   sid="$(basename "$f" .jsonl)"
-  # BSD stat first, GNU stat as fallback; a dash if neither answers.
-  mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null \
-        || stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 \
+  # GNU stat FIRST (Linux `stat -f` = --file-system, prints garbage instead of
+  # failing, so it must not lead); BSD/macOS stat rejects `-c` and falls through.
+  mtime="$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 \
+        || stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null \
         || true)"
   [ -n "$mtime" ] || mtime="?"
   # Approximate turn count: lines carrying a role marker. Cheap and good enough
