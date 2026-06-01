@@ -22,3 +22,4 @@
 
 # Internal conversation backups — never publish
 conversations/
+DOGFOOD-*.md
