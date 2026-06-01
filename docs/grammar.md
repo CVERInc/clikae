@@ -90,9 +90,16 @@ The source is auto-detected from the active session in this shell. clikae always
 surfaced at runtime, never memorised:
 
 ```
-✓ carried your live session → claude/personal (resumed, context intact)
+✓ carried your live session → claude/personal (thread resumed)
 ⚠ codex can't resume a claude session — handed it a written brief (cold start)
 ```
+
+> **Precision (a tank holds more than fuel).** `to` carries the **session
+> transcript** — the thread continues — but NOT the engine's *long-term memory*,
+> which lives inside the tank dir (e.g. claude's file-memory under
+> `CLAUDE_CONFIG_DIR`) and stays with the source tank. So "resume" means the
+> conversation, not the brain. Carrying/sharing memory across tanks is a separate,
+> future opt-in (see the link/overlay idea in §10). Don't claim "context intact".
 
 `to`'s argument resolves **engine name first, then a tank of the current
 engine** (stateless and predictable: a known engine name always crosses to it).
@@ -273,6 +280,47 @@ clikae help                full command reference
       (TTY vs non-TTY), agy folding, and back-compat aliases.
 - [ ] **PowerShell mirror**: reflect the same grammar in `Clikae.psm1` where it
       applies.
+
+---
+
+## 10. Open design frontier — a tank holds more than fuel
+
+> Contributed by a concurrent session (the over-quota-detection work, profile b,
+> 2026-06-01). Recorded here as an open frontier, **not yet a decision** — the
+> maintainer's call whether to fold it into the model.
+
+**The tension.** §2 says *fuel = quota* and *tank = one account/config*. True,
+but the tank dir holds far more than fuel — it holds the engine's **long-term
+memory and every transcript**. Fuel is fungible; memory is not. So "swap the
+tank, keep burning" quietly swaps the engine's *brain* too. (Proof: claude's
+file-memory lives inside `CLAUDE_CONFIG_DIR`, so `profiles/claude/a` and
+`…/b` have entirely separate memory stores — they've even drifted to different
+naming conventions. Cross-tank memory only travels by a hand-rolled bridge.)
+
+**The unifying pattern.** agy's `~/.gemini` symlink-swap (§6) isn't a one-off.
+clikae keeps hitting engines that hardcode *where* their state lives in a way
+that mismatches the cardinality we want — and the fix is always filesystem
+indirection to reshape that mapping:
+
+| Case | Engine assumes | clikae wants | Indirection |
+|---|---|---|---|
+| **agy** (§6) | one hardcoded `~/.gemini` | many tanks | symlink fans **out** (1 path → pick of N) |
+| **shared memory** | memory bundled in the swapped dir | one shared store | symlink fans **in** (N paths → 1 store) |
+| **`to`** (§3.2) | transcript siloed per tank | carry it across | copy bridges the boundary |
+
+Same primitive, three directions. The cooperative engines (claude/codex/gh) are
+the easy case — an env var, so `env-dir`/`env-file`/`flag` just point it. agy and
+memory are the entangled cases that want the same tool.
+
+**The idea to weigh:** a fourth strategy alongside `env-dir`/`env-file`/`flag` —
+a **link / overlay** strategy. It would (a) make agy a principled strategy rather
+than a "target, not adapter" snowflake, (b) give *cross-tank memory sharing* a
+home (a warned, reversible opt-in symlinking one shared memory store into each
+tank — informed-consent style, like §6), and (c) connect `to`'s transcript-carry
+to the same family. i.e. "agy folds into the same grammar" extended one level
+down to "agy folds into the same *state-control model*, no special mechanism."
+
+Full write-up: `~/clikae-handoff-state-mapping.md`.
 
 ---
 
