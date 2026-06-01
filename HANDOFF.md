@@ -34,6 +34,25 @@ These mirror how this project was built and must be preserved:
 
 ## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30)
 
+> **⭐ READ FIRST (2026-06-01): the fuel-tank grammar landed on
+> `feat/relay-and-status`** (committed, not pushed). clikae is now **the verb** —
+> `clikae <engine> <tank>` is the bare switch (no `run`), `clikae to <target>`
+> carries a session onward (merges relay+handoff), `clikae tanks` lists, and agy
+> folds into the same verbs (`init agy`/`agy <tank>`/`remove agy`/`agy --release`,
+> no subcommand tree). Vocabulary is **engine/tank/fuel** everywhere (disk
+> `profiles/` + core fn names unchanged). **`docs/grammar.md` is the SSOT** for all
+> of this — read it before touching the command surface; §10 holds the open
+> "memory control plane" frontier (share/isolate/evaporate + a local-model
+> translator). bats **200/200**, shellcheck clean. The prose below predates this
+> and describes the relay/status/app work it's built on; still accurate as history.
+>
+> Open at this boundary (need a decision / can't verify locally): (a) **PowerShell
+> mirror** of the new grammar (no local pwsh — windows CI verifies, which needs a
+> push); (b) **merge `feat/agy-limit-detection`** (a concurrent session's worktree
+> `~/Desktop/GitHub/clikae-agy` @ `a44a303`; `limit_log_dry` feeds §5's agy
+> dry-aware switch; one `home.sh` overlap to reconcile by hand); (c) **implement**
+> any §10 memory mode (designed, not greenlit).
+
 > **UNRELEASED work on branch `feat/relay-and-status` (not yet tagged).** Two new
 > commands landed since v0.4.0, fully bats-covered (suite now **83 tests**, was
 > 71) and shellcheck-clean at `warning`:
