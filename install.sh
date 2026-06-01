@@ -47,6 +47,7 @@ fi
 say "Copying clikae -> $DEST"
 mkdir -p "$DEST"
 cp -R "$SRC_DIR/bin" "$SRC_DIR/lib" "$DEST/"
+[ -d "$SRC_DIR/assets" ] && cp -R "$SRC_DIR/assets" "$DEST/"   # logo for the welcome screen
 cp "$SRC_DIR/LICENSE" "$SRC_DIR/README.md" "$SRC_DIR/CHANGELOG.md" "$DEST/" 2>/dev/null || true
 
 chmod +x "$DEST/bin/clikae"

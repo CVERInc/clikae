@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A responsive welcome screen with the clikae logo.** First-run `clikae` (no
+  tanks yet) now shows the logo (`assets/logo.txt`, bright-cyan): on a wide
+  terminal the copy sits **beside** it (logo left, text right, placed with
+  cursor-column moves); on a narrow terminal or a pipe it **stacks** — reflowing
+  to the terminal width like a responsive page. Width is read with `stty size`
+  (not `tput cols`, which returns the terminfo default inside a command
+  substitution, so it can't see a narrow window). The everyday tank board is
+  unchanged (no logo — it would bury your tanks). `install.sh` and the Homebrew
+  formula now ship the `assets/` directory.
+
 ## [0.5.0] — 2026-06-01
 
 ### Fixed

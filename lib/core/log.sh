@@ -8,8 +8,10 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   __C_RED='\033[0;31m'
   __C_DIM='\033[2m'
   __C_BOLD='\033[1m'
+  __C_CYAN='\033[36m'
+  __C_BCYAN='\033[96m'
 else
-  __C_RESET='' __C_GREEN='' __C_YELLOW='' __C_RED='' __C_DIM='' __C_BOLD=''
+  __C_RESET='' __C_GREEN='' __C_YELLOW='' __C_RED='' __C_DIM='' __C_BOLD='' __C_CYAN='' __C_BCYAN=''
 fi
 
 log_ok()    { printf '%b[OK]%b    %s\n'    "$__C_GREEN"  "$__C_RESET" "$*"; }

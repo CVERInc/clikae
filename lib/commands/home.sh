@@ -272,10 +272,12 @@ EOF
   printf '  %-9s %s\n' "more" "clikae status · clikae doctor · clikae demo · clikae help"
 }
 
-# The welcome screen, shown when there are no profiles yet.
+# The welcome screen, shown when there are no tanks yet. RESPONSIVE (like a web
+# page reflowing): on a wide terminal the logo sits on the LEFT with the copy
+# beside it on the RIGHT (filling the logo's empty side); on a narrow terminal or
+# a pipe it stacks. The copy is one styled line per element (short enough to sit
+# beside the logo). Colour codes are literal \033 strings → printed with %b.
 _home_welcome() {
-  log_bold "clikae  ｷﾘｶｴ  ·  one CLI, many accounts — swap the tank, keep burning"
-  echo ""
   local installed="" total=0 cli inst binary strategy count label
   while IFS=$'\037' read -r cli inst binary strategy count label; do
     [ -n "$cli" ] || continue
@@ -287,20 +289,79 @@ _home_welcome() {
   done <<EOF
 $(scan_clis)
 EOF
-
   local example="claude"
+  [ -n "$installed" ] && example="$(printf '%s' "$installed" | awk '{print $1}')"
+
+  local -a BODY=()
+  BODY+=("${__C_BOLD}clikae  ｷﾘｶｴ${__C_RESET}")
+  BODY+=("switch any CLI between accounts")
+  BODY+=("${__C_DIM}— swap the tank, keep burning${__C_RESET}")
+  BODY+=("")
   if [ -n "$installed" ]; then
-    printf '  No tanks yet. clikae supports %d engines; installed on this machine:\n' "$total"
-    printf '    %b%s%b\n' "$__C_GREEN" "$installed" "$__C_RESET"
-    example="$(printf '%s' "$installed" | awk '{print $1}')"
+    BODY+=("${__C_BOLD}No tanks yet${__C_RESET} · ${total} engines, here:")
+    BODY+=("  ${__C_GREEN}${installed}${__C_RESET}")
   else
-    printf '  No tanks yet. clikae supports %d engines (none of them detected on PATH here).\n' "$total"
+    BODY+=("${__C_BOLD}No tanks yet${__C_RESET} · ${total} engines supported")
+    BODY+=("  ${__C_DIM}(none detected on PATH here)${__C_RESET}")
   fi
+  BODY+=("")
+  BODY+=("${__C_BOLD}Fill your first tank:${__C_RESET}")
+  BODY+=("  clikae init ${example} work --alias")
+  BODY+=("")
+  BODY+=("${__C_DIM}Curious?  clikae demo${__C_RESET}")
+
+  # Wide TTY → side-by-side; else stacked. (BODY is visible to the renderers via
+  # bash's dynamic scope.)
+  # Live terminal width. NB: `tput cols` inside $(...) reads its piped stdout, not
+  # the tty, so it returns the terminfo default (usually 80) regardless of the
+  # real window — useless here. `stty size </dev/tty` reads the controlling
+  # terminal directly, so it's correct even inside a command substitution.
+  local logo="$CLIKAE_ROOT/assets/logo.txt" cols
+  # Only measure width when actually on a terminal (a pipe is stacked anyway, and
+  # reading /dev/tty off a pipe just errors). NB: `stty size </dev/tty` — NOT
+  # `tput cols`, which returns the terminfo default (80) when its stdout is the
+  # command-substitution pipe, so it can't see a narrow window. Group-redirect
+  # stderr so a missing /dev/tty stays silent; `|| true` so set -e can't abort.
+  if [ -t 1 ] && [ -f "$logo" ]; then
+    cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+    [ -n "$cols" ] || cols="$(tput cols 2>/dev/null || echo 80)"
+    if [ "${cols:-0}" -ge 76 ]; then
+      _home_welcome_beside "$logo"
+      return
+    fi
+  fi
+  _home_welcome_stacked "$logo"
+}
+
+# Logo on top, copy below (also the no-logo / piped / narrow fallback).
+_home_welcome_stacked() {
+  local logo="$1" i
+  if [ -f "$logo" ]; then
+    printf '%b' "$__C_BCYAN"; cat "$logo"; printf '%b\n\n' "$__C_RESET"
+  fi
+  for ((i = 0; i < ${#BODY[@]}; i++)); do
+    printf '  %b\n' "${BODY[i]}"
+  done
+}
+
+# Logo on the LEFT, copy on the RIGHT — placed with absolute cursor-column moves
+# (\033[<col>G), so no multibyte-width padding math is needed. Wide TTY only.
+_home_welcome_beside() {
+  local logo="$1" line i j start
+  local -a L=()
+  while IFS= read -r line || [ -n "$line" ]; do L+=("$line"); done < "$logo"
+  local lh=${#L[@]} bh=${#BODY[@]}
+  start=$(( (lh - bh) / 2 )); [ "$start" -lt 0 ] && start=0
   echo ""
-  log_bold "  Fill your first tank (pick a CLI you use):"
-  log_dim  "    clikae init $example work --alias     # then: source your rc, run $example-work"
+  for ((i = 0; i < lh; i++)); do
+    printf '%b%s%b' "$__C_BCYAN" "${L[i]}" "$__C_RESET"
+    j=$(( i - start ))
+    if [ "$j" -ge 0 ] && [ "$j" -lt "$bh" ]; then
+      printf '\033[42G%b' "${BODY[j]}"
+    fi
+    printf '\n'
+  done
   echo ""
-  log_dim "  Curious first?  clikae demo   (a 30-second sandbox tour — touches nothing)"
 }
 
 # ---------------------------------------------------------------------------
