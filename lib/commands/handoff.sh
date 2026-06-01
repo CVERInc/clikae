@@ -26,14 +26,20 @@ dry. Read-only: the session is never modified.
 it uses whichever tank this shell is on (resolved from the engine's live env var,
 e.g. $CLAUDE_CONFIG_DIR).
 
-How the brief is written:
-  • If a summarizer is set, the session tail is piped to it and its output is the
-    brief. Point it at a LOCAL or cheap model so it costs nothing on the dry tank:
+How the brief is written (first available wins):
+  1. A summarizer you set (--summarizer, or $CLIKAE_HANDOFF_SUMMARIZER). It reads
+     the prompt+digest on stdin and writes the brief to stdout — point it anywhere,
+     a local model or a cloud one:
         export CLIKAE_HANDOFF_SUMMARIZER='llm -m my-local-model'
         clikae handoff claude --summarizer 'llm -m my-local-model'
-    The command reads the prompt+transcript on stdin and writes the brief to stdout.
-  • With no summarizer, you get a dependency-free RAW extract (metadata + recent
-    prompts), clearly labelled as raw.
+  2. Otherwise, a LOCAL model already on your machine, auto-detected and run
+     ON-DEVICE — apfel (Apple's on-device model, macOS 26), ollama, or llm. Your
+     session content never leaves the machine, costs nothing, works offline. The
+     choice is announced; turn it off with CLIKAE_HANDOFF_AUTOLOCAL=0.
+  3. Otherwise, a dependency-free RAW extract (metadata + recent prompts), labelled
+     as raw.
+The transcript is cleaned into a compact digest (capped via
+$CLIKAE_HANDOFF_CONTEXT_CHARS, default 8000) before it reaches any model.
 
 Options:
   --to <target>           After writing the brief, hand it to another tank: start

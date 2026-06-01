@@ -25,7 +25,7 @@ It:
 1. Creates **isolated tank directories** for each engine (one folder per engine + tank).
 2. Generates **shell aliases** (`claude-work`, `gh-personal`, …) you can use in a new terminal.
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
-4. **Carries a live session to another tank** when one runs dry — `clikae to <tank>` keeps the same conversation going on the other account's quota (and `clikae to <other-engine>` hands a written brief across vendors).
+4. **Carries a live session to another tank** when one runs dry — `clikae to <tank>` keeps the same conversation going on the other account's quota (and `clikae to <other-engine>` hands a written brief across vendors, summarized **on-device** by a local model when you have one — `apfel`, `ollama`, or `llm` — so your session never leaves your machine, costs nothing, and works offline).
 5. Cleans up after itself when you're done with a tank.
 
 It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus opt-in multi-account for **Antigravity / agy**), and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
