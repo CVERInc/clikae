@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.4-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
