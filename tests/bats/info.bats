@@ -8,9 +8,9 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"clikae"* ]]
   [[ "$output" == *"install root"* ]]
-  [[ "$output" == *"profile store"* ]]
+  [[ "$output" == *"tank store"* ]]
   [[ "$output" == *"adapters"* ]]
-  [[ "$output" == *"profiles"* ]]
+  [[ "$output" == *"tanks"* ]]
   # Adapters render comma-space separated, not paste's alternating delimiter.
   [[ "$output" != *",az "* ]]
 }

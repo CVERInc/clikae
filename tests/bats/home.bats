@@ -18,8 +18,8 @@ load '../helpers'
   clikae init codex cheap
   run clikae
   [ "$status" -eq 0 ]
-  # Header summary: 3 tanks across 2 CLIs.
-  [[ "$output" == *"3 tanks across 2 CLIs"* ]]
+  # Header summary: 3 tanks across 2 engines.
+  [[ "$output" == *"3 tanks across 2 engines"* ]]
   [[ "$output" == *"claude"* ]]
   [[ "$output" == *"work"* ]]
   [[ "$output" == *"personal"* ]]
@@ -164,6 +164,35 @@ _seed_tx() { # <profile> <jsonl-line>
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" != *"⚠"* ]]
+}
+
+# Seed agy's limit log (cli.log) under the test HOME — agy records its quota
+# event ONLY here, never a transcript (confirmed marker; see limit_log_dry).
+_agy_log() { # <line>
+  mkdir -p "$TEST_HOME/.gemini/antigravity-cli"
+  printf '%s\n' "$1" > "$TEST_HOME/.gemini/antigravity-cli/cli.log"
+}
+
+@test "the board badges a log-only target (agy) with ⚠ + reset when its quota log is dry" {
+  clikae init claude work                     # a tank, so the board renders
+  _fake_bin agy                               # agy installed → shown as a target
+  _agy_log "E0531 log.go:398] RESOURCE_EXHAUSTED (code 429): Individual quota reached. Contact your administrator to enable overages. Resets in 3h32m48s."
+  PATH="$TEST_HOME/fakebin:$PATH" run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy"* ]]
+  [[ "$output" == *"⚠"* ]]
+  [[ "$output" == *"Resets in 3h32m48s"* ]]   # the vendor's verbatim reset phrase
+}
+
+@test "a log-only target (agy) with a clean quota log is NOT badged" {
+  clikae init claude work
+  _fake_bin agy
+  _agy_log "I0531 log.go:1] starting conversation update stream — all normal"
+  PATH="$TEST_HOME/fakebin:$PATH" run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy"* ]]
+  [[ "$output" != *"⚠"* ]]
+  [[ "$output" == *"◈"* ]]                     # plain launch glyph, not a warning
 }
 
 @test "bare clikae changes nothing on disk (read-only)" {

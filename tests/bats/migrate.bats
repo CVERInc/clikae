@@ -152,7 +152,7 @@ EOF
   seed_legacy
   run clikae migrate --keep-login --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"carry over each profile's saved login"* ]]
+  [[ "$output" == *"carry over each tank's saved login"* ]]
   # still a dry run — nothing moved
   [ -d "$TEST_HOME/.claude-acct-a" ]
 }

@@ -191,7 +191,7 @@ EOF
   fi
   if [ "$keep_login" -eq 1 ]; then
     if declare -f adapter_migrate_credentials >/dev/null 2>&1; then
-      log_dim "Will try to carry over each profile's saved login (--keep-login)."
+      log_dim "Will try to carry over each tank's saved login (--keep-login)."
     else
       log_dim "--keep-login has no effect for '$cli' (no saved-login carry-over)."
     fi
