@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **On-device handoff briefs — local-first, private, free.** When you carry a
+  session across engines (`clikae to <other-engine>`, `clikae handoff`), clikae
+  now auto-detects a LOCAL model already on your machine — `apfel` (Apple's
+  on-device Foundation model, macOS 26), `ollama`, or `llm` — and writes the
+  brief **on-device**. Nothing is bundled or installed by clikae; your session
+  content (which may include source or secrets) never leaves the machine to make
+  the handoff, it costs nothing, and it works offline. The choice is announced
+  and fully overridable (`$CLIKAE_HANDOFF_SUMMARIZER`), can be turned off with
+  `CLIKAE_HANDOFF_AUTOLOCAL=0`, and always falls back to the dependency-free raw
+  extract. The transcript is first cleaned into a compact digest (capped via
+  `CLIKAE_HANDOFF_CONTEXT_CHARS`, default 8000 chars) so it fits a small
+  on-device model's context — which also yields more accurate, less hallucinated
+  briefs than feeding a raw JSONL tail.
+
 ### Changed
 
 - **Session titles now use Claude's own AI-generated name.** Claude Code writes

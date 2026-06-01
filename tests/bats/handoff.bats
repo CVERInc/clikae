@@ -81,6 +81,47 @@ _seed_transcript() {
   [[ "$output" == *"second real prompt"* ]] || false
 }
 
+@test "handoff auto-detects a local on-device summarizer and feeds it the cleaned digest" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "a1111111-1111-1111-1111-111111111111"
+  # Stub a local model named `apfel` on PATH: it confirms the cleaned digest (the
+  # real prompt) reached it on stdin, then emits a brief.
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/apfel" <<'STUB'
+#!/usr/bin/env bash
+if grep -q "second real prompt"; then echo "ONDEVICE_BRIEF saw-the-prompt"; else echo "ONDEVICE_BRIEF no-prompt"; fi
+STUB
+  chmod +x "$TEST_HOME/bin/apfel"
+  cd "$work"
+  PATH="$TEST_HOME/bin:$PATH" CLIKAE_HANDOFF_AUTOLOCAL=1 \
+    CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ONDEVICE_BRIEF saw-the-prompt"* ]] || false
+  # Announced the on-device summarizer, and didn't fall back to the raw extract.
+  [[ "$output" == *"on-device"* ]] || false
+  [[ "$output" != *"raw extract"* ]] || false
+}
+
+@test "handoff auto-local can be turned off with CLIKAE_HANDOFF_AUTOLOCAL=0" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "a2222222-2222-2222-2222-222222222222"
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/apfel" <<'STUB'
+#!/usr/bin/env bash
+echo "SHOULD_NOT_RUN"
+STUB
+  chmod +x "$TEST_HOME/bin/apfel"
+  cd "$work"
+  # Even with apfel on PATH, AUTOLOCAL=0 keeps it to the dependency-free raw extract.
+  PATH="$TEST_HOME/bin:$PATH" CLIKAE_HANDOFF_AUTOLOCAL=0 \
+    CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae handoff claude
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"raw extract"* ]] || false
+  [[ "$output" != *"SHOULD_NOT_RUN"* ]] || false
+}
+
 @test "handoff writes to --out" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"

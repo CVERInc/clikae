@@ -24,6 +24,12 @@
 # the raw extract. Lines, not bytes, so we never cut a JSON object in half.
 CLIKAE_HANDOFF_LINES="${CLIKAE_HANDOFF_LINES:-60}"
 
+# Character budget for the cleaned digest fed to a summarizer (~4 chars/token).
+# Small on-device models (Apple's is ~4096 tokens) can't take a raw JSONL tail,
+# so we feed cleaned text capped to this, leaving room for the instruction and
+# the model's own output. Cleaned text is better signal for any model anyway.
+CLIKAE_HANDOFF_CONTEXT_CHARS="${CLIKAE_HANDOFF_CONTEXT_CHARS:-8000}"
+
 # Reliable single-value metadata: every transcript line repeats these as plain
 # "key":"value" pairs, so a first-match grep is safe (no JSON parser needed).
 _handoff_field() {
@@ -53,6 +59,29 @@ _handoff_recent_prompts() {
     | grep -av '^[[:space:]]*<local-command' \
     | grep -av '^[[:space:]]*$' \
     | tail -n "$2" || true
+}
+
+# Build the compact, plain-text digest fed to a summarizer: the recent real
+# prompts plus the assistant's text replies, JSONL/tool noise stripped, capped to
+# CLIKAE_HANDOFF_CONTEXT_CHARS (keeping the MOST RECENT). A small on-device model
+# can't take a raw JSONL tail (Apple's is ~4096 tokens); cleaned text is also
+# better signal for any model — feeding the raw tail produced generic, sometimes
+# hallucinated briefs, while this cleaned digest produced specific, accurate ones.
+# grep/sed only (no jq/python).
+_handoff_clean_tail() {
+  local t="$1"
+  {
+    echo "## Recent user prompts (oldest first)"
+    _handoff_recent_prompts "$t" 14 | sed 's/^/- /'
+    echo
+    echo "## Recent assistant notes (oldest first)"
+    grep -a '"role":"assistant"' "$t" 2>/dev/null \
+      | grep -aoE '"text":"([^"\\]|\\.)*"' \
+      | sed 's/^"text":"//; s/"$//' \
+      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+      | grep -av '^[[:space:]]*$' \
+      | tail -n 14 | sed 's/^/- /'
+  } | tail -c "$CLIKAE_HANDOFF_CONTEXT_CHARS"
 }
 
 # Print the raw (no-model) brief to stdout.
@@ -94,8 +123,8 @@ _handoff_summarizer_prompt() {
   cat <<'EOF'
 You are writing a HANDOFF BRIEF so a different AI coding assistant (possibly a
 different model or vendor) can continue this work after the current one ran out
-of quota. Below is the tail of the session transcript (JSONL, one event per
-line). Read it and write a concise markdown brief with these sections:
+of quota. Below is a digest of the recent conversation (most recent last). Read
+it and write a concise markdown brief with these sections:
 
   ## Goal — what the user is ultimately trying to do
   ## Done — what's already been accomplished this session
@@ -103,29 +132,65 @@ line). Read it and write a concise markdown brief with these sections:
   ## Watch out — gotchas, decisions made, files/commands that matter
 
 Be specific (name files, commands, branches). Do NOT invent anything not in the
-transcript. Keep it under ~250 words. Output only the brief.
+digest. Keep it under ~250 words. Output only the brief.
 
---- TRANSCRIPT TAIL ---
+--- RECENT CONVERSATION (oldest first) ---
 EOF
 }
 
+# Find a LOCAL summarizer already on the machine, so a smart brief is generated
+# ON-DEVICE (private, free, offline) out of the box — nothing bundled, nothing
+# installed by clikae. Order favours the lightest zero-config path first. Prints
+# the command string (for `sh -c`), or returns non-zero if none is found. Never
+# picks a cloud model: that stays the user's explicit opt-in via
+# $CLIKAE_HANDOFF_SUMMARIZER. The brief is the user's own session content, so
+# summarizing it locally means it never leaves the machine to make the handoff.
+_handoff_local_summarizer() {
+  if command -v apfel >/dev/null 2>&1; then
+    printf 'apfel -q\n'; return 0          # Apple on-device model (macOS 26 + Apple Intelligence)
+  fi
+  if command -v ollama >/dev/null 2>&1; then
+    local m; m="$(ollama list 2>/dev/null | awk 'NR==2{print $1; exit}')"
+    [ -n "$m" ] && { printf 'ollama run %s\n' "$m"; return 0; }
+  fi
+  if command -v llm >/dev/null 2>&1; then
+    printf 'llm\n'; return 0                # Simon Willison's llm, whatever model it defaults to
+  fi
+  return 1
+}
+
 # handoff_render <transcript> [<summarizer-cmd>]
-# Prints the brief to stdout. Uses the summarizer if given (arg) or configured
-# ($CLIKAE_HANDOFF_SUMMARIZER); otherwise the raw extract.
+# Prints the brief to stdout. Summarizer precedence:
+#   1. explicit arg ($2, e.g. `--summarizer`)
+#   2. configured $CLIKAE_HANDOFF_SUMMARIZER
+#   3. a LOCAL on-device model auto-detected on this machine (unless
+#      CLIKAE_HANDOFF_AUTOLOCAL=0 turns that off)
+# With none of those, a dependency-free raw extract.
 handoff_render() {
-  local t="$1" summarizer="${2:-$CLIKAE_HANDOFF_SUMMARIZER}"
+  local t="$1" summarizer="${2:-$CLIKAE_HANDOFF_SUMMARIZER}" auto=0
   [ -f "$t" ] || { log_err "Transcript not found: $t"; return 1; }
+
+  # Nothing explicit/configured → try a local on-device model before giving up to
+  # the raw extract. Announced (never a silent surprise) and trivially overridable
+  # ($CLIKAE_HANDOFF_SUMMARIZER, or CLIKAE_HANDOFF_AUTOLOCAL=0); on failure it
+  # still falls back to raw, so a handoff is never lost.
+  if [ -z "$summarizer" ] && [ "${CLIKAE_HANDOFF_AUTOLOCAL:-1}" = "1" ]; then
+    summarizer="$(_handoff_local_summarizer || true)"
+    [ -n "$summarizer" ] && auto=1
+  fi
 
   if [ -z "$summarizer" ]; then
     _handoff_raw_brief "$t"
     return 0
   fi
 
-  # Feed the model: instructions + transcript tail, on stdin. The summarizer
-  # reads stdin and writes the brief to stdout. A non-zero exit (or empty
-  # output) falls back to the raw extract so a handoff is never lost.
+  [ "$auto" -eq 1 ] && log_dim "Brief written on-device by: $summarizer  (override with \$CLIKAE_HANDOFF_SUMMARIZER, disable with CLIKAE_HANDOFF_AUTOLOCAL=0)" >&2
+
+  # Feed the model: instructions + a cleaned, capped digest of the recent
+  # conversation, on stdin. The summarizer reads stdin and writes the brief to
+  # stdout. A non-zero exit (or empty output) falls back to the raw extract.
   local out=""
-  out="$( { _handoff_summarizer_prompt; tail -n "$CLIKAE_HANDOFF_LINES" "$t"; } \
+  out="$( { _handoff_summarizer_prompt; _handoff_clean_tail "$t"; } \
             | sh -c "$summarizer" 2>/dev/null || true )"
   if [ -n "$out" ]; then
     printf '%s\n' "$out"

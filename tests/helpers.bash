@@ -15,6 +15,10 @@ setup() {
   export CLIKAE_HOME="$TEST_HOME/.clikae"
   export SHELL="/bin/zsh"
   export NO_COLOR=1
+  # Keep the suite hermetic: don't let a local-model CLI that happens to be on
+  # the dev machine's PATH (apfel/ollama/llm) make `handoff` auto-summarize. Tests
+  # that exercise auto-detection re-enable this and stub a summarizer on PATH.
+  export CLIKAE_HANDOFF_AUTOLOCAL=0
   RC_FILE="$TEST_HOME/.zshrc"
   # Make EVERY assertion count. bats only enforces a test's LAST command, so an
   # intermediate `[ … ]` (or command) that fails is otherwise silently ignored.
