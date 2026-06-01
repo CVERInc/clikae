@@ -9,22 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`clikae antigravity` — opt-in, sudo-style multi-account for agy.** Antigravity
-  hardcodes its state under `~/.gemini` and ignores every env var (no config-dir
-  flag), so clikae's clean per-shell model can't switch it — by default it stays
-  single-account (launch-only, shown as its own dashboard group with a `◈`).
-  But rather than withhold the capability, clikae offers it as a consciously
-  enabled **power mode**: `clikae antigravity enable` warns about the tradeoffs
-  (it turns your real `~/.gemini` into a managed symlink; it's **global** — one
-  account active at a time across all terminals; swapping under a running agy can
-  corrupt it), asks first, backs up `~/.gemini`, and migrates it into a `default`
-  slot. Then `add <name>` / `use <name>` switch accounts by repointing the
-  symlink (refusing while an `agy` process is live), `list`/`status` show slots
-  with the active one marked, and `disable` restores a normal single-account
-  `~/.gemini`. When enabled, the slots appear as real tanks on the dashboard
-  (active one marked, Enter launches via `use` + agy). Covered by bats (the full
-  enable→add→use→disable lifecycle, consent gating, and the dashboard marker),
-  all against an isolated sandbox so no real `~/.gemini` is touched.
+- **The fuel-tank grammar — clikae is now the verb.** The name is 切り替え
+  (*switching*), so the headline action carries no verb of its own: **`clikae
+  <engine> <tank>`** switches an engine to one of your tanks and runs it (`run` is
+  a hidden alias). One **`clikae to <target>`** carries your current session
+  onward — same engine resumes the conversation, a different engine gets a written
+  brief — replacing the separate `relay`/`handoff` verbs (kept as hidden aliases),
+  with the mechanism announced at runtime. Listing is **`clikae tanks`** (`list`
+  stays as an alias). The vocabulary is **engine** (a.k.a. CLI) + **tank** (a.k.a.
+  profile) + **fuel/dry** throughout help, the dashboard, `status`/`doctor`/`info`
+  headers, and all messages; the on-disk `profiles/` layout and core function
+  names are unchanged. The full design lives in `docs/grammar.md` (the SSOT), with
+  §10 recording the open "memory control plane" frontier. A session-aware guard
+  only prompts carry-vs-fresh when the current tank is over quota. bats 200/200.
+
+- **Antigravity (agy) folds into the same verbs — no special subcommand tree.**
+  agy hardcodes `~/.gemini` and ignores env vars, so clikae can't switch it
+  per-shell. It now uses the **same verbs as every engine**, via an opt-in,
+  reversible symlink-swap power mode: `clikae init agy <tank>` (the first one
+  warns and asks before taking `~/.gemini` over, backs it up, migrates your login
+  into a `default` tank), `clikae agy <tank>` (repoint the symlink — refusing
+  while `agy` is live — and run, with a global-switch notice), `clikae remove agy
+  <tank>` (removing the last tank offers to restore a normal `~/.gemini`), and
+  `clikae agy --release` (restore a single-account `~/.gemini`, keep the tanks).
+  The canonical engine name is **`agy`** (`antigravity` is a hidden long alias).
+  Replaces the earlier `antigravity enable/add/use/disable` subcommand tree
+  (which would have collided with the bare switch). Also fixed a latent crash
+  where `clikae list`/`tanks` died on agy tanks (a missing-adapter `exit 1`
+  propagating through `set -e`). bats rewritten (10 tests) against an isolated
+  sandbox so no real `~/.gemini` is touched.
 
 - **`clikae demo` — a guided tour in a throwaway sandbox.** A non-interactive,
   ~30-second walkthrough that runs entirely under a temp `CLIKAE_HOME`: it shows
