@@ -29,10 +29,54 @@ _relay_preview_card() {
     "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from" "$__C_GREEN" "$__C_RESET"
 }
 
-# Arrow-key chooser for WHICH session to carry — the cure for the home-dir slug
-# ambiguity (everything you run from ~ shares one slug, so "newest" is a guess).
-# Lists recent sessions under <from_dir>; echoes the chosen session id (return 0),
-# or returns nonzero if cancelled. Drawn on /dev/tty so stdout stays the result.
+# Generic arrow-key menu drawn on /dev/tty. Args: <title> then one label per
+# remaining arg. Echoes the selected index (0-based) and returns 0, or returns 1
+# if cancelled — stdout stays clean for the result. Both relay pickers (which
+# session, which target) build a parallel value array and map the index back, so
+# the terminal handling lives in exactly one place.
+_relay_menu() {
+  local title="$1"; shift
+  local -a opts=("$@")
+  local n=${#opts[@]}
+  [ "$n" -gt 0 ] || return 1
+  # Read-write fd so we can both draw to and read keys from the terminal.
+  exec 3<>/dev/tty 2>/dev/null || return 1
+  local sel=0 i key rest
+  printf '\033[?1049h\033[?25l' >&3
+  # shellcheck disable=SC2064
+  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" RETURN
+  while :; do
+    {
+      printf '\033[H\033[2J'
+      printf '%b%s%b\n\n' "$__C_BOLD" "$title" "$__C_RESET"
+      for ((i = 0; i < n; i++)); do
+        if [ "$i" -eq "$sel" ]; then printf '  %b❯ %s%b\n' "$__C_GREEN" "${opts[$i]}" "$__C_RESET"
+        else printf '    %b%s%b\n' "$__C_DIM" "${opts[$i]}" "$__C_RESET"; fi
+      done
+    } >&3
+    IFS= read -rsn1 key <&3 || break
+    case "$key" in
+      $'\e')
+        if IFS= read -rsn2 -t 1 rest <&3; then
+          case "$rest" in '[A') sel=$(((sel - 1 + n) % n)) ;; '[B') sel=$(((sel + 1) % n)) ;; esac
+        else break; fi ;;
+      k) sel=$(((sel - 1 + n) % n)) ;;
+      j) sel=$(((sel + 1) % n)) ;;
+      q) break ;;
+      ''|$'\n'|$'\r')
+        printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+        printf '%s\n' "$sel"
+        return 0 ;;
+    esac
+  done
+  printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+  return 1
+}
+
+# Chooser for WHICH session to carry — the cure for the home-dir slug ambiguity
+# (everything you run from ~ shares one slug, so "newest" is a guess). Lists
+# recent sessions under <from_dir>; echoes the chosen session id, or nonzero if
+# cancelled.
 _relay_pick_session() {
   local from_dir="$1"
   declare -F adapter_list_sessions >/dev/null || return 1
@@ -49,42 +93,40 @@ _relay_pick_session() {
   done <<EOF
 $rows
 EOF
-  local n=${#sids[@]}
-  [ "$n" -gt 0 ] || return 1
+  [ "${#sids[@]}" -gt 0 ] || return 1
+  local idx
+  idx="$(_relay_menu "Pick a session to carry   ↑↓ move · ⏎ select · q cancel" "${labels[@]}" || true)"
+  [ -n "$idx" ] || return 1
+  printf '%s\n' "${sids[$idx]}"
+}
 
-  # Read-write fd so we can both draw to and read keys from the terminal.
-  exec 3<>/dev/tty 2>/dev/null || return 1
-  local sel=0 i key rest
-  printf '\033[?1049h\033[?25l' >&3
-  # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" RETURN
-  while :; do
-    {
-      printf '\033[H\033[2J'
-      printf '%bPick a session to carry%b   %b↑↓ move · ⏎ select · q cancel%b\n\n' \
-        "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-      for ((i = 0; i < n; i++)); do
-        if [ "$i" -eq "$sel" ]; then printf '  %b❯ %s%b\n' "$__C_GREEN" "${labels[$i]}" "$__C_RESET"
-        else printf '    %b%s%b\n' "$__C_DIM" "${labels[$i]}" "$__C_RESET"; fi
-      done
-    } >&3
-    IFS= read -rsn1 key <&3 || break
-    case "$key" in
-      $'\e')
-        if IFS= read -rsn2 -t 1 rest <&3; then
-          case "$rest" in '[A') sel=$(((sel - 1 + n) % n)) ;; '[B') sel=$(((sel + 1) % n)) ;; esac
-        else break; fi ;;
-      k) sel=$(((sel - 1 + n) % n)) ;;
-      j) sel=$(((sel + 1) % n)) ;;
-      q) break ;;
-      ''|$'\n'|$'\r')
-        printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
-        printf '%s\n' "${sids[$sel]}"
-        return 0 ;;
-    esac
+# Chooser for the TARGET tank when `clikae relay <cli>` is run without a target —
+# so a relay never dead-ends on "missing target", it just asks. Lists the cli's
+# other profiles (the source is excluded), annotated with the logged-in account
+# when the adapter can tell. Echoes the chosen profile name, or nonzero/cancel.
+_relay_pick_target() {
+  local cli="$1" from="$2"
+  local base="$CLIKAE_HOME/profiles/$cli"
+  [ -d "$base" ] || return 1
+  local -a names=() labels=()
+  local d name lbl
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    [ "$name" = "$from" ] && continue
+    lbl=""
+    if declare -F adapter_account_label >/dev/null; then
+      lbl="$(adapter_account_label "${d%/}" 2>/dev/null || true)"
+    fi
+    names+=("$name")
+    if [ -n "$lbl" ]; then labels+=("$(printf '%-12s %s' "$name" "$lbl")")
+    else labels+=("$name"); fi
   done
-  printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
-  return 1
+  [ "${#names[@]}" -gt 0 ] || return 1
+  local idx
+  idx="$(_relay_menu "Relay $cli from '$from' — pick a target tank   ↑↓ · ⏎ · q cancel" "${labels[@]}" || true)"
+  [ -n "$idx" ] || return 1
+  printf '%s\n' "${names[$idx]}"
 }
 
 cmd_relay() {
@@ -100,7 +142,9 @@ Hand the current session over to another profile and continue on its quota —
 for when the profile you're on hits its usage limit mid-task.
 
 With one profile name, <from> is auto-detected from the CLI's live env var
-(e.g. $CLAUDE_CONFIG_DIR in this shell). Give both to be explicit.
+(e.g. $CLAUDE_CONFIG_DIR in this shell). Give both to be explicit. With no
+profile at all, you pick the target from an arrow-key list (a TTY is required;
+scripts must name the target).
 
 Arguments after `--` are passed straight through to the CLI.
 
@@ -119,6 +163,7 @@ Options:
       --fresh          switch tanks but start a NEW conversation (don't carry)
 
 Examples:
+  clikae relay claude                # pick the target tank from a list
   clikae relay claude b              # from = whatever this shell is on, to = b
   clikae relay claude a b            # explicit: from a, to b
   clikae relay claude a b --fresh    # open b on a clean slate (no carry)
@@ -147,7 +192,7 @@ EOF
   validate_name cli "$cli"
 
   case "${#positionals[@]}" in
-    1) log_fail "Missing target profile. Usage: clikae relay $cli [<from>] <to>" ;;
+    1) to="" ;;   # target omitted — picked interactively below (or errors if no TTY)
     2) to="${positionals[1]}" ;;
     3) from="${positionals[1]}"; to="${positionals[2]}"; got_from=1 ;;
     *) log_fail "Too many arguments. Usage: clikae relay $cli [<from>] <to>" ;;
@@ -168,6 +213,17 @@ EOF
       exit 1
     fi
     log_dim "Detected current profile: $from  (\$$var)"
+  fi
+
+  # No target given → ask, rather than dead-ending on an error. Needs a TTY;
+  # scripts must still name the target explicitly (preserves the old contract).
+  if [ -z "$to" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+      to="$(_relay_pick_target "$cli" "$from" || true)"
+      [ -n "$to" ] || { log_dim "Cancelled — no target tank chosen."; return 0; }
+    else
+      log_fail "Missing target profile. Usage: clikae relay $cli [<from>] <to>"
+    fi
   fi
 
   validate_name profile "$from"
