@@ -32,11 +32,25 @@ It works for any CLI that selects its config via an environment variable (or a f
 
 ## Install
 
+**Homebrew** (macOS / Linux):
+
 ```bash
 brew install CVERInc/clikae/clikae
 ```
 
-Or from source / `curl | bash` — see [docs/installation.md](docs/installation.md).
+The `CVERInc/clikae/` prefix is the **tap** — clikae ships from its own tap repo,
+not (yet) in homebrew-core, so the prefix is expected and normal (a fully
+supported install, not a sign it's "unpublished").
+
+**Or `curl | bash`** (no Homebrew needed — installs to `~/.local`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CVERInc/clikae/main/install.sh | bash
+```
+
+It's pure bash, so read it first if you'd rather not pipe to a shell — every line
+is auditable. From-source and custom-`PREFIX` options:
+[docs/installation.md](docs/installation.md).
 
 > **Platform.** clikae is a **macOS / Linux** tool — it's bash, and that's the
 > point ("every line is auditable"). A **PowerShell module** lives in
