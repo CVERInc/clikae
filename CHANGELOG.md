@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-01
+
 ### Added
 
 - **A responsive welcome screen with the clikae logo.** First-run `clikae` (no
