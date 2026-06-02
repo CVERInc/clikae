@@ -72,20 +72,34 @@ plain, conventional verbs.
 
 | Command | What it does |
 |---|---|
-| `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next pool tank when it runs dry. |
-| `pool [list] [--json]` / `pool add\|remove <target>` / `pool seed [<engine>]` | Manage the fuel pool — the ordered tanks `watch` falls through to. `--json` emits a JSON array for scripts and the GUI. |
+| `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
+| `auto [ask\|safe\|full]` | **(BETA, claude)** How much clikae carries on its own when a session you launched through it hits the limit. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` just keeps going. The board's `A` key flips it too. |
+| `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
+
+> **Supervised launch (BETA · claude · feedback welcome).** When you start claude
+> *through* clikae, clikae stays as the parent. **When that session ends after
+> hitting its limit** — quit the dead session in an interactive run; a headless
+> `claude -p` exits on its own — clikae carries you onward to the next tank in your
+> burn order (per `clikae auto`) in the **same terminal** (one redraw), and your
+> conversation continues there. Honest limits: it advances *on exit*, not by killing
+> a live session mid-stream (that needs engine support — see issue
+> anthropics/claude-code#35744); one hop per run; interactive **codex** can't be
+> auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+> background unless you launched it through clikae (no daemon) — deliberate.
+> `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
 
 ### Inspect
 
 | Command | What it does |
 |---|---|
-| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`), and the fuel-pool order. On a terminal it's an **interactive launcher** (↑/↓ move, ⏎ open, `r` carry session, `n` new, `q` quit); piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
+| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `x` incognito, `n` new, `a` rename the tank, `d` delete, `/` filter, `h` cycle language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
+| `lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts). Persists to `$CLIKAE_HOME/lang`; the board's `h` key flips it live. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LANG`/`$LC_ALL` > en-US. |
 | `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output ({cli, profile, account, path}) for scripts and the GUI. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
 | `doctor` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next. |
 | `info [--json]` | Show install paths, platform, adapters, and tank count. |
 | `adapters` | List supported engines with descriptions. |
-| `demo` | A 30-second guided tour in a throwaway sandbox — shows isolated tanks, the tank board, the fuel pool, and the `to` idea, then cleans up. Touches nothing real; the accounts are simulated, so it needs no installed engine. |
+| `demo` | A 30-second guided tour in a throwaway sandbox — shows isolated tanks, the tank board, and the `to` idea (your tanks are the reserve), then cleans up. Touches nothing real; the accounts are simulated, so it needs no installed engine. |
 
 ### Antigravity (agy) — same verbs, one power mode
 
@@ -216,31 +230,21 @@ transcript is fed with `$CLIKAE_HANDOFF_LINES` (default `60`). Carrying onward i
 > handoff claude --out HANDOFF.md` just writes a brief to a file without starting
 > anything. Run `clikae help to` / `help relay` / `help handoff` for details.
 
-## Ambient: notice a dry tank and switch (`watch` + `pool`)
+## Ambient: notice a dry tank and switch (`watch`)
 
 Instead of switching by hand, let clikae watch for the moment a tank runs dry and
-fall through to the next one. First, set up your **fuel pool** — the tanks to use,
-in priority order:
+fall through to the next one. **Your tanks are the reserve — there's nothing to
+set up.** Just watch the current session:
 
 ```bash
-clikae pool add claude/a       # most preferred
-clikae pool add claude/b
-clikae pool add codex/work
-clikae pool add antigravity     # last resort
-clikae pool list
-clikae pool seed                # or: add every existing tank at once
-```
-
-Then watch the current session:
-
-```bash
-clikae watch claude            # offer to switch when it looks dry
+clikae watch claude            # offer to switch to the next claude tank when dry
 clikae watch claude --auto     # switch automatically (asks once for consent)
-clikae watch claude --to codex/work   # ignore the pool; go straight here
+clikae watch claude --to codex/work   # cross to a specific tank/engine instead
 ```
 
-When it detects a dry tank it carries onward to the next pool entry (the one
-after the tank you're on). By default it **asks first**; `--auto` switches
+When it detects a dry tank it carries onward to the next tank of the same engine
+(skipping any that are themselves over quota); cross-engine needs an explicit
+`--to`. By default it **asks first**; `--auto` switches
 automatically after a **one-time consent** (remembered in
 `$CLIKAE_HOME/auto-relay-consent` — delete that file to revoke), and always tells
 you what it did.

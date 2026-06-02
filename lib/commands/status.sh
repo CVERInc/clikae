@@ -153,7 +153,18 @@ EOF
 
   if [ "$as_json" -eq 1 ]; then
     printf '%s' "$rows" | _status_render_json
-  else
-    printf '%s' "$rows" | _status_render_table
+    return 0
+  fi
+
+  printf '%s' "$rows" | _status_render_table
+
+  # The "what clikae did" tail — recent session carries (clikae to / board relay,
+  # and later the supervisor's auto-switches). Only shown when there's history.
+  local recent; recent="$(history_recent 5)"
+  if [ -n "$recent" ]; then
+    printf '\n  %brecent carries%b\n' "$__C_BOLD" "$__C_RESET"
+    printf '%s\n' "$recent" | while IFS= read -r _l; do
+      [ -n "$_l" ] && printf '    %b%s%b\n' "$__C_DIM" "$_l" "$__C_RESET"
+    done
   fi
 }

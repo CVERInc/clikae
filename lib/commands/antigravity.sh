@@ -48,6 +48,27 @@ _agy_active() {
   case "$target" in "$slots"/*) basename "$target" ;; esac
 }
 
+# _agy_rename <old> <new> — rename an agy tank: move the slot dir, and if it's the
+# active one, repoint the ~/.gemini symlink. agy has no shell alias or Keychain
+# login to carry, so this is all there is to it. Refuses if agy is running, the
+# source is missing, or the target name is taken.
+_agy_rename() {
+  local old="$1" new="$2" slots link active
+  validate_name profile "$old"; validate_name profile "$new"
+  slots="$(_agy_slots)"; link="$(_agy_link)"
+  [ -d "$slots/$old" ] || log_fail "No such agy tank: $old"
+  [ ! -e "$slots/$new" ] || log_fail "An agy tank named '$new' already exists."
+  _agy_assert_not_running
+  active="$(_agy_active)"
+  mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
+  if [ "$active" = "$old" ]; then
+    rm -f "$link"; ln -s "$slots/$new" "$link"
+    log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
+  else
+    log_ok "Renamed agy tank '$old' → '$new'."
+  fi
+}
+
 # First-time takeover: warn, confirm, back up ~/.gemini, adopt it as a tank, and
 # manage it via a symlink. Returns 1 (no takeover) if the user declines.
 _agy_takeover() {

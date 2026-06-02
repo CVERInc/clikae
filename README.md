@@ -98,6 +98,7 @@ clikae                            # your home dashboard (run `clikae doctor` for
 - **v0.3** — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
 - **v0.4** — Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total) and a `migrate` guard against moving an in-use config dir.
 - **v0.5** *(in progress)* — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` for carrying a session onward (same engine resumes, another engine gets a brief), Antigravity/agy folded into the same verbs, and an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
+- **next** *(in progress)* — the home board becomes a single, reorderable **burn order** (`[` / `]`); switch a tank by name alone (`clikae cver`); interface localisation (en-US / ja-JP / zh-TW, `clikae lang`); and a **BETA supervised launch** — start claude through clikae and it can carry you to the next tank automatically when you hit the limit (`clikae auto`, claude-only for now). The auto-switch is **beta — feedback very welcome** while we shake out how seamless it feels on real sessions.
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing

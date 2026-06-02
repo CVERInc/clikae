@@ -54,7 +54,7 @@ a verb you must decode a metaphor to use.
 | The usage allowance in a tank | **fuel** / quota | — |
 | A tank that's out of quota | **dry** tank | Badged `⚠` on the board. |
 | Using a CLI (consuming fuel) | **burn** | Prose only ("swap the tank, keep burning"). **Not a command.** |
-| The ordered reserve tanks `watch` falls through | **pool** | — |
+| The reserve to fall through to when a tank runs dry | **your other tanks** | No separate concept: the tanks on the board ARE the reserve. (The old `pool` command was removed — undiscoverable and redundant.) |
 | Carrying a live session to another tank | **relay** (same CLI) / **handoff** (cross-CLI) | Internal/legacy terms. The user-facing verb is `to` (§3). |
 
 **`profile` and `slot` are retired from user-facing text.** They survive only as
@@ -122,10 +122,12 @@ fuel words forced on them.
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
 | `clikae tanks` (alias: `clikae list` / `ls`) | List every tank, with the logged-in account. `tanks` is canonical — a **noun query**, like the existing `adapters` command, not a coined verb. `list`/`ls` stay for convention and for the GUI's `list --json`. |
 | `clikae status [cli]` | Which tank each CLI is on **in this shell**. |
-| `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward (drives `to` through the `pool`). |
-| `clikae pool [add\|remove] [target]` | Manage the reserve order `watch` falls through. |
+| `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
+| `clikae auto [ask\|safe\|full]` | (BETA, claude) how much the supervised launch carries on its own on a dry tank. |
+| `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank in the burn order. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
+| `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `h` key flips it live. |
 | `clikae doctor` / `info` / `adapters` / `demo` / `help` / `version` | Inspect / meta. |
 
 ---
@@ -135,7 +137,7 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `pool`, `rename`, `migrate`, `app`, `alias`, `run`, `continue`,
+   `watch`, `auto`, `rename`, `migrate`, `app`, `alias`, `lang`, `run`, `continue`,
    `relay`, `handoff`, `doctor`, `info`, `adapters`, `demo`, `home`, `help`,
    `version`, plus `-h/--help/-v/--version`) → run that command.
 2. **Else, a known CLI?** (an adapter in `lib/adapters/` or a target in

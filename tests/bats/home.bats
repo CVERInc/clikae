@@ -35,16 +35,6 @@ load '../helpers'
   [[ "$output" == *"active here"* ]] || false
 }
 
-@test "the fuel-pool order is shown when a pool is set" {
-  clikae init claude work
-  clikae pool add claude/work
-  clikae pool add claude/spare
-  run clikae
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"fuel pool"* ]] || false
-  [[ "$output" == *"claude/work → claude/spare"* ]] || false
-}
-
 @test "dashboard is reachable by name and via --help" {
   run clikae dashboard
   [ "$status" -eq 0 ]
@@ -62,14 +52,17 @@ _fake_bin() {
   chmod +x "$TEST_HOME/fakebin/$1"
 }
 
-@test "the board shows the real alias name (default and custom)" {
+@test "the board shows tank NAMES, not the shell alias (alias retired from board)" {
   clikae init claude work --alias            # default alias: claude-work
   clikae init claude solo
   clikae alias claude solo --name mysolo     # custom alias name
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude-work"* ]] || false
-  [[ "$output" == *"mysolo"* ]] || false
+  # The name is the identity; the separate alias is no longer shown on the board.
+  [[ "$output" == *"work"* ]] || false
+  [[ "$output" == *"solo"* ]] || false
+  [[ "$output" != *"claude-work"* ]] || false
+  [[ "$output" != *"mysolo"* ]] || false
 }
 
 @test "Also available lists a relay-capable CLI with no tank (codex)" {
@@ -91,21 +84,21 @@ _fake_bin() {
   [[ "$output" != *"gh"* ]] || false
 }
 
-@test "a single-account target on PATH shows as its own group (agy)" {
+@test "a single-account target (agy) shows under Also available, not a floating group" {
   clikae init claude work
   _fake_bin agy
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
   [[ "$output" == *"single-account"* ]] || false
-  [[ "$output" == *"◈"* ]]                 # rendered as a launch target, not a tank
+  [[ "$output" == *"Also available"* ]] || false   # tucked in, not floating on its own
 }
 
 @test "the launch hint emits real colour escapes, not a literal backslash-033" {
   # Regression: colour codes are stored as the literal string '\033[2m' and only
   # printf %b interprets them — embedding one in a %s string leaks it as text.
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
-  source "$CLIKAE_TEST_ROOT/lib/core/pool.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"   # T_* strings the renderer reads
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   __C_DIM='\033[2m'; __C_RESET='\033[0m'; __C_BOLD='\033[1m'; __C_GREEN='\033[0;32m'
   local items; items="$(printf 'tank\037claude\037work\037me@x\037claude-work\0371\037\n')"
@@ -122,7 +115,7 @@ _fake_bin() {
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"antigravity"* ]] || false
+  [[ "$output" == *"[agy]"* ]] || false        # shown by its short name, not "antigravity"
   [[ "$output" == *"work"* ]] || false
   [[ "$output" == *"active here"* ]]          # work is where the symlink points
 }
@@ -166,6 +159,30 @@ _seed_tx() { # <profile> <jsonl-line>
   [[ "$output" != *"over quota"* ]] || false
 }
 
+@test "the board badges the NEW session-limit shape (middot + apiErrorStatus:429)" {
+  # The exact shape Claude Code writes for a session limit (dogfooded 2026-06-02,
+  # the real burn that prompted this): type=assistant, model=<synthetic>,
+  # isApiErrorMessage:true, apiErrorStatus:429, error:rate_limit, and a
+  # "·"-separated reset phrase. Locks the new wording/structure in forever.
+  clikae init claude dry
+  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2026-06-02T09:44:49.962Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"over quota"* ]] || false
+}
+
+@test "limit detection tolerates spaced JSON (future pretty-print)" {
+  # Defensive: if a future Claude Code pretty-prints its JSONL (space after each
+  # colon), the structural greps must still match.
+  clikae init claude dry
+  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2026-06-02T09:44:49.962Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"over quota"* ]] || false
+}
+
 # Seed agy's limit log (cli.log) under the test HOME — agy records its quota
 # event ONLY here, never a transcript (confirmed marker; see limit_log_dry).
 _agy_log() { # <line>
@@ -191,8 +208,7 @@ _agy_log() { # <line>
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
-  [[ "$output" != *"over quota"* ]] || false
-  [[ "$output" == *"◈"* ]]                     # plain launch glyph, not a warning
+  [[ "$output" != *"over quota"* ]] || false   # clean log → not badged dry
 }
 
 @test "bare clikae changes nothing on disk (read-only)" {
@@ -222,8 +238,9 @@ _agy_log() { # <line>
   cd "$work"
   run clikae
   [ "$status" -eq 0 ]
-  # Headline present, titled by Claude's ai-title, naming the engine/tank to resume.
-  [[ "$output" == *"續上次"* ]] || false
+  # Headline present (en-US per the pinned test locale), titled by Claude's
+  # ai-title, naming the engine/tank to resume.
+  [[ "$output" == *"Continue"* ]] || false
   [[ "$output" == *"Resume me please"* ]] || false
   [[ "$output" == *"claude/a"* ]] || false
 }
@@ -234,7 +251,7 @@ _agy_log() { # <line>
   cd "$empty"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"續上次"* ]] || false
+  [[ "$output" != *"Continue"* ]] || false
 }
 
 @test "the continue list shows multiple recent sessions, newest first" {
@@ -269,4 +286,104 @@ _agy_log() { # <line>
   [[ "$output" == *"Has a recap"* ]] || false
   [[ "$output" == *"Fixed the parser; next add tests."* ]] || false
   [[ "$output" != *"disable recaps"* ]] || false
+}
+
+# --- M1c: the board is a flat BURN ORDER (no engine grouping) -------------------
+
+@test "the board lists tanks in the order from the order file" {
+  clikae init claude alpha
+  clikae init claude beta
+  printf 'claude/beta\nclaude/alpha\n' > "$CLIKAE_HOME/order"
+  run clikae
+  [ "$status" -eq 0 ]
+  local lb la
+  lb="$(printf '%s\n' "$output" | grep -n 'beta'  | head -1 | cut -d: -f1)"
+  la="$(printf '%s\n' "$output" | grep -n 'alpha' | head -1 | cut -d: -f1)"
+  [ -n "$lb" ] && [ -n "$la" ] && [ "$lb" -lt "$la" ]
+}
+
+@test "the board shows an inline [engine] tag, not a group header" {
+  clikae init claude work
+  clikae init codex main
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[claude]"* ]] || false
+  [[ "$output" == *"[codex]"* ]] || false
+}
+
+@test "_home_reorder moves a tank within the order file" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  # Default order is alpha, beta. Moving beta up -> beta first.
+  _home_reorder claude beta -1
+  [ "$(head -1 "$CLIKAE_HOME/order")" = "claude/beta" ]
+}
+
+@test "_home_wrap_prefixed wraps CJK by DISPLAY width (no overflow / col-0 wrap)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # 40 two-char CJK words ≈ 160 display cols; at the 80-col fallback it MUST wrap,
+  # and (the bug) no line may exceed the terminal width.
+  local s=""; local i
+  for i in $(seq 1 40); do s="$s 字字"; done
+  run _home_wrap_prefixed "$s" "  -> " 5 "" "" 0
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -ge 2 ]   # wrapped into multiple lines
+  local line maxdw=0 dw
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    dw="$(_dwidth "$line")"; [ "$dw" -gt "$maxdw" ] && maxdw="$dw"
+  done < <(printf '%s\n' "$output")
+  [ "$maxdw" -le 80 ]                                   # nothing overflows 80 cols
+}
+
+@test "agy tanks show an [agy] tag, not [antigravity]" {
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/main"
+  printf 'consented\n' > "$CLIKAE_HOME/antigravity-multi-consent"
+  ln -s "$CLIKAE_HOME/profiles/antigravity/main" "$HOME/.gemini"
+  clikae init claude work
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[agy]"* ]] || false
+  [[ "$output" != *"[antigravity]"* ]] || false
+}
+
+@test "a runaway Continue title is truncated with an ellipsis (no wrap)" {
+  clikae init claude a
+  local work="$TEST_HOME/tw"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  local long; long="$(printf 'X%.0s' $(seq 1 200))"
+  printf '{"type":"ai-title","aiTitle":"%s","sessionId":"a"}\n' "$long" > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"…"* ]] || false                  # truncated
+  [[ "$output" != *"$long"* ]] || false              # not the full 200-char title
+}
+
+@test "the new-tank picker groups AI engines before tool CLIs (+ agy power)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  run _home_newtank_choices
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude  (AI)"* ]] || false
+  [[ "$output" == *"codex  (AI)"* ]] || false
+  [[ "$output" == *"aws  (tool)"* ]] || false
+  [[ "$output" == *"agy  (AI"* ]] || false
+  # AI listed before tools.
+  local lc la
+  lc="$(printf '%s\n' "$output" | grep -n 'claude  (AI)' | head -1 | cut -d: -f1)"
+  la="$(printf '%s\n' "$output" | grep -n 'aws  (tool)'  | head -1 | cut -d: -f1)"
+  [ -n "$lc" ] && [ -n "$la" ] && [ "$lc" -lt "$la" ]
 }

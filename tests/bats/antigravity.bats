@@ -33,6 +33,20 @@ _stub_agy() {
   [ "$(cat "$HOME/.gemini/auth.txt")" = "LOGIN" ]                     # login still readable
 }
 
+@test "rename agy: moves the tank dir, and repoints ~/.gemini for the active one" {
+  mkdir -p "$HOME/.gemini"; echo "LOGIN" > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # default(active) + work
+  # inactive tank: just moves
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/antigravity/laptop" ]
+  [ ! -d "$CLIKAE_HOME/profiles/antigravity/work" ]
+  # active tank: moves AND repoints the symlink
+  run clikae rename agy default main
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/main" ]
+}
+
 @test "init agy: declined (answer N) changes nothing" {
   mkdir -p "$HOME/.gemini"
   run bash -c "printf 'n\n' | '$CLIKAE_BIN' init agy work"
