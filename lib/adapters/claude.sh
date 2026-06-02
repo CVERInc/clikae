@@ -47,6 +47,27 @@ adapter_resume_args() {
   printf -- '--resume\n%s\n' "$sid"
 }
 
+# Optional hook: a one-line RECAP of a session — "where you left off + next step".
+# Claude Code writes these into the transcript as
+#   {"type":"system","subtype":"away_summary","content":"…"}
+# (the "※ recap:" line it shows at the bottom of a session). We take the LAST one
+# (most recent), flatten newlines, and drop its "(disable recaps in /config)"
+# hint. Empty if the session has none. Used by the home board's continue list to
+# show what a session was actually doing — far richer than a title. grep/sed only.
+adapter_session_recap() {
+  local dir="$1" sid="$2"
+  [ -n "$sid" ] || return 0
+  local f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+  [ -f "$f" ] || return 0
+  grep '"subtype":"away_summary"' "$f" 2>/dev/null | tail -n 1 \
+    | grep -oE '"content":"([^"\\]|\\.)*"' | head -n 1 \
+    | sed -E 's/^"content":"//; s/"$//' \
+    | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+    | sed -E 's/ ?\(disable recaps in \/config\) ?//' \
+    | sed -E 's/  +/ /g; s/^ //; s/ $//'
+  return 0
+}
+
 # --- session carry-over for `clikae relay` ----------------------------------
 #
 # Claude Code stores each conversation as a JSONL transcript at
@@ -176,6 +197,48 @@ adapter_list_sessions() {
 $(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
 EOF
   [ "$any" -eq 1 ] || return 1
+}
+
+# Optional hook: CHEAP list of this directory's recent sessions under <dir> —
+# "<epoch-mtime> \037 <session-id>" per line, newest first, capped at [limit]
+# (default 5). No content reads (just the dir listing + mtimes), so the home
+# board can rank sessions across many tanks fast, then pull the title/recap for
+# only the few it actually shows. GNU stat first (Linux `stat -f` prints garbage
+# instead of failing), BSD/macOS falls through.
+# Optional hook: a session's title only (no message count / no full meta), as
+# cheaply as possible — for the home board's continue list, which reads many
+# sessions. Prefers Claude's ai-title; falls back to the opening user prompt.
+# Fast path: a LITERAL line match (not a whole-file regex extraction), then
+# extract from that single line. Avoids the costly grep -oE / grep -c full scans
+# that _claude_meta_for_file does — important on multi-MB transcripts.
+adapter_session_title() {
+  local dir="$1" sid="$2" f t
+  [ -n "$sid" ] || return 0
+  f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+  [ -f "$f" ] || return 0
+  t="$(grep '"aiTitle"' "$f" 2>/dev/null | tail -n 1 \
+        | grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  if [ -z "$t" ]; then
+    t="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null \
+          | grep -oE '"(text|content)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+          | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  fi
+  printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+}
+
+adapter_recent_sids() {
+  local dir="$1" limit="${2:-5}" proj f sid mt
+  proj="$dir/projects/$(_claude_project_slug "$PWD")"
+  [ -d "$proj" ] || return 0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .jsonl)"
+    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
+    printf '%s\037%s\n' "$mt" "$sid"
+  done <<EOF
+$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
+EOF
 }
 
 adapter_relay() {

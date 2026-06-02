@@ -236,3 +236,37 @@ _agy_log() { # <line>
   [ "$status" -eq 0 ]
   [[ "$output" != *"續上次"* ]] || false
 }
+
+@test "the continue list shows multiple recent sessions, newest first" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"Older session","sessionId":"a"}\n' > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
+  sleep 1
+  printf '{"type":"ai-title","aiTitle":"Newer session","sessionId":"b"}\n' > "$d/bbb00000-0000-0000-0000-000000000000.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Newer session"* ]] || false
+  [[ "$output" == *"Older session"* ]] || false
+  # newest first: "Newer" appears before "Older"
+  [[ "$output" == *"Newer session"*"Older session"* ]] || false
+}
+
+@test "a session's recap is shown under its continue row, hint stripped" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  {
+    printf '{"type":"ai-title","aiTitle":"Has a recap","sessionId":"c"}\n'
+    printf '{"type":"system","subtype":"away_summary","content":"Fixed the parser; next add tests. (disable recaps in /config)"}\n'
+  } > "$d/ccc00000-0000-0000-0000-000000000000.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Has a recap"* ]] || false
+  [[ "$output" == *"Fixed the parser; next add tests."* ]] || false
+  [[ "$output" != *"disable recaps"* ]] || false
+}
