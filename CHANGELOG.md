@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The interactive board leads with "continue".** When this directory has
   sessions you can resume, `clikae` now opens with a **續上次 / continue list** at
   the top — your most recent sessions across all tanks (newest first), each titled
-  by Claude's own ai-title. Press Enter to reopen the selected one
+  by Claude's own ai-title and marked with a status dot consistent with the tanks:
+  ● if that session is on the account you're using right now, ○ if it's on
+  another — so you can see at a glance which ones mean switching accounts. Press Enter to reopen the selected one
   (`clikae <engine> <tank> -- --resume <id>` under the hood); the selected row
   also expands to a one-line **recap** — _"where you left off + next step"_ — read
   free from Claude's own session summary (`away_summary`, the `※ recap:` it shows

@@ -99,7 +99,7 @@ EOF
   printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
     | while IFS=$'\037' read -r mt engine tank sid; do
         [ -n "$sid" ] || continue
-        local dir title recap age now _d
+        local dir title recap age now _d aflag _act
         dir="$(profile_dir "$engine" "$tank")"
         load_adapter "$engine" >/dev/null 2>&1 || true
         if declare -F adapter_session_title >/dev/null 2>&1; then
@@ -115,7 +115,11 @@ EOF
         elif [ "$_d" -lt 3600 ];  then age="$(( _d / 60 ))m ago"
         elif [ "$_d" -lt 86400 ]; then age="$(( _d / 3600 ))h ago"
         else                           age="$(( _d / 86400 ))d ago"; fi
-        printf 'resume\037%s\037%s\037%s\037%s\037%s\037%s\n' "$engine" "$tank" "$title" "$recap" "$age" "$sid"
+        # Is this session on the tank you're currently using? (● vs ○). Packed into
+        # the active field as "<flag> <age>" so the draw has both.
+        aflag="0"; _act="$(_home_active_for "$engine" 2>/dev/null || true)"
+        [ -n "$_act" ] && [ "$_act" = "$tank" ] && aflag="1"
+        printf 'resume\037%s\037%s\037%s\037%s\037%s %s\037%s\n' "$engine" "$tank" "$title" "$recap" "$aflag" "$age" "$sid"
       done
 }
 
@@ -256,7 +260,7 @@ _home_render_static() {
     "$n_tanks" "$([ "$n_tanks" = 1 ] || echo s)" \
     "$n_clis"  "$([ "$n_clis" = 1 ] || echo s)" "$__C_RESET"
 
-  local kind cli profile label alias active note cur_cli="" cli_count also="" printed_resume=0
+  local kind cli profile label alias active note cur_cli="" cli_count also="" printed_resume=0 rdot
   local launch_cli="" launch_profile="" launch_alias=""
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -265,8 +269,9 @@ _home_render_static() {
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
-        printf '    %b%s/%s%b · %b"%s"%b\n' "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$label" "$__C_RESET"
-        [ -n "$alias" ] && printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+        if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
+        printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$label" "$__C_RESET"
+        [ -n "$alias" ] && printf '        %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
         ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then
@@ -623,7 +628,7 @@ _home_pick_draw_body() {
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line rdot rage
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -641,15 +646,19 @@ _home_pick_draw_body() {
         # selected one. Title is Claude's ai-title; the selected row also shows a
         # one-line recap ("where you left off + next step").
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
+        # active field is "<flag> <age>": flag 1 = this session is on the tank you're
+        # using now (●), else ○. Age is the hover fallback when there's no recap.
+        if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
+        rage="${active#* }"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b%s/%s%b · "%s"\n' "$mark" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
+          printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
           if [ -n "$alias" ]; then
-            printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+            printf '        %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
           else
-            printf '      %b%s · Enter 接回%b\n' "$__C_DIM" "$active" "$__C_RESET"
+            printf '        %b%s · Enter 接回%b\n' "$__C_DIM" "$rage" "$__C_RESET"
           fi
         else
-          printf '  %b %b%s/%s · "%s"%b\n' "$mark" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
+          printf '  %b %b %b%s/%s · "%s"%b\n' "$mark" "$rdot" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
         fi
         ;;
       tank)
