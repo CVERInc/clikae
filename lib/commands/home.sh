@@ -634,6 +634,7 @@ EOF
     printf '%s/%s is already the session you are on — nothing to relay.\n' "$cli" "$profile"
     return 0
   fi
+  history_log "board: relay $cli/$from → $cli/$profile"
   exec "$CLIKAE_BIN" relay "$cli" "$from" "$profile"
 }
 

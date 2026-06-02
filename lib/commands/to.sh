@@ -177,5 +177,8 @@ EOF2
   fi
 
   [ "${#passthru[@]}" -eq 0 ] || cmd+=(-- "${passthru[@]}")
+  # Record the carry in the "what clikae did" log before we hand off (clikae status
+  # shows the recent tail). cmd[0] is $CLIKAE_BIN, so log from the verb on.
+  history_log "to: ${cmd[*]:1}"
   exec "${cmd[@]}"
 }
