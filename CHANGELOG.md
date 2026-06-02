@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Your tanks ARE the fuel reserve — the `pool` concept is gone.** The separate,
+  CLI-only "fuel pool" was undiscoverable (you couldn't set it from the board) and
+  redundant with the tanks clikae already knows. Removed entirely (`clikae pool`,
+  `lib/core/pool.sh`, the board's fuel-pool line). Falling through to another tank
+  now works with zero setup:
+  - **`clikae to`** (no target) carries your session to the **next tank of the
+    engine you're on** — a real resume, skipping any tank that's itself over quota.
+    Name a tank to pick it; name an engine to cross (a cold-start brief).
+  - **`clikae watch`** falls through to the same next-tank logic; cross-engine
+    still takes an explicit `--to`.
+  If you ever want a custom order, that belongs on the board (reorder the tanks) —
+  not a hidden file. New core helper `next_tank`.
+
+### Added
+
+- **Interface localisation — en-US / ja-JP / zh-TW.** The dashboard, prompts, and
+  key hints now speak your language. A bash-3.2-safe string table
+  (`lib/core/i18n.sh`) loads one set of `T_*` globals per render — no per-keypress
+  cost. Resolution: `$CLIKAE_LANG` env > saved choice (`clikae lang <code>`) >
+  `$LANG`/`$LC_ALL` > en-US. Set it with **`clikae lang en-US|ja-JP|zh-TW`** or flip
+  it **live with the `h` key** in the board. The katakana wordmark `ｷﾘｶｴ` stays as
+  the brand mark in every language. This also _cleanly separates_ the previously
+  mixed-in strings (續上次 / 無痕 / 接回) so each language renders consistently.
+- **A more capable interactive board.** New keys: **Tab / Shift-Tab** to move,
+  **`g` / `G`** to jump to top / bottom, **`1`-`9`** to jump to a row, **`/`** to
+  live-filter tanks, and **`?`** for a full, localised key legend (so every action
+  stays discoverable without crowding the footer).
+- **`a` now renames the whole TANK**, not just its alias — it runs `clikae rename`,
+  carrying the managed alias and saved login across. Alias-only edits stay at
+  `clikae alias` on the CLI. (agy tanks are a global `~/.gemini` target and can't
+  be renamed.)
+- **Continue rows offer a choice.** Pressing Enter on a 續上次 / continue row now
+  opens a tiny menu: **resume that exact session**, or **switch to its tank with a
+  fresh session** (換油箱開新局).
+
+### Fixed
+
+- **Long recaps wrap with a hanging indent.** A continue row's recap no longer
+  spills back to column 0 when it wraps — continuation lines align under the
+  recap's first word.
+- **CJK labels line up.** The board's left-hand labels (launch / fuel pool / more)
+  now pad by display width, so Japanese / Chinese labels align like the English
+  ones instead of drifting.
+
+### Hardened
+
+- **Over-quota detection is future-proofed.** The structural transcript greps that
+  spot a genuine Claude session/usage limit now tolerate optional whitespace after
+  JSON colons, so a future Claude Code that pretty-prints its `.jsonl` can't
+  silently break the `!` badge. Timestamps are compared by bare ISO value. Locked
+  in with regression tests for the exact session-limit shape (middot reset phrase
+  + `apiErrorStatus:429`) and a spaced-JSON variant. (Detection itself already
+  handled the new "session limit" wording — confirmed against a real burn.)
+
 ## [0.5.2] — 2026-06-02
 
 ### Added

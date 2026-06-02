@@ -32,6 +32,8 @@ export CLIKAE_HOME
 # Load core libs
 # shellcheck source=../lib/core/log.sh
 source "$CLIKAE_LIB/core/log.sh"
+# shellcheck source=../lib/core/i18n.sh
+source "$CLIKAE_LIB/core/i18n.sh"
 # shellcheck source=../lib/core/json.sh
 source "$CLIKAE_LIB/core/json.sh"
 # shellcheck source=../lib/core/profile_store.sh
@@ -42,8 +44,6 @@ source "$CLIKAE_LIB/core/shell_rc.sh"
 source "$CLIKAE_LIB/core/adapter_loader.sh"
 # shellcheck source=../lib/core/handoff.sh
 source "$CLIKAE_LIB/core/handoff.sh"
-# shellcheck source=../lib/core/pool.sh
-source "$CLIKAE_LIB/core/pool.sh"
 # shellcheck source=../lib/core/scan.sh
 source "$CLIKAE_LIB/core/scan.sh"
 # shellcheck source=../lib/core/limit.sh
@@ -59,7 +59,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|to|continue|relay|handoff|watch|pool|antigravity|agy|rename|alias|migrate|env|info|adapters|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|to|continue|relay|handoff|watch|antigravity|agy|rename|alias|migrate|env|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }

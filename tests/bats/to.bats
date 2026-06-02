@@ -53,3 +53,42 @@ _seed_tx() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"no recent session"* ]] || false
 }
+
+# --- v0.5.3: your tanks ARE the reserve (no pool) — bare `to` falls through -----
+
+@test "next_tank returns the other tank of the same engine" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  clikae init claude a
+  clikae init claude b
+  [ "$(next_tank claude a)" = "b" ]
+  [ "$(next_tank claude b)" = "a" ]
+}
+
+@test "next_tank is empty when the engine has only one tank" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  clikae init claude solo
+  [ -z "$(next_tank claude solo)" ]
+}
+
+@test "bare 'clikae to' falls through to the next tank of this engine" {
+  _stub_claude; export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  clikae init claude a
+  clikae init claude b
+  cd "$TEST_HOME"; _seed_tx a          # most-recent session here is on tank a
+  run clikae to                        # no target → next claude tank (b)
+  [[ "$output" == *"next claude tank"* ]] || false
+  [[ "$output" == *"b"* ]] || false
+}
+
+@test "bare 'clikae to' errors when there's no other tank to fall through to" {
+  _stub_claude; export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  clikae init claude solo
+  cd "$TEST_HOME"; _seed_tx solo
+  run clikae to
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No other claude tank"* ]] || false
+}

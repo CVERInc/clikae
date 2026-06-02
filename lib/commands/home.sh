@@ -5,8 +5,7 @@
 #   have tanks -> the "tank board": every profile (tank) grouped by CLI, the one
 #                 active in THIS shell marked, account + real alias name, plus an
 #                 "Also available" line for relay-capable CLIs/targets you could
-#                 open even without a tank yet (e.g. codex, agy), and the
-#                 fuel-pool fall-through order.
+#                 open even without a tank yet (e.g. codex, agy).
 #   no tanks   -> a welcome: what clikae found on this machine + the first step.
 # The full command reference is one keystroke away at `clikae help`; the deep
 # machine check at `clikae doctor`. All read-only.
@@ -165,7 +164,7 @@ EOF
       load_adapter "$name" >/dev/null 2>&1 || exit 0
       declare -F adapter_start_with_prompt >/dev/null 2>&1 || exit 0
       command -v "$(adapter_meta_cli_binary)" >/dev/null 2>&1 || exit 0
-      printf 'agent\037%s\037\037\037\0370\037no tank yet — opens default\n' "$name"
+      printf 'agent\037%s\037\037\037\0370\037%s\n' "$name" "$T_NO_TANK_DEFAULT"
     )
   done <<EOF
 $(list_adapters)
@@ -248,6 +247,69 @@ _home_is_dry() {
     '$1==c && $2==p{print $3; found=1} END{exit !found}'
 }
 
+# _home_wrap_prefixed <text> <prefix> <hang> <color> <reset> [extra]
+# Word-wrap <text> to the live terminal width, printing the FIRST line as
+# "<prefix><chunk>" and every continuation line as "<hang spaces><chunk>" — a
+# hanging indent so a long recap's wrapped lines align under its first word, not
+# the left margin. <color>/<reset> are %b colour codes applied per line (so the
+# dim style survives the newline). <extra> is any outer indent the CALLER adds
+# around this block (the interactive picker pipes through a `  ` prefix, so it
+# passes 2) — subtracted from the width budget so the first line can't overflow.
+# Width via `stty size </dev/tty` (works inside $()); 80 fallback. Byte-length
+# math, so CJK recaps wrap a touch early — acceptable, never overflows.
+_home_wrap_prefixed() {
+  local text="$1" prefix="$2" hang="$3" color="$4" reset="$5" extra="${6:-0}"
+  local cols pad first=1 word line="" avail glob=0
+  cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+  [ "$cols" -ge 30 ] || cols=80
+  pad="$(printf '%*s' "$hang" '')"
+  avail=$(( cols - hang - extra - 1 ))
+  [ "$avail" -ge 12 ] || avail=$(( cols - extra - 1 ))
+  # Don't let a `*` in a recap glob against the cwd while we word-split.
+  case $- in *f*) ;; *) glob=1; set -f ;; esac
+  for word in $text; do
+    if [ -z "$line" ]; then
+      line="$word"
+    elif [ "$(( ${#line} + 1 + ${#word} ))" -le "$avail" ]; then
+      line="$line $word"
+    else
+      if [ "$first" -eq 1 ]; then printf '%b%s%s%b\n' "$color" "$prefix" "$line" "$reset"; first=0
+      else printf '%b%s%s%b\n' "$color" "$pad" "$line" "$reset"; fi
+      line="$word"
+    fi
+  done
+  if [ -n "$line" ]; then
+    if [ "$first" -eq 1 ]; then printf '%b%s%s%b\n' "$color" "$prefix" "$line" "$reset"
+    else printf '%b%s%s%b\n' "$color" "$pad" "$line" "$reset"; fi
+  fi
+  [ "$glob" -eq 1 ] && set +f
+  return 0
+}
+
+# _dwidth <str> -> the string's DISPLAY width in terminal columns, counting CJK /
+# fullwidth glyphs as 2. Heuristic but bash-3.2-safe and dependency-free: in a
+# UTF-8 locale `${#s}` is the CHARACTER count and `wc -c` the BYTE count, so the
+# 3-byte (CJK) chars contribute (bytes-chars)/2 extra columns. In a C/POSIX locale
+# `${#s}` already equals bytes, so this collapses to the byte count — i.e. it
+# degrades gracefully to the old %-Ns behaviour, never worse.
+_dwidth() {
+  local s="$1" chars bytes
+  chars=${#s}
+  bytes=$(printf '%s' "$s" | wc -c); bytes=${bytes//[^0-9]/}
+  printf '%s' "$(( chars + (bytes - chars) / 2 ))"
+}
+
+# _home_lpad <str> <width> -> <str> right-padded with spaces to <width> DISPLAY
+# columns (so a CJK label lines up the same as an ASCII one). The drop-in for a
+# `%-<width>s` that would otherwise mis-measure multibyte text.
+_home_lpad() {
+  local s="$1" w="$2" dw pad
+  dw="$(_dwidth "$s")"
+  pad=$(( w - dw )); [ "$pad" -lt 0 ] && pad=0
+  printf '%s%*s' "$s" "$pad" ''
+}
+
 # Render the launchable items (passed as $1) as the static tank board. The dry
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
@@ -255,10 +317,8 @@ _home_render_static() {
   local n_tanks n_clis
   n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c .)"
   n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c .)"
-  printf '%bclikae  ｷﾘｶｴ%b  %b·  %s tank%s across %s engine%s%b\n\n' \
-    "$__C_BOLD" "$__C_RESET" "$__C_DIM" \
-    "$n_tanks" "$([ "$n_tanks" = 1 ] || echo s)" \
-    "$n_clis"  "$([ "$n_clis" = 1 ] || echo s)" "$__C_RESET"
+  printf '%b%s%b  %b·  %s%b\n\n' \
+    "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
 
   local kind cli profile label alias active note cur_cli="" cli_count also="" printed_resume=0 rdot
   local launch_cli="" launch_profile="" launch_alias=""
@@ -268,10 +328,12 @@ _home_render_static() {
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
         printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$label" "$__C_RESET"
-        [ -n "$alias" ] && printf '        %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+        # recap (carried in the alias field): word-wrapped with a hanging indent so
+        # long recaps align under their first word instead of spilling to column 0.
+        [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
         ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then
@@ -289,9 +351,9 @@ _home_render_static() {
           any_dry=1
           if [ "$active" = "1" ] || [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         elif [ "$active" = "1" ]; then
-          printf '    %b●%b %-10s %b%-28s%b %b%s%b  %b← active here%b\n' \
+          printf '    %b●%b %-10s %b%-28s%b %b%s%b  %b← %s%b\n' \
             "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$__C_RESET"
+            "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET"
           launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"
         else
           printf '    %b○%b %-10s %b%-28s%b %b%s%b\n' \
@@ -322,31 +384,27 @@ $items
 EOF
 
   if [ -n "$also" ]; then
-    printf '\n  %bAlso available%b\n' "$__C_BOLD" "$__C_RESET"
+    printf '\n  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
     printf '%s' "$also"
   fi
   echo ""
 
-  local pool
-  pool="$(pool_list | awk 'NR>1{printf " → "} {printf "%s", $0} END{ if (NR) print "" }')"
-  [ -n "$pool" ] && printf '  %-9s %s\n' "fuel pool" "$pool"
-
   if [ -n "$any_dry" ]; then
-    printf '  %b! over quota%b — a dry tank is a poor relay target. Open a %b○%b tank, or relay your session onto a fresh one (%bclikae relay%b / the %br%b key).\n' \
-      "$__C_YELLOW" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
+    printf '  %b! %s%b — %s\n' \
+      "$__C_YELLOW" "$T_OVER_QUOTA" "$__C_RESET" "$T_OVER_QUOTA_HINT"
   fi
 
   if [ -n "$launch_cli" ]; then
     # Colour via %b args, never embedded in a %s string (the codes are literal
     # \033 sequences and only printf %b interprets them).
     if [ -n "$launch_alias" ]; then
-      printf '  %-9s clikae %s %s   %b(or your alias: %s)%b\n' \
-        "launch" "$launch_cli" "$launch_profile" "$__C_DIM" "$launch_alias" "$__C_RESET"
+      printf '  %s clikae %s %s   %b(%s: %s)%b\n' \
+        "$(_home_lpad "$T_LAUNCH" 9)" "$launch_cli" "$launch_profile" "$__C_DIM" "$T_OR_ALIAS" "$launch_alias" "$__C_RESET"
     else
-      printf '  %-9s clikae %s %s\n' "launch" "$launch_cli" "$launch_profile"
+      printf '  %s clikae %s %s\n' "$(_home_lpad "$T_LAUNCH" 9)" "$launch_cli" "$launch_profile"
     fi
   fi
-  printf '  %-9s %s\n' "more" "clikae status · clikae doctor · clikae demo · clikae help"
+  printf '  %s %s\n' "$(_home_lpad "$T_MORE" 9)" "clikae status · clikae doctor · clikae demo · clikae help"
 }
 
 # The welcome screen, shown when there are no tanks yet. RESPONSIVE (like a web
@@ -370,22 +428,22 @@ EOF
   [ -n "$installed" ] && example="$(printf '%s' "$installed" | awk '{print $1}')"
 
   local -a BODY=()
-  BODY+=("${__C_BOLD}clikae  ｷﾘｶｴ${__C_RESET}")
-  BODY+=("switch any CLI between accounts")
-  BODY+=("${__C_DIM}— swap the tank, keep burning${__C_RESET}")
+  BODY+=("${__C_BOLD}${T_WORDMARK}${__C_RESET}")
+  BODY+=("${T_TAGLINE1}")
+  BODY+=("${__C_DIM}${T_TAGLINE2}${__C_RESET}")
   BODY+=("")
   if [ -n "$installed" ]; then
-    BODY+=("${__C_BOLD}No tanks yet${__C_RESET} · ${total} engines, here:")
+    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · ${total} ${T_ENGINES_HERE}")
     BODY+=("  ${__C_GREEN}${installed}${__C_RESET}")
   else
-    BODY+=("${__C_BOLD}No tanks yet${__C_RESET} · ${total} engines supported")
-    BODY+=("  ${__C_DIM}(none detected on PATH here)${__C_RESET}")
+    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · ${total} ${T_ENGINES_SUPPORTED}")
+    BODY+=("  ${__C_DIM}${T_NONE_DETECTED}${__C_RESET}")
   fi
   BODY+=("")
-  BODY+=("${__C_BOLD}Fill your first tank:${__C_RESET}")
+  BODY+=("${__C_BOLD}${T_FILL_FIRST}${__C_RESET}")
   BODY+=("  clikae init ${example} work --alias")
   BODY+=("")
-  BODY+=("${__C_DIM}Curious?  clikae demo${__C_RESET}")
+  BODY+=("${__C_DIM}${T_CURIOUS_DEMO}${__C_RESET}")
 
   # Wide TTY → side-by-side; else stacked. (BODY is visible to the renderers via
   # bash's dynamic scope.)
@@ -581,35 +639,95 @@ EOF
   exec "$CLIKAE_BIN" relay "$cli" "$from" "$profile"
 }
 
-# Rename the shell alias for a selected tank row (the `a` key): type a new name,
-# then `clikae alias <engine> <tank> --name <new>` (which replaces the old block).
-_home_rename_alias() {
+# Rename the selected TANK (the `a` key): type a new name, then
+# `clikae rename <engine> <old> <new>` — the powerful rename that moves the tank
+# dir, rewrites the managed alias, AND carries the saved login across. Per the
+# v0.5.3 design, `a` is "rename" (the whole tank); alias-only tweaks live at
+# `clikae alias` on the CLI. agy/antigravity tanks are a global ~/.gemini symlink
+# target, not a per-shell engine, so rename doesn't apply to them.
+_home_rename_tank() {
   local kind cli profile label alias active note
   IFS=$'\037' read -r kind cli profile label alias active note <<EOF
 $1
 EOF
-  : "$label" "$active" "$note"
-  [ "$kind" = "tank" ] || return 0   # only tanks have a managed alias
-  printf '\nRename alias for %s/%s' "$cli" "$profile"
-  [ -n "$alias" ] && printf ' (currently: %s)' "$alias"
-  printf '\n'
+  : "$label" "$alias" "$active" "$note"
+  [ "$kind" = "tank" ] || return 0
+  if [ "$cli" = "antigravity" ]; then
+    printf '\n  %s\n' "$T_RENAME_NO_AGY"
+    return 0
+  fi
+  printf '\n%s  %s/%s\n' "$T_RENAME_FOR" "$cli" "$profile"
   local newname
-  read -rp "  New alias name: " newname || return 0
-  [ -n "$newname" ] || { printf '  Cancelled — alias unchanged.\n'; return 0; }
-  "$CLIKAE_BIN" alias "$cli" "$profile" --name "$newname" || true
+  read -rp "  $T_RENAME_NEW" newname || return 0
+  [ -n "$newname" ] || { printf '  %s\n' "$T_RENAME_CANCEL"; return 0; }
+  "$CLIKAE_BIN" rename "$cli" "$profile" "$newname" || true
+}
+
+# Enter on a 續上次 / Continue row → a tiny submenu (v0.5.3 item 5): resume the
+# exact session, or just switch to that tank with a fresh session. Both choices
+# exec; cancel (q) returns 1 so the caller can re-enter the picker.
+_home_resume_action() {
+  local row="$1" kind cli profile rest
+  IFS=$'\037' read -r kind cli profile rest <<EOF
+$row
+EOF
+  : "$rest"
+  local opts choice
+  opts="$(printf '%s\n%s' "$T_RESUME_OPT_RESUME" "$T_RESUME_OPT_SWITCH")"
+  choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
+  if [ "$choice" = "$T_RESUME_OPT_SWITCH" ]; then
+    # 換油箱開新局: bare switch, no --resume.
+    if [ "$cli" = "antigravity" ]; then exec "$CLIKAE_BIN" agy "$profile"
+    else exec "$CLIKAE_BIN" "$cli" "$profile"; fi
+  else
+    _home_launch "$row"   # 接回: the resume path (kind=resume → --resume <sid>)
+  fi
 }
 
 # Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
-# the profile name, then `clikae init <engine> <tank> --alias`.
+# the tank name, then `clikae init <engine> <tank> --alias`.
 _home_new_tank() {
   local def_cli="$1" cli profile
-  cli="$(_home_choose "New tank — pick a CLI    up/down move · Enter select · q cancel" "$(list_adapters)" "$def_cli")" \
-    || { printf 'Cancelled — no tank created.\n'; return 0; }
+  cli="$(_home_choose "$T_NEWTANK_TITLE    $T_PICKER_HINT" "$(list_adapters)" "$def_cli")" \
+    || { printf '%s\n' "$T_NEWTANK_CANCEL"; return 0; }
   [ -n "$cli" ] || return 0
   printf '\n'
-  read -rp "Profile name for ${cli} (e.g. work, personal): " profile || return 0
-  [ -n "$profile" ] || { printf 'Cancelled — no name given.\n'; return 0; }
+  read -rp "$(printf "$T_NEWTANK_PROFILE" "$cli")" profile || return 0
+  [ -n "$profile" ] || { printf '%s\n' "$T_NEWTANK_NONAME"; return 0; }
   "$CLIKAE_BIN" init "$cli" "$profile" --alias || true
+}
+
+# _home_filter <items> <query> — keep only rows whose text contains <query>
+# (case-insensitive, literal). Empty query → everything. Group headers in the
+# renderer are derived from the surviving rows, so filtering lines is enough.
+_home_filter() {
+  local items="$1" q="$2"
+  [ -n "$q" ] || { printf '%s' "$items"; return 0; }
+  printf '%s\n' "$items" | grep -i -F -- "$q" || true
+}
+
+# _home_help_row <keys> <description> — one aligned line in the help overlay.
+_home_help_row() { printf '    %b%-16s%b %s\n' "$__C_BOLD" "$1" "$__C_RESET" "$2"; }
+
+# The `?` key: a full, localised key legend drawn over the board (alt screen is
+# already active). Any key dismisses it; the loop then repaints the board.
+_home_help_overlay() {
+  printf '\033[H\033[2J'
+  printf '  %b%s%b\n\n' "$__C_BOLD" "$T_HELP_TITLE" "$__C_RESET"
+  _home_help_row "↑ ↓  j k  Tab" "$T_K_MOVE"
+  _home_help_row "g / G"         "$T_K_TOPBOTTOM"
+  _home_help_row "1-9"           "$T_K_JUMP"
+  _home_help_row "⏎ Enter"       "$T_K_OPEN"
+  _home_help_row "r"             "$T_K_RELAY"
+  _home_help_row "x"             "$T_K_INCOGNITO"
+  _home_help_row "n"             "$T_K_NEW"
+  _home_help_row "a"             "$T_K_RENAME"
+  _home_help_row "d"             "$T_K_DELETE"
+  _home_help_row "/"             "$T_K_FILTER"
+  _home_help_row "h"             "$T_K_LANG"
+  _home_help_row "q / Esc"       "$T_K_QUIT"
+  printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
+  local _k; IFS= read -rsn1 _k || true
 }
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
@@ -635,8 +753,12 @@ _home_pick_draw_body() {
   # tail. The logo is drawn AFTER this, so the full-width erase here can't clip it.
   # (Vars are declared above, outside this pipe's subshell, so no `local` here.)
   {
-  printf '%bclikae  ｷﾘｶｴ%b  %b· up/down move · Enter open · r relay · x 無痕 · n new · a alias · d delete · q quit%b\n\n' \
-    "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  # Compact footer: the everyday keys + a pointer to `?` for the full, localised
+  # legend (relay / incognito / new / rename / delete / jump). Keeps the board
+  # clean while every action stays discoverable.
+  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · ? %s · h %s · q %s%b\n\n' \
+    "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" \
+    "$T_K_MOVE" "$T_K_OPEN" "$T_K_FILTER" "$T_K_HELP" "$T_K_LANG" "$T_K_QUIT" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -645,7 +767,7 @@ _home_pick_draw_body() {
         # The "continue" list — recent resumable sessions; Enter reopens the
         # selected one. Title is Claude's ai-title; the selected row also shows a
         # one-line recap ("where you left off + next step").
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
         if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
@@ -653,9 +775,10 @@ _home_pick_draw_body() {
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
           if [ -n "$alias" ]; then
-            printf '        %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+            # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
+            _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
           else
-            printf '        %b%s · Enter 接回%b\n' "$__C_DIM" "$rage" "$__C_RESET"
+            printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
           printf '  %b %b %b%s/%s · "%s"%b\n' "$mark" "$rdot" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
@@ -745,35 +868,85 @@ _home_pick() {
   trap '_home_tty_leave; exit 130' INT TERM
   printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
 
-  local sel=0 key rest n sel_row sel_kind sel_cli
+  # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
+  # the live `/` query. Everything navigational works on `view`; relay still reads
+  # the FULL `items` so it can find the active source tank even when filtered out.
+  local sel=0 key rest n sel_row sel_kind sel_cli filter="" view
+  view="$items"
   while :; do
-    n="$(printf '%s\n' "$items" | grep -c .)"
-    [ "$n" -gt 0 ] || break                 # nothing left to pick
-    [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete
+    view="$(_home_filter "$items" "$filter")"
+    n="$(printf '%s\n' "$view" | grep -c .)"
+    if [ "$n" -le 0 ]; then
+      # Filter matched nothing (or everything's gone): show a tiny notice, let the
+      # user clear the filter or quit. Never get stuck on an empty board.
+      printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
+        "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
+      IFS= read -rsn1 key || key="q"
+      case "$key" in
+        /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
+           IFS= read -r filter || filter=""; printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+        *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
+      esac
+    fi
+    [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete/filter
     [ "$sel" -lt 0 ] && sel=0
-    _home_pick_draw "$items" "$sel" "$dry"
+    _home_pick_draw "$view" "$sel" "$dry"
     IFS= read -rsn1 key || { key="q"; }
-    sel_row="$(printf '%s\n' "$items" | sed -n "$((sel + 1))p")"
+    sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
     sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
     case "$key" in
       $'\e')
-        # Arrow keys arrive as ESC [ A/B; a lone ESC (1s integer timeout) quits.
+        # Arrow keys arrive as ESC [ A/B; Shift-Tab as ESC [ Z; a lone ESC (1s
+        # integer timeout) quits.
         if IFS= read -rsn2 -t 1 rest; then
           case "$rest" in
             '[A') sel=$(( (sel - 1 + n) % n )) ;;
             '[B') sel=$(( (sel + 1) % n )) ;;
+            '[Z') sel=$(( (sel - 1 + n) % n )) ;;   # Shift-Tab → previous
           esac
         else
           break
         fi
         ;;
+      $'\t') sel=$(( (sel + 1) % n )) ;;            # Tab → next
       k) sel=$(( (sel - 1 + n) % n )) ;;
       j) sel=$(( (sel + 1) % n )) ;;
+      g) sel=0 ;;                                    # top
+      G) sel=$(( n - 1 )) ;;                         # bottom
+      [1-9])
+        # Jump to the Nth row (clamped). Fast access on a long board.
+        sel=$(( key - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
       q) break ;;
+
+      /)
+        # Live filter: drop to the normal screen, read a query, re-enter.
+        _home_tty_leave
+        printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
+        IFS= read -r filter || filter=""
+        printf '\033[?1049h\033[?25l'; sel=0
+        ;;
+      '?')
+        _home_help_overlay   # full key legend; any key dismisses, then redraw
+        ;;
+      h)
+        # Flip the interface language live (en-US → ja-JP → zh-TW → …). Regenerate
+        # items so adapter notes re-localise; the T_* strings update in place.
+        i18n_cycle >/dev/null
+        items="$(_home_items)"; dry="$(_home_dry_set)"
+        ;;
 
       # --- leave actions: these launch a CLI, so exiting the picker is expected
       ''|$'\n'|$'\r')
+        if [ "$sel_kind" = "resume" ]; then
+          # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
+          _home_tty_leave; trap - EXIT INT TERM
+          _home_resume_action "$sel_row" || {
+            trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+            printf '\033[?1049h\033[?25l'; continue
+          }
+          return 0
+        fi
         _home_tty_leave; trap - EXIT INT TERM
         _home_launch "$sel_row"
         return 0
@@ -786,8 +959,9 @@ _home_pick() {
         fi
         ;;
       x)
-        # 無痕 — open the selected tank with throwaway memory (--ephemeral). A
-        # clean, amnesiac session: this run's long-term memory evaporates on exit.
+        # 無痕 / Incognito — open the selected tank with throwaway memory
+        # (--ephemeral). A clean, amnesiac session: this run's long-term memory
+        # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
@@ -800,8 +974,10 @@ _home_pick() {
         items="$(_home_items)"; dry="$(_home_dry_set)"
         ;;
       a)
+        # v0.5.3: `a` renames the TANK (carries alias + login); alias-only edits
+        # are at `clikae alias` on the CLI.
         if [ "$sel_kind" = "tank" ]; then
-          _home_stay _home_rename_alias "$sel_row"
+          _home_stay _home_rename_tank "$sel_row"
           items="$(_home_items)"; dry="$(_home_dry_set)"
         fi
         ;;
@@ -815,7 +991,7 @@ _home_pick() {
   done
 
   _home_tty_leave; trap - EXIT INT TERM
-  # On quit, leave the static board in the normal scrollback.
+  # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"
 }
 
@@ -826,18 +1002,24 @@ cmd_home() {
 Usage: clikae            (no arguments)
 
 Opens the home dashboard — your "tank board". On a real terminal it's an
-interactive launcher: ↑/↓ (or j/k) to move, Enter to open the selected tank,
-`r` to relay this shell's session to it, `x` to open it 無痕 (with throwaway
-memory — a clean, amnesiac session), `n` to create a new tank, `a` to rename a
-tank's alias, `d` to delete a tank (asks first), `q`/Esc to quit (leaving the
-board on screen). It lists
-every profile grouped by CLI (the one active in this shell marked, with account
-and alias name) plus an "Also available" section of relay-capable CLIs/targets
-you can open without a tank (codex, agy), and the fuel-pool order.
+interactive launcher. Keys (press `?` in the board for the full, localised
+legend):
+  ↑/↓ · j/k · Tab/Shift-Tab   move          g / G          jump top / bottom
+  1-9                         jump to row    ⏎ Enter        open the selection
+  r   relay this shell's session into it     x   open it incognito (--ephemeral)
+  n   new tank                a   rename the tank (carries alias + login)
+  d   delete a tank (asks)    /   filter     h   cycle language   q/Esc  quit
 
-When output isn't a terminal (a pipe, a script, the GUI), it prints the same
-board as plain text instead. With no profiles yet it welcomes you and points at
-the first step.
+On a Continue row, Enter offers a small menu: resume that exact session, or just
+switch to its tank with a fresh one. The board lists every tank grouped by CLI
+(the one active in this shell marked, with account and alias name) plus an "Also
+available" section of relay-capable CLIs/targets you can open without a tank
+(codex, agy).
+
+Interface language (en-US / ja-JP / zh-TW) follows `clikae lang`; the `h` key
+flips it live. When output isn't a terminal (a pipe, a script, the GUI), it
+prints the same board as plain text. With no tanks yet it welcomes you and
+points at the first step.
 
 The full command reference is at `clikae help`; the machine check at
 `clikae doctor`.

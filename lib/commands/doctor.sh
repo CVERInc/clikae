@@ -76,11 +76,6 @@ EOF
 $rows
 EOF
 
-  # A fall-through pool only helps if there are ≥2 tanks to fall between. If the
-  # user has the tanks but an empty pool, `watch` has nowhere to go — nudge seed.
-  local pool_empty=0
-  [ -z "$(pool_list)" ] && pool_empty=1
-
   log_bold "Next:"
   if [ -n "$installed_no_profile" ]; then
     log_dim "  • $installed_no_profile is installed with no tank yet:  clikae init $installed_no_profile work --alias"
@@ -88,8 +83,8 @@ EOF
   if [ "$rc_loaded" = "no" ] && [ "$any_profiles" -eq 1 ]; then
     log_dim "  • aliases aren't loaded in this shell yet:  source $rc"
   fi
-  if [ "$pool_empty" -eq 1 ] && [ "$total_profiles" -ge 2 ]; then
-    log_dim "  • your fuel pool is empty so \`watch\` can't fall through:  clikae pool seed"
+  if [ "$total_profiles" -ge 2 ]; then
+    log_dim "  • when a tank runs dry, carry on to the next one:  clikae to"
   fi
   log_dim "  • See your tanks at a glance:  clikae"
   log_dim "  • Take a risk-free tour:       clikae demo"
