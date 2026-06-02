@@ -685,18 +685,44 @@ EOF
   fi
 }
 
+# _home_newtank_choices -> the `n` picker list, GROUPED: AI engines first (the ones
+# you can burn as a tank — they define adapter_start_with_prompt, i.e. claude /
+# codex), then agy (AI · power), then the dev-tool CLIs (account-switchers only:
+# aws, docker, gh, …). Each line is annotated "(AI)" / "(tool)"; the caller takes
+# the first token as the engine name.
+_home_newtank_choices() {
+  local name ai="" tools=""
+  # Classify by whether the adapter FILE defines adapter_start_with_prompt — the
+  # session-handoff hook only AI engines have. NB: a runtime `declare -F` check is
+  # unreliable here (load_adapter provides a default stub, so it's always defined);
+  # the file is the ground truth.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if grep -qE '^[[:space:]]*adapter_start_with_prompt[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$name.sh" 2>/dev/null; then
+      ai="$ai$name"$'\n'
+    else
+      tools="$tools$name"$'\n'
+    fi
+  done <<EOF
+$(list_adapters)
+EOF
+  printf '%s' "$ai"    | while IFS= read -r n; do [ -n "$n" ] && printf '%s  (AI)\n' "$n"; done
+  printf 'agy  (AI · power · takes over ~/.gemini)\n'
+  printf '%s' "$tools" | while IFS= read -r n; do [ -n "$n" ] && printf '%s  (tool)\n' "$n"; done
+}
+
 # Guided new-tank flow (the `n` key): pick an engine with the arrow keys, then type
-# the tank name. agy is offered too (last, flagged "power"): picking it routes to
-# `clikae init agy`, whose first run runs the SU takeover of ~/.gemini (asks first)
-# — so "add agy" is the same one keystroke, just gated by that consent.
+# the tank name. The list is grouped AI vs tool (see _home_newtank_choices). agy is
+# offered (flagged power): picking it routes to `clikae init agy`, whose first run
+# runs the SU takeover of ~/.gemini (asks first) — so "add agy" = same keystroke,
+# just gated by that consent.
 _home_new_tank() {
-  local def_cli="$1" cli profile choices
-  choices="$(printf '%s\nagy  (power · takes over ~/.gemini)' "$(list_adapters)")"
-  cli="$(_home_choose "$T_NEWTANK_TITLE    $T_PICKER_HINT" "$choices" "$def_cli")" \
+  local def_cli="$1" cli profile
+  cli="$(_home_choose "$T_NEWTANK_TITLE    $T_PICKER_HINT" "$(_home_newtank_choices)" "$def_cli")" \
     || { printf '%s\n' "$T_NEWTANK_CANCEL"; return 0; }
   [ -n "$cli" ] || return 0
-  # Strip the power annotation if agy was chosen.
-  case "$cli" in agy*) cli="agy" ;; esac
+  # Take the engine name (first token), dropping the (AI)/(tool)/power annotation.
+  cli="${cli%% *}"
   printf '\n'
   read -rp "$(printf "$T_NEWTANK_PROFILE" "$cli")" profile || return 0
   [ -n "$profile" ] || { printf '%s\n' "$T_NEWTANK_NONAME"; return 0; }

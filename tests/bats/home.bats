@@ -320,3 +320,23 @@ _agy_log() { # <line>
   _home_reorder claude beta -1
   [ "$(head -1 "$CLIKAE_HOME/order")" = "claude/beta" ]
 }
+
+@test "the new-tank picker groups AI engines before tool CLIs (+ agy power)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  run _home_newtank_choices
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude  (AI)"* ]] || false
+  [[ "$output" == *"codex  (AI)"* ]] || false
+  [[ "$output" == *"aws  (tool)"* ]] || false
+  [[ "$output" == *"agy  (AI"* ]] || false
+  # AI listed before tools.
+  local lc la
+  lc="$(printf '%s\n' "$output" | grep -n 'claude  (AI)' | head -1 | cut -d: -f1)"
+  la="$(printf '%s\n' "$output" | grep -n 'aws  (tool)'  | head -1 | cut -d: -f1)"
+  [ -n "$lc" ] && [ -n "$la" ] && [ "$lc" -lt "$la" ]
+}
