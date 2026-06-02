@@ -126,13 +126,19 @@ $src
 EOF
   [ "$from_recent" -eq 1 ] && log_dim "source: this directory's most recent session — $src_engine/$src_tank"
 
-  # Bare `clikae to` — no target given: fall through to the next tank of THIS
-  # engine (the reserve is just your tanks; no pool to configure). Cross-engine
-  # stays explicit because it's a cold-start brief, not a silent jump.
+  # Bare `clikae to` — no target given: fall through to the next tank in your BURN
+  # ORDER (your tanks ARE the reserve; the board order is the order). It may cross
+  # engines if that's what your order says — the resolution below then picks resume
+  # (same engine) vs a written brief (different engine) and announces which.
   if [ -z "$target" ]; then
-    target="$(next_tank "$src_engine" "$src_tank")"
-    [ -n "$target" ] || log_fail "No other $src_engine tank to fall through to. Create one (clikae init $src_engine <tank>), or cross engines explicitly (e.g. clikae to codex)."
-    log_info "to: falling through to the next $src_engine tank — $target."
+    local _next _ne _nt
+    _next="$(next_tank "$src_engine" "$src_tank")"
+    [ -n "$_next" ] || log_fail "Nothing after $src_engine/$src_tank in your burn order. Add a tank (clikae init …) or pick one explicitly (clikae to <engine|tank>)."
+    IFS=$'\t' read -r _ne _nt <<EOF2
+$_next
+EOF2
+    target="$_ne"; target_tank="$_nt"
+    log_info "to: next in your burn order — $_ne/$_nt."
   fi
 
   # Normalise the agy long name for the target lookup (canonical engine = agy).

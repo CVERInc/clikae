@@ -186,13 +186,14 @@ EOF
     return 0
   fi
 
-  # Resolve where we'd go on a dry tank: the next tank of THIS engine (your tanks
-  # are the reserve — no pool to set up). Cross-engine needs an explicit --to.
+  # Resolve where we'd go on a dry tank: the next tank in your BURN ORDER (your
+  # tanks are the reserve — no pool to set up). May cross engines if your order
+  # says so; --to overrides.
   local target="$to"
   if [ -z "$target" ]; then
-    local _nt; _nt="$(next_tank "$cli" "$profile")"
-    [ -n "$_nt" ] || log_fail "No other $cli tank to fall through to. Create one (clikae init $cli <tank>) or give --to <target>."
-    target="$cli/$_nt"
+    local _nt; _nt="$(next_tank "$cli" "$profile" | tr '\t' '/')"
+    [ -n "$_nt" ] || log_fail "Nothing after $cli/$profile in your burn order. Add a tank (clikae init $cli <tank>) or give --to <target>."
+    target="$_nt"
   fi
   validate_handoff_target "$target"
 

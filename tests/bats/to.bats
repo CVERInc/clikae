@@ -56,17 +56,40 @@ _seed_tx() {
 
 # --- v0.5.3: your tanks ARE the reserve (no pool) — bare `to` falls through -----
 
-@test "next_tank returns the other tank of the same engine" {
+@test "next_tank returns the entry AFTER current in the burn order (TAB engine/tank)" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   clikae init claude a
   clikae init claude b
-  [ "$(next_tank claude a)" = "b" ]
-  [ "$(next_tank claude b)" = "a" ]
+  # Default order is list_all_profiles order: claude/a then claude/b.
+  [ "$(next_tank claude a)" = "$(printf 'claude\tb')" ]
+  # b is last -> nothing after (no wrap).
+  [ -z "$(next_tank claude b)" ]
 }
 
-@test "next_tank is empty when the engine has only one tank" {
+@test "next_tank crosses engines when the order says so" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  clikae init claude a
+  clikae init codex main
+  # Default order: claude/a, codex/main -> after claude/a comes codex/main.
+  [ "$(next_tank claude a)" = "$(printf 'codex\tmain')" ]
+}
+
+@test "next_tank honours a custom order file" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  clikae init claude a
+  clikae init claude b
+  clikae init codex main
+  printf 'claude/b\nclaude/a\ncodex/main\n' > "$CLIKAE_HOME/order"
+  [ "$(next_tank claude b)" = "$(printf 'claude\ta')" ]   # order says a follows b
+}
+
+@test "next_tank is empty when nothing follows in the order" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
@@ -74,21 +97,21 @@ _seed_tx() {
   [ -z "$(next_tank claude solo)" ]
 }
 
-@test "bare 'clikae to' falls through to the next tank of this engine" {
+@test "bare 'clikae to' falls through to the next tank in the burn order" {
   _stub_claude; export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   clikae init claude a
   clikae init claude b
   cd "$TEST_HOME"; _seed_tx a          # most-recent session here is on tank a
-  run clikae to                        # no target → next claude tank (b)
-  [[ "$output" == *"next claude tank"* ]] || false
-  [[ "$output" == *"b"* ]] || false
+  run clikae to                        # no target → next in order (claude/b)
+  [[ "$output" == *"burn order"* ]] || false
+  [[ "$output" == *"claude/b"* ]] || false
 }
 
-@test "bare 'clikae to' errors when there's no other tank to fall through to" {
+@test "bare 'clikae to' errors when nothing follows in the burn order" {
   _stub_claude; export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   clikae init claude solo
   cd "$TEST_HOME"; _seed_tx solo
   run clikae to
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No other claude tank"* ]] || false
+  [[ "$output" == *"burn order"* ]] || false
 }
