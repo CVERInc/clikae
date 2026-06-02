@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Your tanks are a single burn order, and the board IS that order.** The home
+  board is now one flat list (no engine grouping; engine shown as an inline tag),
+  in the order clikae falls through when a tank runs dry. Arrange it in place with
+  **`[` / `]`** (move up/down). `clikae <name>` switches to a tank by name alone
+  (e.g. `clikae cver`) — a tank's name is its identity. Bare **`clikae to`** carries
+  your session to the next tank in that order.
+- **Supervised launch — auto-carry on a dry tank (BETA · claude · feedback welcome).**
+  Start claude *through* clikae and, when the session hits its limit, clikae carries
+  you onward to the next tank in your burn order — in the **same terminal** (one
+  redraw), conversation continuing. How much it does on its own is yours to choose:
+  **`clikae auto ask|safe|full`** (or the board's `A` key) — safe default asks first;
+  `safe` auto-resumes same-engine and asks before crossing engines; `full` just keeps
+  going. Nothing runs in the background unless you launched it through clikae (no
+  daemon — deliberate). Honest limits: one hop per run; interactive **codex** isn't
+  auto-detectable yet (claude-only); the truly seamless in-place feel depends on the
+  engine — please report how it behaves. `clikae status` shows what it carried.
+- **The "what clikae did" log.** Carries (`clikae to`, the board's `r`, and the
+  supervised auto-switch) are recorded; `clikae status` shows a **recent carries**
+  tail so you can see what moved where, even while away.
+
 ### Changed
 
 - **Your tanks ARE the fuel reserve — the `pool` concept is gone.** The separate,

@@ -122,8 +122,9 @@ fuel words forced on them.
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
 | `clikae tanks` (alias: `clikae list` / `ls`) | List every tank, with the logged-in account. `tanks` is canonical — a **noun query**, like the existing `adapters` command, not a coined verb. `list`/`ls` stay for convention and for the GUI's `list --json`. |
 | `clikae status [cli]` | Which tank each CLI is on **in this shell**. |
-| `clikae to [target]` | Carry your session onward; bare = the next tank of this engine (your tanks are the reserve). |
-| `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank of the same engine. |
+| `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
+| `clikae auto [ask\|safe\|full]` | (BETA, claude) how much the supervised launch carries on its own on a dry tank. |
+| `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank in the burn order. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
 | `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `h` key flips it live. |
@@ -136,7 +137,7 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `rename`, `migrate`, `app`, `alias`, `lang`, `run`, `continue`,
+   `watch`, `auto`, `rename`, `migrate`, `app`, `alias`, `lang`, `run`, `continue`,
    `relay`, `handoff`, `doctor`, `info`, `adapters`, `demo`, `home`, `help`,
    `version`, plus `-h/--help/-v/--version`) → run that command.
 2. **Else, a known CLI?** (an adapter in `lib/adapters/` or a target in

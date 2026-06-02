@@ -72,8 +72,19 @@ plain, conventional verbs.
 
 | Command | What it does |
 |---|---|
-| `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank of the engine you're on (a real resume); name a tank to pick it; name an engine to cross (a cold-start brief). Your tanks are the reserve — nothing to configure. |
-| `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank of the same engine when it runs dry (cross-engine via `--to`). |
+| `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
+| `auto [ask\|safe\|full]` | **(BETA, claude)** How much clikae carries on its own when a session you launched through it hits the limit. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` just keeps going. The board's `A` key flips it too. |
+| `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
+
+> **Supervised launch (BETA · claude · feedback welcome).** When you start claude
+> *through* clikae, clikae stays as the parent and watches that tank. If the session
+> hits its limit, clikae carries you onward to the next tank in your burn order
+> (per `clikae auto`) in the **same terminal** — one screen redraw, then your
+> conversation continues. Honest limits: it's one hop per run; interactive **codex**
+> can't be auto-detected (no file signal) so it's claude-only for now; and the truly
+> seamless in-place continuation depends on the engine — tell us how it behaves for
+> you. Nothing runs in the background unless you launched it through clikae (no
+> daemon) — that's deliberate. `clikae status` shows what it carried (recent carries).
 
 ### Inspect
 

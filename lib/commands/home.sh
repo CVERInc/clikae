@@ -1049,15 +1049,17 @@ interactive launcher. Keys (press `?` in the board for the full, localised
 legend):
   ↑/↓ · j/k · Tab/Shift-Tab   move          g / G          jump top / bottom
   1-9                         jump to row    ⏎ Enter        open the selection
+  [ / ]   move the tank up/down (the board IS your burn order)
   r   relay this shell's session into it     x   open it incognito (--ephemeral)
   n   new tank                a   rename the tank (carries alias + login)
-  d   delete a tank (asks)    /   filter     h   cycle language   q/Esc  quit
+  d   delete a tank (asks)    /   filter     A   autonomy (BETA)   h   language
+  q/Esc  quit
 
 On a Continue row, Enter offers a small menu: resume that exact session, or just
-switch to its tank with a fresh one. The board lists every tank grouped by CLI
-(the one active in this shell marked, with account and alias name) plus an "Also
-available" section of relay-capable CLIs/targets you can open without a tank
-(codex, agy).
+switch to its tank with a fresh one. The board is a single flat list in your BURN
+ORDER (not grouped by engine; engine shown as an inline tag) — arrange it with
+[ / ]. It also has an "Also available" section of relay-capable CLIs/targets you
+can open without a tank (codex, agy).
 
 Interface language (en-US / ja-JP / zh-TW) follows `clikae lang`; the `h` key
 flips it live. When output isn't a terminal (a pipe, a script, the GUI), it
