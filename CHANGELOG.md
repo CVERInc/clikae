@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also expands to a one-line **recap** — _"where you left off + next step"_ — read
   free from Claude's own session summary (`away_summary`, the `※ recap:` it shows
   at the bottom of a session), so you know what a session was doing before you
-  jump back in. It only appears for engines that can resume by id (new
+  jump back in. Sessions without a recap fall back to showing their age + an
+  Enter-to-resume hint, so the hover detail is always there. It only appears for engines that can resume by id (new
   `adapter_resume_args` hook), so the affordance never lies, and it's absent in a
   brand-new directory. Listing stays fast — sessions are ranked by mtime and only
   the few rows shown read their title/recap (`adapter_recent_sids` /

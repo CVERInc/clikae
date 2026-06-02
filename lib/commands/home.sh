@@ -99,7 +99,7 @@ EOF
   printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
     | while IFS=$'\037' read -r mt engine tank sid; do
         [ -n "$sid" ] || continue
-        local dir title recap
+        local dir title recap age now _d
         dir="$(profile_dir "$engine" "$tank")"
         load_adapter "$engine" >/dev/null 2>&1 || true
         if declare -F adapter_session_title >/dev/null 2>&1; then
@@ -108,7 +108,14 @@ EOF
           title="$(adapter_session_meta "$dir" "$sid" 2>/dev/null | cut -d$'\037' -f4 || true)"
         fi
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
-        printf 'resume\037%s\037%s\037%s\037%s\037\037%s\n' "$engine" "$tank" "$title" "$recap" "$sid"
+        # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
+        # has no recap, so the expand is always visible.
+        now="$(date +%s 2>/dev/null || echo "$mt")"; _d=$(( now - mt ))
+        if   [ "$_d" -lt 60 ];    then age="just now"
+        elif [ "$_d" -lt 3600 ];  then age="$(( _d / 60 ))m ago"
+        elif [ "$_d" -lt 86400 ]; then age="$(( _d / 3600 ))h ago"
+        else                           age="$(( _d / 86400 ))d ago"; fi
+        printf 'resume\037%s\037%s\037%s\037%s\037%s\037%s\n' "$engine" "$tank" "$title" "$recap" "$age" "$sid"
       done
 }
 
@@ -636,7 +643,11 @@ _home_pick_draw_body() {
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b%s/%s%b · "%s"\n' "$mark" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
-          [ -n "$alias" ] && printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+          if [ -n "$alias" ]; then
+            printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
+          else
+            printf '      %b%s · Enter 接回%b\n' "$__C_DIM" "$active" "$__C_RESET"
+          fi
         else
           printf '  %b %b%s/%s · "%s"%b\n' "$mark" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
         fi
