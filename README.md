@@ -1,11 +1,11 @@
 # clikae · ｷﾘｶｴ
 
-> Switch any CLI between accounts. One tool to juggle multiple accounts / configs for any CLI that selects its settings from an environment variable.
+> **Your starting point for working with AI coding CLIs.** Type `clikae` and land on everything you were just doing — your recent sessions across every account and every engine (Claude Code, Codex, Gemini, Antigravity), each with a one-line recap of where you left off. Pick one and pick up where you were.
 >
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.2-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -13,7 +13,9 @@
 
 ## What & why
 
-You probably have more than one account on at least one CLI tool. Two GitHub accounts (personal + work). Two `gcloud` configurations (client A + client B). Two Anthropic Claude subscriptions because one Max plan didn't have enough quota. And now you're juggling shell aliases, env vars, and `--profile` flags by hand, and you keep logging into the wrong one.
+You're juggling AI coding sessions across more than one account — two Claude subscriptions because one Max plan ran dry, a Codex login, maybe Antigravity too — in different terminals, on different projects, half of them unfinished. *Which one was that in? Which account? What was I even doing?* So you `/clear`, reopen, and re-explain the project to a fresh session.
+
+`clikae` is the on-ramp that fixes it: type `clikae` and you land on your recent sessions across **every account and every engine**, newest first, each with a one-line **recap** of where you left off (read free from Claude's own session summary). Pick one, hit Enter, and you're back exactly where you were — right account, right session. _(It also cleanly switches any env-var CLI — gh, gcloud, kubectl, aws… — but AI coding CLIs are where it shines.)_
 
 `clikae` is a small, pure-bash tool. The name is 切り替え — *switching* — so
 **clikae is the verb**: `clikae <engine> <tank>` points an engine (a CLI like
