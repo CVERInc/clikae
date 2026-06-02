@@ -133,23 +133,25 @@ _home_items() {
   _home_recent_rows
 
   # 1) Tanks — every profile.
-  local cli profile path label alias active cur_cli="" active_for="" a
-  while IFS=$'\t' read -r cli profile path; do
-    [ -n "$cli" ] || continue
-    if [ "$cli" != "$cur_cli" ]; then
-      cur_cli="$cli"
-      active_for="$(_home_active_for "$cli")"
-    fi
+  # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
+  # order. Engine travels in the cli field and the renderer shows it as an inline
+  # tag. active is resolved per row since engines now interleave.
+  local entry cli profile path label alias active a
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    cli="${entry%%/*}"; profile="${entry#*/}"
+    path="$(profile_dir "$cli" "$profile")"
     if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
       label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
     else
       label=""   # target-backed tanks (e.g. antigravity) have no adapter label
     fi
     alias="$(_home_alias_for "$cli" "$profile")"
-    if [ -n "$active_for" ] && [ "$profile" = "$active_for" ]; then a=1; else a=0; fi
+    active="$(_home_active_for "$cli")"
+    if [ -n "$active" ] && [ "$profile" = "$active" ]; then a=1; else a=0; fi
     printf 'tank\037%s\037%s\037%s\037%s\037%d\037\n' "$cli" "$profile" "$label" "$alias" "$a"
   done <<EOF
-$(list_all_profiles)
+$(order_list)
 EOF
 
   # 2) Agents — installed adapters with NO profile that are relay-capable (they
@@ -320,7 +322,7 @@ _home_render_static() {
   printf '%b%s%b  %b·  %s%b\n\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
 
-  local kind cli profile label alias active note cur_cli="" cli_count also="" printed_resume=0 rdot
+  local kind cli profile label alias active note cur_cli="" also="" printed_resume=0 rdot
   local launch_cli="" launch_profile="" launch_alias=""
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -336,28 +338,24 @@ _home_render_static() {
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
         ;;
       tank)
-        if [ "$cli" != "$cur_cli" ]; then
-          [ -z "$cur_cli" ] && [ "$printed_resume" -eq 1 ] && printf '\n'
-          cur_cli="$cli"
-          cli_count="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c' | grep -c .)"
-          printf '  %b%s%b %b(%s)%b\n' "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$cli_count" "$__C_RESET"
-        fi
+        # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
+        # [tag]. One blank line separates the continue block from the tanks.
+        if [ -z "$cur_cli" ]; then [ "$printed_resume" -eq 1 ] && printf '\n'; cur_cli="-"; fi
         local _reset
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          # Over quota: ! badge + the vendor's own reset phrase (a poor relay target).
-          printf '    %b!%b %-10s %b%-28s%b %b%s%b  %b%s%b\n' \
-            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
+          printf '    %b!%b %-12s %b[%s]%b %b%-22s%b %b%s%b  %b%s%b\n' \
+            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_YELLOW" "${_reset:-over quota}" "$__C_RESET"
           any_dry=1
           if [ "$active" = "1" ] || [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         elif [ "$active" = "1" ]; then
-          printf '    %b●%b %-10s %b%-28s%b %b%s%b  %b← %s%b\n' \
-            "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
+          printf '    %b●%b %-12s %b[%s]%b %b%-22s%b %b%s%b  %b← %s%b\n' \
+            "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET"
           launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"
         else
-          printf '    %b○%b %-10s %b%-28s%b %b%s%b\n' \
-            "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_DIM" "$alias" "$__C_RESET"
+          printf '    %b○%b %-12s %b[%s]%b %b%-22s%b %b%s%b\n' \
+            "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_DIM" "$alias" "$__C_RESET"
           if [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         fi
         ;;
@@ -706,6 +704,28 @@ _home_filter() {
   printf '%s\n' "$items" | grep -i -F -- "$q" || true
 }
 
+# _home_reorder <engine> <tank> <delta>  — move a tank up (-1) / down (+1) in the
+# BURN ORDER, materialising the full order into $CLIKAE_HOME/order and swapping
+# with its neighbour. The board IS the order, so this is how you arrange it. Returns
+# 0 if it moved, 1 if it was already at the edge (caller leaves selection put).
+_home_reorder() {
+  local engine="$1" tank="$2" delta="$3" target="$1/$2"
+  local -a list=(); local l
+  while IFS= read -r l; do [ -n "$l" ] && list+=("$l"); done <<EOF
+$(order_list)
+EOF
+  local i idx=-1
+  for ((i = 0; i < ${#list[@]}; i++)); do [ "${list[$i]}" = "$target" ] && idx=$i; done
+  [ "$idx" -ge 0 ] || return 1
+  local j=$(( idx + delta ))
+  [ "$j" -ge 0 ] && [ "$j" -lt "${#list[@]}" ] || return 1   # at an edge
+  local tmp="${list[$idx]}"; list[$idx]="${list[$j]}"; list[$j]="$tmp"
+  mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
+  local f; f="$(order_file)"; : > "$f"
+  for ((i = 0; i < ${#list[@]}; i++)); do printf '%s\n' "${list[$i]}" >> "$f"; done
+  return 0
+}
+
 # _home_help_row <keys> <description> — one aligned line in the help overlay.
 _home_help_row() { printf '    %b%-16s%b %s\n' "$__C_BOLD" "$1" "$__C_RESET" "$2"; }
 
@@ -717,6 +737,7 @@ _home_help_overlay() {
   _home_help_row "↑ ↓  j k  Tab" "$T_K_MOVE"
   _home_help_row "g / G"         "$T_K_TOPBOTTOM"
   _home_help_row "1-9"           "$T_K_JUMP"
+  _home_help_row "[ / ]"         "$T_K_REORDER"
   _home_help_row "⏎ Enter"       "$T_K_OPEN"
   _home_help_row "r"             "$T_K_RELAY"
   _home_help_row "x"             "$T_K_INCOGNITO"
@@ -756,9 +777,9 @@ _home_pick_draw_body() {
   # Compact footer: the everyday keys + a pointer to `?` for the full, localised
   # legend (relay / incognito / new / rename / delete / jump). Keeps the board
   # clean while every action stays discoverable.
-  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · ? %s · h %s · q %s%b\n\n' \
+  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · [ ] %s · / %s · ? %s · q %s%b\n\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" \
-    "$T_K_MOVE" "$T_K_OPEN" "$T_K_FILTER" "$T_K_HELP" "$T_K_LANG" "$T_K_QUIT" "$__C_RESET"
+    "$T_K_MOVE" "$T_K_OPEN" "$T_K_REORDER" "$T_K_FILTER" "$T_K_HELP" "$T_K_QUIT" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -785,22 +806,22 @@ _home_pick_draw_body() {
         fi
         ;;
       tank)
-        if [ "$cli" != "$cur_cli" ]; then
-          [ -z "$cur_cli" ] && [ "$printed_resume" -eq 1 ] && printf '\n'
-          cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
-        fi
+        # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
+        # [tag] (shown even collapsed, so a cross-engine list stays unambiguous).
+        # One blank line separates the continue block from the tanks.
+        if [ -z "$cur_cli" ]; then [ "$printed_resume" -eq 1 ] && printf '\n'; cur_cli="-"; fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
-          # Selected → EXPANDED: account label, alias, and any reset time (hover detail).
-          printf '  %b %b %b%-10s %-28s %s%b  %b%s%b\n' "$mark" "$dot" "$__C_BOLD" "$profile" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          # Selected → EXPANDED: name, engine tag, account, alias, any reset time.
+          printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s %s%b  %b%s%b\n' \
+            "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$cli" "$__C_RESET" \
+            "$__C_DIM" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         elif [ -n "$_reset" ]; then
-          # Unselected but DRY → collapsed name + reset time (the warning still shows).
-          printf '  %b %b %s  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          printf '  %b %b %-12s %b[%s]%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         else
-          # Unselected → COLLAPSED: just the status dot + tank name. Hover to expand.
-          printf '  %b %b %s\n' "$mark" "$dot" "$profile"
+          printf '  %b %b %-12s %b[%s]%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$cli" "$__C_RESET"
         fi
         ;;
       target)
@@ -814,7 +835,7 @@ _home_pick_draw_body() {
         fi
         ;;
       agent)
-        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %bAlso available%b\n' "$__C_BOLD" "$__C_RESET"; fi
+        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"; fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b· %-12s %s%b\n' "$mark" "$__C_BOLD" "$cli" "$note" "$__C_RESET"
         else
@@ -917,6 +938,16 @@ _home_pick() {
       [1-9])
         # Jump to the Nth row (clamped). Fast access on a long board.
         sel=$(( key - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+      '[')
+        # Move the selected tank UP in the burn order (the board IS the order).
+        if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" -1; then
+          items="$(_home_items)"; sel=$(( sel - 1 )); [ "$sel" -lt 0 ] && sel=0
+        fi ;;
+      ']')
+        # Move the selected tank DOWN in the burn order.
+        if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" 1; then
+          items="$(_home_items)"; sel=$(( sel + 1 ))
+        fi ;;
       q) break ;;
 
       /)

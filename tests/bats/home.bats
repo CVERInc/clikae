@@ -285,3 +285,39 @@ _agy_log() { # <line>
   [[ "$output" == *"Fixed the parser; next add tests."* ]] || false
   [[ "$output" != *"disable recaps"* ]] || false
 }
+
+# --- M1c: the board is a flat BURN ORDER (no engine grouping) -------------------
+
+@test "the board lists tanks in the order from the order file" {
+  clikae init claude alpha
+  clikae init claude beta
+  printf 'claude/beta\nclaude/alpha\n' > "$CLIKAE_HOME/order"
+  run clikae
+  [ "$status" -eq 0 ]
+  local lb la
+  lb="$(printf '%s\n' "$output" | grep -n 'beta'  | head -1 | cut -d: -f1)"
+  la="$(printf '%s\n' "$output" | grep -n 'alpha' | head -1 | cut -d: -f1)"
+  [ -n "$lb" ] && [ -n "$la" ] && [ "$lb" -lt "$la" ]
+}
+
+@test "the board shows an inline [engine] tag, not a group header" {
+  clikae init claude work
+  clikae init codex main
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[claude]"* ]] || false
+  [[ "$output" == *"[codex]"* ]] || false
+}
+
+@test "_home_reorder moves a tank within the order file" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  # Default order is alpha, beta. Moving beta up -> beta first.
+  _home_reorder claude beta -1
+  [ "$(head -1 "$CLIKAE_HOME/order")" = "claude/beta" ]
+}
