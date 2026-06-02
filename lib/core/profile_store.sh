@@ -61,6 +61,32 @@ list_all_profiles() {
   done | sort
 }
 
+# next_tank <engine> <current>  -> the tank to fall through to when <current>
+# runs dry. The fuel reserve IS just your tanks — every other tank of the same
+# engine, in board order — so there's no separate "pool" to configure. Prefers a
+# tank that isn't itself over quota (via limit_profile_dry when available), else
+# falls back to the first other tank. Echoes a bare tank name, or nothing if the
+# engine has no other tank. Cross-ENGINE fall-through stays explicit (clikae to
+# <engine>) — it's a cold-start brief, not something to do silently.
+next_tank() {
+  local engine="$1" current="$2"
+  local cli profile path
+  local first_other="" first_healthy=""
+  while IFS=$'\t' read -r cli profile path; do
+    [ "$cli" = "$engine" ] || continue
+    [ "$profile" = "$current" ] && continue
+    [ -n "$first_other" ] || first_other="$profile"
+    if declare -F limit_profile_dry >/dev/null 2>&1 \
+       && limit_profile_dry "$cli" "$path" >/dev/null 2>&1; then
+      continue                       # dry — keep looking for a healthy one
+    fi
+    first_healthy="$profile"; break
+  done <<EOF
+$(list_all_profiles)
+EOF
+  printf '%s' "${first_healthy:-$first_other}"
+}
+
 # resolve_active_profile <cli> <strategy> <value>
 # Given the live value of an adapter's env var, echo the clikae profile it
 # corresponds to (or nothing). Used by `clikae status` and `clikae relay` to

@@ -37,8 +37,9 @@ Make & manage tanks:
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
 
 Keep burning when a tank runs dry:
+  to [target]                      carry your session to the next tank (bare = next
+                                   tank of this engine); your tanks ARE the reserve
   watch <engine> [tank]            watch for a dry tank and switch onward
-  pool [add|remove] [target]       the reserve order watch falls through
 
 Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app

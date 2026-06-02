@@ -35,16 +35,6 @@ load '../helpers'
   [[ "$output" == *"active here"* ]] || false
 }
 
-@test "the fuel-pool order is shown when a pool is set" {
-  clikae init claude work
-  clikae pool add claude/work
-  clikae pool add claude/spare
-  run clikae
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"fuel pool"* ]] || false
-  [[ "$output" == *"claude/work → claude/spare"* ]] || false
-}
-
 @test "dashboard is reachable by name and via --help" {
   run clikae dashboard
   [ "$status" -eq 0 ]
@@ -105,7 +95,7 @@ _fake_bin() {
   # Regression: colour codes are stored as the literal string '\033[2m' and only
   # printf %b interprets them — embedding one in a %s string leaks it as text.
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
-  source "$CLIKAE_TEST_ROOT/lib/core/pool.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"   # T_* strings the renderer reads
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   __C_DIM='\033[2m'; __C_RESET='\033[0m'; __C_BOLD='\033[1m'; __C_GREEN='\033[0;32m'
   local items; items="$(printf 'tank\037claude\037work\037me@x\037claude-work\0371\037\n')"
@@ -166,6 +156,30 @@ _seed_tx() { # <profile> <jsonl-line>
   [[ "$output" != *"over quota"* ]] || false
 }
 
+@test "the board badges the NEW session-limit shape (middot + apiErrorStatus:429)" {
+  # The exact shape Claude Code writes for a session limit (dogfooded 2026-06-02,
+  # the real burn that prompted this): type=assistant, model=<synthetic>,
+  # isApiErrorMessage:true, apiErrorStatus:429, error:rate_limit, and a
+  # "·"-separated reset phrase. Locks the new wording/structure in forever.
+  clikae init claude dry
+  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2026-06-02T09:44:49.962Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"over quota"* ]] || false
+}
+
+@test "limit detection tolerates spaced JSON (future pretty-print)" {
+  # Defensive: if a future Claude Code pretty-prints its JSONL (space after each
+  # colon), the structural greps must still match.
+  clikae init claude dry
+  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2026-06-02T09:44:49.962Z"}'
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"over quota"* ]] || false
+}
+
 # Seed agy's limit log (cli.log) under the test HOME — agy records its quota
 # event ONLY here, never a transcript (confirmed marker; see limit_log_dry).
 _agy_log() { # <line>
@@ -222,8 +236,9 @@ _agy_log() { # <line>
   cd "$work"
   run clikae
   [ "$status" -eq 0 ]
-  # Headline present, titled by Claude's ai-title, naming the engine/tank to resume.
-  [[ "$output" == *"續上次"* ]] || false
+  # Headline present (en-US per the pinned test locale), titled by Claude's
+  # ai-title, naming the engine/tank to resume.
+  [[ "$output" == *"Continue"* ]] || false
   [[ "$output" == *"Resume me please"* ]] || false
   [[ "$output" == *"claude/a"* ]] || false
 }
@@ -234,7 +249,7 @@ _agy_log() { # <line>
   cd "$empty"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"續上次"* ]] || false
+  [[ "$output" != *"Continue"* ]] || false
 }
 
 @test "the continue list shows multiple recent sessions, newest first" {

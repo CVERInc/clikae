@@ -28,7 +28,7 @@ cmd_demo() {
 Usage: clikae demo
 
 A 30-second guided tour in a throwaway sandbox — it shows isolated tanks, the
-tank board, the fuel pool, and the `to` idea, then cleans up. Touches nothing
+tank board and the `to` idea (your tanks are the reserve), then cleans up. Touches nothing
 real: not your ~/.clikae, not your logins, not your shell rc.
 EOF
       return 0 ;;
@@ -65,20 +65,17 @@ EOF
   _demo_act "Type \`clikae\` to see your tanks (alice is the one this shell is on)"
   _demo_cmd "$sb" "CLAUDE_CONFIG_DIR=$sb/profiles/claude/alice" --
 
-  # --- Act 3: a fuel pool (the relay fall-through order) -------------------
-  _demo_act "Set a fuel pool — the order to fall through when a tank runs dry"
-  env CLIKAE_HOME="$sb" "$CLIKAE_BIN" pool add claude/alice >/dev/null 2>&1 || true
-  env CLIKAE_HOME="$sb" "$CLIKAE_BIN" pool add claude/bob   >/dev/null 2>&1 || true
-  _demo_cmd "$sb" -- pool list
-
-  # --- Act 4: the magic (narrated — `to` carries a live session) -----------
+  # --- Act 3: the magic (narrated — `to` carries a live session) -----------
   _demo_act "The payoff: hit a limit mid-task? Swap the tank, keep burning"
-  log_dim "  alice runs out of quota in the middle of a task. Instead of"
-  log_dim "  re-logging into bob and re-explaining everything:"
+  log_dim "  alice runs out of quota in the middle of a task. Your tanks ARE the"
+  log_dim "  reserve — nothing to set up — so instead of re-logging into bob and"
+  log_dim "  re-explaining everything:"
   echo ""
-  printf '    %b$ clikae to bob%b              %b# carry the LIVE session over, resume on bob quota%b\n' \
+  printf '    %b$ clikae to%b                  %b# carry the LIVE session to the next tank (bob), resume there%b\n' \
     "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-  printf '    %b$ clikae watch claude --auto%b %b# or let clikae notice and fall through the pool for you%b\n' \
+  printf '    %b$ clikae to bob%b              %b# or name it; cross engines explicitly: clikae to codex%b\n' \
+    "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  printf '    %b$ clikae watch claude --auto%b %b# or let clikae notice and switch for you%b\n' \
     "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   echo ""
 

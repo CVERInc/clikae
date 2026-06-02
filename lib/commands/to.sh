@@ -49,16 +49,19 @@ EOF
 
 _to_help() {
   cat <<'EOF'
-Usage: clikae to <target> [tank] [-- args...]
+Usage: clikae to [target] [tank] [-- args...]
 
 Carry THIS shell's current session onto another tank and keep going — for when
 the tank you're on runs dry. The source is auto-detected from this shell.
 
-clikae picks the mechanism and tells you which:
+With NO target, falls through to the next tank of the engine you're on (your
+tanks ARE the reserve — there's nothing to configure). clikae picks the
+mechanism and tells you which:
   • same engine, another tank  -> a real resume (your conversation continues)
   • a different engine         -> a written brief (that engine can't resume a
                                   foreign session, so it starts cold from a summary)
 
+  clikae to                  fall through to the next tank of THIS engine
   clikae to work             carry onto the 'work' tank of the engine you're on
   clikae to codex            carry onto a different engine (codex) — brief
   clikae to claude personal  explicit engine + tank
@@ -91,9 +94,10 @@ cmd_to() {
     esac
   done
 
-  [ "${#positionals[@]}" -ge 1 ] || log_fail "Missing target. See: clikae to --help"
-  [ "${#positionals[@]}" -le 2 ] || log_fail "Too many arguments. Usage: clikae to <target> [tank]"
-  local target="${positionals[0]}" target_tank="${positionals[1]:-}"
+  [ "${#positionals[@]}" -le 2 ] || log_fail "Too many arguments. Usage: clikae to [target] [tank]"
+  # Target is OPTIONAL: bare `clikae to` falls through to the next tank of the
+  # engine you're on (resolved below, after we detect the source).
+  local target="${positionals[0]:-}" target_tank="${positionals[1]:-}"
 
   # Auto-detect the source engine + tank. First this shell's live env var; then
   # (the common case — the switch/alias/.app never export it) the engine+tank
@@ -121,6 +125,15 @@ cmd_to() {
 $src
 EOF
   [ "$from_recent" -eq 1 ] && log_dim "source: this directory's most recent session — $src_engine/$src_tank"
+
+  # Bare `clikae to` — no target given: fall through to the next tank of THIS
+  # engine (the reserve is just your tanks; no pool to configure). Cross-engine
+  # stays explicit because it's a cold-start brief, not a silent jump.
+  if [ -z "$target" ]; then
+    target="$(next_tank "$src_engine" "$src_tank")"
+    [ -n "$target" ] || log_fail "No other $src_engine tank to fall through to. Create one (clikae init $src_engine <tank>), or cross engines explicitly (e.g. clikae to codex)."
+    log_info "to: falling through to the next $src_engine tank — $target."
+  fi
 
   # Normalise the agy long name for the target lookup (canonical engine = agy).
   local tnorm="$target"; [ "$target" = "agy" ] && tnorm="antigravity"

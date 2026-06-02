@@ -70,7 +70,8 @@ switches automatically after a one-time consent. The brief + handoff reuse
 
 Where it goes next:
   --to <target>   explicit target (<engine>/<tank> or a launch-only target).
-  (otherwise)     the next tank down your fuel pool — see `clikae pool`.
+  (otherwise)     the next tank of the SAME engine — your tanks ARE the reserve,
+                  nothing to configure. Cross-engine needs an explicit --to.
 
 Launch-only targets (single-account vendors, e.g. antigravity): clikae watches
 their LOG instead of a transcript (agy writes its quota error only to
@@ -92,7 +93,7 @@ Options:
             remembers). Without it, you're asked each time.
 
 Examples:
-  clikae watch claude                     # offer to fall through the pool
+  clikae watch claude                     # offer to fall through to the next tank
   clikae watch claude --to codex/work     # offer to switch to a specific tank
   clikae watch claude --auto              # auto-switch (after one-time consent)
   clikae watch claude --check             # would the limit pattern fire right now?
@@ -185,11 +186,13 @@ EOF
     return 0
   fi
 
-  # Resolve where we'd go on a dry tank.
+  # Resolve where we'd go on a dry tank: the next tank of THIS engine (your tanks
+  # are the reserve — no pool to set up). Cross-engine needs an explicit --to.
   local target="$to"
   if [ -z "$target" ]; then
-    target="$(pool_next "$cli/$profile")"
-    [ -n "$target" ] || log_fail "No next tank: give --to <target>, or fill the pool with \`clikae pool seed\`."
+    local _nt; _nt="$(next_tank "$cli" "$profile")"
+    [ -n "$_nt" ] || log_fail "No other $cli tank to fall through to. Create one (clikae init $cli <tank>) or give --to <target>."
+    target="$cli/$_nt"
   fi
   validate_handoff_target "$target"
 
@@ -267,13 +270,12 @@ _watch_target() {
 
   [ -e "$logf" ] || log_fail "Nothing to watch yet at $logf — has $(target_meta_binary) run?"
 
-  local nxt="$to"
-  [ -z "$nxt" ] && nxt="$(pool_next "$cli" 2>/dev/null || true)"
+  local nxt="$to"   # only an explicit --to; agy is single-account, nothing to auto-pick
 
   log_info "Watching $name for a dry tank: $logf"
   log_dim "$name is single-account — clikae can't summarise a brief FROM it, so on a"
   log_dim "dry tank it ALERTS you to switch rather than auto-relaying. Ctrl-C to stop."
-  [ -n "$nxt" ] && log_dim "Next tank in your pool: $nxt"
+  [ -n "$nxt" ] && log_dim "On a dry tank, switch to: $nxt"
 
   # tail -F (follow by NAME): agy repoints cli.log to a fresh file each run, so an
   # inode-following `tail -f` would go stale. -n0 = only lines written from now on.
@@ -284,9 +286,9 @@ _watch_target() {
     log_warn "$name hit its limit — this tank is dry."
     printf '%s' "$line" | grep -aoE "$pattern" | sort -u | sed 's/^/  matched: /'
     if [ -n "$nxt" ]; then
-      log_info "Switch to your next tank: $nxt  (start it with your alias / \`clikae run\`)."
+      log_info "Switch to: $nxt  (start it with your alias / \`clikae run\`)."
     else
-      log_dim "Pick a tank to switch to — see \`clikae pool\` or your aliases."
+      log_dim "Pick a tank to switch to — open \`clikae\` or use your aliases."
     fi
     return 0
   done < <(tail -n0 -F "$logf" 2>/dev/null)

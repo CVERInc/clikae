@@ -68,10 +68,10 @@ _seed() {
   local work="$TEST_HOME/work"; mkdir -p "$work"
   _seed a "$work" ""
   cd "$work"
-  # Pool empty and claude/a not in it -> pool_next returns first (none) -> error.
+  # Only one claude tank exists -> next_tank finds no other tank -> error.
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No next tank"* ]] || false
+  [[ "$output" == *"No other claude tank"* ]] || false
 }
 
 @test "watch errors when there's no session to watch" {
