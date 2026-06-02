@@ -91,19 +91,30 @@ reality before the next. Version bumps only when a milestone is real.
   only. Bare `clikae to` already calls `next_tank` → now walks the order.
 - Honesty: still no "auto" claims anywhere.
 
-### M2 — Report log + autonomy state (no supervisor yet)
-- Switch-history log (`$CLIKAE_HOME/history`), rendered in board / `status`.
-- Autonomy level state (ask | safe-auto | full-auto): one-time consent file + a
-  board toggle that shows/changes it. `to`/`watch` respect it. Nothing silently
-  acts yet.
+### M2 — Report log (SHIPPED)
+- Switch-history log (`$CLIKAE_HOME/history`): `history_log`/`history_recent`.
+  `clikae to` + the board's `r` log real carries; `clikae status` shows a "recent
+  carries" tail. Only user-initiated carries today; the supervisor's auto-switch
+  logging arrives with M3.
+- NOTE (no-phantom refinement): the **autonomy state/toggle moved to M3**. A
+  toggle that says "full-auto" while nothing auto-switches would be a phantom, so
+  the autonomy control ships together with its consumer (the supervisor).
 
-### M3 — The supervisor runtime (the headline)
-- `clikae <name>` runs the engine as a CHILD (not exec); a background watcher tails
-  the right signal (claude transcript / agy log / headless-codex stdout); on dry,
-  per autonomy level, does same-terminal kill+resume onto the next tank in the
-  order, writes the history log, prints the inline report.
-- Cross-engine: pause in safe-auto, proceed in full-auto.
-- Subsumes `watch`. Surfaces every honest limit above (esp. interactive codex).
+### M3 — The supervisor runtime + autonomy (the headline)
+- `clikae <name>` runs the engine as a foreground CHILD inside a loop (not exec);
+  a background watcher tails the right signal (claude transcript / agy log /
+  headless-codex stdout); on dry it flags + SIGTERMs the child, the loop sees the
+  flag and, per autonomy level, relays/resumes onto the next tank in the order in
+  the SAME terminal (the "flicker"), logs it, prints the inline report. No-dry =
+  behaves exactly like today's exec.
+- Autonomy level (ask | safe-auto | full-auto): one-time consent on first burn +
+  a board toggle + `clikae auto`. Cross-engine: pause in safe-auto, proceed in
+  full-auto. Surfaces every honest limit above (esp. interactive codex).
+- **Verification gate (no-phantom):** stub tests cover the loop MACHINERY, but the
+  real kill+resume on an interactive engine can only be confirmed by dogfooding on
+  real claude. M3 is NOT "done" / claimed working on real engines / version-bumped
+  until that dogfood passes. Best built with the maintainer's real engine in the
+  loop, not blind.
 
 ### M4 — Honesty + docs pass, then version bump
 - README / board / `--help` / CHANGELOG updated to match EXACTLY what M1–M3 do,
