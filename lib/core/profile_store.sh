@@ -87,6 +87,22 @@ EOF
   printf '%s' "${first_healthy:-$first_other}"
 }
 
+# resolve_tank_name <name>  -> "<engine>\t<tank>" line(s) for every tank whose
+# NAME equals <name>, across all engines. Powers the bare `clikae <name>` shortcut
+# (scheme B): a tank's name is its identity, so you can switch to it without typing
+# the engine. 0 lines = no such name; 1 = unambiguous; >1 = same name in multiple
+# engines (caller disambiguates).
+resolve_tank_name() {
+  local want="$1" cli profile path
+  [ -n "$want" ] || return 0
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    [ "$profile" = "$want" ] && printf '%s\t%s\n' "$cli" "$profile"
+  done <<EOF
+$(list_all_profiles)
+EOF
+}
+
 # resolve_active_profile <cli> <strategy> <value>
 # Given the live value of an adapter's env var, echo the clikae profile it
 # corresponds to (or nothing). Used by `clikae status` and `clikae relay` to

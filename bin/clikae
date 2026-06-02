@@ -79,10 +79,32 @@ elif [ -f "$CLIKAE_LIB/adapters/$raw.sh" ]; then
   # Bare switch — keep "$@" intact: the engine is cmd_switch's first argument.
   cmd="switch"
 else
-  log_err "Unknown command or engine: $raw"
-  echo ""
-  set --
-  cmd="help"
+  # Maybe it's a TANK NAME (scheme B): a tank's name is its identity, so
+  # `clikae <name>` switches to it without naming the engine. Resolve across
+  # engines; unique -> switch, ambiguous -> ask the user to qualify.
+  __name_matches="$(resolve_tank_name "$raw" 2>/dev/null || true)"
+  __name_n="$(printf '%s\n' "$__name_matches" | grep -c . || true)"
+  if [ "$__name_n" -eq 1 ]; then
+    __m_engine="$(printf '%s' "$__name_matches" | cut -f1)"
+    __m_tank="$(printf '%s' "$__name_matches" | cut -f2)"
+    shift || true   # drop the name; reshape into the canonical switch form
+    if [ "$__m_engine" = "antigravity" ]; then
+      set -- "$__m_tank" "$@"; cmd="antigravity"   # agy tanks switch via cmd_antigravity
+    else
+      set -- "$__m_engine" "$__m_tank" "$@"; cmd="switch"
+    fi
+  elif [ "$__name_n" -gt 1 ]; then
+    log_err "Ambiguous tank name: $raw  (exists in more than one engine)"
+    printf '%s\n' "$__name_matches" | while IFS=$'\t' read -r e t; do
+      [ -n "$e" ] && log_dim "  clikae $e $t"
+    done
+    exit 1
+  else
+    log_err "Unknown command, engine, or tank: $raw"
+    echo ""
+    set --
+    cmd="help"
+  fi
 fi
 
 if [ "$cmd" = "version" ]; then
