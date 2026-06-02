@@ -184,18 +184,23 @@ handoff_render() {
     return 0
   fi
 
-  [ "$auto" -eq 1 ] && log_dim "Brief written on-device by: $summarizer  (override with \$CLIKAE_HANDOFF_SUMMARIZER, disable with CLIKAE_HANDOFF_AUTOLOCAL=0)" >&2
-
   # Feed the model: instructions + a cleaned, capped digest of the recent
   # conversation, on stdin. The summarizer reads stdin and writes the brief to
-  # stdout. A non-zero exit (or empty output) falls back to the raw extract.
+  # stdout. A non-zero exit (or empty output) falls back to the raw extract. We
+  # announce ONLY on success, so a failed local model never leaves a contradictory
+  # "written on-device" line above the fallback.
   local out=""
   out="$( { _handoff_summarizer_prompt; _handoff_clean_tail "$t"; } \
             | sh -c "$summarizer" 2>/dev/null || true )"
   if [ -n "$out" ]; then
+    [ "$auto" -eq 1 ] && log_dim "Brief written on-device by: $summarizer  (override with \$CLIKAE_HANDOFF_SUMMARIZER, disable with CLIKAE_HANDOFF_AUTOLOCAL=0)" >&2
     printf '%s\n' "$out"
   else
-    log_warn "Summarizer produced nothing; falling back to a raw extract." >&2
+    if [ "$auto" -eq 1 ]; then
+      log_warn "On-device summarizer ($summarizer) returned nothing — is the local model ready? Using a raw extract instead." >&2
+    else
+      log_warn "Summarizer produced nothing; falling back to a raw extract." >&2
+    fi
     _handoff_raw_brief "$t"
   fi
 }
