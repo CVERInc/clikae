@@ -112,7 +112,7 @@ _fake_bin() {
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"antigravity"* ]] || false
+  [[ "$output" == *"[agy]"* ]] || false        # shown by its short name, not "antigravity"
   [[ "$output" == *"work"* ]] || false
   [[ "$output" == *"active here"* ]]          # work is where the symlink points
 }
@@ -319,6 +319,31 @@ _agy_log() { # <line>
   # Default order is alpha, beta. Moving beta up -> beta first.
   _home_reorder claude beta -1
   [ "$(head -1 "$CLIKAE_HOME/order")" = "claude/beta" ]
+}
+
+@test "agy tanks show an [agy] tag, not [antigravity]" {
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/main"
+  printf 'consented\n' > "$CLIKAE_HOME/antigravity-multi-consent"
+  ln -s "$CLIKAE_HOME/profiles/antigravity/main" "$HOME/.gemini"
+  clikae init claude work
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[agy]"* ]] || false
+  [[ "$output" != *"[antigravity]"* ]] || false
+}
+
+@test "a runaway Continue title is truncated with an ellipsis (no wrap)" {
+  clikae init claude a
+  local work="$TEST_HOME/tw"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  local long; long="$(printf 'X%.0s' $(seq 1 200))"
+  printf '{"type":"ai-title","aiTitle":"%s","sessionId":"a"}\n' "$long" > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"…"* ]] || false                  # truncated
+  [[ "$output" != *"$long"* ]] || false              # not the full 200-char title
 }
 
 @test "the new-tank picker groups AI engines before tool CLIs (+ agy power)" {

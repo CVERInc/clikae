@@ -66,6 +66,15 @@ EOF
   validate_name profile "$new"
   [ "$old" != "$new" ] || log_fail "Old and new names are the same ('$old')."
 
+  # agy is a symlink-managed target, not an env adapter: rename moves the slot dir
+  # and repoints ~/.gemini if it's the active one. (No alias/Keychain to carry.)
+  if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
+    # shellcheck source=./antigravity.sh
+    source "$CLIKAE_LIB/commands/antigravity.sh"
+    _agy_rename "$old" "$new"
+    return $?
+  fi
+
   load_adapter "$cli"
   local envvar binary old_dir new_dir
   envvar="$(adapter_meta_env_var)"
