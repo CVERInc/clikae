@@ -302,6 +302,18 @@ _dwidth() {
   printf '%s' "$(( chars + (bytes - chars) / 2 ))"
 }
 
+# _home_trunc <str> <maxchars> -> <str> cut to <maxchars> (UTF-8 chars, since bash
+# substring is char-aware in a UTF-8 locale) with an ellipsis when shortened. Keeps
+# a runaway title (e.g. a polluted ai-title) to one line instead of wrapping.
+_home_trunc() {
+  local s="$1" n="$2"
+  if [ "${#s}" -gt "$n" ]; then printf '%s…' "${s:0:$n}"; else printf '%s' "$s"; fi
+}
+
+# _home_engine_label <cli> -> the display name for an engine tag. The antigravity
+# target is shown as its canonical short name "agy" everywhere.
+_home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' "$1" ;; esac; }
+
 # _home_lpad <str> <width> -> <str> right-padded with spaces to <width> DISPLAY
 # columns (so a CJK label lines up the same as an ASCII one). The drop-in for a
 # `%-<width>s` that would otherwise mis-measure multibyte text.
@@ -332,7 +344,7 @@ _home_render_static() {
         # ai-title and a one-line recap when present.
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
-        printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$label" "$__C_RESET"
+        printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 64)" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -344,21 +356,21 @@ _home_render_static() {
           [ "$printed_resume" -eq 1 ] && printf '\n'
           printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
         fi
-        local _reset
+        local _reset _eng; _eng="$(_home_engine_label "$cli")"
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
           printf '    %b!%b %-12s %b[%s]%b %b%-22s%b %b%s%b  %b%s%b\n' \
-            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
+            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_YELLOW" "${_reset:-over quota}" "$__C_RESET"
           any_dry=1
           if [ "$active" = "1" ] || [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         elif [ "$active" = "1" ]; then
           printf '    %b●%b %-12s %b[%s]%b %b%-22s%b %b%s%b  %b← %s%b\n' \
-            "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
+            "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET"
           launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"
         else
           printf '    %b○%b %-12s %b[%s]%b %b%-22s%b %b%s%b\n' \
-            "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_DIM" "$alias" "$__C_RESET"
+            "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_DIM" "$alias" "$__C_RESET"
           if [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; launch_alias="$alias"; fi
         fi
         ;;
@@ -396,12 +408,13 @@ EOF
 
   if [ -n "$launch_cli" ]; then
     # Colour via %b args, never embedded in a %s string (the codes are literal
-    # \033 sequences and only printf %b interprets them).
+    # \033 sequences and only printf %b interprets them). agy shown by its short name.
+    local _leng; _leng="$(_home_engine_label "$launch_cli")"
     if [ -n "$launch_alias" ]; then
       printf '  %s clikae %s %s   %b(%s: %s)%b\n' \
-        "$(_home_lpad "$T_LAUNCH" 9)" "$launch_cli" "$launch_profile" "$__C_DIM" "$T_OR_ALIAS" "$launch_alias" "$__C_RESET"
+        "$(_home_lpad "$T_LAUNCH" 9)" "$_leng" "$launch_profile" "$__C_DIM" "$T_OR_ALIAS" "$launch_alias" "$__C_RESET"
     else
-      printf '  %s clikae %s %s\n' "$(_home_lpad "$T_LAUNCH" 9)" "$launch_cli" "$launch_profile"
+      printf '  %s clikae %s %s\n' "$(_home_lpad "$T_LAUNCH" 9)" "$_leng" "$launch_profile"
     fi
   fi
   printf '  %s %s\n' "$(_home_lpad "$T_MORE" 9)" "clikae status · clikae doctor · clikae demo · clikae help"
@@ -644,8 +657,8 @@ EOF
 # `clikae rename <engine> <old> <new>` — the powerful rename that moves the tank
 # dir, rewrites the managed alias, AND carries the saved login across. Per the
 # v0.5.3 design, `a` is "rename" (the whole tank); alias-only tweaks live at
-# `clikae alias` on the CLI. agy/antigravity tanks are a global ~/.gemini symlink
-# target, not a per-shell engine, so rename doesn't apply to them.
+# `clikae alias` on the CLI. agy tanks rename too (cmd_rename routes them to
+# _agy_rename: move the slot + repoint ~/.gemini if active).
 _home_rename_tank() {
   local kind cli profile label alias active note
   IFS=$'\037' read -r kind cli profile label alias active note <<EOF
@@ -653,11 +666,7 @@ $1
 EOF
   : "$label" "$alias" "$active" "$note"
   [ "$kind" = "tank" ] || return 0
-  if [ "$cli" = "antigravity" ]; then
-    printf '\n  %s\n' "$T_RENAME_NO_AGY"
-    return 0
-  fi
-  printf '\n%s  %s/%s\n' "$T_RENAME_FOR" "$cli" "$profile"
+  printf '\n%s  %s/%s\n' "$T_RENAME_FOR" "$(_home_engine_label "$cli")" "$profile"
   local newname
   read -rp "  $T_RENAME_NEW" newname || return 0
   [ -n "$newname" ] || { printf '  %s\n' "$T_RENAME_CANCEL"; return 0; }
@@ -835,7 +844,7 @@ _home_pick_draw_body() {
         if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
         rage="${active#* }"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
+          printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$(_home_trunc "$label" 64)"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -843,7 +852,7 @@ _home_pick_draw_body() {
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %b%s/%s · "%s"%b\n' "$mark" "$rdot" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
+          printf '  %b %b %b%s/%s · "%s"%b\n' "$mark" "$rdot" "$__C_DIM" "$cli" "$profile" "$(_home_trunc "$label" 64)" "$__C_RESET"
         fi
         ;;
       tank)
@@ -854,18 +863,19 @@ _home_pick_draw_body() {
           [ "$printed_resume" -eq 1 ] && printf '\n'
           printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
         fi
+        local _eng; _eng="$(_home_engine_label "$cli")"
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
           # Selected → EXPANDED: name, engine tag, account, alias, any reset time.
           printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s %s%b  %b%s%b\n' \
-            "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$cli" "$__C_RESET" \
+            "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$_eng" "$__C_RESET" \
             "$__C_DIM" "${label:--}" "$alias" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         elif [ -n "$_reset" ]; then
-          printf '  %b %b %-12s %b[%s]%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$cli" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          printf '  %b %b %-12s %b[%s]%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         else
-          printf '  %b %b %-12s %b[%s]%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$cli" "$__C_RESET"
+          printf '  %b %b %-12s %b[%s]%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET"
         fi
         ;;
       target)
