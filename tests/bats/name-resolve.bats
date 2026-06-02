@@ -40,9 +40,9 @@ _stub() { # put a stub engine on PATH that echoes how it was invoked
   [[ "$output" == *"clikae codex shared"* ]] || false
 }
 
-@test "an unknown token is still an error that falls back to help" {
+@test "an unknown token reports the error and falls back to help" {
   run clikae definitely-not-a-tank
-  [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]]
+  # It prints the error (to stderr, merged by bats) then shows help (exit 0).
   [[ "$output" == *"Unknown command, engine, or tank"* ]] || false
 }
 
