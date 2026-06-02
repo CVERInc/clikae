@@ -100,7 +100,12 @@ reality before the next. Version bumps only when a milestone is real.
   toggle that says "full-auto" while nothing auto-switches would be a phantom, so
   the autonomy control ships together with its consumer (the supervisor).
 
-### M3 — The supervisor runtime + autonomy (the headline)
+### M3 — The supervisor runtime + autonomy (the headline) — IMPLEMENTED (BETA)
+Shipped behind a BETA label (claude-only; `clikae auto`; board `A`; one hop per
+run). Stub tests cover the decision gate + dry-advance; real interactive
+kill+resume still wants real-claude dogfooding (docs say "beta, feedback welcome").
+Original spec below.
+
 - `clikae <name>` runs the engine as a foreground CHILD inside a loop (not exec);
   a background watcher tails the right signal (claude transcript / agy log /
   headless-codex stdout); on dry it flags + SIGTERMs the child, the loop sees the
