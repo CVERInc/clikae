@@ -339,8 +339,11 @@ _home_render_static() {
         ;;
       tank)
         # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
-        # [tag]. One blank line separates the continue block from the tanks.
-        if [ -z "$cur_cli" ]; then [ "$printed_resume" -eq 1 ] && printf '\n'; cur_cli="-"; fi
+        # [tag]. A "Tanks" header opens the section (mirrors "Continue").
+        if [ -z "$cur_cli" ]; then
+          [ "$printed_resume" -eq 1 ] && printf '\n'
+          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
+        fi
         local _reset
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
           printf '    %b!%b %-12s %b[%s]%b %b%-22s%b %b%s%b  %b%s%b\n' \
@@ -360,18 +363,17 @@ _home_render_static() {
         fi
         ;;
       target)
-        # Its own group: a single-account launch target (e.g. agy). Badge it ! +
-        # the vendor's verbatim reset phrase when its limit log says it's dry.
-        local _treset
+        # A single-account launch target (e.g. agy) lives under "Also available",
+        # NOT a floating group of its own. Enter launches it single-account; to make
+        # it a tank, `n` → agy runs the SU takeover. Dry → ! + reset phrase inline.
+        local _treset _tline
         if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          printf '\n  %b%s%b\n    %b!%b %b%s%b  %b%s%b\n' \
-            "$__C_BOLD" "$cli" "$__C_RESET" "$__C_YELLOW" "$__C_RESET" \
-            "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET"
+          _tline="$(printf '    %b!%b %-12s %b%s%b  %b%s%b' "$__C_YELLOW" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET")"
           any_dry=1
         else
-          printf '\n  %b%s%b\n    %b◈%b %b%s%b\n' \
-            "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$note" "$__C_RESET"
+          _tline="$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"
         fi
+        also="$also$_tline"$'\n'
         ;;
       agent)
         also="$also$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"$'\n'
@@ -683,17 +685,26 @@ EOF
   fi
 }
 
-# Guided new-tank flow (the `n` key): pick a CLI with the arrow keys, then type
-# the tank name, then `clikae init <engine> <tank> --alias`.
+# Guided new-tank flow (the `n` key): pick an engine with the arrow keys, then type
+# the tank name. agy is offered too (last, flagged "power"): picking it routes to
+# `clikae init agy`, whose first run runs the SU takeover of ~/.gemini (asks first)
+# — so "add agy" is the same one keystroke, just gated by that consent.
 _home_new_tank() {
-  local def_cli="$1" cli profile
-  cli="$(_home_choose "$T_NEWTANK_TITLE    $T_PICKER_HINT" "$(list_adapters)" "$def_cli")" \
+  local def_cli="$1" cli profile choices
+  choices="$(printf '%s\nagy  (power · takes over ~/.gemini)' "$(list_adapters)")"
+  cli="$(_home_choose "$T_NEWTANK_TITLE    $T_PICKER_HINT" "$choices" "$def_cli")" \
     || { printf '%s\n' "$T_NEWTANK_CANCEL"; return 0; }
   [ -n "$cli" ] || return 0
+  # Strip the power annotation if agy was chosen.
+  case "$cli" in agy*) cli="agy" ;; esac
   printf '\n'
   read -rp "$(printf "$T_NEWTANK_PROFILE" "$cli")" profile || return 0
   [ -n "$profile" ] || { printf '%s\n' "$T_NEWTANK_NONAME"; return 0; }
-  "$CLIKAE_BIN" init "$cli" "$profile" --alias || true
+  if [ "$cli" = "agy" ]; then
+    "$CLIKAE_BIN" init agy "$profile" || true       # SU takeover (asks first)
+  else
+    "$CLIKAE_BIN" init "$cli" "$profile" --alias || true
+  fi
 }
 
 # _home_filter <items> <query> — keep only rows whose text contains <query>
@@ -747,9 +758,10 @@ _home_help_overlay() {
   _home_help_row "d"             "$T_K_DELETE"
   _home_help_row "/"             "$T_K_FILTER"
   _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
-  _home_help_row "h"             "$T_K_LANG"
+  _home_help_row "l"             "$T_K_LANG"
   _home_help_row "q / Esc"       "$T_K_QUIT"
-  printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
+  printf '\n  %b%s%b\n' "$__C_DIM" "$T_HELP_AGY" "$__C_RESET"
+  printf '  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
   local _k; IFS= read -rsn1 _k || true
 }
 
@@ -811,8 +823,11 @@ _home_pick_draw_body() {
       tank)
         # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
         # [tag] (shown even collapsed, so a cross-engine list stays unambiguous).
-        # One blank line separates the continue block from the tanks.
-        if [ -z "$cur_cli" ]; then [ "$printed_resume" -eq 1 ] && printf '\n'; cur_cli="-"; fi
+        # A "Tanks" header opens the section (mirrors "Continue").
+        if [ -z "$cur_cli" ]; then
+          [ "$printed_resume" -eq 1 ] && printf '\n'
+          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
+        fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
@@ -828,13 +843,15 @@ _home_pick_draw_body() {
         fi
         ;;
       target)
-        printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
+        # Under "Also available" (not a floating group). Enter launches it
+        # single-account; `n` → agy makes it a tank (SU takeover).
+        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"; fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}!${__C_RESET}"
-        else tdot="${__C_DIM}◈${__C_RESET}"; _reset=""; fi
+        else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s %b%s%b\n' "$mark" "$tdot" "$__C_BOLD" "$note" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          printf '  %b %b %b%-12s%b %b%s %s%b\n' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$note" "$_reset" "$__C_RESET"
         else
-          printf '  %b %b %b%s%b %b%s%b\n' "$mark" "$tdot" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          printf '  %b %b %-12s %b%s%b %b%s%b\n' "$mark" "$tdot" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
         fi
         ;;
       agent)
@@ -963,10 +980,15 @@ _home_pick() {
       '?')
         _home_help_overlay   # full key legend; any key dismisses, then redraw
         ;;
-      h)
-        # Flip the interface language live (en-US → ja-JP → zh-TW → …). Regenerate
-        # items so adapter notes re-localise; the T_* strings update in place.
-        i18n_cycle >/dev/null
+      l)
+        # Pick the interface language from a menu (not a blind cycle). _home_choose
+        # manages its own screen, so leave/re-enter the picker around it.
+        _home_tty_leave; trap - EXIT INT TERM
+        local _lang
+        _lang="$(_home_choose "$T_LANG_PICK    $T_PICKER_HINT" "$(printf 'en-US\nja-JP\nzh-TW')" "$(clikae_lang)")" || _lang=""
+        [ -n "$_lang" ] && i18n_set "$_lang"
+        trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        printf '\033[?1049h\033[?25l'
         items="$(_home_items)"; dry="$(_home_dry_set)"
         ;;
       A)
