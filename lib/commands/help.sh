@@ -37,14 +37,17 @@ Make & manage tanks:
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
 
 Keep burning when a tank runs dry:
+  to [target]                      carry your session to the next tank (bare = next
+                                   in your burn order); your tanks ARE the reserve
+  auto [ask|safe|full]             how much clikae carries on its own (BETA, claude)
   watch <engine> [tank]            watch for a dry tank and switch onward
-  pool [add|remove] [target]       the reserve order watch falls through
 
 Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app
   alias <engine> <tank>            write a shell alias for the tank
+  lang [en-US|ja-JP|zh-TW]         interface language (dashboard + prompts)
   tanks                            list all tanks (with the logged-in account)
-  status [engine]                  which tank each engine is on in this shell
+  status [engine]                  which tank each engine is on (+ recent carries)
   doctor                           read-only health check: what clikae can do here
   adapters                         list supported engines
   demo                             a 30-second guided tour in a throwaway sandbox

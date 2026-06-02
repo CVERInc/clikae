@@ -19,8 +19,10 @@
 target_meta_name()   { echo "Antigravity (agy)"; }
 target_meta_binary() { echo "agy"; }
 # A one-line note for the dashboard. agy hardcodes ~/.gemini and ignores env, so
-# by default it's single-account (launch-only).
-target_meta_note()   { echo "single-account · opens ~/.gemini directly"; }
+# by default it's single-account (launch-only). Localised via T_AGY_NOTE (from
+# lib/core/i18n.sh), with the English string as a fallback when i18n isn't loaded
+# (e.g. a unit test that sources this target file in isolation).
+target_meta_note()   { echo "${T_AGY_NOTE:-single-account · opens ~/.gemini directly}"; }
 
 # When the opt-in multi-account mode is enabled (see `clikae antigravity`), the
 # active account is whichever slot the ~/.gemini symlink points at. The dashboard

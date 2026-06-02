@@ -80,6 +80,77 @@ use `clikae to` (see: clikae help to).
 EOF
 }
 
+# _supervise_decision <level> <same-engine?1|0>  -> auto | ask | pause
+# The autonomy gate, factored out so it's unit-testable. full → always auto; safe
+# → auto for same-engine, pause (ask) before crossing; ask → always ask.
+_supervise_decision() {
+  case "$1" in
+    full) printf 'auto' ;;
+    safe) [ "$2" = "1" ] && printf 'auto' || printf 'pause' ;;
+    *)    printf 'ask' ;;
+  esac
+}
+
+# _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude-only)
+# Run the engine as a CHILD (so clikae stays the parent), and when it exits, if
+# THIS tank just hit its limit, carry onward to the next tank in the burn order
+# per the autonomy level. Same-engine → seamless resume (relay); cross-engine →
+# a written brief (handoff). One hop per run (the carry execs); relaunch to keep
+# going. A no-dry exit behaves exactly like a plain run.
+_switch_supervise() {
+  local engine="$1" tank="$2" dir="$3"; shift 3
+  # Parent ignores INT so Ctrl-C reaches the engine; we resume after it exits.
+  trap '' INT
+  ( trap - INT; adapter_run "$dir" "$@" ) || true
+  trap - INT
+
+  # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
+  limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || return 0
+
+  local _next ne nt
+  _next="$(next_tank "$engine" "$tank")"
+  if [ -z "$_next" ]; then
+    log_warn "$engine/$tank is out of fuel — and nothing follows it in your burn order."
+    log_dim  "Add a tank (clikae init …) or reorder on the board (clikae)."
+    return 0
+  fi
+  IFS=$'\t' read -r ne nt <<EOF
+$_next
+EOF
+  local same=0; [ "$ne" = "$engine" ] && same=1
+  local level decision; level="$(autonomy_get)"; decision="$(_supervise_decision "$level" "$same")"
+
+  if [ "$decision" != "auto" ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf '\n'; log_warn "$engine/$tank hit its limit."
+      if [ "$decision" = "pause" ]; then
+        printf '  Next in your order is %b%s/%s%b — a different engine (a fresh brief, not a resume).\n' "$__C_BOLD" "$ne" "$nt" "$__C_RESET"
+      else
+        printf '  Carry on to %b%s/%s%b?\n' "$__C_BOLD" "$ne" "$nt" "$__C_RESET"
+      fi
+      printf '    %b[y]%b once   %b[a]%b always   %b[N]%b stop: ' \
+        "$__C_GREEN" "$__C_RESET" "$__C_GREEN" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+      local ans; IFS= read -r ans </dev/tty || ans="N"
+      case "$ans" in
+        y|Y) : ;;
+        a|A) autonomy_set safe ;;
+        *)   log_dim "Stopped on $engine/$tank. Continue later:  clikae to"; return 0 ;;
+      esac
+    else
+      log_dim "$engine/$tank is dry. Continue:  clikae to"
+      return 0
+    fi
+  fi
+
+  history_log "auto: $engine/$tank dry → $ne/$nt"
+  printf '%b↻ %s/%s hit its limit — carrying on to %s/%s%b\n' "$__C_GREEN" "$engine" "$tank" "$ne" "$nt" "$__C_RESET"
+  if [ "$same" = "1" ]; then
+    exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
+  else
+    exec "$CLIKAE_BIN" handoff "$engine" "$tank" --to "$ne/$nt"
+  fi
+}
+
 cmd_switch() {
   local engine="$1"; shift || true
   local tank="" ephemeral=0
@@ -134,6 +205,14 @@ cmd_switch() {
 
   if [ "$ephemeral" -eq 1 ]; then
     _switch_run_ephemeral "$engine" "$d" "${passthru[@]}"
+    return $?
+  fi
+
+  # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
+  # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is
+  # detectable from the transcript; other engines exec unchanged. (docs/DESIGN-runtime)
+  if [ "$engine" = "claude" ]; then
+    _switch_supervise "$engine" "$tank" "$d" "${passthru[@]}"
     return $?
   fi
 

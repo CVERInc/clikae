@@ -87,20 +87,27 @@ limit_profile_dry() {
   # ALL recent sessions (account-level). ISO-8601 stamps sort lexicographically,
   # so `sort | tail -1` is the max — portable across grep/shell quirks, and no
   # bracket class fancier than [^"] (some greps, e.g. ugrep, reject [^"\\]).
+  # NB: the structural greps tolerate optional whitespace after each colon
+  # (`: *`) so a future Claude Code that pretty-prints its JSONL can't silently
+  # break detection. Timestamps are extracted to their BARE ISO value (sed strips
+  # the `"timestamp":` token) so max_lim/max_suc compare cleanly regardless of
+  # whether the source used compact or spaced JSON.
   local max_lim max_suc
   max_lim="$(printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      grep -a '"model":"<synthetic>"' "$f" 2>/dev/null \
-        | grep -a '"isApiErrorMessage":true' \
-        | grep -oaE '"timestamp":"[^"]*"'
+      grep -aE '"model": *"<synthetic>"' "$f" 2>/dev/null \
+        | grep -aE '"isApiErrorMessage": *true' \
+        | grep -oaE '"timestamp": *"[^"]*"' \
+        | sed -E 's/.*"timestamp": *"//; s/".*//'
     done | sort | tail -n 1)"
   [ -n "$max_lim" ] || return 1
 
   max_suc="$(printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      grep -a '"type":"assistant"' "$f" 2>/dev/null \
-        | grep -av '"model":"<synthetic>"' \
-        | grep -oaE '"timestamp":"[^"]*"'
+      grep -aE '"type": *"assistant"' "$f" 2>/dev/null \
+        | grep -avE '"model": *"<synthetic>"' \
+        | grep -oaE '"timestamp": *"[^"]*"' \
+        | sed -E 's/.*"timestamp": *"//; s/".*//'
     done | sort | tail -n 1)"
 
   # Dry only if nothing succeeded AFTER the newest limit. Pick the later of the
@@ -112,12 +119,12 @@ limit_profile_dry() {
   fi
 
   # Dry: echo the vendor's own reset phrase from the NEWEST limit line (matched by
-  # its timestamp), verbatim — never parsed into a countdown.
-  local ts_val="${max_lim#\"timestamp\":\"}"; ts_val="${ts_val%\"}"
+  # its bare ISO timestamp), verbatim — never parsed into a countdown.
+  local ts_val="$max_lim"
   printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
       grep -aF "$ts_val" "$f" 2>/dev/null \
-        | grep -a '"isApiErrorMessage":true' \
+        | grep -aE '"isApiErrorMessage": *true' \
         | grep -oaiE 'resets [^"]+'
     done | head -n 1
   return 0

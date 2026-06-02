@@ -10,7 +10,6 @@ load '../helpers'
   [[ "$output" == *"alice@studio.dev"* ]] || false
   [[ "$output" == *"bob@studio.dev"* ]] || false
   [[ "$output" == *"active here"* ]]          # the live tank board, alice active
-  [[ "$output" == *"Fuel pool"* ]] || false
   [[ "$output" == *"clikae to bob"* ]] || false
 }
 
