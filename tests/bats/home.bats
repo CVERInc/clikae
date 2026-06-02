@@ -81,14 +81,14 @@ _fake_bin() {
   [[ "$output" != *"gh"* ]] || false
 }
 
-@test "a single-account target on PATH shows as its own group (agy)" {
+@test "a single-account target (agy) shows under Also available, not a floating group" {
   clikae init claude work
   _fake_bin agy
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
   [[ "$output" == *"single-account"* ]] || false
-  [[ "$output" == *"◈"* ]]                 # rendered as a launch target, not a tank
+  [[ "$output" == *"Also available"* ]] || false   # tucked in, not floating on its own
 }
 
 @test "the launch hint emits real colour escapes, not a literal backslash-033" {
@@ -205,8 +205,7 @@ _agy_log() { # <line>
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
-  [[ "$output" != *"over quota"* ]] || false
-  [[ "$output" == *"◈"* ]]                     # plain launch glyph, not a warning
+  [[ "$output" != *"over quota"* ]] || false   # clean log → not badged dry
 }
 
 @test "bare clikae changes nothing on disk (read-only)" {
