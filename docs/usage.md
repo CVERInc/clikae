@@ -77,14 +77,16 @@ plain, conventional verbs.
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
 
 > **Supervised launch (BETA · claude · feedback welcome).** When you start claude
-> *through* clikae, clikae stays as the parent and watches that tank. If the session
-> hits its limit, clikae carries you onward to the next tank in your burn order
-> (per `clikae auto`) in the **same terminal** — one screen redraw, then your
-> conversation continues. Honest limits: it's one hop per run; interactive **codex**
-> can't be auto-detected (no file signal) so it's claude-only for now; and the truly
-> seamless in-place continuation depends on the engine — tell us how it behaves for
-> you. Nothing runs in the background unless you launched it through clikae (no
-> daemon) — that's deliberate. `clikae status` shows what it carried (recent carries).
+> *through* clikae, clikae stays as the parent. **When that session ends after
+> hitting its limit** — quit the dead session in an interactive run; a headless
+> `claude -p` exits on its own — clikae carries you onward to the next tank in your
+> burn order (per `clikae auto`) in the **same terminal** (one redraw), and your
+> conversation continues there. Honest limits: it advances *on exit*, not by killing
+> a live session mid-stream (that needs engine support — see issue
+> anthropics/claude-code#35744); one hop per run; interactive **codex** can't be
+> auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+> background unless you launched it through clikae (no daemon) — deliberate.
+> `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
 
 ### Inspect
 
