@@ -58,35 +58,58 @@ _home_alias_for() {
   ' "$rc"
 }
 
-# _home_recent_row -> the "continue" headline: THIS directory's single most-recent
-# session across ALL engines+tanks, as a launchable row — but only for an engine
-# that can actually RESUME a session by id (defines adapter_resume_args), so the
-# "⏎ 接回" affordance never lies. Title comes from adapter_session_meta (Claude's
-# ai-title when present). Emits one row, or nothing (new dir / not resumable):
-#   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ ␟ ␟ <session-id>
-_home_recent_row() {
-  local name r tank mt best_e="" best_t="" best_mt=0
+# _home_recent_rows -> the "continue" list: THIS directory's most recent sessions
+# (newest first, capped at CLIKAE_HOME_RECENT_MAX) across ALL engines+tanks — but
+# only for engines that can RESUME a session by id (adapter_resume_args), so the
+# "接回" affordance never lies. Each row carries the ai-title (label) and a one-line
+# RECAP (alias field) — "where you left off + next step" — fetched only for the few
+# rows shown, so the listing stays cheap. Emits, newest first:
+#   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
+# How many recent sessions the "continue" list surfaces.
+CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-3}"
+
+_home_recent_rows() {
+  local name proot tdir tank rows sid mt acc=""
   while IFS= read -r name; do
     [ -n "$name" ] || continue
-    r="$(newest_transcript_tank "$name" 2>/dev/null || true)"   # "tank<TAB>mtime" or empty
-    [ -n "$r" ] || continue
-    tank="$(printf '%s' "$r" | cut -f1)"; mt="$(printf '%s' "$r" | cut -f2)"
-    [ -n "$mt" ] || mt=0
-    if [ "$mt" -gt "$best_mt" ] 2>/dev/null; then best_mt="$mt"; best_e="$name"; best_t="$tank"; fi
+    ( load_adapter "$name" >/dev/null 2>&1 \
+        && declare -F adapter_resume_args >/dev/null 2>&1 \
+        && declare -F adapter_recent_sids >/dev/null 2>&1 ) || continue
+    proot="$(profiles_root)/$name"
+    [ -d "$proot" ] || continue
+    for tdir in "$proot"/*/; do
+      [ -d "$tdir" ] || continue
+      tank="$(basename "$tdir")"
+      # CHEAP: just epoch-mtime + sid per recent session (no content reads).
+      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
+      [ -n "$rows" ] || continue
+      while IFS=$'\037' read -r mt sid; do
+        [ -n "$sid" ] || continue
+        acc="$acc$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
+      done <<INNER
+$rows
+INNER
+    done
   done <<EOF
 $(list_adapters)
 EOF
-  [ -n "$best_e" ] || return 0
-  # Only surface it when that engine can resume a session by id.
-  ( load_adapter "$best_e" >/dev/null 2>&1 && declare -F adapter_resume_args >/dev/null 2>&1 ) || return 0
-  local dir meta sid title
-  dir="$(profile_dir "$best_e" "$best_t")"
-  meta="$( load_adapter "$best_e" >/dev/null 2>&1 && adapter_session_meta "$dir" 2>/dev/null || true )"
-  [ -n "$meta" ] || return 0
-  sid="$(printf '%s' "$meta" | cut -d$'\037' -f1)"
-  title="$(printf '%s' "$meta" | cut -d$'\037' -f4)"
-  [ -n "$sid" ] || return 0
-  printf 'resume\037%s\037%s\037%s\037\037\037%s\n' "$best_e" "$best_t" "$title" "$sid"
+  [ -n "$acc" ] || return 0
+  # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
+  # title + recap (the only content greps — bounded to the few rows actually shown).
+  printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
+    | while IFS=$'\037' read -r mt engine tank sid; do
+        [ -n "$sid" ] || continue
+        local dir title recap
+        dir="$(profile_dir "$engine" "$tank")"
+        load_adapter "$engine" >/dev/null 2>&1 || true
+        if declare -F adapter_session_title >/dev/null 2>&1; then
+          title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+        else
+          title="$(adapter_session_meta "$dir" "$sid" 2>/dev/null | cut -d$'\037' -f4 || true)"
+        fi
+        recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+        printf 'resume\037%s\037%s\037%s\037%s\037\037%s\n' "$engine" "$tank" "$title" "$recap" "$sid"
+      done
 }
 
 # _home_items  -> one canonical launchable row per "thing you can open", fields
@@ -96,8 +119,8 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
-  # 0) Continue headline — this dir's most recent resumable session, if any.
-  _home_recent_row
+  # 0) Continue list — this dir's most recent resumable sessions, if any.
+  _home_recent_rows
 
   # 1) Tanks — every profile.
   local cli profile path label alias active cur_cli="" active_for="" a
@@ -226,19 +249,21 @@ _home_render_static() {
     "$n_tanks" "$([ "$n_tanks" = 1 ] || echo s)" \
     "$n_clis"  "$([ "$n_clis" = 1 ] || echo s)" "$__C_RESET"
 
-  local kind cli profile label alias active note cur_cli="" cli_count also=""
+  local kind cli profile label alias active note cur_cli="" cli_count also="" printed_resume=0
   local launch_cli="" launch_profile="" launch_alias=""
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
       resume)
-        # The "continue" headline: this dir's most recent resumable session.
-        printf '  %b續上次%b  %b%s/%s%b · %b"%s"%b\n\n' \
-          "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" \
-          "$__C_DIM" "$label" "$__C_RESET"
+        # The "continue" list: this dir's recent resumable sessions, each with its
+        # ai-title and a one-line recap when present.
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
+        printf '    %b%s/%s%b · %b"%s"%b\n' "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$label" "$__C_RESET"
+        [ -n "$alias" ] && printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
         ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then
+          [ -z "$cur_cli" ] && [ "$printed_resume" -eq 1 ] && printf '\n'
           cur_cli="$cli"
           cli_count="$(printf '%s\n' "$items" | awk -F'\037' -v c="$cli" '$1=="tank" && $2==c' | grep -c .)"
           printf '  %b%s%b %b(%s)%b\n' "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$cli_count" "$__C_RESET"
@@ -591,7 +616,7 @@ _home_pick_draw_body() {
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 mark dot _reset tdot _line
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -605,18 +630,22 @@ _home_pick_draw_body() {
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
       resume)
-        # The "continue" headline — this dir's most recent resumable session, top
-        # of the board so ⏎ reopens it. Title is Claude's ai-title when present.
+        # The "continue" list — recent resumable sessions; Enter reopens the
+        # selected one. Title is Claude's ai-title; the selected row also shows a
+        # one-line recap ("where you left off + next step").
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b續上次%b\n' "$__C_BCYAN" "$__C_RESET"; fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b續上次%b  %b%s/%s%b · "%s"\n\n' \
-            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
+          printf '  %b %b%s/%s%b · "%s"\n' "$mark" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
+          [ -n "$alias" ] && printf '      %b-> %s%b\n' "$__C_DIM" "$alias" "$__C_RESET"
         else
-          printf '  %b %b續上次  %s/%s · "%s"%b\n\n' \
-            "$mark" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
+          printf '  %b %b%s/%s · "%s"%b\n' "$mark" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
         fi
         ;;
       tank)
-        if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
+        if [ "$cli" != "$cur_cli" ]; then
+          [ -z "$cur_cli" ] && [ "$printed_resume" -eq 1 ] && printf '\n'
+          cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
+        fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi

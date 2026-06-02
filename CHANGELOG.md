@@ -9,13 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The interactive board leads with "continue".** When this directory has a
-  recent session you can resume, `clikae` now shows a **續上次 / continue
-  headline** at the top — the most recent session across all your tanks, titled
-  by Claude's own ai-title, with `⏎ 接回` to reopen it (`clikae <engine> <tank>
-  -- --resume <id>` under the hood). It only appears for an engine that can
-  actually resume by id (new optional `adapter_resume_args` hook), so the
-  affordance never lies, and it's absent in a brand-new directory. The board also
+- **The interactive board leads with "continue".** When this directory has
+  sessions you can resume, `clikae` now opens with a **續上次 / continue list** at
+  the top — your most recent sessions across all tanks (newest first), each titled
+  by Claude's own ai-title. Press Enter to reopen the selected one
+  (`clikae <engine> <tank> -- --resume <id>` under the hood); the selected row
+  also expands to a one-line **recap** — _"where you left off + next step"_ — read
+  free from Claude's own session summary (`away_summary`, the `※ recap:` it shows
+  at the bottom of a session), so you know what a session was doing before you
+  jump back in. It only appears for engines that can resume by id (new
+  `adapter_resume_args` hook), so the affordance never lies, and it's absent in a
+  brand-new directory. Listing stays fast — sessions are ranked by mtime and only
+  the few rows shown read their title/recap (`adapter_recent_sids` /
+  `adapter_session_title` / `adapter_session_recap`). The board also
   pins the logo top-right on wide terminals, no longer flickers on each keypress
   (the whole frame is composed once and written in a single pass — no per-line
   repaint, no full-screen clear), and adds an `x` key to open the selected tank
