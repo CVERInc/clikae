@@ -17,11 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actually resume by id (new optional `adapter_resume_args` hook), so the
   affordance never lies, and it's absent in a brand-new directory. The board also
   pins the logo top-right on wide terminals, no longer flickers on each keypress
-  (homes + overwrites in place instead of a full-screen clear), and adds an `x`
-  key to open the selected tank **無痕** — with throwaway memory (`--ephemeral`),
-  a clean amnesiac session that leaves nothing behind. Tank rows now collapse to
-  a status dot + name, expanding to the account, alias, and reset time only for
-  the selected row (a hover detail), so a long list reads at a glance.
+  (the whole frame is composed once and written in a single pass — no per-line
+  repaint, no full-screen clear), and adds an `x` key to open the selected tank
+  **無痕** — with throwaway memory (`--ephemeral`), a clean amnesiac session that
+  leaves nothing behind. Tank rows now collapse to a status dot + name, expanding
+  to the account, alias, and reset time only for the selected row (a hover
+  detail), so a long list reads at a glance. Board glyphs are ASCII-safe (no
+  emoji or rare codepoints a terminal font might drop).
 - **On-device handoff briefs — local-first, private, free.** When you carry a
   session across engines (`clikae to <other-engine>`, `clikae handoff`), clikae
   now auto-detects a LOCAL model already on your machine — `apfel` (Apple's

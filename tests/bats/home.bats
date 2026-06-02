@@ -136,14 +136,14 @@ _seed_tx() { # <profile> <jsonl-line>
   printf '%s\n' "$2" >> "$p/s.jsonl"
 }
 
-@test "the board badges an over-quota tank with ⚠ and its reset time" {
+@test "the board badges an over-quota tank with ! and its reset time" {
   clikae init claude dry
   clikae init claude ok
   _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}'
   _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"⚠"* ]] || false
+  [[ "$output" == *"!"* ]] || false
   [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]] || false
   [[ "$output" == *"over quota"* ]] || false
 }
@@ -154,7 +154,7 @@ _seed_tx() { # <profile> <jsonl-line>
   _seed_tx back '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"back to work"}]},"timestamp":"2026-06-01T10:10:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"⚠"* ]] || false
+  [[ "$output" != *"over quota"* ]] || false
   [[ "$output" != *"over quota"* ]] || false
 }
 
@@ -163,7 +163,7 @@ _seed_tx() { # <profile> <jsonl-line>
   _seed_tx chatty '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"lets talk about what hit your session limit means"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"⚠"* ]] || false
+  [[ "$output" != *"over quota"* ]] || false
 }
 
 # Seed agy's limit log (cli.log) under the test HOME — agy records its quota
@@ -173,14 +173,14 @@ _agy_log() { # <line>
   printf '%s\n' "$1" > "$TEST_HOME/.gemini/antigravity-cli/cli.log"
 }
 
-@test "the board badges a log-only target (agy) with ⚠ + reset when its quota log is dry" {
+@test "the board badges a log-only target (agy) with ! + reset when its quota log is dry" {
   clikae init claude work                     # a tank, so the board renders
   _fake_bin agy                               # agy installed → shown as a target
   _agy_log "E0531 log.go:398] RESOURCE_EXHAUSTED (code 429): Individual quota reached. Contact your administrator to enable overages. Resets in 3h32m48s."
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
-  [[ "$output" == *"⚠"* ]] || false
+  [[ "$output" == *"!"* ]] || false
   [[ "$output" == *"Resets in 3h32m48s"* ]]   # the vendor's verbatim reset phrase
 }
 
@@ -191,7 +191,7 @@ _agy_log() { # <line>
   PATH="$TEST_HOME/fakebin:$PATH" run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
-  [[ "$output" != *"⚠"* ]] || false
+  [[ "$output" != *"over quota"* ]] || false
   [[ "$output" == *"◈"* ]]                     # plain launch glyph, not a warning
 }
 

@@ -215,7 +215,7 @@ _home_is_dry() {
 }
 
 # Render the launchable items (passed as $1) as the static tank board. The dry
-# set ($2, from _home_dry_set) badges over-quota tanks with ⚠.
+# set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
   local items="$1" dry="$2" any_dry=""
   local n_tanks n_clis
@@ -233,9 +233,9 @@ _home_render_static() {
     case "$kind" in
       resume)
         # The "continue" headline: this dir's most recent resumable session.
-        printf '  %b⮡ 續上次%b  %b%s/%s%b · %b"%s"%b · %b⏎ 接回%b\n\n' \
+        printf '  %b續上次%b  %b%s/%s%b · %b"%s"%b\n\n' \
           "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" \
-          "$__C_DIM" "$label" "$__C_RESET" "$__C_GREEN" "$__C_RESET"
+          "$__C_DIM" "$label" "$__C_RESET"
         ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then
@@ -245,8 +245,8 @@ _home_render_static() {
         fi
         local _reset
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          # Over quota: ⚠ badge + the vendor's own reset phrase (a poor relay target).
-          printf '    %b⚠%b %-10s %b%-28s%b %b%s%b  %b%s%b\n' \
+          # Over quota: ! badge + the vendor's own reset phrase (a poor relay target).
+          printf '    %b!%b %-10s %b%-28s%b %b%s%b  %b%s%b\n' \
             "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_DIM" "$alias" "$__C_RESET" "$__C_YELLOW" "${_reset:-over quota}" "$__C_RESET"
           any_dry=1
@@ -263,11 +263,11 @@ _home_render_static() {
         fi
         ;;
       target)
-        # Its own group: a single-account launch target (e.g. agy). Badge it ⚠ +
+        # Its own group: a single-account launch target (e.g. agy). Badge it ! +
         # the vendor's verbatim reset phrase when its limit log says it's dry.
         local _treset
         if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          printf '\n  %b%s%b\n    %b⚠%b %b%s%b  %b%s%b\n' \
+          printf '\n  %b%s%b\n    %b!%b %b%s%b  %b%s%b\n' \
             "$__C_BOLD" "$cli" "$__C_RESET" "$__C_YELLOW" "$__C_RESET" \
             "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET"
           any_dry=1
@@ -295,7 +295,7 @@ EOF
   [ -n "$pool" ] && printf '  %-9s %s\n' "fuel pool" "$pool"
 
   if [ -n "$any_dry" ]; then
-    printf '  %b⚠ over quota%b — a dry tank is a poor relay target. Open a %b○%b tank, or relay your session onto a fresh one (%bclikae relay%b / the %br%b key).\n' \
+    printf '  %b! over quota%b — a dry tank is a poor relay target. Open a %b○%b tank, or relay your session onto a fresh one (%bclikae relay%b / the %br%b key).\n' \
       "$__C_YELLOW" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_DIM" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
   fi
 
@@ -566,7 +566,7 @@ EOF
 # the profile name, then `clikae init <engine> <tank> --alias`.
 _home_new_tank() {
   local def_cli="$1" cli profile
-  cli="$(_home_choose "New tank — pick a CLI    ↑↓ move · ⏎ select · q cancel" "$(list_adapters)" "$def_cli")" \
+  cli="$(_home_choose "New tank — pick a CLI    up/down move · Enter select · q cancel" "$(list_adapters)" "$def_cli")" \
     || { printf 'Cancelled — no tank created.\n'; return 0; }
   [ -n "$cli" ] || return 0
   printf '\n'
@@ -577,6 +577,14 @@ _home_new_tank() {
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
 _home_pick_draw() {
+  # Single-write flicker fix: _home_pick_draw_body composes the whole frame via
+  # printf to a captured string; we then write it to the terminal in ONE printf.
+  # Repainting line-by-line (a write per row) is what still flickered.
+  local _frame
+  _frame="$(_home_pick_draw_body "$@")"
+  printf '%s' "$_frame"
+}
+_home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3"
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
@@ -590,7 +598,7 @@ _home_pick_draw() {
   # tail. The logo is drawn AFTER this, so the full-width erase here can't clip it.
   # (Vars are declared above, outside this pipe's subshell, so no `local` here.)
   {
-  printf '%bclikae  ｷﾘｶｴ%b  %b· ↑↓ move · ⏎ open · r relay · x 無痕 · n new · a alias · d delete · q quit%b\n\n' \
+  printf '%bclikae  ｷﾘｶｴ%b  %b· up/down move · Enter open · r relay · x 無痕 · n new · a alias · d delete · q quit%b\n\n' \
     "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -600,16 +608,16 @@ _home_pick_draw() {
         # The "continue" headline — this dir's most recent resumable session, top
         # of the board so ⏎ reopens it. Title is Claude's ai-title when present.
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b⮡ 續上次%b  %b%s/%s%b · "%s"  %b⏎ 接回%b\n\n' \
-            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label" "$__C_GREEN" "$__C_RESET"
+          printf '  %b %b續上次%b  %b%s/%s%b · "%s"\n\n' \
+            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$label"
         else
-          printf '  %b %b⮡ 續上次%b  %b%s/%s · "%s"%b\n\n' \
-            "$mark" "$__C_BCYAN" "$__C_RESET" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
+          printf '  %b %b續上次  %s/%s · "%s"%b\n\n' \
+            "$mark" "$__C_DIM" "$cli" "$profile" "$label" "$__C_RESET"
         fi
         ;;
       tank)
         if [ "$cli" != "$cur_cli" ]; then cur_cli="$cli"; printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"; fi
-        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}⚠${__C_RESET}"
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
         elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
         else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
@@ -625,7 +633,7 @@ _home_pick_draw() {
         ;;
       target)
         printf '  %b%s%b\n' "$__C_BOLD" "$cli" "$__C_RESET"
-        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}⚠${__C_RESET}"
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}!${__C_RESET}"
         else tdot="${__C_DIM}◈${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s %b%s%b\n' "$mark" "$tdot" "$__C_BOLD" "$note" "$__C_YELLOW" "$_reset" "$__C_RESET"
