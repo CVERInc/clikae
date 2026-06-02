@@ -61,30 +61,68 @@ list_all_profiles() {
   done | sort
 }
 
-# next_tank <engine> <current>  -> the tank to fall through to when <current>
-# runs dry. The fuel reserve IS just your tanks — every other tank of the same
-# engine, in board order — so there's no separate "pool" to configure. Prefers a
-# tank that isn't itself over quota (via limit_profile_dry when available), else
-# falls back to the first other tank. Echoes a bare tank name, or nothing if the
-# engine has no other tank. Cross-ENGINE fall-through stays explicit (clikae to
-# <engine>) — it's a cold-start brief, not something to do silently.
+# order_file -> the burn-order file. One "<engine>/<tank>" per line, top first.
+# The board IS this order; there is no separate "pool". Optional — when absent or
+# partial, order_list fills in the rest deterministically.
+order_file() { printf '%s\n' "$CLIKAE_HOME/order"; }
+
+# order_list -> every EXISTING tank as "<engine>/<tank>", in BURN ORDER: first the
+# order-file entries that still exist (in file order), then any remaining tanks in
+# default (list_all_profiles) order. Always complete + deterministic, so callers
+# never need to special-case "not configured".
+order_list() {
+  local f all listed line
+  all="$(list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}')"
+  [ -n "$all" ] || return 0
+  f="$(order_file)"
+  listed=""
+  if [ -f "$f" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%%#*}"
+      line="$(printf '%s' "$line" | tr -d '[:space:]')"
+      [ -n "$line" ] || continue
+      printf '%s\n' "$all" | grep -qxF "$line" || continue       # still exists?
+      printf '%s\n' "$listed" | grep -qxF "$line" && continue    # de-dupe
+      printf '%s\n' "$line"
+      listed="$listed$line"$'\n'
+    done < "$f"
+  fi
+  printf '%s\n' "$all" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$listed" | grep -qxF "$line" && continue
+    printf '%s\n' "$line"
+  done
+}
+
+# next_tank <engine> <current>  -> the next tank to fall through to when
+# <engine>/<current> runs dry: the entry AFTER it in the BURN ORDER (order_list),
+# crossing engines if that's what your order says — your tanks ARE the reserve, so
+# the list is the order. Skips tanks that are themselves over quota (via
+# limit_profile_dry when available). Echoes "<engine>\t<tank>" (TAB-separated), or
+# nothing when there's nothing after <current>. NB: no wrap — a burn order falls
+# DOWN the list once; it doesn't cycle back up.
 next_tank() {
   local engine="$1" current="$2"
-  local cli profile path
-  local first_other="" first_healthy=""
-  while IFS=$'\t' read -r cli profile path; do
-    [ "$cli" = "$engine" ] || continue
-    [ "$profile" = "$current" ] && continue
-    [ -n "$first_other" ] || first_other="$profile"
-    if declare -F limit_profile_dry >/dev/null 2>&1 \
-       && limit_profile_dry "$cli" "$path" >/dev/null 2>&1; then
-      continue                       # dry — keep looking for a healthy one
+  local cur="$engine/$current"
+  local seen=0 entry e t path first_after="" first_after_healthy=""
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if [ "$seen" -eq 0 ]; then
+      [ "$entry" = "$cur" ] && seen=1
+      continue
     fi
-    first_healthy="$profile"; break
+    e="${entry%%/*}"; t="${entry#*/}"
+    [ -n "$first_after" ] || first_after="$e"$'\t'"$t"
+    path="$(profile_dir "$e" "$t")"
+    if declare -F limit_profile_dry >/dev/null 2>&1 \
+       && limit_profile_dry "$e" "$path" >/dev/null 2>&1; then
+      continue
+    fi
+    first_after_healthy="$e"$'\t'"$t"; break
   done <<EOF
-$(list_all_profiles)
+$(order_list)
 EOF
-  printf '%s' "${first_healthy:-$first_other}"
+  printf '%s' "${first_after_healthy:-$first_after}"
 }
 
 # resolve_tank_name <name>  -> "<engine>\t<tank>" line(s) for every tank whose

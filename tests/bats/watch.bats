@@ -68,10 +68,10 @@ _seed() {
   local work="$TEST_HOME/work"; mkdir -p "$work"
   _seed a "$work" ""
   cd "$work"
-  # Only one claude tank exists -> next_tank finds no other tank -> error.
+  # Only one tank exists -> nothing after it in the burn order -> error.
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No other claude tank"* ]] || false
+  [[ "$output" == *"burn order"* ]] || false
 }
 
 @test "watch errors when there's no session to watch" {
