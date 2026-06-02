@@ -52,14 +52,17 @@ _fake_bin() {
   chmod +x "$TEST_HOME/fakebin/$1"
 }
 
-@test "the board shows the real alias name (default and custom)" {
+@test "the board shows tank NAMES, not the shell alias (alias retired from board)" {
   clikae init claude work --alias            # default alias: claude-work
   clikae init claude solo
   clikae alias claude solo --name mysolo     # custom alias name
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude-work"* ]] || false
-  [[ "$output" == *"mysolo"* ]] || false
+  # The name is the identity; the separate alias is no longer shown on the board.
+  [[ "$output" == *"work"* ]] || false
+  [[ "$output" == *"solo"* ]] || false
+  [[ "$output" != *"claude-work"* ]] || false
+  [[ "$output" != *"mysolo"* ]] || false
 }
 
 @test "Also available lists a relay-capable CLI with no tank (codex)" {
@@ -319,6 +322,25 @@ _agy_log() { # <line>
   # Default order is alpha, beta. Moving beta up -> beta first.
   _home_reorder claude beta -1
   [ "$(head -1 "$CLIKAE_HOME/order")" = "claude/beta" ]
+}
+
+@test "_home_wrap_prefixed wraps CJK by DISPLAY width (no overflow / col-0 wrap)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # 40 two-char CJK words ≈ 160 display cols; at the 80-col fallback it MUST wrap,
+  # and (the bug) no line may exceed the terminal width.
+  local s=""; local i
+  for i in $(seq 1 40); do s="$s 字字"; done
+  run _home_wrap_prefixed "$s" "  -> " 5 "" "" 0
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -ge 2 ]   # wrapped into multiple lines
+  local line maxdw=0 dw
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    dw="$(_dwidth "$line")"; [ "$dw" -gt "$maxdw" ] && maxdw="$dw"
+  done < <(printf '%s\n' "$output")
+  [ "$maxdw" -le 80 ]                                   # nothing overflows 80 cols
 }
 
 @test "agy tanks show an [agy] tag, not [antigravity]" {

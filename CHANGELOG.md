@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-06-03
+
 ### Added
 
 - **Your tanks are a single burn order, and the board IS that order.** The home
@@ -74,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CJK labels line up.** The board's left-hand labels (launch / fuel pool / more)
   now pad by display width, so Japanese / Chinese labels align like the English
   ones instead of drifting.
+- **CJK recaps wrap correctly.** A Chinese/Japanese recap no longer overflows and
+  hard-wraps to column 0 — the wrapper now budgets by DISPLAY width (full-width
+  glyphs = 2 cols), not character count. Long/garbled titles are truncated.
+- **Polished from dogfeeding:** language is the **`l`** key and opens a select menu
+  (not a blind cycle); a **"Tanks"** header sits above the tank list; **agy** shows
+  its short name `[agy]` and its signed-in Google account on hover (read from its
+  own log), sits under "Also available" instead of floating, and its tanks rename
+  too; the new-tank picker groups **AI engines vs tool CLIs**; the shell alias is
+  retired from the board (the tank name is the identity); fresh logo.
 
 ### Hardened
 
