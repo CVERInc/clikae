@@ -15,6 +15,14 @@ setup() {
   export CLIKAE_HOME="$TEST_HOME/.clikae"
   export SHELL="/bin/zsh"
   export NO_COLOR=1
+  # Host-independence: agy's "is a session running?" guard uses `pgrep -x agy`,
+  # which would otherwise see a REAL Antigravity running on the dev machine and
+  # make agy tests fail nondeterministically. Stub a no-match pgrep on PATH (no
+  # test relies on real pgrep). CI has no agy running, so this only matters locally.
+  mkdir -p "$TEST_HOME/.testbin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$TEST_HOME/.testbin/pgrep"
+  chmod +x "$TEST_HOME/.testbin/pgrep"
+  export PATH="$TEST_HOME/.testbin:$PATH"
   # Pin the interface language so assertions are deterministic regardless of the
   # CI/host locale. i18n itself is covered by tests/bats/i18n.bats.
   export CLIKAE_LANG=en-US
