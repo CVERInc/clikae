@@ -80,6 +80,7 @@ i18n_load() {
   T_K_TOPBOTTOM="top/bottom"
   T_K_JUMP="jump to Nth"
   T_K_REORDER="reorder"
+  T_K_AUTO="autonomy"
   T_K_INCOGNITO="incognito"
   # welcome
   T_NO_TANKS_YET="No tanks yet"
@@ -144,6 +145,7 @@ i18n_load() {
       T_K_TOPBOTTOM="先頭/末尾"
       T_K_JUMP="N番へ移動"
       T_K_REORDER="並べ替え"
+      T_K_AUTO="自動度"
       T_K_INCOGNITO="シークレット"
       T_NO_TANKS_YET="タンクがまだありません"
       T_ENGINES_HERE="エンジンを検出:"
@@ -202,6 +204,7 @@ i18n_load() {
       T_K_TOPBOTTOM="頂/底"
       T_K_JUMP="跳到第 N 個"
       T_K_REORDER="排序"
+      T_K_AUTO="自主度"
       T_K_INCOGNITO="無痕"
       T_NO_TANKS_YET="尚無油箱"
       T_ENGINES_HERE="個引擎，就在這："

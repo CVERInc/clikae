@@ -746,6 +746,7 @@ _home_help_overlay() {
   _home_help_row "a"             "$T_K_RENAME"
   _home_help_row "d"             "$T_K_DELETE"
   _home_help_row "/"             "$T_K_FILTER"
+  _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
   _home_help_row "h"             "$T_K_LANG"
   _home_help_row "q / Esc"       "$T_K_QUIT"
   printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
@@ -778,9 +779,10 @@ _home_pick_draw_body() {
   # Compact footer: the everyday keys + a pointer to `?` for the full, localised
   # legend (relay / incognito / new / rename / delete / jump). Keeps the board
   # clean while every action stays discoverable.
-  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · [ ] %s · / %s · ? %s · q %s%b\n\n' \
+  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · [ ] %s · / %s · ? %s · q %s%b\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" \
     "$T_K_MOVE" "$T_K_OPEN" "$T_K_REORDER" "$T_K_FILTER" "$T_K_HELP" "$T_K_QUIT" "$__C_RESET"
+  printf '%b%s: %s · [A] change (BETA, claude)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -966,6 +968,15 @@ _home_pick() {
         # items so adapter notes re-localise; the T_* strings update in place.
         i18n_cycle >/dev/null
         items="$(_home_items)"; dry="$(_home_dry_set)"
+        ;;
+      A)
+        # Cycle autonomy ask → safe → full → ask (consumed by the BETA supervised
+        # launch). Shown live on the board's autonomy line.
+        case "$(autonomy_get)" in
+          ask)  autonomy_set safe ;;
+          safe) autonomy_set full ;;
+          *)    autonomy_set ask ;;
+        esac
         ;;
 
       # --- leave actions: these launch a CLI, so exiting the picker is expected
