@@ -55,9 +55,9 @@ adapter_resume_args() {
 # hint. Empty if the session has none. Used by the home board's continue list to
 # show what a session was actually doing — far richer than a title. grep/sed only.
 adapter_session_recap() {
-  local dir="$1" sid="$2"
+  local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 0
-  local f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+  f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   [ -f "$f" ] || return 0
   grep '"subtype":"away_summary"' "$f" 2>/dev/null | tail -n 1 \
     | grep -oE '"content":"([^"\\]|\\.)*"' | head -n 1 \
