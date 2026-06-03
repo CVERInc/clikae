@@ -46,6 +46,21 @@ _watch_default_pattern() {
 # Genuine-limit detection (structural, not text) lives in lib/core/limit.sh as
 # limit_line_is_real — shared with the home dashboard. See the header there.
 
+# _watch_weekly_capture <cli> <profile> <line>  (BETA) — if a tailed line carries
+# the vendor's verbatim weekly-usage notice, cache it (+ a stamp) so the home
+# board can show this tank a yellow ● ("you're at N% this week"). We relay the
+# engine's own words, never compute a %. Best-effort + never fatal: a no-match
+# leaves the cache untouched. See docs/DESIGN-board-fuel-dots.md (yellow is BETA —
+# it's not yet confirmed this notice reaches the transcript at all).
+_watch_weekly_capture() {
+  local cli="$1" profile="$2" line="$3" phrase cache
+  phrase="$(limit_weekly_marker "$line")"
+  [ -n "$phrase" ] || return 0
+  cache="$CLIKAE_HOME/cache/weekly/$cli-$profile"
+  mkdir -p "$(dirname "$cache")" 2>/dev/null || return 0
+  { printf '%s\n' "$phrase"; date '+captured %Y-%m-%d %H:%M' 2>/dev/null; } > "$cache" 2>/dev/null || true
+}
+
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
 _watch_has_consent()  { [ -f "$(_watch_consent_file)" ]; }
 _watch_grant_consent() {
@@ -205,6 +220,9 @@ EOF
   # Tail only NEW lines; stop at the first GENUINE limit line (structured match).
   local line=""
   while IFS= read -r line; do
+    # BETA: relay the vendor's verbatim weekly-usage % to the board's yellow dot,
+    # independent of the dry trigger below (a weekly warning is caution, not dry).
+    _watch_weekly_capture "$cli" "$profile" "$line"
     limit_line_is_real "$cli" "$line" "$pattern" "$pattern_explicit" || continue
     echo
     log_warn "Looks like $cli/$profile hit its limit."
