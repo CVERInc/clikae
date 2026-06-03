@@ -90,6 +90,8 @@ _status_render_table() {
       default)   active_col="(default)";     source_col="$envVar unset — system default" ;;
       flag)      active_col="(n/a)";         source_col="flag-based — not detectable from the environment" ;;
       global)    active_col="${profile:-(none)}"
+                 # ~/.gemini below is literal label text (naming the symlink), not a path to expand.
+                 # shellcheck disable=SC2088
                  if [ -n "$envValue" ]; then source_col="~/.gemini → $envValue  (machine-wide, all shells)"
                  else                         source_col="~/.gemini — not a clikae-managed symlink"; fi ;;
       noadapter) active_col="?";             source_col="(no adapter)" ;;
