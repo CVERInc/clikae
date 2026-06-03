@@ -118,3 +118,11 @@ _agy_log() { # write $1 as agy's cli.log under the test HOME
   [ "$status" -ne 0 ]
   [[ "$output" == *"Nothing to watch"* ]] || false
 }
+
+@test "watch codex is honest: it can't tail-detect (limit isn't in the transcript)" {
+  clikae init codex work
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae watch codex work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not the session transcript"* ]] || false
+  [[ "$output" == *"dispatch time"* ]] || false
+}
