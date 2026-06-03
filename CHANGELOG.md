@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-06-04
+
+### Added
+
+- **agy is now real multi-account.** agy keeps its Google login in ONE machine-wide
+  macOS Keychain item, so swapping the `~/.gemini` symlink alone left every agy tank
+  riding the SAME account. `clikae agy <tank>` now carries the login WITH the tank:
+  it stashes the outgoing tank's login into a clikae-namespaced Keychain slot and
+  restores the incoming tank's (Keychain↔Keychain — the token never lands on disk);
+  a fresh tank logs in clean instead of inheriting the previous account. `rename`
+  carries the slot, `remove` forgets it. macOS-only; gated behind the existing agy
+  multi-account consent, whose warning now discloses the Keychain carry.
+- **`clikae burn <engine> <tank> --artifact <path> -- <cmd…>`** — a headless guarded
+  task runner. Runs a task on a tank, verifies it by the **artifact** it must produce
+  (never the exit code — `codex exec` exits 0 even when it hit its limit and wrote
+  nothing), and re-fires the same task on the next reserve tank if this one runs dry.
+  The headless sibling of `to`/`watch`; batch/parallelism stays the orchestrator's job.
+- **codex sessions now appear in the board's "Continue" list** (cross-engine
+  continuity). The codex adapter gained `adapter_transcript_path` / `recent_sids` /
+  `session_title` / `resume_args`, matching on the rollout's recorded `cwd` (codex
+  doesn't slug `$PWD` like claude). Resume via `codex resume <uuid>`.
+- **codex usage-limit detection from plain `exec` output** — `limit_line_is_real`
+  now matches codex's plain-text limit line (not just `--json`), with reset-time
+  parsing (`limit_codex_reset`) and a captured-output check (`limit_output_dry`) that
+  `burn` uses to tell a dry tank from a task failure.
+- **`clikae tanks` marks the active agy tank** with `(active)` — the one fact that's
+  knowable for sure (agy doesn't persist its account email to disk, so we never fake one).
+
+### Fixed
+
+- **`clikae status` no longer crashes** when an adapter-less tank (agy) exists. The
+  no-args view aborted silently (empty output, exit 1) because `load_adapter` `exit`s
+  rather than returns on a missing adapter, and the `||` guard was dead code under
+  `set -eo pipefail`. It now gates on the adapter file and renders agy as a new
+  `global` state showing its machine-wide `~/.gemini` symlink target.
+- **rename / migrate / remove now refuse to move a tank a live session in ANOTHER
+  terminal is still using** (the phantom-tank bug): the old guard saw only the shell
+  running clikae. New `lib/core/proc.sh` scans all same-uid processes — an interactive
+  session hard-fails (not `--force`-able); only background daemon/spare workers warn.
+- **`clikae env agy`** (and app/alias/run/relay/migrate when handed agy) now give a
+  helpful "agy is global — use `clikae agy <tank>`" message instead of the misleading
+  "No built-in adapter for 'agy'".
+
+### Changed
+
+- **`clikae watch codex` is now honest**: codex records its usage limit only in the
+  exec output stream, never the rollout transcript, so a transcript tail can't catch
+  it. `watch codex` says so and points at dispatch-time detection (`clikae burn`),
+  rather than tailing a file that will never carry the marker.
+
 ## [0.5.4] — 2026-06-03
 
 ### Changed
