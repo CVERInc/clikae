@@ -48,10 +48,83 @@ _agy_active() {
   case "$target" in "$slots"/*) basename "$target" ;; esac
 }
 
-# _agy_rename <old> <new> — rename an agy tank: move the slot dir, and if it's the
-# active one, repoint the ~/.gemini symlink. agy has no shell alias or Keychain
-# login to carry, so this is all there is to it. Refuses if agy is running, the
-# source is missing, or the target name is taken.
+# ── Per-tank Google login (macOS Keychain) ──────────────────────────────────
+# agy keeps its Google OAuth login in ONE machine-wide macOS Keychain item
+# (verified on a real install: service "gemini", account "antigravity") — NOT in
+# the ~/.gemini dir clikae swaps. So swapping the symlink alone leaves every tank
+# riding the SAME account. To make tanks hold DISTINCT Google accounts, clikae
+# carries that login with the tank: on switch it stashes the outgoing tank's
+# login into a clikae-namespaced Keychain slot and restores the incoming tank's.
+# Keychain↔Keychain — the token is never written to disk. macOS-only; on Linux
+# agy stores its login in files inside ~/.gemini, which the dir swap already
+# isolates, so these are no-ops.
+_agy_kc_canon_service() { printf 'gemini\n'; }
+_agy_kc_account()       { printf 'antigravity\n'; }
+_agy_kc_tank_service()  { printf 'clikae-agy-%s\n' "$1"; }
+_agy_kc_available() {
+  case "$OSTYPE" in darwin*) ;; *) return 1 ;; esac
+  command -v security >/dev/null 2>&1
+}
+
+# Copy one generic-password service's secret to another (-U overwrites). Returns
+# 1 if the source has no secret. Never prints the secret.
+_agy_kc_copy() {
+  local from="$1" to="$2" acct secret
+  acct="$(_agy_kc_account)"
+  security find-generic-password -s "$from" -a "$acct" >/dev/null 2>&1 || return 1
+  secret="$(security find-generic-password -s "$from" -a "$acct" -w 2>/dev/null)" || return 1
+  [ -n "$secret" ] || return 1
+  security add-generic-password -s "$to" -a "$acct" -l "$to" -w "$secret" -U >/dev/null 2>&1 \
+    || { secret=""; return 1; }
+  secret=""
+  return 0
+}
+
+# Stash the currently-active agy login (the canonical item) into <tank>'s slot.
+_agy_kc_stash() {
+  _agy_kc_available || return 0
+  _agy_kc_copy "$(_agy_kc_canon_service)" "$(_agy_kc_tank_service "$1")" || return 0
+}
+
+# Restore <tank>'s stashed login into the canonical item agy reads. If the tank
+# has no stash (never logged in on it), CLEAR the canonical item so agy logs in
+# fresh instead of inheriting the previous tank's account.
+_agy_kc_restore() {
+  _agy_kc_available || return 0
+  if ! _agy_kc_copy "$(_agy_kc_tank_service "$1")" "$(_agy_kc_canon_service)"; then
+    security delete-generic-password -s "$(_agy_kc_canon_service)" -a "$(_agy_kc_account)" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+# Forget a tank's stashed login (on remove).
+_agy_kc_forget() {
+  _agy_kc_available || return 0
+  security delete-generic-password -s "$(_agy_kc_tank_service "$1")" -a "$(_agy_kc_account)" \
+    >/dev/null 2>&1 || true
+}
+
+# Clear the canonical login agy reads (used when force-removing the last tank's
+# login). agy will prompt a fresh login next run.
+_agy_kc_clear_canon() {
+  _agy_kc_available || return 0
+  security delete-generic-password -s "$(_agy_kc_canon_service)" -a "$(_agy_kc_account)" \
+    >/dev/null 2>&1 || true
+}
+
+# Carry a tank's stashed login across a rename (old slot -> new slot).
+_agy_kc_rename() {
+  _agy_kc_available || return 0
+  _agy_kc_copy "$(_agy_kc_tank_service "$1")" "$(_agy_kc_tank_service "$2")" || return 0
+  security delete-generic-password -s "$(_agy_kc_tank_service "$1")" -a "$(_agy_kc_account)" \
+    >/dev/null 2>&1 || true
+}
+# ────────────────────────────────────────────────────────────────────────────
+
+# _agy_rename <old> <new> — rename an agy tank: move the slot dir, repoint the
+# ~/.gemini symlink if it's the active one, and carry the tank's Keychain login
+# slot across (macOS). Refuses if agy is running, the source is missing, or the
+# target name is taken.
 _agy_rename() {
   local old="$1" new="$2" slots link active
   validate_name profile "$old"; validate_name profile "$new"
@@ -61,6 +134,7 @@ _agy_rename() {
   _agy_assert_not_running
   active="$(_agy_active)"
   mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
+  _agy_kc_rename "$old" "$new"
   if [ "$active" = "$old" ]; then
     rm -f "$link"; ln -s "$slots/$new" "$link"
     log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
@@ -76,10 +150,15 @@ _agy_takeover() {
   log_warn "Setting up agy multi-account is a POWER mode with real tradeoffs:"
   cat >&2 <<EOF
   • It turns your real ~/.gemini into a clikae-managed symlink.
+  • On macOS, it carries your Google login PER TANK via your login Keychain:
+    agy keeps its OAuth login in one machine-wide Keychain item, so to give each
+    tank its own account clikae copies that login between Keychain slots on every
+    switch. The token moves Keychain→Keychain and is never written to disk.
   • It is GLOBAL: only one agy tank is active at a time across ALL terminals
     (agy ignores per-shell env). Don't run two tanks at once.
   • Swapping while agy is running can corrupt that session.
-  Reversible: 'clikae agy --release' restores a normal ~/.gemini.
+  Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks and
+  their stashed logins are kept).
 EOF
   confirm "Let clikae take over ~/.gemini (your current login becomes a tank)?" \
     || { log_info "Not enabled — no agy tank created."; return 1; }
@@ -133,6 +212,14 @@ _agy_switch() {
   local slots link; slots="$(_agy_slots)"; link="$(_agy_link)"
   [ -d "$slots/$name" ] || log_fail "No such agy tank: $name  (create it:  clikae init agy $name)"
   _agy_assert_not_running
+  # Carry the Google login with the tank (macOS): stash the outgoing tank's login,
+  # restore the incoming tank's — so each tank keeps its own account. No-op when
+  # switching to the tank you're already on, or off macOS.
+  local active; active="$(_agy_active)"
+  if [ "$name" != "$active" ]; then
+    [ -n "$active" ] && _agy_kc_stash "$active"
+    _agy_kc_restore "$name"
+  fi
   rm -f "$link"
   ln -s "$slots/$name" "$link"
   log_ok "agy is now on tank: $name"
@@ -174,6 +261,7 @@ _agy_remove() {
       if confirm "This is your last agy tank. Restore it as a normal ~/.gemini (keep the login) and turn multi-account off?"; then
         rm -f "$link"; mv "${slots:?}/$name" "$link"; rm -f "$(_agy_consent)"
         rmdir "$slots" 2>/dev/null || true
+        _agy_kc_forget "$name"   # login stays in the canonical Keychain item; drop the stash
         log_ok "Restored ~/.gemini from '$name' and turned agy multi-account off."
         return 0
       fi
@@ -182,6 +270,7 @@ _agy_remove() {
     fi
     rm -f "$link"; rm -rf "${slots:?}/$name"; rm -f "$(_agy_consent)"
     rmdir "$slots" 2>/dev/null || true
+    _agy_kc_forget "$name"; _agy_kc_clear_canon   # login lost, as warned
     log_ok "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
     return 0
   fi
@@ -191,6 +280,7 @@ _agy_remove() {
     log_fail "'$name' is the active agy tank. Switch to another first:  clikae agy <other-tank>"
   fi
   rm -rf "${slots:?}/$name"
+  _agy_kc_forget "$name"
   log_ok "Removed agy tank: $name"
 }
 

@@ -22,6 +22,41 @@ setup() {
   mkdir -p "$TEST_HOME/.testbin"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$TEST_HOME/.testbin/pgrep"
   chmod +x "$TEST_HOME/.testbin/pgrep"
+  # Host-safety: agy's per-tank login carry shells out to `security`. WITHOUT a
+  # stub, running the suite on a real Mac would read/WRITE/DELETE the maintainer's
+  # actual `gemini` login Keychain item — corrupting their real agy login. Stub a
+  # stateful `security` (one file per service under $TEST_HOME/.testkeychain) so
+  # every test is hermetic. Tests that need their own keychain behaviour (e.g.
+  # migrate.bats) prepend their own stub later in PATH and win.
+  export CLIKAE_TEST_KEYCHAIN="$TEST_HOME/.testkeychain"
+  mkdir -p "$CLIKAE_TEST_KEYCHAIN"
+  cat > "$TEST_HOME/.testbin/security" <<'SECSTUB'
+#!/usr/bin/env bash
+state="${CLIKAE_TEST_KEYCHAIN:?}"
+sub="$1"; shift
+svc=""; want_w=0; secret=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) svc="$2"; shift 2 ;;
+    -w) shift
+        if [ "$sub" = "add-generic-password" ]; then secret="$1"; shift; else want_w=1; fi ;;
+    -a|-l) shift 2 ;;
+    -U|-g) shift ;;
+    *) shift ;;
+  esac
+done
+file="$state/$svc"
+case "$sub" in
+  find-generic-password)
+    [ -f "$file" ] || exit 1
+    if [ "$want_w" -eq 1 ]; then cat "$file"; else echo '    "acct"<blob>="antigravity"'; fi
+    exit 0 ;;
+  add-generic-password)  printf '%s' "$secret" > "$file"; exit 0 ;;
+  delete-generic-password) rm -f "$file"; exit 0 ;;
+esac
+exit 1
+SECSTUB
+  chmod +x "$TEST_HOME/.testbin/security"
   export PATH="$TEST_HOME/.testbin:$PATH"
   # Pin the interface language so assertions are deterministic regardless of the
   # CI/host locale. i18n itself is covered by tests/bats/i18n.bats.
