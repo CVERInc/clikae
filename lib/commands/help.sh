@@ -41,6 +41,8 @@ Keep burning when a tank runs dry:
                                    in your burn order); your tanks ARE the reserve
   auto [ask|safe|full]             how much clikae carries on its own (BETA, claude)
   watch <engine> [tank]            watch for a dry tank and switch onward
+  burn <engine> <tank> -- <cmd>    run a headless task on a tank; on a dry tank,
+                                   re-fire it on the next (verify by --artifact)
 
 Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app
