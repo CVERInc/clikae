@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-06-04
+
+### Fixed
+
+- **`rename` / `migrate` / `remove` no longer abort when the in-use process scan
+  can't run.** v0.5.5's new cross-shell guard (`lib/core/proc.sh`) leaked
+  `ps eww`'s exit code, so under `set -eo pipefail` a non-zero `ps` — on a
+  locked-down host, a CI runner, or a restricted sandbox — took the whole command
+  down instead of degrading to "couldn't scan, proceed". The scan is now truly
+  best-effort, as HANDOFF §11 intended (no reading ⇒ no users found, never a hard
+  error). Regression test added (a deliberately failing `ps` must not abort rename).
+
 ## [0.5.5] — 2026-06-04
 
 ### Added
