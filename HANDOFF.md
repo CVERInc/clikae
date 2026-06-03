@@ -619,3 +619,36 @@ now" — the overwhelming case — but not a check-then-open race; daemon-vs-TUI
 classification is a command-string heuristic. Recovery for a user who already hit
 it: the phantom stub tanks are safe to back up + remove once the old terminal is
 closed (the real history lives under the renamed tank).
+
+---
+
+## 12. TODO — the board's "Continue" list is claude-ONLY (cross-engine continuity gap)
+
+**Found 2026-06-03 by dogfooding.** A codex session run through a clikae codex
+tank (it edited a repo; the rollout records its `cwd`) shows up on the board only
+as a **tank**, never in the **Continue / 續上次** list — even when the board is
+opened from that session's own `cwd`. Claude sessions on the same dir DO appear,
+each with a recap. So clikae's recent-session resume/recap is, today, **claude
+only**.
+
+**Root cause:** `lib/adapters/codex.sh` defines no `adapter_transcript_path` (nor
+a recap hook), so the board's Continue builder never scans codex's rollouts. Only
+the claude adapter exposes the transcript path the board reads.
+
+**Why it matters:** cross-**engine** continuity is clikae's stated differentiator
+(README + positioning). Right now only cross-**tank** switching is engine-wide;
+the *session* continuity that makes the board valuable is claude-deep. The pitch
+slightly outruns the implementation for non-claude engines.
+
+**The fix (tractable):**
+1. Give the codex adapter `adapter_transcript_path <dir>` → resolve the most
+   recent `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` whose recorded `cwd`
+   matches `<dir>`. **Match on the rollout's `cwd` field, not a path slug** —
+   codex does not slug `$PWD` the way claude does.
+2. A recap extractor for codex rollouts (or fall back to "<age> ago" when none) so
+   Continue rows render like claude's.
+3. Then the existing cross-engine board code lists codex sessions for free.
+
+**Out of scope here:** codex over-quota is still un-detectable from disk (see
+`lib/core/limit.sh` notes) — that's the *fuel* axis, independent of *resume*. This
+TODO is only about surfacing codex sessions in Continue.
