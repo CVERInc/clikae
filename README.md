@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.4-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.6-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -28,9 +28,10 @@ It:
 2. Generates **shell aliases** (`claude-work`, `gh-personal`, …) you can use in a new terminal.
 3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
 4. **Carries a live session to another tank** when one runs dry — `clikae to <tank>` keeps the same conversation going on the other account's quota (and `clikae to <other-engine>` hands a written brief across vendors, summarized **on-device** by a local model when you have one — `apfel`, `ollama`, or `llm` — so your session never leaves your machine, costs nothing, and works offline).
-5. Cleans up after itself when you're done with a tank.
+5. **Runs headless tasks across tanks** — `clikae burn <engine> <tank> --artifact <path> -- <cmd>` runs a task on a tank, verifies it by the **artifact** it produces (never the exit code — `codex exec` exits 0 even when it hit its limit), and re-fires it on the next tank if one runs dry. The headless sibling of `clikae to`.
+6. Cleans up after itself when you're done with a tank.
 
-It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus opt-in multi-account for **Antigravity / agy**), and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
+It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus real **per-account multi-tank for Antigravity / agy** — each tank carries its own Google login via the macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no global state, no network calls — every line is auditable.
 
 ## Install
 
@@ -103,6 +104,8 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **v0.5** — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` carries a session onward (same engine resumes, another engine gets a written brief), Antigravity/agy folded into the same verbs, an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
 - **v0.5.3** — the home board became a single, reorderable **burn order** (`[` / `]`); switch a tank by name alone (`clikae cver`); interface localisation (en-US / ja-JP / zh-TW, `clikae lang`); and a **BETA supervised launch** that carries you to the next tank automatically when you hit the limit (`clikae auto`, claude-only for now — feedback very welcome).
 - **v0.5.4** — the board's status dot became a **fuel gauge, not a "you are here"**: 🟢 ready · 🔴 dry (the vendor's verbatim reset time) · ○ no reading (engines clikae can't read from disk, e.g. codex — never a guessed green), plus a **BETA** yellow that relays Claude's own weekly-usage notice. See [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
+- **v0.5.5** — **Antigravity / agy becomes real multi-account** (each tank carries its own Google login via the macOS Keychain); **codex sessions join the home board's Continue list** (true cross-engine resume); **`clikae burn`** runs a headless task on a tank and re-fires it on the next when one runs dry (verified by artifact, not exit code); and a **cross-shell in-use guard** so `rename`/`migrate`/`remove` won't move a tank a session in another terminal is still using.
+- **v0.5.6** — hardened that in-use guard to be truly best-effort: a restricted `ps` (CI runners, locked-down hosts) no longer aborts `rename`/`migrate`/`remove`.
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing
