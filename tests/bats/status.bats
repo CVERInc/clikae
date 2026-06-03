@@ -107,3 +107,37 @@ load '../helpers'
     skip "python3 not available to validate JSON"
   fi
 }
+
+# --- target-backed engines (agy) must not crash the all-engines view ----------
+# Regression: load_adapter exit()s on a missing adapter file, so the `||` guard
+# in _status_row_for never fired; an agy tank made `clikae status` (no args)
+# abort with empty output + exit 1 under `set -eo pipefail`.
+
+@test "status (no args) does not crash when an adapter-less agy tank exists" {
+  mkdir -p "$HOME/.gemini"; echo LOGIN > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # default(active)+work, symlinks ~/.gemini
+  clikae init claude work
+  run clikae status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" == *"claude"* ]] || false
+}
+
+@test "status shows the agy tank the ~/.gemini symlink points at" {
+  mkdir -p "$HOME/.gemini"; echo LOGIN > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"default"* ]] || false        # active tank, resolved from the symlink
+  [[ "$output" == *"machine-wide"* ]] || false
+}
+
+@test "status --json: agy reports the 'global' state" {
+  mkdir -p "$HOME/.gemini"; echo LOGIN > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae status --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"cli":"agy"'* ]] || false
+  [[ "$output" == *'"state":"global"'* ]] || false
+  [[ "$output" == *'"profile":"default"'* ]] || false
+}
