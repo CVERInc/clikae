@@ -675,3 +675,37 @@ tank inline in the *same* command, not in a prior step.
   over-quota is un-detectable from disk, so the *fuel* axis is the remaining gap for
   codex; *resume* already works. → A `clikae auto` covering codex needs codex
   dry-detection first.
+
+### Grunt-dispatch friction (2026-06-03 follow-up — routing chores to codex/agy)
+
+Tried offloading real grunt work (a vault link-integrity checker) to codex, and a
+text-summary to agy, both via clikae. Four frictions worth fixing/documenting:
+
+1. **codex `exec` (headless) can hang on slow I/O with no clean abort.** The codex
+   grunt read ~350 iCloud-synced files; iCloud read latency stalled it. In headless
+   `exec` stdin is closed, so it couldn't interrupt its own child (`write_stdin failed:
+   stdin is closed … rerun exec_command with tty=true`). It then re-emitted its diff
+   every turn, burning tokens. **Reproduced identically by running the same script in a
+   plain shell → it's iCloud-read latency, not codex.** Lesson: don't hand codex grunt
+   that does slow/iCloud-backed I/O; bound long jobs with an in-script timeout; a
+   dispatcher must not assume a headless codex job is abortable mid-run.
+
+2. **agy needs `--dangerously-skip-permissions` to use its tools headlessly** (e.g. to
+   read a file), which a sandboxed harness correctly refuses. **Clean pattern: feed
+   content via stdin so agy needs no tools** — pure text in/out, no approval gate:
+   `cat file | agy -p "<instruction>"`. Worked first try.
+
+3. **`clikae env agy <tank>` → "No built-in adapter for 'agy'"**, yet `clikae tanks`
+   *lists* agy tanks (8, R). Inconsistent: `tanks` advertises agy tanks but `env`
+   can't put a shell on one (agy is global single-account, so per-shell routing may be
+   intentionally unsupported — but then listing agy in `tanks` is misleading). Fix:
+   either support `env agy`, or mark agy rows in `tanks` as non-switchable. (agy still
+   ran fine on its global default config — just not tank-routed.)
+
+4. (Restated) per-shell `CODEX_HOME` doesn't persist across separate non-interactive
+   shells — set the tank inline in the *same* command.
+
+**What worked:** codex *writing* a correct script is good grunt offload; the *running*
+of a slow-I/O script is better kept by the dispatcher. agy is a fine cheap summarizer
+via stdin. Net: the cheap-tank routing thesis holds, but headless grunt needs
+abort/timeout guards and an agy stdin-only convention.
