@@ -13,14 +13,17 @@ and the still-open roadmap items. Read `HANDOFF.md` §1 (non-negotiables) and
 - ✅ **Phase 3** — codex sessions surface in the board's Continue list.
 - ✅ **Phase 4a** — codex dry-detect from plain exec output + reset-time parse.
 - ✅ **Phase 4b** — `watch codex` made honest (limit isn't in the transcript).
-- ⛔ **Phase 4c — BLOCKED on a grammar decision.** A dropped-task-relay *scheduler*
-  needs a CLI home, but `docs/grammar.md` records that the `pool` command was
-  **deliberately removed** ("undiscoverable and redundant — your tanks ARE the
-  reserve"). Building a new pool/scheduler verb would contradict that SSOT, so it
-  is NOT built. The detection primitive it needs already exists (4a's
-  `limit_codex_output_dry` + reset). Awaiting the maintainer's call on shape
-  (library helper + recipe / fold into an existing verb / re-introduce a named
-  verb / defer). Full suite 282/282 green, shellcheck clean at warning level.
+- ✅ **Phase 4c** — `clikae burn` (provisional name): headless guarded task runner.
+  Resolved the `pool`-removal conflict by NOT building a scheduler/pool verb —
+  instead a single-task unit that verifies by artifact + limit-string (not exit
+  code) and falls through THIS engine's reserve tanks on dry (`--to` overrides).
+  Batch/parallelism stays the orchestrator's job. Discoverable in help. **Name
+  `burn` is provisional** — grammar.md/usage.md entries deferred until the
+  maintainer confirms or renames the verb.
+
+Full suite **290/290 green**, shellcheck clean at warning level. All phases (0–4c)
+shipped + pushed on `feat/agy-multiaccount-codex-continuity-guards` (no PR, no
+merge to main, no version bump).
 
 ## Ship rules for this plan
 - **Commit incrementally, one logical fix per commit.** Conventional-commit
