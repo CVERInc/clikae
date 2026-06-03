@@ -251,6 +251,41 @@ _home_is_dry() {
     '$1==c && $2==p{print $3; found=1} END{exit !found}'
 }
 
+# --- The status dot is a FUEL GAUGE, not a "you are here". ----------------------
+# One axis, one reading per tank (red→yellow→green→none), like a traffic light.
+# See docs/DESIGN-board-fuel-dots.md for the why. "Which tank am I on" is NOT here
+# — that stays with the cursor ❯, the burn-order position, and the `active` flag
+# (which still drives the launch target + the `← here` text label, untouched).
+
+# _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
+# usage phrase, cached (first line) by watch/auto when it streams past. Read-only
+# here; we never compute a %. Absent/empty cache = no yellow reading.
+_home_weekly_path() { printf '%s/cache/weekly/%s-%s' "$CLIKAE_HOME" "$1" "$2"; }
+_home_weekly_read() {
+  local f s; f="$(_home_weekly_path "$1" "$2")"
+  [ -f "$f" ] || return 1
+  s="$(head -n 1 "$f" 2>/dev/null)"
+  [ -n "$s" ] || return 1
+  printf '%s' "$s"
+}
+
+# _home_fuel_dot <dry_set> <cli> <profile>  ->  echoes  "<colored-glyph>\037<note>"
+# note carries the dry reset phrase / weekly-% string (may be empty). Priority is
+# mutually exclusive: dry → weekly(BETA) → detectable-ready → no-reading.
+_home_fuel_dot() {
+  local dry="$1" cli="$2" profile="$3" reset wk
+  if reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
+    printf '%b●%b\037%s' "$__C_RED" "$__C_RESET" "${reset:-over quota}"; return 0
+  fi
+  if wk="$(_home_weekly_read "$cli" "$profile")"; then
+    printf '%b●%b\037%s' "$__C_YELLOW" "$__C_RESET" "$wk"; return 0
+  fi
+  if limit_engine_detectable "$cli"; then
+    printf '%b●%b\037' "$__C_GREEN" "$__C_RESET"; return 0
+  fi
+  printf '%b○%b\037' "$__C_DIM" "$__C_RESET"
+}
+
 # _home_wrap_prefixed <text> <prefix> <hang> <color> <reset> [extra]
 # Word-wrap <text> to the live terminal width, printing the FIRST line as
 # "<prefix><chunk>" and every continuation line as "<hang spaces><chunk>" — a
@@ -357,7 +392,7 @@ _home_render_static() {
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
-        if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
+        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 64)" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
@@ -370,22 +405,25 @@ _home_render_static() {
           [ "$printed_resume" -eq 1 ] && printf '\n'
           printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
         fi
-        local _reset _eng; _eng="$(_home_engine_label "$cli")"
-        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          printf '    %b!%b %-12s %b[%s]%b %b%-22s%b  %b%s%b\n' \
-            "$__C_YELLOW" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_YELLOW" "${_reset:-over quota}" "$__C_RESET"
-          any_dry=1
-          if [ "$active" = "1" ] || [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
+        local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
+        # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
+        # decoupled from `active`. `active` still picks the launch target + the
+        # "← here" label below. See docs/DESIGN-board-fuel-dots.md.
+        _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"; _dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
+        if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
+        if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
+        elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
+        if [ -n "$_reset" ]; then
+          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b%s%b\n' \
+            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
+            "$__C_YELLOW" "$_reset" "$__C_RESET"
         elif [ "$active" = "1" ]; then
-          printf '    %b●%b %-12s %b[%s]%b %b%-22s%b  %b← %s%b\n' \
-            "$__C_GREEN" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
+          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b← %s%b\n' \
+            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
             "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET"
-          launch_cli="$cli"; launch_profile="$profile"
         else
-          printf '    %b○%b %-12s %b[%s]%b %b%-22s%b\n' \
-            "$__C_DIM" "$__C_RESET" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET"
-          if [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
+          printf '    %b %-12s %b[%s]%b %b%-22s%b\n' \
+            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET"
         fi
         ;;
       target)
@@ -394,7 +432,7 @@ _home_render_static() {
         # it a tank, `n` → agy runs the SU takeover. Dry → ! + reset phrase inline.
         local _treset _tline
         if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          _tline="$(printf '    %b!%b %-12s %b%s%b  %b%s%b' "$__C_YELLOW" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET")"
+          _tline="$(printf '    %b●%b %-12s %b%s%b  %b%s%b' "$__C_RED" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET")"
           any_dry=1
         else
           _tline="$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"
@@ -812,6 +850,13 @@ _home_help_overlay() {
   _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
   _home_help_row "l"             "$T_K_LANG"
   _home_help_row "q / Esc"       "$T_K_QUIT"
+  # The status dot is a fuel gauge, not "you are here" (docs/DESIGN-board-fuel-dots.md).
+  printf '\n  %b%s:%b  %b●%b %s · %b●%b %s · %b●%b %s · %b○%b %s\n' \
+    "$__C_BOLD" "$T_DOTS_TITLE" "$__C_RESET" \
+    "$__C_GREEN"  "$__C_RESET" "$T_DOT_READY" \
+    "$__C_RED"    "$__C_RESET" "$T_DOT_DRY" \
+    "$__C_YELLOW" "$__C_RESET" "$T_DOT_WEEK" \
+    "$__C_DIM"    "$__C_RESET" "$T_DOT_NONE"
   printf '\n  %b%s%b\n' "$__C_DIM" "$T_HELP_AGY" "$__C_RESET"
   printf '  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
   local _k; IFS= read -rsn1 _k || true
@@ -858,7 +903,7 @@ _home_pick_draw_body() {
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
-        if [ "${active%% *}" = "1" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
+        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         rage="${active#* }"
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$(_home_trunc "$label" 64)"
@@ -881,9 +926,8 @@ _home_pick_draw_body() {
           printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
         fi
         local _eng; _eng="$(_home_engine_label "$cli")"
-        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then dot="${__C_YELLOW}!${__C_RESET}"
-        elif [ "$active" = "1" ]; then dot="${__C_GREEN}●${__C_RESET}"; _reset=""
-        else dot="${__C_DIM}○${__C_RESET}"; _reset=""; fi
+        local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
+        dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         if [ "$idx" -eq "$sel" ]; then
           # Selected → EXPANDED: name, engine tag, account, any reset time. (Alias
           # retired from the board — the name IS the identity.)
@@ -900,7 +944,7 @@ _home_pick_draw_body() {
         # Under "Also available" (not a floating group). Enter launches it
         # single-account; `n` → agy makes it a tank (SU takeover).
         if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"; fi
-        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_YELLOW}!${__C_RESET}"
+        if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%-12s%b %b%s %s%b\n' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$note" "$_reset" "$__C_RESET"
