@@ -8,6 +8,16 @@
 # scans ALL of the current user's processes. Pure ps/awk/grep, bash 3.2, BSD- and
 # Linux-safe. Best-effort: if process environments can't be read it returns
 # nothing rather than blocking the user's work.
+#
+# PLATFORM LIMIT (honest): on macOS `ps` can only read the ENVIRONMENT of
+# tty-attached processes. So this catches an interactive session in another
+# Terminal — the case that actually regenerates a phantom tank (HANDOFF §11) — but
+# NOT a no-tty background daemon/spare (its env is invisible to `ps` there), so the
+# daemon→soft-warn path effectively only fires on Linux, where /proc/<pid>/environ
+# is readable regardless of tty. Verified 2026-06-04: `ps eww` surfaces a live
+# tty-bound claude's CLAUDE_CONFIG_DIR; a no-tty `sleep` with the same env is listed
+# but its env is not. The interactive case is the one that matters; don't claim
+# daemon detection on macOS.
 
 # live_dir_users <dir> <envvar> — print one line per OTHER same-uid process whose
 # environment binds <envvar> to <dir> (a trailing slash is tolerated):
