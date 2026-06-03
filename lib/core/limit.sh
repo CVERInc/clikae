@@ -41,12 +41,41 @@ limit_line_is_real() {
       # So this matcher is correct for a tail of an exec stream, but the home
       # dashboard cannot detect a codex limit from a transcript (see
       # limit_profile_dry's note).
-      case "$line" in *'"type":"turn.failed"'*|*'"type":"error"'*) ;; *) return 1 ;; esac
-      printf '%s' "$line" | grep -qaiE "hit your (usage|session) limit|usage limit|rate_limit" ;;
+      # Two real shapes: the `--json` failure object (keep the type gate), and —
+      # burn-confirmed 2026-06-03 — a PLAIN `codex exec` line carrying codex's own
+      # wording ("You've hit your usage limit. … try again at <date> <time>"). The
+      # plain path leans on that distinctive phrasing so prose doesn't trip it.
+      case "$line" in
+        *'"type":"turn.failed"'*|*'"type":"error"'*)
+          printf '%s' "$line" | grep -qaiE "hit your (usage|session) limit|usage limit|rate_limit" ;;
+        *)
+          printf '%s' "$line" | grep -qaiE "hit your (usage|session) limit" ;;
+      esac ;;
     *)
       # Unknown transcript cli: keep the legacy whole-line text match (no regress).
       printf '%s' "$line" | grep -qaE "$pat" ;;
   esac
+}
+
+# limit_codex_reset <text> -> echo codex's verbatim reset phrase ("try again at
+# <date> <time>") if the text carries one, else nothing. Never computes a
+# countdown — relays the vendor's own words (same spirit as the other detectors).
+# Drives a "dry-until" window so watch/auto don't re-pick a tank before it recovers.
+limit_codex_reset() {
+  printf '%s\n' "$1" | grep -oaiE "try again at [^.\"]+" | head -n 1 \
+    | sed -E 's/[[:space:]]+$//' || true
+}
+
+# limit_codex_output_dry <captured-output> -> 0 (dry) if a codex exec's CAPTURED
+# output shows a usage limit, echoing the reset phrase; 1 (fine) otherwise.
+# For checking a dispatched headless job: `codex exec` exits 0 even when limited
+# and writes no artifact (burn-confirmed 2026-06-03), so the exit code is useless —
+# the output string is the signal. Pair with an artifact check at the call site
+# (a dropped job = limit string seen AND/OR the expected artifact missing).
+limit_codex_output_dry() {
+  printf '%s' "$1" | grep -qaiE "hit your (usage|session) limit" || return 1
+  limit_codex_reset "$1"
+  return 0
 }
 
 # limit_profile_dry <cli> <config_dir>
