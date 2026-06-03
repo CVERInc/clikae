@@ -47,6 +47,25 @@ EOF
 
   local d
   d="$(profile_dir "$cli" "$profile")"
+
+  # In-use guard (data integrity, NOT --force-able): refuse to delete a tank dir a
+  # live session is still bound to — this shell OR another terminal / a background
+  # worker (the phantom-tank bug, HANDOFF §11). Only when actually deleting data,
+  # and only if the adapter resolves an env var to scan for.
+  if [ "$keep_data" -eq 0 ] && [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+    local _rm_ev
+    _rm_ev="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_meta_env_var || true)"
+    if [ -n "$_rm_ev" ]; then
+      local _rm_live="${!_rm_ev:-}"
+      if [ -n "$_rm_live" ] && [ "${_rm_live%/}" = "${d%/}" ]; then
+        log_err "\$$_rm_ev currently points at the tank you're removing:"
+        log_err "    $_rm_live"
+        log_fail "Open a fresh shell with $cli idle (and \$$_rm_ev unset), then retry."
+      fi
+      assert_dir_free "$d" "$_rm_ev" "$cli" "removal"
+    fi
+  fi
+
   local rc_file
   rc_file="$(detect_shell_rc)"
   local rc_id="$cli.$profile"
