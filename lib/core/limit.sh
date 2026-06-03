@@ -153,3 +153,33 @@ limit_log_dry() {
   grep -aoE 'Resets in [0-9hdms]+' "$logf" 2>/dev/null | tail -n 1 || true
   return 0
 }
+
+# limit_engine_detectable <cli> -> 0 if clikae can read this engine's fuel state
+# from disk at all, 1 if not. This is what splits a real traffic-light reading
+# (red/yellow/green) from an honest ○ "no reading". claude (transcript markers)
+# and antigravity (cli.log) are detectable; codex is PROVEN un-detectable from any
+# transcript (see limit_profile_dry's notes), so it — and any engine without a
+# detector — stays ○ rather than being shown a guessed green.
+limit_engine_detectable() {
+  case "$1" in
+    claude|antigravity) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# limit_weekly_marker <line>  (BETA) -> echo the vendor's own weekly-usage phrase
+# if this streamed line carries one (e.g. "used 85% of your weekly limit"), else
+# nothing. Same spirit as the dry detectors: we RELAY the engine's verbatim words,
+# we never COMPUTE a percentage (disk has token tallies but no weekly denominator
+# or window boundary — computing it would be a guess). The caller (watch/auto)
+# caches whatever this returns, stamped, to drive the board's yellow dot.
+#
+# ⚠️ BETA: the pattern below is a BEST GUESS — it is NOT yet confirmed that Claude
+# serialises this notice into the transcript / `-p` stream at all (it may be
+# TUI-render-only). Confirm against a real sighting before trusting yellow; refine
+# the regex there. Until then yellow simply never lights, which is the safe default.
+limit_weekly_marker() {
+  printf '%s\n' "$1" \
+    | grep -oiE "[0-9]+% of your (weekly|week)[a-z ]*limit" 2>/dev/null \
+    | head -n 1 || true
+}
