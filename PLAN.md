@@ -5,6 +5,23 @@ frictions recorded in `HANDOFF.md` (§11, §12, and the 2026-06-03 burn writeups
 and the still-open roadmap items. Read `HANDOFF.md` §1 (non-negotiables) and
 `docs/grammar.md` (command-surface SSOT) before touching anything.
 
+## Execution status — 2026-06-04 (branch `feat/agy-multiaccount-codex-continuity-guards`, pushed)
+- ✅ **Phase 0** — status adapter-less crash fixed (+ `global` row).
+- ✅ **Phase 1** — agy real multi-account: per-tank Keychain carry (1a, SU-consent
+  disclosed), helpful `env agy` error (1b), active-tank label in `tanks` (1c).
+- ✅ **Phase 2** — `proc.sh` cross-shell in-use guard wired into rename/migrate/remove.
+- ✅ **Phase 3** — codex sessions surface in the board's Continue list.
+- ✅ **Phase 4a** — codex dry-detect from plain exec output + reset-time parse.
+- ✅ **Phase 4b** — `watch codex` made honest (limit isn't in the transcript).
+- ⛔ **Phase 4c — BLOCKED on a grammar decision.** A dropped-task-relay *scheduler*
+  needs a CLI home, but `docs/grammar.md` records that the `pool` command was
+  **deliberately removed** ("undiscoverable and redundant — your tanks ARE the
+  reserve"). Building a new pool/scheduler verb would contradict that SSOT, so it
+  is NOT built. The detection primitive it needs already exists (4a's
+  `limit_codex_output_dry` + reset). Awaiting the maintainer's call on shape
+  (library helper + recipe / fold into an existing verb / re-introduce a named
+  verb / defer). Full suite 282/282 green, shellcheck clean at warning level.
+
 ## Ship rules for this plan
 - **Commit incrementally, one logical fix per commit.** Conventional-commit
   prefixes (`fix(...)`, `feat(...)`, `docs(...)`).
