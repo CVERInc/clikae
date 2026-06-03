@@ -93,6 +93,9 @@ EOF
       log_fail "Open a fresh shell with $binary idle (and \$$envvar unset), then retry."
     fi
   fi
+  # ...and a session open in ANOTHER terminal / a background worker (the phantom-
+  # tank bug: the old guard saw only this shell). Hard-fails on a live TUI.
+  assert_dir_free "$old_dir" "$envvar" "$binary" "rename"
 
   log_bold "Rename $cli/$old → $cli/$new"
   printf '  move dir : %s\n         -> %s\n' "$old_dir" "$new_dir"

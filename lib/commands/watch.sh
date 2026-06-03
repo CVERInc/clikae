@@ -155,6 +155,25 @@ EOF
   fi
 
   load_adapter "$cli"
+
+  # codex writes its usage limit ONLY to the exec STDOUT stream, never to the
+  # rollout transcript (burn-confirmed 2026-06-03; the rollout ends in a
+  # token_count with rate_limit_reached_type:null). Since `watch` tails a
+  # transcript, it physically cannot catch a codex limit — so say so plainly
+  # rather than tail a file that will never carry the marker (codex DID gain
+  # adapter_transcript_path for the board's resume list, which would otherwise
+  # make this path look falsely supported). Detection for codex happens at
+  # DISPATCH time: capture the exec output and check it (lib/core/limit.sh
+  # limit_codex_output_dry — the "You've hit your usage limit" line + a missing
+  # artifact, since codex exec exits 0 even when limited).
+  if [ "$cli" = "codex" ]; then
+    log_warn "codex records its usage limit in the exec output, not the session transcript."
+    log_dim  "So \`clikae watch codex\` (a transcript tail) can't catch a codex limit."
+    log_dim  "Detect it at dispatch time: capture the codex output and check it for"
+    log_dim  "\"You've hit your usage limit\" (codex exec exits 0 even when limited)."
+    return 1
+  fi
+
   if ! declare -F adapter_transcript_path >/dev/null; then
     log_fail "'$cli' has no transcripts clikae can watch (no adapter_transcript_path)."
   fi

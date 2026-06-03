@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.5.4"
+CLIKAE_VERSION="0.5.5"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
@@ -52,6 +52,8 @@ source "$CLIKAE_LIB/core/limit.sh"
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh
 source "$CLIKAE_LIB/core/autonomy.sh"
+# shellcheck source=../lib/core/proc.sh
+source "$CLIKAE_LIB/core/proc.sh"
 
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
@@ -63,7 +65,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|to|continue|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|to|continue|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }

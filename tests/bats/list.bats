@@ -72,3 +72,12 @@ load '../helpers'
     skip "python3 not available to validate JSON"
   fi
 }
+
+@test "tanks marks the active (symlinked) agy tank, doesn't fake an email" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # 'default' is the active/symlinked tank
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" == *"(active)"* ]] || false
+}

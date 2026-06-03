@@ -125,3 +125,57 @@ _stub_agy() {
   [[ "$output" == *"agy"* ]]          # canonical engine name, not 'antigravity'
   [[ "$output" == *"work"* ]] || false
 }
+
+# --- per-tank Google login carried via the Keychain (macOS) -------------------
+# agy keeps its login in ONE machine-wide Keychain item, so without carrying it
+# every tank shares the same Google account. These use the stateful `security`
+# stub from helpers.bash ($CLIKAE_TEST_KEYCHAIN, one file per service); they are
+# macOS-only because the carry is gated on OSTYPE (Linux agy stores creds in
+# files inside ~/.gemini, which the dir swap already isolates).
+
+@test "agy switch stashes the outgoing login and clears canon for a fresh tank" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1     # default(active)+work
+  printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"        # logged in on default
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-default")" = "token-default" ]   # stashed
+  [ ! -f "$CLIKAE_TEST_KEYCHAIN/gemini" ]                                     # canon cleared (work never logged in)
+}
+
+@test "agy switch restores a tank's own login (each tank keeps its account)" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work          # default stashed, canon cleared
+  printf 'token-work' > "$CLIKAE_TEST_KEYCHAIN/gemini"            # log in on work
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy default       # work stashed, default restored
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work")" = "token-work" ]
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # default's account is back
+}
+
+@test "rename agy carries the tank's stashed login to the new slot" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  printf 'tok' > "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work"          # work has a stashed login
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-laptop")" = "tok" ]
+  [ ! -f "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work" ]
+}
+
+@test "remove agy forgets the tank's stashed login" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1      # default active, work inactive
+  printf 'tok' > "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work"
+  run clikae remove agy work
+  [ "$status" -eq 0 ]
+  [ ! -f "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work" ]
+}

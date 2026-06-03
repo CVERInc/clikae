@@ -125,6 +125,7 @@ fuel words forced on them.
 | `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
 | `clikae auto [ask\|safe\|full]` | (BETA, claude) how much the supervised launch carries on its own on a dry tank. |
 | `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank in the burn order. |
+| `clikae burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank, verify it by the artifact it must produce (never the exit code — `codex exec` exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. The headless sibling of the switch: batch/parallelism stays the orchestrator's job; `burn` is the single-task unit it fans out and re-fires. `--to` forces an explicit next hop. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
 | `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `h` key flips it live. |
@@ -137,9 +138,9 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `auto`, `rename`, `migrate`, `app`, `alias`, `lang`, `run`, `continue`,
-   `relay`, `handoff`, `doctor`, `info`, `adapters`, `demo`, `home`, `help`,
-   `version`, plus `-h/--help/-v/--version`) → run that command.
+   `watch`, `auto`, `burn`, `rename`, `migrate`, `app`, `alias`, `lang`, `run`,
+   `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`, `demo`, `home`,
+   `help`, `version`, plus `-h/--help/-v/--version`) → run that command.
 2. **Else, a known CLI?** (an adapter in `lib/adapters/` or a target in
    `lib/targets/`, e.g. `claude`, `codex`, `agy`) → the **bare switch** of §3.1.
 3. **Else** → unknown; show an error + `help`.

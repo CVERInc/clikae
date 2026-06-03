@@ -17,13 +17,39 @@
 # _status_row_for <engine>  -> one canonical row, fields separated by ASCII Unit
 # Separator (\037), record terminated by newline:
 #   cli ␟ state ␟ profile ␟ account ␟ envVar ␟ envValue
-# state ∈ active | default | external | flag | noadapter. Empty fields ARE empty.
+# state ∈ active | default | external | flag | global | noadapter. Empty fields ARE empty.
 # (A non-whitespace delimiter is deliberate: tab is IFS-whitespace, so `read`
 # would collapse consecutive empty fields and shift every column.)
 _status_row_for() {
   local cli="$1"
   (
-    load_adapter "$cli" >/dev/null 2>&1 || { printf '%s\037noadapter\037\037\037\037\n' "$cli"; exit 0; }
+    # No adapter file for this engine. load_adapter log_fails (exit 1) on a miss,
+    # which the `||` below CANNOT catch — `exit` kills this subshell before the
+    # guard runs, and under `set -e` the empty `$(...)` then aborts cmd_status
+    # (the very trap cmd_list documents). So gate on the file first.
+    if [ ! -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      # agy is target-backed: a machine-wide ~/.gemini symlink, not a per-shell
+      # env var. Report the tank it points at as `global` so it isn't silently
+      # dropped (and so this whole command doesn't crash just because an agy
+      # tank exists). See lib/commands/antigravity.sh:_agy_active.
+      if [ "$cli" = "antigravity" ] || [ "$cli" = "agy" ]; then
+        local link="$HOME/.gemini" slots target active=""
+        slots="$(profiles_root)/antigravity"
+        if [ -L "$link" ]; then
+          target="$(readlink "$link")"
+          case "$target" in "$slots"/*) active="$(basename "$target")" ;; esac
+        fi
+        if [ -n "$active" ]; then
+          printf '%s\037global\037%s\037\037\037%s\n' agy "$active" "$target"
+        else
+          printf '%s\037global\037\037\037\037\n' agy
+        fi
+      else
+        printf '%s\037noadapter\037\037\037\037\n' "$cli"
+      fi
+      exit 0
+    fi
+    load_adapter "$cli" >/dev/null 2>&1
     local var strategy value active
     var="$(adapter_meta_env_var)"
     strategy="$(adapter_meta_strategy)"
@@ -63,6 +89,11 @@ _status_render_table() {
       external)  active_col="(external)";    source_col="$envVar=$envValue  — not a clikae tank" ;;
       default)   active_col="(default)";     source_col="$envVar unset — system default" ;;
       flag)      active_col="(n/a)";         source_col="flag-based — not detectable from the environment" ;;
+      global)    active_col="${profile:-(none)}"
+                 # ~/.gemini below is literal label text (naming the symlink), not a path to expand.
+                 # shellcheck disable=SC2088
+                 if [ -n "$envValue" ]; then source_col="~/.gemini → $envValue  (machine-wide, all shells)"
+                 else                         source_col="~/.gemini — not a clikae-managed symlink"; fi ;;
       noadapter) active_col="?";             source_col="(no adapter)" ;;
       *)         active_col="$state";        source_col="" ;;
     esac
@@ -108,8 +139,9 @@ Arguments:
 Options:
   --json  Emit a JSON array instead of a table — one object per engine with fields
           {cli, state, profile, account, envVar, envValue}, where state is one of
-          active | default | external | flag | noadapter (profile/account/envValue
-          are null when not applicable). For the menu-bar GUI and scripts.
+          active | default | external | flag | global | noadapter (profile/account/
+          envValue are null when not applicable). "global" is agy's machine-wide
+          ~/.gemini symlink (envValue = its target). For the menu-bar GUI and scripts.
 
 Examples:
   clikae status
