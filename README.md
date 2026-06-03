@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.2-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.4-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -75,11 +75,14 @@ clikae to personal                # carry the live session to tank `personal`
 clikae to codex                   # or across engines (a written brief)
 ```
 
-Type **`clikae`** any time to see all your tanks — which accounts you have per
-engine, and which one each terminal is currently on:
+Type **`clikae`** any time to land on your **home board**: your recent sessions
+across every account and engine (newest first, each with a one-line recap), above
+your tanks in a single **burn order** you can rearrange with `[` / `]`. Every tank
+wears a traffic-light **fuel dot** — 🟢 ready · 🔴 dry (with the vendor's reset
+time) · ○ no reading — so one glance tells you which account still has gas in it:
 
 ```bash
-clikae                            # your home dashboard (run `clikae doctor` for a health check)
+clikae                            # your home board (run `clikae doctor` for a health check)
 ```
 
 ## Documentation
@@ -97,8 +100,9 @@ clikae                            # your home dashboard (run `clikae doctor` for
 - **v0.2** — 7 built-in adapters (claude, gh, gcloud, docker, helm, kubectl, aws), `bats-core` test suite + CI on Linux & macOS, `migrate` command for hand-rolled setups.
 - **v0.3** — Homebrew tap, `migrate --keep-login` (carries the macOS Keychain token across a move), split docs.
 - **v0.4** — Four more adapters (`az`, `npm`, `terraform`, `pulumi`; 11 total) and a `migrate` guard against moving an in-use config dir.
-- **v0.5** *(in progress)* — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` for carrying a session onward (same engine resumes, another engine gets a brief), Antigravity/agy folded into the same verbs, and an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
-- **next** *(in progress)* — the home board becomes a single, reorderable **burn order** (`[` / `]`); switch a tank by name alone (`clikae cver`); interface localisation (en-US / ja-JP / zh-TW, `clikae lang`); and a **BETA supervised launch** — start claude through clikae and it can carry you to the next tank automatically when you hit the limit (`clikae auto`, claude-only for now). The auto-switch is **beta — feedback very welcome** while we shake out how seamless it feels on real sessions.
+- **v0.5** — the **fuel-tank grammar**: clikae becomes the verb (`clikae <engine> <tank>`), one `clikae to` carries a session onward (same engine resumes, another engine gets a written brief), Antigravity/agy folded into the same verbs, an engine/tank/fuel vocabulary throughout. See [docs/grammar.md](docs/grammar.md).
+- **v0.5.3** — the home board became a single, reorderable **burn order** (`[` / `]`); switch a tank by name alone (`clikae cver`); interface localisation (en-US / ja-JP / zh-TW, `clikae lang`); and a **BETA supervised launch** that carries you to the next tank automatically when you hit the limit (`clikae auto`, claude-only for now — feedback very welcome).
+- **v0.5.4** — the board's status dot became a **fuel gauge, not a "you are here"**: 🟢 ready · 🔴 dry (the vendor's verbatim reset time) · ○ no reading (engines clikae can't read from disk, e.g. codex — never a guessed green), plus a **BETA** yellow that relays Claude's own weekly-usage notice. See [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing
