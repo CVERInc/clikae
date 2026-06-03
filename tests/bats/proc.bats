@@ -66,3 +66,16 @@ STUB
   [[ "$output" == *"another shell"* ]] || false
   [ -d "$d" ]                                              # not deleted
 }
+
+@test "the in-use scan is best-effort: a FAILING ps must not abort rename/remove" {
+  # Regression: live_dir_users leaked the ps pipeline's exit code, so under
+  # `set -eo pipefail` a non-zero `ps` (locked-down hosts, CI runners) aborted
+  # rename/migrate/remove entirely. HANDOFF §11: the scan is best-effort.
+  clikae init claude work
+  local bin="$BATS_TEST_TMPDIR/failps"; mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$bin/ps"; chmod +x "$bin/ps"
+  PATH="$bin:$PATH" run clikae rename claude work personal --force
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/personal" ]
+  [ ! -d "$CLIKAE_HOME/profiles/claude/work" ]
+}
