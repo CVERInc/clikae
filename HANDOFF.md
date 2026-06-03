@@ -652,3 +652,26 @@ slightly outruns the implementation for non-claude engines.
 **Out of scope here:** codex over-quota is still un-detectable from disk (see
 `lib/core/limit.sh` notes) — that's the *fuel* axis, independent of *resume*. This
 TODO is only about surfacing codex sessions in Continue.
+
+---
+
+## Dogfood (2026-06-03): headless cross-engine dispatch + codex tank-switch reality check
+
+Verified clikae can drive a *different engine headlessly*, end to end: in a single
+shell, `eval "$(clikae env codex <tank>)"` then
+`codex exec -C <dir> -s workspace-write "<task>"` — codex then created files
+autonomously on the selected tank. This is the "route the grunt work to a cheaper
+tank" thesis working in practice: one engine orchestrates, another executes.
+
+**Gotcha to document:** tank selection via `clikae env` is **per-shell** (`$CODEX_HOME`)
+and does NOT persist across separate non-interactive shells. Automation must set the
+tank inline in the *same* command, not in a prior step.
+
+**Tank-switch reality check for codex:**
+- **Manual / carried switch: works** — `clikae env|to codex <tank>` moves codex
+  between tanks cleanly.
+- **Self-switch on dry: not yet** — `clikae auto` is claude-only (BETA). codex cannot
+  carry itself onward when a tank runs dry. Consistent with the open item above: codex
+  over-quota is un-detectable from disk, so the *fuel* axis is the remaining gap for
+  codex; *resume* already works. → A `clikae auto` covering codex needs codex
+  dry-detection first.
