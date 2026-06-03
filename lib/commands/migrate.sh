@@ -221,6 +221,11 @@ EOF
       fi
     done
   fi
+  # Also catch a session in ANOTHER terminal / a background worker bound to any
+  # dir slated to move (the phantom-tank bug). Hard-fails on a live TUI.
+  for ((i = 0; i < n; i++)); do
+    assert_dir_free "${c_old[$i]}" "$envvar" "$binary" "migration"
+  done
 
   if [ "$force" -eq 0 ]; then
     confirm "Proceed with migration?" || { log_info "Aborted."; return 0; }

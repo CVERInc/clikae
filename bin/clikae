@@ -52,6 +52,8 @@ source "$CLIKAE_LIB/core/limit.sh"
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh
 source "$CLIKAE_LIB/core/autonomy.sh"
+# shellcheck source=../lib/core/proc.sh
+source "$CLIKAE_LIB/core/proc.sh"
 
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
