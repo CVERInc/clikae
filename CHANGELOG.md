@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-06-03
+
 ### Changed
 
 - **The board's status dot is now a fuel gauge, not a "you are here".** One axis,
