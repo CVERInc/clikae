@@ -42,7 +42,7 @@ EOF
   [ -n "$tank" ] || log_fail "Missing <tank>. Usage: eval \"\$(clikae env <engine> <tank>)\""
   validate_name cli "$cli"
   validate_name profile "$tank"
-  load_adapter "$cli"
+  load_adapter "$cli"   # agy/antigravity get a tailored "it's global" error here
   local d
   d="$(ensure_profile --require "$cli" "$tank")"
 

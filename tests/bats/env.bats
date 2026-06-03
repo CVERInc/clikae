@@ -28,3 +28,11 @@ load '../helpers'
   [ "$status" -ne 0 ]
   [[ "$output" == *"flag-strategy"* ]] || false
 }
+
+@test "env agy reports it's global (helpful, not the 'no adapter' wart)" {
+  run clikae env agy work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"global"* ]] || false
+  [[ "$output" == *"clikae agy"* ]] || false
+  [[ "$output" != *"No built-in adapter"* ]] || false
+}
