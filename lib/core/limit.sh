@@ -78,6 +78,23 @@ limit_codex_output_dry() {
   return 0
 }
 
+# limit_output_dry <cli> <captured-output> -> 0 (dry) + echo the verbatim reset
+# phrase if a headless run's CAPTURED output shows a usage limit; 1 otherwise.
+# Per-engine (the wording differs); engines with no output signal return 1, so the
+# caller treats a missing artifact as a task failure, not a dry tank. Drives
+# `clikae burn`'s fall-through — exit code is NOT trusted (codex exec exits 0 dry).
+limit_output_dry() {
+  local cli="$1" out="$2"
+  case "$cli" in
+    codex)  limit_codex_output_dry "$out" ;;
+    claude)
+      printf '%s' "$out" | grep -qaiE "hit your (session|usage) limit" || return 1
+      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # limit_profile_dry <cli> <config_dir>
 # Is this profile/tank currently rate-limited? Returns 0 (dry) / 1 (fine).
 # When dry, prints the vendor's own reset phrase (e.g. "resets 11pm (Asia/Tokyo)")
