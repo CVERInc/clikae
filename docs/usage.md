@@ -75,6 +75,7 @@ plain, conventional verbs.
 | `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
 | `auto [ask\|safe\|full]` | **(BETA, claude)** How much clikae carries on its own when a session you launched through it hits the limit. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` just keeps going. The board's `A` key flips it too. |
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
+| `burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of `to`/`watch`. See "Headless tasks" below. |
 
 > **Supervised launch (BETA · claude · feedback welcome).** When you start claude
 > *through* clikae, clikae stays as the parent. **When that session ends after
@@ -261,6 +262,35 @@ you what it did.
 > clikae watch claude --check          # would the pattern fire on this session?
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
+
+## Headless tasks across tanks — `clikae burn`
+
+`watch`/`auto` carry an *interactive* session. For *headless* grunt work — the
+"let the cheaper tank do the dirty work" case — use `clikae burn`. It runs one
+task on a tank and, crucially, knows whether it actually finished: it verifies by
+the **artifact** the task must produce, never the exit code (`codex exec` exits 0
+even when it hit its usage limit and wrote nothing). If the tank ran dry, it
+re-fires the *same* task on the next tank in your reserve.
+
+```bash
+# Distil a file with codex on tank M; if M is dry, fall through to your next
+# codex tank automatically. Success = /tmp/out.md exists.
+clikae burn codex M --artifact /tmp/out.md -- \
+    exec -C /tmp -s workspace-write "read /tmp/in.txt, write /tmp/out.md"
+
+clikae burn codex M --artifact /tmp/out.md --to codex/H -- exec … "<task>"   # explicit next hop
+clikae burn codex M --artifact /tmp/out.md --timeout 300 -- exec … "<task>"  # bound a long run
+```
+
+Outcomes: artifact present → done; dry on every reachable tank → fail; ran but
+produced no artifact and showed no limit → a real **task failure** (not rerouted —
+it would fail the same everywhere). `--no-reroute` runs once and stops on a dry tank.
+
+`burn` is the single-task unit — **batch/parallelism stays your orchestrator's
+job** (fan several `burn`s out, review the artifacts). Make tasks idempotent and
+artifact-checked (fixed input/output paths), and pre-stage inputs to `/tmp` rather
+than handing a tank slow iCloud-backed I/O. agy can't be burned (it's global /
+single-account, not per-tank-headless).
 
 ## Seeing which tank you're on
 

@@ -652,3 +652,118 @@ slightly outruns the implementation for non-claude engines.
 **Out of scope here:** codex over-quota is still un-detectable from disk (see
 `lib/core/limit.sh` notes) — that's the *fuel* axis, independent of *resume*. This
 TODO is only about surfacing codex sessions in Continue.
+
+---
+
+## Dogfood (2026-06-03): headless cross-engine dispatch + codex tank-switch reality check
+
+Verified clikae can drive a *different engine headlessly*, end to end: in a single
+shell, `eval "$(clikae env codex <tank>)"` then
+`codex exec -C <dir> -s workspace-write "<task>"` — codex then created files
+autonomously on the selected tank. This is the "route the grunt work to a cheaper
+tank" thesis working in practice: one engine orchestrates, another executes.
+
+**Gotcha to document:** tank selection via `clikae env` is **per-shell** (`$CODEX_HOME`)
+and does NOT persist across separate non-interactive shells. Automation must set the
+tank inline in the *same* command, not in a prior step.
+
+**Tank-switch reality check for codex:**
+- **Manual / carried switch: works** — `clikae env|to codex <tank>` moves codex
+  between tanks cleanly.
+- **Self-switch on dry: not yet** — `clikae auto` is claude-only (BETA). codex cannot
+  carry itself onward when a tank runs dry. Consistent with the open item above: codex
+  over-quota is un-detectable from disk, so the *fuel* axis is the remaining gap for
+  codex; *resume* already works. → A `clikae auto` covering codex needs codex
+  dry-detection first.
+
+### Grunt-dispatch friction (2026-06-03 follow-up — routing chores to codex/agy)
+
+Tried offloading real grunt work (a vault link-integrity checker) to codex, and a
+text-summary to agy, both via clikae. Four frictions worth fixing/documenting:
+
+1. **codex `exec` (headless) can hang on slow I/O with no clean abort.** The codex
+   grunt read ~350 iCloud-synced files; iCloud read latency stalled it. In headless
+   `exec` stdin is closed, so it couldn't interrupt its own child (`write_stdin failed:
+   stdin is closed … rerun exec_command with tty=true`). It then re-emitted its diff
+   every turn, burning tokens. **Reproduced identically by running the same script in a
+   plain shell → it's iCloud-read latency, not codex.** Lesson: don't hand codex grunt
+   that does slow/iCloud-backed I/O; bound long jobs with an in-script timeout; a
+   dispatcher must not assume a headless codex job is abortable mid-run.
+
+2. **agy needs `--dangerously-skip-permissions` to use its tools headlessly** (e.g. to
+   read a file), which a sandboxed harness correctly refuses. **Clean pattern: feed
+   content via stdin so agy needs no tools** — pure text in/out, no approval gate:
+   `cat file | agy -p "<instruction>"`. Worked first try.
+
+3. **`clikae env agy <tank>` → "No built-in adapter for 'agy'"**, yet `clikae tanks`
+   *lists* agy tanks (8, R). Inconsistent: `tanks` advertises agy tanks but `env`
+   can't put a shell on one (agy is global single-account, so per-shell routing may be
+   intentionally unsupported — but then listing agy in `tanks` is misleading). Fix:
+   either support `env agy`, or mark agy rows in `tanks` as non-switchable. (agy still
+   ran fine on its global default config — just not tank-routed.)
+
+4. (Restated) per-shell `CODEX_HOME` doesn't persist across separate non-interactive
+   shells — set the tank inline in the *same* command.
+
+**What worked:** codex *writing* a correct script is good grunt offload; the *running*
+of a slow-I/O script is better kept by the dispatcher. agy is a fine cheap summarizer
+via stdin. Net: the cheap-tank routing thesis holds, but headless grunt needs
+abort/timeout guards and an agy stdin-only convention.
+
+### Dry-tank DURING a parallel multi-engine burn + manual relay — full writeup (2026-06-03)
+
+> Recorded in detail so the next session fully understands what happened and what
+> clikae still needs. This is the single most on-point clikae event observed: a fuel
+> tank ran dry mid-task during a deliberate "burn every tank at once", and a manual
+> relay kept the work going — exactly clikae's reason to exist, done by hand.
+
+**The setup — a deliberate "全油箱同步燒".** 5 workers fired in parallel, each on one
+independent distillation task (read a big text file → write one markdown note):
+- claude **a** — orchestrator: pre-extracted the inputs, then reviewed + placed outputs.
+- claude **b** — `eval "$(clikae env claude b)"; cat in.txt | claude -p "<prompt>" > out.md`
+- codex **H** — `eval "$(clikae env codex H)"; codex exec -C /tmp -s workspace-write --skip-git-repo-check "<prompt: read /tmp/in.txt, write /tmp/out.md>" </dev/null`
+- codex **M** — same codex pattern, tank M, different task.
+- agy (global) — `cat in.txt | agy -p "<prompt>"` (agy is global single-account; `clikae env agy` is broken, see above).
+
+Inputs were pre-extracted to `/tmp` (NOT read from the iCloud vault): codex `exec` hangs
+on iCloud reads (earlier section), so every non-orchestrator worker got its text via a
+`/tmp` file (codex) or stdin (agy/claude) — no iCloud latency, no tool-permission gate.
+
+**The event — codex tank M ran dry mid-task.** M's background job **exited 0** (looked
+like success) but wrote **NO output file**. Its task log showed, mid-run:
+`ERROR: You've hit your usage limit. ... try again at Jul 3rd, 2026 11:38 AM.`
+i.e. the parallel burn drained tank M's codex/ChatGPT quota partway through.
+
+**⚠️ CRITICAL gotcha for clikae's codex dry-detect:** `codex exec` **exits 0 even when it
+hit the usage limit and produced nothing.** Exit code is NOT a reliable success signal.
+Reliable signals are: (a) the literal `You've hit your usage limit` string in stdout/stderr,
+and (b) the expected output artifact is missing. Any codex dry-detection MUST parse the
+limit string and/or verify the artifact — never trust the exit code. Bonus: the message
+carries the reset time (`try again at <date> <time>`) → usable to mark the tank
+**dry-until-<timestamp>** instead of just "dry".
+
+**The relay (manual — and it worked).** The orchestrator (claude a) noticed M's missing
+artifact + the limit error in its log, re-assigned M's dropped task to itself, and
+finished it. Nothing lost; the other 3 tanks' outputs were untouched. 4/4 tasks landed
+despite one tank drying. That is "swap the dry tank, keep burning" — but done by hand.
+
+**What clikae needs to automate this (the actual product gap):**
+1. **codex dry-detect** (the long-open TODO): match `You've hit your usage limit` in
+   codex output + verify the artifact; do NOT use exit code. Parse the reset time to set
+   a dry-until window so `watch`/pool don't re-pick a tank that won't recover until then.
+2. **Auto-relay of a *dropped parallel task*:** when one tank in a parallel set dries,
+   re-queue *that specific task* to a live tank (same engine M→H, or cross-engine →
+   claude/agy). This needs the orchestrator to track a task↔tank map, not just "switch
+   the shell's tank". Today `clikae to`/`relay` carries a *session*; here we needed to
+   re-route a *headless task*. Different shape — pool/scheduler concern.
+3. **Idempotent, artifact-checked grunt tasks:** this relay was trivial only because each
+   task was re-runnable (fixed `/tmp` input path, fixed output path). clikae's pool/relay
+   should assume/encourage idempotent tasks whose completion is verified by an artifact,
+   so a dropped one just re-fires elsewhere.
+4. **Parallel burn is the fastest dry-tank stress test:** firing all tanks at once
+   intentionally drains them — great for exercising watch/pool/relay. M dried within a
+   single task.
+
+Complements the earlier notes: `clikae auto` is claude-only, and codex over-quota was
+"un-detectable from disk". This run shows it IS detectable *from the codex output* (limit
+string), just not from exit code or disk — and that manual relay closes the gap today.

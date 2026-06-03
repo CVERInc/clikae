@@ -60,3 +60,85 @@ adapter_account_label() {
     | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/"$//' || true
   return 0
 }
+
+# --- session continuity: surface codex sessions in the board's "Continue" list -
+# Codex stores each session as a rollout JSONL under
+#   CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ISO-ts>-<uuid>.jsonl
+# whose FIRST line is a `session_meta` carrying payload.id (the session UUID) and
+# payload.cwd (the dir it ran in). Unlike claude, codex does NOT slug $PWD into
+# the path — so we match on the recorded cwd. Filenames embed a sortable ISO
+# timestamp, so a lexical reverse sort is newest-first. We read only line 1 per
+# file to decide, keeping the board cheap. (HANDOFF §12.)
+
+_codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
+
+# _codex_meta_field <file> <field> — pull a string field from the session_meta
+# (first line). Never abort the caller under `set -eo pipefail`.
+_codex_meta_field() {
+  head -n 1 "$1" 2>/dev/null \
+    | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n 1 \
+    | sed -E "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"//; s/\"\$//" || true
+}
+
+# _codex_find_rollout <dir> <sid> — the rollout file for a session id (the uuid is
+# the filename suffix), or empty.
+_codex_find_rollout() {
+  local sdir; sdir="$(_codex_sessions_dir "$1")"
+  [ -d "$sdir" ] || return 0
+  find "$sdir" -type f -name "rollout-*-$2.jsonl" 2>/dev/null | head -n 1
+}
+
+# _codex_rollouts_for_cwd <dir> — rollout files under <dir> whose recorded cwd is
+# $PWD, newest first.
+_codex_rollouts_for_cwd() {
+  local sdir f; sdir="$(_codex_sessions_dir "$1")"
+  [ -d "$sdir" ] || return 0
+  find "$sdir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort -r | while IFS= read -r f; do
+    [ "$(_codex_meta_field "$f" cwd)" = "$PWD" ] && printf '%s\n' "$f"
+  done
+}
+
+# Resume a codex session by id: `codex resume <uuid>` (verified via codex --help).
+# Gates (with adapter_recent_sids) whether the board offers a "接回" affordance.
+adapter_resume_args() {
+  local sid="$1"
+  [ -n "$sid" ] || return 1
+  printf 'resume\n%s\n' "$sid"
+}
+
+# This dir's most recent rollout under <dir> (for relay / handoff).
+adapter_transcript_path() {
+  local f; f="$(_codex_rollouts_for_cwd "$1" | head -n 1)"
+  [ -n "$f" ] || return 1
+  printf '%s\n' "$f"
+}
+
+# CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
+# first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
+adapter_recent_sids() {
+  local dir="$1" limit="${2:-5}" f sid mt
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sid="$(_codex_meta_field "$f" id)"
+    [ -n "$sid" ] || continue
+    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
+    printf '%s\037%s\n' "$mt" "$sid"
+  done <<EOF
+$(_codex_rollouts_for_cwd "$dir" | head -n "$limit")
+EOF
+}
+
+# A session's title for the board: codex records the user's prompt as an event_msg
+# with payload.type "user_message" carrying "message". Take the first, flatten
+# escapes/whitespace (no jq). Empty → the board shows the age instead.
+adapter_session_title() {
+  local dir="$1" sid="$2" f t
+  [ -n "$sid" ] || return 0
+  f="$(_codex_find_rollout "$dir" "$sid")"
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  t="$(grep -m1 '"type":"user_message"' "$f" 2>/dev/null \
+        | grep -oE '"message"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+        | sed -E 's/^"message"[[:space:]]*:[[:space:]]*"//; s/"$//')"
+  printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+}
