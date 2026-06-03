@@ -23,6 +23,11 @@ live_dir_users() {
       # `ps eww` appends each process's environment to the command column. Tokenise
       # the line and match an EXACT `VAR=dir` env token (an env value containing a
       # space would split across fields — acceptable: clikae profile dirs have none).
+      # The trailing `|| true` is LOAD-BEARING: on a locked-down host (CI runners,
+      # some sandboxes) `ps eww` can exit non-zero, and under the caller's
+      # `set -eo pipefail` a leaked failure would abort rename/migrate/remove
+      # entirely (HANDOFF §11: this MUST be best-effort — no reading ⇒ no users,
+      # never a hard error).
       ps eww -o pid=,command= 2>/dev/null | awk -v self="$self" -v var="$envvar" -v want="$want" '
         {
           if ($1 == self) next
@@ -33,7 +38,7 @@ live_dir_users() {
               break
             }
           }
-        }'
+        }' || true
       ;;
     linux*)
       local envf pid cmd
@@ -49,6 +54,7 @@ live_dir_users() {
       done
       ;;
   esac
+  return 0   # best-effort producer: empty output = nobody, never a hard error
 }
 
 # _proc_is_background <cmdline> — true if the command looks like a background
@@ -70,7 +76,7 @@ _proc_is_background() {
 assert_dir_free() {
   local dir="$1" envvar="$2" binary="$3" action="${4:-move}"
   [ -n "$envvar" ] || return 0
-  local lines; lines="$(live_dir_users "$dir" "$envvar")"
+  local lines; lines="$(live_dir_users "$dir" "$envvar" || true)"   # never let a scan failure abort the caller
   [ -n "$lines" ] || return 0
   local had_tui=0 pid cmd
   while IFS="$(printf '\t')" read -r pid cmd; do
