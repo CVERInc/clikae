@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.5.5"
+CLIKAE_VERSION="0.5.6"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
