@@ -575,3 +575,47 @@ Confirmed via real dogfooding and shipped on `feat/relay-and-status`:
 - (d) **fish support** SHIPPED.
 Still genuinely open: antigravity full adapter (likely stays launch-only), vercel adapter,
 `status` polish + v1.0 GUI, Windows follow-ups (PS `.psd1`/migrate, mirror watch/pool), Warp.
+
+---
+
+## 11. TODO — `rename`/`migrate`/`remove` in-use guard only covers the CURRENT shell (phantom-tank bug)
+
+**Found 2026-06-03 by dogfooding (maintainer hit it live).** Renaming claude
+`b`→`L` and `a`→`C` left **phantom `a`/`b` tanks** that kept reappearing on the
+board. Root cause confirmed on disk + via `ps eww`:
+
+- The in-use guard in `cmd_rename` (`lib/commands/rename.sh`, the `${!envvar}`
+  block) — and the equivalent in `migrate` — **only checks the env var of the
+  shell running `clikae`**. It does NOT see a live interactive session, or the
+  background `claude daemon run` + `--bg-spare`/`--bg-pty-host` workers, that hold
+  `CLAUDE_CONFIG_DIR=<old>` in **another** terminal/process tree.
+- So: maintainer ran `rename` from shell A (var not `=b`) → guard passed → `mv`
+  succeeded → a still-open claude session in shell B (env still `=b`) kept writing
+  to the old path → **recreated an empty/stub tank at the old name.** Same class
+  of bug noted for `migrate` in §2 (v0.2 list) — the guard there has the same hole.
+- Proven nuance: after the **interactive** session closed, the stale **daemon/
+  spares** alone did NOT recreate the dir. So the hard culprit is a live
+  interactive TUI; daemon/spares are a softer signal.
+
+**The fix (tractable, ~50–80 lines incl. bats):**
+
+1. Add a core helper, e.g. `lib/core/proc.sh::live_dir_users <dir> <envvar>` —
+   scan same-uid processes for `<envvar>=<dir>`. macOS: `ps eww -o pid=,command=`
+   then read env per pid; Linux: `/proc/<pid>/environ` (NUL-split). Pure
+   `ps`/grep, bash 3.2, BSD-safe. (We already proved the detection works:
+   `ps eww -p <pid> | tr ' ' '\n' | grep CLAUDE_CONFIG_DIR=…`.)
+2. In `cmd_rename` (and reuse in `migrate`, `remove`): after the existing
+   current-shell check, scan all processes for `<old_dir>`. **Classify by command
+   string:** an interactive TUI holding `=old` → **hard-fail** (data-integrity,
+   `--force` can't bypass, like today's guard); only `daemon run`/`--bg-spare`/
+   `--bg-pty-host` holding `=old` → **soft warn** ("quit Claude Code fully first").
+3. **agy exception:** agy has no per-tank env var (it's the `~/.gemini` symlink);
+   `_agy_rename` should instead refuse if any `antigravity` process is running.
+4. Tests: stub `ps` the way the suite already stubs `pgrep` (per the v0.5.3 note
+   "helpers now stub pgrep so agy tests are host-independent").
+
+**Honest limits (don't oversell in copy):** catches "a session is open right
+now" — the overwhelming case — but not a check-then-open race; daemon-vs-TUI
+classification is a command-string heuristic. Recovery for a user who already hit
+it: the phantom stub tanks are safe to back up + remove once the old terminal is
+closed (the real history lives under the renamed tank).

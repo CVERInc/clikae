@@ -387,3 +387,55 @@ _agy_log() { # <line>
   la="$(printf '%s\n' "$output" | grep -n 'aws  (tool)'  | head -1 | cut -d: -f1)"
   [ -n "$lc" ] && [ -n "$la" ] && [ "$lc" -lt "$la" ]
 }
+
+# --- The status dot is a fuel gauge (docs/DESIGN-board-fuel-dots.md) ------------
+
+@test "limit_engine_detectable: claude/agy yes, codex + tools no" {
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  limit_engine_detectable claude
+  limit_engine_detectable antigravity
+  ! limit_engine_detectable codex
+  ! limit_engine_detectable gh
+}
+
+@test "_home_fuel_dot: detectable+clean = ●, un-detectable (codex) = ○ no-reading" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # claude, empty dry set → green ● (a real reading: ready)
+  run _home_fuel_dot "" claude work
+  [[ "$output" == *"●"* ]] || false
+  # codex can't be read from disk → honest ○, never a guessed ●
+  run _home_fuel_dot "" codex cheap
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+}
+
+@test "_home_fuel_dot: a dry tank is ● with its verbatim reset phrase" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  run _home_fuel_dot "$(printf 'claude\037work\037Resets in 2h')" claude work
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"Resets in 2h"* ]] || false
+}
+
+@test "_home_fuel_dot: a cached weekly-% (BETA) lights ● with the verbatim phrase" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  mkdir -p "$CLIKAE_HOME/cache/weekly"
+  printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
+  run _home_fuel_dot "" claude work
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"85% of your weekly limit"* ]] || false
+}
+
+@test "limit_weekly_marker (BETA): captures the vendor weekly phrase, ignores noise" {
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  run limit_weekly_marker "You've used 85% of your weekly limit, resets Monday"
+  [[ "$output" == *"85% of your weekly limit"* ]] || false
+  # a stray percentage in normal output must NOT trip it
+  run limit_weekly_marker "trimmed 10% of the context window to fit"
+  [ -z "$output" ]
+}

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-06-03
+
+### Changed
+
+- **The board's status dot is now a fuel gauge, not a "you are here".** One axis,
+  one reading per tank, like a traffic light: 🔴 dry (over limit, verbatim reset
+  phrase) · 🟢 ready · ○ no reading (engines clikae can't read from disk, e.g.
+  codex — honestly blank, never a guessed green). The old green "active" dot was
+  confusing — it meant a global symlink for agy but a per-shell env var for claude,
+  and "current account per engine" is switcher-thinking clikae isn't. "Which tank
+  am I on" now lives only with the cursor, the burn-order position, and the `← here`
+  text label (the `active` flag still drives the launch target). See
+  `docs/DESIGN-board-fuel-dots.md`. Dot legend added to the `?` overlay (i18n).
+
+### Added
+
+- **Weekly-usage caution dot — 🟡 (BETA).** When `clikae watch` sees Claude's own
+  "used N% of your weekly limit" notice stream past, it captures the phrase
+  **verbatim** (never computed — disk has no weekly denominator) and the board
+  shows that tank a yellow ●. BETA because it's not yet confirmed the notice
+  reaches a stream clikae can tail; until one is observed, yellow simply never
+  lights (safe default). `limit_weekly_marker` / `limit_engine_detectable` added.
+
 ## [0.5.3] — 2026-06-03
 
 ### Added
