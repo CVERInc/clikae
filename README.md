@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.6-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.7-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -106,6 +106,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **v0.5.4** — the board's status dot became a **fuel gauge, not a "you are here"**: 🟢 ready · 🔴 dry (the vendor's verbatim reset time) · ○ no reading (engines clikae can't read from disk, e.g. codex — never a guessed green), plus a **BETA** yellow that relays Claude's own weekly-usage notice. See [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
 - **v0.5.5** — **Antigravity / agy becomes real multi-account** (each tank carries its own Google login via the macOS Keychain); **codex sessions join the home board's Continue list** (true cross-engine resume); **`clikae burn`** runs a headless task on a tank and re-fires it on the next when one runs dry (verified by artifact, not exit code); and a **cross-shell in-use guard** so `rename`/`migrate`/`remove` won't move a tank a session in another terminal is still using.
 - **v0.5.6** — hardened that in-use guard to be truly best-effort: a restricted `ps` (CI runners, locked-down hosts) no longer aborts `rename`/`migrate`/`remove`.
+- **v0.5.7** — the board shows only **burnable fuel tanks** (tool-CLI tanks live in `clikae tanks`); **`clikae app --board`** makes a launcher for the menu, not one tank; **Ghostty launchers** use a trusted config file (no "Allow Ghostty to execute…" dialog) and are re-signed for Apple Silicon; and switching to a tank whose CLI isn't installed gives a **helpful install hint** instead of `exec: … not found`.
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] — 2026-06-04
+
+### Added
+
+- **`clikae app --board`** — a `.app` launcher for the **board** (your menu of
+  recent sessions + tanks), not a single tank: one double-click button for the
+  whole on-ramp. Works for Terminal, iTerm2, and Ghostty.
+- **A helpful "engine isn't installed" message.** Switching to a tank whose CLI
+  binary isn't on your PATH now reports it clearly — with a per-engine install
+  hint (e.g. `npm install -g @anthropic-ai/claude-code`) — instead of a bare
+  `exec: …: not found`. clikae switches accounts; it doesn't install the CLI.
+  (New optional adapter hook `adapter_install_hint`.)
+
+### Changed
+
+- **The board shows only burnable fuel tanks** (claude / codex / agy). Tool-CLI
+  tanks (gh, npm, aws, …) aren't AI sessions — "launching" one only printed a
+  usage screen — so they now live in `clikae tanks` (the full inventory), not on
+  the board. The adapters are unchanged; only their presence on the board is.
+- **Ghostty `.app` launchers pass their command through a trusted config file**
+  (`--config-file=`) instead of `-e`. Ghostty pops an "Allow Ghostty to execute…?"
+  dialog for an externally-injected `-e` command (so a `-e` launcher looked like an
+  empty shell until you clicked Allow); a config file is trusted, so the window
+  just opens. The config is located at runtime via `path to me` (so the .app keeps
+  working if moved), and the bundle is re-signed after the config is written so
+  Apple Silicon doesn't block it.
+
+### Fixed
+
+- **The board no longer renders blank when there are 0 fuel tanks** (e.g. only
+  tool-CLI tanks): a `grep -c .` returning exit 1 on a zero count aborted the whole
+  render under `set -eo pipefail`.
+
 ## [0.5.6] — 2026-06-04
 
 ### Fixed
