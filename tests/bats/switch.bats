@@ -19,9 +19,11 @@ bats_require_minimum_version 1.5.0   # for `run -<expected-code>`
   [[ "$output" == *"npm install -g @anthropic-ai/claude-code"* ]] || false
 }
 
-@test "switch's not-installed message is generic for an engine with no hint (gh)" {
-  clikae init gh work
-  PATH="/usr/bin:/bin" run -127 clikae gh work
+@test "switch's not-installed message is generic for an engine with no hint (vercel)" {
+  # vercel (a flag-strategy adapter, no install hint) is never in /usr/bin — gh
+  # would be, on Ubuntu CI runners, so it'd slip past the restricted PATH.
+  clikae init vercel work
+  PATH="/usr/bin:/bin" run -127 clikae vercel work
   [[ "$output" == *"isn't installed"* ]] || false
-  [[ "$output" == *"install 'gh' and retry"* ]] || false
+  [[ "$output" == *"install 'vercel' and retry"* ]] || false
 }
