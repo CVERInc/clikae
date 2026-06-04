@@ -204,7 +204,7 @@ cmd_switch() {
   load_adapter "$engine"
 
   if [ "$ephemeral" -eq 1 ]; then
-    _switch_run_ephemeral "$engine" "$d" "${passthru[@]}"
+    _switch_run_ephemeral "$engine" "$tank" "$d" "${passthru[@]}"
     return $?
   fi
 
@@ -212,11 +212,32 @@ cmd_switch() {
   # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is
   # detectable from the transcript; other engines exec unchanged. (docs/DESIGN-runtime)
   if [ "$engine" = "claude" ]; then
+    _switch_require_binary "$engine" "$tank"
     _switch_supervise "$engine" "$tank" "$d" "${passthru[@]}"
     return $?
   fi
 
+  _switch_require_binary "$engine" "$tank"
   adapter_run "$d" "${passthru[@]}"   # execs
+}
+
+# clikae switches accounts; it does NOT install the engine. If the binary isn't on
+# PATH, the run paths would die with a bare "exec: <bin>: not found" (the #1
+# first-run confusion — see the launcher journey). Say so helpfully, with a
+# per-engine install hint when the adapter defines one. Call this right before a
+# run path execs — AFTER flag validation (e.g. --ephemeral support) so the more
+# specific error wins. Requires the adapter to be loaded.
+_switch_require_binary() {
+  local engine="$1" tank="$2" bin
+  bin="$(adapter_meta_cli_binary)"
+  command -v "$bin" >/dev/null 2>&1 && return 0
+  log_err "Switched to $engine/$tank, but '$bin' isn't installed (not on your PATH)."
+  if declare -F adapter_install_hint >/dev/null 2>&1; then
+    log_dim "Install it, then retry:  $(adapter_install_hint)"
+  else
+    log_dim "clikae switches accounts; it doesn't install the CLI — install '$bin' and retry."
+  fi
+  exit 127
 }
 
 # Run the engine with EPHEMERAL memory: point its memory dir at a throwaway that's
@@ -224,9 +245,10 @@ cmd_switch() {
 # the normal switch we DON'T exec — clikae stays as the parent so cleanup can run
 # when the engine quits. See docs/grammar.md §10.4.
 _switch_run_ephemeral() {
-  local engine="$1" d="$2"; shift 2
+  local engine="$1" tank="$2" d="$3"; shift 3
   declare -F adapter_memory_dir >/dev/null \
     || log_fail "--ephemeral isn't supported for '$engine' (clikae doesn't know its memory layout)."
+  _switch_require_binary "$engine" "$tank"   # after the --ephemeral support check, before we run
   local mem stash throwaway
   mem="$(adapter_memory_dir "$d")"
   [ -n "$mem" ] || log_fail "--ephemeral: '$engine' reported no memory dir for this directory."
