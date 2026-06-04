@@ -1,13 +1,16 @@
--- clikae Ghostty launcher template. One placeholder (the LAUNCH_CMD token on the
--- do-shell-script line below) is substituted by lib/commands/app.sh with a
--- fully-built, shell-quoted `open -na Ghostty.app --args ...` command.
+-- clikae Ghostty launcher. Ghostty's macOS CLI can't open a window directly, so we
+-- go through `open -na Ghostty.app --args`. Crucially the command is passed via a
+-- TRUSTED config file (--config-file=), NOT via -e: Ghostty pops an
+-- "Allow Ghostty to execute …?" confirmation for -e (its guard against an external
+-- app injecting a command), so a -e launcher looks like an empty shell until you
+-- click Allow. A user config file is trusted → no dialog, and the title sticks.
 --
--- Ghostty's macOS CLI can't open a terminal window directly (`ghostty` only runs
--- "+actions" on macOS), so we go through `open -na Ghostty.app --args`, passing
--- the window title via --title= and the profile command via -e. The placeholder
--- has the @ delimiters that this comment omits, so substitution never touches
--- this text.
+-- The config lives in THIS bundle's Resources, located at runtime via `path to me`
+-- so the launcher keeps working if the .app is moved. app.sh writes
+-- Contents/Resources/clikae-ghostty.conf (a `title = …` + `command = …` pair) right
+-- after compiling this script. This template has no substitution tokens.
 
 on run
-    do shell script "@LAUNCH_CMD@"
+    set confPath to (POSIX path of (path to me)) & "Contents/Resources/clikae-ghostty.conf"
+    do shell script "open -na Ghostty.app --args --config-file=" & quoted form of confPath
 end run
