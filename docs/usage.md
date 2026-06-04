@@ -67,6 +67,14 @@ plain, conventional verbs.
 | `migrate [<engine>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
 | `alias <engine> <tank> [--name <n>]` | Write (or replace) a shell alias. Default name `<engine>-<tank>`. |
 | `app <engine> <tank> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
+| `app --board [--terminal <app>] [--force] [--out <dir>]` | Generate a `clikae.app` that opens the **board** (the menu of recent sessions + tanks) instead of one tank — a single double-click button for the whole on-ramp. |
+
+> **Ghostty launchers** pass their command through a trusted Ghostty **config file**
+> (`--config-file=`), not `-e`. Ghostty pops an "Allow Ghostty to execute…?" dialog
+> for an externally-injected `-e` command (so a `-e` launcher looks like an empty
+> shell until you click Allow); a config file is trusted, so the window just opens.
+> The config lives inside the `.app` and is found via `path to me`, so the launcher
+> keeps working if you move it.
 
 ### Keep burning when a tank runs dry
 
