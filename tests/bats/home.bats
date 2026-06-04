@@ -439,3 +439,27 @@ _agy_log() { # <line>
   run limit_weekly_marker "trimmed 10% of the context window to fit"
   [ -z "$output" ]
 }
+
+@test "board shows only burnable session tanks; tool-CLI tanks live in clikae tanks" {
+  clikae init claude work
+  clikae init gh personal        # gh is a tool CLI, not a session/fuel tank
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"work"* ]] || false
+  [[ "$output" == *"1 tank across 1 engine"* ]] || false   # only the claude tank counts on the board
+  [[ "$output" != *"[gh]"* ]] || false                     # the gh tank is NOT shown on the board
+  # …but it's still in the full inventory.
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gh"* ]] || false
+  [[ "$output" == *"personal"* ]] || false
+}
+
+@test "board with only tool-CLI tanks renders gracefully (no crash on 0 fuel tanks)" {
+  clikae init gh work        # a tool-CLI tank only — the board filters it out
+  run clikae
+  [ "$status" -eq 0 ]        # regression: grep -c . on 0 tank rows used to abort under set -eo pipefail
+  [[ "$output" == *"0 tanks"* ]] || false
+  [[ "$output" != *"[gh]"* ]] || false
+}
