@@ -63,12 +63,11 @@ _app_render_script() {
         || log_fail "Ghostty not found. Install it, or pick another --terminal (terminal, iterm2)."
       tmpl="$CLIKAE_LIB/templates/launcher.ghostty.applescript.tmpl"
       [ -f "$tmpl" ] || log_fail "Missing template: $tmpl"
-      # Ghostty can't open a window from the CLI on macOS — go through `open`.
-      # Title before -e (which consumes the rest as the command to run).
-      local launch_cmd
-      launch_cmd="open -na Ghostty.app --args --title=$(_app_shell_squote "$title") -e /bin/zsh -lc $(_app_shell_squote "$shell_cmd")"
+      # No token substitution: the script reads its command from a TRUSTED config
+      # file (written into the bundle by cmd_app after osacompile) via `path to me`,
+      # so Ghostty never shows the "-e" "Allow execute" dialog. The shell_cmd/title
+      # flow into that conf, not this script.
       tmpl_content="$(cat "$tmpl")"
-      tmpl_content="${tmpl_content//@LAUNCH_CMD@/$(_app_applescript_escape "$launch_cmd")}"
       ;;
     *)
       log_fail "Unknown --terminal '$target'. Choose: terminal, iterm2, ghostty."
@@ -78,27 +77,51 @@ _app_render_script() {
   printf '%s\n' "$tmpl_content" > "$out"
 }
 
+# Write the trusted Ghostty config into a freshly-compiled .app bundle. The
+# launcher's AppleScript points `--config-file` here (via `path to me`), so Ghostty
+# runs `command` WITHOUT the -e "Allow execute" dialog. The command carries no
+# bundle-relative path, so the .app stays valid if moved. Args:
+#   <app_path> <title> <shell_cmd>
+_app_write_ghostty_conf() {
+  local app_path="$1" title="$2" shell_cmd="$3"
+  local resdir="$app_path/Contents/Resources"
+  mkdir -p "$resdir"
+  {
+    printf 'title = %s\n' "$title"
+    # Login shell so PATH has Homebrew + node bins; single-quote shell_cmd (it can
+    # contain  KEY="dir"  pairs) so Ghostty's command parser keeps it as one arg.
+    printf 'command = /bin/zsh -lc %s\n' "$(_app_shell_squote "$shell_cmd")"
+  } > "$resdir/clikae-ghostty.conf"
+}
+
 cmd_app() {
-  local cli="" profile="" force=0 out_dir="" target="${CLIKAE_TERMINAL:-terminal}"
+  local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-terminal}"
   while [ $# -gt 0 ]; do
     case "$1" in
       -f|--force) force=1; shift ;;
       -o|--out)   out_dir="$2"; shift 2 ;;
       -t|--terminal) target="$2"; shift 2 ;;
+      --board)    board=1; shift ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae app <engine> <tank> [--terminal <app>] [--force] [--out <dir>]
+       clikae app --board        [--terminal <app>] [--force] [--out <dir>]
 
-Generate a macOS .app launcher for a profile. Double-clicking the .app opens a
-new terminal window with the given profile active.
+Generate a macOS .app launcher. Double-clicking it opens a new terminal window.
+With <engine> <tank> it opens that tank directly; with --board it opens the
+clikae board (your menu of recent sessions + tanks) so you can pick from there.
 
 Options:
+  --board               Make a launcher for the clikae BOARD (no engine/tank) —
+                        a single button that opens the menu.
   -t, --terminal <app>  Which terminal to open: terminal (default), iterm2,
                         ghostty. Default can also be set via $CLIKAE_TERMINAL.
   -f, --force           Overwrite an existing .app at the destination.
   -o, --out <dir>       Where to put the .app. Default: ~/Applications
 
-The window's title is set to "<CLI> (<tank>)" so you can tell windows apart.
+The window's title is "<CLI> (<tank>)" (or "clikae" for --board) so you can tell
+windows apart. The Ghostty launcher passes its command through a trusted config
+file, so Ghostty never shows the "Allow Ghostty to execute…" dialog.
 
 macOS only.
 EOF
@@ -118,20 +141,30 @@ EOF
   [ "$(uname -s)" = "Darwin" ] || log_fail "clikae app is macOS-only. Use \`clikae alias\` on Linux/Windows."
   command -v osacompile >/dev/null 2>&1 || log_fail "osacompile not found (it's a macOS built-in — this is unexpected)."
 
-  [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae app --help"
-  [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae app --help"
-  validate_name cli "$cli"
-  validate_name profile "$profile"
-
-  load_adapter "$cli"
-  local d
-  d="$(ensure_profile --require "$cli" "$profile")"
-  local title
-  title="${cli} (${profile})"
+  local title shell_cmd app_name
+  if [ "$board" -eq 1 ]; then
+    [ -z "$cli$profile" ] || log_fail "--board opens the whole board — don't also pass an engine/tank."
+    title="clikae"
+    # Open the board; if you quit it (q), keep an interactive login shell rather
+    # than closing the window. A login shell so PATH finds clikae + the engines.
+    shell_cmd="clikae; exec zsh -i"
+    app_name="clikae.app"
+  else
+    [ -n "$cli" ]     || log_fail "Missing <engine>. See: clikae app --help  (or --board for a menu launcher)"
+    [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae app --help"
+    validate_name cli "$cli"
+    validate_name profile "$profile"
+    load_adapter "$cli"
+    local d
+    d="$(ensure_profile --require "$cli" "$profile")"
+    title="${cli} (${profile})"
+    # The shell command the launcher runs: [KEY="V" ...] <binary> [--flag <dir>].
+    shell_cmd="$(adapter_command "$d")"
+    app_name="${cli} (${profile}).app"
+  fi
 
   [ -n "$out_dir" ] || out_dir="$HOME/Applications"
   mkdir -p "$out_dir"
-  local app_name="${cli} (${profile}).app"
   local app_path="$out_dir/$app_name"
 
   if [ -e "$app_path" ]; then
@@ -143,10 +176,6 @@ EOF
     fi
   fi
 
-  # The shell command the launcher runs: [KEY="V" ...] <binary> [--flag <dir>].
-  local shell_cmd
-  shell_cmd="$(adapter_command "$d")"
-
   local tmp_dir tmp_scpt
   tmp_dir="$(mktemp -d -t clikae-launcher.XXXXXX)"
   tmp_scpt="$tmp_dir/launcher.applescript"
@@ -154,6 +183,8 @@ EOF
 
   osacompile -o "$app_path" "$tmp_scpt"
   rm -rf "$tmp_dir"
+  # Ghostty: drop the trusted config into the bundle the script reads via path-to-me.
+  [ "$target" = "ghostty" ] && _app_write_ghostty_conf "$app_path" "$title" "$shell_cmd"
   log_ok "Created $app_path"
   log_dim "  terminal: $target"
   log_dim "  title   : $title"
