@@ -140,6 +140,16 @@ _home_items() {
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     cli="${entry%%/*}"; profile="${entry#*/}"
+    # The board is the AI-session on-ramp, so its 油箱 list holds only BURNABLE
+    # session tanks: claude/codex (they define adapter_start_with_prompt) + agy.
+    # Tool-CLI tanks (gh/npm/aws/kubectl/…) aren't fuel — "launching" one from here
+    # just execs a bare usage screen, which reads as "nothing happened" — so they
+    # live in `clikae tanks` (the full inventory), not on the board. (Real-user
+    # feedback 2026-06.) The adapters stay; only their presence on the board does not.
+    if [ "$cli" != "antigravity" ]; then
+      ( load_adapter "$cli" >/dev/null 2>&1 \
+          && declare -F adapter_start_with_prompt >/dev/null 2>&1 ) || continue
+    fi
     path="$(profile_dir "$cli" "$profile")"
     if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
       label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
@@ -378,8 +388,11 @@ _home_lpad() {
 _home_render_static() {
   local items="$1" dry="$2" any_dry=""
   local n_tanks n_clis
-  n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c .)"
-  n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c .)"
+  # `grep -c .` exits 1 when the count is 0 — under `set -eo pipefail` that would
+  # abort the whole render. The board can legitimately have 0 fuel tanks now (e.g.
+  # only tool-CLI tanks, which the board filters out), so guard with `|| true`.
+  n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c . || true)"
+  n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c . || true)"
   printf '%b%s%b  %b·  %s%b\n\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
 
