@@ -183,8 +183,19 @@ EOF
 
   osacompile -o "$app_path" "$tmp_scpt"
   rm -rf "$tmp_dir"
-  # Ghostty: drop the trusted config into the bundle the script reads via path-to-me.
-  [ "$target" = "ghostty" ] && _app_write_ghostty_conf "$app_path" "$title" "$shell_cmd"
+  # Ghostty: drop the trusted config into the bundle the script reads via path-to-me,
+  # then RE-SEAL. osacompile ad-hoc-signs the bundle; adding a Resource afterwards
+  # breaks that seal ("a sealed resource is missing or invalid"), and on Apple
+  # Silicon a broken signature makes macOS block the .app. Clear stray xattrs, then
+  # re-sign ad-hoc so the conf is sealed in and the launcher opens cleanly.
+  if [ "$target" = "ghostty" ]; then
+    _app_write_ghostty_conf "$app_path" "$title" "$shell_cmd"
+    xattr -cr "$app_path" 2>/dev/null || true
+    if command -v codesign >/dev/null 2>&1; then
+      codesign --force --sign - "$app_path" >/dev/null 2>&1 \
+        || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
+    fi
+  fi
   log_ok "Created $app_path"
   log_dim "  terminal: $target"
   log_dim "  title   : $title"

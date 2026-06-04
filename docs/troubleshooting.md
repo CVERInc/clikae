@@ -36,6 +36,24 @@ If your aliases live in a different file (e.g. you keep everything in
 `~/.zprofile`), source the clikae block from the file clikae wrote, or move the
 sentinel-wrapped block by hand.
 
+## Switching works but the engine won't start: "'claude' isn't installed"
+
+clikae switches **accounts/configs**; it does **not** install the underlying CLI.
+If you switch to a tank whose engine binary isn't on your `PATH`, clikae sets the
+tank and then stops with a clear message instead of a bare `exec: …: not found`:
+
+```
+Switched to claude/work, but 'claude' isn't installed (not on your PATH).
+Install it, then retry:  npm install -g @anthropic-ai/claude-code
+```
+
+Install the engine (e.g. `npm install -g @anthropic-ai/claude-code`,
+`npm install -g @openai/codex`) and run the tank again. If it's installed but
+clikae still can't find it, your launcher is probably using a **non-login** shell:
+make sure the install dir (`~/.local/node/bin`, `/opt/homebrew/bin`, …) is on the
+PATH of the shell that runs clikae. A login shell (`zsh -l`) sources your rc, so a
+`.app`/Dock launcher should run `zsh -lc` — which clikae's own `.app` launchers do.
+
 ## The `.app` won't open: "cannot be opened because it is from an unidentified developer"
 
 The launcher is compiled locally with `osacompile` and is **not code-signed or

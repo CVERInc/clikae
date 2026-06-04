@@ -7,6 +7,8 @@ adapter_meta_cli_binary()  { echo "claude"; }
 adapter_meta_env_var()     { echo "CLAUDE_CONFIG_DIR"; }
 adapter_meta_strategy()    { echo "env-dir"; }
 adapter_meta_description() { echo "Anthropic Claude Code CLI (credentials + settings in CLAUDE_CONFIG_DIR)"; }
+# Optional: how to install the binary, shown when a switch finds it missing.
+adapter_install_hint() { echo "npm install -g @anthropic-ai/claude-code"; }
 
 # adapter_init is optional. For Claude there's nothing to seed — the CLI itself
 # initialises the directory on first login.
