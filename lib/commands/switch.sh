@@ -203,6 +203,21 @@ cmd_switch() {
   d="$(ensure_profile --require "$engine" "$tank")"
   load_adapter "$engine"
 
+  # clikae switches accounts; it does NOT install the engine. If the binary isn't
+  # on PATH, every run path below would die with a bare "exec: <bin>: not found"
+  # (the #1 first-run confusion — see the launcher journey). Say so helpfully, with
+  # a per-engine install hint when the adapter provides one.
+  local _bin; _bin="$(adapter_meta_cli_binary)"
+  if ! command -v "$_bin" >/dev/null 2>&1; then
+    log_err "Switched to $engine/$tank, but '$_bin' isn't installed (not on your PATH)."
+    if declare -F adapter_install_hint >/dev/null 2>&1; then
+      log_dim "Install it, then retry:  $(adapter_install_hint)"
+    else
+      log_dim "clikae switches accounts; it doesn't install the CLI — install '$_bin' and retry."
+    fi
+    exit 127
+  fi
+
   if [ "$ephemeral" -eq 1 ]; then
     _switch_run_ephemeral "$engine" "$d" "${passthru[@]}"
     return $?

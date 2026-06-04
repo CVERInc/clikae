@@ -12,6 +12,8 @@ adapter_meta_cli_binary()  { echo "codex"; }
 adapter_meta_env_var()     { echo "CODEX_HOME"; }
 adapter_meta_strategy()    { echo "env-dir"; }
 adapter_meta_description() { echo "OpenAI Codex CLI (auth + config + history in CODEX_HOME)"; }
+# Optional: how to install the binary, shown when a switch finds it missing.
+adapter_install_hint() { echo "npm install -g @openai/codex"; }
 
 # Nothing to seed — codex initialises CODEX_HOME on first run / login.
 adapter_init() {
