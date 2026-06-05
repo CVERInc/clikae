@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] — 2026-06-05
+
+### Added
+
+- **State schema versioning.** Everything under `$CLIKAE_HOME/` now carries a
+  `version` marker, so a future change to an on-disk format is safe: clikae reads it
+  on startup and runs a forward migration if an older clikae last wrote your state
+  (and warns, rather than downgrading, if a *newer* one did). Deliberately minimal —
+  one version file + one migration runner, no framework. It's stamped when state is
+  created, so read commands stay read-only; a pre-existing install with no marker is
+  treated as the original layout and migrates cleanly when needed. (Invisible in
+  normal use — this is groundwork for safe format changes later.)
+
 ## [0.5.11] — 2026-06-05
 
 ### Fixed
