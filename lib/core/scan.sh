@@ -37,3 +37,14 @@ scan_clis() {
 $(list_adapters)
 EOF
 }
+
+# agy_email <tank_dir> -> the Google account this agy tank is signed in as, scraped
+# verbatim from the most recent "email=<x>" line in its antigravity-cli/log, or
+# empty. agy keeps no account email on disk except in that log (the login itself
+# lives in the Keychain), so this is the one honest read. Shared by `clikae list`
+# and the home board so the two agree on agy's ACCOUNT column.
+agy_email() {
+  local dir="$1"
+  grep -rhoE 'email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+    "$dir/antigravity-cli/log" 2>/dev/null | tail -n 1 | sed 's/^email=//'
+}

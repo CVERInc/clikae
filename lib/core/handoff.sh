@@ -204,3 +204,27 @@ handoff_render() {
     _handoff_raw_brief "$t"
   fi
 }
+
+# validate_handoff_target <target> — fast-fail BEFORE a long watch/handoff if the
+# target can't actually be handed to. <target> is `<engine>[/<tank>]` (the form
+# next_tank emits, tabs already turned to `/`). Mirrors cmd_handoff's own target
+# resolution (handoff.sh §"Parse <engine>[/<tank>]") so a watch pre-check and the
+# eventual handoff agree:
+#   • an ADAPTER engine (claude/codex/…) with a /tank → that tank must exist;
+#   • a single-account TARGET (agy/antigravity) → must NOT carry a /tank;
+#   • anything else → unknown target.
+# log_fail (exit 1) on a bad target; silent on a good one. Used by `clikae watch`.
+validate_handoff_target() {
+  local t="$1" to_cli to_profile=""
+  to_cli="${t%%/*}"
+  case "$t" in */*) to_profile="${t#*/}" ;; esac
+  [ -n "$to_cli" ] || log_fail "Empty handoff target."
+  if [ -f "$CLIKAE_LIB/adapters/$to_cli.sh" ]; then
+    [ -z "$to_profile" ] || profile_exists "$to_cli" "$to_profile" \
+      || log_fail "No such tank to hand off to: $to_cli/$to_profile  (create it: clikae init $to_cli $to_profile)."
+  elif [ -f "$CLIKAE_LIB/targets/$to_cli.sh" ]; then
+    [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
+  else
+    log_fail "Unknown handoff target: '$to_cli'."
+  fi
+}

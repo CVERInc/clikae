@@ -85,8 +85,9 @@ switches automatically after a one-time consent. The brief + handoff reuse
 
 Where it goes next:
   --to <target>   explicit target (<engine>/<tank> or a launch-only target).
-  (otherwise)     the next tank of the SAME engine — your tanks ARE the reserve,
-                  nothing to configure. Cross-engine needs an explicit --to.
+  (otherwise)     the next fuelled tank in your burn order — same-engine first (a
+                  real resume), then a cross-engine cold brief if every same-engine
+                  tank is dry. Your tanks ARE the reserve; nothing to configure.
 
 Launch-only targets (single-account vendors, e.g. antigravity): clikae watches
 their LOG instead of a transcript (agy writes its quota error only to
