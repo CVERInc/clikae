@@ -154,9 +154,9 @@ EOF
 # the engine. 0 lines = no such name; 1 = unambiguous; >1 = same name in multiple
 # engines (caller disambiguates).
 resolve_tank_name() {
-  local want="$1" cli profile path
+  local want="$1" cli profile
   [ -n "$want" ] || return 0
-  while IFS=$'\t' read -r cli profile path; do
+  while IFS=$'\t' read -r cli profile _; do
     [ -n "$cli" ] || continue
     [ "$profile" = "$want" ] && printf '%s\t%s\n' "$cli" "$profile"
   done <<EOF
