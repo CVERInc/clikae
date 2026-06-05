@@ -176,6 +176,74 @@ limit_profile_dry() {
   return 0
 }
 
+# _limit_tank_dry_self <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase
+# if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
+#   • claude  — limit_profile_dry scans the tank's transcripts (account-level
+#     WITHIN this config dir: all its recent sessions).
+#   • any engine — a persisted dry marker (dry_store), written by the live catcher
+#     (burn / supervise) for engines whose limit never lands in a scannable file.
+# Self-only: factored out so limit_tank_dry's account contagion can't recurse.
+_limit_tank_dry_self() {
+  local engine="$1" tank="$2" dir reset
+  dir="$(profile_dir "$engine" "$tank")"
+  if [ "$engine" = "claude" ]; then
+    # claude's dry state is its transcript ONLY (scannable + self-clearing on the
+    # next successful turn). We NEVER consult dry_store for claude, so a stale 6h
+    # marker can't mask a real recovery — the store is strictly for engines whose
+    # limit isn't persisted to a transcript (codex).
+    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 1
+    printf '%s' "$reset"; return 0
+  fi
+  if reset="$(dry_store_read "$engine" "$tank" 2>/dev/null)"; then
+    printf '%s' "$reset"; return 0
+  fi
+  return 1
+}
+
+# _limit_tank_account <engine> <tank> -> this tank's account label (e.g. the
+# logged-in email) via the adapter, or empty. Run in a subshell so loading the
+# adapter here can't clobber whichever adapter the caller already has loaded.
+_limit_tank_account() {
+  local engine="$1" tank="$2" dir
+  dir="$(profile_dir "$engine" "$tank")"
+  ( load_adapter "$engine" >/dev/null 2>&1 || exit 0
+    declare -F adapter_account_label >/dev/null 2>&1 || exit 0
+    adapter_account_label "$dir" 2>/dev/null )
+}
+
+# limit_tank_dry <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase if
+# this tank has NO usable fuel right now; 1 (fine) otherwise. The account- and
+# store-aware unifier that BOTH the board (clikae home) and the carry-onward
+# selector (next_tank) call, so a dry reading means the same thing everywhere:
+#   1. the tank's OWN signal (_limit_tank_dry_self), then
+#   2. ACCOUNT CONTAGION — a usage limit hits the whole account, not one tank, so a
+#      sibling on the SAME account (same adapter_account_label) being dry makes THIS
+#      tank dry too, even with no marker of its own. This is why claude/MFC reads
+#      dry the moment claude/L does: same login, one shared quota. The sibling's
+#      reset phrase is borrowed for display. Skipped when the account is unknown
+#      (empty label) — we never guess a shared quota we can't see.
+limit_tank_dry() {
+  local engine="$1" tank="$2" reset acct sib_e sib_t _p sib_acct
+  if reset="$(_limit_tank_dry_self "$engine" "$tank")"; then
+    printf '%s' "$reset"; return 0
+  fi
+  acct="$(_limit_tank_account "$engine" "$tank")"
+  [ -n "$acct" ] || return 1
+  while IFS=$'\t' read -r sib_e sib_t _p; do
+    [ -n "$sib_e" ] || continue
+    [ "$sib_e" = "$engine" ] || continue
+    [ "$sib_t" = "$tank" ] && continue
+    sib_acct="$(_limit_tank_account "$sib_e" "$sib_t")"
+    [ -n "$sib_acct" ] && [ "$sib_acct" = "$acct" ] || continue
+    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")"; then
+      printf '%s' "$reset"; return 0
+    fi
+  done <<EOF
+$(list_all_profiles)
+EOF
+  return 1
+}
+
 # limit_log_dry <logfile>
 # Is a log-only target's CURRENT limit log showing a genuine quota event?
 # Returns 0 (dry) and echoes the vendor's verbatim reset phrase, or 1 (fine).

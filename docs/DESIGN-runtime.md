@@ -89,6 +89,12 @@ reality before the next. Version bumps only when a milestone is real.
   Reorder keys (move up/down) persisted to `$CLIKAE_HOME/order` (or similar).
 - `next_tank` follows the user order (cross-engine aware), replacing same-engine
   only. Bare `clikae to` already calls `next_tank` → now walks the order.
+  **v0.5.8:** `next_tank` became a RING — it wraps past the end of the order (a
+  tank earlier in your order is still a reserve), prefers a fuelled **same-engine**
+  tank (real resume) over a cross-engine cold brief, and judges "dry" with
+  `limit_tank_dry` (account-aware: a sibling on the same exhausted login is
+  skipped; a persisted `dry_store` marker covers exec-only limits like codex).
+  Returns nothing when the whole ring is dry, so callers say so honestly.
 - Honesty: still no "auto" claims anywhere.
 
 ### M2 — Report log (SHIPPED)
