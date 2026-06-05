@@ -29,6 +29,10 @@ dry_store_path() { printf '%s/dry/%s/%s\n' "$CLIKAE_HOME" "$1" "$2"; }
 # dry_store_mark <engine> <tank> [reset_phrase] -> record that this tank is dry as
 # of NOW, carrying the vendor's verbatim reset phrase (may be empty). One line:
 # "<epoch>\t<reset_phrase>". A write failure is non-fatal.
+#
+# Format note: this line layout is part of the $CLIKAE_HOME state schema (see
+# lib/core/state_version.sh / CLIKAE_STATE_VERSION). If it ever needs a new field,
+# bump the schema version and add a migration rather than parsing both shapes here.
 dry_store_mark() {
   local engine="$1" tank="$2" reset="${3:-}" f now
   f="$(dry_store_path "$engine" "$tank")"

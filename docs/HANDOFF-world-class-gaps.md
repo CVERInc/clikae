@@ -49,7 +49,20 @@ covers what's left to make clikae pass the bar.
   non-zero with the disambiguation message listing both candidates, and does NOT
   switch. The historical "burned the wrong account" neighbourhood is now guarded.
 
-### P2 — state files have no schema version / migration (dim ⑤, portfolio-wide weak)
+### ✅ P2 — state files have no schema version / migration — DONE (v0.5.12)
+
+> **Resolved.** `lib/core/state_version.sh`: a `$CLIKAE_HOME/version` integer
+> (`CLIKAE_STATE_VERSION`, the STATE schema version — bumped only on a format change,
+> not per release) + a forward-migration runner (`state_version_check` on startup;
+> `_state_migrate_<n>` hooks run n→n+1). Stamped when state is created
+> (`ensure_profile --create` → `state_version_ensure`), so read commands stay
+> read-only (the "bare clikae changes nothing on disk" guarantee holds — verified by
+> test). A missing version file = the original un-versioned layout = v1 (migrates
+> cleanly to a future v2). A newer-than-binary version warns instead of downgrading.
+> Tests in `tests/bats/state-version.bats`. Kept 克制 — one file + one runner, no
+> framework. **clikae now clears the 世界第一讚 bar** (the original writeup follows).
+
+### (original) P2 — state files have no schema version / migration (dim ⑤, portfolio-wide weak)
 - **Where:** everything under `$CLIKAE_HOME/` — `profiles/`, `order`, `dry/<engine>/<tank>`
   (`lib/core/dry_store.sh:38`, format `<epoch>\t<phrase>`), `autonomy`,
   `auto-relay-consent`, `cache/weekly/`. All are bare files with no version marker.
@@ -69,8 +82,10 @@ covers what's left to make clikae pass the bar.
 - Full audit + 7-dim scorecard + reusable self-check method:
   Obsidian vault → `Notes/世界第一讚自檢（bleedblend · clikae）.md`
   and the standard itself → `Notes/世界第一讚（CVER 品質標準）.md`.
-- clikae's strongest dims today are ⑥ restraint and ② root-cause; the weak ones are
-  ⑤ (above) and the P1 test-coverage gaps. **The two P1s are now fixed (v0.5.9); P2
-  (state schema versioning) is the one item left** to clear the bar.
+- clikae's strongest dims today are ⑥ restraint and ② root-cause; the weak ones WERE
+  ⑤ (state versioning) and the P1 test-coverage gaps. **All cleared: the two P1s in
+  v0.5.9, P2 in v0.5.12. The punch-list is empty — clikae clears the 世界第一讚 bar.**
+  (A separate "implementation vs expectation" audit on 2026-06-05 also fixed a
+  shipped `clikae watch` crash + doc drift in v0.5.11; see that CHANGELOG.)
 
-— left by Claude a, 2026-06-05. P1s closed in v0.5.9 (2026-06-05).
+— left by Claude a, 2026-06-05. P1s closed v0.5.9; expectation audit v0.5.11; P2 closed v0.5.12.
