@@ -103,3 +103,25 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"artifact"* ]] || false
 }
+
+# --- _burn_timeout_bin: the honest-when-no-coreutils contract (world-class P1) ---
+
+@test "_burn_timeout_bin: picks \`timeout\` when it's on PATH" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/usr/bin/env bash\n' > "$BATS_TEST_TMPDIR/bin/timeout"; chmod +x "$BATS_TEST_TMPDIR/bin/timeout"
+  local out; out="$(PATH="$BATS_TEST_TMPDIR/bin:$PATH" _burn_timeout_bin)"
+  [ "$out" = "timeout" ]
+}
+
+@test "_burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  local out
+  out="$(PATH="$TEST_HOME/.testbin" _burn_timeout_bin 2>"$BATS_TEST_TMPDIR/err")"   # testbin has no timeout/gtimeout
+  [ -z "$out" ]                                                   # no bin selected
+  grep -q "without a time bound" "$BATS_TEST_TMPDIR/err" || grep -qi "WITHOUT a time bound" "$BATS_TEST_TMPDIR/err"
+}

@@ -65,3 +65,30 @@ dry_store_read() {
 dry_store_clear() {
   rm -f "$(dry_store_path "$1" "$2")" 2>/dev/null || true
 }
+
+# dry_store_epoch <engine> <tank> -> echo the epoch this marker was recorded, or
+# return 1 if there's no usable marker. Feeds dry_seen_suffix for the board annotation.
+dry_store_epoch() {
+  local f line stamp; f="$(dry_store_path "$1" "$2")"
+  [ -f "$f" ] || return 1
+  IFS= read -r line < "$f" 2>/dev/null || return 1
+  stamp="${line%%$'\t'*}"
+  case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$stamp"
+}
+
+# dry_seen_suffix <epoch> -> "  · seen HH:MM" (localised) for the LOCAL time a frozen
+# observation was captured, or empty for a bad/empty epoch. Shared by every reset
+# that is a SNAPSHOT rather than a live reading — codex (its dry_store marker) and
+# agy (its limit log's mtime) — so they annotate consistently. The point: those
+# engines report a time we can't trust as live (codex gives UTC for whichever limit
+# window the headless run hit; agy gives a relative "Resets in 3h" frozen at its last
+# run), so stating WHEN we observed it frames the number honestly. claude is exempt —
+# its dry is re-read live each render and its phrase is already absolute + timezoned.
+# We only ever stamp our OWN observation time; we never parse or convert the vendor's.
+dry_seen_suffix() {
+  local stamp="${1:-}" hm
+  case "$stamp" in ''|*[!0-9]*) return 0 ;; esac
+  hm="$(date -r "$stamp" '+%H:%M' 2>/dev/null || date -d "@$stamp" '+%H:%M' 2>/dev/null)" || return 0
+  [ -n "$hm" ] && printf '  · %s' "$(printf "$T_DRY_SEEN" "$hm")"
+}

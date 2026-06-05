@@ -139,3 +139,31 @@ _seed_email() { # <engine> <profile> <email>
   _seed_dry_tx claude b
   [ -z "$(next_tank claude a)" ]
 }
+
+# --- capture-time annotation (codex/agy snapshots read honestly) ---------------
+
+@test "dry_store_epoch: returns the recorded epoch" {
+  _src
+  dry_store_mark codex H "Try again at 2026-06-05 07:00"
+  run dry_store_epoch codex H
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[0-9]+$ ]] || false
+}
+
+@test "dry_seen_suffix: builds a '· seen HH:MM' tag from an epoch" {
+  _src
+  T_DRY_SEEN="seen %s"
+  run dry_seen_suffix 1780624464
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"·"* ]] || false
+  [[ "$output" == *"seen"* ]] || false
+}
+
+@test "dry_seen_suffix: empty/garbage epoch → no annotation (never invents a time)" {
+  _src
+  T_DRY_SEEN="seen %s"
+  run dry_seen_suffix ""
+  [ -z "$output" ]
+  run dry_seen_suffix "nope"
+  [ -z "$output" ]
+}

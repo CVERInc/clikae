@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.9] — 2026-06-05
+
+### Added
+
+- **"✨ Update available" notice on the board.** When a newer clikae is out,
+  `clikae` shows a codex-style prompt before the tank board — a ✨ banner + a 3-way
+  choice: **update now** (runs the right command for your install — `brew upgrade
+  clikae` or the curl installer, auto-detected; just *shown* if it can't tell, never
+  a guess-run), **skip**, or **skip until next version**. Quiet and opt-out: the
+  check is throttled to once a day, cached, offline-safe, and fully disabled by
+  `CLIKAE_NO_UPDATE_CHECK=1`. Localised (en-US / ja-JP / zh-TW).
+- **Carry a session onto another tank even when it still has fuel.** The Continue
+  submenu gains a third choice — *carry this session to another tank* — so you can
+  deliberately move a live conversation to another account, not only when the tank
+  runs dry. (Shown for engines that can resume a carried session, when there's
+  another tank to carry to.)
+- **A capture-time tag on snapshot reset times.** codex (and agy) report a reset
+  time clikae can only catch headless — codex in **UTC**, for whichever limit window
+  it hit; agy as a relative "Resets in 3h" frozen at its last run. The board now
+  appends "· seen HH:MM" (the local time we observed it), so a stale or off-timezone
+  reset reads honestly as a snapshot rather than a live countdown. claude is exempt
+  — its dry is re-read live each render and is already absolute + timezoned.
+
+### Changed
+
+- **`clikae burn --timeout` discloses its dependency.** It needs `timeout` /
+  `gtimeout` (GNU coreutils); stock macOS has neither, so without it the run is
+  **not** bounded — the flag help now says exactly that, and the warning is clearer.
+  No silent promise of a bound the platform can't keep.
+
+### Fixed
+
+- Pinned a regression test for `clikae to`'s refusal when a shell is attached to
+  more than one engine (it must ask, never guess which session to carry).
+
 ## [0.5.8] — 2026-06-05
 
 ### Added
@@ -39,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so, instead of hopping onto a tank that has no fuel either.
 - The dry-tank board submenu's "open fresh" wording is clearer: it opens the
   **same** tank fresh — it never switched tanks (the old "換到這個油箱" read like a
-  tank-picker).
+  tank-picker). New dry-tank carry strings localised (en-US / ja-JP / zh-TW).
 
 ## [0.5.7] — 2026-06-04
 
