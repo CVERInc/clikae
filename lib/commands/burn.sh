@@ -16,7 +16,8 @@
 _burn_help() {
   cat <<'EOF'
 Usage: clikae burn <engine> <tank> --artifact <path> [--to <target>]
-                   [--timeout <secs>] [--no-reroute] -- <engine command...>
+                   [--timeout <secs>] [--no-reroute] [--allow-active]
+                   -- <engine command...>
 
 Run a headless engine command on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -33,6 +34,10 @@ tank in your reserve.
                       NOT bounded and a warning is printed (install: `brew install
                       coreutils` for `gtimeout`).
   --no-reroute        run once; on a dry tank, stop instead of falling through.
+  --allow-active      let auto-reroute use a tank an interactive session is on.
+                      By default the reserve SKIPS such tanks (rerouting a headless
+                      job onto the tank you're mid-conversation on would silently
+                      burn that quota) and tanks sharing an already-dry account.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
 no artifact but no limit -> a real task failure (NOT rerouted — it'd fail the same
@@ -49,12 +54,35 @@ checked so a dropped one just re-fires elsewhere.
 EOF
 }
 
-# This engine's tanks not in <tried>, in listing order — the same-engine reserve.
+# _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
+# The next same-engine tank to reroute a dry burn onto, in listing order — but the
+# reserve is no longer naive (the 2026-06-04 "燒爆" dogfood):
+#   • P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
+#     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
+#     using right now silently burns the quota you're mid-conversation on. Pass
+#     allow_active=1 to override.
+#   • P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
+#     joined): same login = same quota = already dry, so hopping there is wasted.
+# Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
+# writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
-  local cli="$1" tried="$2" t
+  local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
+    tdir="$(profile_dir "$cli" "$t")"
+    if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
+       && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then
+      log_warn "skipping $cli/$t — an interactive session is using it (burn would spend that quota; --allow-active to override)."
+      continue
+    fi
+    if [ -n "$dried_accts" ]; then
+      tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
+      if [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
+        log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
+        continue
+      fi
+    fi
     printf '%s\n' "$t"; return 0
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
@@ -72,7 +100,7 @@ _burn_timeout_bin() {
 }
 
 cmd_burn() {
-  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1
+  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0
   local -a cmd=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -81,6 +109,7 @@ cmd_burn() {
       --to)         shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
       --no-reroute) reroute=0; shift ;;
+      --allow-active) allow_active=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
       *)            if [ -z "$cli" ]; then cli="$1"
@@ -97,13 +126,14 @@ cmd_burn() {
   validate_name cli "$cli"
   validate_name profile "$tank"
   case "$cli" in
-    agy|antigravity) log_fail "agy is global/single-account — it can't be burned per-tank headlessly. Use codex/claude tanks." ;;
+    agy|antigravity) log_fail "agy is already global/single-account — there's no per-tank headless burn to do. Just use it directly (clikae agy <tank>), or burn a codex/claude tank." ;;
   esac
   load_adapter "$cli"
   local binary; binary="$(adapter_meta_cli_binary)"
   command -v "$binary" >/dev/null 2>&1 || log_fail "'$binary' is not on PATH."
+  local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
 
-  local cur="$tank" tried="" reset out rc
+  local cur="$tank" tried="" dried_accts="" reset out rc
   while :; do
     validate_name profile "$cur"
     local dir; dir="$(ensure_profile --require "$cli" "$cur")"
@@ -134,6 +164,9 @@ KV
       # NOT already scannable from disk (claude=transcript, agy=log self-clear);
       # writing a store marker for those would mask their real recovery.
       limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$reset"
+      # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
+      local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
+      [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
     elif [ -e "$artifact" ]; then
       dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       log_ok "Done on $cli/$cur — artifact present: $artifact"
@@ -149,11 +182,11 @@ KV
     tried="$tried $cli/$cur"
     local nxt=""
     if [ -n "$to" ]; then
-      nxt="$to"; to=""                       # explicit hop, consumed once
+      nxt="$to"; to=""                       # explicit hop, consumed once (user's call)
     else
-      nxt="$(_burn_next_same_engine "$cli" "$tried")"
+      nxt="$(_burn_next_same_engine "$cli" "$tried" "$dried_accts" "$envvar" "$allow_active")"
     fi
-    [ -n "$nxt" ] || log_fail "All reachable tanks are dry — nothing left after$tried. Add a tank or wait for a reset."
+    [ -n "$nxt" ] || log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
 
     # Resolve the next hop. A bare name = a tank of the same engine; engine/tank =
     # possibly cross-engine (the same command then runs under that engine — warned).
@@ -165,6 +198,7 @@ KV
     if [ "$nx_cli" != "$cli" ]; then
       log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
+      envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
       command -v "$binary" >/dev/null 2>&1 || log_fail "Reroute engine '$binary' is not on PATH."
     fi
     cur="$nx_tank"

@@ -125,3 +125,52 @@ STUB
   [ -z "$out" ]                                                   # no bin selected
   grep -q "without a time bound" "$BATS_TEST_TMPDIR/err" || grep -qi "WITHOUT a time bound" "$BATS_TEST_TMPDIR/err"
 }
+
+# --- _burn_next_same_engine: in-use + same-account guards (2026-06-04 燒爆 dogfood) ---
+
+_src_burn() {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/proc.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+}
+_seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/$1/$2/.claude.json"; }
+
+@test "_burn_next_same_engine: P0 — skips a tank an interactive session is live on" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  live_dir_users() { case "$1" in */claude/a) printf '999\tclaude\n' ;; esac; }   # 'a' is in use
+  local out; out="$(_burn_next_same_engine claude "" "" CLAUDE_CONFIG_DIR 0 2>/dev/null)"  # skip-warn → stderr
+  [ "$out" = "b" ]
+}
+
+@test "_burn_next_same_engine: P0 — --allow-active (=1) uses the in-use tank anyway" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  live_dir_users() { case "$1" in */claude/a) printf '999\tclaude\n' ;; esac; }
+  run _burn_next_same_engine claude "" "" CLAUDE_CONFIG_DIR 1
+  [ "$output" = "a" ]
+}
+
+@test "_burn_next_same_engine: P1 — skips a tank sharing a dried account (same quota)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  _seed_email claude a same@example.com; _seed_email claude b same@example.com
+  live_dir_users() { :; }
+  local out; out="$(_burn_next_same_engine claude "claude/a" "same@example.com" CLAUDE_CONFIG_DIR 0 2>/dev/null)"
+  [ -z "$out" ]                          # b shares a's dried account → nothing left
+}
+
+@test "_burn_next_same_engine: P1 — a DIFFERENT account is still eligible" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  _seed_email claude a one@example.com; _seed_email claude b two@example.com
+  live_dir_users() { :; }
+  run _burn_next_same_engine claude "claude/a" "one@example.com" CLAUDE_CONFIG_DIR 0
+  [ "$output" = "b" ]
+}
