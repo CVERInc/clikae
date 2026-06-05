@@ -28,7 +28,10 @@ tank in your reserve.
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
-  --timeout <secs>    bound the run (uses `timeout`/`gtimeout` if present).
+  --timeout <secs>    bound the run. NEEDS `timeout` or `gtimeout` (GNU coreutils)
+                      on PATH — stock macOS has neither, so WITHOUT it the run is
+                      NOT bounded and a warning is printed (install: `brew install
+                      coreutils` for `gtimeout`).
   --no-reroute        run once; on a dry tank, stop instead of falling through.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
@@ -56,6 +59,16 @@ _burn_next_same_engine() {
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
+}
+
+# _burn_timeout_bin -> echo `timeout` or `gtimeout` if one is on PATH; otherwise echo
+# NOTHING and warn that the run will be UNBOUNDED. Factored out so the "no tool →
+# honest warning, still runs" contract is unit-testable (stock macOS ships neither).
+_burn_timeout_bin() {
+  if command -v timeout  >/dev/null 2>&1; then printf 'timeout';  return 0; fi
+  if command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout'; return 0; fi
+  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) on PATH — running WITHOUT a time bound."
+  return 0
 }
 
 cmd_burn() {
@@ -101,9 +114,8 @@ cmd_burn() {
     # combined output. Optional time bound if a timeout tool is available.
     local -a runner=()
     if [ -n "$timeout_s" ]; then
-      if   command -v timeout  >/dev/null 2>&1; then runner=(timeout  "$timeout_s")
-      elif command -v gtimeout >/dev/null 2>&1; then runner=(gtimeout "$timeout_s")
-      else log_warn "No timeout/gtimeout on PATH — running without a time bound."; fi
+      local _tbin; _tbin="$(_burn_timeout_bin)"
+      [ -n "$_tbin" ] && runner=("$_tbin" "$timeout_s")
     fi
     rc=0
     out="$(

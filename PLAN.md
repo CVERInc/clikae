@@ -1,5 +1,13 @@
 # PLAN — clikae outstanding work (consolidated 2026-06-03)
 
+> **STATUS 2026-06-05 — SHIPPED.** Phases 0–4c below all landed and shipped in the
+> v0.5.x line (merged to `main`, tagged through **v0.5.9**). The "no version bump /
+> no merge" notes below were true on the working branch at the time; they no longer
+> describe HEAD. The live punch-list is now `docs/HANDOFF-world-class-gaps.md`
+> (P2 = state schema versioning; Phase 4c's task↔tank scheduler is still
+> design-first/deferred). Kept for the per-phase evidence and rationale.
+
+
 One plan covering every open TODO: the bugs found this session, the dogfood
 frictions recorded in `HANDOFF.md` (§11, §12, and the 2026-06-03 burn writeups),
 and the still-open roadmap items. Read `HANDOFF.md` §1 (non-negotiables) and

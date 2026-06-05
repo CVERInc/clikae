@@ -221,10 +221,17 @@ EOF
 # key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
 # profile=$tname). Anything not scannable is simply never marked dry (no guessing).
 _home_dry_set() {
-  local cli profile path reset
+  local cli profile path reset ep
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
     if reset="$(limit_tank_dry "$cli" "$profile")"; then
+      # A persisted (dry_store) marker means the reset phrase is a SNAPSHOT of what
+      # the engine said when we last caught it headless — annotate WHEN we observed
+      # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
+      # has no store marker (its dry is a live transcript scan), so it's never tagged.
+      if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
+        reset="$reset$(dry_seen_suffix "$ep")"
+      fi
       printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
     fi
   done <<EOF
@@ -249,6 +256,11 @@ EOF
       command -v "$tbin" >/dev/null 2>&1 || exit 0
       logf="$(target_limit_log_path)"
       if tre="$(limit_log_dry "$logf")"; then
+        # Same snapshot-honesty as codex: agy's "Resets in 3h" is a relative phrase
+        # frozen at its last run, so tag it with the log's mtime (when we observed it).
+        local lmt
+        lmt="$(stat -f '%m' "$logf" 2>/dev/null || stat -c '%Y' "$logf" 2>/dev/null || true)"
+        [ -n "$tre" ] && tre="$tre$(dry_seen_suffix "$lmt")"
         printf '%s\037%s\037%s\n' "$tbin" "$tname" "$tre"
       fi
     )
@@ -760,16 +772,49 @@ EOF
     _home_resume_dry_action "$cli" "$profile" "$note" "$row"
     return $?
   fi
-  local opts choice
+  # Three choices when the tank still has fuel: resume here · open here fresh · carry
+  # THIS session onto another tank (a deliberate account switch that keeps the
+  # conversation — not just a limit escape). The carry option only shows for engines
+  # that can actually resume a carried session (adapter_relay) and when there IS
+  # another tank of this engine to carry to.
+  local opts choice has_other=""
   opts="$(printf '%s\n%s' "$T_RESUME_OPT_RESUME" "$T_RESUME_OPT_SWITCH")"
-  choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
-  if [ "$choice" = "$T_RESUME_OPT_SWITCH" ]; then
-    # 同油箱、開新局: bare switch, no --resume.
-    if [ "$cli" = "antigravity" ]; then exec "$CLIKAE_BIN" agy "$profile"
-    else exec "$CLIKAE_BIN" "$cli" "$profile"; fi
-  else
-    _home_launch "$row"   # 接回: the resume path (kind=resume → --resume <sid>)
+  if _home_engine_can_carry "$cli"; then
+    has_other="$(list_all_profiles | awk -F'\t' -v c="$cli" -v f="$profile" '$1==c && $2!=f{print;exit}')"
+    [ -n "$has_other" ] && opts="$(printf '%s\n%s' "$opts" "$T_RESUME_OPT_CARRY")"
   fi
+  choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
+  case "$choice" in
+    "$T_RESUME_OPT_SWITCH")
+      # 同油箱、開新局: bare switch, no --resume.
+      if [ "$cli" = "antigravity" ]; then exec "$CLIKAE_BIN" agy "$profile"
+      else exec "$CLIKAE_BIN" "$cli" "$profile"; fi ;;
+    "$T_RESUME_OPT_CARRY")
+      _home_carry_action "$cli" "$profile" "$note" || _home_launch "$row" ;;
+    *)
+      _home_launch "$row" ;;   # 接回: the resume path (kind=resume → --resume <sid>)
+  esac
+}
+
+# Does <engine>'s adapter define adapter_relay (can it carry a live session onto
+# another tank)? File is ground truth — load_adapter installs a default stub, so a
+# runtime declare -F would always say yes. Mirrors _home_newtank_choices' check.
+_home_engine_can_carry() {
+  grep -qE '^[[:space:]]*adapter_relay[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$1.sh" 2>/dev/null
+}
+
+# "Carry this session onto another tank" (the non-dry third choice): pick a target
+# from this engine's OTHER tanks, then relay the session there (same-engine → a real
+# resume on that tank's quota). Returns 1 (caller falls back to plain resume) if
+# there's nothing to pick or the user cancels.
+_home_carry_action() {
+  local cli="$1" from="$2" sid="$3" cands target
+  cands="$(list_all_profiles | awk -F'\t' -v c="$cli" -v f="$from" '$1==c && $2!=f{print $2}')"
+  [ -n "$cands" ] || return 1
+  target="$(_home_choose "$(printf "$T_RESUME_CARRY_PICK" "$cli/$from")" "$cands" "")" || return 1
+  [ -n "$target" ] || return 1
+  history_log "board: carry $cli/$from → $cli/$target"
+  exec "$CLIKAE_BIN" relay "$cli" "$from" "$target" ${sid:+--session "$sid"}
 }
 
 # Dry-tank submenu (see _home_resume_action). <sid> is the session to carry; <row>
@@ -1214,6 +1259,44 @@ _home_pick() {
   _home_render_static "$items" "$dry"
 }
 
+# Shown once, BEFORE the board, when a newer clikae is out (the codex-style startup
+# notice — see lib/core/update_check.sh). Interactive/TTY-only; the caller already
+# gated that. Returns 0 to continue into the board, or 10 when an upgrade just ran
+# (home should stop so the user relaunches on the new binary).
+_home_update_prompt() {
+  update_check_refresh
+  local latest; latest="$(update_check_pending)" || return 0
+  local cmd; cmd="$(update_upgrade_command)"
+  # The ✨ banner doubles as the menu title (_home_choose prints the title above the
+  # options, codex-style). Release-notes link on its own line.
+  local title opt1 opts choice
+  title="$(printf '%b✨ %s%b  clikae %s → %s\n%b%s %s%b' \
+    "$__C_YELLOW" "$T_UPDATE_AVAIL" "$__C_RESET" "$CLIKAE_VERSION" "$latest" \
+    "$__C_DIM" "$T_UPDATE_NOTES" "https://github.com/CVERInc/clikae/releases/latest" "$__C_RESET")"
+  if [ -n "$cmd" ]; then opt1="$(printf "$T_UPDATE_NOW" "$cmd")"; else opt1="$T_UPDATE_SHOW"; fi
+  opts="$(printf '1. %s\n2. %s\n3. %s' "$opt1" "$T_UPDATE_SKIP" "$T_UPDATE_SKIP_VER")"
+  choice="$(_home_choose "$title" "$opts" "1. $opt1")" || return 0   # cancel/q = skip this time
+  case "$choice" in
+    "1. $opt1")
+      if [ -n "$cmd" ]; then
+        printf '\n  %b$ %s%b\n\n' "$__C_DIM" "$cmd" "$__C_RESET"
+        if eval "$cmd"; then
+          printf '\n  %b✓ %s%b\n\n' "$__C_GREEN" "$T_UPDATE_DONE" "$__C_RESET"
+        else
+          log_warn "$T_UPDATE_FAILED"
+        fi
+        return 10   # stop home; relaunch picks up the new binary
+      fi
+      # Unknown install method → only show the command + release page, never guess-run.
+      printf '\n  %s\n    %s\n\n' "$T_UPDATE_MANUAL" "https://github.com/CVERInc/clikae/releases/latest"
+      return 10
+      ;;
+    "3. $T_UPDATE_SKIP_VER") update_check_skip "$latest" ;;   # quiet until something newer ships
+    *) : ;;                                                   # 2. Skip (or cancel) → just continue
+  esac
+  return 0
+}
+
 cmd_home() {
   case "${1:-}" in
     -h|--help)
@@ -1259,6 +1342,10 @@ EOF
   local items dry; items="$(_home_items)"; dry="$(_home_dry_set)"
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
+    # A newer clikae out? Offer it first (codex-style), before the board. If an
+    # upgrade ran (return 10), stop so the user relaunches on the new binary.
+    local _u=0; _home_update_prompt || _u=$?
+    [ "$_u" -eq 10 ] && return 0
     _home_pick "$items" "$dry"
   else
     _home_render_static "$items" "$dry"
