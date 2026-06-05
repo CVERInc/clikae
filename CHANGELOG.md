@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] — 2026-06-05
+
+### Fixed
+
+- **`burn` no longer reroutes a headless job onto the tank you're actively using.**
+  The original "燒爆" footgun: `clikae burn claude <X>` where the reserve walks onto
+  `claude/C` — the tank an interactive session is live on — silently spends *that*
+  conversation's quota. (A 2026-06-05 log had declared this fixed after testing
+  **codex only**; the claude path was never covered and was confirmed still-live.)
+  Now `burn`'s auto-reroute **skips a tank an interactive session holds** (detected
+  via `live_dir_users`); pass `--allow-active` to override.
+- **`burn` reserve is account-aware.** It skips a candidate tank that shares an
+  account with one it already dried — same login = same quota = already dry, so the
+  hop was wasted (e.g. `L`→`MFC` on one login).
+
+### Changed
+
+- The `agy` burn-refusal message reads truer ("agy is *already* global/single-account
+  — there's no per-tank headless burn to do; just use it directly"), and `clikae
+  tanks` now footnotes that agy is interactive-switch-only / not burnable.
+
 ## [0.5.9] — 2026-06-05
 
 ### Added
