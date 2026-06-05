@@ -212,8 +212,10 @@ EOF
 #   cli ␟ profile ␟ reset-phrase
 # Backed by lib/core/limit.sh, which scans transcripts/logs — so compute this ONCE
 # per board render, never per keypress. Two sources:
-#   • claude tanks    — limit_profile_dry scans transcripts (codex can't: its limit
-#                       is exec-stdout-only, never persisted — see limit.sh).
+#   • every tank   — limit_tank_dry: claude via transcript, codex via the persisted
+#                    dry_store (burn writes it; its limit is exec-stdout-only), and
+#                    ACCOUNT CONTAGION so a sibling on the same dry account (e.g.
+#                    claude/MFC the moment claude/L hits its limit) reads dry too.
 #   • log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
 # Rows key on the SAME (cli, profile) pair the renderer uses, so for a target the
 # key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
@@ -222,8 +224,7 @@ _home_dry_set() {
   local cli profile path reset
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
-    [ "$cli" = "claude" ] || continue
-    if reset="$(limit_profile_dry "$cli" "$path")"; then
+    if reset="$(limit_tank_dry "$cli" "$profile")"; then
       printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
     fi
   done <<EOF
@@ -741,24 +742,66 @@ EOF
   "$CLIKAE_BIN" rename "$cli" "$profile" "$newname" || true
 }
 
-# Enter on a 續上次 / Continue row → a tiny submenu (v0.5.3 item 5): resume the
-# exact session, or just switch to that tank with a fresh session. Both choices
-# exec; cancel (q) returns 1 so the caller can re-enter the picker.
+# Enter on a 續上次 / Continue row → a tiny submenu. The options DEPEND on whether
+# the tank still has fuel ($2 = the dry set from _home_dry_set):
+#   • has fuel → resume the exact session, or open that tank fresh (the original
+#     two choices).
+#   • DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
+#     instead lead with "carry onward" — relay this session to the ring's next
+#     fuelled tank (next_tank) — and keep "force-resume anyway" as an escape hatch.
+# Both choices exec; cancel (q) returns 1 so the caller can re-enter the picker.
 _home_resume_action() {
-  local row="$1" kind cli profile rest
-  IFS=$'\037' read -r kind cli profile rest <<EOF
+  local row="$1" dry="$2" kind cli profile label alias active note
+  IFS=$'\037' read -r kind cli profile label alias active note <<EOF
 $row
 EOF
-  : "$rest"
+  : "$label" "$alias" "$active"
+  if [ -n "$dry" ] && _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then
+    _home_resume_dry_action "$cli" "$profile" "$note" "$row"
+    return $?
+  fi
   local opts choice
   opts="$(printf '%s\n%s' "$T_RESUME_OPT_RESUME" "$T_RESUME_OPT_SWITCH")"
   choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
   if [ "$choice" = "$T_RESUME_OPT_SWITCH" ]; then
-    # 換油箱開新局: bare switch, no --resume.
+    # 同油箱、開新局: bare switch, no --resume.
     if [ "$cli" = "antigravity" ]; then exec "$CLIKAE_BIN" agy "$profile"
     else exec "$CLIKAE_BIN" "$cli" "$profile"; fi
   else
     _home_launch "$row"   # 接回: the resume path (kind=resume → --resume <sid>)
+  fi
+}
+
+# Dry-tank submenu (see _home_resume_action). <sid> is the session to carry; <row>
+# is kept for the force-resume fall-through. The carry target comes from next_tank
+# (same-engine first → a real resume; cross-engine → a cold brief), so it never
+# offers a tank that's also dry. When the WHOLE ring is dry, next_tank returns
+# nothing and only the force-resume escape hatch is shown.
+_home_resume_dry_action() {
+  local cli="$1" profile="$2" sid="$3" row="$4"
+  local nxt ne nt label_relay="" label_force opts choice
+  nxt="$(next_tank "$cli" "$profile")"
+  if [ -n "$nxt" ]; then
+    IFS=$'\t' read -r ne nt <<EOF
+$nxt
+EOF
+    label_relay="$(printf "$T_RESUME_OPT_RELAY" "$ne/$nt")"
+  fi
+  label_force="$(printf "$T_RESUME_OPT_FORCE" "$cli/$profile")"
+  if [ -n "$label_relay" ]; then opts="$(printf '%s\n%s' "$label_relay" "$label_force")"
+  else opts="$label_force"; fi
+  choice="$(_home_choose "$(printf "$T_RESUME_DRY_TITLE" "$cli/$profile")" "$opts" "${opts%%$'\n'*}")" || return 1
+  if [ -n "$label_relay" ] && [ "$choice" = "$label_relay" ]; then
+    history_log "board: dry-relay $cli/$profile → $ne/$nt"
+    if [ "$ne" = "$cli" ]; then
+      # Same engine → real resume of THIS session onto the fuelled tank.
+      exec "$CLIKAE_BIN" relay "$cli" "$profile" "$nt" ${sid:+--session "$sid"}
+    else
+      # Cross engine → that engine can't resume a foreign session; hand it a brief.
+      exec "$CLIKAE_BIN" handoff "$cli" "$profile" --to "$ne/$nt"
+    fi
+  else
+    _home_launch "$row"   # 硬接回: resume the dry tank anyway (will hit the limit)
   fi
 }
 
@@ -1117,7 +1160,7 @@ _home_pick() {
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
           _home_tty_leave; trap - EXIT INT TERM
-          _home_resume_action "$sel_row" || {
+          _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             printf '\033[?1049h\033[?25l'; continue
           }

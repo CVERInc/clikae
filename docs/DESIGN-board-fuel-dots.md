@@ -38,10 +38,10 @@ this tank?_
 
 | dot | state | source |
 |---|---|---|
-| 🔴 red `●` | **dry** — over limit, can't burn now | `limit_profile_dry` / `limit_log_dry`, verbatim reset string |
+| 🔴 red `●` | **dry** — over limit, can't burn now | `limit_tank_dry`: transcript (`limit_profile_dry`), log (`limit_log_dry`), or a **persisted dry marker** (`dry_store`, for exec-only limits like codex) — plus a sibling on the same dry account; verbatim reset string |
 | 🟡 yellow `●` | **weekly-% caution** (BETA) | the vendor's own "used N% of your weekly limit", captured **verbatim + stamped** by watch/auto — never computed |
 | 🟢 green `●` | **ready** — a detectable engine with no bad news | `limit_engine_detectable` true, not dry/warned |
-| ○ (no colour) | **no reading** — engine we can't read (codex), or no detector | `limit_engine_detectable` false |
+| ○ (no colour) | **no reading** — no fuel signal on disk right now (e.g. codex when no limit was caught) | `limit_engine_detectable` false **and** not dry |
 
 One sentence: **the dot is the engine's own last word about this tank's fuel.**
 Red = "resets in 3h", yellow = "you're at 85% this week", green = "nothing bad to
@@ -55,8 +55,13 @@ report", ○ = "it has never told us anything" (honest blank — see codex).
   burn-order position (momentary, navigational) — plus the `← here` text label and
   the default-launch-target logic, which stay tied to the `active` flag. We only
   took the *colour* off `active`; `active` still drives launch + the text label.
-- **○ is honest.** codex's limit is provably un-detectable from disk, so a codex
-  tank shows ○ ("no reading"), never a guessed green. Same for never-probed engines.
+- **○ is honest.** codex's limit is never written to a transcript, so clikae can't
+  *passively* read it — a codex tank shows ○ ("no reading"), never a guessed green.
+  But when a live catcher (`clikae burn`) actually sees the limit in codex's exec
+  output, it persists that to a small dry-until store, so the tank then shows **red**
+  with the vendor's verbatim reset time. So ○ means "no dry signal *right now*",
+  not "unknowable forever"; green stays off because there's still no positive
+  fuel reading to justify it.
 
 ## The yellow light is BETA on purpose
 

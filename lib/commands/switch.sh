@@ -105,6 +105,10 @@ _switch_supervise() {
   trap - INT
 
   # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
+  # NB: claude's dry state lives in its transcript (scannable + self-clearing on
+  # the next successful turn), so we deliberately do NOT also write dry_store here —
+  # a 6h store marker would mask a real recovery. dry_store is for engines whose
+  # limit is NOT in a transcript (codex, via burn).
   limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || return 0
 
   local _next ne nt

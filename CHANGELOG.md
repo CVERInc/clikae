@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] — 2026-06-05
+
+### Added
+
+- **Carry on from a dry tank, right from the board.** Pressing Enter on a
+  Continue row whose tank is out of fuel no longer dead-ends on "resume" / "open
+  fresh" — both of which only put you back on the exhausted quota. When the tank
+  is dry, the submenu now leads with **carry this session onto the next fuelled
+  tank**: a real `relay` (same engine resumes the conversation) or a written
+  brief (cross engine), with "resume anyway" kept as an escape hatch.
+- **codex tanks can light a red dot now.** codex's usage limit is exec-stdout-
+  only — it never lands in a transcript, so the passive board had nothing to
+  read and codex always showed `○` (no reading). `clikae burn` already detected
+  it (and the vendor's verbatim reset phrase); it now **persists** that to a
+  small dry-until store, so a later `clikae` shows codex red with its reset time.
+  Self-clearing: a successful run clears it, and a stale marker ages out (6h)
+  rather than pinning a tank red forever.
+
+### Changed
+
+- **The carry-onward selector is now a ring — account- and fuel-aware.** When a
+  tank runs dry, `clikae to`, the BETA supervised auto-carry, and the board all
+  pick the next tank by: **circling** the whole burn order (wrapping past the end
+  — a tank *earlier* in your order is still a reserve, where before the list fell
+  down once and stranded everything above you); preferring a fuelled **same-engine**
+  tank (a real resume) over a cross-engine cold brief; and skipping any tank whose
+  **account** is already exhausted. A usage limit hits the whole account, so a
+  sibling tank sharing a dry login (same email) now reads dry too — no more
+  pointless hop onto the same empty quota. When the *whole* ring is dry it says
+  so, instead of hopping onto a tank that has no fuel either.
+- The dry-tank board submenu's "open fresh" wording is clearer: it opens the
+  **same** tank fresh — it never switched tanks (the old "換到這個油箱" read like a
+  tank-picker).
+
 ## [0.5.7] — 2026-06-04
 
 ### Added
