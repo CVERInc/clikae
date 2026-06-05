@@ -84,12 +84,13 @@ EOF
     if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
       account="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
     fi
-    # agy has no adapter (account stays empty). It's GLOBAL — one tank live at a
-    # time via the ~/.gemini symlink — so surface the one fact we know for certain:
-    # which tank is active. agy doesn't persist the Google account email to disk,
-    # so we don't fake an email here (the login lives in the Keychain).
+    # agy has no adapter (account stays empty). It DOES log its signed-in Google
+    # account under <tank>/antigravity-cli/log — read it (same source the home board
+    # uses, so list and board agree). The ACCOUNT column is for the account, not the
+    # active state (that's `clikae status` / the board cursor), so an un-logged-in
+    # tank shows "-", never a faked "(active)".
     if [ "$cli" = "antigravity" ] && [ -z "$account" ]; then
-      [ "$(readlink "$HOME/.gemini" 2>/dev/null)" = "${path%/}" ] && account="(active)"
+      account="$(agy_email "${path%/}" 2>/dev/null || true)"
     fi
     # Display the canonical engine name: the on-disk dir is 'antigravity', the
     # engine you type is 'agy' (docs/grammar.md §6).

@@ -380,11 +380,7 @@ _home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' 
 # or empty. agy has no clean account field, but its CLI logs the signed-in account
 # ("email=<x>") under <tank>/antigravity-cli/log — the same log family clikae
 # already watches for limits. An un-logged-in tank has no log → empty (shows "-").
-_home_agy_email() {
-  local dir="$1"
-  grep -rhoE 'email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
-    "$dir/antigravity-cli/log" 2>/dev/null | tail -n 1 | sed 's/^email=//'
-}
+_home_agy_email() { agy_email "$1"; }   # shared with `clikae list`, see lib/core/scan.sh
 
 # _home_lpad <str> <width> -> <str> right-padded with spaces to <width> DISPLAY
 # columns (so a CJK label lines up the same as an ASCII one). The drop-in for a
@@ -1311,7 +1307,7 @@ legend):
   [ / ]   move the tank up/down (the board IS your burn order)
   r   relay this shell's session into it     x   open it incognito (--ephemeral)
   n   new tank                a   rename the tank (carries alias + login)
-  d   delete a tank (asks)    /   filter     A   autonomy (BETA)   h   language
+  d   delete a tank (asks)    /   filter     A   autonomy (BETA)   l   language
   q/Esc  quit
 
 On a Continue row, Enter offers a small menu: resume that exact session, or just
@@ -1320,8 +1316,8 @@ ORDER (not grouped by engine; engine shown as an inline tag) — arrange it with
 [ / ]. It also has an "Also available" section of relay-capable CLIs/targets you
 can open without a tank (codex, agy).
 
-Interface language (en-US / ja-JP / zh-TW) follows `clikae lang`; the `h` key
-flips it live. When output isn't a terminal (a pipe, a script, the GUI), it
+Interface language (en-US / ja-JP / zh-TW) follows `clikae lang`; the `l` key
+opens a language picker. When output isn't a terminal (a pipe, a script, the GUI), it
 prints the same board as plain text. With no tanks yet it welcomes you and
 points at the first step.
 

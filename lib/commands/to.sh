@@ -77,6 +77,14 @@ Options (same-engine carries only — forwarded to relay):
 EOF
 }
 
+# _to_can_carry <engine> -> 0 if the engine's adapter defines adapter_relay (a real
+# session carry-over), 1 if not (relay will start fresh). The adapter FILE is ground
+# truth — load_adapter installs a default stub, so a runtime declare -F always says
+# yes. Mirrors _home_engine_can_carry; lets `to` describe what it'll actually do.
+_to_can_carry() {
+  grep -qE '^[[:space:]]*adapter_relay[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$1.sh" 2>/dev/null
+}
+
 cmd_to() {
   local -a positionals=() passthru=() relay_flags=()
   while [ $# -gt 0 ]; do
@@ -147,9 +155,15 @@ EOF2
   local -a cmd; local is_relay=0
   if [ -f "$CLIKAE_LIB/adapters/$tnorm.sh" ] || [ -f "$CLIKAE_LIB/targets/$tnorm.sh" ]; then
     if [ "$tnorm" = "$src_engine" ]; then
-      # Same engine named explicitly -> relay to another of its tanks (resume).
+      # Same engine named explicitly -> relay to another of its tanks. Only a real
+      # resume if the engine can carry a session (adapter_relay) — codex can't, so
+      # relay starts fresh there; say so rather than promise a resume we won't give.
       is_relay=1
-      log_info "to: same engine ($src_engine) — carrying your live session (resume)."
+      if _to_can_carry "$src_engine"; then
+        log_info "to: same engine ($src_engine) — carrying your live session (resume)."
+      else
+        log_info "to: same engine ($src_engine), but $src_engine has no session carry-over — this starts a FRESH session on the target (not a resume)."
+      fi
       if [ -n "$target_tank" ]; then
         cmd=("$CLIKAE_BIN" relay "$src_engine" "$src_tank" "$target_tank")
       else
@@ -165,7 +179,11 @@ EOF2
     # Not an engine -> a tank of the current engine -> relay (resume).
     [ -z "$target_tank" ] || log_fail "'$target' isn't an engine, so a second name ('$target_tank') doesn't apply. Did you mean:  clikae to <engine> $target ?"
     is_relay=1
-    log_info "to: carrying your live session onto $src_engine/$target (resume)."
+    if _to_can_carry "$src_engine"; then
+      log_info "to: carrying your live session onto $src_engine/$target (resume)."
+    else
+      log_info "to: switching to $src_engine/$target — $src_engine has no session carry-over, so this is a FRESH start (not a resume)."
+    fi
     cmd=("$CLIKAE_BIN" relay "$src_engine" "$src_tank" "$target")
   fi
 

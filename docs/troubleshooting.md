@@ -162,7 +162,7 @@ logic: [Claude on macOS](claude-on-macos.md).
 ## I want to undo a change to my shell rc
 
 Every rc edit is backed up first to `<rc>.clikae.bak.<timestamp>` next to the rc
-file (e.g. `~/.zshrc.clikae.bak.1730000000`). Restore the most recent backup:
+file (e.g. `~/.zshrc.clikae.bak.20260605-143000`). Restore the most recent backup:
 
 ```bash
 cp ~/.zshrc.clikae.bak.<timestamp> ~/.zshrc

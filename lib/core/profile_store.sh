@@ -136,6 +136,10 @@ EOF
   for pass in same any; do
     for entry in "${ring[@]}"; do
       e="${entry%%/*}"; t="${entry#*/}"
+      # agy/antigravity is global single-account — it can't be an auto carry-onward
+      # target (handoff treats it as a no-/tank single-account target, so a ring
+      # entry "antigravity/<tank>" would dead-end). Reach it explicitly instead.
+      [ "$e" = "antigravity" ] && continue
       [ "$pass" = "same" ] && [ "$e" != "$engine" ] && continue
       if declare -F limit_tank_dry >/dev/null 2>&1 \
          && limit_tank_dry "$e" "$t" >/dev/null 2>&1; then
