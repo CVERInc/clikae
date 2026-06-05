@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.7-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.8-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -107,6 +107,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **v0.5.5** — **Antigravity / agy becomes real multi-account** (each tank carries its own Google login via the macOS Keychain); **codex sessions join the home board's Continue list** (true cross-engine resume); **`clikae burn`** runs a headless task on a tank and re-fires it on the next when one runs dry (verified by artifact, not exit code); and a **cross-shell in-use guard** so `rename`/`migrate`/`remove` won't move a tank a session in another terminal is still using.
 - **v0.5.6** — hardened that in-use guard to be truly best-effort: a restricted `ps` (CI runners, locked-down hosts) no longer aborts `rename`/`migrate`/`remove`.
 - **v0.5.7** — the board shows only **burnable fuel tanks** (tool-CLI tanks live in `clikae tanks`); **`clikae app --board`** makes a launcher for the menu, not one tank; **Ghostty launchers** use a trusted config file (no "Allow Ghostty to execute…" dialog) and are re-signed for Apple Silicon; and switching to a tank whose CLI isn't installed gives a **helpful install hint** instead of `exec: … not found`.
+- **v0.5.8** — **a dry tank carries you onward instead of dead-ending.** Pressing Enter on a Continue row whose tank is out of fuel now offers to **relay the session onto the next *fuelled* tank** — and the carry-onward selector became a **ring**: it circles the whole burn order (a tank earlier in your order is still a reserve), prefers a fuelled **same-engine** tank (a real resume), and skips any tank whose **account** is already exhausted (a sibling on the same login shares the dead quota). Plus **codex tanks can now show a red dot** — its exec-only limit is persisted so the board can read it later. See [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
 ## Contributing

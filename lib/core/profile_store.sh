@@ -94,35 +94,58 @@ order_list() {
   done
 }
 
-# next_tank <engine> <current>  -> the next tank to fall through to when
-# <engine>/<current> runs dry: the entry AFTER it in the BURN ORDER (order_list),
-# crossing engines if that's what your order says — your tanks ARE the reserve, so
-# the list is the order. Skips tanks that are themselves over quota (via
-# limit_profile_dry when available). Echoes "<engine>\t<tank>" (TAB-separated), or
-# nothing when there's nothing after <current>. NB: no wrap — a burn order falls
-# DOWN the list once; it doesn't cycle back up.
+# next_tank <engine> <current>  -> the next tank to carry onward to when
+# <engine>/<current> runs dry. The selector is a RING — circular, and both fuel-
+# and account-aware:
+#   • CIRCULAR — walk the burn order from AFTER <current>, then WRAP past the end
+#     back to the top, stopping when we'd return to <current>. A tank earlier in
+#     the order is still a valid reserve once the one you're on is dry (the old
+#     "fall down once, never cycle" rule silently stranded everything above you).
+#   • SAME-ENGINE FIRST — a real `relay` resumes the LIVE conversation, which only
+#     the same engine can do; a cross-engine hop is a cold written brief. So we
+#     prefer the nearest fuelled SAME-engine tank anywhere in the ring, and only
+#     fall to a fuelled cross-engine tank when every same-engine tank is dry.
+#   • ACCOUNT-AWARE — "dry" is limit_tank_dry, so a sibling sharing a dry account's
+#     exhausted quota is skipped (no pointless hop onto the same empty tank).
+#   • HONEST WHEN ALL DRY — echoes NOTHING if the whole ring is dry; the caller
+#     says so rather than hopping onto a tank that has no fuel either.
+# Echoes "<engine>\t<tank>" (TAB-separated), or empty.
 next_tank() {
   local engine="$1" current="$2"
   local cur="$engine/$current"
-  local seen=0 entry e t path first_after="" first_after_healthy=""
+  # Build the ring: entries AFTER <current>, then entries BEFORE it (wrap-around).
+  local -a ring=()
+  local entry seen=0
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
-    if [ "$seen" -eq 0 ]; then
-      [ "$entry" = "$cur" ] && seen=1
-      continue
-    fi
-    e="${entry%%/*}"; t="${entry#*/}"
-    [ -n "$first_after" ] || first_after="$e"$'\t'"$t"
-    path="$(profile_dir "$e" "$t")"
-    if declare -F limit_profile_dry >/dev/null 2>&1 \
-       && limit_profile_dry "$e" "$path" >/dev/null 2>&1; then
-      continue
-    fi
-    first_after_healthy="$e"$'\t'"$t"; break
+    [ "$entry" = "$cur" ] && { seen=1; continue; }
+    [ "$seen" -eq 1 ] && ring+=("$entry")
   done <<EOF
 $(order_list)
 EOF
-  printf '%s' "${first_after_healthy:-$first_after}"
+  seen=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ "$entry" = "$cur" ] && { seen=1; break; }
+    ring+=("$entry")
+  done <<EOF
+$(order_list)
+EOF
+  # Pass 1: nearest fuelled SAME-engine tank (real resume). Pass 2: any engine.
+  local pass e t
+  for pass in same any; do
+    for entry in "${ring[@]}"; do
+      e="${entry%%/*}"; t="${entry#*/}"
+      [ "$pass" = "same" ] && [ "$e" != "$engine" ] && continue
+      if declare -F limit_tank_dry >/dev/null 2>&1 \
+         && limit_tank_dry "$e" "$t" >/dev/null 2>&1; then
+        continue
+      fi
+      printf '%s\t%s' "$e" "$t"; return 0
+    done
+  done
+  # Whole ring dry → nothing. The caller surfaces "all dry" honestly.
+  return 0
 }
 
 # resolve_tank_name <name>  -> "<engine>\t<tank>" line(s) for every tank whose
