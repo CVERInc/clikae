@@ -207,6 +207,10 @@ ensure_profile() {
   case "$mode" in
     --create)
       mkdir -p "$d"
+      # Stamp the state-schema version alongside the first state we create, so an
+      # existing install is always identifiable for future migrations (read commands
+      # then never need to write it). Guarded — older callers may not have it sourced.
+      declare -F state_version_ensure >/dev/null 2>&1 && state_version_ensure
       ;;
     --require)
       [ -d "$d" ] || log_fail "Profile not found: $cli/$profile  (expected at $d)"
