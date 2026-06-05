@@ -126,3 +126,59 @@ _agy_log() { # write $1 as agy's cli.log under the test HOME
   [[ "$output" == *"not the session transcript"* ]] || false
   [[ "$output" == *"dispatch time"* ]] || false
 }
+
+# --- validate_handoff_target: watch's live path used to crash on an undefined fn ---
+
+@test "watch: reaches target validation without crashing (regression: validate_handoff_target was undefined)" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed a "$work" ""               # a transcript exists → past "nothing to watch", on to target validation
+  cd "$work"
+  CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude a --to nonsense-target
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unknown handoff target"* ]] || false       # reached validate + rejected cleanly
+  [[ "$output" != *"command not found"* ]] || false            # NOT the old crash
+}
+
+_src_handoff() {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/handoff.sh"
+}
+
+@test "validate_handoff_target: an existing adapter tank passes" {
+  _src_handoff
+  clikae init claude b
+  run validate_handoff_target "claude/b"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_handoff_target: a missing adapter tank fails" {
+  _src_handoff
+  clikae init claude b
+  run validate_handoff_target "claude/ghost"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No such tank"* ]] || false
+}
+
+@test "validate_handoff_target: a single-account target with a /tank is rejected" {
+  _src_handoff
+  run validate_handoff_target "antigravity/R"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"single-account"* ]] || false
+}
+
+@test "validate_handoff_target: a single-account target with NO tank is fine" {
+  _src_handoff
+  run validate_handoff_target "antigravity"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_handoff_target: an unknown engine fails" {
+  _src_handoff
+  run validate_handoff_target "nope/x"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unknown handoff target"* ]] || false
+}

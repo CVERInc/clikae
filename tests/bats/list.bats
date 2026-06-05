@@ -73,11 +73,17 @@ load '../helpers'
   fi
 }
 
-@test "tanks marks the active (symlinked) agy tank, doesn't fake an email" {
+@test "tanks shows an agy tank's signed-in email (or -), not a faked '(active)' state" {
   mkdir -p "$HOME/.gemini"
-  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # 'default' is the active/symlinked tank
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  # The ACCOUNT column is for the account, not the active state — a logged-in agy
+  # tank shows its email (scraped from its cli.log, same source as the board); an
+  # un-logged-in one shows "-". It must NOT show "(active)".
+  local d="$CLIKAE_HOME/profiles/antigravity/work/antigravity-cli"
+  mkdir -p "$d"; printf 'email=agytester@example.com\n' > "$d/log"
   run clikae tanks
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
-  [[ "$output" == *"(active)"* ]] || false
+  [[ "$output" == *"agytester@example.com"* ]] || false    # real email, agrees with the board
+  [[ "$output" != *"(active)"* ]] || false                 # no faked active-state in ACCOUNT
 }

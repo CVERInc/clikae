@@ -22,8 +22,8 @@ claude only for now; feedback welcome).
   ask    (default) ask before carrying onward — the consent moment
   safe   auto-carry to the next SAME-engine tank (seamless resume); ask before
          crossing engines (a lossy cold-start brief)
-  full   auto-carry to whatever is next in your burn order, across engines too —
-         the "just keep going" mode
+  full   auto-carry to whatever is next in your burn order — same-engine is a
+         resume, a cross-engine hop is a cold-start brief — the "just keep going" mode
 
 With no argument, prints the current level. Stored in $CLIKAE_HOME/autonomy;
 reversible anytime. Only sessions you launch THROUGH clikae are supervised.
