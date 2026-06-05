@@ -18,15 +18,18 @@ covers what's left to make clikae pass the bar.
 
 ## Already verified — do NOT re-investigate
 
-- **`burn` "燒爆" (reroute onto the interactive session's account) is FIXED and
-  not reproducible on 0.5.8.** Evidence: env export is sandboxed in a `$(...)`
-  subshell (`lib/commands/burn.sh:109-114`); reroute is same-engine only
-  (`lib/commands/burn.sh:50-59`); the codex adapter exports only `CODEX_HOME`,
-  zero claude vars (`lib/adapters/codex.sh:24-27`). A clean-shell control
-  (`env -i`, no `CLAUDE_CONFIG_DIR`) confirmed every hop's `CLAUDE_CONFIG_DIR`
-  stays empty — burn never injects claude vars. All-dry exit is graceful
-  (`All reachable tanks are dry` → exit 1). Confirmed by dogfood with a fake
-  codex shim (zero token spend). Leave it alone.
+- **`burn` "燒爆" — codex-side isolation is solid; the claude-side reroute was FIXED
+  in v0.5.10 (don't re-clear it the old way).** The 2026-06-05 log first declared the
+  whole 燒爆 P0 fixed after testing **codex only** — a false clear. The codex case is
+  genuinely safe (env export sandboxed in a `$(...)` subshell; codex adapter exports
+  only `CODEX_HOME`, zero claude vars). BUT `burn **claude**`'s same-engine reserve
+  includes the tank an interactive session is on, so it could reroute a headless job
+  onto your live conversation's quota (the original 2026-06-04 dogfood P0 + the
+  same-account P1 — both code-confirmed still-live until v0.5.10). **v0.5.10 fix:**
+  `_burn_next_same_engine` skips a tank `live_dir_users` reports as in interactive use
+  (`--allow-active` overrides) and skips same-account dried siblings; tested in
+  `tests/bats/burn.bats`. All-dry exit stays graceful (exit 1). Lesson logged: don't
+  clear a multi-engine bug by testing one engine.
 - Homebrew formula v0.5.8 `sha256` (`cf360a8…`) verified against the real GitHub
   tarball; `v0.5.8` git tag exists. Delivery (dim ⑦) is otherwise green.
 
