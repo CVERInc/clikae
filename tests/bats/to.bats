@@ -123,3 +123,16 @@ _seed_tx() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"burn order"* ]] || false
 }
+
+@test "to: a shell on more than one engine REFUSES (won't guess which to carry) — world-class P1" {
+  clikae init claude a
+  clikae init codex m
+  # Pin this shell to BOTH engines at once (their env-dir vars point at two tanks).
+  export CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a"
+  export CODEX_HOME="$CLIKAE_HOME/profiles/codex/m"
+  run clikae to
+  [ "$status" -ne 0 ]                                   # refused (didn't switch)
+  [[ "$output" == *"more than one engine"* ]] || false  # explained why
+  [[ "$output" == *"claude/a"* ]] || false              # listed both candidates
+  [[ "$output" == *"codex/m"* ]] || false
+}
