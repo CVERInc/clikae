@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.5.11"
+CLIKAE_VERSION="0.5.12"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
@@ -58,6 +58,12 @@ source "$CLIKAE_LIB/core/history.sh"
 source "$CLIKAE_LIB/core/autonomy.sh"
 # shellcheck source=../lib/core/proc.sh
 source "$CLIKAE_LIB/core/proc.sh"
+# shellcheck source=../lib/core/state_version.sh
+source "$CLIKAE_LIB/core/state_version.sh"
+
+# Migrate the on-disk state forward if an older clikae last wrote it (no-op when the
+# state is current or absent; read-only safe — see lib/core/state_version.sh).
+state_version_check
 
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
