@@ -56,21 +56,25 @@ _seed_tx() {
 
 # --- v0.5.3: your tanks ARE the reserve (no pool) — bare `to` falls through -----
 
-@test "next_tank returns the entry AFTER current in the burn order (TAB engine/tank)" {
+@test "next_tank returns the next fuelled tank in the burn order, wrapping around" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   clikae init claude a
   clikae init claude b
   # Default order is list_all_profiles order: claude/a then claude/b.
   [ "$(next_tank claude a)" = "$(printf 'claude\tb')" ]
-  # b is last -> nothing after (no wrap).
-  [ -z "$(next_tank claude b)" ]
+  # b is last -> the ring WRAPS back up to the fuelled a (no longer dead-ends).
+  [ "$(next_tank claude b)" = "$(printf 'claude\ta')" ]
 }
 
 @test "next_tank crosses engines when the order says so" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   clikae init claude a
   clikae init codex main
@@ -81,6 +85,8 @@ _seed_tx() {
 @test "next_tank honours a custom order file" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   clikae init claude a
   clikae init claude b
@@ -89,9 +95,11 @@ _seed_tx() {
   [ "$(next_tank claude b)" = "$(printf 'claude\ta')" ]   # order says a follows b
 }
 
-@test "next_tank is empty when nothing follows in the order" {
+@test "next_tank is empty when the lone tank is the only one (nothing to wrap to)" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   clikae init claude solo
   [ -z "$(next_tank claude solo)" ]

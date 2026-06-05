@@ -116,7 +116,14 @@ KV
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
+      # Persist what we just caught LIVE so the passive board (clikae home) can
+      # light this tank red + show the reset phrase — codex's limit lives only in
+      # this stdout and would otherwise vanish. Only for engines whose dry state is
+      # NOT already scannable from disk (claude=transcript, agy=log self-clear);
+      # writing a store marker for those would mask their real recovery.
+      limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$reset"
     elif [ -e "$artifact" ]; then
+      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       log_ok "Done on $cli/$cur — artifact present: $artifact"
       return 0
     else
