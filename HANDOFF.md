@@ -142,13 +142,17 @@ These mirror how this project was built and must be preserved:
 > roadmap decision on whether relay deserves its own headline in README's roadmap
 > list.
 
-**HEAD state (read this first).** The latest tagged release is **`v0.4.0`**
-(GitHub Release live; both `homebrew/clikae.rb` and the tap's
-`Formula/clikae.rb` track v0.4.0, sha256 `e2d6fdcb…0fa0`, verified via
-`brew fetch`/`style`/`audit`). The tree is clean, nothing is mid-flight, and CI
-is green on every push — **6 jobs**: shellcheck, smoke (ubuntu+macos), bats
-(ubuntu+macos), and pester (windows). CHANGELOG has a fresh empty `[Unreleased]`
-section ready for the next cycle.
+**HEAD state (read this first).** The latest tagged release is **`v0.5.9`**
+(2026-06-05; both `homebrew/clikae.rb` and the tap's `Formula/clikae.rb` track it,
+`brew fetch`-verified). Everything in §2's "still TODO before a v0.5 tag" shipped
+long ago; v0.5.x has since added the fuel-tank grammar, the burn-order board, agy
+multi-account, `clikae burn`, the dry-tank carry-onward stack + codex red dot
+(v0.5.8), and the update-check notice + the two world-class P1 fixes (v0.5.9 —
+see `docs/HANDOFF-world-class-gaps.md`, now down to just P2). The tree is clean and
+CI is green on every push — **6 jobs**: shellcheck, smoke (ubuntu+macos), bats
+(ubuntu+macos), and pester (windows). `bats -r tests` = **327/327**. The live
+punch-list is `docs/HANDOFF-world-class-gaps.md`; the older §2 below is v0.4-era
+context.
 
 **Release recipe (for next time you cut a tag) — what `v0.4.0` did:** bump
 `CLIKAE_VERSION` in `bin/clikae`; move CHANGELOG `[Unreleased]` → `[X.Y.Z] —
@@ -578,7 +582,13 @@ Still genuinely open: antigravity full adapter (likely stays launch-only), verce
 
 ---
 
-## 11. TODO — `rename`/`migrate`/`remove` in-use guard only covers the CURRENT shell (phantom-tank bug)
+## 11. ✅ DONE (shipped v0.5.5) — `rename`/`migrate`/`remove` in-use guard only covered the CURRENT shell (phantom-tank bug)
+
+> **Resolved:** `lib/core/proc.sh::live_dir_users` scans all same-uid procs for the
+> tank's env var and is wired into rename/migrate/remove (interactive holder →
+> hard-fail; daemon/spare → soft warn). Tests in `tests/bats/{rename,migrate,remove}.bats`.
+> Original writeup kept below for context.
+
 
 **Found 2026-06-03 by dogfooding (maintainer hit it live).** Renaming claude
 `b`→`L` and `a`→`C` left **phantom `a`/`b` tanks** that kept reappearing on the
@@ -622,7 +632,13 @@ closed (the real history lives under the renamed tank).
 
 ---
 
-## 12. TODO — the board's "Continue" list is claude-ONLY (cross-engine continuity gap)
+## 12. ✅ DONE (shipped v0.5.5) — the board's "Continue" list was claude-ONLY (cross-engine continuity gap)
+
+> **Resolved:** `lib/adapters/codex.sh` got `adapter_transcript_path` (matches a
+> rollout's recorded `cwd`, not a slug) + a recap extractor, so codex sessions now
+> show in the board's Continue list (verified live — `clikae` shows codex/H, codex/M).
+> Original writeup kept below for context.
+
 
 **Found 2026-06-03 by dogfooding.** A codex session run through a clikae codex
 tank (it edited a repo; the rollout records its `cwd`) shows up on the board only
@@ -652,6 +668,69 @@ slightly outruns the implementation for non-claude engines.
 **Out of scope here:** codex over-quota is still un-detectable from disk (see
 `lib/core/limit.sh` notes) — that's the *fuel* axis, independent of *resume*. This
 TODO is only about surfacing codex sessions in Continue.
+
+---
+
+## 13. OPEN QUESTION — tanks own the AI account's state, but NOT the git commit identity (mis-attribution leak)
+
+**Found 2026-06-04 by an incident, not by clikae code.** A run authored 9 commits
+across `reef` + `bleedblend` whose git **author/committer email** was the engine's
+own account email (`mr.crazyx2@gmail.com`, the value Claude Code carries as its
+system `userEmail`). GitHub maps a commit to an account by that **email**, so all
+9 commits rendered under the GitHub account `@lersiann` (which owns that email) —
+NOT the maintainer's intended OSS identity `@chodaict` / `x@cver.net`. Fixed
+out-of-band with `git filter-repo` + force-push; the gmail is now scrubbed.
+
+**This was NOT a clikae bug** — clikae never set `user.email`; the engine did
+(a `git -c user.email=<its account email>` style commit, "too faithfully" using
+the email the harness injected). But it exposes a real gap **adjacent to clikae's
+thesis**, so it belongs here.
+
+**The conceptual gap.** clikae's job is "control where the *engine's account state*
+lives" — a tank = one AI account's profile (see the state-mapping work: tank holds
+the engine's MEMORY/login, not just fuel). But a commit has a **second identity
+axis** clikae does not touch: the **git author/committer**. Today these are
+unrelated:
+- the tank says *which AI account* is driving (e.g. a "chodaict" tank), but
+- the commit's `user.name`/`user.email` come from `git config` (global) **or** from
+  whatever the engine injects — which can be its *AI-account* email, a different
+  identity entirely.
+
+So you can be in a tank you think of as "chodaict" and still emit commits stamped
+with the engine account's email → silent mis-attribution on GitHub, and a private
+address leaked into public history.
+
+**Why it matters to clikae specifically.** clikae already positions itself as the
+*control plane* for "which identity/state is active per session". Git authorship is
+the most consequential identity a coding session produces, and it's currently
+*outside* the tank's control — the one place where "which account am I?" has a
+durable, public, hard-to-reverse consequence, and clikae is silent there.
+
+**Possible directions (NOT yet decided — needs maintainer call):**
+1. **Per-tank git identity (opt-in).** Let a tank carry an optional
+   `git.user.name` / `git.user.email`; `clikae env <engine> <tank>` then exports
+   `GIT_AUTHOR_*` / `GIT_COMMITTER_*` (or `-c` overrides) so commits made in that
+   shell are stamped with the tank's intended identity. Safe default = do nothing
+   (inherit global config); enable explicitly — fits the informed-consent opt-in
+   pattern, not a silent default that hijacks `git config`.
+2. **Mismatch warning only (cheaper first brick).** `clikae status --json` /
+   board could surface "this tank's intended identity vs the git identity the
+   shell will actually commit as" and warn when an engine is known to inject its
+   account email. Detection without mutation.
+3. **Do nothing, document the footgun.** Out of scope; just tell users to pin
+   `git config --global user.email` and never let an engine commit with `-c
+   user.email=<harness userEmail>`.
+
+**Guard for whoever ships any of this:** an email can be verified on only ONE
+GitHub account at a time, so "fixing" attribution by re-binding email is an
+account-settings action, not a clikae action — clikae can only influence *new*
+commits, never retroactively re-map old ones (that needs history rewrite, as was
+done here). Don't claim clikae can "fix attribution" — it can only *prevent the
+next* mis-stamp.
+
+**Out of scope here:** this is the *authorship* identity axis. It is independent of
+the *fuel* axis (quota/limit) and the *resume* axis (§12). Three different "which
+account?" questions; clikae owns the first two today, not this one.
 
 ---
 
