@@ -81,7 +81,7 @@ plain, conventional verbs.
 | Command | What it does |
 |---|---|
 | `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
-| `auto [ask\|safe\|full]` | **(BETA, claude)** How much clikae carries on its own when a session you launched through it hits the limit. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` just keeps going. The board's `A` key flips it too. |
+| `auto [ask\|safe\|full]` | **(BETA, claude-launched sessions only)** How much clikae carries on its own when a session **you launched through `clikae`** hits the limit — it has no effect on alias/`.app`/other-engine launches. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` keeps going (same-engine = resume, cross-engine = a cold brief). The board's `A` key cycles it. |
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
 | `burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of `to`/`watch`. See "Headless tasks" below. |
 
@@ -101,8 +101,8 @@ plain, conventional verbs.
 
 | Command | What it does |
 |---|---|
-| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `x` incognito, `n` new, `a` rename the tank, `d` delete, `/` filter, `h` cycle language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
-| `lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts). Persists to `$CLIKAE_HOME/lang`; the board's `h` key flips it live. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LANG`/`$LC_ALL` > en-US. |
+| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `x` incognito, `n` new, `a` rename the tank, `d` delete, `/` filter, `l` pick language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
+| `lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts). Persists to `$CLIKAE_HOME/lang`; the board's `l` key opens a language picker. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LC_ALL` > `$LANG` > en-US. |
 | `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output ({cli, profile, account, path}) for scripts and the GUI. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
 | `doctor` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next. |
@@ -218,19 +218,23 @@ switches tanks without carrying, `--session <id>` carries a specific session.
 **A different engine (a brief).** A different *model* or *vendor* can't resume a
 foreign session — there's no shared transcript format. So clikae writes a
 **handoff brief** (what you're doing, what's done, what's next) and starts the
-target engine seeded with it as the opening prompt. By default the brief is a
-**raw extract** (session metadata + your recent prompts), clearly labelled as
-raw. For a proper summary, point clikae at a **local or cheap model** so writing
-the brief costs nothing on the tank that just ran dry:
+target engine seeded with it as the opening prompt. clikae tries to write a
+**summary** automatically: if a local model CLI is on your PATH (`apfel`,
+`ollama`, or `llm`), it's used to summarise the brief for free — set
+`CLIKAE_HANDOFF_AUTOLOCAL=0` to disable that auto-detection. Otherwise the brief
+is a **raw extract** (session metadata + your recent prompts), clearly labelled
+as raw. To force a specific summariser, point clikae at any model so writing the
+brief costs nothing on the tank that just ran dry:
 
 ```bash
 export CLIKAE_HANDOFF_SUMMARIZER='llm -m my-local-model'   # any stdin→stdout command
 clikae to codex                                            # the model writes the brief
 ```
 
-The summarizer receives, on stdin, an instruction line followed by the tail of
-the session transcript, and writes the brief to stdout. If it produces nothing,
-clikae falls back to the raw extract so a handoff is never lost. Tune how much
+The summarizer (auto-detected or `CLIKAE_HANDOFF_SUMMARIZER`) receives, on stdin,
+an instruction line followed by the tail of the session transcript, and writes the
+brief to stdout. If it produces nothing, clikae falls back to the raw extract so a
+handoff is never lost. Tune how much
 transcript is fed with `$CLIKAE_HANDOFF_LINES` (default `60`). Carrying onward is
 **read-only** on the source — it never touches the source session or any tank.
 
@@ -297,8 +301,35 @@ it would fail the same everywhere). `--no-reroute` runs once and stops on a dry 
 `burn` is the single-task unit — **batch/parallelism stays your orchestrator's
 job** (fan several `burn`s out, review the artifacts). Make tasks idempotent and
 artifact-checked (fixed input/output paths), and pre-stage inputs to `/tmp` rather
-than handing a tank slow iCloud-backed I/O. agy can't be burned (it's global /
-single-account, not per-tank-headless).
+than handing a tank slow iCloud-backed I/O.
+
+**`burn` won't spend the quota you're using.** Its auto-reroute *skips* a tank an
+interactive session is live on (it would otherwise burn the conversation you're
+mid-flight in) and tanks that share an already-dry account. Pass `--allow-active`
+to override the in-use skip, or `--to <tank>` to name a hop explicitly.
+
+**A tank is a *quota* source, not the content.** `burn <engine> <tank>` spends
+*that tank's quota* to run a command; what the command reads/writes is just files,
+unrelated to tanks. So you can spend a cheap tank's quota to chew on *any* file —
+including another tank's transcript.
+
+**Using agy as a cheap read-only worker.** agy can't be a `burn` *tank* (it's one
+global account — there's no reserve to reroute among), but it's a fine headless
+worker — you just invoke it directly, outside `burn`'s reserve wrapper:
+
+```bash
+# agy as a summariser — content in via stdin, agy's own quota spent. Read-only.
+cat /tmp/in.md | agy --sandbox -p "summarise this"  > /tmp/out.md
+
+# …or through clikae, on a specific agy account (switches the global ~/.gemini
+# symlink to tank R, then runs agy headless on R's quota):
+clikae agy R -- -p "summarise this" --sandbox  < /tmp/in.md  > /tmp/out.md
+```
+
+You give up `burn`'s two guarantees here (no dry→reroute — agy has one account, so
+a dry run just fails; no artifact verification), and remember `clikae agy` switches
+a **machine-wide** symlink, not a per-shell env (and agy has no `--model` flag — the
+model is the app's setting).
 
 ## Seeing which tank you're on
 

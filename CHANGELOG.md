@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.11] — 2026-06-05
+
+### Fixed
+
+- **`clikae watch` now starts reliably.** Its live-tail path validated the
+  handoff target through a helper that wasn't defined; `clikae watch <engine>` on a
+  real session could exit before tailing. The target is now validated up front
+  (fast-fail on a bad `--to`), and the path is covered by tests.
+- **`clikae to codex <tank>` describes what it actually does.** codex can't resume a
+  carried session, so the carry starts fresh — the message now says "FRESH (not a
+  resume)" instead of announcing a resume.
+- **Auto-reroute won't dead-end on agy.** `next_tank` no longer offers an
+  `antigravity/<tank>` entry as a carry target (agy is global / single-account, so it
+  can't take a `/tank` handoff). Reach agy explicitly when you want it.
+- **`clikae tanks` shows an agy tank's real account.** The ACCOUNT column now reads
+  agy's signed-in email (the same source the board uses, so the two agree) instead of
+  a `(active)` state marker.
+
+### Changed / docs
+
+- New **[docs/EXPECTATIONS.md](docs/EXPECTATIONS.md)** — an "is this a bug?" guide to
+  deliberate-but-surprising behaviours (the fuel dot, codex's UTC reset time, agy's
+  global switch, account-level limits, …).
+- Doc corrections: the board's language key is **`l`** (not `h`); `lang` opens a
+  picker (not a blind cycle); `handoff` auto-detects a local summariser
+  (`CLIKAE_HANDOFF_AUTOLOCAL=0` to disable); `auto` is claude-launched-only; `watch`'s
+  next-tank is the same-engine-first ring; rc-backup timestamp format; `$LC_ALL`/`$LANG`
+  resolution order; `env` listed in the grammar.
+
 ## [0.5.10] — 2026-06-05
 
 ### Fixed
