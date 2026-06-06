@@ -2,13 +2,13 @@
 # lib/commands/antigravity.sh — Antigravity (agy) folded into clikae's standard
 # grammar. See docs/grammar.md §6.
 #
-# WHY agy is special: its CLI (`agy`) hardcodes state under ~/.gemini and ignores
-# every env var / has no config-dir flag (verified on a real install). clikae's
-# clean per-shell model can't switch it, so the only way to give it multiple
-# tanks is to SWAP ~/.gemini between per-tank directories via a symlink. That is
-# GLOBAL (one tank active at a time across ALL terminals) and mutates your real
-# home dir — so the first `init agy` asks before taking over, and it's reversible
-# with `clikae agy --release`.
+# WHY agy is special: its CLI (`agy`) keeps its login as one global Keychain entry
+# (state follows $HOME, but the account doesn't) and has no per-account config-dir
+# flag. clikae's clean per-shell model can't switch the account, so the only way to
+# give it multiple tanks is to SWAP ~/.gemini between per-tank directories via a
+# symlink (carrying each tank's Keychain login). That is GLOBAL (one tank active at
+# a time across ALL terminals) and mutates your real home dir — so the first
+# `init agy` asks before taking over, and it's reversible with `clikae agy --release`.
 #
 # The user types the SAME verbs as every other engine — there is no `agy enable`
 # / `add` / `use` / `disable` subcommand tree any more:
@@ -155,7 +155,7 @@ _agy_takeover() {
     tank its own account clikae copies that login between Keychain slots on every
     switch. The token moves Keychain→Keychain and is never written to disk.
   • It is GLOBAL: only one agy tank is active at a time across ALL terminals
-    (agy ignores per-shell env). Don't run two tanks at once.
+    (the login is one global Keychain entry). Don't run two tanks at once.
   • Swapping while agy is running can corrupt that session.
   Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks and
   their stashed logins are kept).
@@ -277,7 +277,8 @@ _agy_remove() {
 
   # More than one tank remains.
   if [ "$name" = "$active" ]; then
-    log_fail "'$name' is the active agy tank. Switch to another first:  clikae agy <other-tank>"
+    local _other; _other="$(_agy_tank_names | grep -vx "$name" | head -1)"
+    log_fail "'$name' is the active agy tank. Switch to another first:  clikae agy ${_other:-<other-tank>}"
   fi
   rm -rf "${slots:?}/$name"
   _agy_kc_forget "$name"
@@ -292,11 +293,11 @@ Usage: clikae agy [tank] [-- args...]    switch agy to <tank> and run it
        clikae remove agy <tank>          remove an agy tank
        clikae agy --release              restore a normal ~/.gemini, keep tanks
 
-Antigravity (agy) hardcodes ~/.gemini and ignores env vars, so clikae can't
-switch it per-shell like other engines. Instead it swaps ~/.gemini between tank
-dirs via a symlink — a GLOBAL power mode: one agy tank is active at a time across
-ALL terminals. The first `init agy` asks before taking over ~/.gemini; it's
-reversible with `clikae agy --release`.
+Antigravity (agy) keeps its login as one global Keychain entry, so clikae can't
+switch the account per-shell like other engines. Instead it swaps ~/.gemini between
+tank dirs via a symlink (carrying each tank's login) — a GLOBAL power mode: one agy
+tank is active at a time across ALL terminals. The first `init agy` asks before
+taking over ~/.gemini; it's reversible with `clikae agy --release`.
 EOF
 }
 

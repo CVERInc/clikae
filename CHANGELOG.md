@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13] — 2026-06-07
+
+### Added
+
+- **`burn --fresh`** — delete the artifact before running, for a clean slate.
+- **`burn --timeout` perl fallback** — when neither `timeout` nor `gtimeout` (coreutils)
+  is on PATH, the run is bounded with a `perl` alarm (stock macOS ships neither). Only
+  when all three are missing does the run go unbounded (still warned).
+- **`burn` summary line** — on finish, one line: tank used, reroute count, elapsed time,
+  artifact size.
+
+### Fixed
+
+- **`burn` no longer counts a STALE artifact as success.** A leftover artifact from a
+  previous run could make a failed task look like it succeeded. Success is now judged by
+  the artifact appearing *or its timestamp changing*, via the existing GNU-stat-first
+  `_clikae_mtime` helper (portable across macOS/Linux; whole-second resolution — `--fresh`
+  sidesteps a same-second overwrite).
+- **Accurate agy docs & strings.** Comments and i18n that said agy "hardcodes ~/.gemini
+  and ignores env" were imprecise: agy's *state* follows `$HOME`, but its *login* is one
+  global Keychain entry — so different accounts can't be routed per-shell, which is why
+  switching is global. Also removed a dead, incorrect "agy can't be renamed" string (it
+  can — rename carries the per-tank Keychain login).
+- **`remove agy <active-tank>`** now names a concrete other tank to switch to.
+
 ## [0.5.12] — 2026-06-05
 
 ### Added
