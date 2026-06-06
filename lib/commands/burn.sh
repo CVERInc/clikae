@@ -24,15 +24,17 @@ produce (never the exit code — codex exec exits 0 even when it hit its limit a
 wrote nothing), and if the tank ran dry, re-fire the SAME command on the next
 tank in your reserve.
 
-  --artifact <path>   the file the task must produce; its presence = success.
+  --artifact <path>   the file the task must produce. Success = it appears, or (if
+                      it already existed) its timestamp changes — a STALE file from
+                      a previous run is NOT counted as success.
+  --fresh             delete <artifact> before running, for a clean slate.
   --to <target>       explicit next hop on a dry tank (<engine>/<tank> or a bare
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
-  --timeout <secs>    bound the run. NEEDS `timeout` or `gtimeout` (GNU coreutils)
-                      on PATH — stock macOS has neither, so WITHOUT it the run is
-                      NOT bounded and a warning is printed (install: `brew install
-                      coreutils` for `gtimeout`).
+  --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
+                      else a `perl` alarm (SIGALRM, direct child only). With none of
+                      the three on PATH the run is NOT bounded and a warning is printed.
   --no-reroute        run once; on a dry tank, stop instead of falling through.
   --allow-active      let auto-reroute use a tank an interactive session is on.
                       By default the reserve SKIPS such tanks (rerouting a headless
@@ -51,6 +53,10 @@ Examples:
 burn is the headless sibling of the interactive switch: pre-stage inputs to /tmp
 (never hand a tank slow iCloud-backed I/O), and make tasks idempotent + artifact-
 checked so a dropped one just re-fires elsewhere.
+
+Boundary: burn only fits tasks whose success is a FILE you can name — codegen,
+analysis, transforms. It CANNOT judge work whose proof is runtime behaviour (a UI
+renders, a server answers); that still needs a human to verify.
 EOF
 }
 
@@ -95,12 +101,23 @@ EOF
 _burn_timeout_bin() {
   if command -v timeout  >/dev/null 2>&1; then printf 'timeout';  return 0; fi
   if command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout'; return 0; fi
-  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) on PATH — running WITHOUT a time bound."
+  if command -v perl     >/dev/null 2>&1; then printf 'perl';     return 0; fi
+  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) or \`perl\` on PATH — running WITHOUT a time bound."
   return 0
 }
 
+# Artifact freshness uses _clikae_mtime (lib/core/adapter_loader.sh) — epoch mtime,
+# 0 if absent, GNU-stat-first for Linux portability — so a STALE file from a prior
+# run can't be mistaken for this run's success (2026-06-06 tugtile dogfood #2).
+# Whole-second resolution; a same-second overwrite is invisible (--fresh sidesteps it).
+
+# _burn_size <path> -> byte count, or "?" if absent (for the summary line).
+_burn_size() {
+  if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
+}
+
 cmd_burn() {
-  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0
+  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0
   local -a cmd=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -110,6 +127,7 @@ cmd_burn() {
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
       *)            if [ -z "$cli" ]; then cli="$1"
@@ -133,6 +151,18 @@ cmd_burn() {
   command -v "$binary" >/dev/null 2>&1 || log_fail "'$binary' is not on PATH."
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
 
+  # #2 (tugtile dogfood): snapshot the artifact so a STALE file from a prior run
+  # isn't mistaken for success. --fresh clears it; otherwise warn + judge by mtime.
+  if [ "$fresh" -eq 1 ] && [ -e "$artifact" ]; then
+    rm -f "$artifact" 2>/dev/null
+    if [ -e "$artifact" ]; then log_warn "--fresh could not remove $artifact (judging by timestamp instead)."
+    else log_info "--fresh: cleared $artifact"; fi
+  elif [ -e "$artifact" ]; then
+    log_warn "artifact already exists: $artifact — judging success by a timestamp change (use --fresh for a clean slate)."
+  fi
+  local art_pre; art_pre="$(_clikae_mtime "$artifact")"   # 0 when absent
+  local t0=$SECONDS
+
   local cur="$tank" tried="" dried_accts="" reset out rc
   while :; do
     validate_name profile "$cur"
@@ -145,7 +175,10 @@ cmd_burn() {
     local -a runner=()
     if [ -n "$timeout_s" ]; then
       local _tbin; _tbin="$(_burn_timeout_bin)"
-      [ -n "$_tbin" ] && runner=("$_tbin" "$timeout_s")
+      case "$_tbin" in
+        timeout|gtimeout) runner=("$_tbin" "$timeout_s") ;;
+        perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
+      esac
     fi
     rc=0
     out="$(
@@ -167,13 +200,15 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif [ -e "$artifact" ]; then
+    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
       dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       log_ok "Done on $cli/$cur — artifact present: $artifact"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
     else
-      log_err "$cli/$cur produced no artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
+      log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
 

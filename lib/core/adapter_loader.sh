@@ -141,14 +141,14 @@ load_adapter() {
   local cli="$1"
   local f="$CLIKAE_LIB/adapters/$cli.sh"
   if [ ! -f "$f" ]; then
-    # agy (Antigravity) is a known engine with no adapter on purpose: it ignores
-    # env vars and hardcodes ~/.gemini, so it's switched globally, not per-shell
-    # or per-config-dir. Give that guidance instead of the generic "no adapter"
-    # whenever a generic path (env/app/alias/run/relay/migrate) is handed it.
+    # agy (Antigravity) is a known engine with no adapter on purpose: its login is
+    # one global Keychain entry (state follows $HOME, but the account doesn't), so
+    # accounts switch globally — not per-shell. Give that guidance instead of the
+    # generic "no adapter" whenever a generic path (env/app/alias/run/relay/migrate) is handed it.
     case "$cli" in
       agy|antigravity)
-        log_err "agy (Antigravity) is global — clikae can't route it per-shell or per-config-dir."
-        log_dim "Switch the machine-wide login with:  clikae agy <tank>   (see clikae agy --help)"
+        log_err "agy (Antigravity) login is global — clikae can't route its account per-shell."
+        log_dim "Switch the global login with:  clikae agy <tank>   (see clikae agy --help)"
         exit 1 ;;
     esac
     log_err "No built-in adapter for '$cli'."
