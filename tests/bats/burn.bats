@@ -174,3 +174,51 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   run _burn_next_same_engine claude "claude/a" "one@example.com" CLAUDE_CONFIG_DIR 0
   [ "$output" = "b" ]
 }
+
+# --- #2 (tugtile dogfood): a STALE artifact must not be mistaken for success ---
+
+@test "burn does NOT count a STALE artifact as success (judges by mtime change)" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  echo "leftover from a previous run" > "$A"     # stale artifact already present
+  run clikae burn codex T1 --artifact "$A" -- noop   # this task writes nothing
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already exists"* ]] || false       # warned about the stale file
+  [[ "$output" == *"real task failure"* ]] || false    # not a false "Done"
+}
+
+@test "burn --fresh clears a stale artifact before running" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  echo "leftover" > "$A"
+  run clikae burn codex T1 --artifact "$A" --fresh -- run "$A"   # run recreates it
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cleared"* ]] || false
+  [ -f "$A" ]
+}
+
+@test "burn counts an OVERWRITTEN pre-existing artifact as success (mtime advanced)" {
+  # The path the absent->present tests miss: artifact PRE-EXISTS with an old mtime and
+  # the task rewrites it. Catches the GNU/BSD stat-order bug (broken on Linux/CI).
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  echo "old" > "$A"; touch -t 202001010000 "$A"   # force an OLD mtime
+  run clikae burn codex T1 --artifact "$A" -- run "$A"   # stub rewrites $A (mtime -> now)
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Done on codex/T1"* ]] || false
+}
+
+# --- #3 (tugtile dogfood): perl alarm fallback when no coreutils timeout ---
+
+@test "_burn_timeout_bin: falls back to perl when no timeout/gtimeout" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/perlbin"
+  printf '#!/usr/bin/env bash\n' > "$BATS_TEST_TMPDIR/perlbin/perl"; chmod +x "$BATS_TEST_TMPDIR/perlbin/perl"
+  local out; out="$(PATH="$BATS_TEST_TMPDIR/perlbin" _burn_timeout_bin)"   # only perl, no (g)timeout
+  [ "$out" = "perl" ]
+}

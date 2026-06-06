@@ -104,10 +104,10 @@ EOF
     printf '%s' "$enriched" | _list_render_json
   else
     printf '%s' "$enriched" | _list_render_table "$show_paths"
-    # Flag agy's nature so nobody tries `burn agy`: it's global/single-account, so
-    # there's no per-tank headless burn — interactive switch only.
+    # Flag agy's nature so nobody tries `burn agy`: its login is global (one account
+    # across all shells), so there's no per-tank headless burn — interactive switch only.
     case $'\n'"$enriched" in
-      *$'\n'"agy"$'\037'*) printf '\n%b  agy is global/single-account — interactive switch only (clikae agy <tank>); not burnable.%b\n' "$__C_DIM" "$__C_RESET" ;;
+      *$'\n'"agy"$'\037'*) printf '\n%b  agy login is global — one account active at a time, interactive switch only (clikae agy <tank>); not burnable.%b\n' "$__C_DIM" "$__C_RESET" ;;
     esac
   fi
 }

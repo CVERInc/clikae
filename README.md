@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.12-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.5.13-blue.svg)](CHANGELOG.md)
 
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
@@ -108,6 +108,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **v0.5.5** — **Antigravity / agy becomes real multi-account** (each tank carries its own Google login via the macOS Keychain); **codex sessions join the home board's Continue list** (true cross-engine resume); **`clikae burn`** runs a headless task on a tank and re-fires it on the next when one runs dry (verified by artifact, not exit code); and a **cross-shell in-use guard** so `rename`/`migrate`/`remove` won't move a tank a session in another terminal is still using.
 - **v0.5.6** — hardened that in-use guard to be truly best-effort: a restricted `ps` (CI runners, locked-down hosts) no longer aborts `rename`/`migrate`/`remove`.
 - **v0.5.7** — the board shows only **burnable fuel tanks** (tool-CLI tanks live in `clikae tanks`); **`clikae app --board`** makes a launcher for the menu, not one tank; **Ghostty launchers** use a trusted config file (no "Allow Ghostty to execute…" dialog) and are re-signed for Apple Silicon; and switching to a tank whose CLI isn't installed gives a **helpful install hint** instead of `exec: … not found`.
+- **v0.5.13** — **`burn` hardening** from two dogfoods: a stale artifact no longer reads as success (judged by timestamp change; `--fresh` for a clean slate), `--timeout` falls back to a `perl` alarm when coreutils is absent, and a one-line run summary. Plus accurate agy docs/strings (state follows `$HOME`, login is one global Keychain entry).
 - **v0.5.12** — **state schema versioning**: `$CLIKAE_HOME/` now carries a `version` marker + a forward-migration runner, so future on-disk format changes are safe (read-only-preserving, invisible in normal use). With this, clikae's quality punch-list is empty.
 - **v0.5.11** — reliability + honesty polish: `clikae watch` starts dependably; `clikae to codex` says "fresh start" instead of promising a resume it can't do; auto-reroute won't dead-end on agy; `clikae tanks` shows an agy tank's real account; and a new **["is this a bug?" Expectations guide](docs/EXPECTATIONS.md)** for behaviours that look surprising but are deliberate. Plus doc corrections (the board's language key is `l`, not `h`).
 - **v0.5.10** — **`burn` won't spend the quota you're using.** Its auto-reroute now skips a tank an interactive session is live on (`--allow-active` to override) and skips tanks that share an already-dry account — closing the original "燒爆" footgun (a headless job rerouting onto your live conversation's tank). Plus a clearer agy burn-refusal + a `clikae tanks` footnote that agy is interactive-only.
