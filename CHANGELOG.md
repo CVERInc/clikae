@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] — 2026-06-07
+
+### Changed
+
+- Final polish so the released tarball matches `main` — no behaviour change. Dropped a
+  phantom `$CLIKAE_HOME/adapters` TODO comment (never implemented; adapter overrides
+  live in the repo's `lib/adapters/`), and marked `docs/HANDOFF-world-class-gaps.md`
+  historical now that its punch-list is cleared.
+
 ## [0.5.13] — 2026-06-07
 
 ### Added
