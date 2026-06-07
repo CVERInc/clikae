@@ -1,5 +1,9 @@
 # HANDOFF — world-class ("世界第一讚") gaps
 
+> ✅ **HISTORICAL — punch-list fully cleared** (P1s in v0.5.9, P2 in v0.5.12). This file
+> is kept as a record of the 2026-06-05 quality audit; there is **nothing left to do
+> here**. For live project state see `CHANGELOG.md` — do not read this as an open list.
+
 Focused continuation handoff for a fresh agent. Scope: the remaining gaps found in
 the adversarial quality audit of **2026-06-05** (CVER "世界第一讚" standard, 7-dim
 quality ruler). Read `HANDOFF.md` first for the project itself; this file only
