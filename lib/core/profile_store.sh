@@ -6,7 +6,6 @@
 #     profiles/
 #       <cli>/
 #         <profile>/      <- the actual config dir that the CLI's env var points at
-#     adapters/           <- user-defined adapter overrides (TODO v0.2)
 
 store_root() {
   printf '%s\n' "$CLIKAE_HOME"
