@@ -117,6 +117,17 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **v0.5.8** — **a dry tank carries you onward instead of dead-ending.** Pressing Enter on a Continue row whose tank is out of fuel now offers to **relay the session onto the next *fuelled* tank** — and the carry-onward selector became a **ring**: it circles the whole burn order (a tank earlier in your order is still a reserve), prefers a fuelled **same-engine** tank (a real resume), and skips any tank whose **account** is already exhausted (a sibling on the same login shares the dead quota). Plus **codex tanks can now show a red dot** — its exec-only limit is persisted so the board can read it later. See [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
 - **v1.0** *(planned)* — macOS menu bar app (`gui/ClikaeMenuBar`): tanks per engine, active one marked, click-to-launch, per-engine `to`. Build-verified AppKit skeleton; signed `.app` packaging next.
 
+## Testing & quality
+
+Pure bash, no runtime dependencies, held to a deliberate bar:
+
+- **`bats-core` suite (300+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
+- **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
+- The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
+- Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
+
+Developed and hand-tested on **macOS**; Linux is covered by CI. **Linux / WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
+
 ## Contributing
 
 PRs are very welcome — especially new adapters. Please read [docs/adding-an-adapter.md](docs/adding-an-adapter.md) first. For non-trivial changes, open an issue to discuss the approach before sending a PR.
