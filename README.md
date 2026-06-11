@@ -7,6 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-v0.5.14-blue.svg)](CHANGELOG.md)
 
+🌐 日本語の紹介 → [cver.net/ja-jp/oss/clikae](https://cver.net/ja-jp/oss/clikae) ・ 繁體中文介紹 → [cver.net/zh-tw/oss/clikae](https://cver.net/zh-tw/oss/clikae)
+
 > ⚠️ **Unofficial.** `clikae` is a community tool. It is not affiliated with, endorsed by, or sponsored by any of the CLI vendors it integrates with. "Claude" is a trademark of Anthropic, PBC; other CLI names are trademarks of their respective owners.
 
 ---
