@@ -30,8 +30,10 @@
 #       reached. … Resets in <Hh Mm>.` So agy can't be detected via exit code,
 #       stdout, or a transcript — you must scan that cli.log. (Earlier guess
 #       "quota exceeded" was wrong; the real text is "Individual quota reached".)
-#       NOTE: `clikae watch` does NOT yet read agy's cli.log — wiring watch to
-#       scan it is an unbuilt feature; this only records the confirmed marker.
+#       NOTE: `clikae watch` DOES read agy's cli.log — when the watched engine is
+#       agy, the watcher tails ~/.gemini/antigravity-cli/cli.log instead of the
+#       transcript and matches the RESOURCE_EXHAUSTED / "Individual quota reached"
+#       marker (shipped v0.5.5, covered by bats tests).
 # Note "session limit" (claude) vs "usage limit" (codex) — keep both.
 # This pattern is now only the TEXT GATE / fallback. Real detection for claude &
 # codex is STRUCTURAL (see limit_line_is_real) — a transcript that merely
