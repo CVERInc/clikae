@@ -1,6 +1,7 @@
 # Devlog
 
-A narrative history of clikae, from the first commit to the deliberate park.
+A narrative history of clikae, from the first commit through a deliberate park and
+the v0.6 that earned its way out of it.
 For the precise, per-release record see [CHANGELOG.md](../CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
@@ -222,17 +223,67 @@ A doc- and comment-only release, cut so the published tarball exactly matches
 handoff historical now that its punch-list is cleared. Nothing behaves
 differently — this release exists to leave the repo tidy.
 
-## Where it parks
+### v0.6.0 — 2026-06-14 · un-parked, into vertical orchestration
 
-clikae is, deliberately, done for now. The strategy is honest about what it is:
-a portfolio piece, an on-ramp, and a tip jar — not a revenue product. A pure-bash
-CLI on Homebrew has roughly zero convenience moat to charge for, and the niche
-turned out to be crowded by mid-2026 (Quotio, Relay, caam, and a graveyard of
-auth-switchers). So clikae stops at "complete for this stage" rather than being
-pushed uphill as a business. Its real, narrower edge stays sharp: no proxy, no
-daemon, no telemetry — every line auditable — plus the one thing none of the
-competitors do, carrying an *expensive orchestrator* onto cheap context.
+The park clause said a sharp-enough itch would earn a v0.6. The itch arrived as
+three files from a collaborator: a "conductor" Claude Code skill — `claude-leg.sh`,
+`codex-leg.sh`, and a `SKILL.md` — that fires a headless leg at another model, on
+another account, and reads the whole result back. It was, almost line for line, the
+one edge the park note had reserved as clikae's own: *carrying an expensive
+orchestrator onto cheap context.* Better still, those files had independently
+rediscovered clikae's hardest-won doctrine — judge a headless run by its **output**,
+never its exit code; close stdin so it can't hang; fall back to a `perl` alarm when
+there's no coreutils `timeout`. Two parties arriving at the same rule is the rule
+earning its keep.
 
-The bones are good and the punch-list is empty. If a future itch is sharp enough
-to earn a v0.6, it'll ship then. Until it earns it, clikae waits — fuelled, ready,
-parked.
+So v0.6.0 makes that edge first-class. The split stays clean — the **brain** (a
+conductor: you, or a session model) decides; clikae stays the **muscle** that
+routes accounts, detects dry, and fans work out, and never judges the result:
+
+- **`clikae conduct` (BETA)** fans one prompt headless and read-only across N
+  accounts in parallel — each on its own subscription — and hands you every full
+  result to choose from. It does not grade them; keeping clikae out of the judging
+  is what keeps it a switcher, not a middleman.
+- **`clikae git-id`** (issue #22) pins a tank's git commit identity, so a dispatched
+  write-job can't stamp commits with the engine's account email — the exact §13
+  incident that once leaked nine commits to the wrong GitHub account.
+- **`clikae burn --prompt-file`** (issue #24) ends the hand-rolled headless flags:
+  clikae fills each engine's write-mode dialect from a new `adapter_burn_flags`
+  hook, so a cross-engine reroute regenerates the *right* flags instead of shipping
+  claude's to codex. The raw `-- <cmd>` form still works for power users.
+
+The lessons came, as they always do, from letting something independent check the
+work. An adversarial audit — run, fittingly, on a separate model — caught two bugs
+every test had missed because every test prompt was a single line: the
+newline-framed adapter recipes **shattered a multi-line prompt** into one argv item
+per line (fixed by switching the framing to NUL), and `conduct` called an empty leg
+a *success* because `printf '%s\n' ""` still writes a byte (fixed by judging the
+captured output, not the file's size). Both are the "judge by output, not exit
+code" rule wearing new clothes; both are now locked by tests — including a real
+`git commit` end-to-end proving the pinned identity actually beats `git config`.
+
+And a dogfood that wrote itself: fanning real research legs at a tank that was
+genuinely dry made the leg *report the limit honestly* instead of faking success —
+and surfaced how a person **sees** a dispatched fleet from inside a Claude Code
+session: the footer's `· N shells ·`, the `↓` manager, and the trick of leading
+each background command with a `[tank·role]` token so the manager labels itself.
+That became `docs/orchestration.md` — a playbook written as much for an LLM driving
+clikae as for a person, which is the honest reframe v0.6 settled on: clikae is a
+tool for an LLM to command other LLMs, and the human mostly sets strategy and holds
+the red-line buttons.
+
+## The park held — then its own clause fired
+
+The strategy hasn't changed: clikae is a portfolio piece, an on-ramp, and a tip jar
+— not a revenue product. A pure-bash CLI on Homebrew has roughly zero convenience
+moat to charge for, and the niche is crowded (Quotio, Relay, caam, and a graveyard
+of auth-switchers). v0.6.0 didn't betray that — `conduct` ships **BETA**, off the
+README's headline, opt-in, never pushed uphill as a business. What changed is only
+that the park's own clause came true: the one edge it had reserved — carrying an
+expensive orchestrator onto cheap context — got sharp enough, and handed-over
+enough, to earn the version it was promised.
+
+Its narrower edge stays sharp: no proxy, no daemon, no telemetry — every line
+auditable. The bones were good and ready; the itch finally arrived. clikae is,
+again, complete for this stage — now with a brain it can lend to whoever's
+conducting.
