@@ -69,6 +69,12 @@ session or a memory slice is carried as a **copy**; the tank you came from is
 left exactly as it was. No proxy, no daemon, no traffic interception — clikae
 reshapes *where your state lives*, it never sits in the middle of your requests.
 
+Driving this headless — or letting an **LLM agent** drive it (fanning a job across
+accounts, best-of-N across vendors)? The **[orchestration playbook](docs/orchestration.md)**
+is the field guide: when to use `burn` vs `conduct`, the rules that keep it honest
+(judge by the artifact, never the exit code), the misconfigured-burn anti-pattern,
+and how to see your fleet from inside a Claude Code session.
+
 ## Install
 
 **Homebrew** (macOS / Linux):
@@ -127,6 +133,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
 - **[Grammar](docs/grammar.md)** — the language clikae speaks: why it's a verb, engine/tank/fuel, `clikae to`, agy.
 - **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
+- **[Orchestration](docs/orchestration.md)** — driving clikae headless (or letting an agent drive it): `burn` vs `conduct`, the honesty rules, anti-patterns, seeing your fleet.
 - **[Expectations](docs/EXPECTATIONS.md)** — "is this a bug?" — behaviours that look surprising but are deliberate (the fuel dot, codex resume/time, agy's global switch, …).
 - **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
