@@ -1,11 +1,11 @@
 # clikae
 
-> **Your starting point for working with AI coding CLIs.** Type `clikae` and land on everything you were just doing — your recent sessions across every account and every engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and pick up where you were.
+> **Your starting point for working with AI coding CLIs — and the cost-aware control plane for a fleet of them.** Type `clikae` and land on everything you were just doing — your recent sessions across every account and every engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and pick up where you were. When a tank runs dry mid-task, carry the same session onward — or fan a headless job out across accounts and engines, each burning its own subscription, none eating your main budget.
 >
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.5.14-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.6.0-blue.svg)](CHANGELOG.md)
 
 🌐 [日本語](https://cver.net/ja-jp/oss/clikae) · [한국어](https://cver.net/ko-kr/oss/clikae) · [繁體中文](https://cver.net/zh-tw/oss/clikae)
 
@@ -34,6 +34,40 @@ It:
 6. Cleans up after itself when you're done with a tank.
 
 It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus real **per-account multi-tank for Antigravity / agy** — each tank carries its own Google login via the macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no global state, and exactly one opt-out network call (a throttled update check — `CLIKAE_NO_UPDATE_CHECK=1` silences it) — every line is auditable.
+
+## Command your fleet — cost-aware, across vendors
+
+Once you have more than one account on more than one engine, the home board
+stops being a switcher and starts being a **control plane**: one person directing
+a fleet of AI coding CLIs, each burning its **own** subscription quota, none of
+them quietly eating the budget you're using for your main session. clikae knows
+where each engine keeps its config and transcripts, how each one signals a usage
+limit, and which tank still has fuel — so the arbitrage is two commands, not a
+bag of `--resume` flags and environment-variable juggling:
+
+- **Hit a wall, keep going — `clikae to`.** When the tank you're on runs dry,
+  carry the *same live conversation* onto another tank's quota (a real
+  `--resume`), or hand it across vendors as a written brief — Claude → Codex →
+  Antigravity. The cross-vendor brief is summarized **on-device** by a local
+  model when you have one (`apfel`, `ollama`, or `llm`), so the session never
+  leaves your machine, costs nothing, and works offline.
+
+- **Fan the grunt work out — `clikae burn`.** Run a long, headless task on a
+  tank and verify it by the **artifact it produces** — never the exit code
+  (`codex exec` exits `0` even when it hit its limit). When that tank runs dry,
+  clikae **re-fires the same task on your next reserve tank automatically**,
+  skipping any account that shares a dried login and never reaching for the tank
+  your interactive session is live on. The expensive supervisor stays asleep;
+  the cheap workers burn whichever account still has gas.
+
+- **Spot a wall before it's a wall — `clikae watch`.** Tail a running engine,
+  notice when it's about to go dry, and offer (or auto-carry) the session onward
+  to the next tank in your burn order.
+
+Both `to` and `burn` follow one rule — *aggregate, never mutate the source.* A
+session or a memory slice is carried as a **copy**; the tank you came from is
+left exactly as it was. No proxy, no daemon, no traffic interception — clikae
+reshapes *where your state lives*, it never sits in the middle of your requests.
 
 ## Install
 

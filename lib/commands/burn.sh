@@ -15,15 +15,27 @@
 
 _burn_help() {
   cat <<'EOF'
-Usage: clikae burn <engine> <tank> --artifact <path> [--to <target>]
-                   [--timeout <secs>] [--no-reroute] [--allow-active]
-                   -- <engine command...>
+Usage: clikae burn <engine> <tank> --artifact <path>
+                   ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
+                   [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
+                   [--no-reroute] [--allow-active] [--fresh]
 
-Run a headless engine command on <tank>, verify it by the ARTIFACT it should
+Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
-wrote nothing), and if the tank ran dry, re-fire the SAME command on the next
-tank in your reserve.
+wrote nothing), and if the tank ran dry, re-fire the SAME task on the next tank
+in your reserve.
 
+Give the task in one of two ways:
+  • the easy way — --prompt-file <f> / --prompt <str>: clikae fills in each
+    engine's own headless-write flags (claude's -p / codex's exec …) from its
+    adapter, so you never hand-assemble them and a cross-engine reroute stays
+    sound (the flags are regenerated for the new engine).
+  • the power-user way — -- <engine command...>: pass the raw engine argv yourself.
+
+  --prompt-file <f>   read the task prompt from a file (no quoting hell).
+  --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
+  --add-dir <dir>     a directory the engine may write in. Defaults to the
+                      artifact's parent. Repeatable. (codex uses the first as its cwd.)
   --artifact <path>   the file the task must produce. Success = it appears, or (if
                       it already existed) its timestamp changes — a STALE file from
                       a previous run is NOT counted as success.
@@ -46,9 +58,12 @@ no artifact but no limit -> a real task failure (NOT rerouted — it'd fail the 
 on every tank).
 
 Examples:
+  clikae burn claude L --artifact out/core.test.cjs \
+      --prompt-file task.txt --add-dir "$PWD"      # the easy way
+  clikae burn codex M --artifact /tmp/out.md \
+      --prompt-file task.txt --add-dir /tmp        # same task, different engine, no flag changes
   clikae burn codex M --artifact /tmp/out.md -- exec -C /tmp -s workspace-write \
-      "read /tmp/in.txt, write /tmp/out.md"
-  clikae burn codex M --artifact /tmp/out.md --to codex/H -- exec ... "<task>"
+      "read /tmp/in.txt, write /tmp/out.md"        # the power-user way (raw argv)
 
 burn is the headless sibling of the interactive switch: pre-stage inputs to /tmp
 (never hand a tank slow iCloud-backed I/O), and make tasks idempotent + artifact-
@@ -116,15 +131,39 @@ _burn_size() {
   if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
 }
 
+# _burn_compose <prompt> <post_cmd_count> <post_cmd...> -- <add_dir...>
+# Build the full engine argv into the global array BURN_ARGV: the per-engine
+# headless-write flags from adapter_burn_flags (which must be defined for the
+# CURRENTLY-loaded adapter), followed by any verbatim post-`--` argv. Called once
+# per engine so a cross-engine reroute regenerates the flags for the NEW engine
+# (fixing the old "ship claude's -p flags to codex" unsoundness). Newline-per-item
+# read keeps a multi-line prompt with spaces intact.
+_burn_compose() {
+  local prompt="$1"; shift
+  local n="$1"; shift
+  local -a post=(); local i
+  for ((i=0; i<n; i++)); do post+=("$1"); shift; done
+  shift   # drop the literal "--" separator
+  BURN_ARGV=()
+  local line
+  # NUL-delimited read so a multi-line prompt survives as a single argv item.
+  while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
+  BURN_ARGV+=("${post[@]}")
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0
-  local -a cmd=()
+  local prompt="" prompt_file="" prompt_set=0
+  local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help)    _burn_help; return 0 ;;
       --artifact)   shift; [ $# -gt 0 ] || log_fail "--artifact needs a path"; artifact="$1"; shift ;;
       --to)         shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
+      --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
+      --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
+      --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
       --fresh)      fresh=1; shift ;;
@@ -137,19 +176,44 @@ cmd_burn() {
     esac
   done
 
-  [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> -- <cmd...>"
+  [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
   [ -n "$artifact" ] || log_fail "Missing --artifact <path> — burn verifies completion by the artifact, never the exit code."
-  [ "${#cmd[@]}" -ge 1 ] || log_fail "Missing the engine command after --  (e.g. -- exec -C /tmp \"<task>\")."
+
+  # Convenience surface (--prompt / --prompt-file): clikae fills each engine's
+  # headless-write flags from its adapter, so the task is just "a prompt + the
+  # file it must produce" (2026-06-06 tugtile burn-writeup friction #1).
+  [ "$prompt_set" -eq 1 ] && [ -n "$prompt_file" ] \
+    && log_fail "Use either --prompt or --prompt-file, not both."
+  if [ -n "$prompt_file" ]; then
+    [ -r "$prompt_file" ] || log_fail "--prompt-file not readable: $prompt_file"
+    prompt="$(cat "$prompt_file")"; prompt_set=1
+  fi
+  if [ "$prompt_set" -eq 1 ]; then
+    # Default the writable dir to the artifact's parent, so the engine can always
+    # at least write the file you asked for.
+    [ "${#add_dirs[@]}" -ge 1 ] || add_dirs=("$(dirname "$artifact")")
+  else
+    [ "${#cmd[@]}" -ge 1 ] || log_fail "Give a task: --prompt-file <f> / --prompt <str>, or the explicit -- <cmd...> form."
+  fi
   validate_name cli "$cli"
   validate_name profile "$tank"
   case "$cli" in
     agy|antigravity) log_fail "agy is already global/single-account — there's no per-tank headless burn to do. Just use it directly (clikae agy <tank>), or burn a codex/claude tank." ;;
   esac
+  # Keep the verbatim post-`--` argv aside; in --prompt mode it's appended after
+  # the engine's generated flags (an escape hatch for extra per-engine args).
+  local -a post_cmd=("${cmd[@]}")
   load_adapter "$cli"
   local binary; binary="$(adapter_meta_cli_binary)"
   command -v "$binary" >/dev/null 2>&1 || log_fail "'$binary' is not on PATH."
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
+  if [ "$prompt_set" -eq 1 ]; then
+    declare -F adapter_burn_flags >/dev/null \
+      || log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
+    _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
+    cmd=("${BURN_ARGV[@]}")
+  fi
 
   # #2 (tugtile dogfood): snapshot the artifact so a STALE file from a prior run
   # isn't mistaken for success. --fresh clears it; otherwise warn + judge by mtime.
@@ -231,10 +295,21 @@ KV
       *)   nx_cli="$cli";       nx_tank="$nxt" ;;
     esac
     if [ "$nx_cli" != "$cli" ]; then
-      log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
       envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
       command -v "$binary" >/dev/null 2>&1 || log_fail "Reroute engine '$binary' is not on PATH."
+      if [ "$prompt_set" -eq 1 ]; then
+        # Regenerate the headless flags for the NEW engine — a cross-engine reroute
+        # of a --prompt task is sound (codex's flags differ from claude's, and the
+        # prompt is engine-agnostic). Without a recipe for the new engine, stop.
+        declare -F adapter_burn_flags >/dev/null \
+          || log_fail "Cross-engine reroute → $nx_cli, which has no headless-write recipe (no adapter_burn_flags)."
+        _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
+        cmd=("${BURN_ARGV[@]}")
+        log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
+      else
+        log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
+      fi
     fi
     cur="$nx_tank"
     log_info "Rerouting (dry) → $cli/$cur"

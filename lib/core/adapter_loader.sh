@@ -166,7 +166,8 @@ load_adapter() {
            adapter_export_env adapter_run adapter_init \
            adapter_relay adapter_transcript_path adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
-           adapter_memory_dir adapter_install_hint \
+           adapter_memory_dir adapter_install_hint adapter_burn_flags \
+           adapter_audit_flags \
            2>/dev/null || true
 
   # shellcheck source=/dev/null

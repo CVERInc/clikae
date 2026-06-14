@@ -8,21 +8,35 @@ load '../helpers'
 
 # Stub `codex` on PATH. Per-tank behaviour keyed off $CODEX_HOME:
 #   a ".dry" marker in the tank dir  -> emit the limit line, write nothing (exit 0)
-#   otherwise, `run <path>`          -> create <path> (the artifact)
+#   `run <path>`                     -> create <path> (the legacy raw-argv form)
+#   `exec …` (the generated form)    -> create $STUB_ARTIFACT, if set
 #   otherwise                        -> do nothing (a task that fails to produce)
+# If $STUB_ARGV_LOG is set, every invocation appends its full argv (one line) there
+# so a test can assert the generated flag shape.
 _stub_codex() {
   local bin="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$bin"
   cat > "$bin/codex" <<'STUB'
 #!/usr/bin/env bash
+[ -n "$STUB_ARGV_LOG" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+[ -n "$STUB_ARGC_LOG" ] && printf '%s' "$#" > "$STUB_ARGC_LOG"
 if [ -f "$CODEX_HOME/.dry" ]; then
   echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
   exit 0
 fi
 if [ "$1" = "run" ] && [ -n "$2" ]; then : > "$2"; fi
+if [ "$1" = "exec" ] && [ -n "$STUB_ARTIFACT" ]; then : > "$STUB_ARTIFACT"; fi
 exit 0
 STUB
   chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+}
+
+# A stub `gh` (a real adapter that does NOT define adapter_burn_flags) for the
+# "no headless-write recipe" error path.
+_stub_gh() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/gh"; chmod +x "$bin/gh"
   PATH="$bin:$PATH"; export PATH
 }
 
@@ -221,4 +235,165 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   printf '#!/usr/bin/env bash\n' > "$BATS_TEST_TMPDIR/perlbin/perl"; chmod +x "$BATS_TEST_TMPDIR/perlbin/perl"
   local out; out="$(PATH="$BATS_TEST_TMPDIR/perlbin" _burn_timeout_bin)"   # only perl, no (g)timeout
   [ "$out" = "perl" ]
+}
+
+# --- issue #24: the convenience surface (--prompt-file / --prompt / --add-dir) ---
+# clikae fills each engine's headless-write flags from its adapter, so the caller
+# never hand-assembles them (2026-06-06 tugtile burn-writeup friction #1).
+
+@test "burn --prompt-file builds the engine command via the hook and completes" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  printf 'write the file\n' > "$BATS_TEST_TMPDIR/task.txt"
+  run clikae burn codex T1 --artifact "$A" --prompt-file "$BATS_TEST_TMPDIR/task.txt"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"Done on codex/T1"* ]] || false
+}
+
+@test "burn --prompt inline is equivalent to --prompt-file" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --artifact "$A" --prompt "write the file"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+}
+
+@test "burn --add-dir defaults to the artifact's parent (codex gets -C dirname)" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/sub/out.md"; mkdir -p "$BATS_TEST_TMPDIR/sub"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --artifact "$A" --prompt "x"
+  [ "$status" -eq 0 ]
+  grep -q -- "exec -C $BATS_TEST_TMPDIR/sub -s workspace-write" "$BATS_TEST_TMPDIR/argv.log"
+}
+
+@test "burn rejects --prompt and --prompt-file together" {
+  _stub_codex
+  clikae init codex T1
+  printf 'x\n' > "$BATS_TEST_TMPDIR/task.txt"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --prompt x --prompt-file "$BATS_TEST_TMPDIR/task.txt"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not both"* ]] || false
+}
+
+@test "burn with no prompt and no -- errors and mentions the prompt options" {
+  _stub_codex
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--prompt-file"* ]] || false
+}
+
+@test "burn --prompt on an engine with no adapter_burn_flags errors clearly" {
+  _stub_gh
+  clikae init gh T1
+  run clikae burn gh T1 --artifact "$BATS_TEST_TMPDIR/out.md" --prompt "x"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"headless-write recipe"* ]] || false
+  [[ "$output" == *"-- <cmd"* ]] || false
+}
+
+@test "burn --prompt cross-engine reroute regenerates flags for the new engine" {
+  # T1 dry → reroute to T2; both codex here, but the recompose path runs and the
+  # generated exec form must reach T2 (proves the prompt survives the hop).
+  _stub_codex
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --artifact "$A" --prompt "write it"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"codex/T2"* ]] || false
+  grep -q -- "exec -C .* -s workspace-write" "$BATS_TEST_TMPDIR/argv.log"
+}
+
+# --- issue #24: direct unit tests pinning each engine's flag recipe ---
+# A CLI flag rename is caught here, not in the field.
+
+@test "adapter_burn_flags (claude): exact NUL-per-argv recipe" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local -a got=(); local x
+  while IFS= read -r -d '' x; do got+=("$x"); done < <(adapter_burn_flags "do a thing" /tmp/wd)
+  [ "${#got[@]}" -eq 5 ]
+  [ "${got[0]}" = "-p" ]
+  [ "${got[1]}" = "do a thing" ]
+  [ "${got[2]}" = "--dangerously-skip-permissions" ]
+  [ "${got[3]}" = "--add-dir" ]
+  [ "${got[4]}" = "/tmp/wd" ]
+}
+
+@test "adapter_burn_flags (codex): exact NUL-per-argv recipe, first add-dir = cwd" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/codex.sh"
+  # second add-dir /ignored is dropped — codex's writable root is its cwd (-C).
+  local -a got=(); local x
+  while IFS= read -r -d '' x; do got+=("$x"); done < <(adapter_burn_flags "do a thing" /tmp/wd /ignored)
+  [ "${#got[@]}" -eq 6 ]
+  [ "${got[0]}" = "exec" ]
+  [ "${got[1]}" = "-C" ]
+  [ "${got[2]}" = "/tmp/wd" ]
+  [ "${got[3]}" = "-s" ]
+  [ "${got[4]}" = "workspace-write" ]
+  [ "${got[5]}" = "do a thing" ]
+}
+
+# THE BLIND SPOT (independent-audit catch 2026-06-13): a MULTI-LINE prompt must
+# survive as ONE argv item, not be shattered into one item per line. Every other
+# burn/conduct test uses a single-line prompt, which hid this.
+@test "adapter_burn_flags / adapter_audit_flags do NOT leak across adapters (leak-guard)" {
+  # The new optional hooks are in adapter_loader's unset list, so an adapter that
+  # doesn't define them (gh) must not inherit claude's.
+  _src_burn
+  load_adapter claude
+  declare -F adapter_burn_flags >/dev/null   # claude HAS it
+  declare -F adapter_audit_flags >/dev/null
+  load_adapter gh
+  ! declare -F adapter_burn_flags >/dev/null # gh must NOT have inherited it
+  ! declare -F adapter_audit_flags >/dev/null
+}
+
+@test "burn: --prompt with a trailing -- appends the extra argv after the generated flags" {
+  # Documented escape-hatch combo. Pin the behaviour so it's not a silent surprise:
+  # generated flags first, post-`--` argv appended verbatim.
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --artifact "$A" --prompt "do it" -- --color never
+  [ "$status" -eq 0 ]
+  # exec -C <dir> -s workspace-write "do it" --color never  (extra appended last)
+  grep -q -- "workspace-write do it --color never" "$BATS_TEST_TMPDIR/argv.log"
+}
+
+@test "adapter_burn_flags (claude): a multi-line prompt stays ONE argv item" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local ml; ml=$'line one\nline two\nline three'
+  local -a got=(); local x
+  while IFS= read -r -d '' x; do got+=("$x"); done < <(adapter_burn_flags "$ml" /tmp/wd)
+  [ "${#got[@]}" -eq 5 ]          # NOT 7 — the 3 prompt lines did not split
+  [ "${got[1]}" = "$ml" ]         # the whole multi-line prompt, intact
+}
+
+@test "burn --prompt-file delivers a MULTI-LINE prompt to codex as one arg" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGC_LOG="$BATS_TEST_TMPDIR/argc.log"
+  printf 'first line\nsecond line\nthird line\n' > "$BATS_TEST_TMPDIR/task.txt"
+  run clikae burn codex T1 --artifact "$A" --prompt-file "$BATS_TEST_TMPDIR/task.txt"
+  [ "$status" -eq 0 ]
+  # codex argv must be exactly: exec -C <dir> -s workspace-write <prompt> = 6 args.
+  # A shattered 3-line prompt would be 8. (The file's trailing newline is part of
+  # the single prompt arg, not a separate arg.)
+  [ "$(cat "$BATS_TEST_TMPDIR/argc.log")" = "6" ]
 }

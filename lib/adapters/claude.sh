@@ -29,6 +29,29 @@ adapter_run() {
   CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$@"
 }
 
+# Optional hook: how to run claude HEADLESS-with-write for `clikae burn`'s
+# convenience form (--prompt-file / --prompt). Prints the engine argv (after the
+# binary), one item per NUL, that runs <prompt> non-interactively with write
+# permission in each <add-dir>. NUL-separation (not newline) is what lets a
+# multi-line prompt survive as ONE argv item — a newline framing would shatter a
+# prompt that itself contains newlines (independent-audit catch, 2026-06-13). This
+# is the principled home for the headless flags a caller would otherwise
+# hand-assemble (the 2026-06-06 tugtile burn-writeup friction #1).
+adapter_burn_flags() {
+  local prompt="$1"; shift
+  printf -- '-p\0%s\0--dangerously-skip-permissions\0' "$prompt"
+  local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
+}
+
+# Optional hook: how to run claude HEADLESS READ-ONLY for `clikae conduct`'s
+# fan-out (no --dangerously-skip-permissions → reads/reasons, edits blocked). The
+# prompt is data; <dirs> are extra read roots (claude reads $PWD by default).
+adapter_audit_flags() {
+  local prompt="$1"; shift
+  printf -- '-p\0%s\0' "$prompt"
+  local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
+}
+
 # Optional hook: start a fresh session under this profile, seeded with an initial
 # prompt. Used by `clikae handoff --to` to hand a brief to the next tank. Claude
 # Code takes an initial prompt as a positional argument.

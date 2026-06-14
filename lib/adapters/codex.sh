@@ -31,6 +31,31 @@ adapter_run() {
   CODEX_HOME="$profile_dir" exec codex "$@"
 }
 
+# Optional hook: how to run codex HEADLESS-with-write for `clikae burn`'s
+# convenience form (--prompt-file / --prompt). Codex's headless verb is `exec`,
+# its working dir is `-C <dir>`, and `-s workspace-write` makes that dir writable.
+# Codex takes a SINGLE working dir, so the FIRST --add-dir becomes -C (the rest
+# are ignored — codex's writable root is the cwd under workspace-write). The
+# prompt is the trailing positional. Items are NUL-separated so a multi-line
+# prompt survives as ONE argv item (newline framing would shatter it).
+adapter_burn_flags() {
+  local prompt="$1"; shift
+  printf 'exec\0'
+  [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
+  printf -- '-s\0workspace-write\0%s\0' "$prompt"
+}
+
+# Optional hook: how to run codex HEADLESS READ-ONLY for `clikae conduct`'s
+# fan-out. `-s read-only` sandboxes it to reads; --skip-git-repo-check lets it run
+# outside a repo. First <dir> is the cwd (-C); the prompt is the trailing data.
+# NUL-separated items (multi-line prompt survives as one argv item).
+adapter_audit_flags() {
+  local prompt="$1"; shift
+  printf 'exec\0--skip-git-repo-check\0'
+  [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
+  printf -- '-s\0read-only\0%s\0' "$prompt"
+}
+
 # Optional hook: start a session seeded with an initial prompt (for
 # `clikae handoff --to codex/<profile>`). Codex takes a positional prompt.
 adapter_start_with_prompt() {

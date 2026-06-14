@@ -43,6 +43,27 @@ validate_name() {
   fi
 }
 
+# --- per-tank git commit identity (issue #22) ------------------------------
+# A tank governs an AI account's auth/fuel/memory; a coding session ALSO emits a
+# git author/committer, which the tank does not control today. These helpers let
+# a tank carry an OPTIONAL intended git identity, stamped into the shell by
+# `clikae env` so commits aren't mis-attributed to the engine's account email.
+# Stored as plain text under the tank dir (local-only, auditable):
+#   clikae-meta/git-identity   -> "name<TAB>email" (one line)
+
+# git_identity_file <cli> <profile> -> the path to the identity file.
+git_identity_file() {
+  printf '%s/clikae-meta/git-identity\n' "$(profile_dir "$1" "$2")"
+}
+
+# git_identity_read <cli> <profile> -> echo "name<TAB>email" if set, else nothing.
+# Never aborts the caller under `set -eo pipefail` (a missing file is normal).
+git_identity_read() {
+  local f; f="$(git_identity_file "$1" "$2")"
+  [ -f "$f" ] || return 0
+  head -n 1 "$f" 2>/dev/null || true
+}
+
 # List every profile as "<cli> <profile> <path>" lines, sorted.
 list_all_profiles() {
   local root
