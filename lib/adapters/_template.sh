@@ -48,3 +48,28 @@ adapter_run() {
   local profile_dir="$1"; shift
   EXAMPLE_CONFIG_DIR="$profile_dir" exec example "$@"
 }
+
+# Optional: how to run this CLI HEADLESS-with-write, so `clikae burn` can take a
+# high-level --prompt-file / --prompt + --add-dir instead of making the caller
+# hand-assemble each engine's flag dialect. Print the engine argv (AFTER the
+# binary), ONE item per NUL (\0); the prompt is passed as data and never re-quoted
+# by burn. NUL-separation (not newline) is REQUIRED — it's what lets a multi-line
+# prompt survive as one argv item. Define this only for engines burn can drive
+# (claude, codex); plain config-switcher adapters (gh, aws…) leave it out, and
+# burn then errors clearly, pointing the user at the explicit `-- <cmd…>` form.
+#
+# adapter_burn_flags() {
+#   local prompt="$1"; shift
+#   printf -- '-p\0%s\0' "$prompt"            # the prompt, headless
+#   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done   # writable dirs
+# }
+
+# Optional: the READ-ONLY sibling of adapter_burn_flags, for `clikae conduct`'s
+# parallel fan-out (best-of-N audits/analyses). Same NUL-per-item contract, but
+# the recipe must NOT grant write access (so N legs can't clobber each other).
+#
+# adapter_audit_flags() {
+#   local prompt="$1"; shift
+#   printf -- '-p\0%s\0' "$prompt"            # headless, no write permission
+#   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done   # read roots
+# }

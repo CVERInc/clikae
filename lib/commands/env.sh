@@ -64,6 +64,20 @@ EOF
     return 1
   fi
 
+  # issue #22: if this tank carries an intended git identity, also export the four
+  # standard git env vars so commits made in this shell are stamped with it (git
+  # env vars beat `git config`, pinning authorship even when the engine commits via
+  # global config). Absent file ⇒ nothing emitted (safe default).
+  local gid gname gemail
+  gid="$(git_identity_read "$cli" "$tank")"
+  if [ -n "$gid" ]; then
+    gname="${gid%%$'\t'*}"; gemail="${gid#*$'\t'}"
+    printf 'export GIT_AUTHOR_NAME=%s\n'     "$(_env_shquote "$gname")"
+    printf 'export GIT_AUTHOR_EMAIL=%s\n'    "$(_env_shquote "$gemail")"
+    printf 'export GIT_COMMITTER_NAME=%s\n'  "$(_env_shquote "$gname")"
+    printf 'export GIT_COMMITTER_EMAIL=%s\n' "$(_env_shquote "$gemail")"
+  fi
+
   # If stdout is a terminal the user almost certainly forgot the eval — nudge on
   # stderr so it never pollutes the eval'd output.
   if [ -t 1 ]; then

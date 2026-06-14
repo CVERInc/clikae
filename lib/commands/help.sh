@@ -34,6 +34,7 @@ Make & manage tanks:
   init <engine> <tank>             create a new tank   (--alias adds a shell alias)
   remove <engine> <tank>           remove a tank (dir, alias, .app)
   rename <engine> <old> <new>      rename a tank (login carried over)
+  git-id <engine> <tank>           set a tank's git commit identity (--name --email)
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
 
 Keep burning when a tank runs dry:
@@ -43,6 +44,8 @@ Keep burning when a tank runs dry:
   watch <engine> [tank]            watch for a dry tank and switch onward
   burn <engine> <tank> -- <cmd>    run a headless task on a tank; on a dry tank,
                                    re-fire it on the next (verify by --artifact)
+  conduct --leg <e>/<t>... --prompt-file <f>   (BETA) fan ONE prompt across N
+                                   accounts in parallel, collect each full result
 
 Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app

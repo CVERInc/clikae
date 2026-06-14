@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-14
+
+The vertical-orchestration step: clikae grows the muscle for directing a fleet of
+AI CLIs that each burn their own subscription — and a sibling Claude Code skill
+(`conductor`) stands on it. All additive; the existing command surface is unchanged.
+
+### Added
+
+- **`clikae conduct` (BETA)** — fan ONE prompt across N accounts **in parallel**,
+  each running headless **read-only** on its own tank (its own quota), then collect
+  every leg's full output and print a captured/dry table. clikae does **not** judge —
+  it hands you N result files and an honest table; you (or a session model acting as
+  conductor) pick the winner. Read-only by design so legs can't clobber a shared
+  tree. New optional adapter hook `adapter_audit_flags` (claude, codex).
+- **`clikae git-id <engine> <tank> --name … --email …`** (issue #22) — give a tank
+  an optional git commit identity. When set, `clikae env` also exports
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, so commits made in that shell are stamped with
+  the identity you intended — not the engine's account email (the HANDOFF §13
+  mis-attribution incident). git env vars beat `git config`; honest limits (loses to
+  an explicit `git -c user.email=…`, per-shell only, future commits only) are
+  documented in the command's help and `docs/grammar.md`.
+- **`clikae burn --prompt-file <f>` / `--prompt <str>` / `--add-dir <dir>`** (issue
+  #24) — the easy way to burn a write-task: clikae fills each engine's headless-write
+  flags from a new optional adapter hook `adapter_burn_flags` (claude, codex), so you
+  no longer hand-assemble `-p … --dangerously-skip-permissions` / `exec -s
+  workspace-write …`. A cross-engine `--to` reroute now regenerates the flags for the
+  new engine (previously it shipped the wrong engine's flags). The explicit `-- <cmd…>`
+  form keeps working unchanged.
+
+### Fixed
+
+- The new `adapter_burn_flags` / `adapter_audit_flags` recipes are **NUL-separated**,
+  not newline-separated, so a multi-line prompt survives as a single argv item (a
+  newline framing shattered a prompt that itself contained newlines).
+- `clikae conduct` classifies a leg by its captured output, not the result file's
+  size, so an empty (failed) leg is reported as a real failure rather than a false
+  "captured" (an empty `printf` still writes a trailing newline).
+
 ## [0.5.14] — 2026-06-07
 
 ### Changed

@@ -120,12 +120,14 @@ fuel words forced on them.
 | `clikae init <engine> <tank>` | Create a tank. (`--alias` also writes a shell alias.) |
 | `clikae remove <engine> <tank>` | Remove a tank (dir, alias, .app). |
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
+| `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22 / HANDOFF §13). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
 | `clikae tanks` (alias: `clikae list` / `ls`) | List every tank, with the logged-in account. `tanks` is canonical — a **noun query**, like the existing `adapters` command, not a coined verb. `list`/`ls` stay for convention and for the GUI's `list --json`. |
 | `clikae status [cli]` | Which tank each CLI is on **in this shell**. |
 | `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
 | `clikae auto [ask\|safe\|full]` | (BETA, claude) how much the supervised launch carries on its own on a dry tank. |
 | `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank in the burn order. |
-| `clikae burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank, verify it by the artifact it must produce (never the exit code — `codex exec` exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. The headless sibling of the switch: batch/parallelism stays the orchestrator's job; `burn` is the single-task unit it fans out and re-fires. `--to` forces an explicit next hop. |
+| `clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> \| -- <cmd…>)` | Run a **headless** task on a tank, verify it by the artifact it must produce (never the exit code — `codex exec` exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the **easy way** (`--prompt-file`/`--prompt` + `--add-dir`: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the **power-user way** (raw `-- <cmd…>`). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; `burn` is the single-task unit it fans out and re-fires. `--to` forces an explicit next hop. |
+| `clikae conduct --leg <e>/<t>… (--prompt-file <f> \| --prompt <s>)` | **(BETA)** The vertical-orchestration primitive: fan ONE prompt across N accounts **in parallel**, each running headless **read-only** on its own tank (its own quota), then collect every leg's full output and print a captured/dry table. clikae does **not** judge — it hands you N result files and an honest table; you (or the session model acting as conductor) pick the winner. Brain/muscle split: clikae is the muscle (accounts, dry-detection, parallel routing), the conductor is the brain. Read-only by design so legs can't clobber a shared tree; write/impl tournaments stay an orchestrator's job. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
 | `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `l` key opens a language picker. |
@@ -138,10 +140,11 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `auto`, `burn`, `rename`, `migrate`, `env`, `app`, `alias`, `lang`,
-   `run`, `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`, `demo`,
-   `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases and
-   `-h/--help/-v/--version`) → run that command.
+   `watch`, `auto`, `burn`, `conduct`, `rename`, `git-id`, `migrate`, `env`, `app`, `alias`,
+   `lang`, `run`, `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`,
+   `demo`, `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases
+   and `-h/--help/-v/--version`) → run that command. (`git-id` routes to the
+   `git_id.sh` command — the only verb whose file/function uses `_` for the `-`.)
 2. **Else, a known CLI?** (an adapter in `lib/adapters/` or a target in
    `lib/targets/`, e.g. `claude`, `codex`, `agy`) → the **bare switch** of §3.1.
 3. **Else** → unknown; show an error + `help`.
