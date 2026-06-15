@@ -123,6 +123,19 @@ _stub_gh() {
   [[ "$output" == *"codex/NOPE — no such tank"* ]] || false
 }
 
+# --- honest-limits disclosure in --help (philosophy → docs; no phantom promises) ---
+@test "conduct --help discloses the read-only, no-judge, adapter-gated, dry limits" {
+  run clikae conduct --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Read-only by design"* ]] || false        # legs can't clobber
+  [[ "$output" == *"clikae never judges"* ]] || false        # you pick the winner
+  [[ "$output" == *"adapter_audit_flags"* ]] || false        # adapter-hook gated
+  [[ "$output" == *"CLIKAE_LIMIT_PATTERN"* ]] || false        # dry-wording override
+  # captured vs failed must be visible (the table's vocabulary)
+  [[ "$output" == *"captured"* ]] || false
+  [[ "$output" == *"empty (a real failure"* ]] || false
+}
+
 @test "conduct requires a prompt" {
   run clikae conduct --leg codex/A
   [ "$status" -ne 0 ]
