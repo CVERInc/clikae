@@ -72,6 +72,11 @@ checked so a dropped one just re-fires elsewhere.
 Boundary: burn only fits tasks whose success is a FILE you can name — codegen,
 analysis, transforms. It CANNOT judge work whose proof is runtime behaviour (a UI
 renders, a server answers); that still needs a human to verify.
+
+Dry-detection leans on each vendor's CURRENT limit wording. If a vendor rewords
+it, a dry tank would be misread as a real task failure (no reroute). Set
+$CLIKAE_LIMIT_PATTERN='<regex>' to teach burn a new phrase (same override clikae
+watch honours).
 EOF
 }
 

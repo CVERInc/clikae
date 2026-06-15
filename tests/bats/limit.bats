@@ -49,3 +49,42 @@ _src_limit() {
   run limit_codex_output_dry "wrote /tmp/out.md, done."
   [ "$status" -ne 0 ]
 }
+
+# --- $CLIKAE_LIMIT_PATTERN fallback for the headless output-dry path -----------
+# The built-in matcher leans on codex's CURRENT wording ("hit your usage limit").
+# If a vendor rewords its limit line, burn/conduct would misread a dry tank as a
+# real task failure with no override (watch already has --pattern / the env var;
+# this path did not). $CLIKAE_LIMIT_PATTERN is the escape hatch — same env var the
+# watch path honours — so a user can teach burn/conduct a new phrase in the field.
+
+@test "limit_output_dry: a vendor wording change is missed by the built-in matcher" {
+  _src_limit
+  # Hypothetical future codex phrasing the built-in regex does NOT cover.
+  run limit_output_dry codex "Quota exceeded for this account. Back at Jul 7th, 2026 2:17 PM."
+  [ "$status" -ne 0 ]                       # built-in can't see it (the gap)
+}
+
+@test "limit_output_dry: \$CLIKAE_LIMIT_PATTERN teaches it a new vendor phrase (codex)" {
+  _src_limit
+  CLIKAE_LIMIT_PATTERN='Quota exceeded'
+  run limit_output_dry codex "Quota exceeded for this account. Back at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]                       # the override catches it
+}
+
+@test "limit_output_dry: \$CLIKAE_LIMIT_PATTERN works for an engine with no built-in matcher" {
+  _src_limit
+  # gh has no output-dry detector at all (returns 1) — the override gives one engine
+  # a signal where there was none, without inventing a per-engine matcher.
+  run limit_output_dry gh "some output"
+  [ "$status" -ne 0 ]                       # no built-in, no override → not dry
+  CLIKAE_LIMIT_PATTERN='rate limited'
+  run limit_output_dry gh "you are rate limited, retry later"
+  [ "$status" -eq 0 ]
+}
+
+@test "limit_output_dry: clean output stays NOT dry even with a pattern set" {
+  _src_limit
+  CLIKAE_LIMIT_PATTERN='Quota exceeded'
+  run limit_output_dry codex "wrote /tmp/out.md, all good."
+  [ "$status" -ne 0 ]
+}

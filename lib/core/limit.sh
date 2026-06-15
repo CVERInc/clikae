@@ -83,8 +83,22 @@ limit_codex_output_dry() {
 # Per-engine (the wording differs); engines with no output signal return 1, so the
 # caller treats a missing artifact as a task failure, not a dry tank. Drives
 # `clikae burn`'s fall-through — exit code is NOT trusted (codex exec exits 0 dry).
+#
+# Built-in fragility (honest): the per-engine matchers below lean on each vendor's
+# CURRENT wording. If a vendor rewords its limit line, a dry tank would be misread
+# as a real task failure. $CLIKAE_LIMIT_PATTERN is the escape hatch — the SAME env
+# var `clikae watch` honours (--pattern) — so a user can teach burn/conduct a new
+# phrase in the field without a code change. It is a deliberate override: it is
+# tried FIRST and, when it matches, wins (and even gives a signal to an engine that
+# has no built-in matcher). It never relays a reset phrase (clikae doesn't know the
+# new format), only the dry/not-dry verdict.
 limit_output_dry() {
   local cli="$1" out="$2"
+  if [ -n "${CLIKAE_LIMIT_PATTERN:-}" ]; then
+    printf '%s' "$out" | grep -qaiE "$CLIKAE_LIMIT_PATTERN" && return 0
+    # No override match → fall through to the built-in per-engine matchers, so the
+    # pattern only ADDS coverage, never masks a hit the built-in would have caught.
+  fi
   case "$cli" in
     codex)  limit_codex_output_dry "$out" ;;
     claude)

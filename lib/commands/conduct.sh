@@ -44,6 +44,19 @@ Each leg's outcome is judged by its OUTPUT, never the exit code (a headless agen
 exits 0 even when it hit its limit). Outcomes per leg: captured / dry (with the
 vendor's reset phrase) / empty (a real failure — auth/sandbox/no answer).
 
+Honest limits (what conduct does NOT do):
+  • Read-only by design. Every leg runs with its engine's read-only headless
+    recipe, so N legs can't clobber a shared working tree. conduct is for
+    best-of-N AUDITS/ANALYSES/PROPOSALS — NOT write/impl tournaments (those need
+    isolated worktrees and stay an orchestrator's job).
+  • clikae never judges. You get N result files + an honest table; YOU (or the
+    session model acting as conductor) pick the winner. No scoring, no merge.
+  • Adapter-gated. A leg only runs if its engine defines a read-only recipe
+    (adapter_audit_flags) — today claude and codex. Others are flagged, not run.
+  • Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
+    rewords it, set $CLIKAE_LIMIT_PATTERN='<regex>' to teach it (same override
+    clikae watch honours); otherwise a dry leg may show as "empty (failure)".
+
 Example — best-of-N audit across three accounts:
   clikae conduct --prompt-file review.md \
     --leg codex/H --leg codex/i --leg claude/C --add-dir "$PWD"
