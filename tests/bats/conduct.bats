@@ -123,6 +123,35 @@ _stub_gh() {
   [[ "$output" == *"codex/NOPE — no such tank"* ]] || false
 }
 
+# --- 2026-06-16 adversarial: leg names were NEVER validated, so the per-leg slug
+# (engine-tank) could carry `/` or `..` and make the result/status file escape the
+# out-dir (and two legs could collide onto one slug, overwriting each other). ---
+
+@test "conduct: a path-traversal leg is SKIPPED — no file escapes the out-dir" {
+  _stub_codex
+  clikae init codex A
+  local D="$BATS_TEST_TMPDIR/out"
+  # Sentinel one level above the out-dir; the traversal leg's status file would
+  # have resolved to here ($D/../codex-..-..-x.status style) before the guard.
+  local up="$BATS_TEST_TMPDIR/UP_MUST_STAY_EMPTY"; mkdir -p "$up"
+  run clikae conduct --prompt "x" --leg codex/A --leg "codex/../../UP_MUST_STAY_EMPTY/pwn" --out-dir "$D"
+  [ "$status" -eq 0 ]                                   # the good leg still ran
+  [[ "$output" == *"skipping --leg"* ]] || false        # the bad leg was rejected
+  [[ "$output" == *"codex/A — captured"* ]] || false
+  # Nothing was written outside the out-dir.
+  [ -z "$(ls -A "$up")" ] || false
+}
+
+@test "conduct: a leg with a slash in the tank is skipped, not parsed as a subdir" {
+  _stub_codex
+  clikae init codex A
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "x" --leg codex/A --leg "codex/a/b" --out-dir "$D"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipping --leg 'codex/a/b'"* ]] || false
+  [ ! -e "$D/codex-a" ]                                 # no stray subdir created
+}
+
 # --- honest-limits disclosure in --help (philosophy → docs; no phantom promises) ---
 @test "conduct --help discloses the read-only, no-judge, adapter-gated, dry limits" {
   run clikae conduct --help

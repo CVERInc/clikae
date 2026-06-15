@@ -163,6 +163,17 @@ cmd_conduct() {
       */*) engine="${leg%%/*}"; tank="${leg#*/}" ;;
       *)   log_warn "skipping malformed --leg '$leg' (want <engine>/<tank>)"; continue ;;
     esac
+    # Validate BOTH halves to the same safe name charset clikae uses everywhere
+    # (A-Z a-z 0-9 . _ -). This keeps the per-leg slug a single safe path segment:
+    # without it a tank like `../../x` makes `$out_dir/$slug` escape the out-dir,
+    # and two legs could collide onto one slug and silently overwrite each other's
+    # result. Skip-with-warning (don't abort the whole fan-out for one bad leg).
+    case "$engine$tank" in
+      *[!A-Za-z0-9._-]*|"")
+        log_warn "skipping --leg '$leg' (engine/tank may use only A-Z a-z 0-9 . _ -)"; continue ;;
+    esac
+    case "$engine" in ""|.*) log_warn "skipping --leg '$leg' (bad engine)"; continue ;; esac
+    case "$tank"   in ""|.*) log_warn "skipping --leg '$leg' (bad tank)"; continue ;; esac
     slug="${engine}-${tank}"
     local of="$out_dir/$slug.txt" sf="$out_dir/$slug.status"
     _conduct_one "$engine" "$tank" "$prompt" "$of" "$sf" "$timeout_s" "${add_dirs[@]}" &
