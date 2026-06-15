@@ -122,3 +122,58 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
   [ "$status" -ne 0 ]
   [[ "$output" == *"iTerm2 not found"* ]] || false
 }
+
+# --- string-escaping helpers (pure functions; run on any OS, no .app needed) ----
+# These two escapers are load-bearing: a wrong order corrupts the generated
+# AppleScript / Ghostty conf (HANDOFF §4). Pin them directly so a future tweak
+# can't silently regress the escaping that keeps launchers valid.
+_src_app() {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+}
+
+@test "_app_applescript_escape: backslash is doubled BEFORE the quote is escaped" {
+  _src_app
+  # Order matters: backslash first, then quote. Input  a"b\c  must become  a\"b\\c
+  # (NOT a\"b\c, which a quote-first order would wrongly produce).
+  run _app_applescript_escape 'a"b\c'
+  [ "$output" = 'a\"b\\c' ]
+}
+
+@test "_app_applescript_escape: a lone double-quote is escaped" {
+  _src_app
+  run _app_applescript_escape 'say "hi"'
+  [ "$output" = 'say \"hi\"' ]
+}
+
+@test "_app_applescript_escape: a plain string is unchanged" {
+  _src_app
+  run _app_applescript_escape 'CLAUDE_CONFIG_DIR=/tmp/x claude'
+  [ "$output" = 'CLAUDE_CONFIG_DIR=/tmp/x claude' ]
+}
+
+@test "_app_shell_squote: an embedded single quote becomes the canonical '\\'' form" {
+  _src_app
+  # POSIX single-quote: each ' breaks out, escapes, re-enters → it's  ->  'it'\''s'
+  run _app_shell_squote "it's"
+  [ "$output" = "'it'\\''s'" ]
+}
+
+@test "_app_shell_squote: the result ROUND-TRIPS through the shell (the real contract)" {
+  _src_app
+  # The whole point: eval'ing the squoted form must reproduce the input EXACTLY.
+  # A broken escaping yields "unmatched '" — exactly the corrupt Ghostty conf bug.
+  local inp
+  for inp in "it's" "a'b'c" "plain string" 'has"dquote' 'a\backslash' "mix's \"and\" \\stuff"; do
+    local q rt
+    q="$(_app_shell_squote "$inp")"
+    rt="$(eval "printf '%s' $q")"
+    [ "$rt" = "$inp" ] || { echo "round-trip failed: in=[$inp] quoted=[$q] back=[$rt]" >&2; false; }
+  done
+}
+
+@test "_app_shell_squote: a plain string is just single-quoted" {
+  _src_app
+  run _app_shell_squote 'clikae; exec zsh -i'
+  [ "$output" = "'clikae; exec zsh -i'" ]
+}

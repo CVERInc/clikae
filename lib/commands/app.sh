@@ -17,9 +17,19 @@ _app_applescript_escape() {
   printf '%s' "$s"
 }
 
-# POSIX single-quote a string for safe use as one shell word.
+# POSIX single-quote a string for safe use as one shell word: each embedded `'`
+# becomes the canonical `'\''` (close-quote, escaped-quote, re-open-quote), then the
+# whole is wrapped in single quotes. Everything else (backslashes, double quotes) is
+# literal inside single quotes, so this round-trips any input.
+#
+# The replacement literal is built as a VARIABLE on purpose. Inlining it as
+# `${1//\'/\'\\\'\'}` mis-parses under bash's // backslash handling (it emitted
+# `\'\'\'` instead of `'\''`, producing shell that fails with "unmatched '" for any
+# value containing a quote — e.g. a Ghostty launcher for such a tank/command). The
+# variable form makes the 4 bytes  ' \ ' '  unambiguous.
 _app_shell_squote() {
-  local s="${1//\'/\'\\\'\'}"
+  local q=\'\\\'\'                 # the literal 4 chars:  ' \ ' '
+  local s="${1//\'/$q}"
   printf "'%s'" "$s"
 }
 
