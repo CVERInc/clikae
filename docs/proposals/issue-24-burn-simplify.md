@@ -1,5 +1,28 @@
 # Proposal — Issue #24: simplify `clikae burn` (drop the per-engine flag wrangling)
 
+> Status: ✅ **SHIPPED in v0.6.0** (the full design — `--prompt` / `--prompt-file` /
+> `--add-dir` + the per-engine `adapter_burn_flags` hook). This file is now an
+> **archived reference** for the rationale; the live behaviour is authoritative.
+> What actually shipped:
+>
+> - Convenience surface: `clikae burn <engine> <tank> --artifact <path>
+>   (--prompt-file <f> | --prompt <str>)` with `--add-dir` defaulting to the
+>   artifact's parent (`lib/commands/burn.sh`, `cmd_burn` / `_burn_compose`).
+> - Per-engine write hook `adapter_burn_flags` on claude + codex (NUL-separated
+>   argv, so a multi-line prompt survives as one item), stubbed in `_template.sh`,
+>   added to the adapter-loader leak-guard.
+> - Cross-engine `--to` reroute regenerates the flags for the new engine (the
+>   soundness fix in §2/§3c).
+> - Docs: `docs/grammar.md` §3.3 documents both the easy and power-user forms;
+>   tests in `tests/bats/burn.bats` (incl. the direct `adapter_burn_flags` unit
+>   tests and the cross-engine-regenerate case).
+>
+> The raw `-- <cmd…>` power-user form is unchanged (fully additive, as designed).
+>
+> _Original draft preserved verbatim below._
+
+---
+
 Status: draft / design
 Author: design note (for review)
 Touches: `lib/commands/burn.sh`, `lib/adapters/*.sh`, `lib/core/adapter_loader.sh`, `tests/bats/burn.bats`, `docs/grammar.md`, `docs/usage.md`

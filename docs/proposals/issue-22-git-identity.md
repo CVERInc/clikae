@@ -1,5 +1,27 @@
 # Proposal — issue #22: per-tank git commit identity
 
+> Status: ✅ **SHIPPED in v0.6.0** (the recommended Option A — per-tank git identity,
+> exported via `clikae env`). This file is now an **archived reference** kept for the
+> design rationale and the §5 honest-limits framing; the live behaviour is what
+> matters, not this draft. Pointers to what actually shipped:
+>
+> - Command: `clikae git-id <engine> <tank> [--name N --email E | --unset]`
+>   (`lib/commands/git_id.sh`; help text in `lib/commands/help.sh`).
+> - Mechanism: when a tank has an identity, `clikae env` also emits the four
+>   `GIT_AUTHOR_*` / `GIT_COMMITTER_*` exports (`lib/commands/env.sh`).
+> - Grammar/docs: documented in `docs/grammar.md` §3.3 (management verbs) with the
+>   honest limit — env vars beat `git config` but NOT an explicit
+>   `git -c user.email=…`, and only future commits are affected.
+> - Tests: `tests/bats/git_id.bats`.
+>
+> Option B (the `status` mismatch warning) was NOT shipped as part of v0.6.0 — it
+> remains the cheap follow-up brick described in §3/§4 below. The PowerShell mirror
+> is likewise still a follow-up.
+>
+> _Original draft preserved verbatim below._
+
+---
+
 > Status: **design draft** (no code yet). Origin: HANDOFF.md §13 ("tanks own the
 > AI account's state, but NOT the git commit identity"). This proposal turns that
 > open question into a recommended path. It does **not** touch git history and is
