@@ -75,3 +75,27 @@ seed_rollout() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"00000000f002"* ]] || false
 }
+
+# Regression: a rollout whose recorded cwd carries a TRAILING SLASH must still match
+# the current dir (codex normally records no trailing slash, but a path that resolves
+# with one would silently drop the session from the board / make resume impossible).
+@test "codex cwd match is trailing-slash insensitive (recorded cwd has the slash)" {
+  _setup_codex
+  seed_rollout 019e0000-0000-7000-8000-0000000000a1 "$WORK/" "slashed cwd"
+  run adapter_transcript_path "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0000000000a1"* ]] || false
+  run adapter_recent_sids "$PROFILE"
+  [[ "$output" == *"0000000000a1"* ]] || false
+}
+
+# And the reverse: a still-different cwd must NOT match (the fix must not become a
+# loose prefix/substring match — only a trailing slash is normalised away).
+@test "codex cwd match still EXCLUDES a genuinely different dir after the fix" {
+  _setup_codex
+  seed_rollout 019e0000-0000-7000-8000-0000000000b1 "$WORK"          "here"  10-00-00
+  seed_rollout 019e0000-0000-7000-8000-0000000000b2 "${WORK}-other/" "there" 11-00-00
+  run adapter_recent_sids "$PROFILE"
+  [[ "$output" == *"0000000000b1"* ]] || false
+  [[ "$output" != *"0000000000b2"* ]] || false
+}

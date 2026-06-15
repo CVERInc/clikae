@@ -116,12 +116,17 @@ _codex_find_rollout() {
 }
 
 # _codex_rollouts_for_cwd <dir> — rollout files under <dir> whose recorded cwd is
-# $PWD, newest first.
+# $PWD, newest first. The compare is trailing-slash-insensitive on BOTH sides: a
+# rollout written from a path with a trailing slash (or a $PWD that carries one)
+# must still match, or the session silently vanishes from the board / can't resume.
+# Same normalisation `live_dir_users` already applies (`${dir%/}`).
 _codex_rollouts_for_cwd() {
-  local sdir f; sdir="$(_codex_sessions_dir "$1")"
+  local sdir f want; sdir="$(_codex_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
+  want="${PWD%/}"
   find "$sdir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort -r | while IFS= read -r f; do
-    [ "$(_codex_meta_field "$f" cwd)" = "$PWD" ] && printf '%s\n' "$f"
+    local rec; rec="$(_codex_meta_field "$f" cwd)"
+    [ "${rec%/}" = "$want" ] && printf '%s\n' "$f"
   done
 }
 
