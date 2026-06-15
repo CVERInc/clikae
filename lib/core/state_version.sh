@@ -54,7 +54,11 @@ state_version_check() {
   local n
   for ((n = cur; n < CLIKAE_STATE_VERSION; n++)); do
     if declare -F "_state_migrate_$n" >/dev/null 2>&1; then
-      "_state_migrate_$n" || { log_warn "clikae: state migration v$n→v$((n + 1)) failed — left as-is."; return 0; }
+      # NOTE: keep spaces around the arrow. A multibyte `→` jammed directly
+      # against `$n`/`$((…))` corrupts under bash 3.2 + a UTF-8 LANG with LC_ALL
+      # unset (the digit and the arrow's lead byte get eaten → "v␦␦v2"). The
+      # spaced form renders cleanly; the log_dim line below already uses spaces.
+      "_state_migrate_$n" || { log_warn "clikae: state migration v$n → v$((n + 1)) failed — left as-is."; return 0; }
       log_dim "clikae: migrated state v$n → v$((n + 1))."
     fi
   done
