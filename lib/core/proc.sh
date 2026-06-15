@@ -70,9 +70,21 @@ live_dir_users() {
 # _proc_is_background <cmdline> — true if the command looks like a background
 # daemon / spare / pty-host rather than an interactive session (HANDOFF §11).
 # Those recreate the dir more softly, so they warn instead of hard-failing.
+#
+# CRITICAL ASYMMETRY: this guard fails CLOSED. A false *negative* (a real
+# background worker read as interactive) only over-warns — harmless. A false
+# *positive* (an interactive session read as background) downgrades the hard-fail
+# to a warning, so rename/migrate/remove proceed and CORRUPT the live session.
+# So the markers must be SPECIFIC to Claude's real background spawns, never broad
+# substrings. WHY this matters on macOS: `ps eww` appends each process's whole
+# ENVIRONMENT to the command column (see live_dir_users), so <cmdline> here carries
+# every env var value too — a bare `*daemon*` / `*--bg-*` would match an innocent
+# interactive session whose env happens to hold e.g. `XDG_DATA_HOME=…/daemon-cache`
+# and silently green-light corrupting it (verified 2026-06-16). Match Claude's
+# actual background argv markers only.
 _proc_is_background() {
   case "$1" in
-    *"daemon run"*|*daemon*|*--bg-spare*|*--bg-pty-host*|*"--bg-"*) return 0 ;;
+    *"daemon run"*|*"--bg-spare"*|*"--bg-pty-host"*) return 0 ;;
     *) return 1 ;;
   esac
 }
