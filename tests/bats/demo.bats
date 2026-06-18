@@ -27,13 +27,15 @@ load '../helpers'
 }
 
 @test "demo cleans up its sandbox" {
+  # The tour no longer prints the sandbox path (it would leak a local path into a
+  # public screenshot), so verify cleanup by DELTA — the tour must leave no new
+  # clikae-demo.* sandbox behind (robust to leftovers from other runs).
+  local pat="${TMPDIR:-/tmp}" before after
+  before="$(find "$pat" -maxdepth 1 -name 'clikae-demo.*' -type d 2>/dev/null | wc -l)"
   run clikae demo
   [ "$status" -eq 0 ]
-  # The "Everything below runs under <dir>" line names the sandbox; it must be gone.
-  local sb
-  sb="$(printf '%s\n' "$output" | sed -n 's/.*runs under \(.*\)$/\1/p' | head -n1)"
-  [ -n "$sb" ]
-  [ ! -d "$sb" ]
+  after="$(find "$pat" -maxdepth 1 -name 'clikae-demo.*' -type d 2>/dev/null | wc -l)"
+  [ "$after" -le "$before" ]
 }
 
 @test "demo --help explains the sandbox" {

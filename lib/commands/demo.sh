@@ -89,7 +89,7 @@ EOF
   trap "rm -rf '$sb'" EXIT
 
   log_bold "clikae demo — a guided tour in a throwaway sandbox"
-  log_dim  "Everything below runs under $sb"
+  log_dim  "Everything below runs in a temporary sandbox, gone when the tour ends."
   log_dim  "Your real ~/.clikae, logins, and shell rc are NOT touched."
   echo ""
 
