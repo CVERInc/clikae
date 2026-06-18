@@ -7,10 +7,12 @@ load '../helpers'
   run clikae demo
   [ "$status" -eq 0 ]
   [[ "$output" == *"guided tour"* ]] || false
-  [[ "$output" == *"alice@studio.dev"* ]] || false
-  [[ "$output" == *"bob@studio.dev"* ]] || false
-  [[ "$output" == *"active here"* ]]          # the live tank board, alice active
-  [[ "$output" == *"clikae to bob"* ]] || false
+  [[ "$output" == *"cver-A"* ]] || false                       # one person's OWN accounts (not a shared login)
+  [[ "$output" == *"across claude, codex and agy"* ]] || false # several engines on the board
+  [[ "$output" == *"never shares one login"* ]] || false       # the account-ownership framing
+  [[ "$output" == *"active here"* ]]                            # the live tank board (cver-A active)
+  [[ "$output" == *"hit your usage limit"* ]] || false         # the red over-quota dot + verbatim reset time
+  [[ "$output" == *"clikae to cver-B"* ]] || false
 }
 
 @test "demo touches nothing in the real CLIKAE_HOME" {
@@ -21,7 +23,7 @@ load '../helpers'
   [ "$status" -eq 0 ]
   after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
   [ "$before" = "$after" ]
-  [ ! -d "$CLIKAE_HOME/profiles/claude/alice" ]
+  [ ! -d "$CLIKAE_HOME/profiles/claude/cver-A" ]
 }
 
 @test "demo cleans up its sandbox" {
