@@ -169,8 +169,8 @@ is a hardening patch on top of that — no new command surface:
 - ✅ **`homebrew/RELEASING.md`** — exact publish commands captured in-repo.
 
 The tree is clean and CI is green — **6 jobs**: shellcheck, smoke (ubuntu+macos),
-bats (ubuntu+macos), and pester (windows). `bats -r tests` = **327/327** (was
-327/327 in v0.6.0; the two new bats tests are counted here). The live punch-list
+bats (ubuntu+macos), and pester (windows). `bats -r tests` = **408/408**
+(verified locally 2026-06-20, 0 failures). The live punch-list
 is `docs/HANDOFF-world-class-gaps.md`; the older §2 below is v0.4-era context.
 
 **Release recipe (for next time you cut a tag) — what `v0.4.0` did:** bump
