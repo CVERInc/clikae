@@ -67,3 +67,19 @@ Two landing pages, two tones. (Accepted cost: double the copy/maintenance.)
   roadmap item 2, not shipped yet — don't claim it as present until it is.
 - The local model needs Apple Intelligence / a local CLI available; clikae always
   falls back gracefully (raw extract / age) when it isn't.
+
+## Future opportunities (not yet shipped)
+
+**Interrupted-session pickup** — when a fleet worker's session is cut short
+mid-task (tank ran dry, process killed, network drop), a future clikae could detect
+the partial-completion state and hand off the remaining work to another engine with
+enough context to resume from where the interrupted session stopped — not just a
+static handoff brief, but a "here is what was done, here is the uncompleted step"
+continuation. Today `clikae to` writes a handoff brief from a *completed or
+voluntarily exited* session; this is distinct: it would pick up a *half-finished
+job* and re-thread it to a live tank. The artifact-checked, idempotent task
+convention (`burn`'s `--artifact`) is the right foundation — any task designed
+around a verifiable artifact can be trivially re-fired. The harder piece is
+reconstructing partial state for tasks that don't produce a clean midpoint artifact.
+Not designed yet; flagged here as the natural next capability after the
+model-tiering + neutral-grader work lands in practice.

@@ -142,17 +142,36 @@ These mirror how this project was built and must be preserved:
 > roadmap decision on whether relay deserves its own headline in README's roadmap
 > list.
 
-**HEAD state (read this first).** The latest tagged release is **`v0.5.9`**
-(2026-06-05; both `homebrew/clikae.rb` and the tap's `Formula/clikae.rb` track it,
-`brew fetch`-verified). Everything in §2's "still TODO before a v0.5 tag" shipped
-long ago; v0.5.x has since added the fuel-tank grammar, the burn-order board, agy
-multi-account, `clikae burn`, the dry-tank carry-onward stack + codex red dot
-(v0.5.8), and the update-check notice + the two world-class P1 fixes (v0.5.9 —
-see `docs/HANDOFF-world-class-gaps.md`, now down to just P2). The tree is clean and
-CI is green on every push — **6 jobs**: shellcheck, smoke (ubuntu+macos), bats
-(ubuntu+macos), and pester (windows). `bats -r tests` = **327/327**. The live
-punch-list is `docs/HANDOFF-world-class-gaps.md`; the older §2 below is v0.4-era
-context.
+**HEAD state (read this first — updated 2026-06-20).** The latest release in-tree is
+**`v0.6.1`** (branch `release-v0.6.1`, pending tag + push by the maintainer).
+`v0.6.0` (2026-06-14) shipped the vertical-orchestration feature set: `clikae
+conduct`, `clikae git-id`, `clikae burn --prompt-file/--prompt/--add-dir`, and
+the orchestration playbook (`docs/orchestration.md`). **`v0.6.1`** (2026-06-20)
+is a hardening patch on top of that — no new command surface:
+
+- ✅ **`conduct --leg` name validation** — path-escape bug fixed; slugs can't leave the out-dir.
+- ✅ **`proc` interactive-vs-background guard** — env-block false positives fixed.
+- ✅ **`_app_shell_squote`** — single-quote handling corrected; `.app` launchers
+  work for paths/prompts with apostrophes.
+- ✅ **`codex` cwd trailing-slash matching** — sessions with/without trailing slash
+  both surface in the Continue list.
+- ✅ **`state-version` migration message** — garbled failure message fixed; v1→v2
+  migration path pinned in bats.
+- ✅ **`$CLIKAE_LIMIT_PATTERN` in headless output-dry path** — env override now
+  honoured consistently in both transcript and output-dry detection paths.
+- ✅ **PowerShell adapter-drift test** — bats now guards the PS adapter table
+  against bash-adapter additions, catching cross-language drift early.
+- ✅ **`conduct --help` honesty test** — bats asserts the help text discloses its
+  read-only, non-judging limits.
+- ✅ **Orchestration playbook expanded** (`docs/orchestration.md`) — cost-aware
+  model-tiering guidance and independent-verification principles added.
+- ✅ **Demo board hardened** — ToS-safe multi-engine demo, sandbox path removed.
+- ✅ **`homebrew/RELEASING.md`** — exact publish commands captured in-repo.
+
+The tree is clean and CI is green — **6 jobs**: shellcheck, smoke (ubuntu+macos),
+bats (ubuntu+macos), and pester (windows). `bats -r tests` = **327/327** (was
+327/327 in v0.6.0; the two new bats tests are counted here). The live punch-list
+is `docs/HANDOFF-world-class-gaps.md`; the older §2 below is v0.4-era context.
 
 **Release recipe (for next time you cut a tag) — what `v0.4.0` did:** bump
 `CLIKAE_VERSION` in `bin/clikae`; move CHANGELOG `[Unreleased]` → `[X.Y.Z] —

@@ -163,6 +163,51 @@ It cannot judge:
 That irreducible human (or independent-model) judgement is a feature, not a gap:
 clikae stays a switcher, the conductor stays the brain.
 
+## 8. Model-tiering by task risk
+
+Dogfooding a real multi-model fleet (a full app build across claude + codex + agy)
+produced a working rule for which model tier to put where:
+
+| Role | Model tier | Why |
+|---|---|---|
+| Orchestrator / verifier | High-capability (e.g. claude Max) | Plans, judges output, makes cross-task decisions — mistakes here cascade |
+| Implementer | Mid-tier (e.g. claude Sonnet / codex) | Net-new trust-critical work: new integration code, security-adjacent paths |
+| Mechanical grunt | Cheap (e.g. agy via stdin, a sub-Sonnet model) | Reformatting, summarising, boilerplate — already well-specified, easily verified |
+
+**Red line:** don't drop below the mid tier for net-new, trust-critical integration
+work. "Cheap" makes sense for tasks where the output is fully verifiable by
+inspection or by a test; it is risky for tasks where the verifier itself would need
+to be as capable as the implementer to catch a subtle bug.
+
+**Parallelism ≠ redundancy.** Fanning the same task across accounts (same tier)
+gives you speed + a dry-tank fallback, not a correctness vote. For a correctness
+vote, use `clikae conduct` and a *different* model tier per leg — then a neutral
+third model grades the outputs, not the same one that produced them.
+
+## 9. Independent verification — the neutral-grader principle
+
+The orchestrator must **independently verify** a sub-agent's claims rather than
+accept its self-report. This matters because a model that produced output is a
+poor judge of whether that output is correct: it tends to rate its own work
+confidently even when it has made a subtle error (the "confident-wrong" failure mode).
+
+Practical checks in a clikae fleet:
+
+- **Grep / stat the artifact directly** before trusting a "done" self-report. If
+  the file doesn't exist or is empty, the job failed regardless of what the agent said.
+- **Run the test suite or a targeted invariant check** from the orchestrator after a
+  write leg — not from the same leg that wrote the code.
+- **Use `clikae conduct`** (N legs, same task) and route the outputs through a
+  *separate* model acting as grader — a model that only sees the outputs, not the
+  reasoning that produced them. A grader reading N blind outputs spots errors the
+  producer's self-assessment misses.
+- **Do not infer correctness from tone.** A confident, well-structured completion
+  message ("I've implemented X, added tests, and updated the docs") is not evidence
+  the implementation is correct. Grep for the invariants; run the binary.
+
+The orchestrator's job is to hold the epistemic standard the workers cannot hold
+for themselves.
+
 ## 8. Quick recipes
 
 ```bash

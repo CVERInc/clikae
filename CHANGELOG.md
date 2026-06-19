@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-20
+
+Six weeks of vertical-orchestration dogfooding shook out a collection of quiet
+correctness bugs — in `conduct`, `burn`, `proc`, `app`, `codex`, and `state-version`
+— and added two new test layers (PowerShell adapter-drift guard and a `conduct
+--help` honesty test). No new command surface, no breaking changes. If v0.6.0 grew
+the muscle, v0.6.1 makes sure it doesn't misfire.
+
+### Fixed
+
+- **`conduct --leg` name validation** — a leg slug with path characters could escape
+  its output directory. `--leg` names are now validated before dispatch so a
+  crafted name can't write outside the designated out-dir.
+- **`proc` interactive-vs-background guard** — the env block was confusing the
+  detection heuristic that classifies a process as interactive or a background
+  daemon, producing wrong soft-vs-hard warn decisions. The guard is now reliable.
+- **`_app_shell_squote`** — the shell-quoting helper produced broken shell for any
+  value containing a single quote, making `.app` launchers malfunction for paths or
+  prompts with apostrophes. Fixed.
+- **`codex` cwd trailing-slash matching** — a session's recorded `cwd` is now
+  matched trailing-slash-insensitively, so sessions stored with and without a
+  trailing slash both appear in the board's Continue list.
+- **`state-version` migration-failure message** — the failure message was garbled
+  (double-substitution artefact). The message is now readable, and a new bats test
+  pins the v1→v2 migration path.
+- **`$CLIKAE_LIMIT_PATTERN` in headless output-dry path** — the environment
+  override for the limit-detection pattern was not honoured when scanning headless
+  output; clikae now respects it in that path, consistent with the interactive
+  transcript path.
+
+### Added
+
+- **PowerShell adapter-drift test** — a new compat bats test asserts that the
+  PowerShell adapter table stays in sync with the bash adapter set, catching
+  future bash-only additions before they silently regress the Windows community port.
+- **`conduct --help` honesty test** — bats now asserts that `clikae conduct --help`
+  discloses its read-only, non-judging limits, keeping the help text honest as the
+  command evolves.
+
+### Docs
+
+- **Orchestration playbook** (`docs/orchestration.md`) — the field guide for
+  driving clikae headless / as an agent fleet, including the three dispatch shapes
+  (`burn` / `conduct` / conductor legs), hard-won anti-patterns, and a recipe section.
+  Added in this cycle and expanded with cost-aware model-tiering guidance and
+  independent-verification principles in v0.6.1.
+- **Demo board** (`clikae demo`) — richer, ToS-safe multi-engine demo board with
+  fuel gauge; sandbox path removed from the tour; `help` notes the agy one-shot
+  dispatch pattern.
+- **Proposals archived** — issues #22 and #24 marked SHIPPED in v0.6.0 in
+  `docs/proposals/`.
+- **`homebrew/RELEASING.md`** — exact publish commands for the next release so the
+  step-by-step is in-repo rather than implicit.
+
 ## [0.6.0] — 2026-06-14
 
 The vertical-orchestration step: clikae grows the muscle for directing a fleet of
