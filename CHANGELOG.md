@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-06-20
+
+A small housekeeping patch with no behaviour changes. One Chinese string was
+leaking into the English `relay` / `to` preview card regardless of the user's
+locale setting; it now reads `swap the tank · keep burning` in line with the
+command's own header metaphor. Separately, every remaining foreign-language
+string in code comments has been translated to English — the project policy is
+that comments are English-only and only the i18n dictionary (`lib/core/i18n.sh`)
+carries other languages.
+
+### Fixed
+
+- **`relay` preview card locale leak** — the subtitle label on the relay preview
+  card was hardcoded in Chinese (`換油箱・接力`) and appeared in that language
+  regardless of locale. It now reads `swap the tank · keep burning`, consistent
+  with the file's own `"Swap the fuel tank and keep burning."` header.
+
+### Changed
+
+- **Code comments translated to English** — thirteen comments across `bin/clikae`,
+  `lib/commands/home.sh`, `lib/commands/switch.sh`, `lib/commands/burn.sh`,
+  `lib/adapters/claude.sh`, `lib/adapters/codex.sh`, and `lib/core/update_check.sh`
+  contained Chinese or Japanese phrases. All are now English. The i18n dictionary
+  and the two intentional native-language strings in `lang.sh` / `help.sh` are
+  untouched.
+
 ## [0.6.1] — 2026-06-20
 
 Six weeks of vertical-orchestration dogfooding shook out a collection of quiet

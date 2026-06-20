@@ -5,7 +5,7 @@
 # version). Nothing here ever runs on a non-TTY path (the board gates it), so pipes,
 # scripts and the test suite never see a prompt or a network call.
 #
-# DNA: 悄悄幫忙、不擾民、誠實.
+# DNA: help quietly, never nag, stay honest.
 #   • Throttled — the network check runs at most once per CLIKAE_UPDATE_TTL (24h),
 #     stamped in a cache; every other open just reads the cache (instant, offline-OK).
 #   • Opt-out — CLIKAE_NO_UPDATE_CHECK=1 disables the check AND the prompt entirely.

@@ -60,7 +60,7 @@ _home_alias_for() {
 # _home_recent_rows -> the "continue" list: THIS directory's most recent sessions
 # (newest first, capped at CLIKAE_HOME_RECENT_MAX) across ALL engines+tanks — but
 # only for engines that can RESUME a session by id (adapter_resume_args), so the
-# "接回" affordance never lies. Each row carries the ai-title (label) and a one-line
+# "resume" affordance never lies. Each row carries the ai-title (label) and a one-line
 # RECAP (alias field) — "where you left off + next step" — fetched only for the few
 # rows shown, so the listing stays cheap. Emits, newest first:
 #   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
@@ -140,7 +140,7 @@ _home_items() {
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     cli="${entry%%/*}"; profile="${entry#*/}"
-    # The board is the AI-session on-ramp, so its 油箱 list holds only BURNABLE
+    # The board is the AI-session on-ramp, so its tank list holds only BURNABLE
     # session tanks: claude/codex (they define adapter_start_with_prompt) + agy.
     # Tool-CLI tanks (gh/npm/aws/kubectl/…) aren't fuel — "launching" one from here
     # just execs a bare usage screen, which reads as "nothing happened" — so they
@@ -750,7 +750,7 @@ EOF
   "$CLIKAE_BIN" rename "$cli" "$profile" "$newname" || true
 }
 
-# Enter on a 續上次 / Continue row → a tiny submenu. The options DEPEND on whether
+# Enter on a Continue row → a tiny submenu. The options DEPEND on whether
 # the tank still has fuel ($2 = the dry set from _home_dry_set):
 #   • has fuel → resume the exact session, or open that tank fresh (the original
 #     two choices).
@@ -782,13 +782,13 @@ EOF
   choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
   case "$choice" in
     "$T_RESUME_OPT_SWITCH")
-      # 同油箱、開新局: bare switch, no --resume.
+      # Same tank, fresh session: bare switch, no --resume.
       if [ "$cli" = "antigravity" ]; then exec "$CLIKAE_BIN" agy "$profile"
       else exec "$CLIKAE_BIN" "$cli" "$profile"; fi ;;
     "$T_RESUME_OPT_CARRY")
       _home_carry_action "$cli" "$profile" "$note" || _home_launch "$row" ;;
     *)
-      _home_launch "$row" ;;   # 接回: the resume path (kind=resume → --resume <sid>)
+      _home_launch "$row" ;;   # resume: the resume path (kind=resume → --resume <sid>)
   esac
 }
 
@@ -842,7 +842,7 @@ EOF
       exec "$CLIKAE_BIN" handoff "$cli" "$profile" --to "$ne/$nt"
     fi
   else
-    _home_launch "$row"   # 硬接回: resume the dry tank anyway (will hit the limit)
+    _home_launch "$row"   # force-resume: resume the dry tank anyway (will hit the limit)
   fi
 }
 
@@ -1219,7 +1219,7 @@ _home_pick() {
         fi
         ;;
       x)
-        # 無痕 / Incognito — open the selected tank with throwaway memory
+        # Incognito — open the selected tank with throwaway memory
         # (--ephemeral). A clean, amnesiac session: this run's long-term memory
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then

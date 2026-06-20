@@ -2,7 +2,7 @@
 # lib/commands/switch.sh — the BARE SWITCH: `clikae <engine> [tank] [-- args]`.
 #
 # clikae's headline action, and it carries no verb of its own: the program name
-# IS the verb (clikae = 切り替え, "switch"). `clikae claude work` reads "switch
+# IS the verb (clikae = kirikae, "switch"). `clikae claude work` reads "switch
 # claude to work". See docs/grammar.md §3.1 / §5.
 #
 # This handler is reached from the dispatcher when the first argument is an

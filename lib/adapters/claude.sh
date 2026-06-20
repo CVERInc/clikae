@@ -64,7 +64,7 @@ adapter_start_with_prompt() {
 # (each line becomes a separate argv item). The home board's "continue" headline
 # uses this to reopen this directory's most recent session — effectively
 # `clikae claude <tank> -- --resume <sid>`. Defining this hook is what marks an
-# engine as resume-capable on the board, so the "⏎ 接回" affordance only shows up
+# engine as resume-capable on the board, so the "⏎ resume" affordance only shows up
 # when the session can really be resumed.
 adapter_resume_args() {
   local sid="$1"

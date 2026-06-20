@@ -82,7 +82,7 @@ EOF
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto, in listing order — but the
-# reserve is no longer naive (the 2026-06-04 "燒爆" dogfood):
+# reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
 #   • P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass

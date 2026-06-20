@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# clikae - CLI profile switcher  /  ｷﾘｶｴ (切り替え)
+# clikae - CLI profile switcher  (kirikae, "switch")
 # https://github.com/CVERInc/clikae
 # MIT License
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.6.1"
+CLIKAE_VERSION="0.6.2"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {

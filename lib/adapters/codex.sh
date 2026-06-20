@@ -131,7 +131,7 @@ _codex_rollouts_for_cwd() {
 }
 
 # Resume a codex session by id: `codex resume <uuid>` (verified via codex --help).
-# Gates (with adapter_recent_sids) whether the board offers a "接回" affordance.
+# Gates (with adapter_recent_sids) whether the board offers a "resume" affordance.
 adapter_resume_args() {
   local sid="$1"
   [ -n "$sid" ] || return 1

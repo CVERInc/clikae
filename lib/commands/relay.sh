@@ -18,7 +18,7 @@
 # shown before anything moves so a relay is never a blind leap.
 _relay_preview_card() {
   local cli="$1" from="$2" to="$3" sid="$4" last="$5" msgs="$6" title="$7"
-  printf '\n  %brelay%b  %b換油箱・接力%b\n\n' "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  printf '\n  %brelay%b  %bswap the tank · keep burning%b\n\n' "$__C_BOLD" "$__C_RESET" "$__C_DIM" "$__C_RESET"
   printf '    %-9s%b%s%b  %b%s%b  %b──▶%b  %b%s%b\n' \
     "tanks" "$__C_DIM" "$cli" "$__C_RESET" "$__C_BOLD" "$from" "$__C_RESET" \
     "$__C_DIM" "$__C_RESET" "$__C_GREEN" "$to" "$__C_RESET"
