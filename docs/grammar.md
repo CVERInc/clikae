@@ -353,6 +353,12 @@ Same primitive as agy's symlink, pointed at three purposes. **clikae's essence,
 stated once: control where state lives, how long, and how widely shared** — for
 auth/config (today), for fuel (the reframe), and now for memory.
 
+> **Emergent: MCP connectors.** The claude.ai login isolated in each tank also
+> determines which MCP connectors are active in that session — switch tank and the
+> Stripe, Drive, or WordPress connectors switch with it. clikae doesn't manage MCP
+> and doesn't provision connectors; this is just per-account auth isolation paying
+> off as a third layer alongside fuel and memory.
+
 **Guiding value (maintainer, locked):** *aggregate, never mutate the source.* Any
 memory move/share/translate operates on a COPY going outward; the source tank's
 memory is never rewritten in place. Same DNA as relay's "copy, never move; source
