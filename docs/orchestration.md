@@ -41,6 +41,30 @@ state lives*, it never sits in the middle of a request and never grades output.
   leg, inherits that tank's git identity — see §6). A leg is a single shot; if it
   must survive a dry tank, use `burn` instead.
 
+### agy (Antigravity) is the exception — read this before dispatching to it
+
+agy is half-in: **`conduct` can fan a read-only leg to it** (cheap, fast breadth —
+`--leg agy/<tank>`), but `burn` and the conductor legs can't. agy's login is one
+**global** Keychain entry, so there's no per-shell env to switch and **`burn` can't
+reroute it** ("not burnable" ≠ "not usable"). The conduct leg sidesteps that by
+running on whatever agy tank is **active** (it never switches — a leg naming another
+tank is reported, not run, since the `~/.gemini` swap is machine-wide and exclusive,
+so two agy tanks can't run in parallel):
+
+```bash
+# agy as a best-of-N breadth leg, alongside claude/codex (agy runs on its active tank):
+clikae conduct --prompt-file review.md --leg claude/C --leg codex/H --leg agy/c --add-dir "$PWD"
+
+# Or drive agy directly headless to spend its quota instead of your main budget:
+clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
+```
+
+agy's headless personality differs from claude/codex enough that hand-rolling it the
+usual way fires a blank (it buffers big stdout and returns nothing; it wanders and
+burns the timeout; `-i` dies without a TTY). **Use the dedicated recipe —
+[`docs/agy-dispatch.md`](agy-dispatch.md) — before sending agy a headless job.** It's
+a real paid engine; the recipe is how you stop wasting it.
+
 ## 3. The rules that keep it honest (hard-won — break one and you fire a blank)
 
 1. **Judge by the artifact / output, never the exit code.** A headless `codex exec`

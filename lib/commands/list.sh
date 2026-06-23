@@ -104,10 +104,13 @@ EOF
     printf '%s' "$enriched" | _list_render_json
   else
     printf '%s' "$enriched" | _list_render_table "$show_paths"
-    # Flag agy's nature so nobody tries `burn agy`: its login is global (one account
-    # across all shells), so there's no per-tank headless burn — interactive switch only.
+    # Flag agy's nature so nobody reads its absence from `burn` as "agy can't be used".
+    # Precise meaning: agy's login is global (one account across all shells), so
+    # `clikae burn` can't auto-reroute it across tanks — but it runs fine headless on
+    # the active account via `agy -p`, or switch interactively via `clikae agy <tank>`.
+    # Localised via T_AGY_BURN_NOTE (lib/core/i18n.sh); English string is the fallback.
     case $'\n'"$enriched" in
-      *$'\n'"agy"$'\037'*) printf '\n%b  agy login is global — one account active at a time, interactive switch only (clikae agy <tank>); not burnable.%b\n' "$__C_DIM" "$__C_RESET" ;;
+      *$'\n'"agy"$'\037'*) printf '\n%b  %s%b\n' "$__C_DIM" "${T_AGY_BURN_NOTE:-agy login is global (one account at a time) — clikae burn cannot auto-reroute it across tanks; run it headless on the active account with agy -p, or switch interactively with clikae agy <tank>.}" "$__C_RESET" ;;
     esac
   fi
 }

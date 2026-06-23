@@ -14,7 +14,7 @@ It does three things per profile:
 2. Optionally writes a sentinel-wrapped shell alias to the user's shell rc (`<cli>-<profile>`, e.g. `claude-work`).
 3. On macOS, optionally generates a double-clickable `.app` launcher that opens Terminal with the right env vars and a custom window title.
 
-The repo is at `~/Desktop/GitHub/clikae/`. License: MIT. It's labelled as an unofficial community tool (not affiliated with Anthropic or any CLI vendor).
+The repo is at `~/Developer/clikae/`. License: MIT. It's labelled as an unofficial community tool (not affiliated with Anthropic or any CLI vendor).
 
 ---
 
@@ -489,7 +489,7 @@ path. Lint workflow edits locally with `actionlint .github/workflows/ci.yml`.
 
 | Thing | Where |
 |---|---|
-| Repo root | `~/Desktop/GitHub/clikae/` |
+| Repo root | `~/Developer/clikae/` |
 | Profile store (per user) | `~/.clikae/profiles/<cli>/<profile>/` (override root: `$CLIKAE_HOME`) |
 | Shell rc (auto-detected) | `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` / `~/.profile` |
 | .app launchers | `~/Applications/<cli> (<profile>).app` |

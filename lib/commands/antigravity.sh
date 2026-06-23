@@ -298,6 +298,21 @@ switch the account per-shell like other engines. Instead it swaps ~/.gemini betw
 tank dirs via a symlink (carrying each tank's login) — a GLOBAL power mode: one agy
 tank is active at a time across ALL terminals. The first `init agy` asks before
 taking over ~/.gemini; it's reversible with `clikae agy --release`.
+
+Run agy headless on the active account (route work to your Antigravity quota,
+sparing your main claude/codex budget). agy is NOT burnable (global single login →
+nothing to auto-reroute to), but it IS usable headless — drive it like this:
+
+  clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
+
+Key rules (full recipe: docs/agy-dispatch.md):
+  - Headless is -p, never -i (-i needs a TTY).
+  - Prompt via a FILE, not nested quotes.
+  - For big output, have agy WRITE a file (its stdout buffers and returns nothing);
+    results land in ~/.gemini/antigravity-cli/brain/<session-id>/.
+  - Give a fenced task + long --print-timeout, or it wanders and burns the clock.
+  - Reading files outside cwd needs --add-dir <abs path>, or feed text via stdin.
+  - pkill -9 -f "agy -p" before switching tanks (a live agy blocks the swap).
 EOF
 }
 

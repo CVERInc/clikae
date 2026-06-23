@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`conduct` accepts an agy leg** — `clikae conduct --leg agy/<tank>` now fans a
+  read-only best-of-N prompt to Antigravity alongside claude/codex legs, so cheap
+  breadth work can ride your agy quota instead of your main budget. agy is
+  adapter-less (one global Keychain login), so the leg is special-cased: it runs on
+  the **currently active** agy tank only — a leg naming another tank is reported
+  `NOTACTIVE` (with the active tank's name), never silently run on the wrong account,
+  because clikae can't switch agy per-shell or run two agy tanks in parallel. Its dry
+  state is read from `cli.log` (`limit_log_dry`), since `agy -p` exits 0 with empty
+  stdout when it hits its Gemini quota. Tests in `tests/bats/conduct.bats` (+5).
+- **`docs/agy-dispatch.md`** — a canonical how-to for driving agy headless via clikae
+  (the `-p`-not-`-i` rule, prompt-via-file, write-to-a-file-not-stdout, fenced task +
+  long `--print-timeout`, `--add-dir`, `pkill` before switching, skip-permissions is
+  for a human not an agent). `clikae agy --help` now carries the one-line recipe and
+  points here; `docs/orchestration.md` gained an agy section.
+
+### Changed
+
+- **agy "not burnable" footer reworded** — `clikae tanks` no longer prints the
+  misleading bare phrase `not burnable`. It now reads (localised via
+  `T_AGY_BURN_NOTE`, en/ja/zh-TW) that agy's global login means `burn` can't
+  auto-reroute it across tanks, but it runs fine headless on the active account via
+  `agy -p` (or switch interactively with `clikae agy <tank>`).
+
 ## [0.6.2] — 2026-06-20
 
 A small housekeeping patch with no behaviour changes. One Chinese string was
