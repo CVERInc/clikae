@@ -1,6 +1,6 @@
 # clikae
 
-> **Your starting point for working with AI coding CLIs — and the cost-aware control plane for a fleet of them.** Type `clikae` and land on everything you were just doing — your recent sessions across every account and every engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and pick up where you were. When a tank runs dry mid-task, carry the same session onward — or fan a headless job out across accounts and engines, each burning its own subscription, none eating your main budget.
+> Type `clikae` and land back on your recent sessions — across every account and engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and keep going.
 >
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
@@ -153,6 +153,13 @@ clikae                            # your home board (run `clikae doctor` for a h
   verified by the artifact they produce, never the exit code.
 - **v0.5.12 — the quality punch-list hit empty.** State schema versioning landed; since
   then it's been polish. The full story, version by version: [CHANGELOG.md](CHANGELOG.md).
+- **v0.6 — vertical orchestration.** `clikae conduct` (BETA) fans one prompt across N
+  accounts in parallel, each running headless read-only on its own tank, and hands back
+  every leg's output plus an honest captured/dry table — it doesn't pick the winner, you
+  do. `clikae git-id` gives a tank its own commit identity so commits aren't stamped with
+  the engine's account email; `clikae burn --prompt-file` / `--prompt` / `--add-dir` fill
+  in each engine's headless-write flags for you. Patches since (0.6.1, 0.6.2) are
+  correctness and string fixes — see [CHANGELOG.md](CHANGELOG.md).
 - **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
   build-verified skeleton; it ships when it earns it.
 
