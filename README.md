@@ -74,7 +74,9 @@ Driving this headless — or letting an **LLM agent** drive it (fanning a job ac
 accounts, best-of-N across vendors)? The **[orchestration playbook](docs/orchestration.md)**
 is the field guide: when to use `burn` vs `conduct`, the rules that keep it honest
 (judge by the artifact, never the exit code), the misconfigured-burn anti-pattern,
-and how to see your fleet from inside a Claude Code session.
+and how to see your fleet from inside a Claude Code session. Routing cheap breadth to
+Antigravity? The **[agy dispatch recipe](docs/agy-dispatch.md)** is the one engine an
+agent fumbles most — read it first so an agy leg returns real work, not a blank.
 
 ## Install
 
@@ -160,6 +162,11 @@ clikae                            # your home board (run `clikae doctor` for a h
   the engine's account email; `clikae burn --prompt-file` / `--prompt` / `--add-dir` fill
   in each engine's headless-write flags for you. Patches since (0.6.1, 0.6.2) are
   correctness and string fixes — see [CHANGELOG.md](CHANGELOG.md).
+- **v0.7 — agy joins the fan-out.** `clikae conduct --leg agy/<tank>` lets Antigravity
+  run a read-only best-of-N leg alongside claude/codex, so cheap breadth rides your agy
+  quota — on its active tank only (it's a global single-account engine). The recipe for
+  driving agy headless without firing a blank is now baked into `clikae agy --help` and
+  [docs/agy-dispatch.md](docs/agy-dispatch.md).
 - **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
   build-verified skeleton; it ships when it earns it.
 

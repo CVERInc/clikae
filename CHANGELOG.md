@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-24
+
+agy (Antigravity) becomes a first-class breadth engine. Until now `conduct` could
+only fan to claude and codex; this release lets it fan a read-only best-of-N leg to
+Antigravity too, so cheap/fast breadth work rides your agy quota instead of your main
+budget. Because agy is adapter-less (one global Keychain login that can't be switched
+per-shell or run in parallel), the leg is special-cased to run on the currently active
+agy tank, with an honest `NOTACTIVE` report rather than silently using the wrong
+account. Alongside it, the hard-won knowledge of how to drive agy headless — which a
+session previously re-learned (and re-burned) every time — is now baked into
+`clikae agy --help`, a canonical `docs/agy-dispatch.md`, and the orchestration
+playbook. The misleading bare `not burnable` footer is reworded too.
+
 ### Added
 
 - **`conduct` accepts an agy leg** — `clikae conduct --leg agy/<tank>` now fans a
