@@ -18,6 +18,11 @@
 # Reuse burn's timeout-tool resolver (timeout/gtimeout/perl-or-warn).
 # shellcheck source=./burn.sh
 source "$CLIKAE_LIB/commands/burn.sh"
+# agy is adapter-less (global single-account, no per-shell env to export), so it
+# can't go through the adapter path below. Reuse its symlink/active-tank resolvers
+# (_agy_active, _agy_link) instead of re-inlining the readlink logic.
+# shellcheck source=./antigravity.sh
+source "$CLIKAE_LIB/commands/antigravity.sh"
 
 _conduct_help() {
   cat <<'EOF'
@@ -33,8 +38,10 @@ winner; clikae never judges. (BETA — the vertical-orchestration primitive.)
   --prompt-file <f>   the task prompt (self-contained — each leg is a blind run).
   --prompt <str>      inline prompt (mutually exclusive with --prompt-file).
   --leg <engine>/<tank>   a leg to fan to. Repeatable. Engine must support a
-                          read-only headless recipe (claude, codex). Same prompt,
-                          different account — different perspective / spare quota.
+                          read-only headless recipe (claude, codex, agy). Same
+                          prompt, different account — perspective / spare quota.
+                          agy is cheap & fast — a good breadth leg; but see its
+                          limit below (it runs on its ACTIVE tank only).
   --add-dir <dir>     extra read root for every leg (default: $PWD). Repeatable.
   --out-dir <dir>     where to collect <engine>-<tank>.txt results
                       (default: a fresh mktemp dir, printed at the end).
@@ -53,13 +60,18 @@ Honest limits (what conduct does NOT do):
     session model acting as conductor) pick the winner. No scoring, no merge.
   • Adapter-gated. A leg only runs if its engine defines a read-only recipe
     (adapter_audit_flags) — today claude and codex. Others are flagged, not run.
+  • agy is special (no adapter — global single-account). An agy leg runs ONLY on
+    the currently active agy tank; a leg naming another tank is reported (not run),
+    since clikae can't switch agy per-shell or run two agy tanks in parallel. agy's
+    dry state is read from its cli.log (its quota event never reaches stdout). Full
+    recipe + caveats: docs/agy-dispatch.md.
   • Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
     rewords it, set $CLIKAE_LIMIT_PATTERN='<regex>' to teach it (same override
     clikae watch honours); otherwise a dry leg may show as "empty (failure)".
 
-Example — best-of-N audit across three accounts:
+Example — best-of-N audit across accounts (agy = cheap breadth, on its active tank):
   clikae conduct --prompt-file review.md \
-    --leg codex/H --leg codex/i --leg claude/C --add-dir "$PWD"
+    --leg codex/H --leg claude/C --leg agy/c --add-dir "$PWD"
 EOF
 }
 
@@ -72,6 +84,16 @@ EOF
 _conduct_one() {
   local engine="$1" tank="$2" prompt="$3" outfile="$4" statusfile="$5" tmo="$6"; shift 6
   local -a add_dirs=("$@")
+
+  # agy has no adapter — `load_adapter agy` would `exit 1` and kill this background
+  # subshell before any status is written. Handle it as a special leg up front: it
+  # runs on the CURRENTLY ACTIVE agy tank only (the ~/.gemini swap is machine-wide
+  # and exclusive, so clikae can't route agy per-shell or run two agy tanks at once).
+  case "$engine" in
+    agy|antigravity)
+      _conduct_one_agy "$tank" "$prompt" "$outfile" "$statusfile" "$tmo" "${add_dirs[@]}"
+      return 0 ;;
+  esac
 
   load_adapter "$engine" 2>/dev/null || { printf 'NOTANK\n' > "$statusfile"; return 0; }
   declare -F adapter_audit_flags >/dev/null || { printf 'NORECIPE\n' > "$statusfile"; return 0; }
@@ -112,6 +134,58 @@ KV
   # wrongly call that CAPTURED. Key off $out being non-empty instead.
   local reset
   if reset="$(limit_output_dry "$engine" "$out")"; then
+    printf 'DRY %s\n' "$reset" > "$statusfile"
+  elif [ -n "$out" ]; then
+    printf 'CAPTURED\n' > "$statusfile"
+  else
+    printf 'EMPTY\n' > "$statusfile"
+  fi
+}
+
+# _conduct_one_agy <want_tank> <prompt> <outfile> <statusfile> <timeout_s> <add_dirs...>
+# The agy leg. agy's Google login is one global Keychain entry, so it has no
+# per-shell env and clikae can't switch it in parallel — this leg runs on whatever
+# agy tank is ACTIVE right now (the ~/.gemini target). A leg naming a non-active
+# tank is reported NOTACTIVE (with the active tank's name), never silently run on
+# the wrong account. Verdicts mirror _conduct_one: DRY | CAPTURED | EMPTY | NOPATH | NOTANK.
+_conduct_one_agy() {
+  local want="$1" prompt="$2" outfile="$3" statusfile="$4" tmo="$5"; shift 5
+  local -a add_dirs=("$@")
+
+  command -v agy >/dev/null 2>&1 || { printf 'NOPATH\n' > "$statusfile"; return 0; }
+  local active; active="$(_agy_active 2>/dev/null || true)"
+  [ -n "$active" ] || { printf 'NOTANK\n' > "$statusfile"; return 0; }
+  if [ "$want" != "$active" ]; then
+    printf 'NOTACTIVE %s\n' "$active" > "$statusfile"; return 0
+  fi
+
+  # Read-only headless recipe for agy: print mode (-p), NO --dangerously-skip-permissions
+  # (the leg is read-only, and an AI-driven safety classifier blocks that flag anyway).
+  # --add-dir pre-authorises each read root so a path outside cwd doesn't hang on a
+  # TTY-less permission prompt (docs/agy-dispatch.md).
+  local -a gen=(-p "$prompt"); local d
+  for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
+
+  local -a runner=()
+  if [ -n "$tmo" ]; then
+    local tb; tb="$(_burn_timeout_bin)"
+    case "$tb" in
+      timeout|gtimeout) runner=("$tb" "$tmo") ;;
+      perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$tmo") ;;
+    esac
+  fi
+
+  local out
+  out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
+  printf '%s\n' "$out" > "$outfile"
+
+  # agy's quota event lands in cli.log (RESOURCE_EXHAUSTED / "Individual quota
+  # reached"), NEVER in stdout — `agy -p` exits 0 with empty output when dry. So judge
+  # dry from the log (limit_output_dry can't see agy), not the captured stdout. cli.log
+  # is a per-run symlink, so its content reflects THIS run. (Path == target_limit_log_path.)
+  local logf reset
+  logf="$(_agy_link)/antigravity-cli/cli.log"
+  if reset="$(limit_log_dry "$logf")"; then
     printf 'DRY %s\n' "$reset" > "$statusfile"
   elif [ -n "$out" ]; then
     printf 'CAPTURED\n' > "$statusfile"
@@ -197,6 +271,7 @@ cmd_conduct() {
       NORECIPE) other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;
       NOPATH)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine binary not on PATH" ;;
       NOTANK)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no such tank (clikae tanks to list)" ;;
+      NOTACTIVE) other=$((other+1));      log_err  "  ✖ ${tags[$i]} — not the active agy tank (active: $rest). agy can't switch in parallel; run 'clikae agy ${tags[$i]#*/}' first, or use --leg agy/$rest" ;;
       *)        other=$((other+1));       log_err  "  ✖ ${tags[$i]} — unknown outcome" ;;
     esac
   done

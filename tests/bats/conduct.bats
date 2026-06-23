@@ -230,3 +230,82 @@ _stub_gh() {
   [ "${#got[@]}" -eq 7 ]       # NOT split by the prompt's newlines
   [ "${got[6]}" = "$ml" ]      # whole multi-line prompt intact as the last arg
 }
+
+# --- agy as a conduct leg (adapter-less, global single-account) -----------------
+# agy writes its quota event to cli.log (RESOURCE_EXHAUSTED) and returns empty
+# stdout when dry — the stub mimics that exactly so dry-detection is real.
+_stub_agy_conduct() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"
+mkdir -p "$(dirname "$log")"
+if [ -f "$HOME/.gemini/antigravity-cli/.dry" ]; then
+  echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "$log"
+  exit 0                                  # agy -p exits 0 with EMPTY stdout when dry
+fi
+: > "$log"                                # clean run rotates in a fresh (markerless) log
+echo "AUDIT from agy @ $(readlink "$HOME/.gemini" 2>/dev/null)"
+exit 0
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+}
+
+# Make agy/default the active tank (init takes ~/.gemini over into a symlink).
+_agy_setup_active() {
+  mkdir -p "$HOME/.gemini"; echo LOGIN > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+}
+
+@test "conduct: an agy leg on the ACTIVE tank captures" {
+  _stub_agy_conduct
+  _agy_setup_active
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "audit this" --leg agy/default --out-dir "$D"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agy/default — captured"* ]] || false
+  grep -q "AUDIT from agy" "$D/agy-default.txt"
+}
+
+@test "conduct: an agy leg naming a NON-active tank is reported, not run" {
+  _stub_agy_conduct
+  _agy_setup_active                       # active tank is 'default'
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "x" --leg agy/laptop --out-dir "$D"
+  [ "$status" -ne 0 ]                     # nothing captured
+  [[ "$output" == *"not the active agy tank"* ]] || false
+  [[ "$output" == *"active: default"* ]] || false
+}
+
+@test "conduct: an agy leg that ran dry is shown as dry (read from cli.log, not stdout)" {
+  _stub_agy_conduct
+  _agy_setup_active
+  mkdir -p "$HOME/.gemini/antigravity-cli"
+  : > "$HOME/.gemini/antigravity-cli/.dry"   # next agy run hits its quota
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "x" --leg agy/default --out-dir "$D"
+  [ "$status" -ne 0 ]                     # dry, nothing captured
+  [[ "$output" == *"agy/default — ran dry"* ]] || false
+  [[ "$output" == *"Resets in 3h32m48s"* ]] || false
+}
+
+@test "conduct: agy with no managed tank reports NOTANK, never crashes" {
+  _stub_agy_conduct                       # agy on PATH but no init → ~/.gemini not managed
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "x" --leg agy/default --out-dir "$D"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tank"* ]] || false
+}
+
+@test "conduct: agy + codex legs fan together, both captured" {
+  _stub_agy_conduct
+  _stub_codex
+  _agy_setup_active
+  clikae init codex H
+  local D="$BATS_TEST_TMPDIR/out"
+  run clikae conduct --prompt "audit" --leg agy/default --leg codex/H --out-dir "$D"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2 captured"* ]] || false
+  grep -q "AUDIT from agy" "$D/agy-default.txt"
+  grep -q "AUDIT from codex" "$D/codex-H.txt"
+}
