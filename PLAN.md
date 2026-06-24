@@ -201,6 +201,16 @@ jobs. Files: `docs/usage.md`, maybe a small dispatch helper.
 ---
 
 # Phase 5 — lower priority / deferred (ask before spending effort)
+- **`remove agy <active-tank>` auto-switch (was GH #23, closed 2026-06-24).** Today
+  `clikae remove agy <active-tank>` refuses and names a concrete sibling to switch to
+  first. UX option: auto-switch the global `~/.gemini` symlink + Keychain to a
+  remaining tank, then remove. Tradeoff: removing the active tank becomes a *global*
+  side-effect (every terminal's agy account changes) — that's why the safe default is
+  to refuse. Deferred, debatable; the refuse-and-name default is reasonable as-is.
+- **agy same-account parallel worker fan-out (was GH #25, closed 2026-06-24).** Full
+  writeup already in `docs/proposals/issue-25-agy-parallel.md`: same-account agy
+  workers each with their own `$HOME` run concurrently (verified), trading speed not
+  quota; multi-account-multiplied parallelism stays out (ToS-gray for shipped OSS).
 - **`clikae app` Warp target** + terminal auto-detect (HANDOFF §9.1). iTerm2 path
   needs partner dogfood (no iTerm2 on the maintainer's Mac).
 - **v1.0 SwiftUI menu-bar GUI** runtime dogfood + signed `LSUIElement` `.app`
