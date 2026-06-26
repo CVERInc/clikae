@@ -28,6 +28,8 @@ Switch (the main thing — no verb needed):
   clikae <engine>                  one tank → use it; several → list them
   clikae to <target> [tank]        carry your CURRENT session onto another tank
                                    (same engine → resume; another → a brief)
+  clikae resume [session-id]       reopen a PAST session by id, in whatever tank
+                                   owns it (no id → pick from recent, by title)
   eval "$(clikae env <engine> <tank>)"   put THIS shell on a tank (so to/status see it)
 
 Make & manage tanks:

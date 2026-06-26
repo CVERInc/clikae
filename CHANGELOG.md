@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-26
+
+Resume a past session by id, no matter which tank holds it. Because clikae gives
+each tank its own config dir, a session transcript lives under that tank — not the
+engine's default home — so a bare `claude --resume <id>` in a fresh shell fails
+with "No conversation found": the engine looked in its default home and the session
+is in a tank. Resuming a known session is therefore clikae's job, and until now it
+had no verb for it (`to`/`relay`/`continue` only carry your *current* shell's live
+session *forward*). This release adds `clikae resume`, which reaches *backward* to a
+named session: it scans every tank, finds the owner, cd's to the directory the
+session was recorded in, and resumes it under that tank's config — so you never need
+to know which tank, and with no id it lists recent sessions across all tanks by
+title so you pick one instead of copy-pasting a UUID.
+
+### Added
+
+- **`clikae resume [session-id]`** — reopen a specific past session by id in
+  whichever tank owns it. `clikae resume <id>` locates the tank, cd's to the
+  session's recorded working directory, and resumes it under that tank's config dir.
+  Run with no id, it lists recent sessions across all tanks (newest first, by title)
+  and resumes the one you pick — no UUID to copy. Extra engine args pass through
+  after `--`. Only engines that can resume by id take part (claude today).
+- **Adapter hooks** `adapter_find_session`, `adapter_session_cwd`, and
+  `adapter_recent_sessions` (claude) — locate a session by id across all of a config
+  dir's projects, recover the directory it ran in, and list recent sessions for the
+  picker. Engines that don't define them simply aren't reachable by `resume`.
+
 ## [0.7.0] — 2026-06-24
 
 agy (Antigravity) becomes a first-class breadth engine. Until now `conduct` could

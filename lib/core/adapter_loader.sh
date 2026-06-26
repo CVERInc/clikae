@@ -168,6 +168,9 @@ load_adapter() {
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
            adapter_memory_dir adapter_install_hint adapter_burn_flags \
            adapter_audit_flags \
+           adapter_find_session adapter_session_cwd adapter_recent_sessions \
+           adapter_resume_args adapter_session_meta adapter_list_sessions \
+           adapter_session_title adapter_recent_sids adapter_session_recap \
            2>/dev/null || true
 
   # shellcheck source=/dev/null
