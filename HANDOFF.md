@@ -172,17 +172,44 @@ arg-count bug in the picker's empty-filter path (the localized "no matches" stri
 was never shown), 5 unused-var warnings, and the i18n headline rename
 Continue→Resume. `bats -r tests` green, shellcheck clean at warning.
 
-**⭐ antigravity per-account quota isolation ACTUALLY WORKS — corrects the §"agy
-tank-switch" (2026-06-28) pessimism.** Verified 2026-06-29 on a real Mac by Keychain
-hash comparison: clikae's `_agy_kc_*` login carry holds two DISTINCT Google accounts
-per tank (Keychain service `gemini`, account `antigravity`), and a clean
-`clikae agy <tank>` loads that tank's exact token into the single live slot agy
-reads. The earlier dogfood saw shared quota only because the second tank's stash
-didn't exist yet. Still true: it's ONE global slot (one tank active at a time, don't
-run two agy at once); the running TUI's `/usage` figure is the only layer not yet
-eyeballed. KNOWN GAP: `antigravity.bats` STUBS `security`, so the service-NAME
-assumption (`gemini`/`antigravity`) is verified only by live dogfood, never CI — a
-read-only `clikae doctor` keychain-coordinate check is the suggested permanent guard.
+**⭐ antigravity: LOGIN isolation is PROVEN; whether quota STACKS across accounts is
+UNRESOLVED (do not claim either way yet).** clikae's `_agy_kc_*` login carry
+genuinely holds two DISTINCT Google accounts per tank (Keychain service `gemini`,
+account `antigravity`; verified by hash comparison + cli.log `applyAuthResult:
+email=…, authMethod=consumer`), and a clean `clikae agy <tank>` loads that tank's
+token into the single live slot agy reads. So the SECOND tank runs as a different
+account — login/session/memory isolation is real and solid.
+The OPEN question is quota. HARD FACT: agy's `/usage` shows BYTE-IDENTICAL figures
+to two different accounts (c888700 vs chodaict both at Gemini-weekly 68.86% /
+Gemini-5h 85.41% / Claude-GPT-weekly 29.84%). That is the ONLY thing proven — it
+shows the DISPLAY is identical, NOT that real consumption is shared. Caveats that
+keep this open: (a) Google sells tiers (Free/Pro/Ultra), so quota MUST ultimately be
+per-account — a literal "global shared pool" contradicts the paid product; the 5-h
+"fairly distribute global capacity across all users" text most likely means a
+per-user rate window sized by global-fairness logic, not one shared counter; (b) the
+identical display is therefore most likely a PREVIEW ARTIFACT (Antigravity's `/usage`
+not yet wired to real per-account numbers) — which would mean quota DOES stack and
+the display just doesn't show it. (Author note: this analysis flip-flopped several
+times — "device-shared" → "leans per-account" → "screenshots settle it doesn't
+stack" — all overconfident. The honest state: only a BURN-TEST settles it.)
+THE decisive test (maintainer, real terminal): record each account's weekly %, burn
+account 8's weekly down meaningfully, then check account c's weekly — unchanged ⇒
+per-account (stacks), drops too ⇒ shared. Until then, docs must NOT claim agy
+tank-switching stacks quota NOR that it can't. Independent of quota, position agy as
+a BREADTH leg (one entry → Gemini+Claude+GPT-OSS; already a read-only conduct breadth
+leg since v0.6); the binding burst constraint is the 5-h window regardless.
+
+To make agy a RELIABLE burnable worker (orthogonal to quota — these are the real
+gaps, all from the 2026-06-28 dogfood): (1) headless permission hangs → standardize
+stdin-only dispatch `cat in | agy -p "…"`; (2) `agy exec` exits 0 even when limited
+→ dry-detect by PARSING OUTPUT, never exit code; (3) agy can't be a handoff SOURCE
+(opaque `.pb`) → alert + re-dispatch, no session carry; (4) tank switch orphans the
+agy in-session monitor timers → re-register in the new session.
+
+KNOWN TEST GAP: `antigravity.bats` STUBS `security`, so the `_agy_kc_*` copy
+mechanics are tested but the service-NAME assumption (`gemini`/`antigravity`) is
+only ever verified by live dogfood, never CI — a read-only `clikae doctor`
+keychain-coordinate check is the suggested permanent guard.
 
 ---
 
@@ -909,3 +936,91 @@ despite one tank drying. That is "swap the dry tank, keep burning" — but done 
 Complements the earlier notes: `clikae auto` is claude-only, and codex over-quota was
 "un-detectable from disk". This run shows it IS detectable *from the codex output* (limit
 string), just not from exit code or disk — and that manual relay closes the gap today.
+
+### agy tank-switch vs. global single-account usage friction (2026-06-28)
+
+**The setup & scenario:**
+Tried switching `antigravity-cli (agy)` tanks (`clikae agy 8` vs `clikae agy c`) to check and compare session token and quota usage limits (running TUI command `/usage`).
+
+**The friction / issue:**
+Switching `agy` tanks cleanly switches the local configuration directory, workspace cache, and conversation databases (stored in `~/.gemini` -> `~/.clikae/profiles/antigravity/<tank>`), but it **does not switch the API usage quota or Google account session under the hood**.
+- **Observation:** Running `/usage` in `agy 8` returned the exact same usage metrics as when leaving `agy c`.
+- **Reason:** `agy`'s OAuth credentials/session tokens are stored globally (machine-wide, e.g., in macOS Keychain or system-global paths) rather than inside the config directory. Thus, even when `clikae` symlinks a new configuration directory, `agy` continues to make API requests and fetch quota info using the active global Google account credential.
+- **Current workaround:** The user must manually run `/logout` inside the `agy` TUI to clear the global credentials, then hit `Enter` to run the interactive OAuth flow and authenticate with the other account.
+
+**Opportunities for clikae (Product Gaps):**
+1. **Promote Token File Isolation (Best Path):** Standardize with the `antigravity` team to support file-based OAuth token storage under the configuration directory (e.g. `~/.gemini/antigravity-cli/auth.json`), similar to `codex` (`auth.json` in the tank directory). This would allow `clikae`'s default symlink-swapping mechanism to naturally isolate accounts.
+2. **Environment Variable / Keychain Isolation:** If `agy` uses the macOS Keychain, push for `agy` to read a service name variable (e.g. `GEMINI_KEYCHAIN_SERVICE`). Then `clikae env` can export a separate service name per tank.
+3. **Automate logout/login flow (Adapter Hook):** Implement a lifecycle hook/adapter in `clikae` for `agy`. When switching tanks, if the target tank has a different cached account email, `clikae` could automatically run `agy /logout` in the background and prompt the user to authorize the new account via browser.
+
+**Additional observations on agy behavior during tank transition:**
+- **Session Resume Gap (Isolated sqlite/brain paths):** Session sqlite databases (`conversations/*.db`) and background task transcripts (`brain/<session-id>/`) are strictly isolated under the tank's configuration directory. Thus, when switching tanks, attempting to resume a session created in another tank (e.g. `agy --conversation <session-id>`) fails with `ListDirectory ... does not exist`. To enable true cross-tank resumption, `clikae`'s carry (`to` / `relay`) mechanism needs to copy or symlink the matching database file and `brain/` folder into the target tank.
+- **Orphaned AI Monitor Timers vs. Persistent OS Processes:** Background system processes spawned by `agy` (such as `caffeinate rclone ...`) run globally as OS-level processes and persist across tank switches. However, the AI-level monitor timers (scheduled via the `schedule` tool in `agy`) are bound to the conversation/profile state and become orphaned/inactive once the tank is switched. This creates a "body-mind split" where the transfer continues, but the guardian AI stops monitoring. A fresh monitor timer must be re-registered in the new tank session.
+- **Non-Interactive Permission Hangs:** When executing background/headless tasks, `agy`'s strict security gate prompts for tool execution approval. In non-interactive contexts, this causes silent hangs. Standardizing on piping inputs via stdin (`cat input | agy -p "<prompt>"`) instead of allowing the model to call read/write tools headlessly avoids these permission bottlenecks.
+
+---
+
+## 14. OPEN — FLEET (many concurrent sessions on ONE tank) self-logged-out via OAuth refresh-token stampede
+
+**Found 2026-06-29, diagnosing a real "L tank suddenly logged out" incident.** The L
+tank (a claude Max account) went `auth_required` on its own. Root cause is a
+concurrency bug in token refresh that bites clikae's **FLEET** usage — the maintainer
+confirmed FLEET here means **(a) multiple concurrent sessions burning the SAME tank**
+(one person, own account, many parallel sessions — a first-class supported pattern, NOT
+account-sharing; it's the legitimate multi-open story clikae stands for).
+
+**The mechanism (thundering herd on a single-use, rotating refresh token).** Claude's
+OAuth uses **rotating refresh tokens**: each successful refresh issues a NEW refresh
+token and invalidates the old one. When FLEET spins up N sessions on one tank near token
+expiry, several processes read the same `RT0` and refresh near-simultaneously:
+1. Process A refreshes `RT0` → gets `RT1`, writes it to the Keychain. ✅
+2. Process B (a few hundred ms later) refreshes with the now-stale `RT0` → server returns
+   `invalid_grant`.
+3. **B treats `invalid_grant` as "I'm logged out" and CLEARS the Keychain entry**, wiping
+   the good `RT1` that A just wrote.
+4. The daemon's next proactive refresh finds an empty token → fails → `auth_required`.
+
+One small race gets escalated into a whole-tank logout. With both access AND refresh
+tokens cleared there is **no silent recovery** — only a fresh interactive `/login`.
+
+**Evidence (this incident).** `~/.clikae/profiles/claude/L/daemon.log`: days of
+`auth: proactive refresh succeeded`, then at `2026-06-21T21:14` a `proactive refresh
+failed, signalling re-auth required` → `headless daemon cannot complete OAuth` → `no
+token found`. The log shows **17×** `token still valid (cross-process refresh or not yet
+due)` — i.e. multiple processes refreshing one tank's token is the *normal* state on this
+tank, so the race condition is structurally present, not exotic. The observed refresh
+round-trip took **~6.3s**. Diagnostic: the Keychain entry
+`Claude Code-credentials-<sha256(CONFIG_DIR)[:8]>` (L = `ed272a36`; see the v0.3 keychain
+note in §2) still EXISTS but its `accessToken` AND `refreshToken` are both empty strings =
+genuinely logged out. (When reading that entry to diagnose, print field PRESENCE only,
+never token prefixes — leaking a prefix into a transcript is a credential leak.)
+
+**The fix — DECIDED 2026-06-29 (keep it simple; FLEET is not a frequent state):**
+1. **daemon owns refresh, single-flight via `flock`.** Put a lockfile in the tank's
+   config dir; wrap the read→refresh→write-back critical section in it. Sessions only
+   READ the Keychain; on a 401 they ask the daemon to refresh and retry, they do NOT
+   refresh themselves. This makes "the thing that rotates the single-use token" exactly
+   one actor per tank, killing the herd.
+2. **`invalid_grant` must NEVER directly clear credentials** (cheapest, highest-leverage
+   guard). On `invalid_grant`: take the lock, **re-read the Keychain** — if a fresher
+   token is present (a sibling already refreshed), adopt it; only escalate to
+   `auth_required` after confirming no valid token exists. This alone defuses the
+   "loser wipes the winner's token" amplifier even if some concurrent path slips through.
+3. **Keep proactive refresh, but make it daemon-EXCLUSIVE — do NOT switch to lazy.** Lazy
+   refresh would make N cold-starting sessions all 401 at once and all eat the ~6.3s
+   refresh latency — worse under FLEET. The disease was never "proactive"; it was
+   "proactive done by many." Single-source it in the daemon. Lock only the critical
+   section + serve-stale-while-revalidate (don't hard-block sessions on a still-valid
+   token, or concurrent cold-start queues 6s behind one lock).
+4. **NOT doing: daemon-death failover** (first session to grab the lock refreshes in the
+   daemon's place). Considered and rejected — v1 assumes "daemon is alive"; not worth the
+   second Keychain-writer code path for an edge of an edge. Revisit only if daemon OOM
+   under FLEET proves common.
+
+**Honest limit (don't oversell in copy).** Multiple MACHINES sharing one account still
+mutually evict each other — rotation is server-side, so whichever device refreshes last
+invalidates the others' refresh tokens. That's an OAuth fact a single machine can't fix.
+clikae can only (a) make ONE machine's concurrent sessions safe (the fix above) and (b)
+in the board/fuel-gauge UI, when a tank drops, say "may have been rotated out by another
+machine" rather than implying the account broke. Recovery for a user already hit: just
+re-login the tank (`clikae claude <tank>` → `/login`); there is no token to salvage.
