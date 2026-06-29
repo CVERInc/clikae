@@ -391,6 +391,11 @@ _resume_pick() {
       /) trigger_filter=1 ;;
       ''|$'\n'|$'\r') trigger_select=1 ;;
     esac
+    # MUST end with success: a branch whose last command is `[ cond ] && assign`
+    # (the paging clamps) returns non-zero when cond is false. _handle_key is called
+    # bare in the loop, so under `set -eo pipefail` that non-zero return crashed the
+    # whole picker (dogfood 2026-06-29: → / PgDn exited clikae). Never let it leak.
+    return 0
   }
 
   local sel=0 key n filter="" i last_filter="--initial--"
@@ -441,12 +446,16 @@ _resume_pick() {
     # as keystrokes (the paging-reset bug). One key per frame + the synchronized
     # flicker-free redraw is plenty smooth, and correct.
     IFS= read -rsn1 key <&3 || { key="q"; }
+    [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
+      printf 'READ key=%q sel(before)=%s n=%s max_visible=%s\n' "$key" "$sel" "$n" "$max_visible" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
 
     exit_loop=0
     trigger_filter=0
     trigger_select=0
 
     _handle_key "$key"
+    [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
+      printf '  -> sel(after)=%s exit=%s filt=%s sel_trig=%s\n' "$sel" "$exit_loop" "$trigger_filter" "$trigger_select" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
 
     if [ "$exit_loop" -eq 1 ]; then
       break
