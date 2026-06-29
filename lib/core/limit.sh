@@ -143,57 +143,60 @@ limit_profile_dry() {
   files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
   [ -n "$files" ] || return 1
 
-  # Newest GENUINE-limit timestamp and newest SUCCESSFUL-turn timestamp, across
-  # ALL recent sessions (account-level). ISO-8601 stamps sort lexicographically,
-  # so `sort | tail -1` is the max — portable across grep/shell quirks, and no
-  # bracket class fancier than [^"] (some greps, e.g. ugrep, reject [^"\\]).
-  # NB: the structural greps tolerate optional whitespace after each colon
-  # (`: *`) so a future Claude Code that pretty-prints its JSONL can't silently
-  # break detection. Timestamps are extracted to their BARE ISO value (sed strips
-  # the `"timestamp":` token) so max_lim/max_suc compare cleanly regardless of
-  # whether the source used compact or spaced JSON.
-  local max_lim max_suc
-  # Read only the TAIL of each (potentially 100+ MB) transcript: we want the
-  # NEWEST limit and NEWEST success, both of which are the most-recent lines, so a
-  # bounded slice is correct AND ~1000× cheaper than grepping the whole file (the
-  # home board's old hot spot). See transcript_tail in profile_store.sh.
-  max_lim="$(printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      transcript_tail "$f" \
-        | grep -aE '"model": *"<synthetic>"' \
-        | grep -aE '"isApiErrorMessage": *true' \
-        | grep -oaE '"timestamp": *"[^"]*"' \
-        | sed -E 's/.*"timestamp": *"//; s/".*//'
-    done | sort | tail -n 1)"
-  [ -n "$max_lim" ] || return 1
+  # Find, in ONE awk pass over the bounded tails, three things at once:
+  #   maxL  — newest GENUINE-limit timestamp (synthetic + isApiErrorMessage)
+  #   maxS  — newest SUCCESSFUL-turn timestamp (type:assistant, NOT synthetic)
+  #   reset — the vendor's verbatim "resets …" phrase from the NEWEST limit line
+  # Folding all three into one awk (vs the old per-file grep|grep|grep|sed ×2 +
+  # a separate reset scan) cuts the home board's per-tank fork count ~10× — the
+  # last remaining hot spot after the tail-bounding (dogfood 2026-06-29). ISO-8601
+  # stamps compare lexicographically, so awk tracks the max by string compare; the
+  # structural matches tolerate optional whitespace after each colon (`: *`) so a
+  # pretty-printed JSONL can't silently break detection. Reads only the TAIL of
+  # each (100+ MB) transcript — the newest limit/success are the most-recent lines.
+  local out maxL maxS reset
+  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
+      [ -n "$f" ] && transcript_tail "$f"
+    done | awk '
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      /"model": *"<synthetic>"/ && /"isApiErrorMessage": *true/ {
+        t = ts($0)
+        if (t != "" && (maxL == "" || t > maxL)) {
+          maxL = t; reset = ""
+          if (match($0, /[Rr]esets [^"]*/)) reset = substr($0, RSTART, RLENGTH)
+        }
+        next
+      }
+      /"type": *"assistant"/ && $0 !~ /"model": *"<synthetic>"/ {
+        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+      }
+      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
+    ')"
+  # \037 (Unit Separator), NOT a tab: tab is IFS-whitespace, so `read` would
+  # COLLAPSE the empty maxS field between two tabs and shift reset into maxS
+  # (the exact footgun status.sh's delimiter comment warns about).
+  IFS=$'\037' read -r maxL maxS reset <<EOF
+$out
+EOF
+  [ -n "$maxL" ] || return 1
 
-  max_suc="$(printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      transcript_tail "$f" \
-        | grep -aE '"type": *"assistant"' \
-        | grep -avE '"model": *"<synthetic>"' \
-        | grep -oaE '"timestamp": *"[^"]*"' \
-        | sed -E 's/.*"timestamp": *"//; s/".*//'
-    done | sort | tail -n 1)"
-
-  # Dry only if nothing succeeded AFTER the newest limit. Pick the later of the
-  # two by sort: if a success sorts last (and isn't the same stamp), it cleared.
-  if [ -n "$max_suc" ]; then
+  # Dry only if nothing succeeded AFTER the newest limit (self-clearing). ISO
+  # stamps sort lexicographically, so a later success sorting last cleared it.
+  if [ -n "$maxS" ]; then
     local newer
-    newer="$(printf '%s\n%s\n' "$max_lim" "$max_suc" | sort | tail -n 1)"
-    [ "$newer" = "$max_suc" ] && [ "$max_suc" != "$max_lim" ] && return 1
+    newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
+    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
   fi
 
-  # Dry: echo the vendor's own reset phrase from the NEWEST limit line (matched by
-  # its bare ISO timestamp), verbatim — never parsed into a countdown.
-  local ts_val="$max_lim"
-  printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      transcript_tail "$f" \
-        | grep -aF "$ts_val" \
-        | grep -aE '"isApiErrorMessage": *true' \
-        | grep -oaiE 'resets [^"]+'
-    done | head -n 1
+  # Dry: echo the vendor's own reset phrase (captured above from the newest limit
+  # line), verbatim — never parsed into a countdown.
+  printf '%s' "$reset"
   return 0
 }
 

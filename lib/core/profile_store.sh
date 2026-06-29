@@ -54,7 +54,7 @@ clikae_is_target() {
 # it rather than each re-deriving "read only what you need" and drifting on the
 # bound. Override the bounds via env if a pathological transcript ever needs more.
 CLIKAE_TX_HEAD_LINES="${CLIKAE_TX_HEAD_LINES:-200}"
-CLIKAE_TX_TAIL_LINES="${CLIKAE_TX_TAIL_LINES:-2000}"
+CLIKAE_TX_TAIL_BYTES="${CLIKAE_TX_TAIL_BYTES:-524288}"   # 512 KiB
 
 # transcript_head <file> [lines] — first N lines (head-of-file signals). One
 # `head`, never the whole file. Silent (empty) if the file is missing.
@@ -64,15 +64,18 @@ transcript_head() {
   head -n "$n" "$f" 2>/dev/null || true
 }
 
-# transcript_tail <file> [lines] — last N lines (latest-event signals). `tail`
-# seeks from the end, so cost is bounded by the slice, not the file size — the
-# difference between ~0.01s and grepping a 96 MB file. The events callers want
-# (the NEWEST limit marker / success turn / recap) are by definition the most
-# recent lines, so a tail slice captures them correctly.
+# transcript_tail <file> [bytes] — last N BYTES (latest-event signals). Bounded
+# by BYTES, not lines: a transcript line can be megabytes (a tool result / inline
+# base64), so a line bound (`tail -n`) still reads/processes MBs and was the home
+# board's last hot spot (dogfood 2026-06-29: tank C's 96 MB session → 0.9s per
+# scan). `tail -c` seeks from the end → cost is the slice, period. The first line
+# may be partial — harmless: callers match whole JSON objects, and the events they
+# want (NEWEST limit marker / success turn / recap) are the most-recent COMPLETE
+# lines at the very end. 512 KiB comfortably spans many recent turns.
 transcript_tail() {
-  local f="$1" n="${2:-$CLIKAE_TX_TAIL_LINES}"
+  local f="$1" b="${2:-$CLIKAE_TX_TAIL_BYTES}"
   [ -f "$f" ] || return 0
-  tail -n "$n" "$f" 2>/dev/null || true
+  tail -c "$b" "$f" 2>/dev/null || true
 }
 
 # Validate that <cli> and <profile> are sane names (no slashes, no leading dot, no whitespace).
