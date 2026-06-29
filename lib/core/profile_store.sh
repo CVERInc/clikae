@@ -42,6 +42,39 @@ clikae_is_target() {
   [ -f "$CLIKAE_LIB/targets/$cli.sh" ]
 }
 
+# ── Bounded transcript reads ────────────────────────────────────────────────
+# Session transcripts get HUGE (100+ MB for a long agent run); scanning a whole
+# one PER TANK is what made the home board crawl (dogfood 2026-06-29: ~8s on a
+# 1.6 GB tank — `limit_profile_dry` + the recap each `grep`'d the full file).
+# Every signal we actually need sits at a known END of the file:
+#   • ai-title / opening prompt / cwd → near the HEAD (first lines)
+#   • newest usage-limit marker / newest turn / latest recap → near the TAIL
+# So readers take a BOUNDED slice, never the whole file. This is the ONE home for
+# that rule — limit detection, the home recap, the resume picker all go through
+# it rather than each re-deriving "read only what you need" and drifting on the
+# bound. Override the bounds via env if a pathological transcript ever needs more.
+CLIKAE_TX_HEAD_LINES="${CLIKAE_TX_HEAD_LINES:-200}"
+CLIKAE_TX_TAIL_LINES="${CLIKAE_TX_TAIL_LINES:-2000}"
+
+# transcript_head <file> [lines] — first N lines (head-of-file signals). One
+# `head`, never the whole file. Silent (empty) if the file is missing.
+transcript_head() {
+  local f="$1" n="${2:-$CLIKAE_TX_HEAD_LINES}"
+  [ -f "$f" ] || return 0
+  head -n "$n" "$f" 2>/dev/null || true
+}
+
+# transcript_tail <file> [lines] — last N lines (latest-event signals). `tail`
+# seeks from the end, so cost is bounded by the slice, not the file size — the
+# difference between ~0.01s and grepping a 96 MB file. The events callers want
+# (the NEWEST limit marker / success turn / recap) are by definition the most
+# recent lines, so a tail slice captures them correctly.
+transcript_tail() {
+  local f="$1" n="${2:-$CLIKAE_TX_TAIL_LINES}"
+  [ -f "$f" ] || return 0
+  tail -n "$n" "$f" 2>/dev/null || true
+}
+
 # Validate that <cli> and <profile> are sane names (no slashes, no leading dot, no whitespace).
 validate_name() {
   local kind="$1"   # "cli" or "profile"

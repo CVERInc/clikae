@@ -153,9 +153,14 @@ limit_profile_dry() {
   # the `"timestamp":` token) so max_lim/max_suc compare cleanly regardless of
   # whether the source used compact or spaced JSON.
   local max_lim max_suc
+  # Read only the TAIL of each (potentially 100+ MB) transcript: we want the
+  # NEWEST limit and NEWEST success, both of which are the most-recent lines, so a
+  # bounded slice is correct AND ~1000× cheaper than grepping the whole file (the
+  # home board's old hot spot). See transcript_tail in profile_store.sh.
   max_lim="$(printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      grep -aE '"model": *"<synthetic>"' "$f" 2>/dev/null \
+      transcript_tail "$f" \
+        | grep -aE '"model": *"<synthetic>"' \
         | grep -aE '"isApiErrorMessage": *true' \
         | grep -oaE '"timestamp": *"[^"]*"' \
         | sed -E 's/.*"timestamp": *"//; s/".*//'
@@ -164,7 +169,8 @@ limit_profile_dry() {
 
   max_suc="$(printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      grep -aE '"type": *"assistant"' "$f" 2>/dev/null \
+      transcript_tail "$f" \
+        | grep -aE '"type": *"assistant"' \
         | grep -avE '"model": *"<synthetic>"' \
         | grep -oaE '"timestamp": *"[^"]*"' \
         | sed -E 's/.*"timestamp": *"//; s/".*//'
@@ -183,7 +189,8 @@ limit_profile_dry() {
   local ts_val="$max_lim"
   printf '%s\n' "$files" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      grep -aF "$ts_val" "$f" 2>/dev/null \
+      transcript_tail "$f" \
+        | grep -aF "$ts_val" \
         | grep -aE '"isApiErrorMessage": *true' \
         | grep -oaiE 'resets [^"]+'
     done | head -n 1

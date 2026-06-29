@@ -84,7 +84,7 @@ adapter_session_recap() {
   [ -n "$sid" ] || return 0
   f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   [ -f "$f" ] || return 0
-  grep '"subtype":"away_summary"' "$f" 2>/dev/null | tail -n 1 \
+  transcript_tail "$f" | grep '"subtype":"away_summary"' | tail -n 1 \
     | grep -oE '"content":"([^"\\]|\\.)*"' | head -n 1 \
     | sed -E 's/^"content":"//; s/"$//' \
     | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
