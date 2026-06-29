@@ -152,15 +152,18 @@ adapter_transcript_path() {
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
   local dir="$1" limit="${2:-5}" f sid mt
-  while IFS= read -r f; do
+  # codex's this-dir set is content-matched (a rollout records $PWD in its body,
+  # not its path — see _codex_rollouts_for_cwd), so the FILE LIST comes from there;
+  # sessions_by_mtime (shared kernel) then stats+sorts it. sid is read from each
+  # rollout's session_meta (not derivable from the path). Tank/dir names are
+  # validated (no spaces), so splitting the list into args is safe.
+  # shellcheck disable=SC2046
+  sessions_by_mtime $(_codex_rollouts_for_cwd "$dir") | head -n "$limit" | while IFS= read -r mt f; do
     [ -f "$f" ] || continue
     sid="$(_codex_meta_field "$f" id)"
     [ -n "$sid" ] || continue
-    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
     printf '%s\037%s\n' "$mt" "$sid"
-  done <<EOF
-$(_codex_rollouts_for_cwd "$dir" | head -n "$limit")
-EOF
+  done
 }
 
 # A session's title for the board: codex records the user's prompt as an event_msg

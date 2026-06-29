@@ -572,12 +572,13 @@ _resume_picker() {
     fi
   fi
 
-  # 1. Scan and sort all files using targeted stat globbing (very fast, ~30ms for 500+ files)
+  # 1. Scan + sort ALL tanks' sessions by recency in ~2 processes (sessions_by_mtime,
+  #    the shared kernel; ~30ms for 500+ files). all-dirs scope = bare project globs.
   local files
-  files="$( ( stat -f "%m %N" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-                  "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-                  "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
-            | sort -rn ) 2>/dev/null || true )"
+  files="$(sessions_by_mtime \
+            "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+            "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+            "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl)"
 
   if [ -z "$files" ]; then
     log_err "No resumable sessions found in any tank."
@@ -698,19 +699,10 @@ _resume_cleanup() {
   done
 
   local files
-  if stat --version 2>/dev/null | grep -q GNU; then
-    # GNU / Linux
-    files="$( ( stat -c "%Y %n" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-                    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-                    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
-              | sort -rn ) 2>/dev/null || true )"
-  else
-    # BSD / macOS
-    files="$( ( stat -f "%m %N" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-                    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-                    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
-              | sort -rn ) 2>/dev/null || true )"
-  fi
+  files="$(sessions_by_mtime \
+            "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+            "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+            "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl)"
 
   if [ -z "$files" ]; then
     log_ok "No session files found to clean."

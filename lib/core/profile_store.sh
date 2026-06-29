@@ -78,6 +78,23 @@ transcript_tail() {
   tail -c "$b" "$f" 2>/dev/null || true
 }
 
+# sessions_by_mtime <path-or-glob>...  -> "<mtime-epoch> <path>" per existing file,
+# NEWEST FIRST. ONE `stat` over every arg (the shell expands the globs first), then
+# sort by the leading mtime — so N files cost ~2 processes, not N. This is the
+# shared "list session files by recency" primitive the resume picker proved out
+# (~30ms for 500+ files); the picker, `resume cleanup`, and each adapter's
+# adapter_recent_sids all go through it rather than re-deriving an ls/stat-per-file
+# loop. The CALLER chooses scope via its globs (all tanks/dirs vs one tank's $PWD
+# project); the kernel just stats+sorts. GNU/BSD-portable (detect, don't `||`-fall
+# back — a partial GNU failure on a non-matching glob would otherwise double-run).
+sessions_by_mtime() {
+  if stat --version 2>/dev/null | grep -q GNU; then
+    stat -c '%Y %n' "$@" 2>/dev/null | sort -rn
+  else
+    stat -f '%m %N' "$@" 2>/dev/null | sort -rn
+  fi
+}
+
 # Validate that <cli> and <profile> are sane names (no slashes, no leading dot, no whitespace).
 validate_name() {
   local kind="$1"   # "cli" or "profile"

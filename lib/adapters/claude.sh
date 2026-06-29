@@ -271,17 +271,16 @@ adapter_session_title() {
 }
 
 adapter_recent_sids() {
-  local dir="$1" limit="${2:-5}" proj f sid mt
+  local dir="$1" limit="${2:-5}" proj mt f
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 0
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    sid="$(basename "$f" .jsonl)"
-    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
-    printf '%s\037%s\n' "$mt" "$sid"
-  done <<EOF
-$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
-EOF
+  # This-dir scope = $PWD's project glob; one sessions_by_mtime (shared kernel)
+  # instead of ls -t + a stat per file. sid is the filename (claude names the
+  # transcript by session id).
+  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while IFS= read -r mt f; do
+    [ -n "$f" ] || continue
+    printf '%s\037%s\n' "$mt" "$(basename "$f" .jsonl)"
+  done
 }
 
 # --- resume a SPECIFIC past session by id (powers `clikae resume`) ----------
