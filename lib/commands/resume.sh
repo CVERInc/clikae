@@ -310,6 +310,12 @@ _resume_pick() {
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true # Permanent no-echo for TUI
   printf '\033[?1049h\033[?25l'
+  # Read keys from a DEDICATED /dev/tty fd (like _home_pick/_home_choose), never
+  # bare stdin. The board draws escape sequences to stdout; on stdin those can come
+  # back as stray bytes that a bare read would treat as keystrokes (the old `-t 0`
+  # drain did exactly this — it silently swallowed a digit/letter that reset `sel`,
+  # so paging "didn't work"). fd 3 isolates input from that feedback.
+  exec 3</dev/tty 2>/dev/null || exec 3<&0
 
   # Query terminal size ONCE at startup to avoid TTY driver ioctl overhead during scrolling
   local lsz lines max_visible=15
@@ -326,9 +332,15 @@ _resume_pick() {
     local k="$1"
     case "$k" in
       $'\e')
-        if IFS= read -rn1 -t 1 char1 && [ "$char1" = "[" ]; then
-          if IFS= read -rn1 -t 1 char2; then
+        if IFS= read -rsn1 -t 1 char1 <&3 && [ "$char1" = "[" ]; then
+          if IFS= read -rsn1 -t 1 char2 <&3; then
             local max_visible_in="$max_visible"
+            # Debug probe (opt-in): CLIKAE_RESUME_DEBUG=<file> logs each escape
+            # sequence's bytes + the paging step, so a "broken arrow" report can be
+            # diagnosed from a real run instead of guessed. No-op when unset.
+            [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
+              printf 'ESC char1=%q char2=%q max_visible_in=[%s] sel=%s n=%s\n' \
+                "${char1:-}" "${char2:-}" "$max_visible_in" "$sel" "$n" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
             case "$char2" in
               A) # Up Arrow
                  sel=$(( (sel - 1 + n) % n )) ;;
@@ -345,21 +357,21 @@ _resume_pick() {
               Z) # Shift-Tab
                  sel=$(( (sel - 1 + n) % n )) ;;
               5) # Page Up
-                 IFS= read -rn1 -t 1 _ # consume the '~'
+                 IFS= read -rsn1 -t 1 _ <&3 # consume the '~'
                  sel=$(( sel - max_visible_in ))
                  [ "$sel" -lt 0 ] && sel=0
                  ;;
               6) # Page Down
-                 IFS= read -rn1 -t 1 _ # consume the '~'
+                 IFS= read -rsn1 -t 1 _ <&3 # consume the '~'
                  sel=$(( sel + max_visible_in ))
                  [ "$sel" -ge "$n" ] && sel=$(( n - 1 ))
                  ;;
               H|1) # Home key
-                 [ "$char2" = "1" ] && IFS= read -rn1 -t 1 _
+                 [ "$char2" = "1" ] && IFS= read -rsn1 -t 1 _ <&3
                  sel=0
                  ;;
               F|4) # End key
-                 [ "$char2" = "4" ] && IFS= read -rn1 -t 1 _
+                 [ "$char2" = "4" ] && IFS= read -rsn1 -t 1 _ <&3
                  sel=$(( n - 1 ))
                  ;;
             esac
@@ -381,7 +393,7 @@ _resume_pick() {
     esac
   }
 
-  local sel=0 key next_key rest n filter="" i last_filter="--initial--"
+  local sel=0 key n filter="" i last_filter="--initial--"
   while :; do
     if [ "$filter" != "$last_filter" ]; then
       local -a filtered=()
@@ -410,10 +422,10 @@ _resume_pick() {
     if [ "$n" -le 0 ]; then
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
-      IFS= read -rn1 key || key="q"
+      IFS= read -rsn1 key <&3 || key="q"
       case "$key" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
-           IFS= read -r filter || filter=""
+           IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
            printf '\033[?1049h\033[?25l'; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
@@ -424,20 +436,17 @@ _resume_pick() {
     [ "$sel" -lt 0 ] && sel=0
     _resume_pick_draw "$sel"
 
-    # Block-read the first key
-    IFS= read -rn1 key || { key="q"; }
+    # Block-read ONE key from the dedicated tty fd, handle it, redraw. No `-t 0`
+    # typeahead drain: it read from bare stdin and swallowed stray feedback bytes
+    # as keystrokes (the paging-reset bug). One key per frame + the synchronized
+    # flicker-free redraw is plenty smooth, and correct.
+    IFS= read -rsn1 key <&3 || { key="q"; }
 
     exit_loop=0
     trigger_filter=0
     trigger_select=0
 
     _handle_key "$key"
-
-    # Non-block-read and drain any pending key inputs from TTY buffer
-    while [ "$exit_loop" -eq 0 ] && [ "$trigger_filter" -eq 0 ] && [ "$trigger_select" -eq 0 ] && IFS= read -rn1 -t 0 2>/dev/null; do
-      IFS= read -rn1 next_key
-      _handle_key "$next_key"
-    done
 
     if [ "$exit_loop" -eq 1 ]; then
       break
@@ -446,7 +455,7 @@ _resume_pick() {
     if [ "$trigger_filter" -eq 1 ]; then
       _home_tty_leave
       printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
-      IFS= read -r filter || filter=""
+      IFS= read -r filter <&3 || filter=""
       stty -echo 2>/dev/null || true
       printf '\033[?1049h\033[?25l'; sel=0
       # Reset filter cache to re-trigger scan
@@ -515,6 +524,7 @@ _resume_pick() {
         fi
       fi
 
+      exec 3>&- 2>/dev/null || true   # don't leak the tty fd into the resumed engine
       if [ "${#passthru[@]}" -gt 0 ]; then
         _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid" -- "${passthru[@]}"
       else
@@ -524,6 +534,7 @@ _resume_pick() {
       return 0
     fi
   done
+  exec 3>&- 2>/dev/null || true
   unset -f _handle_key
 }
 
