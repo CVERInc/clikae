@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.6.0-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.8.0-blue.svg)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-clikae.cver.net-2563eb.svg)](https://clikae.cver.net)
 
 📖 **Docs:** [clikae.cver.net](https://clikae.cver.net) — humans read it, agents call `/mcp`.
@@ -170,6 +170,12 @@ clikae                            # your home board (run `clikae doctor` for a h
   quota — on its active tank only (it's a global single-account engine). The recipe for
   driving agy headless without firing a blank is now baked into `clikae agy --help` and
   [docs/agy-dispatch.md](docs/agy-dispatch.md).
+- **v0.8 — resume, picked from a board.** `clikae resume` reaches *backward* to a past
+  session by id across every tank (claude/codex/antigravity); run with no id it opens an
+  interactive picker — filter, page, pick by title, no UUID to copy — and `[R]` opens it
+  from the dashboard. `clikae resume cleanup` reclaims disk from old session data. The
+  home board also got much faster (several seconds → well under one on multi-GB tanks) by
+  reading only the transcript slices it needs and scanning each tank's fuel state once.
 - **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
   build-verified skeleton; it ships when it earns it.
 
