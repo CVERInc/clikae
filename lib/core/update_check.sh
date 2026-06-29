@@ -15,7 +15,8 @@
 #   • Self-limiting — "skip this version" suppresses the nag until a version newer
 #     than the skipped one appears.
 
-: "${CLIKAE_UPDATE_TTL:=86400}"   # 24h, in seconds — how long the cached check is trusted
+: "${CLIKAE_UPDATE_TTL:=86400}"     # 24h, in seconds — how long a SUCCESSFUL check is trusted
+: "${CLIKAE_UPDATE_RETRY:=3600}"    # 1h — a FAILED/offline check retries this soon, not a full TTL
 
 _update_cache_file() { printf '%s/cache/update-check' "$CLIKAE_HOME"; }   # "<epoch>\t<version>"
 _update_skip_file()  { printf '%s/cache/update-skip'  "$CLIKAE_HOME"; }   # "<version>"
@@ -51,27 +52,41 @@ _update_cached_version() {
 }
 
 # update_check_refresh -> if enabled and the cache is stale, fetch the latest release
-# tag from GitHub and rewrite the cache. Synchronous but tight (--max-time 2) and only
-# once per TTL, so the cost is at most a ~2s pause once a day; offline just fails quiet.
-# The cache stamp is bumped BEFORE the fetch so a failing/offline attempt doesn't retry
-# every single open. No-op without curl, or when CLIKAE_NO_UPDATE_CHECK is set.
+# tag from GitHub and rewrite the cache. Synchronous but tight (--max-time 5) and only
+# once per TTL on success, so the cost is at most a ~5s pause once a day; offline just
+# fails quiet. No-op without curl, or when CLIKAE_NO_UPDATE_CHECK is set.
+#
+# Honest failure handling (the whole point of this rewrite): a SUCCESS stamps a full
+# TTL; a FAILURE keeps the last-known version but back-dates the stamp so the next open
+# retries within CLIKAE_UPDATE_RETRY (1h). The old code stamped a full TTL even on
+# failure AND wrote back the stale version — so one transient timeout could pin a
+# version older than what you'd already installed and stay silent for a whole day
+# (forever, if fetches kept failing). That violated "stay honest": a new release was
+# out and the board said nothing. Now a hiccup self-heals within the hour.
 update_check_refresh() {
   [ -z "${CLIKAE_NO_UPDATE_CHECK:-}" ] || return 0
   command -v curl >/dev/null 2>&1 || return 0
-  local f line stamp now tag; f="$(_update_cache_file)"
+  local f line stamp now tag known back; f="$(_update_cache_file)"
   now="$(date +%s 2>/dev/null || echo 0)"
+  known="$(_update_cached_version 2>/dev/null || true)"
   if [ -f "$f" ]; then
     IFS= read -r line < "$f" 2>/dev/null || line=""
     stamp="${line%%$'\t'*}"; case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
     [ "$((now - stamp))" -lt "${CLIKAE_UPDATE_TTL:-86400}" ] && return 0   # still fresh
   fi
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
-  # Throttle even on failure: stamp now, keep whatever version we already knew.
-  printf '%s\t%s\n' "$now" "$(_update_cached_version 2>/dev/null || true)" > "$f" 2>/dev/null || true
-  tag="$(curl -fsSL --max-time 2 "https://api.github.com/repos/CVERInc/clikae/releases/latest" 2>/dev/null \
+  tag="$(curl -fsSL --max-time 5 "https://api.github.com/repos/CVERInc/clikae/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name"' \
         | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/')"
-  [ -n "$tag" ] && printf '%s\t%s\n' "$now" "$tag" > "$f" 2>/dev/null || true
+  if [ -n "$tag" ]; then
+    printf '%s\t%s\n' "$now" "$tag" > "$f" 2>/dev/null || true   # success → trust for a full TTL
+  else
+    # Failure/offline: keep what we knew, but only throttle for CLIKAE_UPDATE_RETRY so a
+    # transient blip doesn't go silent for a day. Back-date the stamp accordingly.
+    back=$(( now - ${CLIKAE_UPDATE_TTL:-86400} + ${CLIKAE_UPDATE_RETRY:-3600} ))
+    [ "$back" -lt 0 ] && back=0
+    printf '%s\t%s\n' "$back" "$known" > "$f" 2>/dev/null || true
+  fi
   return 0
 }
 

@@ -92,6 +92,35 @@ _seed_cache() { # <version>  (stamp = now, so refresh sees it as fresh and skips
   [ "$status" -ne 0 ]
 }
 
+# --- refresh: honest failure handling ------------------------------------------
+
+# A stale cache + a failing fetch must NOT burn a full TTL on a stale version.
+# We force the fetch to "fail" by pointing curl at an unroutable host via the same
+# code path: simplest is to disable the network with a bogus PATH-less curl is hard,
+# so we assert the back-dated stamp directly by seeding an old cache and a known
+# version, then checking the retry window math with CLIKAE_NO_UPDATE_CHECK off but
+# curl forced to miss (no network in CI → empty tag → failure branch).
+@test "update_check_refresh: a failed fetch retries within RETRY, not a full TTL" {
+  _src
+  export CLIKAE_UPDATE_TTL=86400 CLIKAE_UPDATE_RETRY=3600
+  mkdir -p "$CLIKAE_HOME/cache"
+  # stale stamp (2 days ago) + a known version
+  printf '%s\t%s\n' "$(( $(date +%s) - 172800 ))" "0.7.0" > "$CLIKAE_HOME/cache/update-check"
+  # Point the fetch at a black hole so it fails fast regardless of CI connectivity.
+  curl() { command curl --resolve api.github.com:443:127.0.0.1 --max-time 1 "$@" >/dev/null 2>&1; return 1; }
+  export -f curl 2>/dev/null || true
+  run update_check_refresh
+  [ "$status" -eq 0 ]
+  # version preserved, stamp back-dated so (now - stamp) ~= TTL - RETRY (i.e. retry in ~1h)
+  line="$(cat "$CLIKAE_HOME/cache/update-check")"
+  [ "${line#*$'\t'}" = "0.7.0" ]
+  stamp="${line%%$'\t'*}"
+  age=$(( $(date +%s) - stamp ))
+  # should be roughly TTL-RETRY (82800s); allow generous slack
+  [ "$age" -gt 80000 ] && [ "$age" -lt 86400 ]
+  unset -f curl
+}
+
 # --- install-method detection --------------------------------------------------
 
 @test "update_install_method: a Cellar path is brew" {

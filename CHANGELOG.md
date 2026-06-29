@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-06-30
+
+Fixes the update notice going silent. A transient failure when fetching the latest
+release (a slow network, a blocked `api.github.com`, or the old too-tight 2s timeout)
+used to stamp a full 24h throttle **and** write back the last-known version — so one
+hiccup could pin a version older than the one you'd already installed and the home
+board would say nothing about a real new release, sometimes indefinitely. Now a
+successful check is trusted for the full day, but a failed/offline check keeps the
+last-known version and retries within the hour (`CLIKAE_UPDATE_RETRY`, default 3600s),
+so a blip self-heals instead of going quiet. The fetch timeout is also relaxed from 2s
+to 5s for slower connections. No behaviour change when the network is healthy.
+
 ## [0.8.0] — 2026-06-30
 
 `clikae resume` grows up into an interactive, cross-engine session picker, and the
