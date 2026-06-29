@@ -1248,9 +1248,12 @@ _home_pick() {
         fi
         ;;
       R)
+        # Open the full cross-tank resume picker. exec the dispatcher (the same
+        # idiom every other launch in this board uses): cmd_resume lives in
+        # resume.sh, which isn't sourced in the home process — and can't be sourced
+        # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
         _home_tty_leave; trap - EXIT INT TERM
-        cmd_resume
-        return 0
+        exec "$CLIKAE_BIN" resume
         ;;
       x)
         # Incognito — open the selected tank with throwaway memory
