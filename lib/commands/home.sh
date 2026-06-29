@@ -223,21 +223,21 @@ EOF
 # key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
 # profile=$tname). Anything not scannable is simply never marked dry (no guessing).
 _home_dry_set() {
-  local cli profile path reset ep
-  while IFS=$'\t' read -r cli profile path; do
+  local cli profile reset ep
+  # limit_dry_set scans every tank's fuel ONCE (vs limit_tank_dry per tank, which
+  # re-scanned same-account siblings) and emits cli␟profile␟reset for the dry ones.
+  while IFS=$'\037' read -r cli profile reset; do
     [ -n "$cli" ] || continue
-    if reset="$(limit_tank_dry "$cli" "$profile")"; then
-      # A persisted (dry_store) marker means the reset phrase is a SNAPSHOT of what
-      # the engine said when we last caught it headless — annotate WHEN we observed
-      # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
-      # has no store marker (its dry is a live transcript scan), so it's never tagged.
-      if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
-        reset="$reset$(dry_seen_suffix "$ep")"
-      fi
-      printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
+    # A persisted (dry_store) marker means the reset phrase is a SNAPSHOT of what
+    # the engine said when we last caught it headless — annotate WHEN we observed
+    # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
+    # has no store marker (its dry is a live transcript scan), so it's never tagged.
+    if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
+      reset="$reset$(dry_seen_suffix "$ep")"
     fi
+    printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
   done <<EOF
-$(list_all_profiles)
+$(list_all_profiles | limit_dry_set)
 EOF
 
   # Log-only targets (single-account vendors like agy): scan the limit log the

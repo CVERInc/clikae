@@ -268,6 +268,53 @@ EOF
   return 1
 }
 
+# limit_dry_set — the BATCH form of limit_tank_dry for the whole board. Reads a
+# profile list (engine<TAB>tank<TAB>path per line) on stdin and emits one row
+#   engine␟tank␟reset
+# per tank that is out of fuel. Same verdict as calling limit_tank_dry on each
+# tank, but it computes each tank's OWN signal (_limit_tank_dry_self) EXACTLY ONCE
+# and then resolves account contagion from that cache — so a board with several
+# same-account tanks (e.g. claude C+MFC) doesn't re-scan the same transcripts N
+# times (the board's last hot spot; dogfood 2026-06-29). Indexed arrays only (no
+# associative arrays — bash 3.2).
+limit_dry_set() {
+  local -a _e=() _t=() _a=() _sd=() _sr=()   # engine, tank, account, self-dry(0/1), self-reset
+  local cli profile path sreset
+  # Pass 1 — each tank's OWN signal + account, computed ONCE.
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    : "$path"
+    if sreset="$(_limit_tank_dry_self "$cli" "$profile")"; then
+      _sd+=(1); _sr+=("$sreset")
+    else
+      _sd+=(0); _sr+=("")
+    fi
+    _e+=("$cli"); _t+=("$profile")
+    _a+=("$(_limit_tank_account "$cli" "$profile")")
+  done
+
+  # Pass 2 — dry if self-dry, else a same-account same-engine sibling is self-dry
+  # (contagion). A sibling hit counts even when its reset phrase is empty.
+  local i j n="${#_e[@]}" hit reset
+  for ((i = 0; i < n; i++)); do
+    if [ "${_sd[i]}" = "1" ]; then
+      printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "${_sr[i]}"
+      continue
+    fi
+    [ -n "${_a[i]}" ] || continue   # unknown account → never guess a shared quota
+    hit=0; reset=""
+    for ((j = 0; j < n; j++)); do
+      [ "$j" -ne "$i" ] || continue
+      [ "${_sd[j]}" = "1" ] || continue
+      [ "${_e[j]}" = "${_e[i]}" ] || continue
+      [ "${_a[j]}" = "${_a[i]}" ] || continue
+      hit=1; reset="${_sr[j]}"; break
+    done
+    [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
+  done
+  return 0
+}
+
 # limit_log_dry <logfile>
 # Is a log-only target's CURRENT limit log showing a genuine quota event?
 # Returns 0 (dry) and echoes the vendor's verbatim reset phrase, or 1 (fine).
