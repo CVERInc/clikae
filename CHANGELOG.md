@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-30
+
+`clikae resume` grows up into an interactive, cross-engine session picker, and the
+home board gets dramatically faster. With no id, `clikae resume` now opens a TUI
+that lists recent sessions across **every** tank — claude, codex, and antigravity —
+newest first, with live filtering and paging, so you pick a session by title
+instead of copy-pasting a UUID; press `[R]` from the home dashboard to open it. A
+new `clikae resume cleanup` reclaims disk from old session data (interactive, asks
+first, with `--dry-run`/`--older-than`). Under the hood the home board went from
+several seconds to well under one on large tanks, by reading only the slices of
+(sometimes 100+ MB) transcripts it actually needs and scanning each tank's fuel
+state once instead of repeatedly.
+
+### Added
+
+- **Interactive `clikae resume` picker** — run with no id to browse recent sessions
+  across all tanks (filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn,
+  `g`/`G` for top/bottom). Cross-engine: claude, codex, and antigravity sessions all
+  appear. `[R]` from the home board opens the same picker.
+- **codex + antigravity resume** — both can now be resumed by id and surfaced in the
+  picker (antigravity copies its `brain/` + conversation db across tanks on resume).
+- **`clikae resume cleanup`** — delete old session transcripts/databases to free disk
+  space. Interactive and asks before deleting; never removes tank configs or memory.
+  `--dry-run` previews; `--older-than <days>` scopes it.
+
+### Changed
+
+- **Home board is much faster** (~8s → well under 1s on a multi-GB tank). Transcript
+  reads are bounded to the head/tail slice actually needed (a shared
+  `transcript_head`/`transcript_tail`), fuel/over-quota detection folds its per-file
+  pipeline into a single pass, and the board scans each tank's fuel state once rather
+  than re-scanning same-account siblings.
+- A shared `sessions_by_mtime` kernel now backs every "recent sessions" listing (the
+  picker, `cleanup`, and each adapter), replacing copy-pasted stat/ls loops.
+
+### Fixed
+
+- The resume picker no longer crashes or mis-pages on the arrow / Page Up / Page Down
+  keys, and `[R]` from the board no longer aborts with `cmd_resume: command not found`.
+
 ## [0.7.1] — 2026-06-26
 
 Resume a past session by id, no matter which tank holds it. Because clikae gives
