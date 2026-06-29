@@ -148,10 +148,11 @@ EOF
     pattern="$(_watch_default_pattern)"
   fi
 
-  # Launch-only targets (single-account vendors like antigravity) have no adapter
-  # and no per-dir transcript — their only limit signal is a log file. If <engine>
-  # resolves to such a target, watch that log instead of an adapter transcript.
-  if [ ! -f "$CLIKAE_LIB/adapters/$cli.sh" ] && [ -f "$CLIKAE_LIB/targets/$cli.sh" ]; then
+  # Launch-only targets (single-account vendors like antigravity) have no per-dir
+  # transcript — their only limit signal is a log file. If <engine> resolves to
+  # such a target, watch that log instead of an adapter transcript. (Target-ness
+  # wins over a resume-only adapter file — see clikae_is_target.)
+  if clikae_is_target "$cli"; then
     [ "$got_profile" -eq 0 ] || log_fail "'$cli' is a single-account target — drop the <tank>."
     _watch_target "$cli" "$pattern" "$check" "$to"
     return

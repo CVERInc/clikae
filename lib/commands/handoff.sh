@@ -159,7 +159,18 @@ EOF
   local adapter_file="$CLIKAE_LIB/adapters/$to_cli.sh"
   local target_file="$CLIKAE_LIB/targets/$to_cli.sh"
 
-  if [ -f "$adapter_file" ]; then
+  # Target-ness FIRST: a single-account target (e.g. antigravity) may also ship a
+  # resume-only adapter file, which must not route it down the switchable path.
+  if clikae_is_target "$to_cli"; then
+    # A launch-only target (single-account vendor, e.g. antigravity): no profiles.
+    [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
+    # shellcheck source=/dev/null
+    source "$target_file"
+    log_ok "Handing off: $cli/$profile → $(target_meta_name)"
+    log_dim "Starting $(target_meta_binary) seeded with the brief; the source session is untouched."
+    target_start_with_prompt "$brief" "$@"
+
+  elif [ -f "$adapter_file" ]; then
     # A switchable CLI: hand off to one of its profiles.
     load_adapter "$to_cli"
     if ! declare -F adapter_start_with_prompt >/dev/null; then
@@ -175,15 +186,6 @@ EOF
     log_ok "Handing off: $cli/$profile → $to${to_dir:+ ($to_dir)}"
     log_dim "Starting $to_cli seeded with the brief; the source session is untouched."
     adapter_start_with_prompt "$to_dir" "$brief" "$@"
-
-  elif [ -f "$target_file" ]; then
-    # A launch-only target (single-account vendor, e.g. antigravity): no profiles.
-    [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
-    # shellcheck source=/dev/null
-    source "$target_file"
-    log_ok "Handing off: $cli/$profile → $(target_meta_name)"
-    log_dim "Starting $(target_meta_binary) seeded with the brief; the source session is untouched."
-    target_start_with_prompt "$brief" "$@"
 
   else
     log_err "Unknown handoff target: '$to_cli'."

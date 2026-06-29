@@ -102,9 +102,12 @@ _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
 # (first line). Never abort the caller under `set -eo pipefail`.
 _codex_meta_field() {
-  head -n 1 "$1" 2>/dev/null \
-    | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n 1 \
-    | sed -E "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"//; s/\"\$//" || true
+  local first_line=""
+  read -r first_line < "$1" 2>/dev/null || true
+  if [[ "$first_line" == *'"'"$2"'"'* ]]; then
+    local part="${first_line#*\"$2\":\"}"
+    printf '%s\n' "${part%%\"*}"
+  fi
 }
 
 # _codex_find_rollout <dir> <sid> — the rollout file for a session id (the uuid is
@@ -164,13 +167,51 @@ EOF
 # with payload.type "user_message" carrying "message". Take the first, flatten
 # escapes/whitespace (no jq). Empty → the board shows the age instead.
 adapter_session_title() {
-  local dir="$1" sid="$2" f t
+  local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 0
   f="$(_codex_find_rollout "$dir" "$sid")"
   [ -n "$f" ] && [ -f "$f" ] || return 0
-  t="$(grep -m1 '"type":"user_message"' "$f" 2>/dev/null \
-        | grep -oE '"message"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
-        | sed -E 's/^"message"[[:space:]]*:[[:space:]]*"//; s/"$//')"
-  printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
-    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+
+  local line_in idx_in=0 max_lines_in=100 title_in=""
+  while IFS= read -r line_in; do
+    idx_in=$((idx_in + 1))
+    [ "$idx_in" -gt "$max_lines_in" ] && break
+    if [[ "$line_in" == *'"type":"user_message"'* ]]; then
+      local m_part="${line_in#*\"message\":\"}"
+      title_in="${m_part%%\"*}"
+      break
+    fi
+  done < "$f" 2>/dev/null
+
+  [ -n "$title_in" ] || title_in="(no preview)"
+  title_in="${title_in//\\n/ }"
+  title_in="${title_in//\\t/ }"
+  title_in="${title_in//\\\"/\"}"
+  printf '%s' "$title_in"
+}
+
+adapter_find_session() {
+  _codex_find_rollout "$1" "$2"
+}
+
+adapter_session_cwd() {
+  _codex_meta_field "$1" cwd
+}
+
+adapter_recent_sessions() {
+  local dir="$1" limit="${2:-12}" sdir f sid mt cwd title
+  sdir="$(_codex_sessions_dir "$dir")"
+  [ -d "$sdir" ] || return 0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sid="$(_codex_meta_field "$f" id)"
+    [ -n "$sid" ] || continue
+    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
+    cwd="$(adapter_session_cwd "$f")"
+    title="$(adapter_session_title "$dir" "$sid")"
+    [ -n "$title" ] || title="(no preview)"
+    printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$cwd" "$title"
+  done <<EOF
+$( (find "$sdir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort -r | head -n "$limit") 2>/dev/null || true)
+EOF
 }

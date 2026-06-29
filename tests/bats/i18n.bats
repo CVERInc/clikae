@@ -65,11 +65,11 @@ load '../helpers'
   printf '{"type":"ai-title","aiTitle":"Hi","sessionId":"a"}\n' > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
   CLIKAE_LANG=zh-TW run clikae
-  [[ "$output" == *"續上次"* ]] || false
+  [[ "$output" == *"接續"* ]] || false
   CLIKAE_LANG=ja-JP run clikae
-  [[ "$output" == *"続き"* ]] || false
+  [[ "$output" == *"再開"* ]] || false
   CLIKAE_LANG=en-US run clikae
-  [[ "$output" == *"Continue"* ]] || false
+  [[ "$output" == *"Resume"* ]] || false
 }
 
 @test "the katakana wordmark shows ONLY in ja-JP" {

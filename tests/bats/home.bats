@@ -9,7 +9,7 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"No tanks yet"* ]] || false
   [[ "$output" == *"clikae init"* ]] || false
-  [[ "$output" == *"13 engines"* ]] || false
+  [[ "$output" == *"14 engines"* ]] || false
 }
 
 @test "bare clikae with profiles shows the tank board grouped by CLI" {
@@ -240,7 +240,7 @@ _agy_log() { # <line>
   [ "$status" -eq 0 ]
   # Headline present (en-US per the pinned test locale), titled by Claude's
   # ai-title, naming the engine/tank to resume.
-  [[ "$output" == *"Continue"* ]] || false
+  [[ "$output" == *"Resume"* ]] || false
   [[ "$output" == *"Resume me please"* ]] || false
   [[ "$output" == *"claude/a"* ]] || false
 }

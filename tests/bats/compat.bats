@@ -44,6 +44,11 @@ scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; 
     bin="$(grep -m1 'adapter_meta_cli_binary' "$f" | sed -E 's/.*echo "([^"]*)".*/\1/')"
     ev="$(grep -m1 'adapter_meta_env_var'    "$f" | sed -E 's/.*echo "([^"]*)".*/\1/')"
     st="$(grep -m1 'adapter_meta_strategy'   "$f" | sed -E 's/.*echo "([^"]*)".*/\1/')"
+    # `subcommand`-strategy adapters are NOT env-switchable engines — they're a
+    # capability shim on a launch-only target (e.g. antigravity's resume hook: no
+    # env var, macOS Keychain/symlink shaped). The PS module mirrors only
+    # switchable adapters, so such a shim must NOT require a PS table row.
+    [ "$st" = "subcommand" ] && continue
     # The psm1 row keys by the engine name; assert that row carries the same binary,
     # env var (empty for flag-strategy engines), and strategy.
     local row

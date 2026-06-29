@@ -14,9 +14,13 @@
 # This differs from `to`/`relay`/`continue`, which carry your CURRENT shell's live
 # session FORWARD onto another tank. `resume` reaches BACKWARD to a named session.
 
+# Sourcing home.sh to reuse its TUI terminal routines and localized translations.
+# shellcheck source=home.sh
+source "$CLIKAE_LIB/commands/home.sh"
+
 _resume_help() {
   cat <<'EOF'
-Usage: clikae resume [session-id] [-- args...]
+Usage: clikae resume [session-id | cleanup] [-- args...]
 
 Reopen a specific past session by id, in whichever tank owns it — without having
 to know which tank that is. Fixes the bare `<engine> --resume <id>` failure: each
@@ -27,6 +31,8 @@ home; clikae finds the tank and resumes it there.
   clikae resume             no id → pick from recent sessions across ALL tanks
                             (by title, newest first — no UUID to copy)
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
+  clikae resume cleanup     clean up old session data to free disk space
+                            (runs interactively by default, asks before deleting)
 
 clikae cd's to the directory the session was recorded in, so the engine resolves
 it in its own project. Only engines that can resume by id (e.g. claude) take part.
@@ -109,81 +115,741 @@ EOF
   adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
 }
 
-# _resume_picker [-- passthru...] — no id given: list recent sessions across all
-# tanks (newest first, by title) and resume the chosen one. Interactive.
-_resume_picker() {
+# Draw the resume menu with row index $2 highlighted, from items in $1.
+_resume_pick_draw() {
+  local sel="$1"
+  local n=${#filtered[@]}
+
+  # Begin Synchronized Update — terminal buffers all output until ESU,
+  # then renders the entire frame atomically in one pass. This prevents
+  # the terminal from sampling intermediate cursor positions during drawing.
+  printf '\033[?2026h'
+
+  # Use terminal size and viewport from inherited max_visible
+  local start_idx=0 end_idx=$(( n - 1 ))
+
+  if [ "$n" -gt "$max_visible" ]; then
+    start_idx=$(( sel - (max_visible / 2) ))
+    [ "$start_idx" -lt 0 ] && start_idx=0
+    end_idx=$(( start_idx + max_visible - 1 ))
+    if [ "$end_idx" -ge "$n" ]; then
+      end_idx=$(( n - 1 ))
+      start_idx=$(( end_idx - max_visible + 1 ))
+    fi
+  fi
+
+  local idx s_idx item engine tank sid label rage cwd mark rdot active_p
+  printf '\033[H\033[K\n'   # home + one blank top-margin line
+
+  printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · q %s%b\033[K\n\n' \
+    "$__C_BOLD" "clikae resume" "$__C_RESET" "$__C_DIM" \
+    "$T_K_MOVE" "$T_RESUME" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
+
+  # Top overflow indicator
+  if [ "$start_idx" -gt 0 ]; then
+    printf '    %b▲ ... %d more sessions above ...%b\033[K\n' "$__C_DIM" "$start_idx" "$__C_RESET"
+  fi
+
+  for ((idx=start_idx; idx<=end_idx; idx++)); do
+    s_idx="${filtered[idx]}"
+    _lazy_parse "$s_idx"
+    item="${sessions[s_idx]}"
+    engine="${item%%$'\x1f'*}"
+    local tmp="${item#*$'\x1f'}"
+    tank="${tmp%%$'\x1f'*}"
+    tmp="${tmp#*$'\x1f'}"
+    sid="${tmp%%$'\x1f'*}"
+    label="${cached_title[s_idx]}"
+    rage="${cached_age[s_idx]}"
+
+    if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
+
+    active_p=""
+    if [ "$engine" = "claude" ]; then active_p="$active_claude"
+    elif [ "$engine" = "codex" ]; then active_p="$active_codex"
+    elif [ "$engine" = "antigravity" ]; then active_p="$active_antigravity"
+    fi
+    if [ "$tank" = "$active_p" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
+
+    if [ "$idx" -eq "$sel" ]; then
+      _lazy_parse_cwd "$s_idx"
+      cwd="${cached_cwd[s_idx]}"
+      printf '    %b %b %b%s/%s%b · "%s"  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$engine" "$tank" "$__C_RESET" "$(_home_trunc "$label" 64)" "$__C_DIM" "$rage" "$__C_RESET"
+      printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "${cwd:-?}" "$sid" "$T_ENTER_RESUME" "$__C_RESET"
+    else
+      printf '    %b %b %b%s/%s · "%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_DIM" "$engine" "$tank" "$(_home_trunc "$label" 64)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
+    fi
+  done
+
+  # Bottom overflow indicator
+  if [ "$end_idx" -lt $(( n - 1 )) ]; then
+    printf '    %b▼ ... %d more sessions below ...%b\033[K\n' "$__C_DIM" "$(( n - 1 - end_idx ))" "$__C_RESET"
+  fi
+
+  printf '\033[J'   # erase any leftover lines
+
+  # Park the cursor at the bottom-left corner of the window
+  local target_rows="${lines:-24}"
+  printf '\033[%d;1H' "$target_rows"
+
+  # End Synchronized Update — terminal now renders the buffered frame atomically
+  printf '\033[?2026l'
+}
+
+_lazy_parse() {
+  local idx="$1"
+  [ -n "${cached_title[idx]}" ] && return 0
+
+  local item="${sessions[idx]}"
+  local engine="${item%%$'\x1f'*}"
+  local tmp="${item#*$'\x1f'}"
+  local tank="${tmp%%$'\x1f'*}"
+  tmp="${tmp#*$'\x1f'}"
+  local sid="${tmp%%$'\x1f'*}"
+  tmp="${tmp#*$'\x1f'}"
+  local f="${tmp%%$'\x1f'*}"
+  local mt="${tmp##*$'\x1f'}"
+
+  load_adapter "$engine" >/dev/null 2>&1 || true
+
+  local first_line=""
+  if [ -f "$f" ]; then
+    read -r first_line < "$f" 2>/dev/null || first_line=""
+  fi
+
+  local stitle=""
+  if [ "$engine" = "claude" ]; then
+    local line_in idx_in=0 max_lines_in=100 title_in="" user_msg_in=""
+    while IFS= read -r line_in; do
+      idx_in=$((idx_in + 1))
+      [ "$idx_in" -gt "$max_lines_in" ] && break
+      if [[ "$line_in" == *'"aiTitle"'* ]]; then
+        local t_part="${line_in#*\"aiTitle\":\"}"
+        title_in="${t_part%%\"*}"
+        break
+      fi
+      if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
+        if [[ "$line_in" == *'"text":"'* ]]; then
+          local content_part="${line_in#*\"text\":\"}"
+          user_msg_in="${content_part%%\"*}"
+        elif [[ "$line_in" == *'"content":"'* ]]; then
+          local content_part="${line_in#*\"content\":\"}"
+          user_msg_in="${content_part%%\"*}"
+        fi
+      fi
+    done < "$f" 2>/dev/null
+    stitle="$title_in"
+    [ -n "$stitle" ] || stitle="$user_msg_in"
+    stitle="${stitle//\\n/ }"
+    stitle="${stitle//\\t/ }"
+    stitle="${stitle//\\\"/\"}"
+  elif [ "$engine" = "codex" ]; then
+    stitle="$(adapter_session_title "$(profile_dir "$engine" "$tank")" "$sid" 2>/dev/null || true)"
+  elif [ "$engine" = "antigravity" ]; then
+    local c_part="${first_line#*\"content\":\"}"
+    stitle="${c_part%%\"*}"
+    if [[ "$stitle" == *"<USER_REQUEST>"* ]]; then
+      stitle="${stitle#*<USER_REQUEST>}"
+      stitle="${stitle%%</USER_REQUEST>*}"
+    fi
+    stitle="${stitle//\\n/ }"
+    stitle="${stitle//\\t/ }"
+    stitle="${stitle//\\\"/\"}"
+  fi
+
+  [ -n "$stitle" ] || stitle="(no preview)"
+  cached_title[idx]="$stitle"
+
+  # Format age
+  local now; now=$(date +%s 2>/dev/null || echo "$mt")
+  local diff=$((now - mt))
+  local rage
+  if [ "$diff" -lt 60 ]; then rage="just now"
+  elif [ "$diff" -lt 3600 ]; then rage="$((diff / 60))m ago"
+  elif [ "$diff" -lt 86400 ]; then rage="$((diff / 3600))h ago"
+  else rage="$((diff / 86400))d ago"; fi
+  cached_age[idx]="$rage"
+}
+
+_lazy_parse_cwd() {
+  local idx="$1"
+  [ -n "${cached_cwd[idx]}" ] && return 0
+
+  local item="${sessions[idx]}"
+  local engine="${item%%$'\x1f'*}"
+  local tmp="${item#*$'\x1f'}"
+  local tank="${tmp%%$'\x1f'*}"
+  tmp="${tmp#*$'\x1f'}"
+  local sid="${tmp%%$'\x1f'*}"
+  tmp="${tmp#*$'\x1f'}"
+  local f="${tmp%%$'\x1f'*}"
+
+  load_adapter "$engine" >/dev/null 2>&1 || true
+
+  local scwd=""
+  if [ "$engine" = "claude" ]; then
+    scwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
+  elif [ "$engine" = "codex" ]; then
+    scwd="$(_codex_meta_field "$f" cwd)"
+  elif [ "$engine" = "antigravity" ]; then
+    local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
+    scwd="$(grep -F "$sid" "$bdir/history.jsonl" 2>/dev/null \
+      | grep -oE '"workspace"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
+      | sed -E 's/^"workspace"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+    [ -n "$scwd" ] || scwd="$HOME"
+  fi
+  [ -n "$scwd" ] || scwd="?"
+  cached_cwd[idx]="$scwd"
+}
+
+_resume_pick() {
   local -a passthru=()
   [ "${1:-}" = "--" ] && { shift; passthru=("$@"); }
 
-  # Gather "<epoch>\037<engine>\037<tank>\037<sid>\037<cwd>\037<title>" rows.
-  local rows engine cli profile dir
-  rows="$(
-    while IFS= read -r engine; do
-      [ -n "$engine" ] || continue
-      while IFS=$'\t' read -r cli profile dir; do
-        [ "$cli" = "$engine" ] || continue
-        (
-          load_adapter "$engine" >/dev/null 2>&1 || exit 0
-          declare -F adapter_recent_sessions >/dev/null 2>&1 || exit 0
-          local e="$engine" t="$profile"
-          adapter_recent_sessions "$dir" 8 | while IFS=$'\037' read -r mt sid scwd title; do
-            [ -n "$sid" ] || continue
-            printf '%s\037%s\037%s\037%s\037%s\037%s\n' "$mt" "$e" "$t" "$sid" "$scwd" "$title"
-          done
-        )
-      done <<INNER
-$(list_all_profiles)
-INNER
-    done <<OUTER
-$(_resume_engines)
-OUTER
-  )"
+  trap '_home_tty_leave' EXIT
+  trap '_home_tty_leave; exit 130' INT TERM
+  stty -echo 2>/dev/null || true # Permanent no-echo for TUI
+  printf '\033[?1049h\033[?25l'
 
-  if [ -z "$rows" ]; then
+  # Query terminal size ONCE at startup to avoid TTY driver ioctl overhead during scrolling
+  local lsz lines max_visible=15
+  lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  if [ -n "$lsz" ]; then
+    lines="${lsz%% *}"
+    max_visible=$(( lines - 7 ))
+    [ "$max_visible" -lt 5 ] && max_visible=5
+  fi
+
+  local exit_loop=0 trigger_filter=0 trigger_select=0
+
+  _handle_key() {
+    local k="$1"
+    case "$k" in
+      $'\e')
+        if IFS= read -rn1 -t 1 char1 && [ "$char1" = "[" ]; then
+          if IFS= read -rn1 -t 1 char2; then
+            local max_visible_in="$max_visible"
+            case "$char2" in
+              A) # Up Arrow
+                 sel=$(( (sel - 1 + n) % n )) ;;
+              B) # Down Arrow
+                 sel=$(( (sel + 1) % n )) ;;
+              D) # Left Arrow -> Page Up
+                 sel=$(( sel - max_visible_in ))
+                 [ "$sel" -lt 0 ] && sel=0
+                 ;;
+              C) # Right Arrow -> Page Down
+                 sel=$(( sel + max_visible_in ))
+                 [ "$sel" -ge "$n" ] && sel=$(( n - 1 ))
+                 ;;
+              Z) # Shift-Tab
+                 sel=$(( (sel - 1 + n) % n )) ;;
+              5) # Page Up
+                 IFS= read -rn1 -t 1 _ # consume the '~'
+                 sel=$(( sel - max_visible_in ))
+                 [ "$sel" -lt 0 ] && sel=0
+                 ;;
+              6) # Page Down
+                 IFS= read -rn1 -t 1 _ # consume the '~'
+                 sel=$(( sel + max_visible_in ))
+                 [ "$sel" -ge "$n" ] && sel=$(( n - 1 ))
+                 ;;
+              H|1) # Home key
+                 [ "$char2" = "1" ] && IFS= read -rn1 -t 1 _
+                 sel=0
+                 ;;
+              F|4) # End key
+                 [ "$char2" = "4" ] && IFS= read -rn1 -t 1 _
+                 sel=$(( n - 1 ))
+                 ;;
+            esac
+          fi
+        else
+          exit_loop=1
+        fi
+        ;;
+      $'\t') sel=$(( (sel + 1) % n )) ;;
+      k) sel=$(( (sel - 1 + n) % n )) ;;
+      j) sel=$(( (sel + 1) % n )) ;;
+      g) sel=0 ;;
+      G) sel=$(( n - 1 )) ;;
+      [1-9])
+        sel=$(( k - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+      q) exit_loop=1 ;;
+      /) trigger_filter=1 ;;
+      ''|$'\n'|$'\r') trigger_select=1 ;;
+    esac
+  }
+
+  local sel=0 key next_key rest n filter="" i last_filter="--initial--"
+  while :; do
+    if [ "$filter" != "$last_filter" ]; then
+      local -a filtered=()
+      for ((i=0; i<${#sessions[@]}; i++)); do
+        if [ -n "$filter" ]; then
+          _lazy_parse "$i"
+          local item="${sessions[i]}"
+          local engine="${item%%$'\x1f'*}"
+          local tmp="${item#*$'\x1f'}"
+          local tank="${tmp%%$'\x1f'*}"
+          local title="${cached_title[i]}"
+          shopt -s nocasematch
+          if [[ "$engine/$tank $title" == *"$filter"* ]]; then
+            filtered+=("$i")
+          fi
+          shopt -u nocasematch
+        else
+          filtered+=("$i")
+        fi
+      done
+      last_filter="$filter"
+      sel=0
+    fi
+
+    n=${#filtered[@]}
+    if [ "$n" -le 0 ]; then
+      printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
+        "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
+      IFS= read -rn1 key || key="q"
+      case "$key" in
+        /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
+           IFS= read -r filter || filter=""
+           stty -echo 2>/dev/null || true
+           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+        *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
+      esac
+    fi
+
+    [ "$sel" -ge "$n" ] && sel=$((n - 1))
+    [ "$sel" -lt 0 ] && sel=0
+    _resume_pick_draw "$sel"
+
+    # Block-read the first key
+    IFS= read -rn1 key || { key="q"; }
+
+    exit_loop=0
+    trigger_filter=0
+    trigger_select=0
+
+    _handle_key "$key"
+
+    # Non-block-read and drain any pending key inputs from TTY buffer
+    while [ "$exit_loop" -eq 0 ] && [ "$trigger_filter" -eq 0 ] && [ "$trigger_select" -eq 0 ] && IFS= read -rn1 -t 0 2>/dev/null; do
+      IFS= read -rn1 next_key
+      _handle_key "$next_key"
+    done
+
+    if [ "$exit_loop" -eq 1 ]; then
+      break
+    fi
+
+    if [ "$trigger_filter" -eq 1 ]; then
+      _home_tty_leave
+      printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
+      IFS= read -r filter || filter=""
+      stty -echo 2>/dev/null || true
+      printf '\033[?1049h\033[?25l'; sel=0
+      # Reset filter cache to re-trigger scan
+      last_filter="--initial--"
+      continue
+    fi
+
+    if [ "$trigger_select" -eq 1 ]; then
+      local sel_s_idx="${filtered[sel]}"
+      local sel_item="${sessions[sel_s_idx]}"
+      local sel_engine="${sel_item%%$'\x1f'*}"
+      local sel_tmp="${sel_item#*$'\x1f'}"
+      local sel_tank="${sel_tmp%%$'\x1f'*}"
+      sel_tmp="${sel_tmp#*$'\x1f'}"
+      local sel_sid="${sel_tmp%%$'\x1f'*}"
+      # (the 4th field — transcript path — isn't needed here; _resume_exec and the
+      # cross-tank copy below re-derive it via adapter_find_session.)
+
+      _home_tty_leave; trap - EXIT INT TERM
+      local cands target_tank cand_n
+      cands="$(list_all_profiles | awk -F'\t' -v c="$sel_engine" '$1==c{print $2}')"
+      cand_n="$(printf '%s\n' "$cands" | grep -c . || true)"
+      if [ "$cand_n" -gt 1 ]; then
+        target_tank="$(_home_choose "Resume on which tank?" "$cands" "$sel_tank")" || {
+          trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+          stty -echo 2>/dev/null || true
+          printf '\033[?1049h\033[?25l'; continue
+        }
+      else
+        target_tank="$sel_tank"
+      fi
+
+      local d; d="$(profile_dir "$sel_engine" "$target_tank")"
+      if [ "$target_tank" != "$sel_tank" ]; then
+        local src_d; src_d="$(profile_dir "$sel_engine" "$sel_tank")"
+        if [ "$sel_engine" = "antigravity" ]; then
+          local src_brain="$src_d/antigravity-cli/brain/$sel_sid"
+          local tgt_brain="$d/antigravity-cli/brain/$sel_sid"
+          if [ -d "$src_brain" ]; then
+            mkdir -p "$(dirname "$tgt_brain")"
+            cp -R "$src_brain" "$tgt_brain"
+          fi
+          local src_db="$src_d/antigravity-cli/conversations/$sel_sid.db"
+          local tgt_db="$d/antigravity-cli/conversations/$sel_sid.db"
+          if [ -f "$src_db" ]; then
+            mkdir -p "$(dirname "$tgt_db")"
+            cp "$src_db"* "$(dirname "$tgt_db")/" 2>/dev/null || true
+          fi
+          history_log "resume: copied antigravity session $sel_sid from $sel_tank to $target_tank"
+        else
+          local found; found="$(adapter_find_session "$src_d" "$sel_sid" 2>/dev/null || true)"
+          if [ -n "$found" ]; then
+            if [ "$sel_engine" = "codex" ]; then
+              local rel_path; rel_path="${found#*/sessions/}"
+              local tgt_file="$d/sessions/$rel_path"
+              mkdir -p "$(dirname "$tgt_file")"
+              cp "$found" "$tgt_file"
+            else
+              local slug; slug="$(basename "$(dirname "$found")")"
+              local tgt_proj="$d/projects/$slug"
+              mkdir -p "$tgt_proj"
+              cp "$found" "$tgt_proj/$sel_sid.jsonl"
+            fi
+            history_log "resume: copied $sel_engine session $sel_sid from $sel_tank to $target_tank"
+          fi
+        fi
+      fi
+
+      if [ "${#passthru[@]}" -gt 0 ]; then
+        _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid" -- "${passthru[@]}"
+      else
+        _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid"
+      fi
+      unset -f _handle_key
+      return 0
+    fi
+  done
+  unset -f _handle_key
+}
+
+_resume_picker() {
+  _home_tty_leave; trap - EXIT INT TERM
+  local -a passthru=()
+  [ "${1:-}" = "--" ] && { shift; passthru=("$@"); }
+
+  # Cache active profiles once at startup with pure Bash / minimal readlink (1 process total)
+  local active_claude="" active_codex="" active_antigravity=""
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [[ "$CLAUDE_CONFIG_DIR" == "$CLIKAE_HOME/profiles/claude/"* ]]; then
+    local suffix="${CLAUDE_CONFIG_DIR#$CLIKAE_HOME/profiles/claude/}"
+    active_claude="${suffix%%/*}"
+  fi
+  if [ -n "${CODEX_HOME:-}" ] && [[ "$CODEX_HOME" == "$CLIKAE_HOME/profiles/codex/"* ]]; then
+    local suffix="${CODEX_HOME#$CLIKAE_HOME/profiles/codex/}"
+    active_codex="${suffix%%/*}"
+  fi
+  local link="$HOME/.gemini" target
+  if [ -L "$link" ]; then
+    target="$(readlink "$link" 2>/dev/null || true)"
+    local slots="$CLIKAE_HOME/profiles/antigravity"
+    if [[ "$target" == "$slots/"* ]]; then
+      active_antigravity="${target#$slots/}"
+      active_antigravity="${active_antigravity%%/*}"
+    fi
+  fi
+
+  # 1. Scan and sort all files using targeted stat globbing (very fast, ~30ms for 500+ files)
+  local files
+  files="$( ( stat -f "%m %N" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+                  "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                  "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
+            | sort -rn ) 2>/dev/null || true )"
+
+  if [ -z "$files" ]; then
     log_err "No resumable sessions found in any tank."
     log_dim "Resume-capable engines: $(_resume_engines | paste -sd , - | sed 's/,/, /g')"
     exit 1
   fi
 
-  # Sort by epoch desc, keep the newest 12.
-  local sorted
-  sorted="$(printf '%s\n' "$rows" | sort -t$'\037' -k1,1nr | head -n 12)"
+  # 2. Build indexed array in Bash (zero process spawn)
+  local -a sessions=()
+  local -a cached_title=()
+  local -a cached_age=()
+  local -a cached_cwd=()
 
-  log_bold "Recent sessions across your tanks:"
-  local i=0 mt engine2 tank sid scwd title when
-  local -a pick_engine=() pick_tank=() pick_sid=()
-  while IFS=$'\037' read -r mt engine2 tank sid scwd title; do
-    [ -n "$sid" ] || continue
-    i=$((i+1))
-    pick_engine+=("$engine2"); pick_tank+=("$tank"); pick_sid+=("$sid")
-    when="$(date -r "$mt" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$mt" '+%Y-%m-%d %H:%M' 2>/dev/null || echo '?')"
-    printf '  %2d) %s/%s · %s\n' "$i" "$engine2" "$tank" "$title"
-    log_dim "       $when · ${sid%%-*}… · ${scwd:-?}"
+  local mt f rel engine rest tank sid filename without_ext brain_part
+  while read -r mt f; do
+    [ -n "$f" ] || continue
+    rel="${f#*/profiles/}"
+    engine="${rel%%/*}"
+    rest="${rel#*/}"
+    tank="${rest%%/*}"
+    filename="${f##*/}"
+    if [ "$engine" = "antigravity" ]; then
+      brain_part="${f%/.system_generated/*}"
+      sid="${brain_part##*/}"
+    elif [ "$engine" = "codex" ]; then
+      without_ext="${filename%.jsonl}"
+      sid="${without_ext##*-}"
+    else # claude
+      sid="${filename%.jsonl}"
+    fi
+    sessions+=("$engine"$'\x1f'"$tank"$'\x1f'"$sid"$'\x1f'"$f"$'\x1f'"$mt")
   done <<EOF
-$sorted
+$files
 EOF
 
-  [ "$i" -gt 0 ] || { log_err "No resumable sessions found."; exit 1; }
+  if [ "${#sessions[@]}" -eq 0 ]; then
+    log_err "No resumable sessions found in any tank."
+    exit 1
+  fi
 
-  printf 'Resume which? [1-%d, or q to quit]: ' "$i" >&2
-  local choice; read -r choice
-  case "$choice" in
-    q|Q|"")  log_dim "Cancelled."; exit 0 ;;
-    *[!0-9]*) log_fail "Not a number: $choice" ;;
-  esac
-  [ "$choice" -ge 1 ] && [ "$choice" -le "$i" ] || log_fail "Out of range: $choice"
+  if [ ! -t 0 ] || [ ! -t 1 ] || [ -n "${CLIKAE_NO_INTERACTIVE:-}" ]; then
+    log_bold "Recent sessions across your tanks (showing top 50):"
+    local idx=0 limit=50 item engine_t tank_t sid_t label_t rage_t cwd_t
+    [ "${#sessions[@]}" -lt "$limit" ] && limit=${#sessions[@]}
+    for ((idx=0; idx<limit; idx++)); do
+      _lazy_parse "$idx"
+      item="${sessions[idx]}"
+      engine_t="${item%%$'\x1f'*}"
+      local tmp="${item#*$'\x1f'}"
+      tank_t="${tmp%%$'\x1f'*}"
+      tmp="${tmp#*$'\x1f'}"
+      sid_t="${tmp%%$'\x1f'*}"
+      label_t="${cached_title[idx]}"
+      rage_t="${cached_age[idx]}"
+      _lazy_parse_cwd "$idx"
+      cwd_t="${cached_cwd[idx]}"
+      printf '  %2d) %s/%s · "%s" (%s)\n' "$((idx+1))" "$engine_t" "$tank_t" "$label_t" "$rage_t"
+      # Non-interactive list is for scripting/copy-paste — surface the id so it's
+      # actionable (`clikae resume <id>`); there's no cursor to select a row here.
+      log_dim "       id: $sid_t · dir: ${cwd_t:-?}"
+    done
+    return 0
+  fi
 
-  local idx=$((choice-1))
-  local e="${pick_engine[$idx]}" t="${pick_tank[$idx]}" s="${pick_sid[$idx]}"
-  local d; d="$(profile_dir "$e" "$t")"
   if [ "${#passthru[@]}" -gt 0 ]; then
-    _resume_exec "$e" "$t" "$d" "$s" -- "${passthru[@]}"
+    _resume_pick "${passthru[@]}"
   else
-    _resume_exec "$e" "$t" "$d" "$s"
+    _resume_pick
   fi
 }
 
+_get_path_size_kb() {
+  local path="$1"
+  [ -e "$path" ] || { echo 0; return; }
+  local val
+  val="$(du -sk "$path" 2>/dev/null | awk '{print $1}')"
+  echo "${val:-0}"
+}
+
+_resume_cleanup_help() {
+  cat <<'EOF'
+Usage: clikae resume cleanup [options]
+
+Delete old session data files (transcripts, databases, brain assets) to free disk space.
+This only deletes session history files. It never deletes tank configurations, memory files,
+caches, or settings.
+
+Options:
+  -d, --dry-run             Preview what will be deleted and how much space freed, without deleting.
+  -o, --older-than <days>   Only target sessions older than <days> (default: 30).
+  -h, --help                Show this help message.
+
+Examples:
+  clikae resume cleanup
+  clikae resume cleanup --older-than 7
+  clikae resume cleanup --dry-run
+EOF
+}
+
+_resume_cleanup() {
+  local dry_run=0
+  local older_than=30
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) _resume_cleanup_help; return 0 ;;
+      -d|--dry-run) dry_run=1; shift ;;
+      -o|--older-than)
+        if [ -z "${2:-}" ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
+          log_fail "Error: --older-than requires a numeric number of days."
+        fi
+        older_than="$2"
+        shift 2
+        ;;
+      *)
+        log_fail "Unknown cleanup argument: $1"
+        ;;
+    esac
+  done
+
+  local files
+  if stat --version 2>/dev/null | grep -q GNU; then
+    # GNU / Linux
+    files="$( ( stat -c "%Y %n" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+                    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
+              | sort -rn ) 2>/dev/null || true )"
+  else
+    # BSD / macOS
+    files="$( ( stat -f "%m %N" "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+                    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null \
+              | sort -rn ) 2>/dev/null || true )"
+  fi
+
+  if [ -z "$files" ]; then
+    log_ok "No session files found to clean."
+    return 0
+  fi
+
+  local now; now="$(date +%s)"
+  local limit_secs=$((older_than * 86400))
+  local cutoff=$((now - limit_secs))
+
+  local -a candidates=()
+  local -a cand_engine=()
+  local -a cand_tank=()
+  local -a cand_sid=()
+  local -a cand_size_kb=()
+  local -a cand_title=()
+  local -a cand_age_str=()
+  local -a cand_files_to_delete=()
+
+  local mt f rel engine rest tank sid filename without_ext brain_part
+  local size_kb title age_str files_to_del db_file conversations_dir
+  local total_size_kb=0
+
+  while read -r mt f; do
+    [ -n "$f" ] || continue
+    # Filter by age
+    if [ "$mt" -gt "$cutoff" ]; then
+      continue
+    fi
+
+    rel="${f#*/profiles/}"
+    engine="${rel%%/*}"
+    rest="${rel#*/}"
+    tank="${rest%%/*}"
+    filename="${f##*/}"
+
+    # Determine session ID and files to delete
+    if [ "$engine" = "antigravity" ]; then
+      brain_part="${f%/.system_generated/*}"
+      sid="${brain_part##*/}"
+      conversations_dir="${brain_part%/brain/*}/conversations"
+      db_file="$conversations_dir/$sid.db"
+      # Calculate total size of brain folder + db file
+      local b_sz; b_sz="$(_get_path_size_kb "$brain_part")"
+      local d_sz; d_sz="$(_get_path_size_kb "$db_file")"
+      size_kb=$((b_sz + d_sz))
+      files_to_del="$brain_part;$db_file;$db_file-shm;$db_file-wal"
+    elif [ "$engine" = "codex" ]; then
+      without_ext="${filename%.jsonl}"
+      sid="${without_ext##*-}"
+      size_kb="$(_get_path_size_kb "$f")"
+      files_to_del="$f"
+    else # claude
+      sid="${filename%.jsonl}"
+      size_kb="$(_get_path_size_kb "$f")"
+      files_to_del="$f"
+    fi
+
+    # Get title cheaply
+    load_adapter "$engine" >/dev/null 2>&1 || true
+    local dir
+    dir="$(profile_dir "$engine" "$tank")"
+    if declare -F adapter_session_title >/dev/null 2>&1; then
+      title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+    else
+      title="$(adapter_session_meta "$dir" "$sid" 2>/dev/null | cut -d$'\037' -f4 || true)"
+    fi
+    [ -n "$title" ] || title="(no preview)"
+
+    # Format age string
+    local _d=$(( now - mt ))
+    age_str="$(( _d / 86400 ))d ago"
+
+    # Add to candidates
+    candidates+=("$f")
+    cand_engine+=("$engine")
+    cand_tank+=("$tank")
+    cand_sid+=("$sid")
+    cand_size_kb+=("$size_kb")
+    cand_title+=("$title")
+    cand_age_str+=("$age_str")
+    cand_files_to_delete+=("$files_to_del")
+
+    total_size_kb=$((total_size_kb + size_kb))
+  done <<EOF
+$files
+EOF
+
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    log_ok "No sessions found older than $older_than days (0 files to clean)."
+    return 0
+  fi
+
+  log_bold "The following sessions are older than $older_than days and will be deleted:"
+  echo
+  local i
+  for ((i=0; i<${#candidates[@]}; i++)); do
+    local eng="${cand_engine[i]}"
+    local tnk="${cand_tank[i]}"
+    local sz_kb="${cand_size_kb[i]}"
+    local ttl="${cand_title[i]}"
+    local ag="${cand_age_str[i]}"
+    local sz_str; sz_str="$(awk -v k="$sz_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else printf "%.1f MB", k/1024 }')"
+
+    printf "  %b%s/%s%b · %s · %s · %b(%s)%b\n" \
+      "$__C_BOLD" "$eng" "$tnk" "$__C_RESET" \
+      "\"$(_home_trunc "$ttl" 40)\"" \
+      "$ag" \
+      "$__C_DIM" "$sz_str" "$__C_RESET"
+  done
+  echo
+  local total_sz_str; total_sz_str="$(awk -v k="$total_size_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else if (k < 1048576) printf "%.1f MB", k/1024; else printf "%.2f GB", k/1048576 }')"
+  log_bold "Total sessions to clean: ${#candidates[@]}"
+  log_bold "Estimated space to free: $total_sz_str"
+  echo
+
+  if [ "$dry_run" -eq 1 ]; then
+    log_dim "Dry-run mode: no files were deleted."
+    return 0
+  fi
+
+  # Never delete without a live confirmation: in a pipe / non-TTY there's no one to
+  # press Enter, so refuse rather than proceed on EOF (clikae principle: never
+  # silently destroy). --dry-run above is the safe way to preview non-interactively.
+  if [ ! -t 0 ]; then
+    log_fail "Refusing to delete without an interactive confirmation — re-run in a terminal (or use --dry-run to preview)."
+  fi
+  printf "%bAre you sure you want to permanently delete these sessions?%b\n" "$__C_RED" "$__C_RESET"
+  printf "Press %bEnter%b to proceed, or %bCtrl-C%b to cancel: " "$__C_BOLD" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
+  read -r _ || log_fail "No confirmation received — nothing deleted."
+
+  log_dim "Deleting session files..."
+  local deleted_kb=0
+  for ((i=0; i<${#candidates[@]}; i++)); do
+    local files_str="${cand_files_to_delete[i]}"
+    local sz_kb="${cand_size_kb[i]}"
+    IFS=';' read -ra path_list <<< "$files_str"
+    local p
+    for p in "${path_list[@]}"; do
+      if [ -d "$p" ]; then
+        rm -rf "$p"
+      elif [ -f "$p" ]; then
+        rm -f "$p"
+      fi
+    done
+    deleted_kb=$((deleted_kb + sz_kb))
+  done
+
+  local deleted_sz_str; deleted_sz_str="$(awk -v k="$deleted_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else if (k < 1048576) printf "%.1f MB", k/1024; else printf "%.2f GB", k/1048576 }')"
+  log_ok "Cleanup complete. Freed approximately $deleted_sz_str."
+}
+
 cmd_resume() {
+  if [ "${1:-}" = "cleanup" ]; then
+    shift
+    _resume_cleanup "$@"
+    return 0
+  fi
+
   local sid=""
   local -a passthru=()
   while [ $# -gt 0 ]; do

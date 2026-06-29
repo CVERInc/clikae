@@ -237,19 +237,37 @@ EOF
 # extract from that single line. Avoids the costly grep -oE / grep -c full scans
 # that _claude_meta_for_file does — important on multi-MB transcripts.
 adapter_session_title() {
-  local dir="$1" sid="$2" f t
+  local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 0
   f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   [ -f "$f" ] || return 0
-  t="$(grep '"aiTitle"' "$f" 2>/dev/null | tail -n 1 \
-        | grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
-        | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//')"
-  if [ -z "$t" ]; then
-    t="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null \
-          | grep -oE '"(text|content)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
-          | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//')"
-  fi
-  printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+
+  local line_in idx_in=0 max_lines_in=100 title_in="" user_msg_in=""
+  while IFS= read -r line_in; do
+    idx_in=$((idx_in + 1))
+    [ "$idx_in" -gt "$max_lines_in" ] && break
+    if [[ "$line_in" == *'"aiTitle"'* ]]; then
+      local t_part="${line_in#*\"aiTitle\":\"}"
+      title_in="${t_part%%\"*}"
+      break
+    fi
+    if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
+      if [[ "$line_in" == *'"text":"'* ]]; then
+        local content_part="${line_in#*\"text\":\"}"
+        user_msg_in="${content_part%%\"*}"
+      elif [[ "$line_in" == *'"content":"'* ]]; then
+        local content_part="${line_in#*\"content\":\"}"
+        user_msg_in="${content_part%%\"*}"
+      fi
+    fi
+  done < "$f" 2>/dev/null
+
+  local stitle="$title_in"
+  [ -n "$stitle" ] || stitle="$user_msg_in"
+  stitle="${stitle//\\n/ }"
+  stitle="${stitle//\\t/ }"
+  stitle="${stitle//\\\"/\"}"
+  printf '%s' "$stitle"
 }
 
 adapter_recent_sids() {
@@ -295,7 +313,7 @@ adapter_find_session() {
 adapter_session_cwd() {
   local f="$1"
   [ -f "$f" ] || return 0
-  grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -n 1 \
+  head -n 50 "$f" 2>/dev/null | grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null | head -n 1 \
     | sed -E 's/^"cwd"[[:space:]]*:[[:space:]]*"//; s/"$//' || true
   return 0
 }

@@ -23,30 +23,30 @@
 _status_row_for() {
   local cli="$1"
   (
-    # No adapter file for this engine. load_adapter log_fails (exit 1) on a miss,
-    # which the `||` below CANNOT catch — `exit` kills this subshell before the
-    # guard runs, and under `set -e` the empty `$(...)` then aborts cmd_status
+    # A launch-only TARGET (e.g. antigravity) reports a machine-wide active slot
+    # (the ~/.gemini symlink), not a per-shell env var. Classify by target-ness
+    # FIRST: a target may also ship a thin resume-only adapter file, which must
+    # NOT be mistaken for "env-switchable". See clikae_is_target.
+    if clikae_is_target "$cli"; then
+      local link="$HOME/.gemini" slots target active=""
+      slots="$(profiles_root)/antigravity"
+      if [ -L "$link" ]; then
+        target="$(readlink "$link")"
+        case "$target" in "$slots"/*) active="$(basename "$target")" ;; esac
+      fi
+      if [ -n "$active" ]; then
+        printf '%s\037global\037%s\037\037\037%s\n' agy "$active" "$target"
+      else
+        printf '%s\037global\037\037\037\037\n' agy
+      fi
+      exit 0
+    fi
+    # No adapter file (and not a target). load_adapter log_fails (exit 1) on a
+    # miss, which the `||` below CANNOT catch — `exit` kills this subshell before
+    # the guard runs, and under `set -e` the empty `$(...)` then aborts cmd_status
     # (the very trap cmd_list documents). So gate on the file first.
     if [ ! -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
-      # agy is target-backed: a machine-wide ~/.gemini symlink, not a per-shell
-      # env var. Report the tank it points at as `global` so it isn't silently
-      # dropped (and so this whole command doesn't crash just because an agy
-      # tank exists). See lib/commands/antigravity.sh:_agy_active.
-      if [ "$cli" = "antigravity" ] || [ "$cli" = "agy" ]; then
-        local link="$HOME/.gemini" slots target active=""
-        slots="$(profiles_root)/antigravity"
-        if [ -L "$link" ]; then
-          target="$(readlink "$link")"
-          case "$target" in "$slots"/*) active="$(basename "$target")" ;; esac
-        fi
-        if [ -n "$active" ]; then
-          printf '%s\037global\037%s\037\037\037%s\n' agy "$active" "$target"
-        else
-          printf '%s\037global\037\037\037\037\n' agy
-        fi
-      else
-        printf '%s\037noadapter\037\037\037\037\n' "$cli"
-      fi
+      printf '%s\037noadapter\037\037\037\037\n' "$cli"
       exit 0
     fi
     load_adapter "$cli" >/dev/null 2>&1

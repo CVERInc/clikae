@@ -142,7 +142,51 @@ These mirror how this project was built and must be preserved:
 > roadmap decision on whether relay deserves its own headline in README's roadmap
 > list.
 
-**HEAD state (read this first — updated 2026-06-20).** The latest release in-tree is
+**HEAD state (read this first — updated 2026-06-29).** Latest in-tree work is the
+**v0.7 `resume` line** on branch `feat/resume-tui` — drafted largely by a cheaper
+model, then hardened to ship quality (details below). `v0.7.0`/`v0.7.1` already
+shipped `clikae resume` (reopen a past session by id across tanks). `feat/resume-tui`
+extends it:
+
+- **`clikae resume` interactive picker** — no-id opens a TUI across ALL tanks
+  (filter, paging, synchronized-output flicker-free render); `[R]` from the home
+  board opens it. Cross-engine: claude + codex + antigravity. The non-interactive
+  (piped) list now surfaces each session id so it's copy-paste actionable.
+- **codex + antigravity resume** — adapters/targets gained find/resume-by-id hooks;
+  antigravity additionally copies `brain/` + `conversations/*.db` on a cross-tank
+  resume — exactly the fix the 2026-06-28 dogfood called for (see §"agy tank-switch").
+- **`clikae resume cleanup`** — interactive, age-filtered session-data GC. Refuses
+  to delete without a TTY confirmation (never silently destroys); `--dry-run` /
+  `--older-than`.
+
+**Hardening done while landing it (2026-06-29).** The cheap-model draft made
+antigravity a FULL adapter, which silently reclassified it everywhere keyed on "an
+adapter file exists" (status / handoff / watch / validate / PowerShell parity) —
+11 regressions vs a green baseline. Root fix: ONE canonical predicate
+**`clikae_is_target`** (lib/core/profile_store.sh) that wins over adapter-file
+presence, so antigravity stays the launch-only TARGET it is, while its thin
+`lib/adapters/antigravity.sh` is a documented RESUME-ONLY shim (`subcommand`
+strategy, empty env var). Classification code now reads target-ness FIRST, never
+"an adapter file exists" (the old proxy the resume shim broke). Also fixed: a printf
+arg-count bug in the picker's empty-filter path (the localized "no matches" string
+was never shown), 5 unused-var warnings, and the i18n headline rename
+Continue→Resume. `bats -r tests` green, shellcheck clean at warning.
+
+**⭐ antigravity per-account quota isolation ACTUALLY WORKS — corrects the §"agy
+tank-switch" (2026-06-28) pessimism.** Verified 2026-06-29 on a real Mac by Keychain
+hash comparison: clikae's `_agy_kc_*` login carry holds two DISTINCT Google accounts
+per tank (Keychain service `gemini`, account `antigravity`), and a clean
+`clikae agy <tank>` loads that tank's exact token into the single live slot agy
+reads. The earlier dogfood saw shared quota only because the second tank's stash
+didn't exist yet. Still true: it's ONE global slot (one tank active at a time, don't
+run two agy at once); the running TUI's `/usage` figure is the only layer not yet
+eyeballed. KNOWN GAP: `antigravity.bats` STUBS `security`, so the service-NAME
+assumption (`gemini`/`antigravity`) is verified only by live dogfood, never CI — a
+read-only `clikae doctor` keychain-coordinate check is the suggested permanent guard.
+
+---
+
+**Earlier HEAD state (2026-06-20).** The latest release in-tree is
 **`v0.6.1`** (branch `release-v0.6.1`, pending tag + push by the maintainer).
 `v0.6.0` (2026-06-14) shipped the vertical-orchestration feature set: `clikae
 conduct`, `clikae git-id`, `clikae burn --prompt-file/--prompt/--add-dir`, and

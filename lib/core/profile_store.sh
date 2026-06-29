@@ -25,6 +25,23 @@ profile_exists() {
   [ -d "$(profile_dir "$1" "$2")" ]
 }
 
+# clikae_is_target <cli>  ->  0 if <cli> is a LAUNCH-ONLY target (a global,
+# single-account vendor whose switching/active-state is handled by a script in
+# lib/targets/, e.g. antigravity), else 1.
+#
+# The canonical "is it a target, not an env-switchable engine?" predicate. It
+# deliberately wins over the presence of an adapter file: a target may ALSO ship a
+# thin lib/adapters/<cli>.sh that only adds a capability (e.g. antigravity's resume
+# shim — find/resume by id), but that does NOT make it env-switchable. So status /
+# handoff / watch / home must classify by target-ness FIRST, never by "an adapter
+# file exists" (a safe proxy only while targets had no adapter file — an invariant
+# the resume shim broke). Accepts the `agy` alias.
+clikae_is_target() {
+  local cli="$1"
+  [ "$cli" = "agy" ] && cli="antigravity"
+  [ -f "$CLIKAE_LIB/targets/$cli.sh" ]
+}
+
 # Validate that <cli> and <profile> are sane names (no slashes, no leading dot, no whitespace).
 validate_name() {
   local kind="$1"   # "cli" or "profile"

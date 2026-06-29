@@ -219,11 +219,13 @@ validate_handoff_target() {
   to_cli="${t%%/*}"
   case "$t" in */*) to_profile="${t#*/}" ;; esac
   [ -n "$to_cli" ] || log_fail "Empty handoff target."
-  if [ -f "$CLIKAE_LIB/adapters/$to_cli.sh" ]; then
+  # Target-ness FIRST: a single-account target may also ship a resume-only adapter
+  # file, which must not be read as an env-switchable engine. See clikae_is_target.
+  if clikae_is_target "$to_cli"; then
+    [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
+  elif [ -f "$CLIKAE_LIB/adapters/$to_cli.sh" ]; then
     [ -z "$to_profile" ] || profile_exists "$to_cli" "$to_profile" \
       || log_fail "No such tank to hand off to: $to_cli/$to_profile  (create it: clikae init $to_cli $to_profile)."
-  elif [ -f "$CLIKAE_LIB/targets/$to_cli.sh" ]; then
-    [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
   else
     log_fail "Unknown handoff target: '$to_cli'."
   fi

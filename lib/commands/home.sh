@@ -15,22 +15,24 @@
 _home_active_for() {
   local cli="$1"
   (
-    # Gate on the adapter FILE existing — load_adapter exit 1s on a miss, which
-    # would kill this subshell before the target branch could run.
-    if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
-      load_adapter "$cli" >/dev/null 2>&1 || exit 0
-      local var strategy value
-      var="$(adapter_meta_env_var)"
-      [ -n "$var" ] || exit 0     # flag-strategy CLIs aren't detectable from env
-      strategy="$(adapter_meta_strategy)"
-      value="${!var}"
-      resolve_active_profile "$cli" "$strategy" "$value"
-    elif [ -f "$CLIKAE_LIB/targets/$cli.sh" ]; then
-      # Opt-in target tanks (e.g. antigravity multi-account) expose their active
-      # slot via target_active_profile rather than an env var.
+    # Target-ness FIRST: a launch-only target (e.g. antigravity) resolves its
+    # active slot via target_active_profile (the ~/.gemini symlink), not an env
+    # var — even though it may ALSO ship a resume-only adapter file. See
+    # clikae_is_target.
+    if clikae_is_target "$cli"; then
       # shellcheck source=/dev/null
       source "$CLIKAE_LIB/targets/$cli.sh" 2>/dev/null || exit 0
       declare -F target_active_profile >/dev/null 2>&1 && target_active_profile
+    elif [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      # load_adapter exit 1s on a miss, which would kill this subshell — but the
+      # file exists here. flag-strategy engines (no env var) aren't env-detectable.
+      load_adapter "$cli" >/dev/null 2>&1 || exit 0
+      local var strategy value
+      var="$(adapter_meta_env_var)"
+      [ -n "$var" ] || exit 0
+      strategy="$(adapter_meta_strategy)"
+      value="${!var}"
+      resolve_active_profile "$cli" "$strategy" "$value"
     fi
   )
 }
@@ -65,7 +67,7 @@ _home_alias_for() {
 # rows shown, so the listing stays cheap. Emits, newest first:
 #   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
 # How many recent sessions the "continue" list surfaces.
-CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-3}"
+CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
 
 _home_recent_rows() {
   local name proot tdir tank rows sid mt acc=""
@@ -129,9 +131,6 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
-  # 0) Continue list — this dir's most recent resumable sessions, if any.
-  _home_recent_rows
-
   # 1) Tanks — every profile.
   # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
   # order. Engine travels in the cli field and the renderer shows it as an inline
@@ -151,10 +150,10 @@ _home_items() {
           && declare -F adapter_start_with_prompt >/dev/null 2>&1 ) || continue
     fi
     path="$(profile_dir "$cli" "$profile")"
-    if [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
-      label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
-    elif [ "$cli" = "antigravity" ]; then
+    if [ "$cli" = "antigravity" ]; then
       label="$(_home_agy_email "$path")"   # signed-in Google account, from its cli.log
+    elif [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+      label="$(load_adapter "$cli" >/dev/null 2>&1 && adapter_label "$path" || true)"
     else
       label=""
     fi
@@ -206,6 +205,9 @@ EOF
       printf 'target\037%s\037%s\037\037\0370\037%s\n' "$tbin" "$tname" "$note"
     )
   done
+
+  # 4) Resume list — this dir's most recent resumable sessions, if any.
+  _home_recent_rows
 }
 
 # Which tanks/targets are currently over quota? Emit one row per DRY thing:
@@ -585,7 +587,7 @@ _home_welcome_beside() {
 # Interactive launcher (only on a real TTY; pipes/scripts/tests get the static
 # board). Uses the alternate screen buffer so the user's scrollback is intact.
 
-_home_tty_leave() { printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
+_home_tty_leave() { stty echo 2>/dev/null || true; printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
 
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
@@ -966,8 +968,20 @@ _home_pick_draw() {
   # Repainting line-by-line (a write per row) is what still flickered.
   local _frame
   _frame="$(_home_pick_draw_body "$@")"
-  printf '%s' "$_frame"
+  local _lsz _lrows
+  _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  _lrows="${_lsz%% *}"
+  [ -n "$_lrows" ] || _lrows=24
+  # Synchronized Output: BSU → frame → park cursor → ESU
+  printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$_lrows"
 }
+_home_total_sessions() {
+  local chome="${CLIKAE_HOME:-$HOME/.clikae}"
+  ( ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
+          "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+          "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | wc -l | tr -d ' ' ) 2>/dev/null || echo 0
+}
+
 _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3"
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
@@ -994,10 +1008,12 @@ _home_pick_draw_body() {
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
       resume)
-        # The "continue" list — recent resumable sessions; Enter reopens the
-        # selected one. Title is Claude's ai-title; the selected row also shows a
-        # one-line recap ("where you left off + next step").
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
+        # The Resume list — recent resumable sessions
+        if [ "$printed_resume" -eq 0 ]; then
+          printed_resume=1
+          if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
+          printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
+        fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
@@ -1017,17 +1033,15 @@ _home_pick_draw_body() {
       tank)
         # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
         # [tag] (shown even collapsed, so a cross-engine list stays unambiguous).
-        # A "Tanks" header opens the section (mirrors "Continue").
+        # A "Tanks" header opens the section.
         if [ -z "$cur_cli" ]; then
-          [ "$printed_resume" -eq 1 ] && printf '\n'
           printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
         fi
         local _eng; _eng="$(_home_engine_label "$cli")"
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         if [ "$idx" -eq "$sel" ]; then
-          # Selected → EXPANDED: name, engine tag, account, any reset time. (Alias
-          # retired from the board — the name IS the identity.)
+          # Selected → EXPANDED: name, engine tag, account, any reset time.
           printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s%b  %b%s%b\n' \
             "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$_eng" "$__C_RESET" \
             "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
@@ -1040,7 +1054,11 @@ _home_pick_draw_body() {
       target)
         # Under "Also available" (not a floating group). Enter launches it
         # single-account; `n` → agy makes it a tank (SU takeover).
-        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"; fi
+        if [ "$printed_also" -eq 0 ]; then
+          printed_also=1
+          [ -n "$cur_cli" ] && printf '\n'
+          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+        fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
         if [ "$idx" -eq "$sel" ]; then
@@ -1050,7 +1068,11 @@ _home_pick_draw_body() {
         fi
         ;;
       agent)
-        if [ "$printed_also" -eq 0 ]; then printed_also=1; printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"; fi
+        if [ "$printed_also" -eq 0 ]; then
+          printed_also=1
+          [ -n "$cur_cli" ] && printf '\n'
+          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+        fi
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b· %-12s %s%b\n' "$mark" "$__C_BOLD" "$cli" "$note" "$__C_RESET"
         else
@@ -1062,6 +1084,10 @@ _home_pick_draw_body() {
   done <<EOF
 $items
 EOF
+  if [ "$printed_resume" -eq 1 ]; then
+    local total_s; total_s="$(_home_total_sessions)"
+    printf '    %b%s%b\n' "$__C_DIM" "$(printf "$T_RESUME_FOOTER" "$total_s")" "$__C_RESET"
+  fi
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
 
@@ -1093,6 +1119,7 @@ _home_stay() {
   "$@" || true
   printf '\n  %b↵ back to clikae%b ' "$__C_DIM" "$__C_RESET"
   local _discard; IFS= read -r _discard || true
+  stty -echo 2>/dev/null || true
   printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
 }
 
@@ -1102,6 +1129,7 @@ _home_pick() {
   # Restore the terminal on any abnormal exit.
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
+  stty -echo 2>/dev/null || true
   printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
 
   # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
@@ -1120,7 +1148,9 @@ _home_pick() {
       IFS= read -rsn1 key || key="q"
       case "$key" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
-           IFS= read -r filter || filter=""; printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+           IFS= read -r filter || filter=""
+           stty -echo 2>/dev/null || true
+           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
       esac
     fi
@@ -1164,25 +1194,23 @@ _home_pick() {
           items="$(_home_items)"; sel=$(( sel + 1 ))
         fi ;;
       q) break ;;
-
       /)
-        # Live filter: drop to the normal screen, read a query, re-enter.
         _home_tty_leave
         printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
         IFS= read -r filter || filter=""
+        stty -echo 2>/dev/null || true
         printf '\033[?1049h\033[?25l'; sel=0
         ;;
       '?')
         _home_help_overlay   # full key legend; any key dismisses, then redraw
         ;;
       l)
-        # Pick the interface language from a menu (not a blind cycle). _home_choose
-        # manages its own screen, so leave/re-enter the picker around it.
         _home_tty_leave; trap - EXIT INT TERM
         local _lang
         _lang="$(_home_choose "$T_LANG_PICK    $T_PICKER_HINT" "$(printf 'en-US\nja-JP\nzh-TW')" "$(clikae_lang)")" || _lang=""
         [ -n "$_lang" ] && i18n_set "$_lang"
         trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        stty -echo 2>/dev/null || true
         printf '\033[?1049h\033[?25l'
         items="$(_home_items)"; dry="$(_home_dry_set)"
         ;;
@@ -1203,6 +1231,7 @@ _home_pick() {
           _home_tty_leave; trap - EXIT INT TERM
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+            stty -echo 2>/dev/null || true
             printf '\033[?1049h\033[?25l'; continue
           }
           return 0
@@ -1217,6 +1246,11 @@ _home_pick() {
           _home_relay "$items" "$sel_row"
           return 0
         fi
+        ;;
+      R)
+        _home_tty_leave; trap - EXIT INT TERM
+        cmd_resume
+        return 0
         ;;
       x)
         # Incognito — open the selected tank with throwaway memory
