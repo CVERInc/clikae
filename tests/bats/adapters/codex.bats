@@ -8,6 +8,8 @@ load '../../helpers'
 
 _setup_codex() {
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # sessions_by_mtime (shared kernel)
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/adapters/codex.sh"
   WORK="$TEST_HOME/work"; mkdir -p "$WORK"; cd "$WORK" || return 1
   PROFILE="$TEST_HOME/cprofile"

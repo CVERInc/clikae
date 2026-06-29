@@ -277,7 +277,9 @@ adapter_recent_sids() {
   # This-dir scope = $PWD's project glob; one sessions_by_mtime (shared kernel)
   # instead of ls -t + a stat per file. sid is the filename (claude names the
   # transcript by session id).
-  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while IFS= read -r mt f; do
+  # NB: plain `read -r mt f` (NOT `IFS= read`) so the "<mtime> <path>" line splits
+  # into two fields; IFS= would shove the whole line into mt and leave f empty.
+  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt f; do
     [ -n "$f" ] || continue
     printf '%s\037%s\n' "$mt" "$(basename "$f" .jsonl)"
   done

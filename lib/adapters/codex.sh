@@ -158,7 +158,8 @@ adapter_recent_sids() {
   # rollout's session_meta (not derivable from the path). Tank/dir names are
   # validated (no spaces), so splitting the list into args is safe.
   # shellcheck disable=SC2046
-  sessions_by_mtime $(_codex_rollouts_for_cwd "$dir") | head -n "$limit" | while IFS= read -r mt f; do
+  # plain `read -r mt f` (NOT `IFS= read`) so "<mtime> <path>" splits into two.
+  sessions_by_mtime $(_codex_rollouts_for_cwd "$dir") | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
     sid="$(_codex_meta_field "$f" id)"
     [ -n "$sid" ] || continue
