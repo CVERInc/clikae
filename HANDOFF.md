@@ -32,7 +32,69 @@ These mirror how this project was built and must be preserved:
 
 ---
 
-## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30)
+## ⭐ CURRENT STATE — 2026-06-30 (READ THIS FIRST; supersedes every dated block below)
+
+**Shipped tag: `v0.8.1`.** `main` carries **6 unreleased commits** headed to **`0.9.0`**
+— the Soul layer plus this session's board-cockpit redesign. Nothing pushed.
+`bash scripts/test.sh` is the gate (shellcheck + bats, currently green at ~454).
+🔴 **Never verify bats through a pipe** (`bats | tail; echo $?` reports tail's exit, not
+bats') — see `tests/README.md`. Everything in §2–§14 below is accurate as HISTORY but
+predates the two big arcs described here.
+
+### The headline since v0.7 — the **Soul** layer (cross-engine shared memory)
+`clikae memory <share|isolate|status>` points a tank's long-term memory at ONE shared
+markdown "Soul", so several of YOUR OWN tanks — across engines — read/write a single
+brain. SSOT: **`docs/memory.md`** + **`docs/grammar.md §10`**. Code: `lib/commands/memory.sh`.
+- Canonical store: `$CLIKAE_HOME/souls/<group>/memory` (flat, vendor-neutral markdown) +
+  `PROTOCOL.md` (the read/write-back manual seeded into every store) + `members` (the
+  membership ledger).
+- Two strategies, by what the engine exposes: **symlink** (claude — fan its memory DIR
+  into the store; the persistent sibling of `--ephemeral`'s fan-OUT) and **pointer**
+  (codex/agy — a fenced note in `AGENTS.md` / `GEMINI.md` pointing at the store; the
+  engine reads+writes the same markdown via the protocol, so cross-engine needs NO
+  translator and never drifts). Hooks: `adapter_memory_dir` vs
+  `adapter_memory_pointer_path` / `target_memory_pointer_path`.
+- 🔴 Locked values (`docs/memory.md §4`): account isolation is sacred (opt-in, per-tank,
+  NEVER auto-cross; crossing your own accounts is announced); aggregate-never-mutate-the-
+  source (seed by COPY, the joiner's own memory stashed aside, reversible via `isolate`);
+  no phantom continuity (Soul carries context, not the model's capability).
+- Live dogfood: a `me` group shares one brain across claude/C + agy/c + codex/H.
+
+### `clikae solo` — a tank OUT of the fleet
+A solo tank is standalone: skipped by burn/watch rotation and `to`/relay, and `memory
+share` REFUSES it. Marker `<tank>/clikae-meta/solo`; predicates `tank_is_solo` /
+`solo_marker_file` in `profile_store.sh`. This walls off **MFC** (the gaido bot persona on
+the maintainer's OWN account — invisible to the cross-account guard) so it can never be
+commingled. **claude/MFC IS solo as of 2026-06-30.**
+
+### The board is now an interactive cockpit (this session's redesign)
+`clikae` with no args on a TTY is a full launcher. Verbs on the selected tank: Enter open ·
+r relay · R resume-picker · x incognito · n/a/d new/rename/delete · **s solo-toggle** ·
+**m memory dial** · [ ] reorder · / filter · ? help · l lang · A autonomy · g/G · 1-9.
+Visual language — **LOCKED with the maintainer, do not regress:**
+- **Three sections: Tanks / Solo / Resume.** A SECTION is the badge — solo tanks live in
+  their own block, not a per-row icon. No emoji on the board.
+- **Soul-sharing is NOT shown inline** — in the fleet a shared brain is the normal state
+  (that is what relay/`to` are for); not worth shouting.
+- **Aligned columns**: dot · name · engine · account, display-width padded (`_home_lpad`,
+  CJK-safe). Resume rows use the SAME columns (name · engine · "title").
+- **No "current shell" marker** — with many tanks open at once it is noise; `active` is
+  still computed for the launch hint + relay source, just not drawn.
+
+### The ONE remaining roadmap item — Soul **Phase 4** (DOGFOOD-GATED, not now)
+Plan: `~/.clikae/profiles/claude/C/plans/fizzy-drifting-liskov.md`. Phases 0–3 are DONE
+(structure; claude share; codex/agy pointer). **Phase 4** = (a) per-ENTRY scope dial
+(`scope: share|isolate|evaporate` on a single memory file, vs today's whole-tank share);
+(b) a per-person default + per-area override policy; (c) conduct/burn integration so the
+orchestrator wakes the cheapest-sufficient brain WITH the shared Soul context (the two
+north stars — continuity × cost-aware routing — converging). 🔴 The plan itself gates this
+behind dogfooding Phase 1 first: do NOT build Phase 4 until the `me` group has been lived
+in for a while and its shape is proven. **Right state: PARKED, waiting for usage signal**
+— not an unfinished debt.
+
+---
+
+## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30) — HISTORICAL (see CURRENT STATE above)
 
 > **⭐ READ FIRST (2026-06-01): the fuel-tank grammar landed on
 > `feat/relay-and-status`** (committed, not pushed). clikae is now **the verb** —
