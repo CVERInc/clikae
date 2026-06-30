@@ -204,7 +204,14 @@ the engine name. **You type `agy`.**
 agy hardcodes `~/.gemini`, ignores every env var, and has no config-dir flag, so
 it can't switch per-shell like other engines. clikae handles it by swapping
 `~/.gemini` between tank dirs via a symlink — a global, one-tank-active-at-a-time
-power mode. The user does **not** learn a separate command tree for this: agy
+power mode. agy reads its account from one machine-wide Keychain login (ignoring
+which tank dir is active), so on a tank switch clikae **logs agy out** (clears that
+one Keychain item) and agy asks you to sign in with the new tank's Google account —
+your browser already holds your logins, so it's a click. clikae never reads or
+stores the token; it just clears the slot, so the account you land on is the one you
+picked (no silent restore landing you on the wrong one). Honest cost: a cross-account
+switch needs an interactive sign-in, so headless `burn`/`conduct` can't change agy
+accounts. The user does **not** learn a separate command tree for this: agy
 uses the *same verbs as everything else*, with **zero special subcommands**.
 
 | You type | agy behaviour |

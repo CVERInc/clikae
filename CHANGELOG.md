@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — agy tank switch logs out instead of carrying tokens
+
+`clikae agy <tank>` now **logs agy out** on switch (clears the one machine-wide
+Keychain login) and lets agy prompt a fresh Google sign-in for the new tank's
+account — your browser already holds your logins, so it's a click. This replaces the
+old per-tank Keychain stash/restore dance. Why: agy reads its account purely from
+that one Keychain slot, ignoring which tank dir is active (verified live), so the
+stash/restore was both fragile (never tested against a real Keychain) and risked
+landing you on the wrong account if a restore silently no-op'd — you could burn the
+wrong account's quota without noticing. Now clikae never reads or writes a token (no
+secret handling), keeps no per-tank Keychain slots, and the account you end up on is
+the one you explicitly picked. Honest cost: a cross-account switch needs an
+interactive sign-in, so headless `burn`/`conduct` can't change agy accounts.
+
 ### Added — `clikae memory` (the Soul layer)
 
 A tank holds more than fuel — it holds the engine's long-term memory. `clikae memory
