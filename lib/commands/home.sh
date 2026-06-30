@@ -437,17 +437,20 @@ _home_render_static() {
         if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
         elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
+        # A SOLO tank is out of the fleet (no relay/burn/share) — mark it so the board
+        # shows at a glance which tanks are walled off. Quiet 🔒 badge, appended.
+        local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
         if [ -n "$_reset" ]; then
-          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b%s%b\n' \
+          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
             "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_YELLOW" "$_reset" "$__C_RESET"
+            "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
         elif [ "$active" = "1" ]; then
-          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b← %s%b\n' \
+          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b← %s%b%s\n' \
             "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET"
+            "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET" "$_solo"
         else
-          printf '    %b %-12s %b[%s]%b %b%-22s%b\n' \
-            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET"
+          printf '    %b %-12s %b[%s]%b %b%-22s%b%s\n' \
+            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" "$_solo"
         fi
         ;;
       target)

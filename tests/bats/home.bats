@@ -35,6 +35,15 @@ load '../helpers'
   [[ "$output" == *"active here"* ]] || false
 }
 
+@test "the board badges a solo (standalone) tank" {
+  clikae init claude work
+  clikae init claude bot
+  clikae solo claude bot
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"solo"* ]] || false        # the walled-off tank is marked
+}
+
 @test "dashboard is reachable by name and via --help" {
   run clikae dashboard
   [ "$status" -eq 0 ]
