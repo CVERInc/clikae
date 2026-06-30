@@ -83,6 +83,13 @@ metadata:
 - **`project`** — the area/cluster the fact belongs to (e.g. `clikae`,
   `feelreef`, `tile`, `cver-infra`). Drives the **grouped index** (§3). This is
   organisational only; it does not gate visibility.
+**Locking a tank (`clikae memory lock <engine> <tank> [reason]`).** The cross-account
+guard only fires across *different* accounts — so two tanks on the SAME account but
+with different purposes (e.g. your main tank and a bot/persona tank) would slip past
+it: an accidental `share` could commingle them silently. `lock` marks a tank as
+deliberately separate; `share` then refuses it (with the reason) until you `unlock`.
+`status` shows 🔒. This is tank-level, distinct from per-entry `scope` below.
+
 - **`accounts`** — the share-group allowlist. 🔴 **Account isolation is
   sacred:** a fact is only ever visible to tanks the maintainer has explicitly
   grouped as "the same you." `share` is always **opt-in and group-scoped** —

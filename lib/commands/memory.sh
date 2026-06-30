@@ -83,6 +83,15 @@ PROTO
 
 _memory_members_file() { printf '%s/%s/members\n' "$(souls_root)" "$1"; }
 
+# A tank can be LOCKED against sharing — a deliberate "this brain stays separate"
+# marker, stored in the tank dir (needs MEM_CFG resolved). Why this exists beyond
+# the default (which is already isolate): the cross-account guard only fires across
+# DIFFERENT accounts, so two tanks on the SAME account but with different purposes
+# (e.g. your main tank vs a bot/persona tank) would slip past it — an accidental
+# `share` could commingle them silently. Lock the persona tank and `share` refuses.
+_memory_lock_path() { printf '%s/clikae-meta/memory-lock\n' "$MEM_CFG"; }
+_memory_is_locked() { [ -f "$(_memory_lock_path)" ]; }
+
 # Drop a tank (field 1 == <engine>/<tank>) from a group's member file, in place.
 _memory_drop_member() {
   local file="$1" key="$2"
@@ -232,25 +241,76 @@ engines — read/write a single "Soul" (continuity & context). See docs/memory.m
   clikae memory share <group> [<engine> <tank>]   point a tank at <group>'s Soul store
   clikae memory isolate        [<engine> <tank>]   restore the tank's own memory (undo share)
   clikae memory status         [<engine> <tank>]   show share state
+  clikae memory lock           [<engine> <tank>] [reason]   refuse to ever share this tank
+  clikae memory unlock         [<engine> <tank>]   remove the lock
 
 Defaults: engine = claude; tank = whichever this shell is switched to.
 Engines: claude fans its memory DIR into the store (symlink, per-directory); codex
-reads a pointer note in its AGENTS.md and reads/writes the same markdown via the
-memory protocol. (Cross-engine agy is coming.)
+and agy read a pointer note in their AGENTS.md / GEMINI.md and read/write the same
+markdown via the memory protocol.
 
 Flags:
   -y, --yes    skip the cross-account confirmation (for scripts/automation)
 
 🔴 Sharing is opt-in and per-tank; clikae never auto-crosses accounts. Crossing your
 own accounts is announced. The store is seeded by COPY; a joiner's own memory is
-stashed aside (reversible via `isolate`), never overwritten.
+stashed aside (reversible via `isolate`), never overwritten. `lock` protects a tank
+whose brain must stay separate even from your OWN other tanks (e.g. a bot/persona
+tank on the same account) — `share` then refuses it.
 EOF
       return 0 ;;
     share)   _memory_share "$@" ;;
     isolate) _memory_isolate "$@" ;;
     status)  _memory_status "$@" ;;
-    *) log_fail "memory: unknown subcommand '$sub' (try: share | isolate | status)" ;;
+    lock)    _memory_lock "$@" ;;
+    unlock)  _memory_unlock "$@" ;;
+    *) log_fail "memory: unknown subcommand '$sub' (try: share | isolate | status | lock | unlock)" ;;
   esac
+}
+
+_memory_lock() {
+  local engine="" tank="" reason=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -*) log_fail "memory lock: unknown flag: $1" ;;
+      *) if [ -z "$engine" ]; then engine="$1"
+         elif [ -z "$tank" ]; then tank="$1"
+         else reason="${reason:+$reason }$1"; fi
+         shift ;;
+    esac
+  done
+  _memory_resolve_tank "$engine" "$tank"
+  if [ -n "$(_memory_current_group)" ]; then
+    log_warn "$MEM_CLI/$MEM_TANK is currently SHARED. Lock just prevents future shares;"
+    log_dim  "to pull it out now: clikae memory isolate $MEM_CLI $MEM_TANK"
+  fi
+  local f; f="$(_memory_lock_path)"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$reason" > "$f"
+  log_ok "$MEM_CLI/$MEM_TANK is locked — 'clikae memory share' will refuse it."
+  [ -n "$reason" ] && log_dim "reason: $reason"
+  return 0
+}
+
+_memory_unlock() {
+  local engine="" tank=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -*) log_fail "memory unlock: unknown flag: $1" ;;
+      *) if [ -z "$engine" ]; then engine="$1"
+         elif [ -z "$tank" ]; then tank="$1"
+         else log_fail "memory unlock: unexpected argument: $1"; fi
+         shift ;;
+    esac
+  done
+  _memory_resolve_tank "$engine" "$tank"
+  if _memory_is_locked; then
+    rm -f "$(_memory_lock_path)"
+    log_ok "$MEM_CLI/$MEM_TANK is unlocked — it can be shared again."
+  else
+    log_ok "$MEM_CLI/$MEM_TANK wasn't locked."
+  fi
+  return 0
 }
 
 _memory_share() {
@@ -269,6 +329,15 @@ _memory_share() {
   [ -n "$group" ] || log_fail "memory share: name a group:  clikae memory share <group>"
   validate_name profile "$group"   # exits with a clear message on a bad name
   _memory_resolve_tank "$engine" "$tank"
+
+  # 🔴 A locked tank is deliberately kept separate (e.g. a bot/persona tank on your
+  # own account that the cross-account guard can't protect). Refuse, loudly.
+  if _memory_is_locked; then
+    log_err "$MEM_CLI/$MEM_TANK is LOCKED against sharing (deliberately kept separate)."
+    local _r; _r="$(cat "$(_memory_lock_path)" 2>/dev/null || true)"
+    [ -n "$_r" ] && log_dim "reason: $_r"
+    log_fail "If you really mean it: clikae memory unlock $MEM_CLI $MEM_TANK"
+  fi
 
   local store account members existing_group
   store="$(_memory_store_path "$group")"
@@ -423,21 +492,23 @@ _memory_status() {
       if [ "$strat" = "symlink" ]; then MEM_DIR="$(adapter_memory_dir "$MEM_CFG")"
       elif clikae_is_target "$eng"; then MEM_PTR="$(target_memory_pointer_path "$MEM_CFG")"
       else MEM_PTR="$(adapter_memory_pointer_path "$MEM_CFG")"; fi
-      local g acct; g="$(_memory_current_group)"; acct="$(_memory_account)"
-      if [ -n "$g" ]; then log_ok "  $cli/$tname  → shared '$g'${acct:+  ($acct)}"
-      else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}"; fi
+      local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
+      lk=""; _memory_is_locked && lk="  🔒 locked"
+      if [ -n "$g" ]; then log_ok "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk"
+      else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}$lk"; fi
     done < <(list_all_profiles)
     [ "$saw" -eq 1 ] || log_dim "  (no $eng tanks)"
     return 0
   fi
   # One named tank.
   _memory_resolve_tank "$engine" "$tank"
-  local g acct; g="$(_memory_current_group)"; acct="$(_memory_account)"
+  local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
+  lk=""; _memory_is_locked && lk="  🔒 locked"
   if [ -n "$g" ]; then
-    log_ok "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}"
+    log_ok "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"
     log_dim "store: $(_memory_store_path "$g")"
   else
-    log_dim "$MEM_CLI/$MEM_TANK → isolated${acct:+  ($acct)}"
+    log_dim "$MEM_CLI/$MEM_TANK → isolated${acct:+  ($acct)}$lk"
   fi
   return 0
 }

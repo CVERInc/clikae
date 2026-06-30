@@ -268,3 +268,37 @@ _seed_memory() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"shared 'me'"* ]] || false
 }
+
+# ── lock: keep a tank's brain separate even from your OWN other tanks ──────────
+# The cross-account guard can't protect two tanks on the SAME account but with
+# different purposes (e.g. a bot/persona tank). lock makes `share` refuse the tank.
+
+@test "🔴 memory lock: a locked tank refuses share (same-account persona guard)" {
+  clikae init claude main
+  clikae init claude persona
+  clikae memory lock claude persona "bot persona — keep separate"
+  run clikae memory share me claude persona            # same account as main — guard wouldn't catch it
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"LOCKED"* ]] || false
+  [[ "$output" == *"bot persona"* ]] || false          # the reason is shown
+  local mem; mem="$(_memdir persona)"
+  [ ! -L "$mem" ]                                       # it did NOT get shared
+}
+
+@test "memory unlock: lets the tank be shared again" {
+  clikae init claude persona
+  clikae memory lock claude persona
+  run clikae memory share me claude persona
+  [ "$status" -ne 0 ]                                   # locked → refused
+  clikae memory unlock claude persona
+  run clikae memory share me claude persona
+  [ "$status" -eq 0 ]                                   # now allowed
+}
+
+@test "memory status: shows the lock" {
+  clikae init claude persona
+  clikae memory lock claude persona
+  run clikae memory status claude persona
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"locked"* ]] || false
+}
