@@ -24,15 +24,17 @@ load '../helpers'
   [[ "$output" == *"work"* ]] || false
   [[ "$output" == *"personal"* ]] || false
   [[ "$output" == *"codex"* ]] || false
-  # No tank is active in this clean shell — nothing marked "← here".
-  [[ "$output" != *"← here"* ]] || false
 }
 
-@test "the tank active in THIS shell is marked" {
+@test "the active shell's tank drives the launch hint (no on-row 'here' marker)" {
+  # The board intentionally does NOT badge the current shell's tank — with many
+  # tanks open at once it's noise. But `active` is still computed under the hood:
+  # it picks the default launch target shown at the bottom.
   clikae init claude work
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/work" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"← here"* ]] || false
+  [[ "$output" == *"clikae claude work"* ]] || false   # the active tank is the launch suggestion
+  [[ "$output" != *"here"* ]] || false                 # but not marked on its row
 }
 
 @test "the board sections off a solo (standalone) tank under 'Solo'" {
@@ -141,7 +143,6 @@ _fake_bin() {
   [[ "$output" == *"agy"* ]] || false          # shown by its short name, not "antigravity"
   [[ "$output" != *"antigravity"* ]] || false
   [[ "$output" == *"work"* ]] || false
-  [[ "$output" == *"← here"* ]]               # work is where the symlink points
 }
 
 # --- L4: over-quota (dry) tank awareness on the board ---------------------------

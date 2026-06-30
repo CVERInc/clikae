@@ -450,11 +450,12 @@ _home_render_static() {
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
         elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
         # Aligned columns (display-width padded, CJK-safe): name · engine · account,
-        # then a right gutter that holds EITHER the reset time (dry) or "← here".
+        # then a right gutter that holds the reset time when the tank is dry. (We don't
+        # mark "this shell's tank": with many tanks open at once across terminals, the
+        # current-shell tank is an artifact of where you typed clikae, not useful info.)
         local _nm _en _ac _tail="" _sep=""
         _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"
-        elif [ "$active" = "1" ]; then _tail="$(printf '%b← %s%b' "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET")"; fi
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
         [ -n "$_tail" ] && _sep="  "
         printf '    %b %s %b%s%b %b%s%b%s%s\n' \
           "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
@@ -1056,11 +1057,11 @@ _home_pick_draw_body() {
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         # Aligned columns (display-width padded): name · engine · account, then a
-        # right gutter holding EITHER the reset time (dry) or "← here" (this shell).
+        # right gutter holding the reset time when the tank is dry. (No "this shell"
+        # marker — see _home_render_static: with many tanks open at once it's noise.)
         local _nm _en _ac _tail="" _sep=""
         _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"
-        elif [ "$active" = "1" ]; then _tail="$(printf '%b← %s%b' "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET")"; fi
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
         [ -n "$_tail" ] && _sep="  "
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
