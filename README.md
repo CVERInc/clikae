@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.8.0-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.9.0-blue.svg)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-clikae.cver.net-2563eb.svg)](https://clikae.cver.net)
 
 📖 **Docs:** [clikae.cver.net](https://clikae.cver.net) — humans read it, agents call `/mcp`.
@@ -73,6 +73,26 @@ session or a memory slice is carried as a **copy**; the tank you came from is
 left exactly as it was. No proxy, no daemon, no traffic interception — clikae
 reshapes *where your state lives*, it never sits in the middle of your requests.
 
+## Swap the engine, keep the soul — shared memory
+
+A tank holds more than fuel — it holds the engine's long-term **memory**. `clikae
+memory share <group>` points several of your own tanks at ONE vendor-neutral
+markdown store — a **Soul** you own — so they read and write a single brain
+**across engines**. Hit a Claude limit, carry on in Codex, and it already knows who
+you are and where the work stands. Swap the engine, keep the soul.
+
+- **claude** fans its memory dir into the store with a symlink; **codex** and **agy**
+  read a fenced pointer note (`AGENTS.md` / `GEMINI.md`) to the same markdown files —
+  no translator, no drift, it's literally the same files.
+- 🔴 Sharing is **opt-in and per-tank**; clikae never auto-crosses accounts, and
+  crossing your own is announced. The store is seeded by copy and `clikae memory
+  isolate` reverses it.
+- `clikae solo` walls a tank off — a bot or persona that lives on your own account —
+  so it's out of the fleet: never relayed, burned, watched, or shared.
+
+It carries *continuity and context*, not the model's capability — no phantom "same AI
+on a different engine." See **[docs/memory.md](docs/memory.md)**.
+
 Driving this headless — or letting an **LLM agent** drive it (fanning a job across
 accounts, best-of-N across vendors)? The **[orchestration playbook](docs/orchestration.md)**
 is the field guide: when to use `burn` vs `conduct`, the rules that keep it honest
@@ -123,11 +143,14 @@ clikae to personal                # carry the live session to tank `personal`
 clikae to codex                   # or across engines (a written brief)
 ```
 
-Type **`clikae`** any time to land on your **home board**: your recent sessions
-across every account and engine (newest first, each with a one-line recap), above
-your tanks in a single **burn order** you can rearrange with `[` / `]`. Every tank
-wears a traffic-light **fuel dot** — 🟢 ready · 🔴 dry (with the vendor's reset
-time) · ○ no reading — so one glance tells you which account still has gas in it:
+Type **`clikae`** any time to land on your **home board** — an interactive cockpit.
+It lists your recent sessions across every account and engine (newest first, each
+with a one-line recap), above your tanks laid out as **Tanks / Solo / Resume** in a
+single **burn order**. Arrow-key to any tank and act on it with one keystroke: Enter
+opens it · `r` relays your live session in · `m` opens the memory (Soul) dial · `s`
+toggles solo · `[` / `]` reorder. Every tank wears a traffic-light **fuel dot** —
+🟢 ready · 🔴 dry (with the vendor's reset time) · ○ no reading — so one glance tells
+you which account still has gas in it:
 
 ```bash
 clikae                            # your home board (run `clikae doctor` for a health check)
@@ -138,6 +161,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Installation](docs/installation.md)** — Homebrew, from source, `curl | bash`, PATH setup.
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
 - **[Grammar](docs/grammar.md)** — the language clikae speaks: why it's a verb, engine/tank/fuel, `clikae to`, agy.
+- **[Memory (Soul)](docs/memory.md)** — share one markdown brain across your tanks and engines; what stays isolated, and `clikae solo`.
 - **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
 - **[Orchestration](docs/orchestration.md)** — driving clikae headless (or letting an agent drive it): `burn` vs `conduct`, the honesty rules, anti-patterns, seeing your fleet.
 - **[Expectations](docs/EXPECTATIONS.md)** — "is this a bug?" — behaviours that look surprising but are deliberate (the fuel dot, codex resume/time, agy's global switch, …).
@@ -176,6 +200,13 @@ clikae                            # your home board (run `clikae doctor` for a h
   from the dashboard. `clikae resume cleanup` reclaims disk from old session data. The
   home board also got much faster (several seconds → well under one on multi-GB tanks) by
   reading only the transcript slices it needs and scanning each tank's fuel state once.
+- **v0.9 — the Soul layer.** `clikae memory share|isolate|status` gives several of
+  your own tanks one shared markdown brain **across engines** — claude symlinks its
+  memory dir into the store; codex and agy read a pointer note to the same files, no
+  translator, no drift. Swap the engine, keep the soul. `clikae solo` walls a tank off
+  from the fleet, and the home board became an **interactive cockpit** (press `m` for
+  the memory dial, `s` to solo) laid out as Tanks / Solo / Resume. See
+  [docs/memory.md](docs/memory.md).
 - **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
   build-verified skeleton; it ships when it earns it.
 
@@ -183,7 +214,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 
 Pure bash, no runtime dependencies, held to a deliberate bar:
 
-- **`bats-core` suite (300+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
+- **`bats-core` suite (450+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
