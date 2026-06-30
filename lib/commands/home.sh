@@ -948,6 +948,7 @@ _home_help_overlay() {
   _home_help_row "n"             "$T_K_NEW"
   _home_help_row "a"             "$T_K_RENAME"
   _home_help_row "d"             "$T_K_DELETE"
+  _home_help_row "s"             "$T_K_SOLO"
   _home_help_row "/"             "$T_K_FILTER"
   _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
   _home_help_row "l"             "$T_K_LANG"
@@ -1043,15 +1044,16 @@ _home_pick_draw_body() {
         local _eng; _eng="$(_home_engine_label "$cli")"
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
+        local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
         if [ "$idx" -eq "$sel" ]; then
           # Selected → EXPANDED: name, engine tag, account, any reset time.
-          printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s%b  %b%s%b\n' \
+          printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
             "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$_eng" "$__C_RESET" \
-            "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+            "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
         elif [ -n "$_reset" ]; then
-          printf '  %b %b %-12s %b[%s]%b  %b%s%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          printf '  %b %b %-12s %b[%s]%b  %b%s%b%s\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
         else
-          printf '  %b %b %-12s %b[%s]%b\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET"
+          printf '  %b %b %-12s %b[%s]%b%s\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$_solo"
         fi
         ;;
       target)
@@ -1124,6 +1126,14 @@ _home_stay() {
   local _discard; IFS= read -r _discard || true
   stty -echo 2>/dev/null || true
   printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
+}
+
+# Toggle the solo marker on a tank — instant + silent (the picker redraws the badge
+# itself). solo = out of the fleet: no relay/`to`, skipped by burn/watch, `memory
+# share` refuses it. The CLI face is `clikae solo`; this is the board's one-key form.
+_home_toggle_solo() {
+  local f; f="$(solo_marker_file "$1" "$2")"
+  if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$(dirname "$f")"; : > "$f"; fi
 }
 
 _home_pick() {
@@ -1285,6 +1295,13 @@ _home_pick() {
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_remove_tank "$sel_row"
           items="$(_home_items)"; dry="$(_home_dry_set)"
+        fi
+        ;;
+      s)
+        # Toggle SOLO on the selected tank — instant + in-place (like reorder), no
+        # drop to the shell. A solo tank is out of the fleet: no relay/burn/share.
+        if [ "$sel_kind" = "tank" ]; then
+          _home_toggle_solo "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
         fi
         ;;
     esac
