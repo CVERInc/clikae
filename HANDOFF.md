@@ -34,9 +34,10 @@ These mirror how this project was built and must be preserved:
 
 ## ⭐ CURRENT STATE — 2026-06-30 (READ THIS FIRST; supersedes every dated block below)
 
-**Shipped tag: `v0.8.1`.** `main` carries **6 unreleased commits** headed to **`0.9.0`**
-— the Soul layer plus this session's board-cockpit redesign. Nothing pushed.
-`bash scripts/test.sh` is the gate (shellcheck + bats, currently green at ~454).
+**Shipped tag: `v0.9.0`** (2026-06-30) — the Soul layer plus the interactive
+board-cockpit redesign. Tag + GitHub release + Homebrew (in-repo `homebrew/clikae.rb`
+**and** the tap `~/Developer/homebrew-clikae/Formula/clikae.rb`) all bumped; `main` is
+clean. `bash scripts/test.sh` is the gate (shellcheck + bats, currently green at ~454).
 🔴 **Never verify bats through a pipe** (`bats | tail; echo $?` reports tail's exit, not
 bats') — see `tests/README.md`. Everything in §2–§14 below is accurate as HISTORY but
 predates the two big arcs described here.
