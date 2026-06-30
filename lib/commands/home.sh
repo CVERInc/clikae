@@ -135,7 +135,11 @@ _home_items() {
   # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
   # order. Engine travels in the cli field and the renderer shows it as an inline
   # tag. active is resolved per row since engines now interleave.
+  # Partition by solo: fleet tanks first, solo (out-of-the-fleet) tanks last, so
+  # the renderers can draw them as two sections (Tanks / Solo) while the picker's
+  # row index still matches the on-screen order (no separate sort needed).
   local entry cli profile path label alias active a
+  local _fleet="" _solo=""
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     cli="${entry%%/*}"; profile="${entry#*/}"
@@ -160,10 +164,13 @@ _home_items() {
     alias="$(_home_alias_for "$cli" "$profile")"
     active="$(_home_active_for "$cli")"
     if [ -n "$active" ] && [ "$profile" = "$active" ]; then a=1; else a=0; fi
-    printf 'tank\037%s\037%s\037%s\037%s\037%d\037\n' "$cli" "$profile" "$label" "$alias" "$a"
+    local _row; _row="$(printf 'tank\037%s\037%s\037%s\037%s\037%d\037' "$cli" "$profile" "$label" "$alias" "$a")"
+    if tank_is_solo "$cli" "$profile"; then _solo="$_solo$_row"$'\n'; else _fleet="$_fleet$_row"$'\n'; fi
   done <<EOF
 $(order_list)
 EOF
+  [ -n "$_fleet" ] && printf '%s' "$_fleet"
+  [ -n "$_solo" ] && printf '%s' "$_solo"
 
   # 2) Agents — installed adapters with NO profile that are relay-capable (they
   #    define adapter_start_with_prompt, i.e. interactive agent CLIs you'd hand a
@@ -384,22 +391,6 @@ _home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' 
 # already watches for limits. An un-logged-in tank has no log → empty (shows "-").
 _home_agy_email() { agy_email "$1"; }   # shared with `clikae list`, see lib/core/scan.sh
 
-# _home_soul_group <cli> <tank> -> the Soul group this tank shares, or empty. Reads
-# the membership ledgers ($CLIKAE_HOME/souls/<group>/members, one `engine/tank\t…`
-# line per member) — PWD-independent and cheap, so the board can badge a shared brain
-# the same once-per-row way it badges solo. `isolate` drops the member line, so a
-# present line means actively shared. First match wins (a tank is in one group).
-_home_soul_group() {
-  local key="$1/$2" mf grp
-  for mf in "$CLIKAE_HOME"/souls/*/members; do
-    [ -f "$mf" ] || continue
-    if awk -F'\t' -v k="$key" 'NF>=1 && $1==k{found=1} END{exit !found}' "$mf"; then
-      grp="${mf%/members}"; printf '%s\n' "${grp##*/}"; return 0
-    fi
-  done
-  return 1
-}
-
 # _home_lpad <str> <width> -> <str> right-padded with spaces to <width> DISPLAY
 # columns (so a CJK label lines up the same as an ASCII one). The drop-in for a
 # `%-<width>s` that would otherwise mis-measure multibyte text.
@@ -423,7 +414,7 @@ _home_render_static() {
   printf '%b%s%b  %b·  %s%b\n\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
 
-  local kind cli profile label alias active note cur_cli="" also="" printed_resume=0 rdot
+  local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 rdot
   local launch_cli="" launch_profile=""
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -439,36 +430,34 @@ _home_render_static() {
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
         ;;
       tank)
-        # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
-        # [tag]. A "Tanks" header opens the section (mirrors "Continue").
-        if [ -z "$cur_cli" ]; then
+        # Two sections in burn order: fleet tanks under "Tanks", solo (out-of-the-
+        # fleet) tanks under "Solo" — the section IS the badge (no per-row 🔒). Soul
+        # sharing isn't shown: in the fleet, a shared brain is the NORMAL state (that's
+        # what relay/`to` are for), so it's not worth shouting. _home_items emits fleet
+        # first then solo, so a section change is just a header.
+        if tank_is_solo "$cli" "$profile"; then
+          if [ "$cur_sect" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
+        elif [ "$cur_sect" != "fleet" ]; then
           [ "$printed_resume" -eq 1 ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
+          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
         fi
         local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
         # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
         # decoupled from `active`. `active` still picks the launch target + the
-        # "← here" label below. See docs/DESIGN-board-fuel-dots.md.
+        # "← here" label. See docs/DESIGN-board-fuel-dots.md.
         _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"; _dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
         elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
-        # A SOLO tank is out of the fleet (no relay/burn/share) — mark it so the board
-        # shows at a glance which tanks are walled off. Quiet 🔒 badge, appended.
-        local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
-        local _grp; if _grp="$(_home_soul_group "$cli" "$profile")"; then _solo="$_solo$(printf '  %b🧠 %s%b' "$__C_DIM" "$_grp" "$__C_RESET")"; fi
-        if [ -n "$_reset" ]; then
-          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
-            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
-        elif [ "$active" = "1" ]; then
-          printf '    %b %-12s %b[%s]%b %b%-22s%b  %b← %s%b%s\n' \
-            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
-            "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET" "$_solo"
-        else
-          printf '    %b %-12s %b[%s]%b %b%-22s%b%s\n' \
-            "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" "$_solo"
-        fi
+        # Aligned columns (display-width padded, CJK-safe): name · engine · account,
+        # then a right gutter that holds EITHER the reset time (dry) or "← here".
+        local _nm _en _ac _tail="" _sep=""
+        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"
+        elif [ "$active" = "1" ]; then _tail="$(printf '%b← %s%b' "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET")"; fi
+        [ -n "$_tail" ] && _sep="  "
+        printf '    %b %s %b%s%b %b%s%b%s%s\n' \
+          "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         ;;
       target)
         # A single-account launch target (e.g. agy) lives under "Also available",
@@ -1053,26 +1042,32 @@ _home_pick_draw_body() {
         fi
         ;;
       tank)
-        # Flat BURN ORDER — no engine grouping. Name first; engine is an inline
-        # [tag] (shown even collapsed, so a cross-engine list stays unambiguous).
-        # A "Tanks" header opens the section.
-        if [ -z "$cur_cli" ]; then
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="-"
+        # Two sections in burn order: fleet under "Tanks", solo (out-of-the-fleet)
+        # under "Solo" — the section IS the badge (no per-row 🔒). Soul sharing isn't
+        # shown: in the fleet a shared brain is the normal state. cur_cli doubles as
+        # the current-section marker ("fleet"/"solo"); other cases test it for "any
+        # tank printed yet".
+        if tank_is_solo "$cli" "$profile"; then
+          if [ "$cur_cli" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
+        elif [ "$cur_cli" != "fleet" ]; then
+          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
         local _eng; _eng="$(_home_engine_label "$cli")"
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
-        local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
-        local _grp; if _grp="$(_home_soul_group "$cli" "$profile")"; then _solo="$_solo$(printf '  %b🧠 %s%b' "$__C_DIM" "$_grp" "$__C_RESET")"; fi
+        # Aligned columns (display-width padded): name · engine · account, then a
+        # right gutter holding EITHER the reset time (dry) or "← here" (this shell).
+        local _nm _en _ac _tail="" _sep=""
+        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"
+        elif [ "$active" = "1" ]; then _tail="$(printf '%b← %s%b' "$__C_GREEN" "$T_ACTIVE_HERE" "$__C_RESET")"; fi
+        [ -n "$_tail" ] && _sep="  "
         if [ "$idx" -eq "$sel" ]; then
-          # Selected → EXPANDED: name, engine tag, account, any reset time.
-          printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
-            "$mark" "$dot" "$__C_BOLD" "$profile" "$__C_RESET" "$__C_DIM" "$_eng" "$__C_RESET" \
-            "$__C_DIM" "${label:--}" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
-        elif [ -n "$_reset" ]; then
-          printf '  %b %b %-12s %b[%s]%b  %b%s%b%s\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET" "$_solo"
+          printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
+            "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         else
-          printf '  %b %b %-12s %b[%s]%b%s\n' "$mark" "$dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$_solo"
+          printf '  %b %b %s %b%s%b %b%s%b%s%s\n' \
+            "$mark" "$dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         fi
         ;;
       target)
@@ -1352,10 +1347,24 @@ _home_pick() {
         fi
         ;;
       s)
-        # Toggle SOLO on the selected tank — instant + in-place (like reorder), no
-        # drop to the shell. A solo tank is out of the fleet: no relay/burn/share.
+        # Toggle SOLO on the selected tank — instant, no drop to the shell. A solo
+        # tank is out of the fleet (no relay/burn/share), so it moves between the
+        # Tanks and Solo sections: rebuild items so the row re-partitions, and follow
+        # it by name so the cursor stays on the tank you just toggled.
         if [ "$sel_kind" = "tank" ]; then
-          _home_toggle_solo "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
+          local _sp; _sp="$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
+          _home_toggle_solo "$sel_cli" "$_sp"
+          items="$(_home_items)"
+          local _vv _i=0 _row2
+          _vv="$(_home_filter "$items" "$filter")"
+          while IFS= read -r _row2; do
+            [ "$(printf '%s' "$_row2" | cut -d$'\037' -f1)" = "tank" ] \
+              && [ "$(printf '%s' "$_row2" | cut -d$'\037' -f2)" = "$sel_cli" ] \
+              && [ "$(printf '%s' "$_row2" | cut -d$'\037' -f3)" = "$_sp" ] && { sel=$_i; break; }
+            _i=$(( _i + 1 ))
+          done <<EOF
+$_vv
+EOF
         fi
         ;;
       m)

@@ -24,51 +24,38 @@ load '../helpers'
   [[ "$output" == *"work"* ]] || false
   [[ "$output" == *"personal"* ]] || false
   [[ "$output" == *"codex"* ]] || false
-  # No tank is active in this clean shell — nothing marked "active here".
-  [[ "$output" != *"active here"* ]] || false
+  # No tank is active in this clean shell — nothing marked "← here".
+  [[ "$output" != *"← here"* ]] || false
 }
 
 @test "the tank active in THIS shell is marked" {
   clikae init claude work
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/work" run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"active here"* ]] || false
+  [[ "$output" == *"← here"* ]] || false
 }
 
-@test "the board badges a solo (standalone) tank" {
+@test "the board sections off a solo (standalone) tank under 'Solo'" {
   clikae init claude work
   clikae init claude bot
   clikae solo claude bot
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"solo"* ]] || false        # the walled-off tank is marked
+  [[ "$output" == *"Solo"* ]] || false        # the walled-off tank gets its own section
 }
 
-@test "the board badges a tank that shares a Soul group (🧠 <group>)" {
+@test "a solo tank moves into its own 'Solo' section (not the fleet)" {
   clikae init claude work
-  clikae init claude alt
-  clikae memory share team claude work -y
+  clikae init claude bot
+  clikae solo claude bot
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"🧠 team"* ]] || false   # the shared brain is visible on the board
-  # the un-shared sibling carries no badge
-  [[ "$(printf '%s\n' "$output" | grep -E '^\s*[●○].*\balt\b')" != *"🧠"* ]] || false
-}
-
-@test "_home_soul_group: a member reads its group, a non-member reads nothing" {
-  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
-  # shellcheck source=/dev/null
-  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
-  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
-  . "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
-  . "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  mkdir -p "$CLIKAE_HOME/souls/team"
-  printf 'claude/work\thi@x\t/store\n' > "$CLIKAE_HOME/souls/team/members"
-  run _home_soul_group claude work
-  [ "$status" -eq 0 ]
-  [ "$output" = "team" ]
-  run _home_soul_group claude other
-  [ "$status" -ne 0 ]
+  [[ "$output" == *"Solo"* ]] || false
+  # bot appears AFTER the Solo header, work appears under Tanks before it
+  local solo_at work_at
+  solo_at="$(printf '%s\n' "$output" | grep -n 'Solo' | head -1 | cut -d: -f1)"
+  work_at="$(printf '%s\n' "$output" | grep -n '\bwork\b' | head -1 | cut -d: -f1)"
+  [ -n "$solo_at" ] && [ -n "$work_at" ] && [ "$work_at" -lt "$solo_at" ] || false
 }
 
 @test "dashboard is reachable by name and via --help" {
@@ -151,9 +138,10 @@ _fake_bin() {
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[agy]"* ]] || false        # shown by its short name, not "antigravity"
+  [[ "$output" == *"agy"* ]] || false          # shown by its short name, not "antigravity"
+  [[ "$output" != *"antigravity"* ]] || false
   [[ "$output" == *"work"* ]] || false
-  [[ "$output" == *"active here"* ]]          # work is where the symlink points
+  [[ "$output" == *"← here"* ]]               # work is where the symlink points
 }
 
 # --- L4: over-quota (dry) tank awareness on the board ---------------------------
@@ -338,13 +326,13 @@ _agy_log() { # <line>
   [ -n "$lb" ] && [ -n "$la" ] && [ "$lb" -lt "$la" ]
 }
 
-@test "the board shows an inline [engine] tag, not a group header" {
+@test "the board shows the engine name inline per row, not as a group header" {
   clikae init claude work
   clikae init codex main
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[claude]"* ]] || false
-  [[ "$output" == *"[codex]"* ]] || false
+  [[ "$output" == *"claude"* ]] || false
+  [[ "$output" == *"codex"* ]] || false
 }
 
 @test "_home_reorder moves a tank within the order file" {
@@ -379,15 +367,15 @@ _agy_log() { # <line>
   [ "$maxdw" -le 80 ]                                   # nothing overflows 80 cols
 }
 
-@test "agy tanks show an [agy] tag, not [antigravity]" {
+@test "agy tanks show the 'agy' name, not 'antigravity'" {
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/main"
   printf 'consented\n' > "$CLIKAE_HOME/antigravity-multi-consent"
   ln -s "$CLIKAE_HOME/profiles/antigravity/main" "$HOME/.gemini"
   clikae init claude work
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[agy]"* ]] || false
-  [[ "$output" != *"[antigravity]"* ]] || false
+  [[ "$output" == *"agy"* ]] || false
+  [[ "$output" != *"antigravity"* ]] || false
 }
 
 @test "a runaway Continue title is truncated with an ellipsis (no wrap)" {
