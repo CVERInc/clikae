@@ -269,36 +269,36 @@ _seed_memory() {
   [[ "$output" == *"shared 'me'"* ]] || false
 }
 
-# ── lock: keep a tank's brain separate even from your OWN other tanks ──────────
+# ── solo: a tank walled off from the fleet can't be shared ─────────────────────
 # The cross-account guard can't protect two tanks on the SAME account but with
-# different purposes (e.g. a bot/persona tank). lock makes `share` refuse the tank.
+# different purposes (e.g. a bot/persona tank). `clikae solo` walls it off.
 
-@test "🔴 memory lock: a locked tank refuses share (same-account persona guard)" {
+@test "🔴 memory share: a SOLO tank is refused (same-account persona guard)" {
   clikae init claude main
   clikae init claude persona
-  clikae memory lock claude persona "bot persona — keep separate"
+  clikae solo claude persona "bot persona — keep separate"
   run clikae memory share me claude persona            # same account as main — guard wouldn't catch it
   [ "$status" -ne 0 ]
-  [[ "$output" == *"LOCKED"* ]] || false
+  [[ "$output" == *"SOLO"* ]] || false
   [[ "$output" == *"bot persona"* ]] || false          # the reason is shown
   local mem; mem="$(_memdir persona)"
   [ ! -L "$mem" ]                                       # it did NOT get shared
 }
 
-@test "memory unlock: lets the tank be shared again" {
+@test "solo --off: lets the tank be shared again" {
   clikae init claude persona
-  clikae memory lock claude persona
+  clikae solo claude persona
   run clikae memory share me claude persona
-  [ "$status" -ne 0 ]                                   # locked → refused
-  clikae memory unlock claude persona
+  [ "$status" -ne 0 ]                                   # solo → refused
+  clikae solo claude persona --off
   run clikae memory share me claude persona
-  [ "$status" -eq 0 ]                                   # now allowed
+  [ "$status" -eq 0 ]                                   # back in the fleet → allowed
 }
 
-@test "memory status: shows the lock" {
+@test "memory status: shows a solo tank" {
   clikae init claude persona
-  clikae memory lock claude persona
+  clikae solo claude persona
   run clikae memory status claude persona
   [ "$status" -eq 0 ]
-  [[ "$output" == *"locked"* ]] || false
+  [[ "$output" == *"solo"* ]] || false
 }

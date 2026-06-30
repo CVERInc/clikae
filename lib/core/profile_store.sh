@@ -134,6 +134,19 @@ git_identity_read() {
   head -n 1 "$f" 2>/dev/null || true
 }
 
+# ── Solo tanks ──────────────────────────────────────────────────────────────
+# A tank can be marked SOLO: it opts OUT of the fleet flow — not a relay/`to`
+# target, skipped by the burn/`watch` rotation, and refused by `clikae memory
+# share`. For a dedicated, standalone tank (a bot/persona tank, a client-only tank)
+# that must never receive carried work or share a brain. The marker is a file in
+# the tank dir; this is the one predicate everything checks. `agy` resolves to
+# `antigravity`. See `clikae solo` and docs/grammar.md §2.
+solo_marker_file() {
+  local cli="$1"; [ "$cli" = "agy" ] && cli="antigravity"
+  printf '%s/clikae-meta/solo\n' "$(profile_dir "$cli" "$2")"
+}
+tank_is_solo() { [ -f "$(solo_marker_file "$1" "$2")" ]; }
+
 # List every profile as "<cli> <profile> <path>" lines, sorted.
 list_all_profiles() {
   local root
