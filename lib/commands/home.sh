@@ -384,6 +384,22 @@ _home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' 
 # already watches for limits. An un-logged-in tank has no log → empty (shows "-").
 _home_agy_email() { agy_email "$1"; }   # shared with `clikae list`, see lib/core/scan.sh
 
+# _home_soul_group <cli> <tank> -> the Soul group this tank shares, or empty. Reads
+# the membership ledgers ($CLIKAE_HOME/souls/<group>/members, one `engine/tank\t…`
+# line per member) — PWD-independent and cheap, so the board can badge a shared brain
+# the same once-per-row way it badges solo. `isolate` drops the member line, so a
+# present line means actively shared. First match wins (a tank is in one group).
+_home_soul_group() {
+  local key="$1/$2" mf grp
+  for mf in "$CLIKAE_HOME"/souls/*/members; do
+    [ -f "$mf" ] || continue
+    if awk -F'\t' -v k="$key" 'NF>=1 && $1==k{found=1} END{exit !found}' "$mf"; then
+      grp="${mf%/members}"; printf '%s\n' "${grp##*/}"; return 0
+    fi
+  done
+  return 1
+}
+
 # _home_lpad <str> <width> -> <str> right-padded with spaces to <width> DISPLAY
 # columns (so a CJK label lines up the same as an ASCII one). The drop-in for a
 # `%-<width>s` that would otherwise mis-measure multibyte text.
@@ -440,6 +456,7 @@ _home_render_static() {
         # A SOLO tank is out of the fleet (no relay/burn/share) — mark it so the board
         # shows at a glance which tanks are walled off. Quiet 🔒 badge, appended.
         local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
+        local _grp; if _grp="$(_home_soul_group "$cli" "$profile")"; then _solo="$_solo$(printf '  %b🧠 %s%b' "$__C_DIM" "$_grp" "$__C_RESET")"; fi
         if [ -n "$_reset" ]; then
           printf '    %b %-12s %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
             "$_dot" "$profile" "$__C_DIM" "$_eng" "$__C_RESET" "$__C_DIM" "${label:--}" "$__C_RESET" \
@@ -949,6 +966,7 @@ _home_help_overlay() {
   _home_help_row "a"             "$T_K_RENAME"
   _home_help_row "d"             "$T_K_DELETE"
   _home_help_row "s"             "$T_K_SOLO"
+  _home_help_row "m"             "$T_K_MEMORY"
   _home_help_row "/"             "$T_K_FILTER"
   _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
   _home_help_row "l"             "$T_K_LANG"
@@ -1045,6 +1063,7 @@ _home_pick_draw_body() {
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         local _solo=""; if tank_is_solo "$cli" "$profile"; then _solo="$(printf '  %b🔒 solo%b' "$__C_DIM" "$__C_RESET")"; fi
+        local _grp; if _grp="$(_home_soul_group "$cli" "$profile")"; then _solo="$_solo$(printf '  %b🧠 %s%b' "$__C_DIM" "$_grp" "$__C_RESET")"; fi
         if [ "$idx" -eq "$sel" ]; then
           # Selected → EXPANDED: name, engine tag, account, any reset time.
           printf '  %b %b %b%-12s%b %b[%s]%b %b%-22s%b  %b%s%b%s\n' \
@@ -1134,6 +1153,41 @@ _home_stay() {
 _home_toggle_solo() {
   local f; f="$(solo_marker_file "$1" "$2")"
   if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$(dirname "$f")"; : > "$f"; fi
+}
+
+# The memory dial on the selected TANK (the `m` key): point its long-term memory at
+# a shared "Soul" group, restore its own, or show the sharing state. Routes through
+# `clikae memory`, which resolves the per-engine strategy (claude fans its memory DIR
+# in; codex/agy get a pointer note). Runs in the NORMAL screen (it prompts for a group
+# name and may ask to confirm crossing accounts), so the caller wraps it in _home_stay.
+# The CLI face is `clikae memory`; this is the board's one-key door to the same verbs.
+_home_memory() {
+  local kind cli profile rest
+  IFS=$'\037' read -r kind cli profile rest <<EOF
+$1
+EOF
+  : "$rest"
+  [ "$kind" = "tank" ] || return 0
+  # `clikae memory` takes the engine name; for an agy tank the board's cli field is
+  # already the canonical "antigravity", which memory.sh maps internally — pass it through.
+  local opts choice
+  opts="$(printf '%s\n%s\n%s' "$T_MEM_OPT_SHARE" "$T_MEM_OPT_ISOLATE" "$T_MEM_OPT_STATUS")"
+  choice="$(_home_choose "$T_MEM_TITLE  ($(_home_engine_label "$cli")/$profile)" "$opts" "$T_MEM_OPT_SHARE")" || return 0
+  case "$choice" in
+    "$T_MEM_OPT_SHARE")
+      local group
+      printf '\n%s  %s/%s\n' "$T_MEM_SHARE_FOR" "$(_home_engine_label "$cli")" "$profile"
+      read -rp "  $T_MEM_GROUP_PROMPT" group || return 0
+      [ -n "$group" ] || { printf '  %s\n' "$T_MEM_NOGROUP"; return 0; }
+      "$CLIKAE_BIN" memory share "$group" "$cli" "$profile" || true
+      ;;
+    "$T_MEM_OPT_ISOLATE")
+      "$CLIKAE_BIN" memory isolate "$cli" "$profile" || true
+      ;;
+    "$T_MEM_OPT_STATUS")
+      "$CLIKAE_BIN" memory status "$cli" "$profile" || true
+      ;;
+  esac
 }
 
 _home_pick() {
@@ -1304,6 +1358,15 @@ _home_pick() {
           _home_toggle_solo "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
         fi
         ;;
+      m)
+        # Memory dial on the selected tank: share into a Soul group / isolate /
+        # status. Prompts + may confirm a cross-account merge, so it runs in the
+        # normal screen via _home_stay, then the board refreshes.
+        if [ "$sel_kind" = "tank" ]; then
+          _home_stay _home_memory "$sel_row"
+          items="$(_home_items)"; dry="$(_home_dry_set)"
+        fi
+        ;;
     esac
   done
 
@@ -1364,7 +1427,8 @@ legend):
   [ / ]   move the tank up/down (the board IS your burn order)
   r   relay this shell's session into it     x   open it incognito (--ephemeral)
   n   new tank                a   rename the tank (carries alias + login)
-  d   delete a tank (asks)    /   filter     A   autonomy (BETA)   l   language
+  d   delete a tank (asks)    s   solo (out of the fleet)   m   memory (Soul)
+  /   filter                  A   autonomy (BETA)           l   language
   q/Esc  quit
 
 On a Continue row, Enter offers a small menu: resume that exact session, or just

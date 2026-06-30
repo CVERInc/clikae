@@ -44,6 +44,33 @@ load '../helpers'
   [[ "$output" == *"solo"* ]] || false        # the walled-off tank is marked
 }
 
+@test "the board badges a tank that shares a Soul group (🧠 <group>)" {
+  clikae init claude work
+  clikae init claude alt
+  clikae memory share team claude work -y
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🧠 team"* ]] || false   # the shared brain is visible on the board
+  # the un-shared sibling carries no badge
+  [[ "$(printf '%s\n' "$output" | grep -E '^\s*[●○].*\balt\b')" != *"🧠"* ]] || false
+}
+
+@test "_home_soul_group: a member reads its group, a non-member reads nothing" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  mkdir -p "$CLIKAE_HOME/souls/team"
+  printf 'claude/work\thi@x\t/store\n' > "$CLIKAE_HOME/souls/team/members"
+  run _home_soul_group claude work
+  [ "$status" -eq 0 ]
+  [ "$output" = "team" ]
+  run _home_soul_group claude other
+  [ "$status" -ne 0 ]
+}
+
 @test "dashboard is reachable by name and via --help" {
   run clikae dashboard
   [ "$status" -eq 0 ]
