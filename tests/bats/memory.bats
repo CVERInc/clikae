@@ -41,6 +41,24 @@ _seed_memory() {
   [[ "$output" == *"shared brain v1"* ]] || false
 }
 
+@test "memory share: seeds the Soul PROTOCOL.md without clobbering the copied memory" {
+  clikae init claude a
+  _seed_memory a MEMORY.md "the brain"
+  clikae memory share me claude a
+  local store; store="$CLIKAE_HOME/souls/me/memory"
+  [ -f "$store/PROTOCOL.md" ]                                # operating manual seeded
+  [ -f "$store/MEMORY.md" ]                                  # 🔴 real memory STILL copied (ordering regression)
+  run cat "$store/MEMORY.md"; [[ "$output" == *"the brain"* ]] || false
+  run cat "$store/PROTOCOL.md"; [[ "$output" == *"read & write this memory"* ]] || false
+}
+
+@test "memory share (codex): the pointer note tells the engine to read PROTOCOL.md" {
+  clikae init codex H
+  clikae memory share me codex H
+  run cat "$CLIKAE_HOME/profiles/codex/H/AGENTS.md"
+  [[ "$output" == *"PROTOCOL.md"* ]] || false
+}
+
 @test "memory share: two tanks (same account) end up on ONE shared brain" {
   clikae init claude a; _set_account a you@example.com
   clikae init claude b; _set_account b you@example.com

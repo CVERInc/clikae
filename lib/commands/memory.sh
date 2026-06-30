@@ -33,6 +33,54 @@ souls_root() { printf '%s/souls\n' "$CLIKAE_HOME"; }
 # codex and agy all point at the same markdown brain (no per-engine, per-dir forks).
 _memory_store_path() { printf '%s/%s/memory\n' "$(souls_root)" "$1"; }
 
+# Seed the Soul's operating manual into the store (write-back hygiene). claude
+# learns the memory protocol from its system prompt, but codex/agy only get the
+# pointer note's gist — so the full read+write rules live IN the store, where any
+# engine reading the Soul (and any human browsing it) finds them. Idempotent: only
+# written if absent, never clobbers a hand-edited one.
+_memory_seed_protocol() {
+  local store="$1" f="$1/PROTOCOL.md"
+  [ -e "$f" ] && return 0
+  mkdir -p "$store"
+  cat > "$f" <<'PROTO'
+# Soul — how to read & write this memory
+
+> This file is managed by `clikae memory` (docs/memory.md). It is the operating
+> manual for the shared markdown "Soul" in this directory. Several of one person's
+> own AI tanks — possibly across engines (Claude / Codex / Antigravity) — read and
+> write these same files. Follow these rules so the Soul stays coherent.
+
+## Reading
+- `MEMORY.md` is the index — one line per memory, grouped by area. Read it first,
+  then open only the topic files relevant to the task. Don't load everything.
+- Each topic file holds ONE fact, with YAML frontmatter (`name`, `description`,
+  `metadata.type` = user | feedback | project | reference).
+- 🔴 A memory records what was TRUE WHEN WRITTEN, not necessarily now. If a file
+  names a path/flag/version, verify against the real code before relying on it.
+- 🔴 Some files record a past *incident* or a *correction* (e.g. a mis-attribution
+  that was fixed). Read the file's own framing + its `description`; do not take an
+  incident record as a current fact about the user.
+
+## Writing back
+- When you learn a durable fact about the user or the work, persist it: append or
+  update ONE topic file (one fact per file), then add/update its one-line pointer
+  in `MEMORY.md`. Keep index lines short (≤ ~200 chars).
+- Prefer UPDATING an existing file over creating a near-duplicate. Delete a file
+  that turns out to be wrong (and its index line).
+- Concurrency: another tank may be writing too. Touch only the files you're
+  changing; never rewrite the whole `MEMORY.md` — append/edit your own line. Keep
+  one fact per file so two writers rarely collide on the same file.
+- Don't record what the repo already captures (code structure, git history) or what
+  only matters to one conversation.
+
+## Optional Soul frontmatter (clikae)
+- `metadata.scope` = share | isolate | evaporate — whether this fact may travel.
+- `metadata.project` = an area slug — groups the entry in the index.
+- `metadata.accounts` = a share-group allowlist. 🔴 Account isolation is sacred:
+  never copy a fact into a group it isn't allowed in.
+PROTO
+}
+
 _memory_members_file() { printf '%s/%s/members\n' "$(souls_root)" "$1"; }
 
 # Drop a tank (field 1 == <engine>/<tank>) from a group's member file, in place.
@@ -159,7 +207,8 @@ _memory_ptr_write() {
     printf '## Your long-term memory (Soul)\n\n'
     printf 'Your durable memory lives at:\n\n    %s\n\n' "$store"
     printf 'Read `%s/MEMORY.md` first — it indexes everything. It is plain markdown you\n' "$store"
-    printf 'own and share with your other engines. Follow the memory protocol: pull in the\n'
+    printf 'own and share with your other engines. The full read + write-back rules are in\n'
+    printf '`%s/PROTOCOL.md` — read it before writing anything back. In short: pull in the\n' "$store"
     printf 'files relevant to the task, and when you learn a durable fact about the user or\n'
     printf 'project, append/update a file there (one fact per file) and add a one-line\n'
     printf 'pointer to MEMORY.md. This is shared continuity & context across engines — not a\n'
@@ -276,6 +325,10 @@ _memory_share() {
     # ideally already seeded by a claude share. An empty store is fine (it grows).
     _memory_ptr_write "$MEM_PTR" "$group" "$store"
   fi
+
+  # Seed the Soul's read/write-back manual (after any symlink seed, so the empty-
+  # store check above still copies the tank's real memory). Idempotent.
+  _memory_seed_protocol "$store"
 
   # Record membership (dedup by engine/tank).
   mkdir -p "$(dirname "$members")"

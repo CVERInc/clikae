@@ -46,6 +46,12 @@ existing memory protocol (a `MEMORY.md` index + one fact per topic file). There
 is **no dependency on Obsidian or any viewer**; Obsidian is one optional reader
 of the same files.
 
+The store also carries a `PROTOCOL.md` — the Soul's operating manual (how to read
+and, crucially, how to *write back* without drift: one fact per file, append don't
+rewrite, mark incident/correction records, respect account isolation). claude knows
+this from its system prompt; codex/agy learn it by reading `PROTOCOL.md` (the pointer
+note sends them there). It's seeded on first `share` and never clobbered.
+
 claude's file-memory is already near-neutral markdown, so claude is the **anchor
 format**: claude reads its own memory dir natively (zero translation). codex keeps
 its *own* memory opaquely (sqlite) but reads markdown **instructions** (`AGENTS.md`),
