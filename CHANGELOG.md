@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-30
+
 ### Changed — agy tank switch logs out instead of carrying tokens
 
 `clikae agy <tank>` now **logs agy out** on switch (clears the one machine-wide
@@ -41,7 +43,27 @@ brain. Swap the engine, keep the soul.
   COPY; a joiner's own memory is stashed aside (reversible via `isolate`).
 
 Convention + schema in `docs/memory.md`; design rationale in `docs/grammar.md` §10.
-(Headed for the 0.9.0 release once write-back hygiene and the per-entry scope dial land.)
+The per-entry scope dial + conduct/burn integration are the dogfood-gated Phase 4 —
+parked until the shared Soul has been lived in, not in this release.
+
+### Added — `clikae solo` (a tank out of the fleet)
+
+`clikae solo [<engine> <tank>] [reason | --off]` marks a tank **standalone**: it's
+skipped by `burn`/`watch` rotation and `to`/relay, and `memory share` refuses it. This
+walls off a bot/persona tank that lives on **your own account** (so the cross-account
+guard can't see it) and must never be commingled — for the maintainer, the gaido bot
+tank. Bare `clikae solo` lists the solo tanks. Marker: `<tank>/clikae-meta/solo`.
+
+### Changed — the home board is an interactive cockpit
+
+`clikae` with no args on a terminal is now a full launcher, not just a listing. New
+verbs on the selected tank: **`s`** toggles solo, **`m`** opens the memory (Soul) dial
+(share / isolate / status) — alongside the existing open / relay / resume / incognito /
+new / rename / delete / reorder / filter. The board was also redesigned for clarity:
+**three sections (Tanks / Solo / Resume)** where a section is the badge (solo tanks live
+in their own block, no per-row icon), **aligned columns** (name · engine · account,
+CJK-safe), Resume rows on the same grid, and **no emoji / no "current shell" marker** —
+with many tanks open at once, the latter is noise.
 
 ## [0.8.1] — 2026-06-30
 
