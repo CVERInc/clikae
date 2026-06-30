@@ -52,3 +52,14 @@ target_start_with_prompt() {
 # watchers must `tail -F` it (follow by name across rotation), not `tail -f` an
 # inode. Single-account vendor → no profile dir, so this takes no argument.
 target_limit_log_path() { echo "$HOME/.gemini/antigravity-cli/cli.log"; }
+
+# target_memory_pointer_path <tank-dir>
+# Where to drop a "your long-term memory (Soul) lives at <path>" pointer for
+# `clikae memory share` (docs/memory.md). agy keeps its OWN memory opaquely
+# (antigravity-cli/{knowledge,brain,implicit/*.pb}) — nothing markdown to symlink —
+# but it reads `~/.gemini/GEMINI.md` as global rules (Antigravity v1.20.3+ native
+# AGENTS.md/GEMINI.md support; GEMINI.md is the highest-priority global rules file).
+# `~/.gemini` is clikae's per-tank symlink, so <tank-dir>/GEMINI.md IS that tank's
+# global rules — the agy analogue of codex's $CODEX_HOME/AGENTS.md. Defining this
+# marks the target as pointer-strategy for `clikae memory`.
+target_memory_pointer_path() { printf '%s\n' "$1/GEMINI.md"; }

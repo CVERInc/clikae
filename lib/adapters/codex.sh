@@ -15,6 +15,18 @@ adapter_meta_description() { echo "OpenAI Codex CLI (auth + config + history in 
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @openai/codex"; }
 
+# Optional hook: where to drop a "your long-term memory (Soul) lives at <path>"
+# pointer for `clikae memory share` (docs/memory.md). codex keeps its OWN memory
+# in opaque sqlite, NOT a markdown dir we can symlink — but it reads `AGENTS.md`
+# as instructions, and CODEX_HOME-scoped `$CODEX_HOME/AGENTS.md` is the global
+# (per-tank, not per-repo) layer. So we point codex at the shared markdown Soul
+# there. Defining THIS hook (instead of adapter_memory_dir) marks an engine as
+# pointer-strategy: it reads/writes the shared Soul via the memory protocol
+# rather than via a memory-dir symlink.
+adapter_memory_pointer_path() {
+  printf '%s\n' "$1/AGENTS.md"
+}
+
 # Nothing to seed — codex initialises CODEX_HOME on first run / login.
 adapter_init() {
   local profile_dir="$1"

@@ -37,6 +37,7 @@ Make & manage tanks:
   remove <engine> <tank>           remove a tank (dir, alias, .app)
   rename <engine> <old> <new>      rename a tank (login carried over)
   git-id <engine> <tank>           set a tank's git commit identity (--name --email)
+  memory <share|isolate|status>    share one markdown "brain" across your tanks (claude·codex·agy)
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
 
 Keep burning when a tank runs dry:

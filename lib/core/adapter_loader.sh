@@ -166,7 +166,7 @@ load_adapter() {
            adapter_export_env adapter_run adapter_init \
            adapter_relay adapter_transcript_path adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
-           adapter_memory_dir adapter_install_hint adapter_burn_flags \
+           adapter_memory_dir adapter_memory_pointer_path adapter_install_hint adapter_burn_flags \
            adapter_audit_flags \
            adapter_find_session adapter_session_cwd adapter_recent_sessions \
            adapter_resume_args adapter_session_meta adapter_list_sessions \

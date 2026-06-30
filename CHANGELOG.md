@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `clikae memory` (the Soul layer)
+
+A tank holds more than fuel — it holds the engine's long-term memory. `clikae memory
+share|isolate|status` points that memory at ONE vendor-neutral markdown store (a
+"Soul") so several of your own tanks — **across engines** — read and write a single
+brain. Swap the engine, keep the soul.
+
+- **One canonical Soul** per group: `$CLIKAE_HOME/souls/<group>/memory`, plain
+  markdown you own.
+- **claude** fans its memory dir into the store with a symlink (the persistent
+  fan-in sibling of `--ephemeral`'s fan-out).
+- **codex** and **agy** keep their own memory opaquely, so they get a fenced pointer
+  note in the markdown rules file each reads on start (`AGENTS.md` for codex,
+  `GEMINI.md` for agy) and read/write the same Soul via the memory protocol — no
+  translator, no drift (it's literally the same file).
+- 🔴 Sharing is opt-in and per-tank; clikae never auto-crosses accounts. Crossing
+  your own accounts is announced (`--yes` skips the prompt). The store is seeded by
+  COPY; a joiner's own memory is stashed aside (reversible via `isolate`).
+
+Convention + schema in `docs/memory.md`; design rationale in `docs/grammar.md` §10.
+(Headed for the 0.9.0 release once write-back hygiene and the per-entry scope dial land.)
+
 ## [0.8.1] — 2026-06-30
 
 Fixes the update notice going silent. A transient failure when fetching the latest

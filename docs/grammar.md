@@ -102,8 +102,9 @@ surfaced at runtime, never memorised:
 > transcript** — the thread continues — but NOT the engine's *long-term memory*,
 > which lives inside the tank dir (e.g. claude's file-memory under
 > `CLAUDE_CONFIG_DIR`) and stays with the source tank. So "resume" means the
-> conversation, not the brain. Carrying/sharing memory across tanks is a separate,
-> future opt-in (see the link/overlay idea in §10). Don't claim "context intact".
+> conversation, not the brain. Carrying/sharing the *brain* across tanks/engines is
+> a separate opt-in — `clikae memory share` (§3.3, the §10 link/overlay idea, now
+> shipped for claude/codex/agy). Don't claim "context intact".
 
 `to`'s argument resolves **engine name first, then a tank of the current
 engine** (stateless and predictable: a known engine name always crosses to it).
@@ -121,6 +122,7 @@ fuel words forced on them.
 | `clikae remove <engine> <tank>` | Remove a tank (dir, alias, .app). |
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
 | `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22 / HANDOFF §13). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
+| `clikae memory <share\|isolate\|status> [<engine> <tank>]` | The **memory dial** (§10.1, docs/memory.md). `share <group>` points a tank's long-term memory at ONE vendor-neutral markdown store (`souls/<group>/memory`, a "Soul") so several of *your own* tanks — **across engines** — read/write the same brain; `isolate` restores a tank's own memory; `status` shows the share state. Two strategies by what the engine exposes: **claude** fans its memory DIR into the store (symlink, per-`$PWD`); **codex** gets a fenced pointer note in its `AGENTS.md` and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 opt-in and per-tank — clikae never auto-crosses accounts; crossing your own accounts is announced (`--yes` skips the prompt). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of `--ephemeral`'s fan-out. agy points the same way via `~/.gemini/GEMINI.md`. |
 | `clikae tanks` (alias: `clikae list` / `ls`) | List every tank, with the logged-in account. `tanks` is canonical — a **noun query**, like the existing `adapters` command, not a coined verb. `list`/`ls` stay for convention and for the GUI's `list --json`. |
 | `clikae status [cli]` | Which tank each CLI is on **in this shell**. |
 | `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
@@ -140,7 +142,7 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `auto`, `burn`, `conduct`, `rename`, `git-id`, `migrate`, `env`, `app`, `alias`,
+   `watch`, `auto`, `burn`, `conduct`, `rename`, `git-id`, `memory`, `migrate`, `env`, `app`, `alias`,
    `lang`, `run`, `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`,
    `demo`, `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases
    and `-h/--help/-v/--version`) → run that command. (`git-id` routes to the
