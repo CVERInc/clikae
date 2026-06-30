@@ -140,6 +140,17 @@ _seed_email() { # <engine> <profile> <email>
   [ -z "$(next_tank claude a)" ]
 }
 
+@test "next_tank skips a SOLO tank (it's out of the fleet rotation)" {
+  _src
+  clikae init claude a
+  clikae init claude b
+  clikae init claude c
+  clikae solo claude b                                   # b is standalone
+  printf 'claude/a\nclaude/b\nclaude/c\n' > "$CLIKAE_HOME/order"
+  # Ring after a is b (solo → skipped) then c. So the carry target is c, not b.
+  [ "$(next_tank claude a)" = "$(printf 'claude\tc')" ]
+}
+
 # --- capture-time annotation (codex/agy snapshots read honestly) ---------------
 
 @test "dry_store_epoch: returns the recorded epoch" {

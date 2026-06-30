@@ -96,6 +96,7 @@ _burn_next_same_engine() {
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
+    tank_is_solo "$cli" "$t" && continue   # solo tanks are out of the fleet — never an auto-reroute target
     tdir="$(profile_dir "$cli" "$t")"
     if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
        && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then
