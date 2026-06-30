@@ -267,7 +267,10 @@ _agy_log() { # <line>
   # ai-title, naming the engine/tank to resume.
   [[ "$output" == *"Resume"* ]] || false
   [[ "$output" == *"Resume me please"* ]] || false
-  [[ "$output" == *"claude/a"* ]] || false
+  # The resume row uses the same columns as a tank row: name + engine, then title.
+  local rrow; rrow="$(printf '%s\n' "$output" | grep 'Resume me please')"
+  [[ "$rrow" == *"a"* ]] || false
+  [[ "$rrow" == *"claude"* ]] || false
 }
 
 @test "the board shows NO continue headline in a dir with no session" {

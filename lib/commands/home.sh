@@ -424,7 +424,10 @@ _home_render_static() {
         # ai-title and a one-line recap when present.
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
-        printf '    %b %b%s/%s%b · %b"%s"%b\n' "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 64)" "$__C_RESET"
+        # Same columns as a Tank row — dot · name · engine — then the session title
+        # where a tank's account would sit, so the two sections read as one grid.
+        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
+        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -1030,8 +1033,10 @@ _home_pick_draw_body() {
         # using now (●), else ○. Age is the hover fallback when there's no recap.
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         rage="${active#* }"
+        # Same columns as a Tank row — dot · name · engine — then the session title.
+        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s/%s%b · "%s"\n' "$mark" "$rdot" "$__C_BOLD" "$cli" "$profile" "$__C_RESET" "$(_home_trunc "$label" 64)"
+          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 50)" "$__C_RESET"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -1039,7 +1044,7 @@ _home_pick_draw_body() {
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %b%s/%s · "%s"%b\n' "$mark" "$rdot" "$__C_DIM" "$cli" "$profile" "$(_home_trunc "$label" 64)" "$__C_RESET"
+          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 50)" "$__C_RESET"
         fi
         ;;
       tank)
