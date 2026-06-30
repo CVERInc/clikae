@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `?` help overlay aligned its descriptions by byte count**, so rows whose keys
+  hold multibyte glyphs (`↑ ↓  j k  Tab`, `⏎ Enter`) sat crooked. The description
+  column is now placed at an absolute terminal column, so every row lines up.
+- **The `clikae resume` picker now uses the same columns as the home board** — dot ·
+  name · engine · "title" (age) — instead of `engine/tank · "title"`, so the two views
+  read as one grid. The expanded row still shows `dir:` + the full session `id:`.
+
 ## [0.9.0] — 2026-06-30
 
 ### Changed — agy tank switch logs out instead of carrying tokens

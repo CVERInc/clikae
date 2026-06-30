@@ -940,8 +940,11 @@ EOF
   return 0
 }
 
-# _home_help_row <keys> <description> — one aligned line in the help overlay.
-_home_help_row() { printf '    %b%-16s%b %s\n' "$__C_BOLD" "$1" "$__C_RESET" "$2"; }
+# _home_help_row <keys> <description> — one aligned line in the help overlay. The
+# description is placed at an ABSOLUTE column (\033[24G) rather than padding the key
+# with %-16s: keys like "↑ ↓  j k  Tab" / "⏎ Enter" contain multibyte glyphs, and
+# printf field width counts bytes, not display columns, so %-16s misaligns them.
+_home_help_row() { printf '    %b%s%b\033[24G%s\n' "$__C_BOLD" "$1" "$__C_RESET" "$2"; }
 
 # The `?` key: a full, localised key legend drawn over the board (alt screen is
 # already active). Any key dismisses it; the loop then repaints the board.

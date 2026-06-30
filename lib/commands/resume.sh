@@ -171,13 +171,15 @@ _resume_pick_draw() {
     fi
     if [ "$tank" = "$active_p" ]; then rdot="${__C_GREEN}●${__C_RESET}"; else rdot="${__C_DIM}○${__C_RESET}"; fi
 
+    # Same columns as the home board — dot · name · engine — then the title and age.
+    local _rnm _ren; _rnm="$(_home_lpad "$tank" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$engine")" 8)"
     if [ "$idx" -eq "$sel" ]; then
       _lazy_parse_cwd "$s_idx"
       cwd="${cached_cwd[s_idx]}"
-      printf '    %b %b %b%s/%s%b · "%s"  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$engine" "$tank" "$__C_RESET" "$(_home_trunc "$label" 64)" "$__C_DIM" "$rage" "$__C_RESET"
+      printf '    %b %b %b%s%b %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
       printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "${cwd:-?}" "$sid" "$T_ENTER_RESUME" "$__C_RESET"
     else
-      printf '    %b %b %b%s/%s · "%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_DIM" "$engine" "$tank" "$(_home_trunc "$label" 64)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
+      printf '    %b %b %s %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
     fi
   done
 
