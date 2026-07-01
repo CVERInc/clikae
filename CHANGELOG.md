@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-07-01
+
+### Fixed
+
+- **A claude tank no longer isolates away your personal skills/commands.** `CLAUDE_CONFIG_DIR`
+  isolation was meant for identity state (auth token, transcript history, keychain slot), but
+  Claude Code also reads personal skills and slash commands from
+  `$CLAUDE_CONFIG_DIR/{skills,commands}` — so a freshly created tank silently couldn't see
+  anything under `~/.claude/skills` or `~/.claude/commands`. `clikae init` and every `clikae
+  claude <tank>` switch now symlink `skills/` and `commands/` from `~/.claude` into the tank,
+  share-by-default, unless the tank already has its own real entry there (a deliberate
+  per-tank override, never touched). Idempotent, so tanks created before this fix self-heal
+  on next use.
+
 ## [0.9.1] — 2026-06-30
 
 ### Fixed
