@@ -64,3 +64,30 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [ -f "$CLIKAE_HOME/profiles/kubectl/dev/config" ]
 }
+
+@test "init symlinks shared personal skills/commands into a new claude tank" {
+  mkdir -p "$HOME/.claude/skills/recast-fidelity" "$HOME/.claude/commands"
+  touch "$HOME/.claude/skills/recast-fidelity/SKILL.md"
+  run clikae init claude work
+  [ "$status" -eq 0 ]
+  [ -L "$CLIKAE_HOME/profiles/claude/work/skills" ]
+  [ -e "$CLIKAE_HOME/profiles/claude/work/skills/recast-fidelity/SKILL.md" ]
+  [ -L "$CLIKAE_HOME/profiles/claude/work/commands" ]
+}
+
+@test "init does not create a skills symlink when ~/.claude/skills doesn't exist" {
+  run clikae init claude work
+  [ "$status" -eq 0 ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/work/skills" ]
+}
+
+@test "init never clobbers a tank's own pre-existing skills dir" {
+  mkdir -p "$HOME/.claude/skills"
+  local d="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$d/skills"
+  touch "$d/skills/only-mine.md"
+  run bash -c "source '$CLIKAE_TEST_ROOT/lib/adapters/claude.sh'; _claude_link_shared_asset '$d' skills"
+  [ "$status" -eq 0 ]
+  [ ! -L "$d/skills" ]
+  [ -f "$d/skills/only-mine.md" ]
+}

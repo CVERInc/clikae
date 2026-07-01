@@ -10,11 +10,39 @@ adapter_meta_description() { echo "Anthropic Claude Code CLI (credentials + sett
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @anthropic-ai/claude-code"; }
 
-# adapter_init is optional. For Claude there's nothing to seed — the CLI itself
-# initialises the directory on first login.
+# Per-tank CLAUDE_CONFIG_DIR isolation is meant for IDENTITY state (auth token,
+# transcript history, keychain slot) — it was never meant to also isolate
+# ASSETS the user hand-authors once and expects everywhere (personal skills,
+# slash commands). Claude Code reads both of those from
+# $CLAUDE_CONFIG_DIR/{skills,commands}, so a freshly-created tank silently
+# couldn't see anything under ~/.claude/skills or ~/.claude/commands — a real
+# bug hit 2026-07-01 (tank saw none of the user's personal skills). Fix:
+# share-by-default via symlink, but only when the tank has NOT already got its
+# own real directory there — an existing real dir (or a symlink the user made
+# themselves) is a deliberate override and must never be touched.
+#
+# Idempotent and safe to call on every switch (see adapter_run below), so
+# tanks created before this fix self-heal the next time they're used — no new
+# command for the user to learn or remember to run.
+_claude_link_shared_asset() {
+  local profile_dir="$1" name="$2"
+  local src="$HOME/.claude/$name"
+  # Nothing to share, or this tank's own config dir IS ~/.claude (no isolation
+  # in play) — leave alone either way.
+  [ -d "$src" ] || return 0
+  [ "$profile_dir" = "$HOME/.claude" ] && return 0
+  # Existing entry (real dir or user's own symlink) = an intentional
+  # per-tank override. Never clobber it.
+  if [ -e "$profile_dir/$name" ] || [ -L "$profile_dir/$name" ]; then
+    return 0
+  fi
+  ln -s "$src" "$profile_dir/$name" 2>/dev/null || true
+}
+
 adapter_init() {
   local profile_dir="$1"
-  : "$profile_dir"  # silence shellcheck
+  _claude_link_shared_asset "$profile_dir" "skills"
+  _claude_link_shared_asset "$profile_dir" "commands"
 }
 
 # Print KEY=VALUE pairs (one per line) to export when activating this profile.
@@ -26,6 +54,9 @@ adapter_export_env() {
 # Exec the CLI with this profile's env applied.
 adapter_run() {
   local profile_dir="$1"; shift
+  # Self-heal tanks created before shared-asset linking existed.
+  _claude_link_shared_asset "$profile_dir" "skills"
+  _claude_link_shared_asset "$profile_dir" "commands"
   CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$@"
 }
 
