@@ -1,11 +1,11 @@
-# HANDOFF — world-class ("世界第一讚") gaps
+# HANDOFF — world-class gaps
 
 > ✅ **HISTORICAL — punch-list fully cleared** (P1s in v0.5.9, P2 in v0.5.12). This file
 > is kept as a record of the 2026-06-05 quality audit; there is **nothing left to do
 > here**. For live project state see `CHANGELOG.md` — do not read this as an open list.
 
 Focused continuation handoff for a fresh agent. Scope: the remaining gaps found in
-the adversarial quality audit of **2026-06-05** (CVER "世界第一讚" standard, 7-dim
+the adversarial quality audit of **2026-06-05** (CVER world-class standard, 7-dim
 quality ruler). Read `HANDOFF.md` first for the project itself; this file only
 covers what's left to make clikae pass the bar.
 
@@ -22,9 +22,9 @@ covers what's left to make clikae pass the bar.
 
 ## Already verified — do NOT re-investigate
 
-- **`burn` "燒爆" — codex-side isolation is solid; the claude-side reroute was FIXED
+- **`burn` "burnout" — codex-side isolation is solid; the claude-side reroute was FIXED
   in v0.5.10 (don't re-clear it the old way).** The 2026-06-05 log first declared the
-  whole 燒爆 P0 fixed after testing **codex only** — a false clear. The codex case is
+  whole burnout P0 fixed after testing **codex only** — a false clear. The codex case is
   genuinely safe (env export sandboxed in a `$(...)` subshell; codex adapter exports
   only `CODEX_HOME`, zero claude vars). BUT `burn **claude**`'s same-engine reserve
   includes the tank an interactive session is on, so it could reroute a headless job
@@ -63,8 +63,8 @@ covers what's left to make clikae pass the bar.
 > read-only (the "bare clikae changes nothing on disk" guarantee holds — verified by
 > test). A missing version file = the original un-versioned layout = v1 (migrates
 > cleanly to a future v2). A newer-than-binary version warns instead of downgrading.
-> Tests in `tests/bats/state-version.bats`. Kept 克制 — one file + one runner, no
-> framework. **clikae now clears the 世界第一讚 bar** (the original writeup follows).
+> Tests in `tests/bats/state-version.bats`. Kept minimalist — one file + one runner, no
+> framework. **clikae now clears the world-class bar** (the original writeup follows).
 
 ### (original) P2 — state files have no schema version / migration (dim ⑤, portfolio-wide weak)
 - **Where:** everything under `$CLIKAE_HOME/` — `profiles/`, `order`, `dry/<engine>/<tank>`
@@ -78,17 +78,17 @@ covers what's left to make clikae pass the bar.
   1. Write a `$CLIKAE_HOME/version` file and read it on startup.
   2. A migration hook that runs when the on-disk version is older than the binary.
   3. Reserve a version prefix in the `dry_store` line format so it can evolve.
-  - Keep it 克制: don't over-engineer a migration framework; one version file + one
+  - Keep it minimalist: don't over-engineer a migration framework; one version file + one
     hook is the world-class-correct minimum.
 
 ## Reference
 
 - Full audit + 7-dim scorecard + reusable self-check method:
-  Obsidian vault → `Notes/世界第一讚自檢（bleedblend · clikae）.md`
-  and the standard itself → `Notes/世界第一讚（CVER 品質標準）.md`.
+  Obsidian vault → `Notes/world-class-self-check-bleedblend-clikae.md`
+  and the standard itself → `Notes/world-class-CVER-quality-standards.md`.
 - clikae's strongest dims today are ⑥ restraint and ② root-cause; the weak ones WERE
   ⑤ (state versioning) and the P1 test-coverage gaps. **All cleared: the two P1s in
-  v0.5.9, P2 in v0.5.12. The punch-list is empty — clikae clears the 世界第一讚 bar.**
+  v0.5.9, P2 in v0.5.12. The punch-list is empty — clikae clears the world-class bar.**
   (A separate "implementation vs expectation" audit on 2026-06-05 also fixed a
   shipped `clikae watch` crash + doc drift in v0.5.11; see that CHANGELOG.)
 

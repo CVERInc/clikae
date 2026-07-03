@@ -173,7 +173,7 @@ snapshot than pretend it's a live countdown.
 
 ### v0.5.10 — 2026-06-05 · the *real* burn fix
 
-The footgun with a name (燒爆 — "burning yourself up"): `clikae burn claude <X>`
+The footgun with a name ("burning yourself up" / burnout): `clikae burn claude <X>`
 could reroute its dry-fallthrough onto the very tank an *interactive* session was
 live on, silently spending that conversation's quota. A 2026-06-05 dogfood had
 declared this fixed — after testing **codex only**. It wasn't; the claude path was
