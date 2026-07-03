@@ -363,12 +363,15 @@ _agy_log() { # <line>
   run _home_wrap_prefixed "$s" "  -> " 5 "" "" 0
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c .)" -ge 2 ]   # wrapped into multiple lines
-  local line maxdw=0 dw
+  local line maxdw=0 dw cols
+  cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+  [ "$cols" -ge 30 ] || cols=80
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     dw="$(_dwidth "$line")"; [ "$dw" -gt "$maxdw" ] && maxdw="$dw"
   done < <(printf '%s\n' "$output")
-  [ "$maxdw" -le 80 ]                                   # nothing overflows 80 cols
+  [ "$maxdw" -le "$cols" ]                                  # nothing overflows terminal columns
 }
 
 @test "agy tanks show the 'agy' name, not 'antigravity'" {
