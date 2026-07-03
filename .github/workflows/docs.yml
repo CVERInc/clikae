@@ -1,12 +1,13 @@
 name: docs
 
-# Docs-as-code: the repo adds ONE config file (kura.toml) + this workflow. The kurajs/pages action
-# reads kura.toml, renders docs/ into a searchable, agent-native static site, and deploys it to
-# GitHub Pages -> https://<owner>.github.io/clikae/
+# Docs-as-code: kura.toml + this workflow render docs/ into a searchable, agent-native static site
+# via the kurajs/pages action. clikae.cver.net is a custom domain (served at the root), so we build
+# with the action (deploy: false) and publish ourselves, carrying the gh-pages CNAME back in so the
+# custom domain survives every redeploy.
 
 on:
   push:
-    branches: [main, docs/kura-site]
+    branches: [main]
     paths:
       - "docs/**"
       - "kura.toml"
@@ -25,4 +26,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: kurajs/pages@v1
+
+      - id: kura
+        uses: kurajs/pages@v1
+        with:
+          deploy: false # publish below so we can preserve the custom-domain CNAME
+
+      - name: Preserve the custom-domain CNAME from gh-pages
+        run: |
+          git fetch origin gh-pages --depth 1 2>/dev/null || true
+          git show origin/gh-pages:CNAME > "${{ steps.kura.outputs.dir }}/CNAME" 2>/dev/null && echo "kept CNAME: $(cat "${{ steps.kura.outputs.dir }}/CNAME")" || echo "no CNAME on gh-pages"
+
+      - name: Publish to gh-pages (CNAME preserved)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ steps.kura.outputs.dir }}
+          commit_message: "docs: publish Kura site (${{ github.sha }})"
