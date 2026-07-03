@@ -9,7 +9,7 @@ name        = "clikae"
 description = "An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini & Antigravity account, each with a recap of where you left off."
 [deploy]
 target    = "github-pages"
-base_path = "/clikae"
+base_path = ""            # clikae.cver.net (custom domain) serves at the root, so no path prefix
 [content]
 sources = []
 [[nav.tabs]]
