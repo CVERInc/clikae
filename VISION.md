@@ -10,7 +10,7 @@ Open it and you land on _everything you were just burning through_: your recent
 sessions across every account and every engine, each with a one-line recap of
 where you left off. Pick one and pick up exactly where you were.
 
-> 你跟 AI CLI 工作的起點。一個畫面,跨帳號、跨引擎、帶 recap,挑一條接回。
+> *Your starting point for working with AI CLIs. One screen: cross-account, cross-engine, with recap; pick one to resume.*
 
 ## What clikae IS (and isn't)
 
@@ -33,7 +33,7 @@ just a helpful detail.
 ## Two faces
 
 1. **`clikae` — the bash CLI (MIT, the soul).** The continue list, recap, status
-   dots, relay, ephemeral (無痕). Pure bash, no daemons, auditable. This is the
+   dots, relay, ephemeral (incognito). Pure bash, no daemons, auditable. This is the
    product; everything else wraps it.
 2. **`clikae.app` — the native Mac front door (clioil family, later).** A thin
    launcher: click it → it opens your favourite terminal (Ghostty / iTerm2 /

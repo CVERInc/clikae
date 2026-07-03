@@ -32,7 +32,7 @@ Backward compatible: yes (additive — the current `-- <cmd…>` form keeps work
 
 ## 1. Problem statement
 
-`clikae burn` already nails its core bet (artifact verification + dry-reroute + cross-account offload). The remaining friction, surfaced directly in the dogfood writeup (`docs/dogfood-burn-tugtile.md` §摩擦 1), is that **the caller must hand-assemble each engine's headless invocation by hand**:
+`clikae burn` already nails its core bet (artifact verification + dry-reroute + cross-account offload). The remaining friction, surfaced directly in the dogfood writeup (`docs/dogfood-burn-tugtile.md` § friction 1), is that **the caller must hand-assemble each engine's headless invocation by hand**:
 
 ```bash
 # claude — must remember -p + the skip-permissions flag + --add-dir
@@ -44,7 +44,7 @@ clikae burn codex M --artifact /tmp/out.md \
   -- exec -C /tmp -s workspace-write "read /tmp/in.txt, write /tmp/out.md"
 ```
 
-To burn *anything* the first time you have to go read `claude --help` / `codex --help`, get the headless flags right, and quote a multi-line prompt inside `--`. Get it wrong and you fire a **空包彈** — the engine runs, exits 0, and writes nothing, which is exactly the failure mode burn was built to detect but which the user just hand-wrote into existence.
+To burn *anything* the first time you have to go read `claude --help` / `codex --help`, get the headless flags right, and quote a multi-line prompt inside `--`. Get it wrong and you fire a **blank cartridge** — the engine runs, exits 0, and writes nothing, which is exactly the failure mode burn was built to detect but which the user just hand-wrote into existence.
 
 The task burn is built for is almost always the same shape: *"here is a prompt, here is the file it should produce, run it headless with write access to this directory."* That intent should not require the user to know each CLI's flag dialect.
 
@@ -171,7 +171,7 @@ adapter_burn_flags <prompt> [add-dir…]   # optional hook; newline-per-argv; no
 
 ## 6. agy note
 
-agy stays rejected by burn (global single-account — `lib/commands/burn.sh` already errors early, and `docs/dogfood-burn-tugtile.md` 追記 explains why). It simply won't define `adapter_burn_flags`. The separate "let burn drive agy via serialize-and-restore" idea from that 追記 is **out of scope** for #24 and tracked elsewhere.
+agy stays rejected by burn (global single-account — `lib/commands/burn.sh` already errors early, and `docs/dogfood-burn-tugtile.md` postscript explains why). It simply won't define `adapter_burn_flags`. The separate "let burn drive agy via serialize-and-restore" idea from that postscript is **out of scope** for #24 and tracked elsewhere.
 
 ## 7. Implementation sketch (files / functions)
 

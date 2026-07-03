@@ -1,182 +1,156 @@
-# clikae 試玩指南 — 10 分鐘上手(v0.5.4)
+# clikae Playtest Guide — 10-Minute Get Started (v0.5.4)
 
-> 嗨 👋 謝謝你幫忙試 **clikae**。這份從零帶你到「啊我懂了」，大概 10 分鐘。
-> 假設你**完全沒用過 clikae**、甚至沒聽過，都沒關係，跟著做就好。
+> Hi 👋 Thank you for helping playtest **clikae**. This guide will take you from scratch to "Aha, I get it" in about 10 minutes.
+> Even if you've **never used clikae before** or even heard of it, that's fine—just follow along.
 >
-> 小提醒:clikae 預設是**英文介面**，所以這份指南裡凡是它畫面上會出現的字，我都用
-> 「英文(中文)」標出來，例如 **tank(油箱)**——括號裡是中文意思，前面是你在畫面上
-> 真正會看到的字。(想換成中文介面?第 5 步會教。)
+> Note: clikae defaults to an **English interface**. This guide highlights English UI labels with their explanations.
 
 ---
 
-## clikae 是什麼?(先看這段)
+## What is clikae? (Read this first)
 
-如果你會用 **Claude Code** 或 **Codex** 這類在終端機裡跑的 AI，而且你不只一個帳號
-(例如一個額度不夠，又辦了第二個)，或同時開好幾條做到一半的工作——你大概有過這種痛:
+If you use AI tools running in the terminal like **Claude Code** or **Codex**, and you have more than one account (e.g., because one ran dry, so you signed up for a second) or you are juggling multiple half-finished tasks at once, you've probably felt this pain:
 
-- 剛剛那條對話在哪個視窗?用的是哪個帳號?
-- 我到底做到哪了?
-- 算了，重開一個，再把專案從頭跟它講一遍……
+- *Which terminal window has that conversation? Which account was I using?*
+- *Where did I leave off?*
+- *Never mind, let me just start a new one and tell the AI about the project all over again...*
 
-**clikae 就是來收掉這個亂的。** 你只要打一個指令 `clikae`，就會看到一個畫面，上面是
-**你最近在做的所有事**——跨帳號、跨工具，最新的排在最上面，每一條還附一句「做到哪、
-下一步」。挑一條、按 Enter，直接回到你剛剛停下的地方。
+**clikae is here to fix this mess.** Just type a single command, `clikae`, and you'll see a dashboard showing **everything you've been working on recently**—cross-account, cross-tool, newest first, with a one-line recap of "where you left off + next step." Pick one, press Enter, and you are right back where you stopped.
 
-它很小、是純 bash 寫的(每一行你都看得懂、查得到)、MIT 開源、**不連網、不收集任何資料、
-沒有背景常駐程式**。我們把一個 AI 帳號/設定叫做一個 **tank(油箱)**——你可以有很多個，
-clikae 幫你在它們之間清楚地切換、接續。
+It's tiny, written in pure bash (every line is auditable), MIT open-source, **does not connect to the internet (zero-telemetry), has no background daemons, and stores no global state**. We call an AI account/config a **tank**—you can have many of them, and clikae helps you switch and resume between them cleanly.
 
 ---
 
-## 開始前要準備什麼
+## Prerequisites
 
-- 一台 **macOS 或 Linux**，裝好 [Homebrew](https://brew.sh)。
-- **至少一個你本來就在用的 AI 終端工具**，最可能是 **Claude Code**(指令是 `claude`)。
-  clikae 不會幫你裝它，也不會幫你登入——它是來幫你**整理你已經有的東西**。
-- 一個可以登入的 Claude 帳號(Pro 或 Max)。
-- 大約 10 分鐘。
+- A **macOS or Linux** machine with [Homebrew](https://brew.sh) installed.
+- **At least one AI CLI tool** you already use, most likely **Claude Code** (the `claude` command). clikae won't install the AI CLI or log in for you—it organizes what you already have.
+- A Claude account you can sign in to (Pro or Max).
+- About 10 minutes.
 
-> 已經是 clikae 舊版用戶?直接 `brew upgrade clikae`，然後跳到第 3 步。
+*Already a clikae user? Run `brew upgrade clikae` and skip to Step 3.*
 
 ---
 
-## 第 0 步:安裝(1 分鐘)
+## Step 0: Installation (1 min)
 
-打開終端機，貼上:
+Open your terminal and paste:
 
 ```bash
 brew install CVERInc/clikae/clikae
 clikae version
 ```
 
-第二行應該印出 `clikae 0.5.4`。看到就代表裝好了。
+The second command should print `clikae 0.5.4` (or newer). This means it's successfully installed.
 
 ---
 
-## 第 1 步:建你的第一個 tank(油箱)(2 分鐘)
+## Step 1: Initialize your first tank (2 mins)
 
-一個 **tank(油箱)= 一個帳號/設定**，各自獨立存放，帳號之間絕不會互相污染。
-名字**用你喜歡的就好**——底下我用 `myname` 當例子，你換成任何你看得懂的名字
-(例如自己的暱稱、帳號用途都行)。先幫 Claude Code 建一個、再打開它登入:
+A **tank** is one account/config, isolated in its own directory so configurations never collide. The name can be anything you like—I'll use `myname` as an example. Let's create one for Claude Code, then open it to log in:
 
 ```bash
 clikae init claude myname
 clikae claude myname
 ```
 
-第一行建一個你命名的 tank(油箱);第二行用它打開 Claude Code。第一次開會帶你走
-Claude 平常的瀏覽器登入流程。登入完，**離開 Claude**(打 `/exit` 或按 Ctrl-C)。
-你就有一個登入好的 tank(油箱)了 🎉
+The first command initializes the tank; the second opens Claude Code pointing to it. The first launch will guide you through Claude's normal browser login flow. Once logged in, **exit Claude** (type `/exit` or press Ctrl-C).
+You now have a logged-in tank! 🎉
 
-想看「跨帳號」的效果?再建一個、用**另一個帳號**登入(名字一樣隨你喜歡):
+To see the "cross-account" effect, initialize a second tank with a different account (use any name you like):
 
 ```bash
-clikae init claude 另一個你喜歡的名字
-clikae claude 另一個你喜歡的名字
+clikae init claude anothername
+clikae claude anothername
 ```
 
 ---
 
-## 第 2 步:留下幾條「之後想接回」的線(2 分鐘)
+## Step 2: Leave some threads to resume (2 mins)
 
-板子要「你真的做過事」才會精彩。隨便挑一個真實的專案資料夾，跟 Claude 聊幾句、
-請它做點什麼，然後離開(把 `myname` 換成你剛剛取的名字):
+The board needs some activity to look interesting. Go to any project folder, converse with Claude, ask it to do something, and then exit:
 
 ```bash
-cd ~/某個專案資料夾
+cd ~/some-project-folder
 clikae claude myname
-# 跟 Claude 工作一下、問它幾個問題，然後 /exit 離開
+# Do a bit of work with Claude, ask a couple of questions, then /exit to leave
 ```
 
-這樣做個一兩次(同一個資料夾也行)。你聊得越真實，之後的摘要就越好看。
+Do this once or twice (even in the same folder). The more realistic your conversation, the better the recaps will be.
 
 ---
 
-## 第 3 步:打開「板子」(重頭戲 🌟)
+## Step 3: Open the Board (The main event 🌟)
 
-在一個你剛剛用過 Claude 的資料夾裡，只打一個字:
+In a folder where you recently ran Claude, type:
 
 ```bash
 clikae
 ```
 
-這個畫面就是「板子」。它分兩區:
+This is the "board". It has two sections:
 
-**上面 Continue(續上次)** —— 這個資料夾最近的對話，最新的在最上面，每條有個標題。
-把游標停在某一條，它會展開一行「做到哪、下一步」的摘要。
+**Top: Continue** — Recent conversations in this folder, newest first. Hovering over a row expands its one-line recap ("where you left off + next step").
 
-**下面 Tanks(油箱)** —— 你所有的帳號，排成一個由上到下的清單(這個順序就是 clikae
-之後沒油時自動接續的順序)。
+**Bottom: Tanks** — All your accounts, listed in a single burn order (the priority queue clikae uses to automatically route headless jobs when one runs dry).
 
-每一列名字前面有一顆**燈號點**，告訴你這個帳號的油況(也就是 `?` 說明裡的
-**Dots = fuel(燈號 = 油況)**):
+Each tank features a **status dot** indicating its quota status:
 
-- 🟢 **綠點 = ready(可燒)** —— 還有額度，現在就能用。
-- 🔴 **紅點 = dry / over limit(乾 / 超限)** —— 額度用完了;旁邊會顯示大概多久後恢復。
-- 🟡 **黃點 = weekly %(本週用量)** —— 本週用量偏高的提醒(這是 **BETA 實驗功能**,
-  之後再說)。
-- ○ **空心圈 = no reading(無讀數)** —— clikae 讀不到這個帳號的狀態(有些工具沒辦法
-  從本機判斷，例如 codex，那就誠實留空，不亂猜)。
+- 🟢 **Ready** — Has quota, ready to burn.
+- 🔴 **Dry / Over limit** — Quota exhausted; shows estimated reset time.
+- 🟡 **Weekly warning** — Reminds you of high weekly usage (BETA experimental feature).
+- ○ **No reading** — Indeterminate status (e.g. Codex, where local status checking isn't supported, so it stays blank rather than guessing).
 
-另外，你**現在這個視窗正在用**的那個帳號，旁邊會標 **active here(使用中)**。
+The tank **active in your current window** is marked as `active here`.
 
-**怎麼操作板子(畫面最上面那行也有提示):**
+**How to control the board (controls are shown at the top of the screen):**
 
-- `↑` `↓`(或 `j` `k`)= move(移動)
-- `Enter` = open(開啟)，打開游標停的那一條
-- `[` `]` = reorder(排序)，把選到的 tank(油箱)往上 / 往下調順序
-- `/` = filter(篩選)、`?` = help(說明)、`q` = quit(離開)
-- `l` = language(語言)，切換英文 / 日文 / 繁體中文
+- `↑` `↓` (or `j` `k`) = move cursor
+- `Enter` = open / resume the selected thread or tank
+- `[` `]` = reorder the tanks up or down
+- `/` = filter, `?` = help, `q` = quit
+- `l` = switch language (English / Japanese / Traditional Chinese)
 
-按一下 `?` 會跳出完整的按鍵清單和燈號圖例，看完按任意鍵回到板子。
+Press `?` to view the full hotkey map and legend. Press any key to return.
 
-**這一步你幫我留意三件事:**
+**Things to notice during this step:**
 
-1. 板子**夠快嗎**?大概一秒內就出現嗎?
-2. 上下移動時畫面**乾淨嗎**?會不會閃?
-3. 燈號點和那句摘要，有沒有讓你**一眼看懂**現在的狀況?
+1. Is the board **fast**? Does it render in under a second?
+2. Is navigation **flicker-free** and clean?
+3. Do the status dots and recaps help you **grasp the situation at a glance**?
 
 ---
 
-## 第 4 步:接回對話 & 無痕(2 分鐘)
+## Step 4: Resume & Incognito (2 mins)
 
-在板子上試這三個動作:
+Try these three actions on the board:
 
-- 在 Continue(續上次)挑一條，按 `Enter` → 你會**接回那一條確切的對話**，同一段
-  上下文，從你停下的地方繼續。
-- 回板子，在 Tanks(油箱)挑一個，按 `x` → 用它開一個 **incognito(無痕)** session:
-  乾淨、不記得任何東西、離開後什麼都不留。適合一次性、不想留痕跡的小任務。
-- 在 Tanks(油箱)挑一個，按 `Enter` → 切到那個帳號，開一場**全新**的 Claude。
+- Select a thread in the **Continue** section and press `Enter` → you will **resume that exact conversation**, carrying over the context right from where you left off.
+- Go back to the board, select a tank in the **Tanks** section, and press `x` → starts an **incognito** session: clean, remembers nothing, leaves no trace on exit. Perfect for quick, throwaway tasks.
+- Select a tank and press `Enter` → switches to that tank and starts a **fresh** Claude session.
 
-任何 session 都用 `/exit` 或 Ctrl-C 離開——除了那段對話本身，clikae 不會多花你任何額度。
+Exit any session using `/exit` or Ctrl-C. clikae doesn't consume extra quota beyond the CLI session itself.
 
 ---
 
-## 第 5 步(選用):換語言、和「接手筆記」
+## Step 5 (Optional): Language & Handoff Briefs
 
-**換語言**:在板子上按 `l`(language / 語言)，或直接 `clikae lang`，可以在
-英文 / 日文 / 繁體中文之間切。想要中文介面就在這裡切。
+**Language**: Press `l` on the board or run `clikae lang` to switch UI language between English, Japanese, and Traditional Chinese.
 
-**接手筆記**:當一條對話快撞到帳號上限，`clikae to <另一個帳號或工具>`(relay / 接力)
-會幫你寫一份「做了什麼、下一步」的接手筆記，帶到另一個 tank(油箱)繼續。重點是這份筆記
-是用**你自己電腦上的本地模型**寫的——不上雲、免費、可離線。clikae 會自動偵測你有哪個，
-順序是:**Apple Intelligence**(需 Apple M 系列晶片、macOS 26 並開啟 Apple Intelligence,
-透過 `apfel`)→ **ollama** → **llm**(後兩個在 Intel Mac、Linux 也能跑)。三個都沒裝也
-沒關係，會退回一份乾淨的原始摘要。先知道有這功能就好，不一定要試。
+**Handoff Briefs**: When a session is close to its limit, `clikae to <another-tank-or-engine>` (relay) writes a handoff brief summarizing "what was done + next steps" and hands it to the target tank. These briefs are generated **on-device** using your local models—private, free, and offline. clikae auto-detects what is available in the order of: **Apple Intelligence** (via `apfel` on Apple Silicon Macs running macOS 26) → **Ollama** → **llm** command. If none are installed, it falls back to a clean raw extract of the transcript. It's a handy feature to know about even if you don't test it now.
 
 ---
 
-## 玩完請回報 🙏
+## Let us know what you think! 🙏
 
-什麼回饋都歡迎!我特別想知道這三件事:
+All feedback is welcome! We'd love to know:
 
-1. 你有在 **10 分鐘內「懂了」**嗎?哪裡卡住、哪裡看不懂?
-2. **板子**——夠快嗎?乾淨嗎?燈號點和摘要有沒有讓你一眼看懂?
-3. **一件**你希望它能做、或覺得怪怪的事。
+1. Did you **get it in 10 minutes**? Where did you get stuck or confused?
+2. **The board**—fast enough? Clean? Did the dots and recaps make sense instantly?
+3. **One thing** you wish it did, or found odd.
 
-回個訊息(或一張板子截圖)給團隊就好。**越誠實越好**——這樣才磨得出真正好用的工具 🍻
+Send a message (or a screenshot of your board) to the team. **The more honest, the better!** 🍻
 
 ---
 
-_clikae 是 MIT 開源:<https://github.com/CVERInc/clikae> · 完整願景在
-[`docs/VISION.md`](./VISION.md)。_
+*clikae is open-source under the MIT license: <https://github.com/CVERInc/clikae> · The full vision is at [`docs/VISION.md`](./VISION.md).*

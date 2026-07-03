@@ -145,7 +145,7 @@ snapshot reset times — because codex reports its limit in UTC for a different
 window than its own TUI shows, and clikae would rather frame a number as a
 snapshot than pretend it's a live countdown.</p>
 <h3 id="v0510--2026-06-05--the-real-burn-fix">v0.5.10 — 2026-06-05 · the <em>real</em> burn fix</h3>
-<p>The footgun with a name (燒爆 — &quot;burning yourself up&quot;): <code>clikae burn claude &lt;X&gt;</code>
+<p>The footgun with a name (&quot;burning yourself up&quot; / burnout): <code>clikae burn claude &lt;X&gt;</code>
 could reroute its dry-fallthrough onto the very tank an <em>interactive</em> session was
 live on, silently spending that conversation's quota. A 2026-06-05 dogfood had
 declared this fixed — after testing <strong>codex only</strong>. It wasn't; the claude path was
