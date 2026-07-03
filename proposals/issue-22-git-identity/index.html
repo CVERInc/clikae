@@ -1,0 +1,350 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/clikae/favicon.svg" type="image/svg+xml"/><title>#22 · git identity - clikae</title><meta name="description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:title" content="#22 · git identity"/><meta property="og:description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+          @view-transition { navigation: auto; }
+          ::view-transition-group(root),
+          ::view-transition-old(root),
+          ::view-transition-new(root) { animation-duration: 120ms; }
+          @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+          }
+</style><link rel="stylesheet" href="/clikae/_june/global.592c7c63.css"/></head><body><script>(function(){try{var p=localStorage.getItem('kura-theme')||'system';var d=document.documentElement;d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',(p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches))?'dark':'light');}catch(e){}})();</script><header class="sticky top-0 z-20 flex items-center gap-4 h-14 px-5 bg-topbar-bg backdrop-blur-sm border-b border-border max-md:px-4 max-md:gap-2.5"><a class="flex items-center gap-1.5 font-bold text-[1.05rem]" href="/clikae/">clikae<!-- --> <span class="font-normal text-muted text-[.85rem]">Docs</span></a><form class="ml-auto max-md:ml-2 max-md:flex-1 max-md:min-w-0" action="/clikae/search" method="get"><input class="w-[280px] max-w-[40vw] px-3 py-2 text-[.9rem] border border-border rounded-lg bg-surface-2 text-fg max-md:w-full max-md:max-w-none search-box" placeholder="Search docs…  (press /)" aria-label="Search" data-search-endpoint="/clikae/search.json" data-doc-base="/clikae/" data-search-static="1" name="q"/></form><nav class="flex items-center gap-4 text-muted text-[.9rem]"></nav></header><nav data-tabbar="true" class="sticky top-14 z-[15] h-11 bg-bg border-b border-border max-md:hidden"><div class="flex items-stretch gap-6 h-full max-w-[1280px] mx-auto px-5 overflow-x-auto no-scrollbar"><a data-tab-key="Guide" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div></nav><button class="hidden max-md:flex items-center gap-2.5 w-full px-4 py-2.5 bg-bg border-0 border-b border-border text-fg-soft text-[.9rem] text-left cursor-pointer focus-visible:outline-none focus-visible:bg-hover" data-drawer-open="true" aria-controls="docs-nav" aria-expanded="false"><span class="text-[1.05rem] leading-none" aria-hidden="true">☰</span><span class="font-semibold text-fg flex-none">Navigation</span><span class="nav-bar-context text-muted flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" data-nav-context="true"></span></button><div class="drawer-backdrop" data-drawer-close="true" aria-hidden="true"></div><div class="grid grid-cols-[248px_minmax(0,1fr)_220px] max-lg:grid-cols-[248px_minmax(0,1fr)] max-md:grid-cols-1 items-start max-w-[1280px] mx-auto has-tabs"><aside class="sidebar sticky top-[100px] h-[calc(100vh-100px)] overflow-y-auto px-4 py-6 border-r border-border" id="docs-nav"><div data-tabbar="true" class="hidden max-md:flex flex-wrap gap-1.5 mb-4 pb-4 border-b border-border"><a data-tab-key="Guide" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div><div data-tab="Guide"><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Guide</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/installation">Installation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/usage">Usage</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/grammar">Grammar &amp; lexicon</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/orchestration">Orchestration</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/agy-dispatch">Driving agy headless</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/adding-an-adapter">Adding an adapter</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/memory">Memory (Soul layer)</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/claude-on-macos">Claude Code on macOS</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/troubleshooting">Troubleshooting</a></li></ul></div></div><div data-tab="Design" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Design &amp; vision</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/VISION">Vision</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-runtime">Runtime redesign</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-board-fuel-dots">Board: fuel dots</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/EXPECTATIONS">Expectation vs implementation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/HANDOFF-world-class-gaps">World-class gaps</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DEVLOG">Devlog</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/PLAYTEST">Playtest guide</a></li></ul></div></div><div data-tab="Proposals" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Proposals</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-22-git-identity">#22 · git identity</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-24-burn-simplify">#24 · simplify burn</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-25-agy-parallel">#25 · agy parallel</a></li></ul></div></div></aside><div data-june-outlet=""><main class="w-auto max-w-none m-0 min-w-0 px-10 pt-8 pb-20 max-md:px-4 max-md:pt-5 max-md:pb-12"><details class="hidden max-lg:block mb-5 border border-border rounded-xl overflow-hidden"><summary class="chevron flex justify-between items-center cursor-pointer px-3.5 py-2.5 text-[.85rem] font-semibold text-fg-soft">On this page</summary><div class="flex flex-col px-3.5 pt-1 pb-2.5 border-t border-border"><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#1-problem-statement">1. Problem statement</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#why-this-is-not-hypothetical">Why this is not hypothetical</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#scope-boundary-state-once-hold-to-it">Scope boundary (state once, hold to it)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#2-current-behaviour-do-nothing-today">2. Current behaviour (do-nothing today)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#3-the-three-options">3. The three options</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#option-a--per-tank-git-identity-exported-highest-isolation--recommended">Option A — Per-tank git identity, exported (highest isolation) ✅ recommended</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#option-b--mismatch-warning-only-detection-no-mutation">Option B — Mismatch warning only (detection, no mutation)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#option-c--do-nothing-document-the-footgun-status-quo">Option C — Do nothing, document the footgun (status quo)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#4-recommendation">4. Recommendation</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#5-honest-limits-dont-oversell">5. Honest limits (don&#x27;t oversell)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#6-implementation-sketch-option-a--b-warning">6. Implementation sketch (Option A + B warning)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#7-open-questions-for-the-maintainer">7. Open questions for the maintainer</a></div></details><div class="flex items-center justify-between gap-4 mb-6"><div class="prose"><h1 class="!m-0">Proposal — issue #22: per-tank git commit identity</h1></div><div class="relative inline-flex items-stretch flex-none"><button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[.85rem] border border-border border-r-0 rounded-l-lg bg-surface text-fg-soft cursor-pointer hover:bg-hover hover:text-fg" data-copy-md="/clikae/proposals/issue-22-git-identity.md"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>Copy Markdown</button><details class="relative inline-flex items-stretch" data-menu="true"><summary class="chevron inline-flex items-center justify-center w-[30px] border border-border rounded-r-lg bg-surface text-muted cursor-pointer hover:bg-hover hover:text-fg" aria-label="More actions"></summary><div class="absolute right-0 top-[calc(100%+.4rem)] z-30 min-w-[17rem] flex flex-col gap-px p-1.5 bg-surface border border-border rounded-xl shadow-xl"><button class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" data-copy-md="/clikae/proposals/issue-22-git-identity.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg><span class="flex flex-col min-w-0"><span class="font-semibold text-[.9rem] text-fg">Copy Markdown</span><span class="text-[.8rem] text-muted">Copy this page as Markdown for LLMs</span></span></button><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="/clikae/proposals/issue-22-git-identity.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M16 21H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6l4 4v12a2 2 0 0 1-2 2z"></path><path d="M9 13h6M9 17h4"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">View as Markdown<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">View this page as plain text</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://chatgpt.com/?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20%2322%20%C2%B7%20git%20identity" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in ChatGPT<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask ChatGPT about this page</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://claude.ai/new?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20%2322%20%C2%B7%20git%20identity" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in Claude<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask Claude about this page</span></span></a></div></details></div></div><article class="prose"><blockquote>
+<p>Status: ✅ <strong>SHIPPED in v0.6.0</strong> (the recommended Option A — per-tank git identity,
+exported via <code>clikae env</code>). This file is now an <strong>archived reference</strong> kept for the
+design rationale and the §5 honest-limits framing; the live behaviour is what
+matters, not this draft. Pointers to what actually shipped:</p>
+<ul>
+<li>Command: <code>clikae git-id &lt;engine&gt; &lt;tank&gt; [--name N --email E | --unset]</code>
+(<code>lib/commands/git_id.sh</code>; help text in <code>lib/commands/help.sh</code>).</li>
+<li>Mechanism: when a tank has an identity, <code>clikae env</code> also emits the four
+<code>GIT_AUTHOR_*</code> / <code>GIT_COMMITTER_*</code> exports (<code>lib/commands/env.sh</code>).</li>
+<li>Grammar/docs: documented in <code>docs/grammar.md</code> §3.3 (management verbs) with the
+honest limit — env vars beat <code>git config</code> but NOT an explicit
+<code>git -c user.email=…</code>, and only future commits are affected.</li>
+<li>Tests: <code>tests/bats/git_id.bats</code>.</li>
+</ul>
+<p>Option B (the <code>status</code> mismatch warning) was NOT shipped as part of v0.6.0 — it
+remains the cheap follow-up brick described in §3/§4 below. The PowerShell mirror
+is likewise still a follow-up.</p>
+<p><em>Original draft preserved verbatim below.</em></p>
+</blockquote>
+<hr />
+<blockquote>
+<p>Status: <strong>design draft</strong> (no code yet). Origin: HANDOFF.md §13 (&quot;tanks own the
+AI account's state, but NOT the git commit identity&quot;). This proposal turns that
+open question into a recommended path. It does <strong>not</strong> touch git history and is
+not itself shipped.</p>
+</blockquote>
+<hr />
+<h2 id="1-problem-statement">1. Problem statement</h2>
+<p>A clikae <strong>tank</strong> is the control plane for &quot;which identity/state is active per
+session&quot; — it holds an AI account's login, memory and quota. But a coding session
+produces a <em>second</em> identity that the tank does <strong>not</strong> govern: the <strong>git
+author/committer</strong> stamped onto every commit.</p>
+<p>These two axes are unrelated today:</p>
+<ul>
+<li>The tank tells you <em>which AI account is driving</em> (e.g. a tank you think of as
+&quot;chodaict&quot;).</li>
+<li>The commit's <code>user.name</code> / <code>user.email</code> come from <code>git config</code> (global) <strong>or</strong>
+from whatever the engine injects at commit time — which can be the engine's
+<em>own AI-account email</em> (<code>git -c user.email=&lt;harness userEmail&gt; commit …</code>).</li>
+</ul>
+<p>GitHub maps a commit to an account by <strong>email</strong>, and that email can be verified on
+only one GitHub account at a time. So a session run inside a tank you call
+&quot;chodaict&quot; can silently emit commits stamped with the engine's account email →
+mis-attribution on GitHub <strong>and</strong> a private address leaked into public history.</p>
+<p>This is the one place where &quot;which account am I?&quot; has a durable, public,
+hard-to-reverse consequence, and clikae is currently silent there.</p>
+<h3 id="why-this-is-not-hypothetical">Why this is not hypothetical</h3>
+<p>It already happened (HANDOFF.md §13, 2026-06-04): a run authored <strong>9 commits</strong>
+across <code>reef</code> + <code>bleedblend</code> whose author/committer email was the engine's account
+email (<code>mr.crazyx2@gmail.com</code>). All 9 rendered under the wrong GitHub account
+(<code>@lersiann</code>) instead of the intended <code>@chodaict</code> / <code>&lt;x@cver.net&gt;</code>. It was fixed
+out-of-band with <code>git filter-repo</code> + force-push. That cleanup is <strong>not</strong> something
+clikae can do — clikae can only ever influence the <em>next</em> commit, never re-map old
+ones.</p>
+<h3 id="scope-boundary-state-once-hold-to-it">Scope boundary (state once, hold to it)</h3>
+<p>This is the <strong>authorship</strong> identity axis. It is independent of:</p>
+<ul>
+<li>the <strong>fuel</strong> axis (quota / dry-detection), and</li>
+<li>the <strong>resume</strong> axis (carrying a session, §12 of HANDOFF).</li>
+</ul>
+<p>Three different &quot;which account?&quot; questions. clikae owns the first two today; this
+proposal is about whether — and how — it should touch the third.</p>
+<hr />
+<h2 id="2-current-behaviour-do-nothing-today">2. Current behaviour (do-nothing today)</h2>
+<p>clikae <strong>never</strong> sets <code>user.name</code> / <code>user.email</code>. A tank's <code>adapter_export_env</code>
+exports only the engine's config-dir var, e.g.:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-sh"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># lib/adapters/claude.sh</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#D2A8FF">adapter_export_env</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">() {</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">  local</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> profile_dir</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">$1</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">  printf</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> 'CLAUDE_CONFIG_DIR=%s\n'</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$profile_dir</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">}</span></span></code></pre>
+<p>So <code>eval &quot;$(clikae env claude &lt;tank&gt;)&quot;</code> puts a config dir on the shell and nothing
+else. Whatever commits that shell produces are stamped by:</p>
+<ol>
+<li>the engine's injected <code>-c user.email=…</code> (if it commits that way), else</li>
+<li>the user's global <code>git config user.email</code> — which, on this maintainer's Mac, is
+<code>chodaict &lt;x@cver.net&gt;</code>.</li>
+</ol>
+<p>There is no per-tank git identity, no detection of mismatch, and no warning. The
+attribution is entirely at the mercy of (1).</p>
+<hr />
+<h2 id="3-the-three-options">3. The three options</h2>
+<h3 id="option-a--per-tank-git-identity-exported-highest-isolation--recommended">Option A — Per-tank git identity, exported (highest isolation) ✅ recommended</h3>
+<p>Let a tank carry an <strong>optional</strong> <code>git.user.name</code> / <code>git.user.email</code>. When that
+tank is activated via <code>clikae env</code>, clikae appends <code>GIT_AUTHOR_*</code> /
+<code>GIT_COMMITTER_*</code> exports so every commit made in that shell is stamped with the
+tank's intended identity — regardless of what the engine tries to inject.</p>
+<ul>
+<li><strong>Storage:</strong> a small <code>git-identity</code> file inside the tank dir
+(<code>$CLIKAE_HOME/profiles/&lt;engine&gt;/&lt;tank&gt;/clikae-meta/git-identity</code>), holding
+<code>name</code> + <code>email</code>. Per-tank, on disk, alongside the state it belongs to. Absent
+file ⇒ feature off for that tank (safe default).</li>
+<li><strong>Mechanism — env vars, not <code>git config</code>.</strong> Export the four standard git env
+vars rather than mutating any <code>git config</code>:
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-sh"><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">export</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> GIT_AUTHOR_NAME</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"…"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">  GIT_AUTHOR_EMAIL</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"…"</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">export</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> GIT_COMMITTER_NAME</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"…"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> GIT_COMMITTER_EMAIL</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"…"</span></span></code></pre>
+Crucially, <strong>git env vars beat <code>git config</code></strong>, so this pins authorship even when
+the engine commits via the user's global config. (It does <em>not</em> beat an explicit
+<code>git -c user.email=… commit</code> — see §5.)</li>
+<li><strong>Set up via a command:</strong> <code>clikae git-id &lt;engine&gt; &lt;tank&gt; --name … --email …</code>
+writes the file; <code>--unset</code> removes it; bare prints the current value.</li>
+<li><strong>Safety:</strong> opt-in, explicit, reversible, never silently rewrites the user's
+<code>git config</code>. Fits the informed-consent / sudo-style opt-in pattern in MEMORY.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Security</strong></td>
+<td>Strongest. Pins the <em>intended</em> identity into the very shell the engine commits from; closes the leak for the normal <code>git config</code> commit path. Keeps the private/AI-account email out of public history <em>by construction</em>, not by vigilance.</td>
+</tr>
+<tr>
+<td><strong>Implementation cost</strong></td>
+<td>Medium. New <code>git-id</code> command + a tiny store helper + 4 lines in <code>env</code>'s export emission + bats. ~100–150 lines incl. tests. No history rewrite, no <code>git config</code> mutation. PowerShell mirror is a follow-up, not a blocker.</td>
+</tr>
+<tr>
+<td><strong>UX</strong></td>
+<td>Set once per tank, then invisible — exactly the &quot;quietly help&quot; philosophy. Slight learning curve (a new optional command); zero burden for tanks that don't opt in. Honest framing required (see §5): it pins env-var authorship, not a <code>-c</code> override.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="option-b--mismatch-warning-only-detection-no-mutation">Option B — Mismatch warning only (detection, no mutation)</h3>
+<p>Don't change what gets committed. Instead, surface the gap. <code>clikae status</code>
+(and the board / <code>--json</code>) computes &quot;this tank's <em>intended</em> identity&quot; vs &quot;the git
+identity this shell will actually commit as&quot;, and warns when an engine is known to
+inject its own account email.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Security</strong></td>
+<td>Weak-to-medium. Detection without prevention — it tells you <em>after</em> you might have leaked, and only if you read the warning. A non-interactive / headless run (the exact case the §13 incident was) sees no human to heed the warning.</td>
+</tr>
+<tr>
+<td><strong>Implementation cost</strong></td>
+<td>Low–medium. Needs a resolver for &quot;what will this shell commit as&quot; (read <code>GIT_AUTHOR_EMAIL</code> → else <code>git config user.email</code>) plus a per-engine &quot;known to inject&quot; flag and a tank-intended-identity field. No mutation, so lower blast radius.</td>
+</tr>
+<tr>
+<td><strong>UX</strong></td>
+<td>Informational, never blocks. Good as a <em>complement</em> to A, poor as the sole fix — it leans on the user noticing, which the incident showed doesn't hold under automation.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="option-c--do-nothing-document-the-footgun-status-quo">Option C — Do nothing, document the footgun (status quo)</h3>
+<p>Leave authorship entirely outside clikae. Document in <code>docs/troubleshooting.md</code>:
+pin <code>git config --global user.email</code>, and never let an engine commit with
+<code>-c user.email=&lt;harness userEmail&gt;</code>.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Security</strong></td>
+<td>Lowest. Relies wholly on user discipline + global git config. The incident proves an engine can override global config with <code>-c</code>, so a pure-doc answer doesn't actually stop the recurrence.</td>
+</tr>
+<tr>
+<td><strong>Implementation cost</strong></td>
+<td>Near-zero (a doc paragraph).</td>
+</tr>
+<tr>
+<td><strong>UX</strong></td>
+<td>No new surface, no learning curve — but also no protection. clikae stays silent on its most consequential identity axis, which contradicts its &quot;control plane for which identity is active&quot; positioning.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-recommendation">4. Recommendation</h2>
+<p><strong>Ship Option A as the primary fix, with Option B's mismatch warning folded in as
+the cheap second brick.</strong></p>
+<p>Rationale:</p>
+<ul>
+<li>A is the only option that <em>prevents the next mis-stamp</em> rather than merely
+describing it. The §13 incident was a headless run with no human in the loop —
+exactly where B's warning is useless and C's &quot;be careful&quot; is empty.</li>
+<li>A is squarely on-thesis: clikae already controls where the engine's
+auth/fuel/memory state lives; git authorship is the most consequential identity
+a coding session emits, and pinning it is the same &quot;control where identity is
+active per session&quot; lever applied to a new axis.</li>
+<li>A is safe by default: no <code>git config</code> mutation, no history touch, opt-in per
+tank, fully reversible.</li>
+<li>B is cheap and strictly additive once A's &quot;intended identity&quot; field exists —
+surface the mismatch in <code>status</code> so a user who <em>hasn't</em> opted into A still gets
+a heads-up. Do B second, not instead.</li>
+</ul>
+<p><strong>Honesty guard (must be in the copy):</strong> clikae can only influence <em>new</em> commits.
+It cannot fix attribution on existing commits — that requires a history rewrite +
+force-push (as was done in §13) and an account-settings change (an email verifies
+on one GitHub account at a time). Never claim clikae &quot;fixes attribution&quot;; it
+<em>prevents the next mis-stamp</em>. Also be explicit that env-var authorship is beaten
+by an explicit <code>git -c user.email=… commit</code> (§5).</p>
+<hr />
+<h2 id="5-honest-limits-dont-oversell">5. Honest limits (don't oversell)</h2>
+<ol>
+<li><strong><code>git -c user.email=…</code> still wins.</strong> Git precedence is
+<code>-c</code> command-line &gt; <code>GIT_*</code> env &gt; <code>git config</code>. Option A's env exports beat the
+global-config commit path (the common case) but <strong>not</strong> an engine that commits
+with an explicit per-command <code>-c user.email=…</code>. If an engine does that, A
+cannot override it from the parent shell; that case still needs B's warning +
+user/engine-config action. Document this precedence plainly.</li>
+<li><strong>Per-shell only.</strong> Like <code>clikae env</code>, the exports live in the shell that
+eval'd them; they don't follow the engine into a separately-spawned shell. The
+bare switch / aliases / <code>.app</code> run the engine with a prefix assignment, so to
+get git identity onto a long-lived session you <code>eval &quot;$(clikae env …)&quot;</code> first
+(same constraint already documented for <code>env</code>).</li>
+<li><strong>No retroactive fix.</strong> Restated from §4 — clikae touches only future commits.</li>
+<li><strong>agy / flag-strategy engines</strong> have no per-shell <code>env</code> to ride on. The git-id
+exports can still be emitted by <code>clikae env</code> for engines that <em>have</em> an env
+path; for agy (global, no per-shell routing) the git-id feature is best-effort
+/ out-of-scope in v1, mirroring <code>env agy</code>'s existing limitation.</li>
+</ol>
+<hr />
+<h2 id="6-implementation-sketch-option-a--b-warning">6. Implementation sketch (Option A + B warning)</h2>
+<p>Files to touch:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lib/core/profile_store.sh</code></td>
+<td>Add <code>git_identity_file &lt;cli&gt; &lt;tank&gt;</code> (path helper) + <code>git_identity_read &lt;cli&gt; &lt;tank&gt;</code> (echo <code>name&lt;TAB&gt;email</code> or nothing). Pure path/read helpers, mirroring the existing <code>profile_dir</code> family.</td>
+</tr>
+<tr>
+<td><code>lib/commands/git_id.sh</code> <em>(new)</em></td>
+<td>`cmd_git_id <engine> <tank> [--name N --email E</td>
+</tr>
+<tr>
+<td><code>lib/commands/env.sh</code></td>
+<td>After the adapter's <code>adapter_export_env</code> loop, if <code>git_identity_read &quot;$cli&quot; &quot;$tank&quot;</code> is non-empty, also emit the four <code>export GIT_AUTHOR_*</code> / <code>GIT_COMMITTER_*</code> lines (quoted via the existing <code>_env_shquote</code>). This is the whole of the &quot;exported per-tank identity&quot; behaviour — ~6 lines.</td>
+</tr>
+<tr>
+<td><code>bin/clikae</code></td>
+<td>Register <code>git-id</code> in the §4 reserved-command resolver (<code>docs/grammar.md</code>) and route to <code>cmd_git_id</code>. Add to <code>help</code>.</td>
+</tr>
+<tr>
+<td><code>lib/commands/status.sh</code></td>
+<td><strong>Option B brick:</strong> when a tank has a git-identity (or an engine is flagged &quot;injects its account email&quot;), compute &quot;will-commit-as&quot; (<code>GIT_AUTHOR_EMAIL</code> ?: <code>git config user.email</code>) and show intended-vs-actual, warning on mismatch. Detection only — no mutation.</td>
+</tr>
+<tr>
+<td><code>lib/adapters/_template.sh</code> + adapters</td>
+<td>Optional new meta hook <code>adapter_meta_injects_git_identity</code> (default: no) so <code>status</code> knows which engines are known to stamp their own email. Claude's adapter can advertise it; others stay silent.</td>
+</tr>
+<tr>
+<td><code>docs/grammar.md</code></td>
+<td>Add <code>git-id</code> to the management-verbs table (§3.3) and the reserved-command list (§4). It is a plain conventional verb (create/inspect tank metadata), not a switching verb — no fuel metaphor.</td>
+</tr>
+<tr>
+<td><code>docs/usage.md</code> / <code>docs/troubleshooting.md</code></td>
+<td>Document the feature + the §5 honest limits (precedence, per-shell, no retroactive fix). The troubleshooting entry doubles as Option C's doc safety-net for tanks that don't opt in.</td>
+</tr>
+<tr>
+<td><code>tests/bats/git_id.bats</code> <em>(new)</em></td>
+<td>Cover: write/read/unset round-trip; <code>env</code> emits the four git vars only when the file exists; name validation; absent-file = no git exports (safe default).</td>
+</tr>
+<tr>
+<td><code>powershell/Clikae.psm1</code> + <code>Clikae.Tests.ps1</code></td>
+<td>Mirror (follow-up, not a v1 blocker per the §4 grammar checklist's &quot;where it applies&quot;).</td>
+</tr>
+</tbody>
+</table>
+<p>Sketch of the <code>env.sh</code> addition (conceptual):</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-sh"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># …after the existing adapter_export_env emission loop in cmd_env …</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">gid</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">git_identity_read</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$cli</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">" "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$tank</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">")"</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # "name&#x3C;TAB>email" or empty</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">if</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> [ </span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">-n</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$gid</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> ]; </span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">then</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">  gname</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"${</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">gid</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">%%</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">$'</span><span style="--shiki-light:#005CC5;--shiki-dark:#FF7B72">\t</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">'</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">*</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">; gemail</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"${</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">gid</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">#*</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">$'</span><span style="--shiki-light:#005CC5;--shiki-dark:#FF7B72">\t</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">'}"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">  printf</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> 'export GIT_AUTHOR_NAME=%s\n'</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">    "$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_env_shquote</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$gname</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">")"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">  printf</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> 'export GIT_AUTHOR_EMAIL=%s\n'</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">   "$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_env_shquote</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$gemail</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">")"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">  printf</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> 'export GIT_COMMITTER_NAME=%s\n'</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_env_shquote</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$gname</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">")"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">  printf</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> 'export GIT_COMMITTER_EMAIL=%s\n'</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_env_shquote</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$gemail</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">")"</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">fi</span></span></code></pre>
+<p>Conventions to honour (per HANDOFF §4/§7): bash 3.2 compatible, no GNU-isms, quote
+everything, shellcheck-clean, no new language dependency, no network/telemetry. The
+git-identity file is plain text under <code>$CLIKAE_HOME</code> — local-only, auditable.</p>
+<hr />
+<h2 id="7-open-questions-for-the-maintainer">7. Open questions for the maintainer</h2>
+<ul>
+<li><strong>Command name:</strong> <code>clikae git-id</code> vs <code>clikae identity</code> vs folding into
+<code>clikae init &lt;engine&gt; &lt;tank&gt; --git-name … --git-email …</code> at create time. (Lean:
+a dedicated <code>git-id</code> so existing tanks can adopt it without re-init.)</li>
+<li><strong>Auto-suggest from the account label?</strong> clikae already reads the AI account
+email via <code>adapter_account_label</code>. Should <code>git-id</code> <em>offer</em> to set the git email
+to match — or deliberately keep them separate (the whole point of §13 is that the
+AI-account email is the <em>wrong</em> one to commit as)? Probably: never auto-fill from
+the account label; that's the footgun.</li>
+<li><strong>Should <code>status</code> warn even when no git-identity is set</strong> (pure Option B), for
+the leak-prevention value, or only once a tank opts in? (Lean: warn whenever an
+&quot;injects-its-own-email&quot; engine is active and the resolved commit email differs
+from the global <code>git config</code> — that's the highest-signal case.)</li>
+</ul>
+</article><nav class="flex justify-between gap-4 mt-12 pt-6 border-t border-border"><span></span><a class="flex-1 px-4 py-3.5 border border-border rounded-xl hover:border-accent text-right" href="/clikae/proposals/issue-24-burn-simplify"><div class="text-muted text-[.78rem]">Next<!-- --> →</div><div class="font-semibold text-accent">#24 · simplify burn</div></a></nav><script>document.querySelectorAll('[data-copy-md]').forEach(function(b){b.addEventListener('click',async function(){try{var r=await fetch(b.getAttribute('data-copy-md'));var t=await r.text();await navigator.clipboard.writeText(t);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1500);}catch(e){alert('Copy failed: '+e);}});});document.querySelectorAll('.prose pre').forEach(function(pre){if(pre.querySelector('.copy-code'))return;var b=document.createElement('button');b.className='copy-code';b.textContent='Copy';b.addEventListener('click',async function(){var c=pre.querySelector('code');try{await navigator.clipboard.writeText(c?c.innerText:pre.innerText);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1200);}catch(e){}});pre.appendChild(b);});document.querySelectorAll('.tabs').forEach(function(t){t.querySelectorAll('.tab-btn').forEach(function(b){b.addEventListener('click',function(){var i=b.getAttribute('data-tab');t.querySelectorAll('.tab-btn').forEach(function(x){x.classList.toggle('active',x.getAttribute('data-tab')===i);});t.querySelectorAll('.tab-panel').forEach(function(p){p.hidden=p.getAttribute('data-tab')!==i;});});});});(function(){var blocks=document.querySelectorAll('code.language-mermaid');if(!blocks.length)return;var items=[];blocks.forEach(function(c){var pre=c.closest('pre')||c;var h=document.createElement('div');h.className='mermaid-diagram';pre.replaceWith(h);items.push({src:c.textContent,holder:h});});var lib,id=0;function load(){return lib||(lib=import("https://esm.sh/mermaid@11").then(function(m){return m.default;}));}function theme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'default';}function run(){load().then(function(mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:theme()});items.forEach(function(it){mermaid.render('kura-mmd-'+(id++),it.src).then(function(r){it.holder.innerHTML=r.svg;}).catch(function(e){it.holder.innerHTML='<pre class="mermaid-error">'+String((e&&e.message)||e)+'</pre>';});});}).catch(function(){});}run();var cur=document.documentElement.getAttribute('data-theme');new MutationObserver(function(){var t=document.documentElement.getAttribute('data-theme');if(t!==cur){cur=t;run();}}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});})();</script></main><aside class="sticky top-14 max-h-[calc(100vh-56px)] overflow-y-auto px-4 py-8 max-lg:hidden"><p class="text-[.72rem] font-bold tracking-wider uppercase text-muted mb-2.5">On this page</p><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#1-problem-statement">1. Problem statement</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#why-this-is-not-hypothetical">Why this is not hypothetical</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#scope-boundary-state-once-hold-to-it">Scope boundary (state once, hold to it)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#2-current-behaviour-do-nothing-today">2. Current behaviour (do-nothing today)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#3-the-three-options">3. The three options</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#option-a--per-tank-git-identity-exported-highest-isolation--recommended">Option A — Per-tank git identity, exported (highest isolation) ✅ recommended</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#option-b--mismatch-warning-only-detection-no-mutation">Option B — Mismatch warning only (detection, no mutation)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#option-c--do-nothing-document-the-footgun-status-quo">Option C — Do nothing, document the footgun (status quo)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#4-recommendation">4. Recommendation</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#5-honest-limits-dont-oversell">5. Honest limits (don&#x27;t oversell)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#6-implementation-sketch-option-a--b-warning">6. Implementation sketch (Option A + B warning)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#7-open-questions-for-the-maintainer">7. Open questions for the maintainer</a></aside></div></div><footer class="border-t border-border mt-8"><div class="flex items-center justify-between flex-wrap gap-4 max-w-[1280px] mx-auto px-6 py-5 max-md:px-4"><nav class="flex items-center gap-[1.1rem] text-[.85rem]"><a class="text-muted hover:text-fg" href="/clikae/llms.txt">llms.txt</a><button type="button" class="inline-flex items-center justify-center w-[30px] h-[30px] p-0 text-[.95rem] leading-none border border-border rounded-lg bg-surface text-fg cursor-pointer hover:bg-hover" data-theme-toggle="true" aria-label="Toggle theme"></button></nav><a class="text-muted text-[.85rem] hover:text-accent" href="https://kura.build/" target="_blank" rel="noreferrer">Powered by Kura</a></div></footer><script>document.addEventListener('keydown',function(e){if(e.key==='/' && !document.documentElement.dataset.ctrlk && !/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'')){e.preventDefault();var s=document.querySelector('.search-box');if(s)s.focus();}});(function(){var b=document.querySelector('[data-theme-toggle]');if(!b)return;var d=document.documentElement,order=['system','light','dark'],icon={system:'🖥',light:'☀',dark:'☾'};function pref(){return d.getAttribute('data-theme-pref')||'system';}function res(p){return p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}function set(p){d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',res(p));try{localStorage.setItem('kura-theme',p);}catch(e){}b.textContent=icon[p];b.setAttribute('title','Theme: '+p);}set(pref());b.addEventListener('click',function(){set(order[(order.indexOf(pref())+1)%order.length]);});try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){if(pref()==='system')d.setAttribute('data-theme',res('system'));});}catch(e){}})();document.addEventListener('click',function(e){var t=e.target;document.querySelectorAll('details[data-menu][open]').forEach(function(d){if(!d.contains(t))d.removeAttribute('open');});var it=t.closest&&t.closest('details[data-menu] a, details[data-menu] [data-copy-md]');if(it){var dd=it.closest('details[data-menu]');if(dd)setTimeout(function(){dd.removeAttribute('open');},0);}});document.addEventListener('keydown',function(e){if(e.key==='Escape')document.querySelectorAll('details[data-menu][open]').forEach(function(d){d.removeAttribute('open');});});(function(){var root=document.documentElement;function opener(){return document.querySelector('[data-drawer-open]');}function items(){var d=document.getElementById('docs-nav');if(!d)return[];return[].filter.call(d.querySelectorAll('a[href],button:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'),function(el){return el.offsetParent!==null;});}function set(o){var was=root.classList.contains('drawer-open');root.classList.toggle('drawer-open',o);var b=opener();if(b)b.setAttribute('aria-expanded',o?'true':'false');if(o){var f=items();if(f[0])f[0].focus();}else if(was&&b)b.focus();}document.addEventListener('click',function(e){if(e.target.closest('[data-drawer-open]')){e.preventDefault();set(!root.classList.contains('drawer-open'));return;}if(e.target.closest('[data-drawer-close]')){set(false);return;}if(e.target.closest('#docs-nav a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'){set(false);return;}if(e.key==='Tab'&&root.classList.contains('drawer-open')){var f=items();if(!f.length)return;var first=f[0],last=f[f.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}else if(f.indexOf(document.activeElement)<0){e.preventDefault();first.focus();}}});})();(function(){
+  function trim(p){return p.length>1&&p.endsWith('/')?p.slice(0,-1):p;}
+  function sync(){
+    var path=trim(location.pathname), tab=null;
+    var links=document.querySelectorAll('.sidebar a[href],[data-tabbar] a[href]');
+    for(var i=0;i<links.length;i++){var a=links[i],on=trim(a.getAttribute('href'))===path;
+      if(on){a.setAttribute('aria-current','page');var g=a.closest('[data-tab]');if(g)tab=g.getAttribute('data-tab');}
+      else a.removeAttribute('aria-current');}
+    if(tab!=null){
+      document.querySelectorAll('[data-tab]').forEach(function(g){g.hidden=g.getAttribute('data-tab')!==tab;});
+      document.querySelectorAll('[data-tabbar] a').forEach(function(a){
+        if(a.getAttribute('data-tab-key')===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+    }
+    // expand the folder(s) holding the active page. Iterate EVERY aria-current sidebar link, not
+    // just the first: a folder-as-page link lives in a <details>, but the mobile tab-bar link (also
+    // in .sidebar, earlier in the DOM) has no folder ancestor — querySelector would pick that one
+    // and expand nothing. forEach opens each link's folder chain; tab links are harmless no-ops.
+    document.querySelectorAll('.sidebar a[aria-current="page"]').forEach(function(cur){
+      var d=cur.closest('details.folder');while(d){d.open=true;d=d.parentElement&&d.parentElement.closest('details.folder');}});
+    // rewrite the locale-switch links to THIS page's equivalent path (swap the locale prefix)
+    var ll=document.querySelectorAll('[data-locale-home]');
+    if(ll.length){var lc=document.querySelector('[data-locale-home][data-locale-active]'),cp=lc?lc.getAttribute('data-locale-home'):'/';cp=cp==='/'?'':cp;
+      var rest=location.pathname;if(cp&&rest.indexOf(cp)===0)rest=rest.slice(cp.length)||'/';
+      ll.forEach(function(a){var h=a.getAttribute('data-locale-home'),p=h==='/'?'':h;a.setAttribute('href',rest==='/'?(p||'/'):(p+rest));});}
+    // mobile nav-context: "Active tab / Page title" (the shell can't know the page server-side)
+    var nc=document.querySelector('[data-nav-context]');
+    if(nc){var at=document.querySelector('[data-tabbar] a[aria-current="page"]'),h1=document.querySelector('main h1');
+      nc.textContent=[at&&at.textContent.trim(),h1&&h1.textContent.trim()].filter(Boolean).join(' / ');}
+  }
+  sync();
+  var outlet=document.querySelector('[data-june-outlet]');
+  if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
+})();</script><script type="module" src="/clikae/_june/client.aa34fb55.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as clean Markdown by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>

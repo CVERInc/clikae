@@ -1,0 +1,678 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/clikae/favicon.svg" type="image/svg+xml"/><title>Grammar &amp; lexicon - clikae</title><meta name="description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:title" content="Grammar &amp; lexicon"/><meta property="og:description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+          @view-transition { navigation: auto; }
+          ::view-transition-group(root),
+          ::view-transition-old(root),
+          ::view-transition-new(root) { animation-duration: 120ms; }
+          @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+          }
+</style><link rel="stylesheet" href="/clikae/_june/global.592c7c63.css"/></head><body><script>(function(){try{var p=localStorage.getItem('kura-theme')||'system';var d=document.documentElement;d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',(p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches))?'dark':'light');}catch(e){}})();</script><header class="sticky top-0 z-20 flex items-center gap-4 h-14 px-5 bg-topbar-bg backdrop-blur-sm border-b border-border max-md:px-4 max-md:gap-2.5"><a class="flex items-center gap-1.5 font-bold text-[1.05rem]" href="/clikae/">clikae<!-- --> <span class="font-normal text-muted text-[.85rem]">Docs</span></a><form class="ml-auto max-md:ml-2 max-md:flex-1 max-md:min-w-0" action="/clikae/search" method="get"><input class="w-[280px] max-w-[40vw] px-3 py-2 text-[.9rem] border border-border rounded-lg bg-surface-2 text-fg max-md:w-full max-md:max-w-none search-box" placeholder="Search docs…  (press /)" aria-label="Search" data-search-endpoint="/clikae/search.json" data-doc-base="/clikae/" data-search-static="1" name="q"/></form><nav class="flex items-center gap-4 text-muted text-[.9rem]"></nav></header><nav data-tabbar="true" class="sticky top-14 z-[15] h-11 bg-bg border-b border-border max-md:hidden"><div class="flex items-stretch gap-6 h-full max-w-[1280px] mx-auto px-5 overflow-x-auto no-scrollbar"><a data-tab-key="Guide" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div></nav><button class="hidden max-md:flex items-center gap-2.5 w-full px-4 py-2.5 bg-bg border-0 border-b border-border text-fg-soft text-[.9rem] text-left cursor-pointer focus-visible:outline-none focus-visible:bg-hover" data-drawer-open="true" aria-controls="docs-nav" aria-expanded="false"><span class="text-[1.05rem] leading-none" aria-hidden="true">☰</span><span class="font-semibold text-fg flex-none">Navigation</span><span class="nav-bar-context text-muted flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" data-nav-context="true"></span></button><div class="drawer-backdrop" data-drawer-close="true" aria-hidden="true"></div><div class="grid grid-cols-[248px_minmax(0,1fr)_220px] max-lg:grid-cols-[248px_minmax(0,1fr)] max-md:grid-cols-1 items-start max-w-[1280px] mx-auto has-tabs"><aside class="sidebar sticky top-[100px] h-[calc(100vh-100px)] overflow-y-auto px-4 py-6 border-r border-border" id="docs-nav"><div data-tabbar="true" class="hidden max-md:flex flex-wrap gap-1.5 mb-4 pb-4 border-b border-border"><a data-tab-key="Guide" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div><div data-tab="Guide"><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Guide</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/installation">Installation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/usage">Usage</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/grammar">Grammar &amp; lexicon</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/orchestration">Orchestration</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/agy-dispatch">Driving agy headless</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/adding-an-adapter">Adding an adapter</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/memory">Memory (Soul layer)</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/claude-on-macos">Claude Code on macOS</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/troubleshooting">Troubleshooting</a></li></ul></div></div><div data-tab="Design" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Design &amp; vision</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/VISION">Vision</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-runtime">Runtime redesign</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-board-fuel-dots">Board: fuel dots</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/EXPECTATIONS">Expectation vs implementation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/HANDOFF-world-class-gaps">World-class gaps</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DEVLOG">Devlog</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/PLAYTEST">Playtest guide</a></li></ul></div></div><div data-tab="Proposals" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Proposals</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-22-git-identity">#22 · git identity</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-24-burn-simplify">#24 · simplify burn</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-25-agy-parallel">#25 · agy parallel</a></li></ul></div></div></aside><div data-june-outlet=""><main class="w-auto max-w-none m-0 min-w-0 px-10 pt-8 pb-20 max-md:px-4 max-md:pt-5 max-md:pb-12"><details class="hidden max-lg:block mb-5 border border-border rounded-xl overflow-hidden"><summary class="chevron flex justify-between items-center cursor-pointer px-3.5 py-2.5 text-[.85rem] font-semibold text-fg-soft">On this page</summary><div class="flex flex-col px-3.5 pt-1 pb-2.5 border-t border-border"><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#0-the-one-idea">0. The one idea</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#1-two-layers-one-rule">1. Two layers, one rule</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#2-the-lexicon-nouns">2. The lexicon (nouns)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#3-the-grammar-verbs">3. The grammar (verbs)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#31-switching--the-elided-verb">3.1 Switching — the elided verb</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#32-carrying-a-session--to">3.2 Carrying a session — to</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#33-management--plain-conventional-verbs">3.3 Management — plain conventional verbs</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#4-parsing-amp-precedence">4. Parsing &amp;amp; precedence</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#5-the-to-footgun--and-how-we-defuse-it">5. The to footgun — and how we defuse it</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#6-antigravity-agy-folds-into-the-same-grammar--no-special-verbs">6. Antigravity (agy) folds into the same grammar — no special verbs</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#7-back-compatibility-hidden-aliases">7. Back-compatibility (hidden aliases)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#8-help-must-lead-with-the-elided-form">8. Help must lead with the elided form</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#9-implementation-checklist-conform-the-code-to-this-doc">9. Implementation checklist (conform the code to this doc)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#10-open-design-frontier--a-tank-holds-more-than-fuel">10. Open design frontier — a tank holds more than fuel</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#101-the-synthesis-clikae-is-the-control-plane-for-the-engines-brain">10.1 The synthesis: clikae is the control plane for the engine&#x27;s brain</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#102-the-bridge--a-pluggable-local-first-translator">10.2 The bridge — a pluggable, local-first translator</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#103-light-vs-heavy--and-idea-b">10.3 Light vs heavy — and idea B</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#104-ephemeral-memory-the-quotevaporatequot-mode---shipped">10.4 Ephemeral memory (the &amp;quot;evaporate&amp;quot; mode) — ✅ SHIPPED</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#105-shipping-order">10.5 Shipping order</a></div></details><div class="flex items-center justify-between gap-4 mb-6"><div class="prose"><h1 class="!m-0">clikae grammar &amp; lexicon — the single source of truth</h1></div><div class="relative inline-flex items-stretch flex-none"><button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[.85rem] border border-border border-r-0 rounded-l-lg bg-surface text-fg-soft cursor-pointer hover:bg-hover hover:text-fg" data-copy-md="/clikae/grammar.md"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>Copy Markdown</button><details class="relative inline-flex items-stretch" data-menu="true"><summary class="chevron inline-flex items-center justify-center w-[30px] border border-border rounded-r-lg bg-surface text-muted cursor-pointer hover:bg-hover hover:text-fg" aria-label="More actions"></summary><div class="absolute right-0 top-[calc(100%+.4rem)] z-30 min-w-[17rem] flex flex-col gap-px p-1.5 bg-surface border border-border rounded-xl shadow-xl"><button class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" data-copy-md="/clikae/grammar.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg><span class="flex flex-col min-w-0"><span class="font-semibold text-[.9rem] text-fg">Copy Markdown</span><span class="text-[.8rem] text-muted">Copy this page as Markdown for LLMs</span></span></button><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="/clikae/grammar.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M16 21H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6l4 4v12a2 2 0 0 1-2 2z"></path><path d="M9 13h6M9 17h4"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">View as Markdown<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">View this page as plain text</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://chatgpt.com/?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20Grammar%20%26%20lexicon" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in ChatGPT<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask ChatGPT about this page</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://claude.ai/new?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20Grammar%20%26%20lexicon" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in Claude<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask Claude about this page</span></span></a></div></details></div></div><article class="prose"><p>This document defines clikae's command grammar and its vocabulary. It is the
+SSOT: <code>bin/clikae</code> (dispatch), <code>lib/commands/help.sh</code>, every user-facing string,
+the home dashboard, and the docs all conform to what is written here. When the
+grammar and the code disagree, the grammar wins — fix the code.</p>
+<blockquote>
+<p>Read this end-to-end before touching the command surface or any user-facing
+wording.</p>
+</blockquote>
+<hr />
+<h2 id="0-the-one-idea">0. The one idea</h2>
+<p><strong><code>clikae</code> is a verb.</strong> The name is <code>CLI</code> + <code>kae</code> (切り替え, <em>kirikae</em> — &quot;to
+switch&quot;). The tool's whole job is <em>switching</em>, so the word <code>clikae</code> already
+<em>means</em> &quot;switch&quot;. The grammar is built on that:</p>
+<ul>
+<li>The headline action — point a CLI at a tank and start it — needs <strong>no verb at
+all</strong>, because the verb is the program name. <code>clikae claude work</code> reads
+&quot;<strong>switch</strong> claude <strong>to</strong> work&quot;. Nothing to memorise: you already know what
+<code>clikae</code> means.</li>
+<li>Everything that <em>isn't</em> switching (create, delete, inspect, monitor) keeps an
+explicit, conventional verb.</li>
+</ul>
+<p>This is the opposite of inventing cute verbs. We do not rename <code>run</code> to <code>burn</code>.
+We <strong>elide</strong> the verb where the program name already carries it, and otherwise
+use the plain verbs every power user already has in muscle memory.</p>
+<hr />
+<h2 id="1-two-layers-one-rule">1. Two layers, one rule</h2>
+<blockquote>
+<p><strong>The interface follows convention. The metaphor lives in the model.</strong></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What goes here</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Verbs / operation</strong></td>
+<td>what you type, tab-complete, script</td>
+<td>Follow convention. <code>init</code> / <code>remove</code> / <code>list</code> / <code>status</code> are what git, docker, npm, kubectl, gh use. The <em>switch</em> action is elided (program name = verb). <strong>Zero novel verbs to learn.</strong></td>
+</tr>
+<tr>
+<td><strong>Nouns / model</strong></td>
+<td>the concepts you read and remember</td>
+<td>This is where the fuel metaphor earns its keep — it makes the model sticky at no keystroke cost.</td>
+</tr>
+<tr>
+<td><strong>Prose / dashboard</strong></td>
+<td>help intro, status lines, errors, README, the board</td>
+<td>Tell the fuel story freely here.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The test a metaphor must pass:</strong> it may help you <em>understand</em>; it must never
+be required to <em>operate</em>. <code>clikae run claude work</code> needs no story. We never ship
+a verb you must decode a metaphor to use.</p>
+<hr />
+<h2 id="2-the-lexicon-nouns">2. The lexicon (nouns)</h2>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Word</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A CLI tool clikae manages (claude, codex, agy…)</td>
+<td><strong>engine</strong> <em>(a.k.a. CLI)</em></td>
+<td>The thing that burns fuel. The arg is <code>&lt;engine&gt;</code>. Internal code, adapters, and <code>lib/adapters/</code> keep the name <code>cli</code> — users see <em>engine</em>.</td>
+</tr>
+<tr>
+<td>One account/config you can burn</td>
+<td><strong>tank</strong> <em>(a.k.a. profile)</em></td>
+<td>The core noun. <strong>Replaces <code>profile</code> and <code>slot</code> on every user-facing surface.</strong> Annotate &quot;(a.k.a. profile)&quot; the first time it appears in help and in <code>--help</code> for <code>init</code>/<code>list</code>, for people who know the old word.</td>
+</tr>
+<tr>
+<td>The usage allowance in a tank</td>
+<td><strong>fuel</strong> / quota</td>
+<td>—</td>
+</tr>
+<tr>
+<td>A tank that's out of quota</td>
+<td><strong>dry</strong> tank</td>
+<td>Badged <code>⚠</code> on the board.</td>
+</tr>
+<tr>
+<td>Using a CLI (consuming fuel)</td>
+<td><strong>burn</strong></td>
+<td>Prose only (&quot;swap the tank, keep burning&quot;). <strong>Not a command.</strong></td>
+</tr>
+<tr>
+<td>The reserve to fall through to when a tank runs dry</td>
+<td><strong>your other tanks</strong></td>
+<td>No separate concept: the tanks on the board ARE the reserve. (The old <code>pool</code> command was removed — undiscoverable and redundant.)</td>
+</tr>
+<tr>
+<td>A tank set apart from the fleet (no relay/burn/share)</td>
+<td><strong>solo</strong> tank</td>
+<td>Standalone — opts out of <code>to</code>/relay, the burn/<code>watch</code> rotation, and <code>memory share</code>. The board groups it apart from the fleet. Set with <code>clikae solo</code> (§3.3).</td>
+</tr>
+<tr>
+<td>Carrying a live session to another tank</td>
+<td><strong>relay</strong> (same CLI) / <strong>handoff</strong> (cross-CLI)</td>
+<td>Internal/legacy terms. The user-facing verb is <code>to</code> (§3).</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>profile</code> and <code>slot</code> are retired from user-facing text.</strong> They survive only as
+internal identifiers and on disk (<code>~/.clikae/profiles/&lt;engine&gt;/&lt;tank&gt;/</code>,
+<code>profile_dir</code>, <code>profiles_root</code>) — we do <strong>not</strong> churn the storage layout or the
+core functions. Users see exactly one word: <em>tank</em>.</p>
+<hr />
+<h2 id="3-the-grammar-verbs">3. The grammar (verbs)</h2>
+<h3 id="31-switching--the-elided-verb">3.1 Switching — the elided verb</h3>
+<table>
+<thead>
+<tr>
+<th>You type</th>
+<th>Means</th>
+<th>Replaces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clikae</code></td>
+<td>Open your tank board (home).</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>clikae &lt;engine&gt; &lt;tank&gt;</code></td>
+<td>Switch <code>&lt;engine&gt;</code> to <code>&lt;tank&gt;</code> and <strong>start fresh</strong>.</td>
+<td><code>run</code></td>
+</tr>
+<tr>
+<td><code>clikae &lt;engine&gt;</code></td>
+<td>One tank → switch to it. Many → list / pick. None → offer to create.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>clikae &lt;engine&gt; &lt;tank&gt; -- &lt;args&gt;</code></td>
+<td>…passing <code>&lt;args&gt;</code> straight to the CLI.</td>
+<td><code>run … -- …</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-carrying-a-session--to">3.2 Carrying a session — <code>to</code></h3>
+<p><code>to</code> is the <strong>&quot;bring my work with me&quot;</strong> marker. <code>clikae to codex</code> reads &quot;switch
+<strong>to</strong> codex&quot;, and <em>carries the current session</em> rather than starting fresh.</p>
+<table>
+<thead>
+<tr>
+<th>You type</th>
+<th>Means</th>
+<th>Replaces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clikae to &lt;tank&gt;</code></td>
+<td>Carry this shell's current session onto another <strong>tank of the same CLI</strong> → a real <code>--resume</code>.</td>
+<td><code>relay</code></td>
+</tr>
+<tr>
+<td><code>clikae to &lt;engine&gt; [tank]</code></td>
+<td>Carry it to a <strong>different CLI</strong> → that engine can't resume a foreign session, so clikae hands it a written <strong>brief</strong> (cold start).</td>
+<td><code>handoff</code></td>
+</tr>
+</tbody>
+</table>
+<p>The source is auto-detected: first the live env var, then — because the bare
+switch / aliases / <code>.app</code> run the engine with a prefix assignment that never
+reaches the parent shell — <strong>the tank with this directory's most recent
+transcript</strong> (stateless; &quot;the session I was just in here&quot;). To pin a shell to a
+tank explicitly, <code>eval &quot;$(clikae env &lt;engine&gt; &lt;tank&gt;)&quot;</code>. clikae always
+<strong>announces which mechanism it used</strong>, so the resume-vs-brief difference is
+surfaced at runtime, never memorised:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>✓ carried your live session → claude/personal (thread resumed)</span></span>
+<span class="line"><span>⚠ codex can't resume a claude session — handed it a written brief (cold start)</span></span></code></pre>
+<blockquote>
+<p><strong>Precision (a tank holds more than fuel).</strong> <code>to</code> carries the <strong>session
+transcript</strong> — the thread continues — but NOT the engine's <em>long-term memory</em>,
+which lives inside the tank dir (e.g. claude's file-memory under
+<code>CLAUDE_CONFIG_DIR</code>) and stays with the source tank. So &quot;resume&quot; means the
+conversation, not the brain. Carrying/sharing the <em>brain</em> across tanks/engines is
+a separate opt-in — <code>clikae memory share</code> (§3.3, the §10 link/overlay idea, now
+shipped for claude/codex/agy). Don't claim &quot;context intact&quot;.</p>
+</blockquote>
+<p><code>to</code>'s argument resolves <strong>engine name first, then a tank of the current
+engine</strong> (stateless and predictable: a known engine name always crosses to it).
+Disambiguate explicitly with <code>clikae to &lt;engine&gt; &lt;tank&gt;</code>. clikae always
+announces what it resolved, so a wrong guess is visible and correctable.</p>
+<h3 id="33-management--plain-conventional-verbs">3.3 Management — plain conventional verbs</h3>
+<p>These are <strong>not</strong> switching, so they keep an explicit, conventional verb. No
+fuel words forced on them.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clikae init &lt;engine&gt; &lt;tank&gt;</code></td>
+<td>Create a tank. (<code>--alias</code> also writes a shell alias.)</td>
+</tr>
+<tr>
+<td><code>clikae remove &lt;engine&gt; &lt;tank&gt;</code></td>
+<td>Remove a tank (dir, alias, .app).</td>
+</tr>
+<tr>
+<td><code>clikae rename &lt;engine&gt; &lt;old&gt; &lt;new&gt;</code></td>
+<td>Rename a tank (dir, alias, login carried over).</td>
+</tr>
+<tr>
+<td><code>clikae git-id &lt;engine&gt; &lt;tank&gt; [--name N --email E | --unset]</code></td>
+<td>Give a tank an optional <strong>git commit identity</strong>. When set, <code>clikae env</code> also exports <code>GIT_AUTHOR_*</code>/<code>GIT_COMMITTER_*</code> so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22 / HANDOFF §13). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat <code>git config</code> but not an explicit <code>git -c user.email=…</code>; future commits only.</td>
+</tr>
+<tr>
+<td><code>clikae memory &lt;share|isolate|status&gt; [&lt;engine&gt; &lt;tank&gt;]</code></td>
+<td>The <strong>memory dial</strong> (§10.1, docs/memory.md). <code>share &lt;group&gt;</code> points a tank's long-term memory at ONE vendor-neutral markdown store (<code>souls/&lt;group&gt;/memory</code>, a &quot;Soul&quot;) so several of <em>your own</em> tanks — <strong>across engines</strong> — read/write the same brain; <code>isolate</code> restores a tank's own memory; <code>status</code> shows the share state. Two strategies by what the engine exposes: <strong>claude</strong> fans its memory DIR into the store (symlink, per-<code>$PWD</code>); <strong>codex</strong> gets a fenced pointer note in its <code>AGENTS.md</code> and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 opt-in and per-tank — clikae never auto-crosses accounts; crossing your own accounts is announced (<code>--yes</code> skips the prompt). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of <code>--ephemeral</code>'s fan-out. agy points the same way via <code>~/.gemini/GEMINI.md</code>.</td>
+</tr>
+<tr>
+<td><code>clikae solo &lt;engine&gt; &lt;tank&gt; [reason | --off]</code></td>
+<td>Mark a tank <strong>standalone</strong> — out of the fleet. A solo tank is never a <code>to</code>/relay target, the burn/<code>watch</code> rotation skips it, and <code>clikae memory share</code> refuses it. For a dedicated tank (a bot/persona tank on your own account, a client-only tank) that must never receive carried work or share a brain. Bare <code>clikae solo</code> lists them. The cross-account guard can't protect a same-account, different-purpose tank — solo is how you wall it off. State: a marker file <code>&lt;tank&gt;/clikae-meta/solo</code>; the predicate <code>tank_is_solo</code> is what the fleet checks.</td>
+</tr>
+<tr>
+<td><code>clikae tanks</code> (alias: <code>clikae list</code> / <code>ls</code>)</td>
+<td>List every tank, with the logged-in account. <code>tanks</code> is canonical — a <strong>noun query</strong>, like the existing <code>adapters</code> command, not a coined verb. <code>list</code>/<code>ls</code> stay for convention and for the GUI's <code>list --json</code>.</td>
+</tr>
+<tr>
+<td><code>clikae status [cli]</code></td>
+<td>Which tank each CLI is on <strong>in this shell</strong>.</td>
+</tr>
+<tr>
+<td><code>clikae to [target]</code></td>
+<td>Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve).</td>
+</tr>
+<tr>
+<td><code>clikae auto [ask|safe|full]</code></td>
+<td>(BETA, claude) how much the supervised launch carries on its own on a dry tank.</td>
+</tr>
+<tr>
+<td><code>clikae watch &lt;engine&gt; [tank]</code></td>
+<td>Notice a dry tank; offer/auto carry onward to the next tank in the burn order.</td>
+</tr>
+<tr>
+<td><code>clikae burn &lt;engine&gt; &lt;tank&gt; --artifact &lt;path&gt; (--prompt-file &lt;f&gt; | -- &lt;cmd…&gt;)</code></td>
+<td>Run a <strong>headless</strong> task on a tank, verify it by the artifact it must produce (never the exit code — <code>codex exec</code> exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the <strong>easy way</strong> (<code>--prompt-file</code>/<code>--prompt</code> + <code>--add-dir</code>: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the <strong>power-user way</strong> (raw <code>-- &lt;cmd…&gt;</code>). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; <code>burn</code> is the single-task unit it fans out and re-fires. <code>--to</code> forces an explicit next hop.</td>
+</tr>
+<tr>
+<td><code>clikae conduct --leg &lt;e&gt;/&lt;t&gt;… (--prompt-file &lt;f&gt; | --prompt &lt;s&gt;)</code></td>
+<td><strong>(BETA)</strong> The vertical-orchestration primitive: fan ONE prompt across N accounts <strong>in parallel</strong>, each running headless <strong>read-only</strong> on its own tank (its own quota), then collect every leg's full output and print a captured/dry table. clikae does <strong>not</strong> judge — it hands you N result files and an honest table; you (or the session model acting as conductor) pick the winner. Brain/muscle split: clikae is the muscle (accounts, dry-detection, parallel routing), the conductor is the brain. Read-only by design so legs can't clobber a shared tree; write/impl tournaments stay an orchestrator's job.</td>
+</tr>
+<tr>
+<td><code>clikae migrate [cli]</code></td>
+<td>Adopt a hand-rolled config-dir + alias setup.</td>
+</tr>
+<tr>
+<td><code>clikae app</code> / <code>clikae alias</code></td>
+<td>Generate a macOS launcher / write a shell alias.</td>
+</tr>
+<tr>
+<td><code>clikae lang [en-US|ja-JP|zh-TW]</code></td>
+<td>Show or set the interface language (dashboard + prompts); the board's <code>l</code> key opens a language picker.</td>
+</tr>
+<tr>
+<td><code>clikae doctor</code> / <code>info</code> / <code>adapters</code> / <code>demo</code> / <code>help</code> / <code>version</code></td>
+<td>Inspect / meta.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-parsing-amp-precedence">4. Parsing &amp; precedence</h2>
+<p><code>bin/clikae</code> resolves the first argument in this order:</p>
+<ol>
+<li><strong>Reserved command?</strong> (<code>init</code>, <code>remove</code>, <code>list</code>, <code>tanks</code>, <code>status</code>, <code>to</code>,
+<code>watch</code>, <code>auto</code>, <code>burn</code>, <code>conduct</code>, <code>rename</code>, <code>git-id</code>, <code>memory</code>, <code>migrate</code>, <code>env</code>, <code>app</code>, <code>alias</code>,
+<code>lang</code>, <code>run</code>, <code>continue</code>, <code>relay</code>, <code>handoff</code>, <code>doctor</code>, <code>info</code>, <code>adapters</code>,
+<code>demo</code>, <code>home</code>, <code>help</code>, <code>version</code>, plus the <code>agy</code>/<code>dashboard</code>/<code>ls</code>/<code>rm</code> aliases
+and <code>-h/--help/-v/--version</code>) → run that command. (<code>git-id</code> routes to the
+<code>git_id.sh</code> command — the only verb whose file/function uses <code>_</code> for the <code>-</code>.)</li>
+<li><strong>Else, a known CLI?</strong> (an adapter in <code>lib/adapters/</code> or a target in
+<code>lib/targets/</code>, e.g. <code>claude</code>, <code>codex</code>, <code>agy</code>) → the <strong>bare switch</strong> of §3.1.</li>
+<li><strong>Else</strong> → unknown; show an error + <code>help</code>.</li>
+</ol>
+<p>Consequences, documented so they never surprise:</p>
+<ul>
+<li>Reserved commands win. If you ever have a CLI literally named like a reserved
+word, reach it via the explicit alias: <code>clikae run &lt;engine&gt; &lt;tank&gt;</code>.</li>
+<li><code>clikae &lt;engine&gt; --help</code> is ambiguous, so we don't guess: clikae's own help is
+<code>clikae help &lt;engine&gt;</code>; flags meant for the CLI go after <code>--</code>
+(<code>clikae &lt;engine&gt; &lt;tank&gt; -- --help</code>).</li>
+</ul>
+<hr />
+<h2 id="5-the-to-footgun--and-how-we-defuse-it">5. The <code>to</code> footgun — and how we defuse it</h2>
+<p><code>clikae claude work</code> (start fresh) and <code>clikae to claude work</code> (carry the
+session) differ by one word. A bare switch does <strong>not</strong> destroy anything — your
+old tank's transcript is still there to <code>to</code> back into later — so the cost of
+forgetting <code>to</code> is usually just a wasted step, and it's recoverable.</p>
+<p>The one moment it genuinely stings is when <strong>the tank you're on just ran dry</strong>:
+you hit a limit, you want to continue, and a silent fresh start is the opposite
+of your intent. So the mitigation is <strong>narrow on purpose</strong> — it fires only there:</p>
+<p><strong>Mitigation (option B):</strong> a bare switch is <strong>dry-aware</strong>, not session-aware in
+general. When <code>clikae &lt;engine&gt; &lt;tank&gt;</code> is invoked and the tank you're currently
+on for that engine <strong>is over quota (dry)</strong>, clikae does not silently start fresh.
+On a TTY it asks:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>claude/main is out of fuel right now.</span></span>
+<span class="line"><span>  ❯ Carry this session over to work   (= clikae to)</span></span>
+<span class="line"><span>    Start work fresh</span></span></code></pre>
+<p>Non-interactively (pipe/script) it defaults to <strong>start fresh</strong> but prints:
+<code>hint: to continue this session, use  clikae to claude work</code>.</p>
+<p>When the current tank is <strong>not</strong> dry, a bare switch is silent and instant — we
+respect that switching to another tank is probably intentional. This puts the
+one prompt exactly on the product's core moment (dry → swap tank), and nowhere
+else.</p>
+<hr />
+<h2 id="6-antigravity-agy-folds-into-the-same-grammar--no-special-verbs">6. Antigravity (agy) folds into the same grammar — no special verbs</h2>
+<p>The engine's canonical name is <strong><code>agy</code></strong> — that's what its own CLI calls itself,
+and it matches the rule that the engine arg is always the binary name (<code>claude</code>,
+<code>codex</code>, <code>gh</code>). <code>Antigravity</code> is the proper name we use in prose and UI titles
+(&quot;Antigravity (agy)&quot;); <code>antigravity</code> survives only as a hidden long-form alias of
+the engine name. <strong>You type <code>agy</code>.</strong></p>
+<p>agy hardcodes <code>~/.gemini</code>, ignores every env var, and has no config-dir flag, so
+it can't switch per-shell like other engines. clikae handles it by swapping
+<code>~/.gemini</code> between tank dirs via a symlink — a global, one-tank-active-at-a-time
+power mode. agy reads its account from one machine-wide Keychain login (ignoring
+which tank dir is active), so on a tank switch clikae <strong>logs agy out</strong> (clears that
+one Keychain item) and agy asks you to sign in with the new tank's Google account —
+your browser already holds your logins, so it's a click. clikae never reads or
+stores the token; it just clears the slot, so the account you land on is the one you
+picked (no silent restore landing you on the wrong one). Honest cost: a cross-account
+switch needs an interactive sign-in, so headless <code>burn</code>/<code>conduct</code> can't change agy
+accounts. The user does <strong>not</strong> learn a separate command tree for this: agy
+uses the <em>same verbs as everything else</em>, with <strong>zero special subcommands</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>You type</th>
+<th>agy behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clikae init agy work</code></td>
+<td><strong>First time:</strong> warn about the tradeoffs and ask one explicit <code>[y/N]</code> before clikae takes <code>~/.gemini</code> over, then back it up, migrate the current login into a <code>default</code> tank, and create <code>work</code>. <strong>After:</strong> just creates the tank (no ceremony — the dangerous one-time takeover already happened).</td>
+</tr>
+<tr>
+<td><code>clikae agy work</code></td>
+<td>Switch the active tank to <code>work</code> (refuses if agy is live), then start agy. Prints <code>agy is global — switched all terminals to work</code>, because the side-effect is machine-wide.</td>
+</tr>
+<tr>
+<td><code>clikae list</code> / <code>status</code></td>
+<td>agy tanks appear alongside the rest; <code>●</code> marks the one active tank; labelled <code>(global)</code>.</td>
+</tr>
+<tr>
+<td><code>clikae remove agy work</code></td>
+<td>Remove the tank. <strong>Removing the last tank</strong> offers to also restore a vanilla <code>~/.gemini</code> and release the takeover — that's the teardown, folded into <code>remove</code>.</td>
+</tr>
+<tr>
+<td><code>clikae agy --release</code></td>
+<td>The rare &quot;keep my tanks but stop managing <code>~/.gemini</code>&quot; case: restore a normal single-account <code>~/.gemini</code> and release the symlink takeover, leaving the tank dirs on disk for later. A flag (not a tank name → no bare-switch collision).</td>
+</tr>
+</tbody>
+</table>
+<p>There is <strong>no</strong> <code>clikae agy disable</code> / <code>antigravity disable</code> — it would collide
+with the bare switch (<code>clikae agy &lt;tank&gt;</code> reads <code>disable</code>/anything as a tank
+name). Teardown lives in <code>remove</code> (last tank) and the <code>--release</code> flag.</p>
+<p>Key points:</p>
+<ul>
+<li>agy <strong>can have many tanks</strong> (store as many as you like). It can only have
+<strong>one active at a time</strong> across the whole machine — agy's engine has a single
+hardcoded fuel line (<code>~/.gemini</code>). The board's <code>●</code> makes that visible.</li>
+<li>The warn-and-confirm lives on the <strong>first-ever takeover only</strong> (turning your
+real <code>~/.gemini</code> into a managed symlink). Subsequent <code>init agy &lt;tank&gt;</code> is a
+plain <code>mkdir</code> — same friction as <code>init claude</code>.</li>
+<li>agy can be a relay/<code>to</code> <strong>target</strong> (<code>clikae to agy</code> → brief + launch) but not
+a <strong>source</strong> (its <code>.pb</code> transcript is opaque). <code>watch agy</code> is alert-only.</li>
+</ul>
+<hr />
+<h2 id="7-back-compatibility-hidden-aliases">7. Back-compatibility (hidden aliases)</h2>
+<p>These keep working but are <strong>not</strong> advertised in <code>clikae help</code> (they may appear
+in <code>clikae help &lt;cmd&gt;</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Hidden alias</th>
+<th>Canonical</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run &lt;engine&gt; &lt;tank&gt;</code></td>
+<td><code>clikae &lt;engine&gt; &lt;tank&gt;</code></td>
+</tr>
+<tr>
+<td><code>continue</code> / <code>relay</code> / <code>handoff</code></td>
+<td><code>clikae to …</code></td>
+</tr>
+<tr>
+<td><code>antigravity add</code> / <code>use</code> / <code>enable</code> / <code>disable</code></td>
+<td>folded into <code>init</code> / bare-switch / first-<code>init</code> / <code>remove</code>-last-tank + <code>--release</code></td>
+</tr>
+<tr>
+<td><code>antigravity</code> (as the engine name)</td>
+<td><code>agy</code> (canonical engine name; <code>antigravity</code> is a hidden long alias)</td>
+</tr>
+<tr>
+<td><code>list</code> / <code>ls</code> → <code>tanks</code>, <code>rm</code> → <code>remove</code>, <code>dashboard</code> → <code>home</code></td>
+<td><code>tanks</code> is canonical; <code>list</code>/<code>ls</code> are aliases</td>
+</tr>
+</tbody>
+</table>
+<p>Scripts and CI should prefer the explicit aliases (<code>clikae run …</code>) where
+clarity beats brevity — that's exactly what they're for.</p>
+<hr />
+<h2 id="8-help-must-lead-with-the-elided-form">8. Help must lead with the elided form</h2>
+<p>Because the bare switch has no verb, it is <em>invisible</em> unless taught. The home
+screen (bare <code>clikae</code>) and <code>clikae help</code> MUST open with it:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>clikae &#x3C;engine> &#x3C;tank>     switch &#x3C;engine> to &#x3C;tank> and run it      ← the main thing</span></span>
+<span class="line"><span>clikae to &#x3C;where>       carry your current session elsewhere</span></span>
+<span class="line"><span>clikae                  your tank board</span></span>
+<span class="line"><span>clikae init &#x3C;engine> &#x3C;tank>   create a new tank</span></span>
+<span class="line"><span>clikae help                full command reference</span></span></code></pre>
+<hr />
+<h2 id="9-implementation-checklist-conform-the-code-to-this-doc">9. Implementation checklist (conform the code to this doc)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>Dispatch</strong> (<code>bin/clikae</code>): the §4 first-arg resolver — reserved command
+→ bare switch (known CLI) → error. Wire <code>to</code> and <code>tanks</code>; keep <code>run</code>,
+<code>continue</code>, <code>relay</code>, <code>handoff</code> as hidden aliases.</li>
+<li><input disabled="" type="checkbox"> <strong>Bare switch</strong>: route <code>&lt;engine&gt; &lt;tank&gt;</code> through the existing <code>cmd_run</code> path
+(env apply + exec). Add the §5 session-aware prompt.</li>
+<li><input disabled="" type="checkbox"> <strong><code>to</code></strong>: a single command that auto-detects source, picks resume
+(same CLI) vs brief (cross CLI), and announces which. Fold today's
+<code>relay</code> + <code>handoff</code> behind it.</li>
+<li><input disabled="" type="checkbox"> <strong>agy</strong>: intercept <code>cli ∈ {agy, antigravity}</code> in <code>init</code> / bare-switch /
+<code>remove</code> <strong>before</strong> <code>load_adapter</code> (agy has no adapter). First <code>init agy</code>
+runs the warn-and-confirm takeover; bare-switch does select-slot + launch +
+the global notice; <strong>remove of the last tank offers teardown</strong>, and
+<code>clikae agy --release</code> handles keep-tanks-but-release. <strong>No <code>disable</code>
+subcommand</strong> (collides with bare switch). Canonical engine name is <code>agy</code>;
+<code>antigravity</code> becomes a hidden long alias — drop the old
+<code>cmd_antigravity</code> subcommand tree.</li>
+<li><input disabled="" type="checkbox"> <strong>Wording sweep</strong>: <code>profile</code>/<code>slot</code> → <code>tank</code> (a.k.a. profile) across
+<code>help.sh</code>, <code>list</code> header (<code>PROFILE</code> → <code>TANK</code>), <code>init</code>/<code>run</code>/<code>remove</code>
+prompts, error strings, and the home dashboard. Disk layout and core
+function names stay <code>profile</code>.</li>
+<li><input disabled="" type="checkbox"> <strong>Help</strong>: rewrite <code>cmd_help</code> to §8 — lead with the elided form.</li>
+<li><input disabled="" type="checkbox"> <strong>Docs</strong>: update <code>usage.md</code> / <code>README.md</code> to this grammar; purge <code>run</code>
+and <code>relay/handoff</code> from the <em>recommended</em> surface (keep as aliases).</li>
+<li><input disabled="" type="checkbox"> <strong>Tests</strong>: bats for first-arg resolution, the <code>to</code> footgun prompt
+(TTY vs non-TTY), agy folding, and back-compat aliases.</li>
+<li><input disabled="" type="checkbox"> <strong>PowerShell mirror</strong>: reflect the same grammar in <code>Clikae.psm1</code> where it
+applies.</li>
+</ul>
+<hr />
+<h2 id="10-open-design-frontier--a-tank-holds-more-than-fuel">10. Open design frontier — a tank holds more than fuel</h2>
+<blockquote>
+<p>Contributed by a concurrent session (the over-quota-detection work, profile b,
+2026-06-01). Recorded here as an open frontier, <strong>not yet a decision</strong> — the
+maintainer's call whether to fold it into the model.</p>
+</blockquote>
+<p><strong>The tension.</strong> §2 says <em>fuel = quota</em> and <em>tank = one account/config</em>. True,
+but the tank dir holds far more than fuel — it holds the engine's <strong>long-term
+memory and every transcript</strong>. Fuel is fungible; memory is not. So &quot;swap the
+tank, keep burning&quot; quietly swaps the engine's <em>brain</em> too. (Proof: claude's
+file-memory lives inside <code>CLAUDE_CONFIG_DIR</code>, so <code>profiles/claude/a</code> and
+<code>…/b</code> have entirely separate memory stores — they've even drifted to different
+naming conventions. Cross-tank memory only travels by a hand-rolled bridge.)</p>
+<p><strong>The unifying pattern.</strong> agy's <code>~/.gemini</code> symlink-swap (§6) isn't a one-off.
+clikae keeps hitting engines that hardcode <em>where</em> their state lives in a way
+that mismatches the cardinality we want — and the fix is always filesystem
+indirection to reshape that mapping:</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Engine assumes</th>
+<th>clikae wants</th>
+<th>Indirection</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>agy</strong> (§6)</td>
+<td>one hardcoded <code>~/.gemini</code></td>
+<td>many tanks</td>
+<td>symlink fans <strong>out</strong> (1 path → pick of N)</td>
+</tr>
+<tr>
+<td><strong>shared memory</strong></td>
+<td>memory bundled in the swapped dir</td>
+<td>one shared store</td>
+<td>symlink fans <strong>in</strong> (N paths → 1 store)</td>
+</tr>
+<tr>
+<td><strong><code>to</code></strong> (§3.2)</td>
+<td>transcript siloed per tank</td>
+<td>carry it across</td>
+<td>copy bridges the boundary</td>
+</tr>
+</tbody>
+</table>
+<p>Same primitive, three directions. The cooperative engines (claude/codex/gh) are
+the easy case — an env var, so <code>env-dir</code>/<code>env-file</code>/<code>flag</code> just point it. agy and
+memory are the entangled cases that want the same tool.</p>
+<p><strong>The idea to weigh:</strong> a fourth strategy alongside <code>env-dir</code>/<code>env-file</code>/<code>flag</code> —
+a <strong>link / overlay</strong> strategy. It would (a) make agy a principled strategy rather
+than a &quot;target, not adapter&quot; snowflake, (b) give <em>cross-tank memory sharing</em> a
+home (a warned, reversible opt-in symlinking one shared memory store into each
+tank — informed-consent style, like §6), and (c) connect <code>to</code>'s transcript-carry
+to the same family. i.e. &quot;agy folds into the same grammar&quot; extended one level
+down to &quot;agy folds into the same <em>state-control model</em>, no special mechanism.&quot;</p>
+<p>Full write-up: <code>~/clikae-handoff-state-mapping.md</code>.</p>
+<blockquote>
+<p>The rest of §10 is a maintainer design session (2026-06-01) building on that
+gift. Still a frontier, not a shipped decision — but the shape is agreed.</p>
+</blockquote>
+<h3 id="101-the-synthesis-clikae-is-the-control-plane-for-the-engines-brain">10.1 The synthesis: clikae is the control plane for the engine's <em>brain</em></h3>
+<p>The tension above resolves into a single idea. clikae already controls <strong>where
+the engine's fuel comes from</strong> (which account/quota). The same lever — filesystem
+indirection on the config dir — also controls <strong>the engine's memory</strong>. So memory
+is just another dial, with a spectrum:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Memory mapping</th>
+<th>For whom</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>share</strong></td>
+<td>N tanks → <strong>1</strong> store (fan-in)</td>
+<td>aggregate your own brain across accounts</td>
+</tr>
+<tr>
+<td><strong>isolate</strong></td>
+<td>N → <strong>N</strong> (today's default)</td>
+<td>the current behaviour; blast-radius containment</td>
+</tr>
+<tr>
+<td><strong>evaporate</strong></td>
+<td>N → <strong>0</strong> (redirect to throwaway)</td>
+<td>the surgical/ephemeral power user</td>
+</tr>
+</tbody>
+</table>
+<p>Same primitive as agy's symlink, pointed at three purposes. <strong>clikae's essence,
+stated once: control where state lives, how long, and how widely shared</strong> — for
+auth/config (today), for fuel (the reframe), and now for memory.</p>
+<blockquote>
+<p><strong>Emergent: MCP connectors.</strong> The claude.ai login isolated in each tank also
+determines which MCP connectors are active in that session — switch tank and the
+Stripe, Drive, or WordPress connectors switch with it. clikae doesn't manage MCP
+and doesn't provision connectors; this is just per-account auth isolation paying
+off as a third layer alongside fuel and memory.</p>
+</blockquote>
+<p><strong>Guiding value (maintainer, locked):</strong> <em>aggregate, never mutate the source.</em> Any
+memory move/share/translate operates on a COPY going outward; the source tank's
+memory is never rewritten in place. Same DNA as relay's &quot;copy, never move; source
+untouched.&quot;</p>
+<h3 id="102-the-bridge--a-pluggable-local-first-translator">10.2 The bridge — a pluggable, local-first translator</h3>
+<p>Cross-<strong>engine</strong> memory is NOT a symlink: claude / codex / agy store memory in
+incompatible formats. The fix mirrors <code>handoff</code>'s existing
+<code>CLIKAE_HANDOFF_SUMMARIZER</code> — a pluggable, local/cheap model does the semantic
+work, clikae just runs plumbing. Propose <strong><code>CLIKAE_MEMORY_TRANSLATOR='&lt;cmd&gt;'</code></strong>:
+model-agnostic, <strong>local-first</strong> (no quota burned, nothing leaves the machine —
+memory is sensitive). Apple Intelligence is one backend (its on-device model is
+reachable only via Swift <code>FoundationModels</code>, so a small <code>clikae-translate</code> shim —
+the GUI is already Swift); <code>llm</code>/<code>ollama</code> another.</p>
+<p><strong>The objection MOVES from format to <em>loss</em>.</strong> A summarizer for a one-shot
+handoff brief is safe because the brief is <strong>disposable</strong>. Memory is the opposite
+— authoritative, accumulative, trusted across sessions. An LLM rewriting memory
+on every sync drifts (a telephone game). So memory translation must be treated as
+reviewable + reversible, never a silent background rewrite.</p>
+<h3 id="103-light-vs-heavy--and-idea-b">10.3 Light vs heavy — and idea B</h3>
+<ul>
+<li><strong>Light — per-<code>to</code> memory injection (disposable).</strong> On <code>clikae to codex</code>, the
+translator renders the <em>relevant slice</em> of the source tank's memory into a form
+codex can use, injected <strong>once</strong> alongside the handoff brief. codex doesn't
+permanently grow a claude-brain; it just knows enough for <em>this</em> continuation.
+No canonical store, no telephone game, no concurrency. It is literally
+<code>handoff</code> ++ : the brief carries the thread, this carries a brain-slice. <strong>Do
+this first.</strong></li>
+<li><strong>Heavy — a persistent canonical store.</strong> clikae keeps ONE canonical memory
+store; the translator does canonical↔each-engine; all tools share long-term.
+The endgame, but it needs a canonical schema, <strong>reviewable sync (show the diff,
+approve)</strong>, drift control, and concurrency handling.</li>
+<li><strong>Idea B (engines read/write clikae natively) — half true, half walled.</strong>
+<em>Already true:</em> clikae's config-dir indirection ALREADY puts the memory
+physically in its own tree — this very file's <code>MEMORY.md</code> lives under
+<code>…/profiles/claude/b/…/memory/</code>. <em>Walled:</em> engines expose a memory <em>location</em>
+hook (the env var) but <strong>not a memory <em>format</em> hook</strong> — you can relocate
+claude's memory, you can't make it write clikae's schema or make codex read
+claude's files. So the clean form of B = <strong>adopt claude's near-neutral markdown
+AS the canonical</strong>, claude is ~native, others bridged by the translator. B
+doesn't escape translation; it minimises it by picking the most-neutral format
+as the anchor. (B is the heavy version reached from another door.)</li>
+</ul>
+<h3 id="104-ephemeral-memory-the-quotevaporatequot-mode---shipped">10.4 Ephemeral memory (the &quot;evaporate&quot; mode) — ✅ SHIPPED</h3>
+<p>The surgical power user wants a model that <strong>remembers nothing</strong>. clikae already
+owns the config-dir indirection, so pointing the <code>memory</code> subdir at a throwaway
+is trivial — same primitive, third direction. <strong>Shipped as
+<code>clikae &lt;engine&gt; &lt;tank&gt; --ephemeral</code></strong> (<code>lib/commands/switch.sh</code>): it stashes the
+tank's real <code>projects/&lt;slug&gt;/memory</code> aside, symlinks a <code>mktemp -d</code> throwaway in
+its place, runs the engine <strong>as a child</strong> (not <code>exec</code>, so cleanup runs), and on
+exit restores the real memory + wipes the throwaway. A crashed run self-heals on
+the next <code>--ephemeral</code>. Login + transcripts are normal — <strong>only memory is
+throwaway</strong>. Engine-gated by a new optional hook <code>adapter_memory_dir &lt;dir&gt;</code>
+(claude defines it; others reject <code>--ephemeral</code> cleanly). bats in
+<code>tests/bats/ephemeral.bats</code>.</p>
+<p><strong>Honest framing (shipped as written):</strong> clikae guarantees <em>the memory dir is
+throwaway</em> — it's <strong>ephemeral memory</strong>, NOT &quot;remembers nothing anywhere&quot; (caches,
+shell history, telemetry, Keychain are outside reach). The <code>--help</code>/docs promise
+only what's kept.</p>
+<h3 id="105-shipping-order">10.5 Shipping order</h3>
+<ol>
+<li>✅ <strong>Ephemeral memory</strong> — SHIPPED (<code>--ephemeral</code>; smallest, zero
+model/translation, immediate value for the surgical user).</li>
+<li><strong>Light per-<code>to</code> memory injection</strong> — the local-translator proving ground
+(<code>handoff</code>++). NEXT.</li>
+<li><strong>Heavy canonical store</strong> (= idea B) — only once the local bridge is proven
+reliable and the disposable slice turns out not to be enough.</li>
+</ol>
+<p>All three are one <code>link/overlay</code> strategy (§10 intro) — clikae as the dial on the
+engine's brain.</p>
+<hr />
+<p><em>This grammar is a decision, not a sketch. Change it here first, with the
+maintainer, before changing the code.</em></p>
+</article><nav class="flex justify-between gap-4 mt-12 pt-6 border-t border-border"><a class="flex-1 px-4 py-3.5 border border-border rounded-xl hover:border-accent" href="/clikae/usage"><div class="text-muted text-[.78rem]">← <!-- -->Previous</div><div class="font-semibold text-accent">Usage</div></a><a class="flex-1 px-4 py-3.5 border border-border rounded-xl hover:border-accent text-right" href="/clikae/orchestration"><div class="text-muted text-[.78rem]">Next<!-- --> →</div><div class="font-semibold text-accent">Orchestration</div></a></nav><script>document.querySelectorAll('[data-copy-md]').forEach(function(b){b.addEventListener('click',async function(){try{var r=await fetch(b.getAttribute('data-copy-md'));var t=await r.text();await navigator.clipboard.writeText(t);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1500);}catch(e){alert('Copy failed: '+e);}});});document.querySelectorAll('.prose pre').forEach(function(pre){if(pre.querySelector('.copy-code'))return;var b=document.createElement('button');b.className='copy-code';b.textContent='Copy';b.addEventListener('click',async function(){var c=pre.querySelector('code');try{await navigator.clipboard.writeText(c?c.innerText:pre.innerText);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1200);}catch(e){}});pre.appendChild(b);});document.querySelectorAll('.tabs').forEach(function(t){t.querySelectorAll('.tab-btn').forEach(function(b){b.addEventListener('click',function(){var i=b.getAttribute('data-tab');t.querySelectorAll('.tab-btn').forEach(function(x){x.classList.toggle('active',x.getAttribute('data-tab')===i);});t.querySelectorAll('.tab-panel').forEach(function(p){p.hidden=p.getAttribute('data-tab')!==i;});});});});(function(){var blocks=document.querySelectorAll('code.language-mermaid');if(!blocks.length)return;var items=[];blocks.forEach(function(c){var pre=c.closest('pre')||c;var h=document.createElement('div');h.className='mermaid-diagram';pre.replaceWith(h);items.push({src:c.textContent,holder:h});});var lib,id=0;function load(){return lib||(lib=import("https://esm.sh/mermaid@11").then(function(m){return m.default;}));}function theme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'default';}function run(){load().then(function(mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:theme()});items.forEach(function(it){mermaid.render('kura-mmd-'+(id++),it.src).then(function(r){it.holder.innerHTML=r.svg;}).catch(function(e){it.holder.innerHTML='<pre class="mermaid-error">'+String((e&&e.message)||e)+'</pre>';});});}).catch(function(){});}run();var cur=document.documentElement.getAttribute('data-theme');new MutationObserver(function(){var t=document.documentElement.getAttribute('data-theme');if(t!==cur){cur=t;run();}}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});})();</script></main><aside class="sticky top-14 max-h-[calc(100vh-56px)] overflow-y-auto px-4 py-8 max-lg:hidden"><p class="text-[.72rem] font-bold tracking-wider uppercase text-muted mb-2.5">On this page</p><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#0-the-one-idea">0. The one idea</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#1-two-layers-one-rule">1. Two layers, one rule</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#2-the-lexicon-nouns">2. The lexicon (nouns)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#3-the-grammar-verbs">3. The grammar (verbs)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#31-switching--the-elided-verb">3.1 Switching — the elided verb</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#32-carrying-a-session--to">3.2 Carrying a session — to</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#33-management--plain-conventional-verbs">3.3 Management — plain conventional verbs</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#4-parsing-amp-precedence">4. Parsing &amp;amp; precedence</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#5-the-to-footgun--and-how-we-defuse-it">5. The to footgun — and how we defuse it</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#6-antigravity-agy-folds-into-the-same-grammar--no-special-verbs">6. Antigravity (agy) folds into the same grammar — no special verbs</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#7-back-compatibility-hidden-aliases">7. Back-compatibility (hidden aliases)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#8-help-must-lead-with-the-elided-form">8. Help must lead with the elided form</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#9-implementation-checklist-conform-the-code-to-this-doc">9. Implementation checklist (conform the code to this doc)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#10-open-design-frontier--a-tank-holds-more-than-fuel">10. Open design frontier — a tank holds more than fuel</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#101-the-synthesis-clikae-is-the-control-plane-for-the-engines-brain">10.1 The synthesis: clikae is the control plane for the engine&#x27;s brain</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#102-the-bridge--a-pluggable-local-first-translator">10.2 The bridge — a pluggable, local-first translator</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#103-light-vs-heavy--and-idea-b">10.3 Light vs heavy — and idea B</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#104-ephemeral-memory-the-quotevaporatequot-mode---shipped">10.4 Ephemeral memory (the &amp;quot;evaporate&amp;quot; mode) — ✅ SHIPPED</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#105-shipping-order">10.5 Shipping order</a></aside></div></div><footer class="border-t border-border mt-8"><div class="flex items-center justify-between flex-wrap gap-4 max-w-[1280px] mx-auto px-6 py-5 max-md:px-4"><nav class="flex items-center gap-[1.1rem] text-[.85rem]"><a class="text-muted hover:text-fg" href="/clikae/llms.txt">llms.txt</a><button type="button" class="inline-flex items-center justify-center w-[30px] h-[30px] p-0 text-[.95rem] leading-none border border-border rounded-lg bg-surface text-fg cursor-pointer hover:bg-hover" data-theme-toggle="true" aria-label="Toggle theme"></button></nav><a class="text-muted text-[.85rem] hover:text-accent" href="https://kura.build/" target="_blank" rel="noreferrer">Powered by Kura</a></div></footer><script>document.addEventListener('keydown',function(e){if(e.key==='/' && !document.documentElement.dataset.ctrlk && !/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'')){e.preventDefault();var s=document.querySelector('.search-box');if(s)s.focus();}});(function(){var b=document.querySelector('[data-theme-toggle]');if(!b)return;var d=document.documentElement,order=['system','light','dark'],icon={system:'🖥',light:'☀',dark:'☾'};function pref(){return d.getAttribute('data-theme-pref')||'system';}function res(p){return p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}function set(p){d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',res(p));try{localStorage.setItem('kura-theme',p);}catch(e){}b.textContent=icon[p];b.setAttribute('title','Theme: '+p);}set(pref());b.addEventListener('click',function(){set(order[(order.indexOf(pref())+1)%order.length]);});try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){if(pref()==='system')d.setAttribute('data-theme',res('system'));});}catch(e){}})();document.addEventListener('click',function(e){var t=e.target;document.querySelectorAll('details[data-menu][open]').forEach(function(d){if(!d.contains(t))d.removeAttribute('open');});var it=t.closest&&t.closest('details[data-menu] a, details[data-menu] [data-copy-md]');if(it){var dd=it.closest('details[data-menu]');if(dd)setTimeout(function(){dd.removeAttribute('open');},0);}});document.addEventListener('keydown',function(e){if(e.key==='Escape')document.querySelectorAll('details[data-menu][open]').forEach(function(d){d.removeAttribute('open');});});(function(){var root=document.documentElement;function opener(){return document.querySelector('[data-drawer-open]');}function items(){var d=document.getElementById('docs-nav');if(!d)return[];return[].filter.call(d.querySelectorAll('a[href],button:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'),function(el){return el.offsetParent!==null;});}function set(o){var was=root.classList.contains('drawer-open');root.classList.toggle('drawer-open',o);var b=opener();if(b)b.setAttribute('aria-expanded',o?'true':'false');if(o){var f=items();if(f[0])f[0].focus();}else if(was&&b)b.focus();}document.addEventListener('click',function(e){if(e.target.closest('[data-drawer-open]')){e.preventDefault();set(!root.classList.contains('drawer-open'));return;}if(e.target.closest('[data-drawer-close]')){set(false);return;}if(e.target.closest('#docs-nav a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'){set(false);return;}if(e.key==='Tab'&&root.classList.contains('drawer-open')){var f=items();if(!f.length)return;var first=f[0],last=f[f.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}else if(f.indexOf(document.activeElement)<0){e.preventDefault();first.focus();}}});})();(function(){
+  function trim(p){return p.length>1&&p.endsWith('/')?p.slice(0,-1):p;}
+  function sync(){
+    var path=trim(location.pathname), tab=null;
+    var links=document.querySelectorAll('.sidebar a[href],[data-tabbar] a[href]');
+    for(var i=0;i<links.length;i++){var a=links[i],on=trim(a.getAttribute('href'))===path;
+      if(on){a.setAttribute('aria-current','page');var g=a.closest('[data-tab]');if(g)tab=g.getAttribute('data-tab');}
+      else a.removeAttribute('aria-current');}
+    if(tab!=null){
+      document.querySelectorAll('[data-tab]').forEach(function(g){g.hidden=g.getAttribute('data-tab')!==tab;});
+      document.querySelectorAll('[data-tabbar] a').forEach(function(a){
+        if(a.getAttribute('data-tab-key')===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+    }
+    // expand the folder(s) holding the active page. Iterate EVERY aria-current sidebar link, not
+    // just the first: a folder-as-page link lives in a <details>, but the mobile tab-bar link (also
+    // in .sidebar, earlier in the DOM) has no folder ancestor — querySelector would pick that one
+    // and expand nothing. forEach opens each link's folder chain; tab links are harmless no-ops.
+    document.querySelectorAll('.sidebar a[aria-current="page"]').forEach(function(cur){
+      var d=cur.closest('details.folder');while(d){d.open=true;d=d.parentElement&&d.parentElement.closest('details.folder');}});
+    // rewrite the locale-switch links to THIS page's equivalent path (swap the locale prefix)
+    var ll=document.querySelectorAll('[data-locale-home]');
+    if(ll.length){var lc=document.querySelector('[data-locale-home][data-locale-active]'),cp=lc?lc.getAttribute('data-locale-home'):'/';cp=cp==='/'?'':cp;
+      var rest=location.pathname;if(cp&&rest.indexOf(cp)===0)rest=rest.slice(cp.length)||'/';
+      ll.forEach(function(a){var h=a.getAttribute('data-locale-home'),p=h==='/'?'':h;a.setAttribute('href',rest==='/'?(p||'/'):(p+rest));});}
+    // mobile nav-context: "Active tab / Page title" (the shell can't know the page server-side)
+    var nc=document.querySelector('[data-nav-context]');
+    if(nc){var at=document.querySelector('[data-tabbar] a[aria-current="page"]'),h1=document.querySelector('main h1');
+      nc.textContent=[at&&at.textContent.trim(),h1&&h1.textContent.trim()].filter(Boolean).join(' / ');}
+  }
+  sync();
+  var outlet=document.querySelector('[data-june-outlet]');
+  if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
+})();</script><script type="module" src="/clikae/_june/client.aa34fb55.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as clean Markdown by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>

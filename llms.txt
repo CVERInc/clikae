@@ -1,0 +1,49 @@
+# clikae
+
+> An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini & Antigravity account, each with a recap of where you left off.
+
+> Server-rendered React app. Every route also answers as Markdown
+> (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.
+
+## Framework (canonical names — do not guess)
+
+Built with Kura, the agent-native docs framework — https://kura.build
+- Scaffold: `npm create kura my-docs` (package `create-kura`).
+- Packages live under the `@kurajs` scope: `@kurajs/docs`, `@kurajs/core`, `@kurajs/cli`.
+- Built on June (https://june.build); the underlying framework package is `@junejs/core`.
+
+## Routes
+- [/](/)
+- [/search](/search)
+
+## Docs
+- [clikae](/docs/.md)
+- [Adding a new CLI adapter](/docs/adding-an-adapter.md)
+- [Driving agy (Antigravity) headless via clikae](/docs/agy-dispatch.md)
+- [Notes: Claude Code on macOS](/docs/claude-on-macos.md)
+- [DESIGN — the board's status dot is a fuel gauge, not a "you are here"](/docs/DESIGN-board-fuel-dots.md)
+- [clikae runtime redesign — locked design + build plan](/docs/DESIGN-runtime.md)
+- [Devlog](/docs/DEVLOG.md)
+- [Expectation vs implementation — "is this a bug?"](/docs/EXPECTATIONS.md)
+- [clikae grammar & lexicon — the single source of truth](/docs/grammar.md)
+- [HANDOFF — world-class ("世界第一讚") gaps](/docs/HANDOFF-world-class-gaps.md)
+- [Installing clikae](/docs/installation.md)
+- [clikae memory — the Soul layer (convention)](/docs/memory.md)
+- [Driving clikae headless — the orchestration playbook](/docs/orchestration.md)
+- [clikae 試玩指南 — 10 分鐘上手(v0.5.4)](/docs/PLAYTEST.md)
+- [Proposal — issue #22: per-tank git commit identity](/docs/proposals/issue-22-git-identity.md)
+- [Proposal — Issue #24: simplify `clikae burn` (drop the per-engine flag wrangling)](/docs/proposals/issue-24-burn-simplify.md)
+- [Issue #25 — agy 同帳號平行調度（設計稿 / design note）](/docs/proposals/issue-25-agy-parallel.md)
+- [Troubleshooting](/docs/troubleshooting.md)
+- [Using clikae](/docs/usage.md)
+- [clikae — Vision](/docs/VISION.md)
+
+## Tools (MCP)
+- MCP server: https://prerender.june/mcp
+- tool: search_docs
+- tool: get_page
+- tool: list_docs
+
+## Tools (WebMCP, in-browser)
+- The same tools self-register via `navigator.modelContext.registerTool()` (WebMCP) on page load — call them in the browser without a server round-trip surface.
+- Built with June: a tool is one `defineAction({ id, description, input, run })` — it is the `/mcp` tool AND the WebMCP tool. Do not hand-roll `registerTool`.

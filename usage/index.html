@@ -1,0 +1,604 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/clikae/favicon.svg" type="image/svg+xml"/><title>Usage - clikae</title><meta name="description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:title" content="Usage"/><meta property="og:description" content="An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+          @view-transition { navigation: auto; }
+          ::view-transition-group(root),
+          ::view-transition-old(root),
+          ::view-transition-new(root) { animation-duration: 120ms; }
+          @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+          }
+</style><link rel="stylesheet" href="/clikae/_june/global.592c7c63.css"/></head><body><script>(function(){try{var p=localStorage.getItem('kura-theme')||'system';var d=document.documentElement;d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',(p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches))?'dark':'light');}catch(e){}})();</script><header class="sticky top-0 z-20 flex items-center gap-4 h-14 px-5 bg-topbar-bg backdrop-blur-sm border-b border-border max-md:px-4 max-md:gap-2.5"><a class="flex items-center gap-1.5 font-bold text-[1.05rem]" href="/clikae/">clikae<!-- --> <span class="font-normal text-muted text-[.85rem]">Docs</span></a><form class="ml-auto max-md:ml-2 max-md:flex-1 max-md:min-w-0" action="/clikae/search" method="get"><input class="w-[280px] max-w-[40vw] px-3 py-2 text-[.9rem] border border-border rounded-lg bg-surface-2 text-fg max-md:w-full max-md:max-w-none search-box" placeholder="Search docs…  (press /)" aria-label="Search" data-search-endpoint="/clikae/search.json" data-doc-base="/clikae/" data-search-static="1" name="q"/></form><nav class="flex items-center gap-4 text-muted text-[.9rem]"></nav></header><nav data-tabbar="true" class="sticky top-14 z-[15] h-11 bg-bg border-b border-border max-md:hidden"><div class="flex items-stretch gap-6 h-full max-w-[1280px] mx-auto px-5 overflow-x-auto no-scrollbar"><a data-tab-key="Guide" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div></nav><button class="hidden max-md:flex items-center gap-2.5 w-full px-4 py-2.5 bg-bg border-0 border-b border-border text-fg-soft text-[.9rem] text-left cursor-pointer focus-visible:outline-none focus-visible:bg-hover" data-drawer-open="true" aria-controls="docs-nav" aria-expanded="false"><span class="text-[1.05rem] leading-none" aria-hidden="true">☰</span><span class="font-semibold text-fg flex-none">Navigation</span><span class="nav-bar-context text-muted flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" data-nav-context="true"></span></button><div class="drawer-backdrop" data-drawer-close="true" aria-hidden="true"></div><div class="grid grid-cols-[248px_minmax(0,1fr)_220px] max-lg:grid-cols-[248px_minmax(0,1fr)] max-md:grid-cols-1 items-start max-w-[1280px] mx-auto has-tabs"><aside class="sidebar sticky top-[100px] h-[calc(100vh-100px)] overflow-y-auto px-4 py-6 border-r border-border" id="docs-nav"><div data-tabbar="true" class="hidden max-md:flex flex-wrap gap-1.5 mb-4 pb-4 border-b border-border"><a data-tab-key="Guide" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/installation">Guide</a><a data-tab-key="Design" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/VISION">Design</a><a data-tab-key="Proposals" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/clikae/proposals/issue-22-git-identity">Proposals</a></div><div data-tab="Guide"><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Guide</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/installation">Installation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/usage">Usage</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/grammar">Grammar &amp; lexicon</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/orchestration">Orchestration</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/agy-dispatch">Driving agy headless</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/adding-an-adapter">Adding an adapter</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/memory">Memory (Soul layer)</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/claude-on-macos">Claude Code on macOS</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/troubleshooting">Troubleshooting</a></li></ul></div></div><div data-tab="Design" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Design &amp; vision</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/VISION">Vision</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-runtime">Runtime redesign</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DESIGN-board-fuel-dots">Board: fuel dots</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/EXPECTATIONS">Expectation vs implementation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/HANDOFF-world-class-gaps">World-class gaps</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/DEVLOG">Devlog</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/PLAYTEST">Playtest guide</a></li></ul></div></div><div data-tab="Proposals" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Proposals</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-22-git-identity">#22 · git identity</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-24-burn-simplify">#24 · simplify burn</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/clikae/proposals/issue-25-agy-parallel">#25 · agy parallel</a></li></ul></div></div></aside><div data-june-outlet=""><main class="w-auto max-w-none m-0 min-w-0 px-10 pt-8 pb-20 max-md:px-4 max-md:pt-5 max-md:pb-12"><details class="hidden max-lg:block mb-5 border border-border rounded-xl overflow-hidden"><summary class="chevron flex justify-between items-center cursor-pointer px-3.5 py-2.5 text-[.85rem] font-semibold text-fg-soft">On this page</summary><div class="flex flex-col px-3.5 pt-1 pb-2.5 border-t border-border"><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#quick-tour">Quick tour</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#commands">Commands</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#switch-the-main-thing">Switch (the main thing)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#make-amp-manage-tanks">Make &amp;amp; manage tanks</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#keep-burning-when-a-tank-runs-dry">Keep burning when a tank runs dry</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#inspect">Inspect</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#antigravity-agy--same-verbs-one-power-mode">Antigravity (agy) — same verbs, one power mode</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#shells">Shells</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#migrating-an-existing-setup">Migrating an existing setup</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#carrying-a-session-when-you-hit-a-usage-limit--clikae-to">Carrying a session when you hit a usage limit — clikae to</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#ambient-notice-a-dry-tank-and-switch-watch">Ambient: notice a dry tank and switch (watch)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#headless-tasks-across-tanks--clikae-burn">Headless tasks across tanks — clikae burn</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#seeing-which-tank-youre-on">Seeing which tank you&#x27;re on</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#naming-your-tanks">Naming your tanks</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#ephemeral-memory---ephemeral">Ephemeral memory (--ephemeral)</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#how-it-works">How it works</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#supported-engines">Supported engines</a></div></details><div class="flex items-center justify-between gap-4 mb-6"><div class="prose"><h1 class="!m-0">Using clikae</h1></div><div class="relative inline-flex items-stretch flex-none"><button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[.85rem] border border-border border-r-0 rounded-l-lg bg-surface text-fg-soft cursor-pointer hover:bg-hover hover:text-fg" data-copy-md="/clikae/usage.md"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>Copy Markdown</button><details class="relative inline-flex items-stretch" data-menu="true"><summary class="chevron inline-flex items-center justify-center w-[30px] border border-border rounded-r-lg bg-surface text-muted cursor-pointer hover:bg-hover hover:text-fg" aria-label="More actions"></summary><div class="absolute right-0 top-[calc(100%+.4rem)] z-30 min-w-[17rem] flex flex-col gap-px p-1.5 bg-surface border border-border rounded-xl shadow-xl"><button class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" data-copy-md="/clikae/usage.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg><span class="flex flex-col min-w-0"><span class="font-semibold text-[.9rem] text-fg">Copy Markdown</span><span class="text-[.8rem] text-muted">Copy this page as Markdown for LLMs</span></span></button><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="/clikae/usage.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M16 21H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6l4 4v12a2 2 0 0 1-2 2z"></path><path d="M9 13h6M9 17h4"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">View as Markdown<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">View this page as plain text</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://chatgpt.com/?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20Usage" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in ChatGPT<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask ChatGPT about this page</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://claude.ai/new?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20Usage" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in Claude<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask Claude about this page</span></span></a></div></details></div></div><article class="prose"><p><strong>clikae is a verb</strong> (切り替え, <em>switching</em>). The headline action carries no verb
+of its own — the program name is the verb:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72"> &#x3C;</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">engin</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">e</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">></span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72"> &#x3C;</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">tan</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">k</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">></span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">      # switch &#x3C;engine> to &#x3C;tank> and run it</span></span></code></pre>
+<p>An <code>&lt;engine&gt;</code> is a CLI with an adapter (run <code>clikae adapters</code>); a <code>&lt;tank&gt;</code> is a
+name you choose (<code>A-Z a-z 0-9 . _ -</code> allowed) for one account/config. The fuel
+metaphor runs throughout: a tank holds an engine's quota (its <em>fuel</em>); when a
+tank runs <em>dry</em> you carry your work onward with <code>clikae to</code>.</p>
+<p>Run <code>clikae help &lt;command&gt;</code> for the full per-command reference. The full design
+of the language is in <a href="/clikae/grammar">grammar.md</a>.</p>
+<h2 id="quick-tour">Quick tour</h2>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Create a tank for Claude Code, and add the matching shell alias</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> init</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --alias</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Switch to it and run — the bare verb (no `run` needed)</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --help</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">    # args after -- go straight to the engine</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Or pick up the alias and use that</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">source</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> ~/.zshrc</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # or your rc file</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">claude-work</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Generate a macOS launcher you can double-click from ~/Applications</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> app</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># See what you've got</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> tanks</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                    # alias: clikae list</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   ENGINE       TANK</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   claude       work</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> tanks</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -p</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # also print the tank directory paths</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Tear it all down (tank dir + alias + .app, asks to confirm)</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> remove</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span></span></code></pre>
+<h2 id="commands">Commands</h2>
+<p>clikae is the verb, so <strong>switching needs no verb</strong>; management commands keep
+plain, conventional verbs.</p>
+<h3 id="switch-the-main-thing">Switch (the main thing)</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;engine&gt; &lt;tank&gt; [-- args]</code></td>
+<td>Switch <code>&lt;engine&gt;</code> to <code>&lt;tank&gt;</code> and run it. The bare verb. (<code>run</code> is a hidden alias.)</td>
+</tr>
+<tr>
+<td><code>&lt;engine&gt; &lt;tank&gt; --ephemeral</code></td>
+<td>Switch and run with <strong>ephemeral memory</strong> — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below.</td>
+</tr>
+<tr>
+<td><code>&lt;engine&gt;</code></td>
+<td>One tank → use it; several → list them; none → offer to create.</td>
+</tr>
+<tr>
+<td><code>to &lt;target&gt; [tank] [-- args]</code></td>
+<td>Carry <strong>this shell's current session</strong> onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Source is auto-detected (env var, else this directory's most recent session). Forwards relay's <code>-y</code>/<code>--fresh</code>/<code>--session</code>. (<code>relay</code>/<code>handoff</code>/<code>continue</code> are hidden aliases.)</td>
+</tr>
+<tr>
+<td><code>resume [session-id] [-- args]</code></td>
+<td>Reopen a <strong>specific past session</strong> by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare <code>&lt;engine&gt; --resume &lt;id&gt;</code> &quot;No conversation found&quot; when the session lives in a tank, not the engine's default home). With <strong>no id</strong> it opens an interactive picker across <strong>all</strong> tanks (claude/codex/antigravity), newest first — filter with <code>/</code>, move with arrows/<code>j</code>/<code>k</code>, page with PgUp/PgDn — so you pick by title, no UUID. <code>[R]</code> on the board opens the same picker. This reaches <em>backward</em> to a named session; <code>to</code> carries your <em>current</em> session <em>forward</em>.</td>
+</tr>
+<tr>
+<td><code>resume cleanup [--dry-run] [--older-than &lt;days&gt;]</code></td>
+<td>Delete old session transcripts/databases to free disk space. Interactive — previews and asks before deleting; never touches tank configs, memory, or settings. <code>--dry-run</code> just previews; <code>--older-than</code> (default 30) scopes by age.</td>
+</tr>
+<tr>
+<td><code>eval &quot;$(clikae env &lt;engine&gt; &lt;tank&gt;)&quot;</code></td>
+<td>Put the <strong>current shell</strong> on a tank (export its config env var), so the engine's own command and <code>clikae status</code>/<code>to</code> see it. The explicit alternative to the one-shot bare switch.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="make-amp-manage-tanks">Make &amp; manage tanks</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init &lt;engine&gt; &lt;tank&gt; [--alias]</code></td>
+<td>Create the tank directory; with <code>--alias</code>, also write a shell alias.</td>
+</tr>
+<tr>
+<td><code>remove &lt;engine&gt; &lt;tank&gt; [--force] [--keep-data]</code></td>
+<td>Remove dir + alias + <code>.app</code>. <code>--keep-data</code> keeps the directory.</td>
+</tr>
+<tr>
+<td><code>rename &lt;engine&gt; &lt;old&gt; &lt;new&gt; [--force]</code></td>
+<td>Rename a tank (moves the dir, rewrites the alias, carries the login).</td>
+</tr>
+<tr>
+<td><code>migrate [&lt;engine&gt;] [--dry-run] [--force] [--keep-login]</code></td>
+<td>Adopt a hand-rolled config-dir + alias setup.</td>
+</tr>
+<tr>
+<td><code>alias &lt;engine&gt; &lt;tank&gt; [--name &lt;n&gt;]</code></td>
+<td>Write (or replace) a shell alias. Default name <code>&lt;engine&gt;-&lt;tank&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>app &lt;engine&gt; &lt;tank&gt; [--terminal &lt;app&gt;] [--force] [--out &lt;dir&gt;]</code></td>
+<td>Generate a macOS <code>.app</code> launcher (default <code>~/Applications</code>). macOS only. <code>--terminal</code>: <code>terminal</code> (default), <code>iterm2</code>, <code>ghostty</code>.</td>
+</tr>
+<tr>
+<td><code>app --board [--terminal &lt;app&gt;] [--force] [--out &lt;dir&gt;]</code></td>
+<td>Generate a <code>clikae.app</code> that opens the <strong>board</strong> (the menu of recent sessions + tanks) instead of one tank — a single double-click button for the whole on-ramp.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Ghostty launchers</strong> pass their command through a trusted Ghostty <strong>config file</strong>
+(<code>--config-file=</code>), not <code>-e</code>. Ghostty pops an &quot;Allow Ghostty to execute…?&quot; dialog
+for an externally-injected <code>-e</code> command (so a <code>-e</code> launcher looks like an empty
+shell until you click Allow); a config file is trusted, so the window just opens.
+The config lives inside the <code>.app</code> and is found via <code>path to me</code>, so the launcher
+keeps working if you move it.</p>
+</blockquote>
+<h3 id="keep-burning-when-a-tank-runs-dry">Keep burning when a tank runs dry</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>to [target] [tank]</code></td>
+<td>Carry this shell's session onward when a tank runs dry. <strong>Bare <code>clikae to</code></strong> falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure.</td>
+</tr>
+<tr>
+<td><code>auto [ask|safe|full]</code></td>
+<td><strong>(BETA, claude-launched sessions only)</strong> How much clikae carries on its own when a session <strong>you launched through <code>clikae</code></strong> hits the limit — it has no effect on alias/<code>.app</code>/other-engine launches. <code>ask</code> (default) prompts; <code>safe</code> auto-resumes same-engine + asks to cross; <code>full</code> keeps going (same-engine = resume, cross-engine = a cold brief). The board's <code>A</code> key cycles it.</td>
+</tr>
+<tr>
+<td><code>watch &lt;engine&gt; [&lt;tank&gt;] [--auto] [--to &lt;target&gt;]</code></td>
+<td>Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via <code>--to</code>).</td>
+</tr>
+<tr>
+<td><code>burn &lt;engine&gt; &lt;tank&gt; --artifact &lt;path&gt; -- &lt;cmd…&gt;</code></td>
+<td>Run a <strong>headless</strong> task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of <code>to</code>/<code>watch</code>. See &quot;Headless tasks&quot; below.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Supervised launch (BETA · claude · feedback welcome).</strong> When you start claude
+<em>through</em> clikae, clikae stays as the parent. <strong>When that session ends after
+hitting its limit</strong> — quit the dead session in an interactive run; a headless
+<code>claude -p</code> exits on its own — clikae carries you onward to the next tank in your
+burn order (per <code>clikae auto</code>) in the <strong>same terminal</strong> (one redraw), and your
+conversation continues there. Honest limits: it advances <em>on exit</em>, not by killing
+a live session mid-stream (that needs engine support — see issue
+anthropics/claude-code#35744); one hop per run; interactive <strong>codex</strong> can't be
+auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+background unless you launched it through clikae (no daemon) — deliberate.
+<code>clikae status</code> shows what it carried (recent carries). <strong>Tell us how it feels.</strong></p>
+</blockquote>
+<h3 id="inspect">Inspect</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>(no args)</em></td>
+<td>Open the <strong>home dashboard</strong> — your &quot;tank board&quot;: every tank grouped by engine, the one active in this shell marked, account + alias name, an &quot;Also available&quot; list of engines/targets you can open without a tank (e.g. <code>codex</code>, <code>agy</code>). On a terminal it's an <strong>interactive launcher</strong>; press <code>?</code> for the full key legend. Keys: ↑/↓·<code>j</code>/<code>k</code>·Tab/Shift-Tab move, <code>g</code>/<code>G</code> top/bottom, <code>1</code>-<code>9</code> jump, ⏎ open (a Continue row offers <em>resume</em> vs <em>switch fresh</em>), <code>r</code> carry session, <code>x</code> incognito, <code>n</code> new, <code>a</code> rename the tank, <code>d</code> delete, <code>/</code> filter, <code>l</code> pick language, <code>q</code>/Esc quit. Piped/scripted it prints the same board as plain text (<code>CLIKAE_NO_INTERACTIVE</code> forces that).</td>
+</tr>
+<tr>
+<td><code>lang [en-US|ja-JP|zh-TW]</code></td>
+<td>Show or set the interface language (dashboard + prompts). Persists to <code>$CLIKAE_HOME/lang</code>; the board's <code>l</code> key opens a language picker. Resolution when unset: <code>$CLIKAE_LANG</code> &gt; saved choice &gt; <code>$LC_ALL</code> &gt; <code>$LANG</code> &gt; en-US.</td>
+</tr>
+<tr>
+<td><code>tanks [-p|--paths] [--json]</code></td>
+<td>List all tanks, with the logged-in account where the adapter can tell. (Aliases: <code>list</code>, <code>ls</code>.) <code>--json</code> emits machine-readable output <code>{cli, profile, account, path}</code> for scripts and the GUI.</td>
+</tr>
+<tr>
+<td><code>status [&lt;engine&gt;] [--json]</code></td>
+<td>Show which tank each engine is on <strong>in this shell</strong>. <code>--json</code> emits one object per engine with a <code>state</code> enum.</td>
+</tr>
+<tr>
+<td><code>doctor</code></td>
+<td>Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next.</td>
+</tr>
+<tr>
+<td><code>info [--json]</code></td>
+<td>Show install paths, platform, adapters, and tank count.</td>
+</tr>
+<tr>
+<td><code>adapters</code></td>
+<td>List supported engines with descriptions.</td>
+</tr>
+<tr>
+<td><code>demo</code></td>
+<td>A 30-second guided tour in a throwaway sandbox — shows isolated tanks, the tank board, and the <code>to</code> idea (your tanks are the reserve), then cleans up. Touches nothing real; the accounts are simulated, so it needs no installed engine.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="antigravity-agy--same-verbs-one-power-mode">Antigravity (agy) — same verbs, one power mode</h3>
+<p>agy hardcodes <code>~/.gemini</code> and ignores env vars, so clikae can't switch it
+per-shell like other engines. It folds into the <strong>same verbs</strong> anyway, via an
+opt-in symlink-swap power mode (global: one tank active at a time across all
+terminals; reversible):</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init agy &lt;tank&gt;</code></td>
+<td>First time: warns and asks before taking <code>~/.gemini</code> over (backs it up, migrates your current login into a <code>default</code> tank), then creates <code>&lt;tank&gt;</code>. After: just creates the tank.</td>
+</tr>
+<tr>
+<td><code>agy &lt;tank&gt;</code></td>
+<td>Switch the active tank (refuses if agy is running) and start agy. Prints a global-switch notice.</td>
+</tr>
+<tr>
+<td><code>remove agy &lt;tank&gt;</code></td>
+<td>Remove the tank. Removing the <strong>last</strong> tank offers to restore a normal <code>~/.gemini</code> and turn the power mode off.</td>
+</tr>
+<tr>
+<td><code>agy --release</code></td>
+<td>Restore a normal single-account <code>~/.gemini</code> from the active tank, keep the tank dirs.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="shells">Shells</h2>
+<p><code>clikae</code> auto-detects your shell from <code>$SHELL</code> and writes the alias to the right
+rc file: <strong>zsh</strong> (<code>~/.zshrc</code>), <strong>bash</strong> (<code>~/.bash_profile</code> on macOS, else
+<code>~/.bashrc</code>), and <strong>fish</strong> (<code>~/.config/fish/config.fish</code>). For fish it emits fish
+syntax — <code>alias &lt;name&gt; 'env VAR=val &lt;binary&gt;'</code> — because fish has no inline
+<code>VAR=val cmd</code>; the result behaves identically. <code>clikae remove</code> cleans up the
+block in any of them.</p>
+<h2 id="migrating-an-existing-setup">Migrating an existing setup</h2>
+<p>Already juggling accounts by hand — say a <code>~/.claude-acct-a</code> / <code>~/.claude-acct-b</code>
+pair with aliases in your <code>~/.zshrc</code>? <code>clikae migrate</code> adopts that into clikae:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> migrate</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --dry-run</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # preview: which dirs move where, which aliases change</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> migrate</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">             # do it (asks to confirm first)</span></span></code></pre>
+<p>It scans your shell rc for aliases that set the engine's config env var and
+invoke the engine. For each one it:</p>
+<ol>
+<li>moves the referenced config directory under <code>~/.clikae/profiles/&lt;engine&gt;/&lt;p&gt;/</code>,</li>
+<li>rewrites the alias into clikae's managed sentinel block.</li>
+</ol>
+<p>The rc file is backed up to <code>&lt;rc&gt;.clikae.bak.&lt;timestamp&gt;</code> first, and an existing
+clikae tank is never overwritten. Pass an engine name (<code>clikae migrate gh</code>) to
+migrate a different tool's aliases. Default is <code>claude</code>.</p>
+<blockquote>
+<p>⚠️ <strong>Don't migrate a config dir that's currently in use.</strong> <code>migrate</code> <em>moves</em>
+the directory, so if a process is running against it right now (e.g. you run
+<code>clikae migrate</code> from inside the very <code>claude</code> session whose
+<code>CLAUDE_CONFIG_DIR</code> points at the dir being moved), you pull the directory out
+from under that live process — it can fail to write, or recreate an empty dir
+at the old path and leave you with two half-states. Run <code>migrate</code> from a fresh
+shell with no instance of that engine active. <code>--dry-run</code> is always safe.</p>
+<p>As of v0.4, <code>migrate</code> guards against the most common form of this: if
+<code>$CLAUDE_CONFIG_DIR</code> (or whichever env var the adapter uses) currently points
+at a directory slated to move, it refuses and tells you to retry from a fresh
+shell. The guard is not bypassed by <code>--force</code> — it protects your data, it
+isn't a confirmation prompt.</p>
+</blockquote>
+<blockquote>
+<p>🔑 <strong>macOS + claude: expect a one-time re-login per migrated tank.</strong> On
+macOS, Claude Code keeps its login token in the <strong>login Keychain</strong>, not inside
+<code>CLAUDE_CONFIG_DIR</code> — and the keychain entry is keyed by the config-dir path.
+Because <code>migrate</code> moves the dir to a new path, claude no longer finds the token
+and asks you to log in once for each migrated tank. Your data is intact;
+only the saved login doesn't follow the move. To avoid the re-login, pass
+<code>--keep-login</code>, which copies the saved token from the old path's keychain entry
+to the new one (macOS only; it never reads or transmits the token anywhere — it
+stays in your Keychain). macOS may prompt you to allow keychain access.</p>
+</blockquote>
+<h2 id="carrying-a-session-when-you-hit-a-usage-limit--clikae-to">Carrying a session when you hit a usage limit — <code>clikae to</code></h2>
+<p>This is clikae's origin story: you keep a second account precisely because one
+account's quota runs out mid-task. <code>clikae to</code> lets you carry the work onward —
+like swapping a fuel tank — and <strong>keep the same conversation going</strong> on a fresh
+quota.</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># You're working on claude tank `a` and just hit its limit. From the same project</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># directory, carry the conversation onto another tank and keep going:</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> b</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                     # same engine → a real resume, on b's quota</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # a different engine → a written brief (cold start)</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">            # cross to a specific tank of another engine</span></span></code></pre>
+<p>clikae auto-detects which engine + tank this shell is on: first the live env var,
+then — since the bare switch / aliases / <code>.app</code> run the engine with a prefix
+assignment that never reaches the parent shell — <strong>the tank with this directory's
+most recent session</strong> (the one you were just in here). So <code>switch → work → to</code>
+works from one shell. To pin a shell to a tank explicitly instead, use
+<code>eval &quot;$(clikae env &lt;engine&gt; &lt;tank&gt;)&quot;</code>. The target resolves <strong>engine-name-first</strong>:
+a known engine name crosses to it; anything else is a tank of your current engine.
+clikae always <strong>announces which mechanism it used</strong> so resume-vs-brief is never a
+guess.</p>
+<p><strong>Same engine (a resume).</strong> For Claude Code, clikae finds the <strong>current
+directory's</strong> most recent transcript under the source tank, copies it into the
+target tank, and runs <code>claude --resume &lt;id&gt;</code> there — so the conversation
+continues, but every new turn burns the target tank's quota. The source tank is
+left completely untouched (it copies, never moves), so you can always go back.
+A preview + confirm is shown before anything moves; <code>-y</code> skips it, <code>--fresh</code>
+switches tanks without carrying, <code>--session &lt;id&gt;</code> carries a specific session.</p>
+<blockquote>
+<p>Carry-over relies on Claude Code's on-disk transcript layout
+(<code>&lt;config-dir&gt;/projects/&lt;slug&gt;/&lt;id&gt;.jsonl</code>) and <code>--resume</code>. It's verified
+against current Claude Code; if a future version changes that layout, it falls
+back to a fresh start rather than doing anything destructive.</p>
+</blockquote>
+<p><strong>A different engine (a brief).</strong> A different <em>model</em> or <em>vendor</em> can't resume a
+foreign session — there's no shared transcript format. So clikae writes a
+<strong>handoff brief</strong> (what you're doing, what's done, what's next) and starts the
+target engine seeded with it as the opening prompt. clikae tries to write a
+<strong>summary</strong> automatically: if a local model CLI is on your PATH (<code>apfel</code>,
+<code>ollama</code>, or <code>llm</code>), it's used to summarise the brief for free — set
+<code>CLIKAE_HANDOFF_AUTOLOCAL=0</code> to disable that auto-detection. Otherwise the brief
+is a <strong>raw extract</strong> (session metadata + your recent prompts), clearly labelled
+as raw. To force a specific summariser, point clikae at any model so writing the
+brief costs nothing on the tank that just ran dry:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">export</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> CLIKAE_HANDOFF_SUMMARIZER</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">'llm -m my-local-model'</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # any stdin→stdout command</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                                            # the model writes the brief</span></span></code></pre>
+<p>The summarizer (auto-detected or <code>CLIKAE_HANDOFF_SUMMARIZER</code>) receives, on stdin,
+an instruction line followed by the tail of the session transcript, and writes the
+brief to stdout. If it produces nothing, clikae falls back to the raw extract so a
+handoff is never lost. Tune how much
+transcript is fed with <code>$CLIKAE_HANDOFF_LINES</code> (default <code>60</code>). Carrying onward is
+<strong>read-only</strong> on the source — it never touches the source session or any tank.</p>
+<blockquote>
+<p>Under the hood, <code>clikae to</code> delegates to <code>relay</code> (same engine) or <code>handoff</code>
+(different engine). Both remain available as hidden aliases — e.g. <code>clikae handoff claude --out HANDOFF.md</code> just writes a brief to a file without starting
+anything. Run <code>clikae help to</code> / <code>help relay</code> / <code>help handoff</code> for details.</p>
+</blockquote>
+<h2 id="ambient-notice-a-dry-tank-and-switch-watch">Ambient: notice a dry tank and switch (<code>watch</code>)</h2>
+<p>Instead of switching by hand, let clikae watch for the moment a tank runs dry and
+fall through to the next one. <strong>Your tanks are the reserve — there's nothing to
+set up.</strong> Just watch the current session:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">            # offer to switch to the next claude tank when dry</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --auto</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # switch automatically (asks once for consent)</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex/work</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # cross to a specific tank/engine instead</span></span></code></pre>
+<p>When it detects a dry tank it carries onward to the next tank of the same engine
+(skipping any that are themselves over quota); cross-engine needs an explicit
+<code>--to</code>. By default it <strong>asks first</strong>; <code>--auto</code> switches
+automatically after a <strong>one-time consent</strong> (remembered in
+<code>$CLIKAE_HOME/auto-relay-consent</code> — delete that file to revoke), and always tells
+you what it did.</p>
+<blockquote>
+<p><strong>Honest caveat.</strong> An interactive engine hitting its usage limit doesn't exit,
+returns no code, and fires no hook — so the only thing clikae can watch is what
+the limit writes to disk. For claude that's the session transcript; for agy
+it's <code>~/.gemini/antigravity-cli/cli.log</code> (agy's <code>-p</code> run exits 0 with empty
+output, so the log line is the only signal). codex's limit is <strong>proven not
+persisted</strong> to its transcript, so a dry tank can't be detected for codex from
+disk. Confirm/tune the match the first time you actually get limited:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --check</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">          # would the pattern fire on this session?</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">CLIKAE_LIMIT_PATTERN</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">'…'</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657"> clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # override the match</span></span></code></pre>
+</blockquote>
+<h2 id="headless-tasks-across-tanks--clikae-burn">Headless tasks across tanks — <code>clikae burn</code></h2>
+<p><code>watch</code>/<code>auto</code> carry an <em>interactive</em> session. For <em>headless</em> grunt work — the
+&quot;let the cheaper tank do the dirty work&quot; case — use <code>clikae burn</code>. It runs one
+task on a tank and, crucially, knows whether it actually finished: it verifies by
+the <strong>artifact</strong> the task must produce, never the exit code (<code>codex exec</code> exits 0
+even when it hit its usage limit and wrote nothing). If the tank ran dry, it
+re-fires the <em>same</em> task on the next tank in your reserve.</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Distil a file with codex on tank M; if M is dry, fall through to your next</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># codex tank automatically. Success = /tmp/out.md exists.</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> burn</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> M</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --artifact</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#005CC5;--shiki-dark:#FF7B72"> \</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">    exec</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -C</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -s</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> workspace-write</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "read /tmp/in.txt, write /tmp/out.md"</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> burn</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> M</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --artifact</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex/H</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> exec</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> …</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "&#x3C;task>"</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # explicit next hop</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> burn</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> M</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --artifact</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --timeout</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> 300</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> exec</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> …</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "&#x3C;task>"</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">  # bound a long run</span></span></code></pre>
+<p>Outcomes: artifact present → done; dry on every reachable tank → fail; ran but
+produced no artifact and showed no limit → a real <strong>task failure</strong> (not rerouted —
+it would fail the same everywhere). <code>--no-reroute</code> runs once and stops on a dry tank.</p>
+<p><code>burn</code> is the single-task unit — <strong>batch/parallelism stays your orchestrator's
+job</strong> (fan several <code>burn</code>s out, review the artifacts). Make tasks idempotent and
+artifact-checked (fixed input/output paths), and pre-stage inputs to <code>/tmp</code> rather
+than handing a tank slow iCloud-backed I/O.</p>
+<p><strong><code>burn</code> won't spend the quota you're using.</strong> Its auto-reroute <em>skips</em> a tank an
+interactive session is live on (it would otherwise burn the conversation you're
+mid-flight in) and tanks that share an already-dry account. Pass <code>--allow-active</code>
+to override the in-use skip, or <code>--to &lt;tank&gt;</code> to name a hop explicitly.</p>
+<p><strong>A tank is a <em>quota</em> source, not the content.</strong> <code>burn &lt;engine&gt; &lt;tank&gt;</code> spends
+<em>that tank's quota</em> to run a command; what the command reads/writes is just files,
+unrelated to tanks. So you can spend a cheap tank's quota to chew on <em>any</em> file —
+including another tank's transcript.</p>
+<p><strong>Using agy as a cheap read-only worker.</strong> agy can't be a <code>burn</code> <em>tank</em> (it's one
+global account — there's no reserve to reroute among), but it's a fine headless
+worker — you just invoke it directly, outside <code>burn</code>'s reserve wrapper:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># agy as a summariser — content in via stdin, agy's own quota spent. Read-only.</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">cat</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/in.md</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72"> |</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657"> agy</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --sandbox</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -p</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "summarise this"</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">  ></span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># …or through clikae, on a specific agy account (switches the global ~/.gemini</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># symlink to tank R, then runs agy headless on R's quota):</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> agy</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> R</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -p</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "summarise this"</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --sandbox</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">  &#x3C;</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/in.md</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">  ></span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span></span></code></pre>
+<p>You give up <code>burn</code>'s two guarantees here (no dry→reroute — agy has one account, so
+a dry run just fails; no artifact verification), and remember <code>clikae agy</code> switches
+a <strong>machine-wide</strong> symlink, not a per-shell env (and agy has no <code>--model</code> flag — the
+model is the app's setting).</p>
+<h2 id="seeing-which-tank-youre-on">Seeing which tank you're on</h2>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> status</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">            # every engine that has a tank</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> status</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # just one</span></span>
+<span class="line"></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   ENGINE       TANK         ACCOUNT          SOURCE</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   claude       cver         hi@cver.net      CLAUDE_CONFIG_DIR=…/profiles/claude/cver</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   aws          (default)    -                AWS_PROFILE unset — system default</span></span></code></pre>
+<p><code>status</code> reads the <strong>live</strong> value of each adapter's env var in the current shell
+and resolves it back to a clikae tank. It's a per-shell view: another terminal
+(or one launched from a different <code>clikae app</code>) can be on a different tank.
+<code>(default)</code> means the env var is unset (the engine's own default); <code>(external)</code>
+means it points somewhere that isn't a clikae tank. The ACCOUNT column shows
+the logged-in account when the adapter can tell.</p>
+<h2 id="naming-your-tanks">Naming your tanks</h2>
+<p>Name tanks however makes sense to you — <code>work</code>, <code>personal</code>, a client name, or
+the account email. You don't have to remember what a bare <code>a</code>/<code>b</code> meant: both
+<code>tanks</code> and <code>status</code> show the logged-in <strong>account</strong> when the adapter can read it.</p>
+<p>Changed your mind about a name? <code>clikae rename</code> moves the directory, rewrites the
+managed alias, and — for claude on macOS — carries the saved Keychain login
+across so you don't have to log in again:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> rename</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> a</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> cver</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">        # a → cver; login + alias follow</span></span></code></pre>
+<p>It refuses if the new name is taken or if that engine is currently using the tank
+in this shell (run it from a fresh shell). A pre-existing <code>.app</code> launcher is left
+alone but flagged — recreate it with <code>clikae app claude cver</code>.</p>
+<h2 id="ephemeral-memory---ephemeral">Ephemeral memory (<code>--ephemeral</code>)</h2>
+<p>For the surgical, leave-no-trace run: <code>clikae claude work --ephemeral</code> switches to
+the tank and runs it, but points the engine's <strong>long-term memory</strong> at a throwaway
+directory that's discarded when the engine quits. The tank's real memory is
+stashed aside and restored, untouched.</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --ephemeral</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # incognito: nothing learned this session is kept</span></span></code></pre>
+<ul>
+<li><strong>Login and transcripts are normal</strong> — only the <em>memory store</em> is throwaway
+(you're still you, the conversation is still logged/resumable).</li>
+<li><strong>Honest scope:</strong> clikae guarantees the <em>memory directory</em> is a throwaway. It
+can't promise the engine &quot;remembers nothing anywhere&quot; — caches, shell history,
+telemetry, the macOS Keychain are outside clikae's reach. So it's <em>ephemeral
+memory</em>, not guaranteed total amnesia.</li>
+<li>Supported only for engines whose memory layout clikae knows (currently
+<strong>claude</strong>); others say so and exit.</li>
+<li>Unlike a normal switch (which <code>exec</code>s the engine), <code>--ephemeral</code> runs it as a
+child so cleanup can run on exit. A crashed run self-heals on the next
+<code>--ephemeral</code> (the real memory is recovered from its stash).</li>
+</ul>
+<h2 id="how-it-works">How it works</h2>
+<p>For each tank, <code>clikae</code>:</p>
+<ol>
+<li>Creates <code>~/.clikae/profiles/&lt;engine&gt;/&lt;tank&gt;/</code> — the directory the engine's env
+var (e.g. <code>CLAUDE_CONFIG_DIR</code>) points at. (The on-disk path keeps the word
+<code>profiles</code> for stability; you only ever type/​see <em>tank</em>.)</li>
+<li>(<code>alias</code>) Appends a sentinel-wrapped block to your shell rc:
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span># >>> clikae:claude.work >>></span></span>
+<span class="line"><span>alias claude-work='CLAUDE_CONFIG_DIR="/Users/you/.clikae/profiles/claude/work" claude'</span></span>
+<span class="line"><span># &#x3C;&#x3C;&#x3C; clikae:claude.work &#x3C;&#x3C;&#x3C;</span></span></code></pre>
+The sentinels make safe, exact removal possible.</li>
+<li>(<code>app</code>, macOS) Generates an AppleScript-compiled <code>.app</code> that opens a terminal,
+runs the env-var-prefixed engine, and sets the window title to <code>claude (work)</code>
+so you can tell windows apart. The terminal is <strong>Terminal.app</strong> by default;
+<code>--terminal iterm2</code> and <code>--terminal ghostty</code> target those instead (set
+<code>$CLIKAE_TERMINAL</code> to change the default). Terminal.app and iTerm2 are driven
+by AppleScript; Ghostty has no window-opening CLI on macOS, so its launcher
+goes through <code>open -na Ghostty.app --args … -e …</code>.</li>
+</ol>
+<p>No daemons, no global state, no network calls. You can read every line.</p>
+<h2 id="supported-engines">Supported engines</h2>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Strategy</th>
+<th>Env var</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claude</code> (Anthropic Claude Code)</td>
+<td><code>env-dir</code></td>
+<td><code>CLAUDE_CONFIG_DIR</code></td>
+</tr>
+<tr>
+<td><code>codex</code> (OpenAI Codex CLI)</td>
+<td><code>env-dir</code></td>
+<td><code>CODEX_HOME</code></td>
+</tr>
+<tr>
+<td><code>gh</code> (GitHub CLI)</td>
+<td><code>env-dir</code></td>
+<td><code>GH_CONFIG_DIR</code></td>
+</tr>
+<tr>
+<td><code>gcloud</code> (Google Cloud CLI)</td>
+<td><code>env-dir</code></td>
+<td><code>CLOUDSDK_CONFIG</code></td>
+</tr>
+<tr>
+<td><code>docker</code> (Docker CLI)</td>
+<td><code>env-dir</code></td>
+<td><code>DOCKER_CONFIG</code></td>
+</tr>
+<tr>
+<td><code>helm</code></td>
+<td><code>env-dir</code></td>
+<td><code>HELM_CONFIG_HOME</code></td>
+</tr>
+<tr>
+<td><code>kubectl</code></td>
+<td><code>env-file</code></td>
+<td><code>KUBECONFIG</code></td>
+</tr>
+<tr>
+<td><code>aws</code> (AWS CLI)</td>
+<td><code>env-var</code></td>
+<td><code>AWS_PROFILE</code></td>
+</tr>
+<tr>
+<td><code>az</code> (Azure CLI)</td>
+<td><code>env-dir</code></td>
+<td><code>AZURE_CONFIG_DIR</code></td>
+</tr>
+<tr>
+<td><code>npm</code></td>
+<td><code>env-file</code></td>
+<td><code>NPM_CONFIG_USERCONFIG</code></td>
+</tr>
+<tr>
+<td><code>terraform</code></td>
+<td><code>env-file</code></td>
+<td><code>TF_CLI_CONFIG_FILE</code></td>
+</tr>
+<tr>
+<td><code>pulumi</code></td>
+<td><code>env-dir</code></td>
+<td><code>PULUMI_HOME</code></td>
+</tr>
+<tr>
+<td><code>vercel</code> (Vercel CLI)</td>
+<td><code>flag</code></td>
+<td>— (<code>--global-config &lt;dir&gt;</code>)</td>
+</tr>
+<tr>
+<td><code>agy</code> (Google Antigravity)</td>
+<td>opt-in symlink</td>
+<td>— (hardcoded <code>~/.gemini</code>; see above)</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>flag</code> strategy is for engines with no config-directory env var: the tank
+directory is injected as a command-line flag (e.g. vercel's <code>--global-config</code>)
+in the generated alias / <code>.app</code> / run command instead of an exported variable.
+Such an engine shows <code>(n/a)</code> in <code>clikae status</code> (there's nothing in the
+environment to read back).</p>
+<p>Run <code>clikae adapters</code> to see them with descriptions. Adding your own is ~10
+lines of bash — see <a href="/clikae/adding-an-adapter">adding-an-adapter.md</a>.</p>
+<blockquote>
+<p><strong>Note on <code>aws</code>:</strong> unlike the others, the AWS adapter doesn't isolate config
+into a separate directory — <code>AWS_PROFILE</code> selects a <em>named profile</em> from your
+existing <code>~/.aws/config</code>. So <code>clikae init aws work</code> expects a matching
+<code>[profile work]</code> entry to exist. See the comment at the top of
+<code>lib/adapters/aws.sh</code> for the alternative <code>env-file</code> approach.</p>
+</blockquote>
+</article><nav class="flex justify-between gap-4 mt-12 pt-6 border-t border-border"><a class="flex-1 px-4 py-3.5 border border-border rounded-xl hover:border-accent" href="/clikae/installation"><div class="text-muted text-[.78rem]">← <!-- -->Previous</div><div class="font-semibold text-accent">Installation</div></a><a class="flex-1 px-4 py-3.5 border border-border rounded-xl hover:border-accent text-right" href="/clikae/grammar"><div class="text-muted text-[.78rem]">Next<!-- --> →</div><div class="font-semibold text-accent">Grammar &amp; lexicon</div></a></nav><script>document.querySelectorAll('[data-copy-md]').forEach(function(b){b.addEventListener('click',async function(){try{var r=await fetch(b.getAttribute('data-copy-md'));var t=await r.text();await navigator.clipboard.writeText(t);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1500);}catch(e){alert('Copy failed: '+e);}});});document.querySelectorAll('.prose pre').forEach(function(pre){if(pre.querySelector('.copy-code'))return;var b=document.createElement('button');b.className='copy-code';b.textContent='Copy';b.addEventListener('click',async function(){var c=pre.querySelector('code');try{await navigator.clipboard.writeText(c?c.innerText:pre.innerText);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1200);}catch(e){}});pre.appendChild(b);});document.querySelectorAll('.tabs').forEach(function(t){t.querySelectorAll('.tab-btn').forEach(function(b){b.addEventListener('click',function(){var i=b.getAttribute('data-tab');t.querySelectorAll('.tab-btn').forEach(function(x){x.classList.toggle('active',x.getAttribute('data-tab')===i);});t.querySelectorAll('.tab-panel').forEach(function(p){p.hidden=p.getAttribute('data-tab')!==i;});});});});(function(){var blocks=document.querySelectorAll('code.language-mermaid');if(!blocks.length)return;var items=[];blocks.forEach(function(c){var pre=c.closest('pre')||c;var h=document.createElement('div');h.className='mermaid-diagram';pre.replaceWith(h);items.push({src:c.textContent,holder:h});});var lib,id=0;function load(){return lib||(lib=import("https://esm.sh/mermaid@11").then(function(m){return m.default;}));}function theme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'default';}function run(){load().then(function(mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:theme()});items.forEach(function(it){mermaid.render('kura-mmd-'+(id++),it.src).then(function(r){it.holder.innerHTML=r.svg;}).catch(function(e){it.holder.innerHTML='<pre class="mermaid-error">'+String((e&&e.message)||e)+'</pre>';});});}).catch(function(){});}run();var cur=document.documentElement.getAttribute('data-theme');new MutationObserver(function(){var t=document.documentElement.getAttribute('data-theme');if(t!==cur){cur=t;run();}}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});})();</script></main><aside class="sticky top-14 max-h-[calc(100vh-56px)] overflow-y-auto px-4 py-8 max-lg:hidden"><p class="text-[.72rem] font-bold tracking-wider uppercase text-muted mb-2.5">On this page</p><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#quick-tour">Quick tour</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#commands">Commands</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#switch-the-main-thing">Switch (the main thing)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#make-amp-manage-tanks">Make &amp;amp; manage tanks</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#keep-burning-when-a-tank-runs-dry">Keep burning when a tank runs dry</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#inspect">Inspect</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#antigravity-agy--same-verbs-one-power-mode">Antigravity (agy) — same verbs, one power mode</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#shells">Shells</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#migrating-an-existing-setup">Migrating an existing setup</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#carrying-a-session-when-you-hit-a-usage-limit--clikae-to">Carrying a session when you hit a usage limit — clikae to</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#ambient-notice-a-dry-tank-and-switch-watch">Ambient: notice a dry tank and switch (watch)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#headless-tasks-across-tanks--clikae-burn">Headless tasks across tanks — clikae burn</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#seeing-which-tank-youre-on">Seeing which tank you&#x27;re on</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#naming-your-tanks">Naming your tanks</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#ephemeral-memory---ephemeral">Ephemeral memory (--ephemeral)</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#how-it-works">How it works</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#supported-engines">Supported engines</a></aside></div></div><footer class="border-t border-border mt-8"><div class="flex items-center justify-between flex-wrap gap-4 max-w-[1280px] mx-auto px-6 py-5 max-md:px-4"><nav class="flex items-center gap-[1.1rem] text-[.85rem]"><a class="text-muted hover:text-fg" href="/clikae/llms.txt">llms.txt</a><button type="button" class="inline-flex items-center justify-center w-[30px] h-[30px] p-0 text-[.95rem] leading-none border border-border rounded-lg bg-surface text-fg cursor-pointer hover:bg-hover" data-theme-toggle="true" aria-label="Toggle theme"></button></nav><a class="text-muted text-[.85rem] hover:text-accent" href="https://kura.build/" target="_blank" rel="noreferrer">Powered by Kura</a></div></footer><script>document.addEventListener('keydown',function(e){if(e.key==='/' && !document.documentElement.dataset.ctrlk && !/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'')){e.preventDefault();var s=document.querySelector('.search-box');if(s)s.focus();}});(function(){var b=document.querySelector('[data-theme-toggle]');if(!b)return;var d=document.documentElement,order=['system','light','dark'],icon={system:'🖥',light:'☀',dark:'☾'};function pref(){return d.getAttribute('data-theme-pref')||'system';}function res(p){return p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}function set(p){d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',res(p));try{localStorage.setItem('kura-theme',p);}catch(e){}b.textContent=icon[p];b.setAttribute('title','Theme: '+p);}set(pref());b.addEventListener('click',function(){set(order[(order.indexOf(pref())+1)%order.length]);});try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){if(pref()==='system')d.setAttribute('data-theme',res('system'));});}catch(e){}})();document.addEventListener('click',function(e){var t=e.target;document.querySelectorAll('details[data-menu][open]').forEach(function(d){if(!d.contains(t))d.removeAttribute('open');});var it=t.closest&&t.closest('details[data-menu] a, details[data-menu] [data-copy-md]');if(it){var dd=it.closest('details[data-menu]');if(dd)setTimeout(function(){dd.removeAttribute('open');},0);}});document.addEventListener('keydown',function(e){if(e.key==='Escape')document.querySelectorAll('details[data-menu][open]').forEach(function(d){d.removeAttribute('open');});});(function(){var root=document.documentElement;function opener(){return document.querySelector('[data-drawer-open]');}function items(){var d=document.getElementById('docs-nav');if(!d)return[];return[].filter.call(d.querySelectorAll('a[href],button:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'),function(el){return el.offsetParent!==null;});}function set(o){var was=root.classList.contains('drawer-open');root.classList.toggle('drawer-open',o);var b=opener();if(b)b.setAttribute('aria-expanded',o?'true':'false');if(o){var f=items();if(f[0])f[0].focus();}else if(was&&b)b.focus();}document.addEventListener('click',function(e){if(e.target.closest('[data-drawer-open]')){e.preventDefault();set(!root.classList.contains('drawer-open'));return;}if(e.target.closest('[data-drawer-close]')){set(false);return;}if(e.target.closest('#docs-nav a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'){set(false);return;}if(e.key==='Tab'&&root.classList.contains('drawer-open')){var f=items();if(!f.length)return;var first=f[0],last=f[f.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}else if(f.indexOf(document.activeElement)<0){e.preventDefault();first.focus();}}});})();(function(){
+  function trim(p){return p.length>1&&p.endsWith('/')?p.slice(0,-1):p;}
+  function sync(){
+    var path=trim(location.pathname), tab=null;
+    var links=document.querySelectorAll('.sidebar a[href],[data-tabbar] a[href]');
+    for(var i=0;i<links.length;i++){var a=links[i],on=trim(a.getAttribute('href'))===path;
+      if(on){a.setAttribute('aria-current','page');var g=a.closest('[data-tab]');if(g)tab=g.getAttribute('data-tab');}
+      else a.removeAttribute('aria-current');}
+    if(tab!=null){
+      document.querySelectorAll('[data-tab]').forEach(function(g){g.hidden=g.getAttribute('data-tab')!==tab;});
+      document.querySelectorAll('[data-tabbar] a').forEach(function(a){
+        if(a.getAttribute('data-tab-key')===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+    }
+    // expand the folder(s) holding the active page. Iterate EVERY aria-current sidebar link, not
+    // just the first: a folder-as-page link lives in a <details>, but the mobile tab-bar link (also
+    // in .sidebar, earlier in the DOM) has no folder ancestor — querySelector would pick that one
+    // and expand nothing. forEach opens each link's folder chain; tab links are harmless no-ops.
+    document.querySelectorAll('.sidebar a[aria-current="page"]').forEach(function(cur){
+      var d=cur.closest('details.folder');while(d){d.open=true;d=d.parentElement&&d.parentElement.closest('details.folder');}});
+    // rewrite the locale-switch links to THIS page's equivalent path (swap the locale prefix)
+    var ll=document.querySelectorAll('[data-locale-home]');
+    if(ll.length){var lc=document.querySelector('[data-locale-home][data-locale-active]'),cp=lc?lc.getAttribute('data-locale-home'):'/';cp=cp==='/'?'':cp;
+      var rest=location.pathname;if(cp&&rest.indexOf(cp)===0)rest=rest.slice(cp.length)||'/';
+      ll.forEach(function(a){var h=a.getAttribute('data-locale-home'),p=h==='/'?'':h;a.setAttribute('href',rest==='/'?(p||'/'):(p+rest));});}
+    // mobile nav-context: "Active tab / Page title" (the shell can't know the page server-side)
+    var nc=document.querySelector('[data-nav-context]');
+    if(nc){var at=document.querySelector('[data-tabbar] a[aria-current="page"]'),h1=document.querySelector('main h1');
+      nc.textContent=[at&&at.textContent.trim(),h1&&h1.textContent.trim()].filter(Boolean).join(' / ');}
+  }
+  sync();
+  var outlet=document.querySelector('[data-june-outlet]');
+  if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
+})();</script><script type="module" src="/clikae/_june/client.aa34fb55.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as clean Markdown by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>
