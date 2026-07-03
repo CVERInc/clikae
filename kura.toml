@@ -1,0 +1,47 @@
+# clikae docs site — the ONLY config. The kurajs/pages action reads this + renders docs/ into the
+# site. clikae is a pure-bash repo, so nothing at the root is touched. Deployed to GitHub Pages by
+# .github/workflows/docs.yml.
+
+markdown  = "commonmark"
+base_path = ""
+[site]
+name        = "clikae"
+description = "An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini & Antigravity account, each with a recap of where you left off."
+[deploy]
+target    = "github-pages"
+base_path = "/clikae"
+[content]
+sources = []
+[[nav.tabs]]
+title  = "Guide"
+groups = ["guide"]
+[[nav.tabs]]
+title  = "Design"
+groups = ["design"]
+[[nav.tabs]]
+title  = "Proposals"
+groups = ["proposals"]
+[nav.groups.guide]
+title = "Guide"
+pages = [
+  { slug = "installation", title = "Installation" }, { slug = "usage", title = "Usage" },
+  { slug = "grammar", title = "Grammar & lexicon" }, { slug = "orchestration", title = "Orchestration" },
+  { slug = "agy-dispatch", title = "Driving agy headless" }, { slug = "adding-an-adapter", title = "Adding an adapter" },
+  { slug = "memory", title = "Memory (Soul layer)" }, { slug = "claude-on-macos", title = "Claude Code on macOS" },
+  { slug = "troubleshooting", title = "Troubleshooting" },
+]
+[nav.groups.design]
+title = "Design & vision"
+pages = [
+  { slug = "VISION", title = "Vision" }, { slug = "DESIGN-runtime", title = "Runtime redesign" },
+  { slug = "DESIGN-board-fuel-dots", title = "Board: fuel dots" }, { slug = "EXPECTATIONS", title = "Expectation vs implementation" },
+  { slug = "HANDOFF-world-class-gaps", title = "World-class gaps" }, { slug = "DEVLOG", title = "Devlog" },
+  { slug = "PLAYTEST", title = "Playtest guide" },
+]
+[nav.groups.proposals]
+title = "Proposals"
+pages = [
+  { slug = "proposals/issue-22-git-identity", title = "#22 · git identity" },
+  { slug = "proposals/issue-24-burn-simplify", title = "#24 · simplify burn" },
+  { slug = "proposals/issue-25-agy-parallel", title = "#25 · agy parallel" },
+]
