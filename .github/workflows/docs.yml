@@ -1,0 +1,28 @@
+name: docs
+
+# Docs-as-code: the repo adds ONE config file (kura.toml) + this workflow. The kurajs/pages action
+# reads kura.toml, renders docs/ into a searchable, agent-native static site, and deploys it to
+# GitHub Pages -> https://<owner>.github.io/clikae/
+
+on:
+  push:
+    branches: [main, docs/kura-site]
+    paths:
+      - "docs/**"
+      - "kura.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: kurajs/pages@v1
