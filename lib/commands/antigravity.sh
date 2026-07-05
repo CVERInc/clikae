@@ -205,6 +205,7 @@ _agy_rename() {
   active="$(_agy_active)"
   mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
   _agy_kc_rename "$old" "$new"
+  soul_rename_member "antigravity" "$old" "$new"   # keep Soul membership in step
   if [ "$active" = "$old" ]; then
     rm -f "$link"; ln -s "$slots/$new" "$link"
     log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."

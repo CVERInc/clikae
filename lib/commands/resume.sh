@@ -122,6 +122,7 @@ EOF
   log_ok "Resuming $engine/$tank · session ${sid%%-*}…"
   [ -n "$cwd" ] && log_dim "in $cwd"
   history_log "resume: $engine/$tank ${sid%%-*}"
+  soul_prelaunch "$engine" "$tank" "$dir"   # member tank → fan this dir into its Soul
   adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
 }
 

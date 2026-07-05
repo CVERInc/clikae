@@ -38,6 +38,8 @@ source "$CLIKAE_LIB/core/i18n.sh"
 source "$CLIKAE_LIB/core/json.sh"
 # shellcheck source=../lib/core/profile_store.sh
 source "$CLIKAE_LIB/core/profile_store.sh"
+# shellcheck source=../lib/core/soul.sh
+source "$CLIKAE_LIB/core/soul.sh"
 # shellcheck source=../lib/core/shell_rc.sh
 source "$CLIKAE_LIB/core/shell_rc.sh"
 # shellcheck source=../lib/core/adapter_loader.sh

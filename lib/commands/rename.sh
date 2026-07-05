@@ -124,6 +124,11 @@ EOF
   mv "$old_dir" "$new_dir"
   log_ok "Moved $old_dir -> $new_dir"
 
+  # 1b) Carry Soul membership: the members files name <engine>/<tank>, so a
+  # rename without this leaves a ghost member behind (and the renamed tank
+  # would read as isolated even though its slots still link into the store).
+  soul_rename_member "$cli" "$old" "$new"
+
   # 2) Carry over the saved login (best-effort, adapter-specific).
   if declare -f adapter_migrate_credentials >/dev/null 2>&1; then
     local mc_rc=0

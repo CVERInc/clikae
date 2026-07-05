@@ -27,11 +27,12 @@
 # (opt-in, per-tank, never auto-cross — crossing your own accounts is announced); no
 # phantom continuity (Soul carries context, not the model's capability).
 
-souls_root() { printf '%s/souls\n' "$CLIKAE_HOME"; }
-
-# The ONE canonical Soul store for a group — flat & vendor-neutral, so claude,
-# codex and agy all point at the same markdown brain (no per-engine, per-dir forks).
-_memory_store_path() { printf '%s/%s/memory\n' "$(souls_root)" "$1"; }
+# Path helpers + tank-level membership live in lib/core/soul.sh (always sourced
+# by bin/clikae): souls_root, soul_store_path, soul_members_file,
+# soul_group_for_tank, soul_prelaunch. Membership is the tank-level SSOT;
+# symlinks (claude, per-directory) and pointer notes (codex/agy) are projections
+# of it — soul_prelaunch re-projects the current directory at every launch.
+_memory_store_path() { soul_store_path "$1"; }
 
 # Seed the Soul's operating manual into the store (write-back hygiene). claude
 # learns the memory protocol from its system prompt, but codex/agy only get the
@@ -81,7 +82,7 @@ _memory_seed_protocol() {
 PROTO
 }
 
-_memory_members_file() { printf '%s/%s/members\n' "$(souls_root)" "$1"; }
+_memory_members_file() { soul_members_file "$1"; }
 
 # Drop a tank (field 1 == <engine>/<tank>) from a group's member file, in place.
 _memory_drop_member() {
@@ -162,8 +163,14 @@ _memory_account() {                            # best-effort account label for M
   printf '\n'
 }
 
-# Which group (if any) the resolved tank currently shares — by strategy.
+# Which group (if any) the resolved tank currently shares. Membership (the
+# members file) is authoritative — a per-directory symlink only tells you about
+# $PWD's slot. The per-strategy inspection remains as a fallback so a tank
+# linked by hand (or by a pre-membership clikae) still reads as shared.
 _memory_current_group() {
+  local g
+  g="$(soul_group_for_tank "$MEM_CLI" "$MEM_TANK")"
+  if [ -n "$g" ]; then printf '%s\n' "$g"; return 0; fi
   if [ "$MEM_STRATEGY" = "symlink" ]; then
     [ -L "$MEM_DIR" ] || return 0
     local tgt root; tgt="$(readlink "$MEM_DIR" 2>/dev/null || true)"
@@ -176,6 +183,17 @@ _memory_current_group() {
     # Read the group from our fenced sentinel: `>>> clikae soul:<group> >>>`.
     sed -n 's/.*>>> clikae soul:\([^ ]*\) >>>.*/\1/p' "$MEM_PTR" 2>/dev/null | head -n 1
   fi
+}
+
+# Every memory slot of MEM_CFG currently linked into <store> (claude keeps one
+# memory dir per project directory — projects/<slug>/memory). Used by isolate
+# (unlink them ALL) and share (link the already-existing ones eagerly; new
+# directories are linked lazily by soul_prelaunch at launch).
+_memory_all_linked_slots() {
+  local store="$1" l
+  find "$MEM_CFG" -maxdepth 3 -type l -name memory 2>/dev/null | while IFS= read -r l; do
+    [ "$(readlink "$l" 2>/dev/null || true)" = "$store" ] && printf '%s\n' "$l"
+  done
 }
 
 # ── pointer-strategy note (fenced, idempotent, removable) ───────────────────
@@ -287,8 +305,18 @@ _memory_share() {
 
   existing_group="$(_memory_current_group)"
   if [ "$existing_group" = "$group" ]; then
+    # Membership already granted — just make sure THIS directory's slot is
+    # projected too (the same lazy repair soul_prelaunch does at launch).
+    if [ "$MEM_STRATEGY" = "symlink" ] && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$store" ]; then
+      soul_prelaunch "$MEM_CLI" "$MEM_TANK" "$MEM_CFG"
+    fi
     log_ok "$MEM_CLI/$MEM_TANK already shares '$group'."
     return 0
+  fi
+  # One brain per tank: moving to another group leaves the old one's roster.
+  if [ -n "$existing_group" ]; then
+    _memory_drop_member "$(_memory_members_file "$existing_group")" "$MEM_CLI/$MEM_TANK"
+    log_dim "leaving group '$existing_group' (a tank shares at most one Soul)."
   fi
 
   # Informed consent: if the store already holds another of YOUR accounts, say so
@@ -330,6 +358,25 @@ _memory_share() {
     fi
     mkdir -p "$(dirname "$MEM_DIR")"
     ln -s "$store" "$MEM_DIR"
+    # Project the WHOLE tank, not just $PWD: fan in every other project
+    # directory's existing slot too (own memory stashed alongside, reversible);
+    # brand-new directories are linked lazily by soul_prelaunch at launch.
+    # Membership is per-tank, so one consented `share` covers them all.
+    local slot sstash fanned=0
+    for slot in "$MEM_CFG"/projects/*/memory; do
+      [ -e "$slot" ] || [ -L "$slot" ] || continue
+      [ "$slot" = "$MEM_DIR" ] && continue
+      if [ -L "$slot" ]; then
+        [ "$(readlink "$slot" 2>/dev/null || true)" = "$store" ] && continue
+        rm -f "$slot"
+      else
+        sstash="$slot.clikae-soul-stash"
+        [ -e "$sstash" ] && sstash="$sstash.$$"
+        mv "$slot" "$sstash"
+      fi
+      ln -s "$store" "$slot" && fanned=$((fanned+1))
+    done
+    [ "$fanned" -gt 0 ] && log_dim "also fanned in $fanned other project-directory slot(s) of this tank."
   else
     # Pointer strategy: drop a note in the engine's instructions file. We do NOT
     # seed from the engine's own (opaque) memory — it adopts the shared markdown,
@@ -379,13 +426,26 @@ _memory_isolate() {
   fi
 
   if [ "$MEM_STRATEGY" = "symlink" ]; then
-    # Drop only the symlink — the shared store is left untouched (aggregate, never
-    # mutate). Restore the tank's stashed own memory if we have it.
-    local stash="$MEM_DIR.clikae-soul-stash"
-    rm -f "$MEM_DIR"
-    [ -d "$stash" ] && mv "$stash" "$MEM_DIR"
-    log_ok "$MEM_CLI/$MEM_TANK is back on its own memory (left group '$group')."
-    [ -d "$MEM_DIR" ] || log_dim "(it had no stashed memory; the engine will create a fresh one.)"
+    # Drop the symlinks — ALL of them: one share may have projected into many
+    # project directories (share fans in eagerly, soul_prelaunch lazily). The
+    # shared store is left untouched (aggregate, never mutate). Each slot's
+    # stashed own memory is restored where one exists.
+    local store slot stash unlinked=0
+    store="$(_memory_store_path "$group")"
+    while IFS= read -r slot; do
+      [ -n "$slot" ] || continue
+      rm -f "$slot"; unlinked=$((unlinked+1))
+      stash="$slot.clikae-soul-stash"
+      [ -d "$stash" ] && mv "$stash" "$slot"
+    done < <(_memory_all_linked_slots "$store")
+    # $PWD's slot may predate membership records or point at an odd path — make
+    # sure the resolved dir is covered even if the walk missed it.
+    if [ -L "$MEM_DIR" ]; then
+      rm -f "$MEM_DIR"
+      [ -d "$MEM_DIR.clikae-soul-stash" ] && mv "$MEM_DIR.clikae-soul-stash" "$MEM_DIR"
+    fi
+    log_ok "$MEM_CLI/$MEM_TANK is back on its own memory (left group '$group', $unlinked slot(s) unlinked)."
+    [ -d "$MEM_DIR" ] || log_dim "(this directory had no stashed memory; the engine will create a fresh one.)"
   else
     # Pointer strategy: remove only our note (the store is untouched).
     _memory_ptr_strip "$MEM_PTR" "$group"
@@ -424,7 +484,7 @@ _memory_status() {
       declare -F adapter_memory_pointer_path >/dev/null 2>&1 || [ "$strat" = "symlink" ] || log_fail "memory: '$eng' unsupported."
     fi
     local saw=0
-    [ "$strat" = "symlink" ] && log_info "memory sharing for: $PWD" || log_info "memory sharing ($eng):"
+    log_info "memory sharing ($eng):"
     while IFS=$'\t' read -r cli tname _; do
       [ "$cli" = "$canon" ] || continue
       saw=1
@@ -434,9 +494,16 @@ _memory_status() {
       if [ "$strat" = "symlink" ]; then MEM_DIR="$(adapter_memory_dir "$MEM_CFG")"
       elif clikae_is_target "$eng"; then MEM_PTR="$(target_memory_pointer_path "$MEM_CFG")"
       else MEM_PTR="$(adapter_memory_pointer_path "$MEM_CFG")"; fi
-      local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
+      local g acct lk here; g="$(_memory_current_group)"; acct="$(_memory_account)"
       lk=""; tank_is_solo "$cli" "$tname" && lk="  🔒 solo"
-      if [ -n "$g" ]; then log_ok "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk"
+      # Sharing is tank-level; note when THIS directory's slot isn't projected
+      # yet (it links on the tank's next launch here — soul_prelaunch).
+      here=""
+      if [ -n "$g" ] && [ "$strat" = "symlink" ] \
+         && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then
+        here="  (this dir: links on next launch)"
+      fi
+      if [ -n "$g" ]; then log_ok "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk$here"
       else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}$lk"; fi
     done < <(list_all_profiles)
     [ "$saw" -eq 1 ] || log_dim "  (no $eng tanks)"
@@ -449,6 +516,10 @@ _memory_status() {
   if [ -n "$g" ]; then
     log_ok "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"
     log_dim "store: $(_memory_store_path "$g")"
+    if [ "$MEM_STRATEGY" = "symlink" ] \
+       && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then
+      log_dim "(this directory's slot links on the tank's next launch here.)"
+    fi
   else
     log_dim "$MEM_CLI/$MEM_TANK → isolated${acct:+  ($acct)}$lk"
   fi

@@ -40,5 +40,6 @@ EOF
   local d
   d="$(ensure_profile --require "$cli" "$profile")"
 
+  soul_prelaunch "$cli" "$profile" "$d"   # member tank → fan this dir into its Soul
   adapter_run "$d" "$@"
 }

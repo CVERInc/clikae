@@ -212,6 +212,11 @@ cmd_switch() {
     return $?
   fi
 
+  # Soul: a member tank shares its WHOLE brain — make sure this directory's
+  # memory slot is fanned into the store before the engine starts (lib/core/
+  # soul.sh; no-op for non-members, solo tanks, pointer engines).
+  soul_prelaunch "$engine" "$tank" "$d"
+
   # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
   # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is
   # detectable from the transcript; other engines exec unchanged. (docs/DESIGN-runtime)
@@ -253,12 +258,21 @@ _switch_run_ephemeral() {
   declare -F adapter_memory_dir >/dev/null \
     || log_fail "--ephemeral isn't supported for '$engine' (clikae doesn't know its memory layout)."
   _switch_require_binary "$engine" "$tank"   # after the --ephemeral support check, before we run
-  local mem stash throwaway
+  local mem stash throwaway soul_tgt=""
   mem="$(adapter_memory_dir "$d")"
   [ -n "$mem" ] || log_fail "--ephemeral: '$engine' reported no memory dir for this directory."
   stash="$mem.clikae-ephemeral-stash"
 
   mkdir -p "$(dirname "$mem")"
+  # A Soul-shared slot is a symlink INTO $CLIKAE_HOME/souls — remember its target
+  # so the exit trap can re-link it. (Without this, an ephemeral run on a shared
+  # tank silently un-shared this directory: the link read as a crashed run's
+  # leftover, got removed, and nothing put it back.)
+  if [ -L "$mem" ]; then
+    case "$(readlink "$mem" 2>/dev/null || true)" in
+      "$(souls_root)"/*) soul_tgt="$(readlink "$mem")" ;;
+    esac
+  fi
   # Self-heal a crashed prior run: a leftover symlink + a stash holding the real
   # memory. Remove the dangling link and put the real memory back first.
   [ -L "$mem" ] && rm -f "$mem"
@@ -270,8 +284,9 @@ _switch_run_ephemeral() {
 
   # Cleanup on exit, with literal paths captured now (survives scope). The parent
   # ignores INT so Ctrl-C reaches the engine; cleanup fires on the parent's exit.
+  # Restore order: stashed own memory first; else re-link a Soul-shared slot.
   # shellcheck disable=SC2064
-  trap "rm -f '$mem'; [ -d '$stash' ] && mv '$stash' '$mem'; rm -rf '$throwaway'" EXIT
+  trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'" EXIT
   trap '' INT
 
   log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
