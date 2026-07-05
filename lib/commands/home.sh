@@ -287,7 +287,8 @@ _home_is_dry() {
 # One axis, one reading per tank (red→yellow→green→none), like a traffic light.
 # See docs/DESIGN-board-fuel-dots.md for the why. "Which tank am I on" is NOT here
 # — that stays with the cursor ❯, the burn-order position, and the `active` flag
-# (which still drives the launch target + the `← here` text label, untouched).
+# (which still drives the launch target — the on-row `← here` text label it used
+# to also drive was dropped 2026-06-30, commit 9d55047: noise with many shells open).
 
 # _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
 # usage phrase, cached (first line) by watch/auto when it streams past. Read-only
@@ -446,8 +447,8 @@ _home_render_static() {
         fi
         local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
         # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
-        # decoupled from `active`. `active` still picks the launch target + the
-        # "← here" label. See docs/DESIGN-board-fuel-dots.md.
+        # decoupled from `active`. `active` still picks the launch target (the
+        # on-row "← here" label it also used to drive was dropped, see above).
         _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"; _dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
@@ -767,8 +768,14 @@ EOF
 
 # Enter on a Continue row → a tiny submenu. The options DEPEND on whether
 # the tank still has fuel ($2 = the dry set from _home_dry_set):
-#   • has fuel → resume the exact session, or open that tank fresh (the original
-#     two choices).
+#   • has fuel → by default (resume_ask_tank_get = always), FIRST ask which tank
+#     to resume on — same "Resume on which tank?" question and default as
+#     `clikae resume`'s own standalone picker, so the two entry points behave
+#     identically. Keeping the default (this tank) falls through to the original
+#     two choices (resume here / open here fresh); picking a different tank
+#     carries the session there directly (switching tanks IS the carry — no
+#     separate "are you sure" needed). `clikae resume ask-tank dry-only` skips
+#     this and restores the older behavior below.
 #   • DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
 #     instead lead with "carry onward" — relay this session to the ring's next
 #     fuelled tank (next_tank) — and keep "force-resume anyway" as an escape hatch.
@@ -783,16 +790,26 @@ EOF
     _home_resume_dry_action "$cli" "$profile" "$note" "$row"
     return $?
   fi
-  # Three choices when the tank still has fuel: resume here · open here fresh · carry
-  # THIS session onto another tank (a deliberate account switch that keeps the
-  # conversation — not just a limit escape). The carry option only shows for engines
-  # that can actually resume a carried session (adapter_relay) and when there IS
-  # another tank of this engine to carry to.
-  local opts choice has_other=""
+  local cands has_other=""
+  cands="$(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')"
+  has_other="$(printf '%s\n' "$cands" | grep -vxF "$profile" | head -1)"
+  if [ -n "$has_other" ] && [ "$(resume_ask_tank_get)" = "always" ]; then
+    local target
+    target="$(_home_choose "$T_RESUME_WHICH_TANK" "$cands" "$profile")" || return 1
+    if [ -n "$target" ] && [ "$target" != "$profile" ]; then
+      history_log "board: carry $cli/$profile → $cli/$target"
+      [ -n "$note" ] && _resume_carry_session "$cli" "$profile" "$target" "$note"
+      _home_launch "$kind"$'\037'"$cli"$'\037'"$target"$'\037'"$label"$'\037'"$alias"$'\037'"$active"$'\037'"$note"
+      return $?
+    fi
+  fi
+  # Two choices when staying on this tank: resume here, or open here fresh. The
+  # third, older "Carry this session to another tank" menu item is kept for
+  # `ask-tank dry-only` users, who skip the upfront question above entirely.
+  local opts choice
   opts="$(printf '%s\n%s' "$T_RESUME_OPT_RESUME" "$T_RESUME_OPT_SWITCH")"
-  if _home_engine_can_carry "$cli"; then
-    has_other="$(list_all_profiles | awk -F'\t' -v c="$cli" -v f="$profile" '$1==c && $2!=f{print;exit}')"
-    [ -n "$has_other" ] && opts="$(printf '%s\n%s' "$opts" "$T_RESUME_OPT_CARRY")"
+  if [ -n "$has_other" ] && [ "$(resume_ask_tank_get)" = "dry-only" ]; then
+    opts="$(printf '%s\n%s' "$opts" "$T_RESUME_OPT_CARRY")"
   fi
   choice="$(_home_choose "$T_RESUME_TITLE  ($cli/$profile)" "$opts" "$T_RESUME_OPT_RESUME")" || return 1
   case "$choice" in
@@ -807,17 +824,12 @@ EOF
   esac
 }
 
-# Does <engine>'s adapter define adapter_relay (can it carry a live session onto
-# another tank)? File is ground truth — load_adapter installs a default stub, so a
-# runtime declare -F would always say yes. Mirrors _home_newtank_choices' check.
-_home_engine_can_carry() {
-  grep -qE '^[[:space:]]*adapter_relay[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$1.sh" 2>/dev/null
-}
-
-# "Carry this session onto another tank" (the non-dry third choice): pick a target
-# from this engine's OTHER tanks, then relay the session there (same-engine → a real
-# resume on that tank's quota). Returns 1 (caller falls back to plain resume) if
-# there's nothing to pick or the user cancels.
+# "Carry this session onto another tank" (the dry-only mode's buried 3rd choice,
+# and the dry submenu's fallback): pick a target from this engine's OTHER tanks,
+# copy the session there (_resume_carry_session — shared with `clikae resume`'s
+# own picker, covers claude/codex/antigravity), then resume it there directly.
+# Returns 1 (caller falls back to plain resume) if there's nothing to pick or the
+# user cancels.
 _home_carry_action() {
   local cli="$1" from="$2" sid="$3" cands target
   cands="$(list_all_profiles | awk -F'\t' -v c="$cli" -v f="$from" '$1==c && $2!=f{print $2}')"
@@ -825,7 +837,8 @@ _home_carry_action() {
   target="$(_home_choose "$(printf "$T_RESUME_CARRY_PICK" "$cli/$from")" "$cands" "")" || return 1
   [ -n "$target" ] || return 1
   history_log "board: carry $cli/$from → $cli/$target"
-  exec "$CLIKAE_BIN" relay "$cli" "$from" "$target" ${sid:+--session "$sid"}
+  [ -n "$sid" ] && _resume_carry_session "$cli" "$from" "$target" "$sid"
+  _home_launch "resume"$'\037'"$cli"$'\037'"$target"$'\037'""$'\037'""$'\037'""$'\037'"$sid"
 }
 
 # Dry-tank submenu (see _home_resume_action). <sid> is the session to carry; <row>

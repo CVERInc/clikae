@@ -126,45 +126,84 @@ _stub_agy() {
   [[ "$output" == *"work"* ]] || false
 }
 
-# --- agy login on switch: log out, let agy re-OAuth (macOS) -------------------
+# --- agy login on switch: carry the Keychain token per tank (macOS) ----------
 # agy reads its account from ONE machine-wide Keychain item, ignoring which tank
-# dir ~/.gemini points at (verified live 2026-06-30). So clikae doesn't carry
-# tokens — on a tank switch it just LOGS OUT (clears that one item) and agy prompts
-# a fresh sign-in for the new tank's account. clikae never reads/writes a token and
-# keeps no per-tank Keychain slots. These use the stateful `security` stub from
-# helpers.bash ($CLIKAE_TEST_KEYCHAIN, one file per service); macOS-only (on Linux
-# agy stores creds in ~/.gemini, which the dir swap already isolates).
+# dir ~/.gemini points at (verified live 2026-06-30). So clikae carries that login
+# WITH the tank: on switch it stashes the outgoing tank's login into a
+# clikae-namespaced slot and restores the incoming tank's (or logs out cleanly if
+# the incoming tank has never logged in) — then VERIFIES the restore actually
+# took before handing off to agy (2026-07-05: the fix for the 2026-06-30 trust bug
+# where a silent no-op restore left agy on the wrong account with zero warning).
+# These use the stateful `security` stub from helpers.bash ($CLIKAE_TEST_KEYCHAIN,
+# one file per service); macOS-only (on Linux agy stores creds in ~/.gemini, which
+# the dir swap already isolates).
 
-@test "agy switch to a different tank logs out so it signs in fresh" {
-  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain logout is macOS-only"
+@test "agy switch to a different tank stashes outgoing, restores incoming" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
   _stub_agy
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1     # default(active)+work
   printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"        # signed in on default
-  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work          # work != default → logout
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work          # work != default → carry
   [ "$status" -eq 0 ]
-  [ ! -f "$CLIKAE_TEST_KEYCHAIN/gemini" ]                         # logged out → agy re-OAuths
-  [ -z "$(ls "$CLIKAE_TEST_KEYCHAIN"/clikae-agy-* 2>/dev/null)" ] # NO per-tank slots — clikae carries nothing
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-default")" = "token-default" ]  # outgoing stashed
+  [ ! -f "$CLIKAE_TEST_KEYCHAIN/gemini" ]                          # work has no stash yet → logged out clean
 }
 
-@test "agy switch to the already-active tank does NOT log out" {
-  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain logout is macOS-only"
+@test "agy switch to a tank with a prior stash restores its own token" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  printf 'token-work' > "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work"   # work already has a stash
+  printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-work" ]       # restored work's own token
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-default")" = "token-default" ]  # default's stash kept
+}
+
+@test "agy switch to the already-active tank does NOT touch the Keychain" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
   _stub_agy
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1     # default active
   printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"
-  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy default       # default == active → no logout
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy default       # default == active → no-op
   [ "$status" -eq 0 ]
-  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # still signed in
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # still signed in, untouched
 }
 
-@test "rename agy doesn't touch the Keychain (login isn't per-tank)" {
-  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain is macOS-only"
+@test "agy switch refuses to proceed if the restore doesn't verify" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
   _stub_agy
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
-  printf 'token' > "$CLIKAE_TEST_KEYCHAIN/gemini"                 # the one canonical login
+  printf 'token-work' > "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work"
+  printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"
+  # Sabotage the stub mid-flight: make add-generic-password a silent no-op, so
+  # the restore's copy "succeeds" (exit 0) but the canonical item never changes —
+  # exactly the failure mode that caused the 2026-06-30 incident.
+  cat > "$BATS_TEST_TMPDIR/bin/security" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "add-generic-password" ]; then exit 0; fi
+exec "$TEST_HOME/.testbin/security" "\$@"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/security"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"didn't verify"* ]] || false
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # canonical left as-is, NOT silently trusted
+}
+
+@test "rename agy carries the tank's Keychain slot across" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  printf 'token-work' > "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work"  # work's stashed login
   run clikae rename agy work laptop
   [ "$status" -eq 0 ]
-  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token" ]           # untouched by rename
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-laptop")" = "token-work" ]  # carried to the new slot name
+  [ ! -f "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work" ]                       # old slot name gone
 }

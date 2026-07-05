@@ -106,10 +106,75 @@ _stub_gh() {
   [[ "$output" != *"codex/T2"* ]] || false
 }
 
-@test "burn rejects agy (global, not per-tank headless)" {
+# --- agy burn: since the 2026-07-05 Keychain-carry restore, a tank switch is
+# non-interactive, so burn can auto-hop agy tanks on dry (sequential — agy still
+# can't run two tanks in parallel, unlike other engines that's fine for burn's
+# single-task-at-a-time contract anyway). Per-tank dry state is a `.dry` marker
+# INSIDE that tank's own slot dir (mirroring conduct.bats's _stub_agy_conduct) —
+# since $HOME/.gemini symlinks to whichever tank is active, the stub sees it
+# only when that tank is the one currently switched in.
+_stub_agy_burn() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"
+mkdir -p "$(dirname "$log")"
+if [ -f "$HOME/.gemini/antigravity-cli/.dry" ]; then
+  echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "$log"
+  exit 0
+fi
+: > "$log"
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+}
+
+@test "burn rejects agy with no raw '-- <cmd...>' form (no adapter to fill flags)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
   run clikae burn agy work --artifact /tmp/x -- run /tmp/x
   [ "$status" -ne 0 ]
-  [[ "$output" == *"global"* ]] || false
+  [[ "$output" == *"no adapter"* ]] || false
+}
+
+@test "burn agy completes on the active tank and verifies by the artifact" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"Done on agy/default"* ]] || false
+}
+
+@test "burn agy hops to the next tank (Keychain carry) when the first runs dry" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1       # default(active) + work
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"   # default is dry
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"ran dry"* ]] || false
+  [[ "$output" == *"Done on agy/work"* ]] || false
+  [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]   # actually switched, not just retried
+}
+
+@test "burn agy fails when every tank is dry" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli" \
+           "$CLIKAE_HOME/profiles/antigravity/work/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"
+  : > "$CLIKAE_HOME/profiles/antigravity/work/antigravity-cli/.dry"
+  run clikae burn agy default --artifact "$BATS_TEST_TMPDIR/out.md" --prompt "do the thing"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"All 2 agy tank(s) are dry"* ]] || false
 }
 
 @test "burn requires --artifact" {

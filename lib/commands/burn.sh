@@ -12,6 +12,11 @@
 # burn ran: claude dispatched in parallel and reviewed). "Your tanks are the
 # reserve" (docs/grammar.md — why `pool` was removed), so auto-reroute walks THIS
 # engine's other tanks; --to forces an explicit next hop (may cross engines, warned).
+#
+# agy is adapter-less (global single-account, no per-shell env), so it can't go
+# through the adapter-driven loop below — it gets its own loop, _agy_burn.
+# shellcheck source=./antigravity.sh
+source "$CLIKAE_LIB/commands/antigravity.sh"
 
 _burn_help() {
   cat <<'EOF'
@@ -157,6 +162,85 @@ _burn_compose() {
   BURN_ARGV+=("${post[@]}")
 }
 
+# _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <add_dirs...>
+# agy's own burn loop. agy has no adapter (no per-shell env; one global
+# ~/.gemini symlink), so it can't go through cmd_burn's adapter-driven engine
+# loop below — this is a dedicated SEQUENTIAL dry→next-tank loop, reusing the
+# read-only headless recipe + cli.log dry-detection from
+# lib/commands/conduct.sh's _conduct_one_agy, and the Keychain carry from
+# lib/commands/antigravity.sh (now that a tank switch is non-interactive, this
+# can drive it programmatically instead of refusing outright — see 32507a8's
+# revert). Only sequential: agy can't run two tanks in parallel (one global
+# active tank), so unlike other engines' burn there's no cross-terminal safety
+# concern from an interactive session being mid-use on a DIFFERENT tank — this
+# still moves the ONE global active tank, same as `clikae agy <tank>` always has.
+_agy_burn() {
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6"; shift 6
+  local -a add_dirs=("$@")
+
+  if [ "$fresh" -eq 1 ] && [ -e "$artifact" ]; then
+    rm -f "$artifact" 2>/dev/null
+    if [ -e "$artifact" ]; then log_warn "--fresh could not remove $artifact (judging by timestamp instead)."
+    else log_info "--fresh: cleared $artifact"; fi
+  elif [ -e "$artifact" ]; then
+    log_warn "artifact already exists: $artifact — judging success by a timestamp change (use --fresh for a clean slate)."
+  fi
+  local art_pre; art_pre="$(_clikae_mtime "$artifact")"
+  local t0=$SECONDS
+
+  local cur="$start_tank" tank_count; tank_count="$(_agy_tank_names | grep -c . || true)"
+  local -a agy_tried=("$start_tank")
+  while :; do
+    [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
+    if [ "$cur" != "$(_agy_active)" ]; then
+      log_info "burn agy/$cur → switching (Keychain carry, no OAuth needed since 2026-07-05)"
+      _agy_assert_not_running
+      local active; active="$(_agy_active)"
+      [ -n "$active" ] && _agy_kc_stash "$active"
+      _agy_kc_restore "$cur"
+      _agy_kc_verify_restore "$cur"
+      rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
+    fi
+    log_info "burn agy/$cur → agy -p ..."
+
+    local -a gen=(-p "$prompt") d
+    for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
+    local -a runner=()
+    if [ -n "$timeout_s" ]; then
+      local tb; tb="$(_burn_timeout_bin)"
+      case "$tb" in
+        timeout|gtimeout) runner=("$tb" "$timeout_s") ;;
+        perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
+      esac
+    fi
+    local out; out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
+
+    local logf reset; logf="$(_agy_link)/antigravity-cli/cli.log"
+    if reset="$(limit_log_dry "$logf")"; then
+      log_warn "agy/$cur ran dry${reset:+  — }${reset}"
+    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
+      log_ok "Done on agy/$cur — artifact present: $artifact"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+      return 0
+    else
+      log_err "agy/$cur produced no fresh artifact and shows no limit — a real task failure, not a dry tank."
+      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      return 1
+    fi
+
+    [ "$reroute" -eq 1 ] || { log_info "Dry, and --no-reroute is set. Stopping."; return 1; }
+    # `|| true`: under `set -e -o pipefail`, grep exiting 1 (every tank already
+    # tried — nothing left to select) would otherwise abort the script here
+    # instead of falling through to the "all dry" log_fail below.
+    local nxt; nxt="$(_agy_tank_names | grep -vxF -f <(printf '%s\n' "${agy_tried[@]}") | head -1)" || true
+    [ -n "$nxt" ] || log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+    agy_tried+=("$nxt")
+    cur="$nxt"
+    log_info "Rerouting (dry) → agy/$cur"
+  done
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0
   local prompt="" prompt_file="" prompt_set=0
@@ -205,7 +289,13 @@ cmd_burn() {
   validate_name cli "$cli"
   validate_name profile "$tank"
   case "$cli" in
-    agy|antigravity) log_fail "agy is already global/single-account — there's no per-tank headless burn to do. Just use it directly (clikae agy <tank>), or burn a codex/claude tank." ;;
+    agy|antigravity)
+      _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
+      [ "$prompt_set" -eq 1 ] || log_fail "agy burn only supports the --prompt / --prompt-file form (agy has no adapter to fill in a raw '-- <cmd...>')."
+      [ -z "$to" ] || log_fail "--to isn't supported for agy — it walks its own tanks (clikae init agy <name> to add more)."
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "${add_dirs[@]}"
+      return $?
+      ;;
   esac
   # Keep the verbatim post-`--` argv aside; in --prompt mode it's appended after
   # the engine's generated flags (an escape hatch for extra per-engine args).

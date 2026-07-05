@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.9.2"
+CLIKAE_VERSION="0.10.0"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
@@ -56,6 +56,10 @@ source "$CLIKAE_LIB/core/limit.sh"
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh
 source "$CLIKAE_LIB/core/autonomy.sh"
+# shellcheck source=../lib/core/resume_settings.sh
+source "$CLIKAE_LIB/core/resume_settings.sh"
+# shellcheck source=../lib/core/session_carry.sh
+source "$CLIKAE_LIB/core/session_carry.sh"
 # shellcheck source=../lib/core/proc.sh
 source "$CLIKAE_LIB/core/proc.sh"
 # shellcheck source=../lib/core/state_version.sh

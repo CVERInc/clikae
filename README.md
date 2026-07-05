@@ -37,7 +37,7 @@ It:
 6. Cleans up after itself when you're done with a tank.
 7. **Your connectors ride along.** A tank isolates the claude.ai login, so the MCP connectors configured on that account come with it — switch tank and the Stripe, Drive, or WordPress tools live in your session switch too. clikae doesn't manage MCP; this is per-account isolation paying off. One more thing that follows the person, not just model auth and memory.
 
-It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus real **per-account multi-tank for Antigravity / agy** — each tank carries its own Google login via the macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no global state, and exactly one opt-out network call (a throttled update check — `CLIKAE_NO_UPDATE_CHECK=1` silences it) — every line is auditable.
+It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus real **per-account multi-tank for Antigravity / agy** — each tank carries its own Google login via the macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no global state, and exactly one opt-out network call (a throttled update check — `CLIKAE_NO_UPDATE_CHECK=1` silences it) — every line is auditable. It's **MIT** — free to run, fork, or build into a commercial product or paid client work, no separate license to buy.
 
 ## Command your fleet — cost-aware, across vendors
 
@@ -123,10 +123,12 @@ It's pure bash, so read it first if you'd rather not pipe to a shell — every l
 is auditable. From-source and custom-`PREFIX` options:
 [docs/installation.md](docs/installation.md).
 
-> **Platform.** clikae is a **macOS / Linux** tool — it's bash, and that's the point. A **PowerShell module** lives in
-> [`powershell/`](powershell/) but is **community-contributed and unsupported**:
-> it isn't part of the maintained grammar and its CI is informational only.
-> Windows users very welcome to drive it — PRs appreciated.
+> **Platform.** clikae is a **macOS / Linux** tool — it's bash, and that's the point.
+> **On Windows, use WSL** — it's a real Linux userspace, so clikae runs there
+> unmodified; no separate port needed. A **PowerShell module** for native Windows
+> (no WSL) lives in [`powershell/`](powershell/) but is **community-contributed and
+> unsupported**: it isn't part of the maintained grammar and its CI is informational
+> only. Windows users very welcome to drive it — PRs appreciated.
 
 ## 30 seconds
 

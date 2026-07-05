@@ -10,7 +10,7 @@ load '../helpers'
   [[ "$output" == *"cver-A"* ]] || false                       # one person's OWN accounts (not a shared login)
   [[ "$output" == *"across claude, codex and agy"* ]] || false # several engines on the board
   [[ "$output" == *"never shares one login"* ]] || false       # the account-ownership framing
-  [[ "$output" == *"active here"* ]]                            # the live tank board (cver-A active)
+  [[ "$output" == *"cver-A  claude"* ]] || false                # the live tank board renders a row
   [[ "$output" == *"hit your usage limit"* ]] || false         # the red over-quota dot + verbatim reset time
   [[ "$output" == *"clikae to cver-B"* ]] || false
 }

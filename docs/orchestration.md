@@ -43,13 +43,11 @@ state lives*, it never sits in the middle of a request and never grades output.
 
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
-agy is half-in: **`conduct` can fan a read-only leg to it** (cheap, fast breadth —
-`--leg agy/<tank>`), but `burn` and the conductor legs can't. agy's login is one
-**global** Keychain entry, so there's no per-shell env to switch and **`burn` can't
-reroute it** ("not burnable" ≠ "not usable"). The conduct leg sidesteps that by
-running on whatever agy tank is **active** (it never switches — a leg naming another
-tank is reported, not run, since the `~/.gemini` swap is machine-wide and exclusive,
-so two agy tanks can't run in parallel):
+agy's login is one **global** Keychain entry, so there's no per-shell env to
+switch — it can never run two tanks in **parallel**, which is a structural limit,
+not a friction one. That's why `conduct` legs still refuse to switch: a leg naming
+a non-active agy tank is reported, not run (the `~/.gemini` swap is machine-wide
+and exclusive):
 
 ```bash
 # agy as a best-of-N breadth leg, alongside claude/codex (agy runs on its active tank):
@@ -57,6 +55,10 @@ clikae conduct --prompt-file review.md --leg claude/C --leg codex/H --leg agy/c 
 
 # Or drive agy directly headless to spend its quota instead of your main budget:
 clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
+
+# `burn`, unlike `conduct`, CAN reroute agy — sequentially, one tank at a time
+# (a tank switch carries the Google login via Keychain, no interactive OAuth):
+clikae burn agy <tank> --artifact out.md --prompt-file task.txt
 ```
 
 agy's headless personality differs from claude/codex enough that hand-rolling it the

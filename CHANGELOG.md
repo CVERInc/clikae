@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-05
+
+### Added
+
+- **agy tank switching carries the Google login again, verified this time.** The
+  2026-06-30 logout+re-OAuth flow is replaced by a hardened Keychain carry: every
+  restore is checked against the stash before agy launches, refusing to proceed
+  silently if it doesn't match — the actual fix for the trust bug that got the old
+  carry removed. New real-Keychain integration test exercises the actual `security`
+  binary against a disposable scratch keychain, never the login item.
+- **`clikae burn agy <tank>` works.** Since a tank switch no longer needs interactive
+  OAuth, burn can auto-hop agy to the next tank on dry — sequential only, agy still
+  can't run two tanks in parallel (unchanged, structural).
+- **`clikae resume ask-tank [always|dry-only]`.** Resuming a session now asks which
+  tank to land on every time by default (matching `clikae resume`'s standalone
+  picker), not just when the tank is dry — `dry-only` restores the quieter old
+  behavior. The cross-tank session carry (`_resume_carry_session`) is now shared
+  code between the standalone picker and the home board, and covers codex/
+  antigravity, not just claude.
+- **Windows via WSL is now a documented, first-class path.** clikae is plain bash,
+  so it already runs unmodified under WSL — the README now says so instead of
+  leaving Windows users to guess. The community PowerShell port (native Windows,
+  no WSL) is unchanged: unsupported, CI informational-only.
+
+### Fixed
+
+- The shared cross-tank session carry now explicitly loads the target engine's
+  adapter before looking up a session — it previously relied on that happening as
+  a side effect of an unrelated subshell elsewhere in the board, which didn't
+  reliably hold, silently carrying nothing on some paths.
+- `clikae demo`'s end-to-end test asserted for the on-row `← here` marker text that
+  was intentionally removed on 2026-06-30 (commit `9d55047`) — missed in that
+  refactor because the assertion was missing `|| false`, so it silently never
+  failed locally; only a stricter CI `bats` caught it. Test updated, two stale
+  comments and the design doc corrected to match current behavior.
+
 ## [0.9.2] — 2026-07-01
 
 ### Fixed

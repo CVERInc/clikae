@@ -207,13 +207,16 @@ agy hardcodes `~/.gemini`, ignores every env var, and has no config-dir flag, so
 it can't switch per-shell like other engines. clikae handles it by swapping
 `~/.gemini` between tank dirs via a symlink — a global, one-tank-active-at-a-time
 power mode. agy reads its account from one machine-wide Keychain login (ignoring
-which tank dir is active), so on a tank switch clikae **logs agy out** (clears that
-one Keychain item) and agy asks you to sign in with the new tank's Google account —
-your browser already holds your logins, so it's a click. clikae never reads or
-stores the token; it just clears the slot, so the account you land on is the one you
-picked (no silent restore landing you on the wrong one). Honest cost: a cross-account
-switch needs an interactive sign-in, so headless `burn`/`conduct` can't change agy
-accounts. The user does **not** learn a separate command tree for this: agy
+which tank dir is active), so on a tank switch clikae **carries that login WITH
+the tank**: it stashes the outgoing tank's login into a clikae-namespaced Keychain
+slot and restores the incoming tank's (Keychain→Keychain, never written to disk),
+then VERIFIES the restore actually took before handing control to agy — refusing
+to proceed rather than silently landing on the wrong account (the 2026-06-30
+incident that briefly replaced this with a logout+re-OAuth flow; restored
+2026-07-05 with that verification as the actual fix). Since a switch is
+non-interactive again, `clikae burn agy <tank>` can auto-hop to the next agy tank
+when one runs dry — sequential only, agy still can't run two tanks in parallel.
+The user does **not** learn a separate command tree for this: agy
 uses the *same verbs as everything else*, with **zero special subcommands**.
 
 | You type | agy behaviour |

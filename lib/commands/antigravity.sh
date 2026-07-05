@@ -6,10 +6,10 @@
 # (state follows $HOME, but the account doesn't) and has no per-account config-dir
 # flag. clikae's clean per-shell model can't switch the account, so the only way to
 # give it multiple tanks is to SWAP ~/.gemini between per-tank directories via a
-# symlink (and log out on switch so each tank signs into its own account — see the
-# Keychain note below). That is GLOBAL (one tank active at
-# a time across ALL terminals) and mutates your real home dir — so the first
-# `init agy` asks before taking over, and it's reversible with `clikae agy --release`.
+# symlink AND carry each tank's login with it — see the Keychain note below. That
+# is GLOBAL (one tank active at a time across ALL terminals) and mutates your real
+# home dir — so the first `init agy` asks before taking over, and it's reversible
+# with `clikae agy --release`.
 #
 # The user types the SAME verbs as every other engine — there is no `agy enable`
 # / `add` / `use` / `disable` subcommand tree any more:
@@ -49,44 +49,152 @@ _agy_active() {
   case "$target" in "$slots"/*) basename "$target" ;; esac
 }
 
-# ── agy login on tank switch: log out, let agy re-OAuth ─────────────────────
+# ── Per-tank Google login (macOS Keychain) ──────────────────────────────────
 # agy keeps its Google OAuth login in ONE machine-wide macOS Keychain item
 # (verified on a real install: service "gemini", account "antigravity") — NOT in
 # the ~/.gemini dir clikae swaps. And agy reads the account purely from that
 # Keychain slot, IGNORING which tank dir ~/.gemini points at (verified live
 # 2026-06-30: on tank-8 state with tank-c's token in the slot, agy ran as tank c).
 #
-# So clikae does NOT try to carry tokens between tanks. On a tank switch it simply
-# **logs out** — clears that one Keychain slot — and agy, finding itself signed
-# out, prompts a fresh Google OAuth so you pick the tank's account (your browser
-# already holds your Google logins, so it's a click). This replaces the old
-# stash/restore dance: clikae never reads or writes a token (no secret handling),
-# there are no per-tank Keychain slots to clobber, and the account you end up on is
-# the one you explicitly picked — not whatever a silent restore happened to leave.
-# Honest cost: switching tanks needs an interactive sign-in, so a headless
-# cross-account switch (burn/conduct) can't change accounts. macOS-only; on Linux
-# agy stores its login in files inside ~/.gemini, which the dir swap already
-# isolates, so logout is a no-op there.
+# So clikae carries that login WITH the tank: on switch it stashes the outgoing
+# tank's login into a clikae-namespaced Keychain slot and restores the incoming
+# tank's. Keychain↔Keychain — the token is never written to disk.
+#
+# 2026-06-30 history: this WAS ripped out (commit 32507a8) after a live test
+# showed a restore that silently no-op's (e.g. the incoming tank has no stash
+# yet, or `security` behaves subtly differently than assumed) can leave agy
+# running on the WRONG account with zero warning — and the whole mechanism had
+# NEVER been exercised against a real Keychain (tests stub `security`
+# entirely). It's back now with the actual fix for that: _agy_kc_verify_restore
+# below refuses to proceed silently if the restore didn't verifiably take, and
+# tests/bats/antigravity_keychain_real.bats exercises the real `security`
+# binary end to end. macOS-only; on Linux agy stores its login in files inside
+# ~/.gemini, which the dir swap already isolates, so these are no-ops.
 _agy_kc_canon_service() { printf 'gemini\n'; }
 _agy_kc_account()       { printf 'antigravity\n'; }
+_agy_kc_tank_service()  { printf 'clikae-agy-%s\n' "$1"; }
 _agy_kc_available() {
   case "$OSTYPE" in darwin*) ;; *) return 1 ;; esac
   command -v security >/dev/null 2>&1
 }
 
-# Log agy out: clear the one canonical Keychain item it reads. agy prompts a fresh
-# OAuth next run. Never touches a token value — just deletes the slot.
+# A trailing keychain-file argument for `security` (verified against the real
+# binary: it's a bare positional path at the END of the command, NOT a `-k`
+# flag), left in the global $_agy_kc_kargs array (bash 3.2 on macOS has no
+# namerefs or a builtin to read a command's output straight into an array, so a
+# fixed-name global is the portable way to hand one back to a caller). Empty
+# (= the default search list, i.e. the real login keychain) unless a test sets
+# $CLIKAE_AGY_KEYCHAIN to a scratch keychain path — production code never sets
+# this, only tests/bats/antigravity_keychain_real.bats does.
+_agy_kc_kargs=()
+_agy_kc_keychain_argv() {
+  _agy_kc_kargs=()
+  [ -n "${CLIKAE_AGY_KEYCHAIN:-}" ] && _agy_kc_kargs=("$CLIKAE_AGY_KEYCHAIN")
+  return 0   # under `set -e`, a false `[ ... ] &&` as the last statement would kill the caller
+}
+
+# Read one generic-password service's secret, or return 1 if absent/empty.
+# Never prints the secret to stdout on failure paths.
+_agy_kc_read() {
+  local svc="$1" acct; acct="$(_agy_kc_account)"
+  local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+  # `security`'s optional keychain arg is TRAILING/positional, not a flag — it
+  # must come after -w, or the real binary rejects it as an unknown option
+  # (verified against the real binary; the old bash-stub tests never caught this
+  # since the stub didn't validate argument order).
+  security find-generic-password -s "$svc" -a "$acct" -w "${kargs[@]}" 2>/dev/null
+}
+
+# Copy one generic-password service's secret to another (-U overwrites). Returns
+# 1 if the source has no secret. Never prints the secret.
+_agy_kc_copy() {
+  local from="$1" to="$2" acct secret
+  acct="$(_agy_kc_account)"
+  local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+  secret="$(_agy_kc_read "$from")" || return 1
+  [ -n "$secret" ] || return 1
+  security add-generic-password -s "$to" -a "$acct" -l "$to" -w "$secret" -U "${kargs[@]}" \
+    >/dev/null 2>&1 || { secret=""; return 1; }
+  secret=""
+  return 0
+}
+
+# Stash the currently-active agy login (the canonical item) into <tank>'s slot.
+_agy_kc_stash() {
+  _agy_kc_available || return 0
+  _agy_kc_copy "$(_agy_kc_canon_service)" "$(_agy_kc_tank_service "$1")" || return 0
+}
+
+# Restore <tank>'s stashed login into the canonical item agy reads. If the tank
+# has no stash (never logged in on it), CLEAR the canonical item so agy logs in
+# fresh instead of inheriting the previous tank's account.
+_agy_kc_restore() {
+  _agy_kc_available || return 0
+  if ! _agy_kc_copy "$(_agy_kc_tank_service "$1")" "$(_agy_kc_canon_service)"; then
+    local acct; acct="$(_agy_kc_account)"
+    local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+    security delete-generic-password -s "$(_agy_kc_canon_service)" -a "$acct" "${kargs[@]}" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+# The actual fix for the 2026-06-30 trust bug: after a restore, if <tank> HAD a
+# stash, re-read the canonical item and confirm its secret matches the stash
+# byte-for-byte. A tank with NO stash (canonical was cleared, not restored) is
+# not checked here — that path is an intentional logout, not a restore. On
+# mismatch, refuse to let the caller proceed as if the switch succeeded: this is
+# the difference between "silently burn the wrong account's quota" and "clikae
+# told you it couldn't verify the switch."
+_agy_kc_verify_restore() {
+  local tank="$1" stashed canon
+  _agy_kc_available || return 0
+  stashed="$(_agy_kc_read "$(_agy_kc_tank_service "$tank")")" || return 0   # no stash: logout path, nothing to verify
+  canon="$(_agy_kc_read "$(_agy_kc_canon_service)")" || {
+    stashed=""; log_fail "agy Keychain restore for tank '$tank' didn't take (canonical login is empty after restore) — refusing to guess which account is active. Run 'clikae agy $tank' again, or check Keychain by hand."
+  }
+  if [ "$stashed" != "$canon" ]; then
+    stashed=""; canon=""
+    log_fail "agy Keychain restore for tank '$tank' didn't verify (canonical login doesn't match the stash) — refusing to guess which account is active. Run 'clikae agy $tank' again, or check Keychain by hand."
+  fi
+  stashed=""; canon=""
+  return 0
+}
+
+# Forget a tank's stashed login (on remove).
+_agy_kc_forget() {
+  _agy_kc_available || return 0
+  local acct; acct="$(_agy_kc_account)"
+  local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+  security delete-generic-password -s "$(_agy_kc_tank_service "$1")" -a "$acct" "${kargs[@]}" \
+    >/dev/null 2>&1 || true
+}
+
+# Clear the canonical login agy reads (used when force-removing the last tank's
+# login, or when a tank switch finds no stash to restore). agy will prompt a
+# fresh login next run.
 _agy_kc_logout() {
   _agy_kc_available || return 0
-  security delete-generic-password -s "$(_agy_kc_canon_service)" -a "$(_agy_kc_account)" \
+  local acct; acct="$(_agy_kc_account)"
+  local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+  security delete-generic-password -s "$(_agy_kc_canon_service)" -a "$acct" "${kargs[@]}" \
+    >/dev/null 2>&1 || true
+}
+
+# Carry a tank's stashed login across a rename (old slot -> new slot).
+_agy_kc_rename() {
+  _agy_kc_available || return 0
+  _agy_kc_copy "$(_agy_kc_tank_service "$1")" "$(_agy_kc_tank_service "$2")" || return 0
+  local acct; acct="$(_agy_kc_account)"
+  local -a kargs=(); _agy_kc_keychain_argv; kargs=("${_agy_kc_kargs[@]}")
+  security delete-generic-password -s "$(_agy_kc_tank_service "$1")" -a "$acct" "${kargs[@]}" \
     >/dev/null 2>&1 || true
 }
 # ────────────────────────────────────────────────────────────────────────────
 
-# _agy_rename <old> <new> — rename an agy tank: move the slot dir and repoint the
-# ~/.gemini symlink if it's the active one. No Keychain work: the login lives in
-# the one canonical slot (not per-tank), so a rename doesn't touch it. Refuses if
-# agy is running, the source is missing, or the target name is taken.
+# _agy_rename <old> <new> — rename an agy tank: move the slot dir, repoint the
+# ~/.gemini symlink if it's the active one, and carry the tank's Keychain login
+# slot across (macOS). Refuses if agy is running, the source is missing, or the
+# target name is taken.
 _agy_rename() {
   local old="$1" new="$2" slots link active
   validate_name profile "$old"; validate_name profile "$new"
@@ -96,6 +204,7 @@ _agy_rename() {
   _agy_assert_not_running
   active="$(_agy_active)"
   mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
+  _agy_kc_rename "$old" "$new"
   if [ "$active" = "$old" ]; then
     rm -f "$link"; ln -s "$slots/$new" "$link"
     log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
@@ -111,13 +220,19 @@ _agy_takeover() {
   log_warn "Setting up agy multi-account is a POWER mode with real tradeoffs:"
   cat >&2 <<EOF
   • It turns your real ~/.gemini into a clikae-managed symlink.
-  • Switching tanks logs agy out (clears its one machine-wide Keychain login),
-    so it asks you to sign in with the new tank's Google account. clikae never
-    reads or stores your token — it just clears the slot; you pick the account.
+  • On macOS, it carries your Google login PER TANK via your login Keychain:
+    agy keeps its OAuth login in one machine-wide Keychain item, so to give each
+    tank its own account clikae copies that login between Keychain slots on every
+    switch. The token moves Keychain→Keychain and is never written to disk — and
+    every restore is VERIFIED (clikae re-reads the login after copying it and
+    refuses to proceed if it doesn't match, rather than silently landing you on
+    the wrong account). A tank with no prior login logs out cleanly instead, so
+    agy asks for a fresh OAuth pick.
   • It is GLOBAL: only one agy tank is active at a time across ALL terminals
     (the login is one global Keychain entry). Don't run two tanks at once.
   • Swapping while agy is running can corrupt that session.
-  Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks are kept).
+  Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks and
+  their stashed logins are kept).
 EOF
   confirm "Let clikae take over ~/.gemini (your current login becomes a tank)?" \
     || { log_info "Not enabled — no agy tank created."; return 1; }
@@ -171,20 +286,21 @@ _agy_switch() {
   local slots link; slots="$(_agy_slots)"; link="$(_agy_link)"
   [ -d "$slots/$name" ] || log_fail "No such agy tank: $name  (create it:  clikae init agy $name)"
   _agy_assert_not_running
-  # Switching tanks = log out (clear the one Keychain slot agy reads), so agy
-  # prompts a fresh Google OAuth and you pick THIS tank's account. No token
-  # carrying, no silent restore landing you on the wrong account. Skip when you're
-  # already on this tank (stay signed in) or off macOS.
+  # Switching tanks carries the Google login WITH the tank: stash the outgoing
+  # tank's login (if any), restore the incoming tank's (or log out cleanly if it
+  # has never logged in), then VERIFY the restore actually took before handing
+  # control to agy. Skip entirely when you're already on this tank (stay signed
+  # in) or off macOS (no-ops there).
   local active; active="$(_agy_active)"
   if [ "$name" != "$active" ]; then
-    _agy_kc_logout
+    [ -n "$active" ] && _agy_kc_stash "$active"
+    _agy_kc_restore "$name"
+    _agy_kc_verify_restore "$name"
   fi
   rm -f "$link"
   ln -s "$slots/$name" "$link"
   log_ok "agy is now on tank: $name"
   log_dim "agy is global — switched all terminals to $name."
-  [ "$name" != "$active" ] && _agy_kc_available \
-    && log_dim "signed out — agy will ask you to pick $name's Google account."
   exec agy "$@"
 }
 
@@ -222,7 +338,7 @@ _agy_remove() {
       if confirm "This is your last agy tank. Restore it as a normal ~/.gemini (keep the login) and turn multi-account off?"; then
         rm -f "$link"; mv "${slots:?}/$name" "$link"; rm -f "$(_agy_consent)"
         rmdir "$slots" 2>/dev/null || true
-        # Login stays in the canonical Keychain item — that's what "keep the login" means.
+        _agy_kc_forget "$name"   # login stays in the canonical Keychain item; drop the stash
         log_ok "Restored ~/.gemini from '$name' and turned agy multi-account off."
         return 0
       fi
@@ -231,7 +347,7 @@ _agy_remove() {
     fi
     rm -f "$link"; rm -rf "${slots:?}/$name"; rm -f "$(_agy_consent)"
     rmdir "$slots" 2>/dev/null || true
-    _agy_kc_logout   # login lost, as warned
+    _agy_kc_forget "$name"; _agy_kc_logout   # login lost, as warned
     log_ok "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
     return 0
   fi
@@ -242,6 +358,7 @@ _agy_remove() {
     log_fail "'$name' is the active agy tank. Switch to another first:  clikae agy ${_other:-<other-tank>}"
   fi
   rm -rf "${slots:?}/$name"
+  _agy_kc_forget "$name"
   log_ok "Removed agy tank: $name"
 }
 
@@ -255,15 +372,17 @@ Usage: clikae agy [tank] [-- args...]    switch agy to <tank> and run it
 
 Antigravity (agy) keeps its login as one global Keychain entry, so clikae can't
 switch the account per-shell like other engines. Instead it swaps ~/.gemini between
-tank dirs via a symlink — a GLOBAL power mode: one agy tank is active at a time
-across ALL terminals. Switching a tank logs agy out (clears that one Keychain item)
-so it asks you to sign in with the new tank's Google account — your browser already
-holds your logins, so it's a click. The first `init agy` asks before taking over
-~/.gemini; it's reversible with `clikae agy --release`.
+tank dirs via a symlink AND carries each tank's login with it (macOS Keychain,
+verified on every switch — never a silent landing on the wrong account) — a
+GLOBAL power mode: one agy tank is active at a time across ALL terminals. The
+first `init agy` asks before taking over ~/.gemini; it's reversible with
+`clikae agy --release`.
 
 Run agy headless on the active account (route work to your Antigravity quota,
-sparing your main claude/codex budget). agy is NOT burnable (global single login →
-nothing to auto-reroute to), but it IS usable headless — drive it like this:
+sparing your main claude/codex budget), or hand it to `clikae burn agy <tank>` —
+since a tank switch no longer needs an interactive OAuth pick, burn can auto-hop
+to the next agy tank when one runs dry (sequential only; agy can't run two tanks
+in parallel — see `clikae conduct --help`). Drive it directly like this:
 
   clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
 

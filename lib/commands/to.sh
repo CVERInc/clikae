@@ -80,7 +80,9 @@ EOF
 # _to_can_carry <engine> -> 0 if the engine's adapter defines adapter_relay (a real
 # session carry-over), 1 if not (relay will start fresh). The adapter FILE is ground
 # truth — load_adapter installs a default stub, so a runtime declare -F always says
-# yes. Mirrors _home_engine_can_carry; lets `to` describe what it'll actually do.
+# yes. Lets `to` describe what it'll actually do. (Not the same check as
+# `clikae resume`'s cross-tank carry, which uses _resume_carry_session and covers
+# codex/antigravity too — `to`/`relay` carry the CURRENT live session, claude-only.)
 _to_can_carry() {
   grep -qE '^[[:space:]]*adapter_relay[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$1.sh" 2>/dev/null
 }

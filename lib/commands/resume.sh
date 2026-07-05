@@ -20,7 +20,7 @@ source "$CLIKAE_LIB/commands/home.sh"
 
 _resume_help() {
   cat <<'EOF'
-Usage: clikae resume [session-id | cleanup] [-- args...]
+Usage: clikae resume [session-id | cleanup | ask-tank] [-- args...]
 
 Reopen a specific past session by id, in whichever tank owns it — without having
 to know which tank that is. Fixes the bare `<engine> --resume <id>` failure: each
@@ -29,10 +29,20 @@ home; clikae finds the tank and resumes it there.
 
   clikae resume <id>        find the tank holding <id> and resume it
   clikae resume             no id → pick from recent sessions across ALL tanks
-                            (by title, newest first — no UUID to copy)
+                            (by title, newest first — no UUID to copy). Picking
+                            one asks "Resume on which tank?" whenever the engine
+                            has more than one; pick a different tank and the
+                            session is carried there (a real cross-tank resume,
+                            not a fresh start).
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
   clikae resume cleanup     clean up old session data to free disk space
                             (runs interactively by default, asks before deleting)
+  clikae resume ask-tank [always|dry-only]
+                            show or set whether resuming from the home board
+                            asks which tank too (default: always — same as the
+                            standalone picker above). dry-only asks only when
+                            the tank you're resuming is actually dry, the
+                            quieter older behavior.
 
 clikae cd's to the directory the session was recorded in, so the engine resolves
 it in its own project. Only engines that can resume by id (e.g. claude) take part.
@@ -490,7 +500,7 @@ _resume_pick() {
       cands="$(list_all_profiles | awk -F'\t' -v c="$sel_engine" '$1==c{print $2}')"
       cand_n="$(printf '%s\n' "$cands" | grep -c . || true)"
       if [ "$cand_n" -gt 1 ]; then
-        target_tank="$(_home_choose "Resume on which tank?" "$cands" "$sel_tank")" || {
+        target_tank="$(_home_choose "$T_RESUME_WHICH_TANK" "$cands" "$sel_tank")" || {
           trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
           stty -echo 2>/dev/null || true
           printf '\033[?1049h\033[?25l'; continue
@@ -501,38 +511,7 @@ _resume_pick() {
 
       local d; d="$(profile_dir "$sel_engine" "$target_tank")"
       if [ "$target_tank" != "$sel_tank" ]; then
-        local src_d; src_d="$(profile_dir "$sel_engine" "$sel_tank")"
-        if [ "$sel_engine" = "antigravity" ]; then
-          local src_brain="$src_d/antigravity-cli/brain/$sel_sid"
-          local tgt_brain="$d/antigravity-cli/brain/$sel_sid"
-          if [ -d "$src_brain" ]; then
-            mkdir -p "$(dirname "$tgt_brain")"
-            cp -R "$src_brain" "$tgt_brain"
-          fi
-          local src_db="$src_d/antigravity-cli/conversations/$sel_sid.db"
-          local tgt_db="$d/antigravity-cli/conversations/$sel_sid.db"
-          if [ -f "$src_db" ]; then
-            mkdir -p "$(dirname "$tgt_db")"
-            cp "$src_db"* "$(dirname "$tgt_db")/" 2>/dev/null || true
-          fi
-          history_log "resume: copied antigravity session $sel_sid from $sel_tank to $target_tank"
-        else
-          local found; found="$(adapter_find_session "$src_d" "$sel_sid" 2>/dev/null || true)"
-          if [ -n "$found" ]; then
-            if [ "$sel_engine" = "codex" ]; then
-              local rel_path; rel_path="${found#*/sessions/}"
-              local tgt_file="$d/sessions/$rel_path"
-              mkdir -p "$(dirname "$tgt_file")"
-              cp "$found" "$tgt_file"
-            else
-              local slug; slug="$(basename "$(dirname "$found")")"
-              local tgt_proj="$d/projects/$slug"
-              mkdir -p "$tgt_proj"
-              cp "$found" "$tgt_proj/$sel_sid.jsonl"
-            fi
-            history_log "resume: copied $sel_engine session $sel_sid from $sel_tank to $target_tank"
-          fi
-        fi
+        _resume_carry_session "$sel_engine" "$sel_tank" "$target_tank" "$sel_sid"
       fi
 
       exec 3>&- 2>/dev/null || true   # don't leak the tty fd into the resumed engine
@@ -861,6 +840,22 @@ cmd_resume() {
   if [ "${1:-}" = "cleanup" ]; then
     shift
     _resume_cleanup "$@"
+    return 0
+  fi
+
+  if [ "${1:-}" = "ask-tank" ]; then
+    shift
+    if [ -z "${1:-}" ]; then
+      local cur; cur="$(resume_ask_tank_get)"
+      log_info "Resume ask-tank: $cur — $(resume_ask_tank_label "$cur")"
+      log_dim  "Choices:  always · dry-only    (set with: clikae resume ask-tank <choice>)"
+      return 0
+    fi
+    if resume_ask_tank_set "$1"; then
+      log_ok "Resume ask-tank: $1 — $(resume_ask_tank_label "$1")"
+    else
+      log_fail "Unknown choice: $1  (use: always | dry-only)"
+    fi
     return 0
   fi
 

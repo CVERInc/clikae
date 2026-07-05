@@ -6,10 +6,13 @@ engine — use it. But it behaves differently from `claude -p` / `codex exec`, a
 most wasted agy quota comes from driving it the wrong way. This page is the
 canonical how-to so you don't re-learn it (and re-burn it) every session.
 
-> TL;DR — agy is **global, single-account, not burnable**. That does **not** mean
-> "can't be used." It means: clikae can't auto-reroute it across tanks like `burn`
-> does for claude/codex. You drive it headless on the *active* account with
-> `clikae agy <tank> -- -p`, and switch accounts interactively between batches.
+> TL;DR — agy is **global, single-account** — one account active across all
+> terminals at a time, never two in parallel. As of 2026-07-05 that no longer
+> means "not burnable": `clikae agy <tank>` carries the Google login WITH the
+> tank via the macOS Keychain (verified on every switch, no interactive OAuth),
+> so `clikae burn agy <tank>` can auto-hop to the next agy tank when one runs
+> dry — same contract as burn for claude/codex, just sequential (agy still
+> can't run two tanks in parallel).
 
 ## The one mental-model fact
 
@@ -18,12 +21,15 @@ So:
 
 - There is **no `clikae env agy`** and **no per-shell routing** — `clikae env agy`
   fails on purpose and points you here.
-- `clikae agy <tank>` swaps `~/.gemini` (and its login) **machine-wide** — one agy
-  account is active across *all* terminals at once. It's exclusive, not parallel.
-- `clikae burn` can't include agy in a reserve walk (nothing to reroute *to* on the
-  same machine). agy relay is **sequential, by hand**: run a batch, switch tank,
-  run the next. See `agy-gemini-shared-quota` notes for why same-account agy↔gemini
-  is a fake relay (same quota bucket).
+- `clikae agy <tank>` swaps `~/.gemini` (and its login, carried via Keychain)
+  **machine-wide** — one agy account is active across *all* terminals at once.
+  It's exclusive, not parallel: `clikae burn agy <tank>` walks agy's OWN tanks
+  sequentially (dry → switch → retry), never two at once, and `clikae conduct`
+  still refuses a leg naming a non-active agy tank (parallelism is a structural
+  limit, unrelated to the OAuth friction that used to gate sequential switching).
+  See `agy-gemini-shared-quota` notes for why same-account agy↔gemini is a fake
+  relay (same quota bucket) — that's still true; it's cross-ACCOUNT tanks that
+  now hop for free.
 
 ## The canonical headless invocation
 
