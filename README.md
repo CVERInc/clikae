@@ -1,4 +1,4 @@
-# clikae (ｷﾘｶｴ / CLI-Kae) 
+# clikae (CLI-Kae / ｷﾘｶｴ)
 
 > Type `clikae` and land back on your recent sessions — across every account and engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and keep going.
 >
