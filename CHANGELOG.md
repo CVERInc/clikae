@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-06
+
+### Added
+
+- **`clikae mcp <share|unshare|list>`** — fleet-wide MCP server sharing.
+  `tank_is_solo` was always meant to run two logics — fleet tanks work
+  seamlessly together, a solo tank stays deliberately out of that — but until
+  now only Soul memory (opt-in, per-tank) and skills/commands (unconditional)
+  read it; dev-environment config like MCP servers had no fleet story at all.
+  `mcp share <name>` promotes an already-added server into ONE canonical
+  per-engine store, and every tank that ISN'T solo gets it merged into its own
+  config automatically — at share time for existing tanks, and at every
+  launch from then on (`fleet_mcp_prelaunch`, wired into
+  `switch`/`run`/`relay`/`resume` alongside `soul_prelaunch`). Merge is
+  additive-only: a tank's own entry for the same name is never overwritten.
+  Requires `jq` (claude.sh only, for now).
+
 ## [0.11.0] — 2026-07-05
 
 ### Changed
