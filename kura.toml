@@ -6,7 +6,7 @@ markdown  = "commonmark"
 base_path = ""
 [site]
 name        = "clikae"
-description = "An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Gemini & Antigravity account, each with a recap of where you left off."
+description = "An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off."
 [deploy]
 target    = "github-pages"
 [content]
