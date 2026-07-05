@@ -24,6 +24,15 @@ behaviour:
 | **isolate** | N → **N** (today's default) | none (separate dirs) | blast-radius containment |
 | **evaporate** | N → **0** (throwaway) | symlink to `mktemp -d` | the ephemeral power user (`--ephemeral`, ✅ shipped) |
 
+Sharing is **per-tank, whole-brain**: the consent unit is the tank (the members
+file under `souls/<group>/`), never a single directory. claude keeps one memory
+dir *per project directory*, so those symlinks are just per-directory
+**projections** of the membership — `share` fans in every existing directory's
+slot at once, and every clikae launch re-projects the current directory first
+(`soul_prelaunch`, lib/core/soul.sh). A member tank therefore never quietly
+accumulates isolated side-memory in a new directory; the only way a tank keeps
+its own memory is `isolate` (or `solo`, which refuses sharing outright).
+
 The framing, stated once: **clikae controls where state lives, how long, and how
 widely shared** — for auth (today), for fuel (the reframe), and now for memory.
 

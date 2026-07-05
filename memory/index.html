@@ -55,6 +55,14 @@ behaviour:</p>
 </tr>
 </tbody>
 </table>
+<p>Sharing is <strong>per-tank, whole-brain</strong>: the consent unit is the tank (the members
+file under <code>souls/&lt;group&gt;/</code>), never a single directory. claude keeps one memory
+dir <em>per project directory</em>, so those symlinks are just per-directory
+<strong>projections</strong> of the membership — <code>share</code> fans in every existing directory's
+slot at once, and every clikae launch re-projects the current directory first
+(<code>soul_prelaunch</code>, lib/core/soul.sh). A member tank therefore never quietly
+accumulates isolated side-memory in a new directory; the only way a tank keeps
+its own memory is <code>isolate</code> (or <code>solo</code>, which refuses sharing outright).</p>
 <p>The framing, stated once: <strong>clikae controls where state lives, how long, and how
 widely shared</strong> — for auth (today), for fuel (the reframe), and now for memory.</p>
 <h2 id="1-the-soul--brain-split">1. The Soul / Brain split</h2>
