@@ -18,7 +18,7 @@
 
 ## What & why
 
-You're juggling AI coding sessions across more than one account — two Claude subscriptions because one Max plan ran dry, a Codex login, maybe Antigravity too — in different terminals, on different projects, half of them unfinished. *Which one was that in? Which account? What was I even doing?* So you `/clear`, reopen, and re-explain the project to a fresh session.
+You're juggling AI coding sessions across more than one account — three Claude Max 20x subscriptions because one always seems to run dry mid-task, a Google AI Pro login for Antigravity, maybe a Codex login too — in different terminals, on different projects, half of them unfinished. *Which one was that in? Which account? What was I even doing?* So you `/clear`, reopen, and re-explain the project to a fresh session.
 
 `clikae` is the on-ramp that fixes it. The home board lists those sessions newest first, each with its one-line **recap** read free from Claude's own session summary; pick one, hit Enter, and you're back — right account, right session. _(It also cleanly switches any env-var CLI — gh, gcloud, kubectl, aws… — but AI coding CLIs are where it shines.)_
 

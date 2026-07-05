@@ -9,7 +9,7 @@
 
 ## What is clikae? (Read this first)
 
-If you use AI tools running in the terminal like **Claude Code** or **Codex**, and you have more than one account (e.g., because one ran dry, so you signed up for a second) or you are juggling multiple half-finished tasks at once, you've probably felt this pain:
+If you use AI tools running in the terminal like **Claude Code** or **Codex**, and you have more than one account (e.g., because one always seems to run dry mid-task — some of us are up to three Claude Max subscriptions, plus a separate Google AI Pro login for Antigravity) or you are juggling multiple half-finished tasks at once, you've probably felt this pain:
 
 - *Which terminal window has that conversation? Which account was I using?*
 - *Where did I leave off?*
