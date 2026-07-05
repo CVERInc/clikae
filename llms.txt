@@ -30,7 +30,7 @@ Built with Kura, the agent-native docs framework — https://kura.build
 - [Installing clikae](/docs/installation.md)
 - [clikae memory — the Soul layer (convention)](/docs/memory.md)
 - [Driving clikae headless — the orchestration playbook](/docs/orchestration.md)
-- [clikae Playtest Guide — 10-Minute Get Started (v0.5.4)](/docs/PLAYTEST.md)
+- [clikae Playtest Guide — 10-Minute Get Started (v0.10.0)](/docs/PLAYTEST.md)
 - [Proposal — issue #22: per-tank git commit identity](/docs/proposals/issue-22-git-identity.md)
 - [Proposal — Issue #24: simplify `clikae burn` (drop the per-engine flag wrangling)](/docs/proposals/issue-24-burn-simplify.md)
 - [Issue #25 — agy Parallel Execution on Same Account (Design Note)](/docs/proposals/issue-25-agy-parallel.md)
