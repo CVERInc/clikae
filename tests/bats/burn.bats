@@ -188,6 +188,7 @@ STUB
 @test "_burn_timeout_bin: picks \`timeout\` when it's on PATH" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   printf '#!/usr/bin/env bash\n' > "$BATS_TEST_TMPDIR/bin/timeout"; chmod +x "$BATS_TEST_TMPDIR/bin/timeout"
@@ -198,6 +199,7 @@ STUB
 @test "_burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   local out
   out="$(PATH="$TEST_HOME/.testbin" _burn_timeout_bin 2>"$BATS_TEST_TMPDIR/err")"   # testbin has no timeout/gtimeout
@@ -295,6 +297,7 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
 @test "_burn_timeout_bin: falls back to perl when no timeout/gtimeout" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/perlbin"
   printf '#!/usr/bin/env bash\n' > "$BATS_TEST_TMPDIR/perlbin/perl"; chmod +x "$BATS_TEST_TMPDIR/perlbin/perl"
