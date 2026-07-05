@@ -6,7 +6,7 @@
 > (`$CLIKAE_HOME/souls/<group>/memory`); **claude** symlinks its memory dir into it,
 > **codex** gets a pointer note in `AGENTS.md` and reads/writes the same markdown via
 > the memory protocol — so cross-engine continuity needs **no translator and never
-> drifts** (it's literally the same file). Design rationale: [`grammar.md` §10](grammar.md).
+> drifts** (it's literally the same file). Design rationale: [`grammar.md` §10](/grammar.md).
 > Coming: cross-engine **agy** (same pointer hook); an **optional** apfel translator
 > (`CLIKAE_MEMORY_TRANSLATOR`) only for slicing/compressing a Soul (never required for
 > the basic experience); per-entry `scope:` dial.
@@ -127,4 +127,4 @@ content was already well-separated; only the index was a flat wall.
 Phase 0 (this doc + grouped index) → Phase 1 (`clikae memory share|isolate|status`,
 symlink fan-in for claude) → Phase 2 (bootstrap pointer + write-back hygiene) →
 Phase 3 (cross-engine translator bridge) → Phase 4 (scope dial + orchestration).
-Full roadmap: the maintainer's plan + [`grammar.md` §10](grammar.md).
+Full roadmap: the maintainer's plan + [`grammar.md` §10](/grammar.md).

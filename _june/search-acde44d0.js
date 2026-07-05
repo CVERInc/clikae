@@ -678,7 +678,7 @@ async function indexKb(entries, embedder) {
 async function buildIndex(opts) {
 	return (await indexKb(opts.entries, opts.embedder)).serialize();
 }
-function buildKeywordIndex(entries, tokenizer) {
+function buildKeywordIndex(entries, tokenizer, defaultLocale) {
 	const records = entries.flatMap((e) => {
 		const title = String(e.data.title ?? e.slug);
 		const section = String(e.data.section ?? "");
@@ -690,7 +690,7 @@ function buildKeywordIndex(entries, tokenizer) {
 		}))).map((sec) => ({
 			id: `${e.locale ?? "_"}:${e.slug}#${sec.headingId}`,
 			text: `${title}\n${sec.heading}\n${sec.text}`,
-			lang: e.locale,
+			lang: e.locale ?? defaultLocale,
 			data: {
 				slug: e.slug,
 				title,
@@ -812,23 +812,38 @@ function collapseSemantic(raw, locale) {
 */
 function createSearch(opts) {
 	const tokenizer = opts.tokenizer ?? defaultTokenizer();
-	if (!opts.embedder) {
-		let index = null;
-		const idx = () => index ??= buildKeywordIndex(opts.entries, tokenizer);
-		return {
-			getKb: async () => null,
-			search: async (query, o) => {
-				const topK = o?.topK ?? 8;
-				return capPerPage(keywordSearch(idx(), query, topK * 3, void 0, o?.locale, o?.prefix, o?.navBoost), o?.maxPerPage ?? 3).slice(0, topK);
-			},
-			tokensOf: (query, locale) => idx().tokensOf(query, locale)
-		};
-	}
+	const known = opts.knownLocales?.length ? new Set(opts.knownLocales) : null;
+	const scope = (l) => l && known?.has(l) ? l : void 0;
+	const lang = (l) => (known ? scope(l) : l) ?? opts.defaultLocale;
+	const entriesOf = (l) => l && opts.entriesFor ? opts.entriesFor(l) : opts.entries;
+	const kwCache = /* @__PURE__ */ new Map();
+	const kwFor = (l) => {
+		const key = l ?? "";
+		let idx = kwCache.get(key);
+		if (!idx) kwCache.set(key, idx = buildKeywordIndex(entriesOf(l), tokenizer, opts.defaultLocale));
+		return idx;
+	};
+	const variantCache = /* @__PURE__ */ new Map();
+	const variantSlugsFor = (l) => {
+		let set = variantCache.get(l);
+		if (!set) variantCache.set(l, set = new Set(entriesOf(l).filter((e) => e.locale === l).map((e) => e.slug)));
+		return set;
+	};
+	/** Keep a chunk in locale `l`'s view: its own variant, or the default text of an untranslated slug. */
+	const inLocaleView = (l, chunkLocale, slug) => chunkLocale === l || (chunkLocale ?? opts.defaultLocale) === opts.defaultLocale && !variantSlugsFor(l).has(slug);
+	if (!opts.embedder) return {
+		getKb: async () => null,
+		search: async (query, o) => {
+			const topK = o?.topK ?? 8;
+			const l = scope(o?.locale);
+			const qLang = lang(o?.locale);
+			return capPerPage(keywordSearch(kwFor(l), query, topK * 3, void 0, qLang, o?.prefix, o?.navBoost), o?.maxPerPage ?? 3).slice(0, topK);
+		},
+		tokensOf: (query, locale) => kwFor(scope(locale)).tokensOf(query, lang(locale))
+	};
 	const embedder = opts.embedder;
 	let building = null;
-	let keyword = null;
 	const getKb = () => building ??= opts.indexBytes?.length ? Promise.resolve(Kb.load(opts.indexBytes, { embedder })) : indexKb(opts.entries, embedder);
-	const getKeyword = () => keyword ??= buildKeywordIndex(opts.entries, tokenizer);
 	if (opts.warm !== false) try {
 		setTimeout(() => {
 			getKb().then((kb) => kb.searchText("warm", { topK: 1 })).catch(() => {});
@@ -838,9 +853,14 @@ function createSearch(opts) {
 		const topK = o?.topK ?? 8;
 		const maxPerPage = o?.maxPerPage ?? 3;
 		const depth = topK * 4;
-		if (o?.mode === "keyword") return capPerPage(keywordSearch(getKeyword(), query, topK * 3, depth, o?.locale, o?.prefix, o?.navBoost), maxPerPage).slice(0, topK);
-		const semantic = collapseSemantic(await (await getKb()).searchText(query, { topK: depth }), o?.locale);
-		return capPerPage(rrfScored([{ hits: keywordSearch(getKeyword(), query, depth, depth, o?.locale) }, { hits: semantic }], (h) => `${h.slug}#${h.headingId ?? ""}`, { topK: topK * 3 }).map(({ item, score }) => ({
+		const l = scope(o?.locale);
+		const qLang = lang(o?.locale);
+		if (o?.mode === "keyword") return capPerPage(keywordSearch(kwFor(l), query, topK * 3, depth, qLang, o?.prefix, o?.navBoost), maxPerPage).slice(0, topK);
+		const kb = await getKb();
+		const vecDepth = l ? Math.max(depth, 64) : depth;
+		const rawChunks = await kb.searchText(query, { topK: vecDepth });
+		const semantic = collapseSemantic((l ? rawChunks.filter((h) => inLocaleView(l, h.data.locale, h.data.slug)) : rawChunks).slice(0, depth), o?.locale);
+		return capPerPage(rrfScored([{ hits: keywordSearch(kwFor(l), query, depth, depth, qLang) }, { hits: semantic }], (h) => `${h.slug}#${h.headingId ?? ""}`, { topK: topK * 3 }).map(({ item, score }) => ({
 			...item,
 			score: Number(score.toFixed(4))
 		})), maxPerPage).slice(0, topK);
@@ -848,7 +868,7 @@ function createSearch(opts) {
 	return {
 		getKb,
 		search,
-		tokensOf: (query, locale) => getKeyword().tokensOf(query, locale)
+		tokensOf: (query, locale) => kwFor(scope(locale)).tokensOf(query, lang(locale))
 	};
 }
 //#endregion

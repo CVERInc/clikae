@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/HEAD/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/02d39d82c96c1fec1e8e372302c27d1bea8ff58c/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -11,7 +11,7 @@ If something here surprised you, it's working as intended; the *why* is below.
 **The coloured dot on the board isn't "which tank I'm on."** It's a fuel gauge:
 🔴 dry · 🟡 weekly-% (BETA) · 🟢 ready · ○ no reading. "Which am I on" is the cursor
 `❯`, the burn-order position, and the `← here` label. (See
-[DESIGN-board-fuel-dots.md](DESIGN-board-fuel-dots.md).)
+[DESIGN-board-fuel-dots.md](/DESIGN-board-fuel-dots.md).)
 
 **codex shows `○`, never 🟢 green.** codex's usage limit is exec-stdout-only — it's
 never written to a file clikae can scan — so clikae can honestly show 🔴 *only* when
@@ -78,7 +78,7 @@ it so. Reversible with `clikae agy --release`.
 **agy can't be `burn`ed.** burn spends *a tank's quota* and reroutes among a reserve;
 agy is one global account with no reserve. Use it as a direct worker instead
 (`cat in | agy --sandbox -p "…"`), or `clikae agy R -- -p "…"` to spend a specific
-agy account's quota. (See [usage.md → Headless tasks](usage.md).)
+agy account's quota. (See [usage.md → Headless tasks](/usage.md).)
 
 **agy isn't listed by `clikae adapters`.** It's architecturally a *target*, not an
 *adapter* (it can't be profile-switched per the adapter contract), so it appears in

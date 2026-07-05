@@ -10156,7 +10156,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-fcc84af1.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-4f7ad71f.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -10918,9 +10918,13 @@ function setup(opts) {
 	const locale = trigger?.dataset.locale || void 0;
 	let loadingHandle = null;
 	const getHandle = () => loadingHandle ??= (async () => {
-		const [{ createSearch }, res] = await Promise.all([import("./search-6ec750df.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
+		const [{ createSearch }, res] = await Promise.all([import("./search-acde44d0.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
 		if (!res.ok) throw new Error(`search index ${res.status}`);
-		return createSearch({ entries: (await res.json()).index ?? [] });
+		const data = await res.json();
+		return createSearch({
+			entries: data.index ?? [],
+			defaultLocale: data.defaultLocale
+		});
 	})();
 	let tokens = [];
 	const ctrl = createCtrlk({

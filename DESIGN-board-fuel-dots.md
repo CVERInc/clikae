@@ -52,9 +52,12 @@ report", ○ = "it has never told us anything" (honest blank — see codex).
 - **Multiple greens are now correct,** not contradictory: they mean "several tanks
   have fuel", which is what you want to see.
 - **"Which am I on"** is demoted to where it belongs: the cursor `❯` and the
-  burn-order position (momentary, navigational) — plus the `← here` text label and
-  the default-launch-target logic, which stay tied to the `active` flag. We only
-  took the *colour* off `active`; `active` still drives launch + the text label.
+  burn-order position (momentary, navigational), plus the default-launch-target
+  logic, which stays tied to the `active` flag. We took the *colour* off `active`
+  first; the on-row `← here` text label it also used to drive was dropped
+  entirely on 2026-06-30 (commit `9d55047`) — with many shells open on different
+  tanks at once, "which one is THIS shell on" turned out to be noise, not signal.
+  `active` still drives the launch target underneath.
 - **○ is honest.** codex's limit is never written to a transcript, so clikae can't
   *passively* read it — a codex tank shows ○ ("no reading"), never a guessed green.
   But when a live catcher (`clikae burn`) actually sees the limit in codex's exec

@@ -145,7 +145,7 @@ If you already migrated without `--keep-login`, re-running with it won't help:
 for them. Just log in once per profile — that's the simplest path.
 
 The full story (keychain key format, manual recovery) is in
-[Claude on macOS](claude-on-macos.md).
+[Claude on macOS](/claude-on-macos.md).
 
 ## After migrating, claude's startup screen looks different (macOS)
 
@@ -157,7 +157,7 @@ Opus 4.8 banner) plus the `CLAUDE_CODE_FORCE_FULL_LOGO` env var — never from t
 config-dir path. A well-used profile that has already seen the announcements
 shows the compact logo; that state moved with the directory unchanged. To force
 the full box, set `CLAUDE_CODE_FORCE_FULL_LOGO=1`. Details and the decompiled
-logic: [Claude on macOS](claude-on-macos.md).
+logic: [Claude on macOS](/claude-on-macos.md).
 
 ## I want to undo a change to my shell rc
 
@@ -178,5 +178,5 @@ shellcheck bin/clikae lib/**/*.sh install.sh
 bats tests/bats
 ```
 
-See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/HEAD/HANDOFF.md) §6 for the full verification recipe, including an
+See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/02d39d82c96c1fec1e8e372302c27d1bea8ff58c/HANDOFF.md) §6 for the full verification recipe, including an
 isolated end-to-end run that doesn't touch your real `$HOME`.

@@ -13,7 +13,7 @@ metaphor runs throughout: a tank holds an engine's quota (its *fuel*); when a
 tank runs *dry* you carry your work onward with `clikae to`.
 
 Run `clikae help <command>` for the full per-command reference. The full design
-of the language is in [grammar.md](grammar.md).
+of the language is in [grammar.md](/grammar.md).
 
 ## Quick tour
 
@@ -442,7 +442,7 @@ Such an engine shows `(n/a)` in `clikae status` (there's nothing in the
 environment to read back).
 
 Run `clikae adapters` to see them with descriptions. Adding your own is ~10
-lines of bash — see [adding-an-adapter.md](adding-an-adapter.md).
+lines of bash — see [adding-an-adapter.md](/adding-an-adapter.md).
 
 > **Note on `aws`:** unlike the others, the AWS adapter doesn't isolate config
 > into a separate directory — `AWS_PROFILE` selects a *named profile* from your

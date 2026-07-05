@@ -153,4 +153,4 @@ Send a message (or a screenshot of your board) to the team. **The more honest, t
 
 ---
 
-*clikae is open-source under the MIT license: <https://github.com/CVERInc/clikae> · The full vision is at [`docs/VISION.md`](./VISION.md).*
+*clikae is open-source under the MIT license: <https://github.com/CVERInc/clikae> · The full vision is at [`docs/VISION.md`](/VISION.md).*
