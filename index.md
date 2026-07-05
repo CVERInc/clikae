@@ -1,9 +1,9 @@
 ---
-title: "clikae"
+title: "clikae (ｷﾘｶｴ / CLI-Kae)"
 description: "An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off."
 ---
 
-# clikae
+# clikae (ｷﾘｶｴ / CLI-Kae)
 
 An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off.
 

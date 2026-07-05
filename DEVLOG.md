@@ -2,7 +2,7 @@
 
 A narrative history of clikae, from the first commit through a deliberate park and
 the v0.6 that earned its way out of it.
-For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/594d7b7ac79186764edf705098404934da1937db/CHANGELOG.md) — this is
+For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/c9564148d609df1202eaf859fbc60e7ee1728d1a/CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
 changelog. Nothing here is roadmap or aspiration — only what actually shipped.
