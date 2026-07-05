@@ -1,4 +1,4 @@
-# clikae Playtest Guide — 10-Minute Get Started (v0.5.4)
+# clikae Playtest Guide — 10-Minute Get Started (v0.10.0)
 
 > Hi 👋 Thank you for helping playtest **clikae**. This guide will take you from scratch to "Aha, I get it" in about 10 minutes.
 > Even if you've **never used clikae before** or even heard of it, that's fine—just follow along.
@@ -17,7 +17,7 @@ If you use AI tools running in the terminal like **Claude Code** or **Codex**, a
 
 **clikae is here to fix this mess.** Just type a single command, `clikae`, and you'll see a dashboard showing **everything you've been working on recently**—cross-account, cross-tool, newest first, with a one-line recap of "where you left off + next step." Pick one, press Enter, and you are right back where you stopped.
 
-It's tiny, written in pure bash (every line is auditable), MIT open-source, **does not connect to the internet (zero-telemetry), has no background daemons, and stores no global state**. We call an AI account/config a **tank**—you can have many of them, and clikae helps you switch and resume between them cleanly.
+It's tiny, written in pure bash (every line is auditable), MIT open-source, **zero-telemetry, no background daemons, no global state, and exactly one opt-out network call** (a throttled update check — `CLIKAE_NO_UPDATE_CHECK=1` silences it). We call an AI account/config a **tank**—you can have many of them, and clikae helps you switch and resume between them cleanly.
 
 ---
 
@@ -41,7 +41,7 @@ brew install CVERInc/clikae/clikae
 clikae version
 ```
 
-The second command should print `clikae 0.5.4` (or newer). This means it's successfully installed.
+The second command should print `clikae 0.10.0` (or newer). This means it's successfully installed.
 
 ---
 
@@ -97,11 +97,11 @@ This is the "board". It has two sections:
 Each tank features a **status dot** indicating its quota status:
 
 - 🟢 **Ready** — Has quota, ready to burn.
-- 🔴 **Dry / Over limit** — Quota exhausted; shows estimated reset time.
+- 🔴 **Dry / Over limit** — Quota exhausted; shows the vendor's own reset time, quoted verbatim (never a countdown clikae computed).
 - 🟡 **Weekly warning** — Reminds you of high weekly usage (BETA experimental feature).
 - ○ **No reading** — Indeterminate status (e.g. Codex, where local status checking isn't supported, so it stays blank rather than guessing).
 
-The tank **active in your current window** is marked as `active here`.
+Continue rows carry their own status dot too — **filled** if that session is on the account you're using right now, **hollow** if it's on another. That tells you at a glance which resumes mean an account switch.
 
 **How to control the board (controls are shown at the top of the screen):**
 
