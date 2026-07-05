@@ -123,6 +123,7 @@ EOF
   [ -n "$cwd" ] && log_dim "in $cwd"
   history_log "resume: $engine/$tank ${sid%%-*}"
   soul_prelaunch "$engine" "$tank" "$dir"   # member tank → fan this dir into its Soul
+  fleet_mcp_prelaunch "$engine" "$tank" "$dir"   # non-solo tank → fan in the shared MCP list
   adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
 }
 

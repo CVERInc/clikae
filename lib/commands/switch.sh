@@ -216,6 +216,10 @@ cmd_switch() {
   # memory slot is fanned into the store before the engine starts (lib/core/
   # soul.sh; no-op for non-members, solo tanks, pointer engines).
   soul_prelaunch "$engine" "$tank" "$d"
+  # Fleet MCP: unlike Soul, this is default-on for every non-solo tank — no
+  # per-tank opt-in (lib/core/fleet_mcp.sh; no-op for solo tanks, an empty
+  # store, or engines without an adapter_mcp_config_file hook).
+  fleet_mcp_prelaunch "$engine" "$tank" "$d"
 
   # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
   # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is

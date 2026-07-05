@@ -45,6 +45,16 @@ adapter_init() {
   _claude_link_shared_asset "$profile_dir" "commands"
 }
 
+# Optional hook: path to this tank's config file that holds `mcpServers` (used
+# by `clikae mcp` / fleet_mcp_prelaunch, lib/core/fleet_mcp.sh, to fan the
+# fleet-wide MCP list into every non-solo tank). Claude Code keeps user-scope
+# MCP servers in the same top-level file as everything else (oauthAccount,
+# projects, caches) — fleet_mcp_prelaunch only ever touches the mcpServers key.
+adapter_mcp_config_file() {
+  local profile_dir="$1"
+  printf '%s/.claude.json\n' "$profile_dir"
+}
+
 # Print KEY=VALUE pairs (one per line) to export when activating this profile.
 adapter_export_env() {
   local profile_dir="$1"

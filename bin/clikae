@@ -40,6 +40,8 @@ source "$CLIKAE_LIB/core/json.sh"
 source "$CLIKAE_LIB/core/profile_store.sh"
 # shellcheck source=../lib/core/soul.sh
 source "$CLIKAE_LIB/core/soul.sh"
+# shellcheck source=../lib/core/fleet_mcp.sh
+source "$CLIKAE_LIB/core/fleet_mcp.sh"
 # shellcheck source=../lib/core/shell_rc.sh
 source "$CLIKAE_LIB/core/shell_rc.sh"
 # shellcheck source=../lib/core/adapter_loader.sh
@@ -81,7 +83,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|conduct|to|continue|resume|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|solo|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|conduct|to|continue|resume|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }
