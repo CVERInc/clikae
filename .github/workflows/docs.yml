@@ -26,4 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: kurajs/pages@v1
+      # Pinned to a commit SHA, not the mutable `v1` tag — kurajs/pages is a very
+      # young action (org + repo both created 2026, no track record yet), and its
+      # own cli/docs deps default to a floating pre-1.0 range. Pinning all three
+      # means clikae only picks up a new Kura release when someone here reviews
+      # and bumps it, not automatically on the next docs build. Verified-working
+      # versions as of 2026-07-05: @kurajs/cli@0.0.28, @kurajs/docs@0.0.53.
+      - uses: kurajs/pages@3ca3b9f42e9f31057cb757bc210a789bd975a462 # v1
+        with:
+          cli-version: "0.0.28"
+          docs-version: "0.0.53"
