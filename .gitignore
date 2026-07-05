@@ -8,6 +8,9 @@
 # Local dev artefacts
 /tmp/
 /dist/
+
+# Superseded Kura Cloudflare Workers scaffold — archived on branch archive/kura-cloudflare-website
+/website/
 /build/
 
 # SwiftPM build output (gui/ClikaeMenuBar)
