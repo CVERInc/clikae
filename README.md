@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.10.0-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.11.0-blue.svg)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-clikae.cver.net-2563eb.svg)](https://clikae.cver.net)
 
 📖 **Docs:** [clikae.cver.net](https://clikae.cver.net) — humans read it, agents call `/mcp`.
@@ -81,9 +81,12 @@ markdown store — a **Soul** you own — so they read and write a single brain
 **across engines**. Hit a Claude limit, carry on in Codex, and it already knows who
 you are and where the work stands. Swap the engine, keep the soul.
 
-- **claude** fans its memory dir into the store with a symlink; **codex** and **agy**
-  read a fenced pointer note (`AGENTS.md` / `GEMINI.md`) to the same markdown files —
-  no translator, no drift, it's literally the same files.
+- Sharing is **per-tank, whole-brain** — every project directory that tank ever
+  runs in reads and writes the same store, not just wherever you happened to
+  run `memory share`. **claude** fans each directory's memory dir into the
+  store with a symlink; **codex** and **agy** read a fenced pointer note
+  (`AGENTS.md` / `GEMINI.md`) to the same markdown files — no translator, no
+  drift, it's literally the same files.
 - 🔴 Sharing is **opt-in and per-tank**; clikae never auto-crosses accounts, and
   crossing your own is announced. The store is seeded by copy and `clikae memory
   isolate` reverses it.
