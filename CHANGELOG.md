@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-05
+
+### Changed
+
+- **Soul sharing is per-tank, whole-brain — not per-directory.** The consent
+  unit was always the tank (the members file, the cross-account guard), but
+  claude's per-project memory layout meant one `memory share` only linked the
+  directory it ran in; sessions started anywhere else silently accumulated
+  isolated side-memory. Now membership is the single source of truth and the
+  per-directory symlinks are just projections of it: `share` fans in every
+  existing project directory at once, and every launch path (switch, run,
+  relay, resume) links the current directory's slot first (`soul_prelaunch`).
+  A member tank can no longer fragment its brain; the only ways to keep a
+  tank's own memory are `memory isolate` and `solo`.
+- `memory isolate` unlinks EVERY projected directory (restoring each slot's
+  stashed own memory), not just the directory it runs in.
+- `memory status` reports tank-level membership, with a per-directory
+  "links on next launch" note — an unlinked directory no longer reads as
+  "isolated" for a tank that shares its brain.
+
+### Fixed
+
+- `--ephemeral` on a Soul-shared tank no longer permanently un-shares the
+  directory: the Soul link was treated as a crashed run's leftover and
+  removed; the exit trap now re-links it.
+- `clikae rename` (claude and agy) carries Soul membership instead of leaving
+  a ghost member under the old name and a tank that reads as isolated while
+  its slots still point at the store.
+
 ## [0.10.0] — 2026-07-05
 
 ### Added
