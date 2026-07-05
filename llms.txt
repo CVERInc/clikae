@@ -1,6 +1,6 @@
-# clikae (ｷﾘｶｴ / CLI-Kae)
+# clikae
 
-> An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off.
+> clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off.
 
 > Server-rendered React app. Every route also answers as Markdown
 > (`.md`) and JSON (`.json`); actions are MCP tools at `/mcp`.
@@ -17,7 +17,7 @@ Built with Kura, the agent-native docs framework — https://kura.build
 - [/search](/search)
 
 ## Docs
-- [clikae (ｷﾘｶｴ / CLI-Kae)](/docs/.md)
+- [clikae](/docs/.md)
 - [Adding a new CLI adapter](/docs/adding-an-adapter.md)
 - [Driving agy (Antigravity) headless via clikae](/docs/agy-dispatch.md)
 - [Notes: Claude Code on macOS](/docs/claude-on-macos.md)
