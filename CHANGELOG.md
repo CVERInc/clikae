@@ -7,12 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A deep no-new-features audit pass: four independent review lenses (performance,
+dead code, correctness/portability, structure) over the whole tree, then the
+verified findings applied.
+
 ### Fixed
 
 - **`clikae resume` picker had no way to reach `cleanup`** — it shipped as a
   separate subcommand (`clikae resume cleanup`) with no affordance from the
   interactive picker, so it was easy to not know it existed. Press `c` from
   the picker now to jump straight into the same interactive cleanup flow.
+- **`resume cleanup` titled every out-of-directory claude session "(no
+  preview)"** — titles were looked up via the board's $PWD-scoped hook. A new
+  file-based hook (`adapter_title_for_file`) extracts the title straight from
+  the transcript; the picker and cleanup both use it.
+- **Session titles truncated at an escaped quote** — the string-surgery
+  extraction cut `Fix the \"off-by-one\" bug` down to `Fix the `. Extraction
+  is now escape-aware (bash-native `=~`) in claude, codex, and the picker,
+  which had also drifted from antigravity's canonical whitespace handling.
+- **A space in `$HOME` / `$CLIKAE_HOME` silently dropped every codex session**
+  from the board's Continue list (unquoted word-splitting of the rollout list).
+- **`dry_seen_suffix` could print a wrong time on Linux** — BSD-style
+  `date -r <epoch>` means "<file>'s mtime" on GNU, so a numeric-named file in
+  $PWD made it succeed with garbage; the GNU form now runs first (the same
+  ordering rule the codebase already applies to `stat`).
+
+### Changed
+
+- **Faster everywhere, measured on a real 2300-session store:** `resume
+  cleanup` prices candidates with ONE batched `du` instead of one per session
+  (7.4s → 3.7s at `--older-than 0`); `load_adapter` is memoized (one board
+  render re-sourced the same adapter up to 18×); hot loops use parameter
+  expansion instead of `basename`/`awk` forks; the home board render dropped
+  ~15%. Non-TUI commands no longer load the i18n string table at all.
+- **Bounded reads for the two stragglers** that still scanned whole
+  transcripts (the documented 100+ MB trap): `_claude_meta_for_file` (relay
+  preview, `clikae list`) and `watch --check`, which now reads the tail slice
+  and says so.
+- **~220 lines of dead/duplicated code removed**: the never-called
+  `adapter_recent_sessions` hook (×3 adapters), `store_root`, `i18n_cycle`,
+  5 unused `T_*` keys (×3 languages), and one shared owner each for the
+  picker's row decode, path→session-fields derivation, the three-engine glob
+  list, and the human-age formatter.
 
 ## [0.11.1] — 2026-07-06
 
