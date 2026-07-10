@@ -66,9 +66,7 @@ i18n_load() {
   T_AGY_BURN_NOTE="agy login is global (one account at a time, never two in parallel) — 'clikae burn agy <tank>' can reroute it sequentially on dry (Keychain carry, no OAuth needed), or run it headless on the active account via 'agy -p'."
   T_LAUNCH="launch"
   T_MORE="more"
-  T_INCOGNITO="Incognito"
   T_OVER_QUOTA="over quota"
-  T_OR_ALIAS="or your alias"
   T_OVER_QUOTA_HINT="carry your session on to the next tank:  clikae to"
   # footer key hints
   T_K_MOVE="move"
@@ -123,14 +121,12 @@ i18n_load() {
   T_UPDATE_FAILED="Upgrade command failed — run it yourself, or see the release page."
   T_UPDATE_MANUAL="Upgrade clikae with your installer, or grab it from:"
   T_DRY_SEEN="seen %s"
-  T_CANCEL="Cancelled."
   # new-tank / rename prompts
   T_NEWTANK_TITLE="New tank — pick a CLI"
   T_NEWTANK_PROFILE="Tank name for %s (e.g. work, personal): "
   T_NEWTANK_CANCEL="Cancelled — no tank created."
   T_NEWTANK_NONAME="Cancelled — no name given."
   T_RENAME_FOR="Rename"
-  T_RENAME_CURRENTLY="currently"
   T_RENAME_NEW="New name: "
   T_RENAME_CANCEL="Cancelled — name unchanged."
   # filter / help / misc
@@ -144,7 +140,6 @@ i18n_load() {
   T_DOT_WEEK="weekly % (BETA)"
   T_DOT_NONE="no reading"
   T_HELP_DISMISS="any key to close"
-  T_BACK="back to clikae"
   T_PICKER_HINT="up/down move · Enter select · q cancel"
   T_LANG_SET="Interface language: %s"
   T_LANG_UNKNOWN="Unknown language: %s  (use: en-US | ja-JP | zh-TW)"
@@ -167,9 +162,7 @@ i18n_load() {
       T_AGY_BURN_NOTE="agy のログインはグローバル（同時に1アカウント、並列不可）— 'clikae burn agy <tank>' は枯渇時に順番に次のタンクへ切り替えられます（Keychain 引き継ぎ、OAuth 不要）。現在のアカウントで 'agy -p' を使ってヘッドレス実行することもできます。"
       T_LAUNCH="起動"
       T_MORE="その他"
-      T_INCOGNITO="シークレット"
       T_OVER_QUOTA="上限到達"
-      T_OR_ALIAS="エイリアス"
       T_OVER_QUOTA_HINT="次のタンクへセッションを引き継ぐ:  clikae to"
       T_K_MOVE="移動"
       T_K_OPEN="開く"
@@ -221,13 +214,11 @@ i18n_load() {
       T_UPDATE_FAILED="更新コマンドが失敗しました — 手動で実行するか、リリースページをご確認ください。"
       T_UPDATE_MANUAL="お使いのインストーラーで更新するか、こちらから取得してください："
       T_DRY_SEEN="%s 取得"
-      T_CANCEL="キャンセルしました。"
       T_NEWTANK_TITLE="新規タンク — CLI を選択"
       T_NEWTANK_PROFILE="%s のタンク名 (例: work, personal): "
       T_NEWTANK_CANCEL="キャンセル — タンク未作成。"
       T_NEWTANK_NONAME="キャンセル — 名前が未入力。"
       T_RENAME_FOR="名前変更"
-      T_RENAME_CURRENTLY="現在"
       T_RENAME_NEW="新しい名前: "
       T_RENAME_CANCEL="キャンセル — 名前は変更されません。"
       T_FILTER_PROMPT="絞込: "
@@ -240,7 +231,6 @@ i18n_load() {
       T_DOT_WEEK="週間 %(BETA)"
       T_DOT_NONE="読取不可"
       T_HELP_DISMISS="任意のキーで閉じる"
-      T_BACK="clikae に戻る"
       T_PICKER_HINT="上下で移動 · Enter で選択 · q で中止"
       T_LANG_SET="表示言語: %s"
       T_LANG_UNKNOWN="不明な言語: %s  (en-US | ja-JP | zh-TW)"
@@ -261,9 +251,7 @@ i18n_load() {
       T_AGY_BURN_NOTE="agy 登入是全域的（同時只一個帳號，無法並行）— 'clikae burn agy <tank>' 現在能在燒乾時自動接力到下一個油箱（Keychain 攜帶登入，不必 OAuth）；也能用 'agy -p' 在當前帳號跑 headless。"
       T_LAUNCH="啟動"
       T_MORE="更多"
-      T_INCOGNITO="無痕"
       T_OVER_QUOTA="已達上限"
-      T_OR_ALIAS="或你的別名"
       T_OVER_QUOTA_HINT="把 session 接到下一顆油箱：clikae to"
       T_K_MOVE="移動"
       T_K_OPEN="開啟"
@@ -315,13 +303,11 @@ i18n_load() {
       T_UPDATE_FAILED="更新指令失敗 —— 請自行執行，或查看 release 頁面。"
       T_UPDATE_MANUAL="用你的安裝方式更新 clikae，或從這裡取得："
       T_DRY_SEEN="擷取於 %s"
-      T_CANCEL="已取消。"
       T_NEWTANK_TITLE="新增油箱 — 選一個 CLI"
       T_NEWTANK_PROFILE="%s 的油箱名稱（例：work、personal）："
       T_NEWTANK_CANCEL="已取消 — 未建立油箱。"
       T_NEWTANK_NONAME="已取消 — 未輸入名稱。"
       T_RENAME_FOR="改名"
-      T_RENAME_CURRENTLY="目前"
       T_RENAME_NEW="新名稱："
       T_RENAME_CANCEL="已取消 — 名稱未變更。"
       T_FILTER_PROMPT="篩選："
@@ -334,7 +320,6 @@ i18n_load() {
       T_DOT_WEEK="本週用量（BETA）"
       T_DOT_NONE="無讀數"
       T_HELP_DISMISS="按任意鍵關閉"
-      T_BACK="回到 clikae"
       T_PICKER_HINT="上下移動 · Enter 選擇 · q 取消"
       T_LANG_SET="介面語言：%s"
       T_LANG_UNKNOWN="未知語言：%s （可用：en-US | ja-JP | zh-TW）"
@@ -372,21 +357,6 @@ i18n_set() {
   printf '%s\n' "$norm" > "$CLIKAE_HOME/lang" 2>/dev/null || true
   CLIKAE_LANG_RESOLVED="$norm"
   i18n_load "$norm"
-}
-
-# i18n_cycle — en-US -> ja-JP -> zh-TW -> en-US. Persists + reloads. Echoes the
-# new code. Used by the dashboard's `h` key for a live, no-restart language flip.
-i18n_cycle() {
-  local cur next
-  cur="$(clikae_lang)"
-  case "$cur" in
-    en-US) next="ja-JP" ;;
-    ja-JP) next="zh-TW" ;;
-    zh-TW) next="en-US" ;;
-    *)     next="en-US" ;;
-  esac
-  i18n_set "$next"
-  printf '%s' "$next"
 }
 
 # Initialise at source time. CLIKAE_HOME is set by bin/clikae before this is

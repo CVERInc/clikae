@@ -7,10 +7,6 @@
 #       <cli>/
 #         <profile>/      <- the actual config dir that the CLI's env var points at
 
-store_root() {
-  printf '%s\n' "$CLIKAE_HOME"
-}
-
 profiles_root() {
   printf '%s/profiles\n' "$CLIKAE_HOME"
 }

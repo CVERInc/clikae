@@ -74,32 +74,3 @@ adapter_session_title() {
     | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
 }
 
-adapter_recent_sessions() {
-  local dir="$1" limit="${2:-12}" bdir f sid mt cwd title
-  bdir="$dir/antigravity-cli/brain"
-  [ -d "$bdir" ] || return 0
-
-  local list="" t mt
-  for t in "$bdir"/*/.system_generated/logs/transcript.jsonl; do
-    [ -f "$t" ] || continue
-    mt="$(stat -c '%Y' "$t" 2>/dev/null || stat -f '%m' "$t" 2>/dev/null || echo 0)"
-    list="$list$mt $t"$'\n'
-  done
-
-  local sorted_files
-  sorted_files="$( (printf '%s\n' "$list" | sort -rn | head -n "$limit") 2>/dev/null || true)"
-  sorted_files="$(printf '%s\n' "$sorted_files" | cut -d' ' -f2-)"
-
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    sid="$(basename "$(dirname "$(dirname "$(dirname "$f")")")")"
-    [ -n "$sid" ] || continue
-    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
-    cwd="$(adapter_session_cwd "$f")"
-    title="$(adapter_session_title "$dir" "$sid")"
-    [ -n "$title" ] || title="(no preview)"
-    printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$cwd" "$title"
-  done <<EOF
-$sorted_files
-EOF
-}

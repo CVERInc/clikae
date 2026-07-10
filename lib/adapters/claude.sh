@@ -360,27 +360,6 @@ adapter_session_cwd() {
   return 0
 }
 
-# Optional hook: this config dir's recent sessions across ALL projects (not just
-# $PWD), newest first, one row each, capped at [limit] (default 12):
-#   <epoch-mtime> \037 <session-id> \037 <cwd> \037 <title>
-# Powers `clikae resume`'s no-id picker, which merges these across tanks and
-# sorts by mtime so you choose a session by title — never by copying a UUID.
-adapter_recent_sessions() {
-  local dir="$1" limit="${2:-12}" f sid mt cwd meta title
-  [ -d "$dir/projects" ] || return 0
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    sid="$(basename "$f" .jsonl)"
-    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
-    cwd="$(adapter_session_cwd "$f")"
-    meta="$(_claude_meta_for_file "$f" 2>/dev/null || true)"
-    title="$(printf '%s' "$meta" | cut -d$'\037' -f4)"
-    [ -n "$title" ] || title="(no preview)"
-    printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$cwd" "$title"
-  done <<EOF
-$(ls -t "$dir"/projects/*/*.jsonl 2>/dev/null | head -n "$limit")
-EOF
-}
 
 adapter_relay() {
   local from_dir="$1" to_dir="$2"; shift 2

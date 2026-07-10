@@ -214,20 +214,3 @@ adapter_session_cwd() {
   _codex_meta_field "$1" cwd
 }
 
-adapter_recent_sessions() {
-  local dir="$1" limit="${2:-12}" sdir f sid mt cwd title
-  sdir="$(_codex_sessions_dir "$dir")"
-  [ -d "$sdir" ] || return 0
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    sid="$(_codex_meta_field "$f" id)"
-    [ -n "$sid" ] || continue
-    mt="$(stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null || echo 0)"
-    cwd="$(adapter_session_cwd "$f")"
-    title="$(adapter_session_title "$dir" "$sid")"
-    [ -n "$title" ] || title="(no preview)"
-    printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$cwd" "$title"
-  done <<EOF
-$( (find "$sdir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort -r | head -n "$limit") 2>/dev/null || true)
-EOF
-}
