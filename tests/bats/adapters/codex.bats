@@ -101,3 +101,30 @@ seed_rollout() {
   [[ "$output" == *"0000000000b1"* ]] || false
   [[ "$output" != *"0000000000b2"* ]] || false
 }
+
+@test "codex title_for_file keeps a prompt with escaped quotes intact (no truncation at \\\")" {
+  _setup_codex
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T12-00-00-019e0000-0000-7000-8000-00000000ffff.jsonl"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"019e0000-0000-7000-8000-00000000ffff","cwd":"%s"}}\n' "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"fix the \\"off-by-one\\" bug"}}\n'
+  } > "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'fix the "off-by-one" bug'* ]] || false
+}
+
+@test "codex recent_sids survives a CLIKAE_HOME path containing a space" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/codex.sh"
+  WORK="$TEST_HOME/spaced work"; mkdir -p "$WORK"; cd "$WORK" || return 1
+  PROFILE="$TEST_HOME/dir with space/cprofile"
+  SDIR="$PROFILE/sessions"
+  mkdir -p "$SDIR/2026/06/03"
+  seed_rollout 019e0000-0000-7000-8000-000000000abc "$WORK" "prompt in spaced home"
+  run adapter_recent_sids "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"000000000abc"* ]] || false
+}

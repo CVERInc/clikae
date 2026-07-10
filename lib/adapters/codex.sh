@@ -167,11 +167,20 @@ adapter_recent_sids() {
   # codex's this-dir set is content-matched (a rollout records $PWD in its body,
   # not its path — see _codex_rollouts_for_cwd), so the FILE LIST comes from there;
   # sessions_by_mtime (shared kernel) then stats+sorts it. sid is read from each
-  # rollout's session_meta (not derivable from the path). Tank/dir names are
-  # validated (no spaces), so splitting the list into args is safe.
-  # shellcheck disable=SC2046
+  # rollout's session_meta (not derivable from the path). Read the list into an
+  # array line-by-line, never via unquoted word-splitting: tank names are
+  # validated (no spaces) but $CLIKAE_HOME rides on $HOME, which ISN'T — a space
+  # anywhere in the home path used to shred every path into fragments and
+  # silently drop all codex sessions from the board.
+  local -a rfiles=()
+  while IFS= read -r f; do
+    [ -n "$f" ] && rfiles+=("$f")
+  done <<EOF
+$(_codex_rollouts_for_cwd "$dir")
+EOF
+  [ "${#rfiles[@]}" -gt 0 ] || return 0
   # plain `read -r mt f` (NOT `IFS= read`) so "<mtime> <path>" splits into two.
-  sessions_by_mtime $(_codex_rollouts_for_cwd "$dir") | head -n "$limit" | while read -r mt f; do
+  sessions_by_mtime "${rfiles[@]}" | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
     sid="$(_codex_meta_field "$f" id)"
     [ -n "$sid" ] || continue
@@ -186,15 +195,23 @@ adapter_session_title() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 0
   f="$(_codex_find_rollout "$dir" "$sid")"
+  adapter_title_for_file "$f"
+}
+
+# Optional hook: title straight from a rollout FILE (see claude.sh's twin for
+# why: cross-project listings can't derive the path from $PWD). Escape-aware
+# =~ extraction — the old ${line%%\"*} surgery truncated at an internal \".
+adapter_title_for_file() {
+  local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 
+  local re_msg='"message"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local line_in idx_in=0 max_lines_in=100 title_in=""
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
     [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"type":"user_message"'* ]]; then
-      local m_part="${line_in#*\"message\":\"}"
-      title_in="${m_part%%\"*}"
+    if [[ "$line_in" == *'"type":"user_message"'* ]] && [[ $line_in =~ $re_msg ]]; then
+      title_in="${BASH_REMATCH[1]}"
       break
     fi
   done < "$f" 2>/dev/null

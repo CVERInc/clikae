@@ -93,6 +93,10 @@ dry_store_epoch() {
 dry_seen_suffix() {
   local stamp="${1:-}" hm
   case "$stamp" in ''|*[!0-9]*) return 0 ;; esac
-  hm="$(date -r "$stamp" '+%H:%M' 2>/dev/null || date -d "@$stamp" '+%H:%M' 2>/dev/null)" || return 0
+  # GNU form FIRST (same rule as stat -c/-f everywhere else): on Linux,
+  # `date -r <digits>` means "that FILE's mtime" — if a file named e.g.
+  # 1718000000 exists in $PWD it SUCCEEDS with garbage instead of failing to
+  # the fallback. GNU's -d fails cleanly on BSD/macOS, whose -r then runs.
+  hm="$(date -d "@$stamp" '+%H:%M' 2>/dev/null || date -r "$stamp" '+%H:%M' 2>/dev/null)" || return 0
   [ -n "$hm" ] && printf '  · %s' "$(printf "$T_DRY_SEEN" "$hm")"
 }

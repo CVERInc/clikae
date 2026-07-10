@@ -60,10 +60,18 @@ adapter_session_cwd() {
 }
 
 adapter_session_title() {
-  local dir="$1" sid="$2" f t
+  local dir="$1" sid="$2"
   [ -n "$sid" ] || return 0
-  f="$dir/antigravity-cli/brain/$sid/.system_generated/logs/transcript.jsonl"
-  [ -f "$f" ] || return 0
+  adapter_title_for_file "$dir/antigravity-cli/brain/$sid/.system_generated/logs/transcript.jsonl"
+}
+
+# Optional hook: title straight from a transcript FILE (see claude.sh's twin).
+# The resume picker used to re-implement this extraction inline — minus the
+# whitespace-collapse below, so the same session titled differently in the
+# picker vs the home board.
+adapter_title_for_file() {
+  local f="$1" t
+  [ -n "$f" ] && [ -f "$f" ] || return 0
   t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
         | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
   if [[ "$t" == *"<USER_REQUEST>"* ]]; then

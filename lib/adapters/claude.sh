@@ -278,27 +278,38 @@ EOF
 # extract from that single line. Avoids the costly grep -oE / grep -c full scans
 # that _claude_meta_for_file does — important on multi-MB transcripts.
 adapter_session_title() {
-  local dir="$1" sid="$2" f
+  local dir="$1" sid="$2"
   [ -n "$sid" ] || return 0
-  f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
-  [ -f "$f" ] || return 0
+  adapter_title_for_file "$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+}
 
+# Optional hook: title straight from a transcript FILE. The resume picker and
+# `resume cleanup` list sessions across ALL projects, so deriving the path from
+# $PWD (what adapter_session_title above does, correctly, for the board's
+# this-directory list) made every out-of-$PWD session show "(no preview)".
+# Extraction is bash-native =~ (zero forks per line) and escape-aware: the old
+# ${line%%\"*} surgery cut a title at its first internal \" — an ai-title like
+# `Fix the \"off-by-one\" bug` lost everything past `Fix the `.
+adapter_title_for_file() {
+  local f="$1"
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+
+  local re_title='"aiTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
+  local re_text='"text"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
+  local re_content='"content"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local line_in idx_in=0 max_lines_in=100 title_in="" user_msg_in=""
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
     [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"aiTitle"'* ]]; then
-      local t_part="${line_in#*\"aiTitle\":\"}"
-      title_in="${t_part%%\"*}"
+    if [[ "$line_in" == *'"aiTitle"'* ]] && [[ $line_in =~ $re_title ]]; then
+      title_in="${BASH_REMATCH[1]}"
       break
     fi
     if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
-      if [[ "$line_in" == *'"text":"'* ]]; then
-        local content_part="${line_in#*\"text\":\"}"
-        user_msg_in="${content_part%%\"*}"
-      elif [[ "$line_in" == *'"content":"'* ]]; then
-        local content_part="${line_in#*\"content\":\"}"
-        user_msg_in="${content_part%%\"*}"
+      if [[ $line_in =~ $re_text ]]; then
+        user_msg_in="${BASH_REMATCH[1]}"
+      elif [[ $line_in =~ $re_content ]]; then
+        user_msg_in="${BASH_REMATCH[1]}"
       fi
     fi
   done < "$f" 2>/dev/null

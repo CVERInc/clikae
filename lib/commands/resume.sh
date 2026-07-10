@@ -228,49 +228,13 @@ _lazy_parse() {
 
   load_adapter "$engine" >/dev/null 2>&1 || true
 
-  local first_line=""
-  if [ -f "$f" ]; then
-    read -r first_line < "$f" 2>/dev/null || first_line=""
-  fi
-
+  # One extractor per engine, owned by the adapter (adapter_title_for_file) —
+  # this used to re-implement claude's and antigravity's parsing inline, and the
+  # antigravity copy had drifted (it skipped the whitespace collapse, so the
+  # picker titled a session differently than the home board did).
   local stitle=""
-  if [ "$engine" = "claude" ]; then
-    local line_in idx_in=0 max_lines_in=100 title_in="" user_msg_in=""
-    while IFS= read -r line_in; do
-      idx_in=$((idx_in + 1))
-      [ "$idx_in" -gt "$max_lines_in" ] && break
-      if [[ "$line_in" == *'"aiTitle"'* ]]; then
-        local t_part="${line_in#*\"aiTitle\":\"}"
-        title_in="${t_part%%\"*}"
-        break
-      fi
-      if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
-        if [[ "$line_in" == *'"text":"'* ]]; then
-          local content_part="${line_in#*\"text\":\"}"
-          user_msg_in="${content_part%%\"*}"
-        elif [[ "$line_in" == *'"content":"'* ]]; then
-          local content_part="${line_in#*\"content\":\"}"
-          user_msg_in="${content_part%%\"*}"
-        fi
-      fi
-    done < "$f" 2>/dev/null
-    stitle="$title_in"
-    [ -n "$stitle" ] || stitle="$user_msg_in"
-    stitle="${stitle//\\n/ }"
-    stitle="${stitle//\\t/ }"
-    stitle="${stitle//\\\"/\"}"
-  elif [ "$engine" = "codex" ]; then
-    stitle="$(adapter_session_title "$(profile_dir "$engine" "$tank")" "$sid" 2>/dev/null || true)"
-  elif [ "$engine" = "antigravity" ]; then
-    local c_part="${first_line#*\"content\":\"}"
-    stitle="${c_part%%\"*}"
-    if [[ "$stitle" == *"<USER_REQUEST>"* ]]; then
-      stitle="${stitle#*<USER_REQUEST>}"
-      stitle="${stitle%%</USER_REQUEST>*}"
-    fi
-    stitle="${stitle//\\n/ }"
-    stitle="${stitle//\\t/ }"
-    stitle="${stitle//\\\"/\"}"
+  if declare -F adapter_title_for_file >/dev/null 2>&1; then
+    stitle="$(adapter_title_for_file "$f" 2>/dev/null || true)"
   fi
 
   [ -n "$stitle" ] || stitle="(no preview)"
@@ -797,14 +761,13 @@ _resume_cleanup() {
       files_to_del="$f"
     fi
 
-    # Get title cheaply
+    # Get title cheaply — from the transcript FILE, not (dir, sid):
+    # adapter_session_title derives its path from $PWD's project, so every
+    # session outside the current directory listed as "(no preview)" here.
     load_adapter "$engine" >/dev/null 2>&1 || true
-    local dir
-    dir="$(profile_dir "$engine" "$tank")"
-    if declare -F adapter_session_title >/dev/null 2>&1; then
-      title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
-    else
-      title="$(adapter_session_meta "$dir" "$sid" 2>/dev/null | cut -d$'\037' -f4 || true)"
+    title=""
+    if declare -F adapter_title_for_file >/dev/null 2>&1; then
+      title="$(adapter_title_for_file "$f" 2>/dev/null || true)"
     fi
     [ -n "$title" ] || title="(no preview)"
 
