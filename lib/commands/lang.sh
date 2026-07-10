@@ -20,6 +20,7 @@ _lang_display() {
 }
 
 cmd_lang() {
+  i18n_load "$(clikae_lang)"   # T_* aren't loaded at source time; this command prints them
   case "${1:-}" in
     -h|--help)
       cat <<'EOF'

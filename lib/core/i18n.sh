@@ -359,6 +359,9 @@ i18n_set() {
   i18n_load "$norm"
 }
 
-# Initialise at source time. CLIKAE_HOME is set by bin/clikae before this is
-# sourced, so the persisted preference is honoured from the first string.
-i18n_load "$(clikae_lang)"
+# NOT initialised at source time: loading ~130 strings ×(base+override) plus the
+# clikae_lang subshell costs ~2ms on EVERY invocation, and only the TUI-ish
+# commands read T_* at all (home.sh — which resume.sh sources — plus lang and
+# list; dry_store's and targets/' T_* uses are reached only via home). Those
+# entry points call i18n_load "$(clikae_lang)" themselves; the ~30 other
+# commands (env, switch, to, status, burn, …) skip the cost entirely.

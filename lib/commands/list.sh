@@ -38,6 +38,7 @@ _list_render_json() {
 }
 
 cmd_list() {
+  i18n_load "$(clikae_lang)"   # T_* aren't loaded at source time; the agy note below is localised
   local show_paths=0 as_json=0
   while [ $# -gt 0 ]; do
     case "$1" in

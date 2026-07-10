@@ -189,7 +189,7 @@ _claude_meta_for_file() {
   local f="$1"
   [ -f "$f" ] || return 1
   local sid mtime nmsgs title
-  sid="$(basename "$f" .jsonl)"
+  sid="${f##*/}"; sid="${sid%.jsonl}"
   # GNU stat FIRST (Linux `stat -f` = --file-system, prints garbage instead of
   # failing, so it must not lead); BSD/macOS stat rejects `-c` and falls through.
   mtime="$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 \
@@ -198,15 +198,24 @@ _claude_meta_for_file() {
   [ -n "$mtime" ] || mtime="?"
   # Approximate turn count: lines carrying a role marker. Cheap and good enough
   # for a preview; never let a no-match abort under the caller's pipefail.
-  nmsgs="$(grep -c '"role"' "$f" 2>/dev/null || true)"
+  # LC_ALL=C: byte-wise matching on a pure-ASCII pattern is several times faster
+  # on the multi-MB transcripts this can hit, with identical counts.
+  nmsgs="$(LC_ALL=C grep -c '"role"' "$f" 2>/dev/null || true)"
   [ -n "$nmsgs" ] || nmsgs=0
   # Title: prefer Claude's OWN ai-generated session title. The transcript carries
   # a  {"type":"ai-title","aiTitle":"…"}  line — the same human-readable name
   # Claude shows in its session list (e.g. "Lucky number confirmation"). It's
   # already in the file, so a real title costs nothing: no local model needed.
-  # Take the LAST one (a session can be re-titled). Sessions/engines without such
-  # a line fall through to the opening user message below.
-  title="$(grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' "$f" 2>/dev/null \
+  # Take the LAST one (a session can be re-titled) — but from BOUNDED slices,
+  # never a whole-file regex pass (the documented 100+ MB transcript trap; see
+  # profile_store.sh's transcript_head/tail kernel). The newest re-title lives in
+  # the tail slice; a session titled once early has it in the head slice. A
+  # mid-file-only title (huge file, titled mid-run, never again) degrades to the
+  # opening-prompt fallback below — a preview, not a loss.
+  title="$(transcript_tail "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+        | tail -n 1 \
+        | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  [ -n "$title" ] || title="$(transcript_head "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
         | tail -n 1 \
         | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
   # Fallback = the opening user message. The first line with a user role carries
@@ -217,7 +226,7 @@ _claude_meta_for_file() {
   # the plain "content" string. (No jq/python — grep+sed only.)
   if [ -z "$title" ]; then
     local _uline
-    _uline="$(grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null || true)"
+    _uline="$(LC_ALL=C grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' "$f" 2>/dev/null || true)"
     title="$(printf '%s' "$_uline" \
           | grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
           | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//')"

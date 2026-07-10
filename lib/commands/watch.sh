@@ -197,12 +197,17 @@ EOF
   transcript="$(adapter_transcript_path "$dir" || true)"
   [ -n "$transcript" ] || log_fail "No session for this directory under '$cli/$profile' (nothing to watch)."
 
-  # --check: report whether a GENUINE limit marker fires on the session so far.
-  # Line-by-line via the structured matcher, so a transcript that merely discusses
-  # a limit (the old whole-file grep's classic false positive) no longer trips it.
+  # --check: report whether a GENUINE limit marker fires in the session's recent
+  # tail. Line-by-line via the structured matcher, so a transcript that merely
+  # discusses a limit (the old whole-file grep's classic false positive) no longer
+  # trips it. BOUNDED to transcript_tail, never the whole file: reading a 100+ MB
+  # transcript line-by-line in bash took tens of seconds, and the question --check
+  # answers — "is this session limited NOW?" — is decided by the newest marker
+  # anyway (the same tail-slice rule every other limit reader follows; see
+  # profile_store.sh's bounded-reads kernel).
   if [ "$check" -eq 1 ]; then
     local found=0 line sid
-    sid="$(basename "$transcript" .jsonl)"
+    sid="${transcript##*/}"; sid="${sid%.jsonl}"
     while IFS= read -r line; do
       limit_line_is_real "$cli" "$line" "$pattern" "$pattern_explicit" || continue
       if [ "$found" -eq 0 ]; then
@@ -216,9 +221,11 @@ EOF
       snip="$(printf '%s' "$line" | grep -aoiE "hit your [a-z]+ limit[^\"]*" | head -n 1 || true)"
       [ -n "$snip" ] || snip="$(printf '%s' "$line" | grep -aoE "$pattern" | head -n 1 || true)"
       [ -z "$snip" ] || printf '  matched: %s\n' "$snip"
-    done < "$transcript"
+    done <<EOF
+$(transcript_tail "$transcript")
+EOF
     if [ "$found" -eq 0 ]; then
-      log_ok "No genuine limit marker found in the current session."
+      log_ok "No genuine limit marker found in the current session's recent tail."
       log_dim "(claude requires isApiErrorMessage + model:<synthetic>; override with --pattern / \$CLIKAE_LIMIT_PATTERN)"
     fi
     return 0

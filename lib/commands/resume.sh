@@ -51,6 +51,50 @@ it in its own project. Only engines that can resume by id (e.g. claude) take par
 EOF
 }
 
+# ── Shared session-row plumbing ─────────────────────────────────────────────
+# A picker row packs one session as:  engine ␟ tank ␟ sid ␟ file ␟ mtime.
+# _resume_split <row> unpacks it into _rs_engine/_rs_tank/_rs_sid/_rs_f/_rs_mt.
+# Six call sites used to hand-roll the same ${row%%$'\x1f'*} chain and could
+# drift on field order; this is the one decoder.
+_resume_split() {
+  local tmp="$1"
+  _rs_engine="${tmp%%$'\x1f'*}"; tmp="${tmp#*$'\x1f'}"
+  _rs_tank="${tmp%%$'\x1f'*}";   tmp="${tmp#*$'\x1f'}"
+  _rs_sid="${tmp%%$'\x1f'*}";    tmp="${tmp#*$'\x1f'}"
+  _rs_f="${tmp%%$'\x1f'*}"
+  _rs_mt="${tmp##*$'\x1f'}"
+}
+
+# _resume_session_fields <path> — derive _rs_engine/_rs_tank/_rs_sid from a raw
+# transcript path (…/profiles/<engine>/<tank>/…; each engine encodes the sid in
+# its path differently). Shared by the picker's array build and cleanup's
+# candidate scan, which used to duplicate the whole chain.
+_resume_session_fields() {
+  local f="$1" rel rest filename
+  rel="${f#*/profiles/}"
+  _rs_engine="${rel%%/*}"
+  rest="${rel#*/}"
+  _rs_tank="${rest%%/*}"
+  filename="${f##*/}"
+  if [ "$_rs_engine" = "antigravity" ]; then
+    _rs_sid="${f%/.system_generated/*}"; _rs_sid="${_rs_sid##*/}"
+  elif [ "$_rs_engine" = "codex" ]; then
+    _rs_sid="${filename%.jsonl}"; _rs_sid="${_rs_sid##*-}"
+  else # claude
+    _rs_sid="${filename%.jsonl}"
+  fi
+}
+
+# _resume_all_sessions — "<mtime> <path>" for EVERY tank's sessions, newest
+# first. The ONE home of the three-engine glob list (it appeared verbatim in
+# both the picker and cleanup); a new resumable engine's glob goes here only.
+_resume_all_sessions() {
+  sessions_by_mtime \
+    "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
+    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl
+}
+
 # _resume_engines -> the engines whose adapter can resume by id AND look a session
 # up by id (defines adapter_resume_args + adapter_find_session). One name per line.
 _resume_engines() {
@@ -152,7 +196,7 @@ _resume_pick_draw() {
     fi
   fi
 
-  local idx s_idx item engine tank sid label rage cwd mark rdot active_p
+  local idx s_idx engine tank sid label rage cwd mark rdot active_p
   printf '\033[H\033[K\n'   # home + one blank top-margin line
 
   printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · c %s · q %s%b\033[K\n\n' \
@@ -167,12 +211,8 @@ _resume_pick_draw() {
   for ((idx=start_idx; idx<=end_idx; idx++)); do
     s_idx="${filtered[idx]}"
     _lazy_parse "$s_idx"
-    item="${sessions[s_idx]}"
-    engine="${item%%$'\x1f'*}"
-    local tmp="${item#*$'\x1f'}"
-    tank="${tmp%%$'\x1f'*}"
-    tmp="${tmp#*$'\x1f'}"
-    sid="${tmp%%$'\x1f'*}"
+    _resume_split "${sessions[s_idx]}"
+    engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
     label="${cached_title[s_idx]}"
     rage="${cached_age[s_idx]}"
 
@@ -216,15 +256,8 @@ _lazy_parse() {
   local idx="$1"
   [ -n "${cached_title[idx]}" ] && return 0
 
-  local item="${sessions[idx]}"
-  local engine="${item%%$'\x1f'*}"
-  local tmp="${item#*$'\x1f'}"
-  local tank="${tmp%%$'\x1f'*}"
-  tmp="${tmp#*$'\x1f'}"
-  local sid="${tmp%%$'\x1f'*}"
-  tmp="${tmp#*$'\x1f'}"
-  local f="${tmp%%$'\x1f'*}"
-  local mt="${tmp##*$'\x1f'}"
+  _resume_split "${sessions[idx]}"
+  local engine="$_rs_engine" f="$_rs_f" mt="$_rs_mt"
 
   load_adapter "$engine" >/dev/null 2>&1 || true
 
@@ -240,29 +273,15 @@ _lazy_parse() {
   [ -n "$stitle" ] || stitle="(no preview)"
   cached_title[idx]="$stitle"
 
-  # Format age
-  local now; now=$(date +%s 2>/dev/null || echo "$mt")
-  local diff=$((now - mt))
-  local rage
-  if [ "$diff" -lt 60 ]; then rage="just now"
-  elif [ "$diff" -lt 3600 ]; then rage="$((diff / 60))m ago"
-  elif [ "$diff" -lt 86400 ]; then rage="$((diff / 3600))h ago"
-  else rage="$((diff / 86400))d ago"; fi
-  cached_age[idx]="$rage"
+  cached_age[idx]="$(_human_age "$mt")"
 }
 
 _lazy_parse_cwd() {
   local idx="$1"
   [ -n "${cached_cwd[idx]}" ] && return 0
 
-  local item="${sessions[idx]}"
-  local engine="${item%%$'\x1f'*}"
-  local tmp="${item#*$'\x1f'}"
-  local tank="${tmp%%$'\x1f'*}"
-  tmp="${tmp#*$'\x1f'}"
-  local sid="${tmp%%$'\x1f'*}"
-  tmp="${tmp#*$'\x1f'}"
-  local f="${tmp%%$'\x1f'*}"
+  _resume_split "${sessions[idx]}"
+  local engine="$_rs_engine" sid="$_rs_sid" f="$_rs_f"
 
   load_adapter "$engine" >/dev/null 2>&1 || true
 
@@ -386,13 +405,10 @@ _resume_pick() {
       for ((i=0; i<${#sessions[@]}; i++)); do
         if [ -n "$filter" ]; then
           _lazy_parse "$i"
-          local item="${sessions[i]}"
-          local engine="${item%%$'\x1f'*}"
-          local tmp="${item#*$'\x1f'}"
-          local tank="${tmp%%$'\x1f'*}"
+          _resume_split "${sessions[i]}"
           local title="${cached_title[i]}"
           shopt -s nocasematch
-          if [[ "$engine/$tank $title" == *"$filter"* ]]; then
+          if [[ "$_rs_engine/$_rs_tank $title" == *"$filter"* ]]; then
             filtered+=("$i")
           fi
           shopt -u nocasematch
@@ -468,15 +484,12 @@ _resume_pick() {
     fi
 
     if [ "$trigger_select" -eq 1 ]; then
-      local sel_s_idx="${filtered[sel]}"
-      local sel_item="${sessions[sel_s_idx]}"
-      local sel_engine="${sel_item%%$'\x1f'*}"
-      local sel_tmp="${sel_item#*$'\x1f'}"
-      local sel_tank="${sel_tmp%%$'\x1f'*}"
-      sel_tmp="${sel_tmp#*$'\x1f'}"
-      local sel_sid="${sel_tmp%%$'\x1f'*}"
-      # (the 4th field — transcript path — isn't needed here; _resume_exec and the
-      # cross-tank copy below re-derive it via adapter_find_session.)
+      _resume_split "${sessions[${filtered[sel]}]}"
+      # Plain copies: the block below crosses other function calls, so don't
+      # lean on the shared _rs_* slots staying untouched. (The transcript-path
+      # field isn't needed here; _resume_exec and the cross-tank copy below
+      # re-derive it via adapter_find_session.)
+      local sel_engine="$_rs_engine" sel_tank="$_rs_tank" sel_sid="$_rs_sid"
 
       _home_tty_leave; trap - EXIT INT TERM
       local cands target_tank cand_n
@@ -539,10 +552,7 @@ _resume_picker() {
   # 1. Scan + sort ALL tanks' sessions by recency in ~2 processes (sessions_by_mtime,
   #    the shared kernel; ~30ms for 500+ files). all-dirs scope = bare project globs.
   local files
-  files="$(sessions_by_mtime \
-            "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-            "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-            "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl)"
+  files="$(_resume_all_sessions)"
 
   if [ -z "$files" ]; then
     log_err "No resumable sessions found in any tank."
@@ -556,24 +566,11 @@ _resume_picker() {
   local -a cached_age=()
   local -a cached_cwd=()
 
-  local mt f rel engine rest tank sid filename without_ext brain_part
+  local mt f
   while read -r mt f; do
     [ -n "$f" ] || continue
-    rel="${f#*/profiles/}"
-    engine="${rel%%/*}"
-    rest="${rel#*/}"
-    tank="${rest%%/*}"
-    filename="${f##*/}"
-    if [ "$engine" = "antigravity" ]; then
-      brain_part="${f%/.system_generated/*}"
-      sid="${brain_part##*/}"
-    elif [ "$engine" = "codex" ]; then
-      without_ext="${filename%.jsonl}"
-      sid="${without_ext##*-}"
-    else # claude
-      sid="${filename%.jsonl}"
-    fi
-    sessions+=("$engine"$'\x1f'"$tank"$'\x1f'"$sid"$'\x1f'"$f"$'\x1f'"$mt")
+    _resume_session_fields "$f"
+    sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt")
   done <<EOF
 $files
 EOF
@@ -585,16 +582,12 @@ EOF
 
   if [ ! -t 0 ] || [ ! -t 1 ] || [ -n "${CLIKAE_NO_INTERACTIVE:-}" ]; then
     log_bold "Recent sessions across your tanks (showing top 50):"
-    local idx=0 limit=50 item engine_t tank_t sid_t label_t rage_t cwd_t
+    local idx=0 limit=50 engine_t tank_t sid_t label_t rage_t cwd_t
     [ "${#sessions[@]}" -lt "$limit" ] && limit=${#sessions[@]}
     for ((idx=0; idx<limit; idx++)); do
       _lazy_parse "$idx"
-      item="${sessions[idx]}"
-      engine_t="${item%%$'\x1f'*}"
-      local tmp="${item#*$'\x1f'}"
-      tank_t="${tmp%%$'\x1f'*}"
-      tmp="${tmp#*$'\x1f'}"
-      sid_t="${tmp%%$'\x1f'*}"
+      _resume_split "${sessions[idx]}"
+      engine_t="$_rs_engine"; tank_t="$_rs_tank"; sid_t="$_rs_sid"
       label_t="${cached_title[idx]}"
       rage_t="${cached_age[idx]}"
       _lazy_parse_cwd "$idx"
@@ -698,10 +691,7 @@ _resume_cleanup() {
   done
 
   local files
-  files="$(sessions_by_mtime \
-            "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-            "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-            "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl)"
+  files="$(_resume_all_sessions)"
 
   if [ -z "$files" ]; then
     log_ok "No session files found to clean."
@@ -723,7 +713,7 @@ _resume_cleanup() {
   local -a sz_paths=()    # every path to size, flat — one batched du after the scan
   local -a cand_nsz=()    # how many sz_paths entries belong to candidate i
 
-  local mt f rel engine rest tank sid filename without_ext brain_part
+  local mt f engine tank sid brain_part
   local size_kb title age_str files_to_del db_file conversations_dir
   local total_size_kb=0
 
@@ -734,29 +724,19 @@ _resume_cleanup() {
       continue
     fi
 
-    rel="${f#*/profiles/}"
-    engine="${rel%%/*}"
-    rest="${rel#*/}"
-    tank="${rest%%/*}"
-    filename="${f##*/}"
+    _resume_session_fields "$f"
+    engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
 
-    # Determine session ID and files to delete. Sizing is deferred: paths pile up
-    # in sz_paths and ONE batched du prices them all after the scan (per-candidate
+    # Determine the files to delete. Sizing is deferred: paths pile up in
+    # sz_paths and ONE batched du prices them all after the scan (per-candidate
     # du made this loop fork-bound — 7s+ on a real store).
     if [ "$engine" = "antigravity" ]; then
       brain_part="${f%/.system_generated/*}"
-      sid="${brain_part##*/}"
       conversations_dir="${brain_part%/brain/*}/conversations"
       db_file="$conversations_dir/$sid.db"
       sz_paths+=("$brain_part" "$db_file"); cand_nsz+=(2)
       files_to_del="$brain_part;$db_file;$db_file-shm;$db_file-wal"
-    elif [ "$engine" = "codex" ]; then
-      without_ext="${filename%.jsonl}"
-      sid="${without_ext##*-}"
-      sz_paths+=("$f"); cand_nsz+=(1)
-      files_to_del="$f"
-    else # claude
-      sid="${filename%.jsonl}"
+    else # claude / codex: the transcript file is the session
       sz_paths+=("$f"); cand_nsz+=(1)
       files_to_del="$f"
     fi

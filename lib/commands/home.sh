@@ -10,6 +10,27 @@
 # The full command reference is one keystroke away at `clikae help`; the deep
 # machine check at `clikae doctor`. All read-only.
 
+# Every renderer in this file (and in resume.sh, which sources it) reads T_*
+# strings, so populate them the moment this file loads. i18n.sh no longer does
+# this at its own source time — non-TUI commands never pay for the string table.
+# Guarded: unit tests source this file standalone (without i18n.sh) to exercise
+# pure helpers that never read T_*.
+if declare -F i18n_load >/dev/null 2>&1; then i18n_load "$(clikae_lang)"; fi
+
+# _human_age <epoch-mtime> [now-epoch] — "just now" / "5m ago" / "3h ago" /
+# "2d ago". One formatter for the board's Continue list and the resume picker
+# (each used to carry its own copy).
+_human_age() {
+  local mt="$1" now="${2:-}" d
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo "$mt")"
+  d=$(( now - mt ))
+  if   [ "$d" -lt 60 ];    then printf 'just now'
+  elif [ "$d" -lt 3600 ];  then printf '%dm ago' "$(( d / 60 ))"
+  elif [ "$d" -lt 86400 ]; then printf '%dh ago' "$(( d / 3600 ))"
+  else                          printf '%dd ago' "$(( d / 86400 ))"
+  fi
+}
+
 # _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.
 _home_active_for() {
@@ -117,11 +138,7 @@ EOF
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
         # has no recap, so the expand is always visible.
-        now="$(date +%s 2>/dev/null || echo "$mt")"; _d=$(( now - mt ))
-        if   [ "$_d" -lt 60 ];    then age="just now"
-        elif [ "$_d" -lt 3600 ];  then age="$(( _d / 60 ))m ago"
-        elif [ "$_d" -lt 86400 ]; then age="$(( _d / 3600 ))h ago"
-        else                           age="$(( _d / 86400 ))d ago"; fi
+        age="$(_human_age "$mt")"
         # Is this session on the tank you're currently using? (● vs ○). Packed into
         # the active field as "<flag> <age>" so the draw has both.
         aflag="0"; _act="$(_home_active_for "$engine" 2>/dev/null || true)"

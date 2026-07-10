@@ -10,6 +10,8 @@ load '../../helpers'
 # slugs $PWD, so we cd into a stable working dir whose slug we mirror.
 _setup_session_meta() {
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_head/tail (bounded-read kernel)
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
   WORK="$TEST_HOME/work"
   mkdir -p "$WORK"
