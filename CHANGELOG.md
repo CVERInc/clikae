@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae resume` picker had no way to reach `cleanup`** — it shipped as a
+  separate subcommand (`clikae resume cleanup`) with no affordance from the
+  interactive picker, so it was easy to not know it existed. Press `c` from
+  the picker now to jump straight into the same interactive cleanup flow.
+
 ## [0.11.1] — 2026-07-06
 
 ### Added

@@ -33,7 +33,9 @@ home; clikae finds the tank and resumes it there.
                             one asks "Resume on which tank?" whenever the engine
                             has more than one; pick a different tank and the
                             session is carried there (a real cross-tank resume,
-                            not a fresh start).
+                            not a fresh start). Press `c` in the picker to jump
+                            straight into cleanup (same as `clikae resume cleanup`
+                            below).
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
   clikae resume cleanup     clean up old session data to free disk space
                             (runs interactively by default, asks before deleting)
@@ -153,9 +155,9 @@ _resume_pick_draw() {
   local idx s_idx item engine tank sid label rage cwd mark rdot active_p
   printf '\033[H\033[K\n'   # home + one blank top-margin line
 
-  printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · q %s%b\033[K\n\n' \
+  printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · c %s · q %s%b\033[K\n\n' \
     "$__C_BOLD" "clikae resume" "$__C_RESET" "$__C_DIM" \
-    "$T_K_MOVE" "$T_RESUME" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
+    "$T_K_MOVE" "$T_RESUME" "$T_K_FILTER" "$T_K_CLEANUP" "$T_K_QUIT" "$__C_RESET"
 
   # Top overflow indicator
   if [ "$start_idx" -gt 0 ]; then
@@ -340,7 +342,7 @@ _resume_pick() {
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
-  local exit_loop=0 trigger_filter=0 trigger_select=0
+  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_cleanup=0
 
   _handle_key() {
     local k="$1"
@@ -403,6 +405,7 @@ _resume_pick() {
         sel=$(( k - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
       q) exit_loop=1 ;;
       /) trigger_filter=1 ;;
+      c) trigger_cleanup=1 ;;
       ''|$'\n'|$'\r') trigger_select=1 ;;
     esac
     # MUST end with success: a branch whose last command is `[ cond ] && assign`
@@ -466,6 +469,7 @@ _resume_pick() {
     exit_loop=0
     trigger_filter=0
     trigger_select=0
+    trigger_cleanup=0
 
     _handle_key "$key"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
@@ -473,6 +477,19 @@ _resume_pick() {
 
     if [ "$exit_loop" -eq 1 ]; then
       break
+    fi
+
+    if [ "$trigger_cleanup" -eq 1 ]; then
+      # Cleanup deletes session files the picker has already cached — don't try to
+      # resume the TUI afterward with a now-stale `sessions` array; drop to the
+      # normal screen, run the same interactive flow as `clikae resume cleanup`,
+      # and return to the shell (matches the trigger_select exit pattern below).
+      exec 3>&- 2>/dev/null || true
+      _home_tty_leave; trap - EXIT INT TERM
+      echo
+      _resume_cleanup
+      unset -f _handle_key
+      return 0
     fi
 
     if [ "$trigger_filter" -eq 1 ]; then
