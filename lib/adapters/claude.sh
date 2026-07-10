@@ -322,7 +322,8 @@ adapter_recent_sids() {
   # into two fields; IFS= would shove the whole line into mt and leave f empty.
   sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt f; do
     [ -n "$f" ] || continue
-    printf '%s\037%s\n' "$mt" "$(basename "$f" .jsonl)"
+    f="${f##*/}"
+    printf '%s\037%s\n' "$mt" "${f%.jsonl}"
   done
 }
 

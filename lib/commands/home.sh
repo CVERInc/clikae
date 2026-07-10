@@ -76,11 +76,17 @@ _home_recent_rows() {
     ( load_adapter "$name" >/dev/null 2>&1 \
         && declare -F adapter_resume_args >/dev/null 2>&1 \
         && declare -F adapter_recent_sids >/dev/null 2>&1 ) || continue
+    # The gate above proved this adapter loads cleanly, so it's safe to ALSO load
+    # it here in the parent (load_adapter exit()s on a broken adapter — only the
+    # subshell gate may take that risk). The parent's memo is inherited by every
+    # $( … ) fork below, so the per-tank loads become instant instead of each
+    # re-sourcing the adapter file (measured: 47 loads per board render before).
+    load_adapter "$name" >/dev/null 2>&1
     proot="$(profiles_root)/$name"
     [ -d "$proot" ] || continue
     for tdir in "$proot"/*/; do
       [ -d "$tdir" ] || continue
-      tank="$(basename "$tdir")"
+      tank="${tdir%/}"; tank="${tank##*/}"
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
       rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
@@ -152,6 +158,10 @@ _home_items() {
     if [ "$cli" != "antigravity" ]; then
       ( load_adapter "$cli" >/dev/null 2>&1 \
           && declare -F adapter_start_with_prompt >/dev/null 2>&1 ) || continue
+      # Gate passed → safe to load in the parent too, so the label/active forks
+      # below (and later rows of the same cli) inherit the memo instead of
+      # re-sourcing the adapter per row.
+      load_adapter "$cli" >/dev/null 2>&1
     fi
     path="$(profile_dir "$cli" "$profile")"
     if [ "$cli" = "antigravity" ]; then
@@ -196,7 +206,7 @@ EOF
   local tfile tname troot
   for tfile in "$CLIKAE_LIB"/targets/*.sh; do
     [ -f "$tfile" ] || continue
-    tname="$(basename "$tfile" .sh)"
+    tname="${tfile##*/}"; tname="${tname%.sh}"
     # If the target has clikae profiles (opt-in multi-account mode), it's shown
     # as tanks above — don't also list it as a single-account launch target.
     troot="$(profiles_root)/$tname"
@@ -254,7 +264,7 @@ EOF
   local tfile tname
   for tfile in "$CLIKAE_LIB"/targets/*.sh; do
     [ -f "$tfile" ] || continue
-    tname="$(basename "$tfile" .sh)"
+    tname="${tfile##*/}"; tname="${tname%.sh}"
     (
       # shellcheck source=/dev/null
       source "$tfile" 2>/dev/null || exit 0

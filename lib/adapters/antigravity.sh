@@ -50,7 +50,7 @@ adapter_session_cwd() {
   local f="$1"
   [ -f "$f" ] || return 0
   local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
-  local sid; sid="$(basename "$(dirname "$(dirname "$(dirname "$f")")")")"
+  local sid; sid="${f%/.system_generated/*}"; sid="${sid##*/}"
   local cwd
   cwd="$(grep -F "$sid" "$bdir/history.jsonl" 2>/dev/null \
     | grep -oE '"workspace"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \

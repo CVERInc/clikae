@@ -18,7 +18,7 @@ list_adapters() {
   local f name
   for f in "$CLIKAE_LIB"/adapters/*.sh; do
     [ -f "$f" ] || continue
-    name="$(basename "$f" .sh)"
+    name="${f##*/}"; name="${name%.sh}"   # basename in pure expansion — this runs per adapter file on hot paths
     case "$name" in
       _*) continue ;;  # underscored files are templates/helpers
     esac
@@ -137,8 +137,17 @@ adapter_label() {
 }
 
 # Source the adapter file for <cli>. Fails if missing.
+#
+# Memoized: one board render used to re-source the SAME adapter dozens of times
+# (traced 47 loads for 8 tanks, 18 of them claude) because every call site
+# defensively reloads. Loading is idempotent, so if <cli> is already the loaded
+# adapter, return immediately. Works inside `( load_adapter … )` subshells too:
+# fork copies the parent's functions and _CLIKAE_LOADED_ADAPTER, so a child whose
+# parent already loaded <cli> skips the re-source for free, and a child that
+# loads something ELSE can't pollute the parent (its memo dies with it).
 load_adapter() {
   local cli="$1"
+  if [ "${_CLIKAE_LOADED_ADAPTER:-}" = "$cli" ]; then return 0; fi
   local f="$CLIKAE_LIB/adapters/$cli.sh"
   if [ ! -f "$f" ]; then
     # agy (Antigravity) is a known engine with no adapter on purpose: its login is
@@ -184,4 +193,5 @@ load_adapter() {
       log_fail "Adapter '$cli' is missing required function: $fn"
     fi
   done
+  _CLIKAE_LOADED_ADAPTER="$cli"
 }

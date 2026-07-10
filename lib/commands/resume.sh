@@ -650,12 +650,47 @@ EOF
   fi
 }
 
-_get_path_size_kb() {
-  local path="$1"
-  [ -e "$path" ] || { echo 0; return; }
-  local val
-  val="$(du -sk "$path" 2>/dev/null | awk '{print $1}')"
-  echo "${val:-0}"
+# _batch_du_kb <path>... — print one "<kb>" line PER ARGUMENT, in argument order
+# (0 for a missing path). ONE `du -sk` over everything (chunked for argv limits)
+# instead of a `du | awk` pair per path: the per-path form made `resume cleanup`
+# fork-bound (~7s on a 2300-session store; sys time dominated). du emits existing
+# args in the order given on both BSD and GNU, so filtering to existing paths
+# first keeps the output aligned with the input.
+_batch_du_kb() {
+  local -a ex=() exidx=() out=()
+  local i=0 p n=$#
+  for p in "$@"; do
+    out[i]=0
+    if [ -e "$p" ]; then ex+=("$p"); exidx+=("$i"); fi
+    i=$((i+1))
+  done
+  local j=0 start kb rest
+  for ((start=0; start<${#ex[@]}; start+=1000)); do
+    while IFS=$'\t' read -r kb rest; do
+      [ -n "$kb" ] || continue
+      out[${exidx[j]}]="$kb"
+      j=$((j+1))
+    done <<EOF
+$(du -sk "${ex[@]:start:1000}" 2>/dev/null || true)
+EOF
+  done
+  [ "$n" -gt 0 ] && printf '%s\n' "${out[@]}"
+  return 0
+}
+
+# _kb_human <kb> — "512 KB" / "1.5 MB" / "2.32 GB", pure bash (no awk fork; the
+# per-row awk added one fork per listed candidate).
+_kb_human() {
+  local kb="$1" v
+  if [ "$kb" -lt 1024 ]; then
+    printf '%d KB' "$kb"
+  elif [ "$kb" -lt 1048576 ]; then
+    v=$(( (kb * 10 + 512) / 1024 ))
+    printf '%d.%d MB' $((v / 10)) $((v % 10))
+  else
+    v=$(( (kb * 100 + 524288) / 1048576 ))
+    printf '%d.%02d GB' $((v / 100)) $((v % 100))
+  fi
 }
 
 _resume_cleanup_help() {
@@ -721,6 +756,8 @@ _resume_cleanup() {
   local -a cand_title=()
   local -a cand_age_str=()
   local -a cand_files_to_delete=()
+  local -a sz_paths=()    # every path to size, flat — one batched du after the scan
+  local -a cand_nsz=()    # how many sz_paths entries belong to candidate i
 
   local mt f rel engine rest tank sid filename without_ext brain_part
   local size_kb title age_str files_to_del db_file conversations_dir
@@ -739,25 +776,24 @@ _resume_cleanup() {
     tank="${rest%%/*}"
     filename="${f##*/}"
 
-    # Determine session ID and files to delete
+    # Determine session ID and files to delete. Sizing is deferred: paths pile up
+    # in sz_paths and ONE batched du prices them all after the scan (per-candidate
+    # du made this loop fork-bound — 7s+ on a real store).
     if [ "$engine" = "antigravity" ]; then
       brain_part="${f%/.system_generated/*}"
       sid="${brain_part##*/}"
       conversations_dir="${brain_part%/brain/*}/conversations"
       db_file="$conversations_dir/$sid.db"
-      # Calculate total size of brain folder + db file
-      local b_sz; b_sz="$(_get_path_size_kb "$brain_part")"
-      local d_sz; d_sz="$(_get_path_size_kb "$db_file")"
-      size_kb=$((b_sz + d_sz))
+      sz_paths+=("$brain_part" "$db_file"); cand_nsz+=(2)
       files_to_del="$brain_part;$db_file;$db_file-shm;$db_file-wal"
     elif [ "$engine" = "codex" ]; then
       without_ext="${filename%.jsonl}"
       sid="${without_ext##*-}"
-      size_kb="$(_get_path_size_kb "$f")"
+      sz_paths+=("$f"); cand_nsz+=(1)
       files_to_del="$f"
     else # claude
       sid="${filename%.jsonl}"
-      size_kb="$(_get_path_size_kb "$f")"
+      sz_paths+=("$f"); cand_nsz+=(1)
       files_to_del="$f"
     fi
 
@@ -781,12 +817,9 @@ _resume_cleanup() {
     cand_engine+=("$engine")
     cand_tank+=("$tank")
     cand_sid+=("$sid")
-    cand_size_kb+=("$size_kb")
     cand_title+=("$title")
     cand_age_str+=("$age_str")
     cand_files_to_delete+=("$files_to_del")
-
-    total_size_kb=$((total_size_kb + size_kb))
   done <<EOF
 $files
 EOF
@@ -795,6 +828,26 @@ EOF
     log_ok "No sessions found older than $older_than days (0 files to clean)."
     return 0
   fi
+
+  # Price everything in one pass. _batch_du_kb prints one kb per sz_paths entry
+  # (in order), so a walking pointer re-attaches each candidate's cand_nsz sizes.
+  local -a all_kb=()
+  local kb_line
+  while IFS= read -r kb_line; do
+    all_kb+=("${kb_line:-0}")
+  done <<EOF
+$(_batch_du_kb "${sz_paths[@]}")
+EOF
+  local ci p=0 k
+  for ((ci=0; ci<${#candidates[@]}; ci++)); do
+    size_kb=0
+    for ((k=0; k<${cand_nsz[ci]}; k++)); do
+      size_kb=$((size_kb + ${all_kb[p]:-0}))
+      p=$((p+1))
+    done
+    cand_size_kb[ci]="$size_kb"
+    total_size_kb=$((total_size_kb + size_kb))
+  done
 
   log_bold "The following sessions are older than $older_than days and will be deleted:"
   echo
@@ -805,7 +858,7 @@ EOF
     local sz_kb="${cand_size_kb[i]}"
     local ttl="${cand_title[i]}"
     local ag="${cand_age_str[i]}"
-    local sz_str; sz_str="$(awk -v k="$sz_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else printf "%.1f MB", k/1024 }')"
+    local sz_str; sz_str="$(_kb_human "$sz_kb")"
 
     printf "  %b%s/%s%b · %s · %s · %b(%s)%b\n" \
       "$__C_BOLD" "$eng" "$tnk" "$__C_RESET" \
@@ -814,7 +867,7 @@ EOF
       "$__C_DIM" "$sz_str" "$__C_RESET"
   done
   echo
-  local total_sz_str; total_sz_str="$(awk -v k="$total_size_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else if (k < 1048576) printf "%.1f MB", k/1024; else printf "%.2f GB", k/1048576 }')"
+  local total_sz_str; total_sz_str="$(_kb_human "$total_size_kb")"
   log_bold "Total sessions to clean: ${#candidates[@]}"
   log_bold "Estimated space to free: $total_sz_str"
   echo
@@ -851,7 +904,7 @@ EOF
     deleted_kb=$((deleted_kb + sz_kb))
   done
 
-  local deleted_sz_str; deleted_sz_str="$(awk -v k="$deleted_kb" 'BEGIN { if (k < 1024) printf "%d KB", k; else if (k < 1048576) printf "%.1f MB", k/1024; else printf "%.2f GB", k/1048576 }')"
+  local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"
   log_ok "Cleanup complete. Freed approximately $deleted_sz_str."
 }
 

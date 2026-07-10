@@ -151,10 +151,10 @@ list_all_profiles() {
   local cli_dir cli profile_path profile
   for cli_dir in "$root"/*/; do
     [ -d "$cli_dir" ] || continue
-    cli="$(basename "$cli_dir")"
+    cli="${cli_dir%/}"; cli="${cli##*/}"
     for profile_path in "$cli_dir"*/; do
       [ -d "$profile_path" ] || continue
-      profile="$(basename "$profile_path")"
+      profile="${profile_path%/}"; profile="${profile##*/}"
       printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
     done
   done | sort
@@ -288,8 +288,8 @@ resolve_active_profile() {
       [ -d "$root" ] || return 0
       for pdir in "$root"/*/; do
         [ -d "$pdir" ] || continue
-        profile="$(basename "$pdir")"
         pdir="${pdir%/}"
+        profile="${pdir##*/}"
         if [ "$norm" = "$pdir" ] || case "$norm" in "$pdir"/*) true ;; *) false ;; esac; then
           printf '%s\n' "$profile"
           return 0
