@@ -34,6 +34,7 @@ Built with Kura, the agent-native docs framework — https://kura.build
 - [Proposal — issue #22: per-tank git commit identity](/docs/proposals/issue-22-git-identity.md)
 - [Proposal — Issue #24: simplify `clikae burn` (drop the per-engine flag wrangling)](/docs/proposals/issue-24-burn-simplify.md)
 - [Issue #25 — agy Parallel Execution on Same Account (Design Note)](/docs/proposals/issue-25-agy-parallel.md)
+- [Your accounts and the vendors' terms](/docs/terms-and-your-accounts.md)
 - [Troubleshooting](/docs/troubleshooting.md)
 - [Using clikae](/docs/usage.md)
 - [clikae — Vision](/docs/VISION.md)
