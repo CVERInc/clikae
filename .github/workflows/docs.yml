@@ -31,8 +31,9 @@ jobs:
       # own cli/docs deps default to a floating pre-1.0 range. Pinning all three
       # means clikae only picks up a new Kura release when someone here reviews
       # and bumps it, not automatically on the next docs build. Verified-working
-      # versions as of 2026-07-05: @kurajs/cli@0.0.28, @kurajs/docs@0.0.53.
+      # versions as of 2026-07-11: @kurajs/cli@0.1.0, @kurajs/docs@0.1.0 (the
+      # coordinated June-0.1.0-line release; upstream declares no API changes).
       - uses: kurajs/pages@3ca3b9f42e9f31057cb757bc210a789bd975a462 # v1
         with:
-          cli-version: "0.0.28"
-          docs-version: "0.0.53"
+          cli-version: "0.1.0"
+          docs-version: "0.1.0"
