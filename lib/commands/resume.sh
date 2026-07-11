@@ -626,21 +626,349 @@ Delete old session data files (transcripts, databases, brain assets) to free dis
 This only deletes session history files. It never deletes tank configurations, memory files,
 caches, or settings.
 
+Besides the age/size filters, every run also offers two kinds of pure waste:
+
+  - stale copies: `clikae to`/relay and a cross-tank resume COPY the session into
+    the target tank and leave the source behind. Copies of the same session are
+    grouped across all tanks and project dirs, the LARGEST copy is kept, and a
+    copy is offered only when it is provably contained in the kept one (an exact
+    byte prefix, or a tail of session-metadata lines only). A copy with unique
+    conversation content is listed as "diverged — not auto-selected" and starts
+    unchecked; sessions with a live process are skipped entirely.
+  - orphaned subagent data: claude keeps a sibling `<session-id>/` directory next
+    to each transcript (subagent/workflow transcripts). Orphans — a sid directory
+    whose transcript is already gone — are offered for deletion, and cleaning a
+    transcript now removes its sibling directory too.
+
+The preview is a checkbox list, biggest first: arrows move, space toggles a row,
+`a` toggles all, Enter proceeds to the final confirmation, q/ESC cancels.
+
 Options:
   -d, --dry-run             Preview what will be deleted and how much space freed, without deleting.
   -o, --older-than <days>   Only target sessions older than <days> (default: 30).
+  -m, --min-size <MB>       Only target sessions of at least <MB> MB. Given alone, size is the
+                            only filter (no age cutoff); combine with --older-than to require
+                            both. Stale copies and orphans ignore both filters.
   -h, --help                Show this help message.
 
 Examples:
   clikae resume cleanup
   clikae resume cleanup --older-than 7
+  clikae resume cleanup --min-size 5
+  clikae resume cleanup --min-size 5 --older-than 30
   clikae resume cleanup --dry-run
 EOF
 }
 
+# _file_bytes <path> — the file's exact byte size (0 if missing). du prices
+# candidates for the preview, but picking WHICH copy of a duplicated session to
+# keep needs exact bytes, not blocks: the kept copy must be the byte-superset.
+_file_bytes() {
+  stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null || echo 0
+  return 0
+}
+
+# _resume_stale_copy_check <kept> <candidate> — is <candidate> safe to delete
+# given <kept> survives? Safe means no conversation content exists only in the
+# candidate, verified on BYTES (never mtime — on a real store the newest copy was
+# NOT always the byte-superset; one group's older copy was 552 B larger):
+#   1. the candidate is an exact byte-prefix of <kept> (a relay copy never
+#      touched again), or
+#   2. it diverges only within its last 4096 bytes AND every candidate line from
+#      the divergence on is a session-metadata line (types mode / permission-mode
+#      / ai-title / last-prompt / agent-name / pr-link / summary) — the metadata
+#      write-back an engine does on open, no conversation content.
+# The prefix test is `head -c | cmp`, NEVER `cmp -n`: BSD `cmp -s -n <sz>` exits
+# 1 ("EOF") when the second file is exactly <sz> bytes, so every byte-identical
+# copy would read as diverged.
+_resume_stale_copy_check() {
+  local kept="$1" cand="$2" csz ksz
+  csz="$(_file_bytes "$cand")"; ksz="$(_file_bytes "$kept")"
+  [ "$csz" -le "$ksz" ] || return 1
+  [ "$csz" -gt 0 ] || return 0
+  if head -c "$csz" "$kept" 2>/dev/null | cmp -s - "$cand" 2>/dev/null; then
+    return 0
+  fi
+  # Not a clean prefix — locate the divergence. cmp reports the first differing
+  # byte and line as "differ: char N, line L" (GNU may say "byte" for N).
+  local report off line
+  report="$(LC_ALL=C cmp "$kept" "$cand" 2>/dev/null || true)"
+  off="$(printf '%s\n' "$report" | awk '{for(i=1;i<NF;i++) if($i=="char"||$i=="byte"){gsub(/,/,"",$(i+1)); print $(i+1); exit}}')"
+  line="$(printf '%s\n' "$report" | awk '{for(i=1;i<NF;i++) if($i=="line"){gsub(/,/,"",$(i+1)); print $(i+1); exit}}')"
+  case "$off" in ''|*[!0-9]*) return 1 ;; esac
+  case "$line" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( csz - (off - 1) )) -le 4096 ] || return 1
+  # Every candidate line from the first differing one must be metadata-only.
+  tail -n +"$line" "$cand" 2>/dev/null | LC_ALL=C awk '
+    /^[[:space:]]*$/ { next }
+    $0 !~ /"type"[[:space:]]*:[[:space:]]*"(mode|permission-mode|ai-title|last-prompt|agent-name|pr-link|summary)"/ { exit 1 }
+  '
+}
+
+# _resume_cleanup_add_candidate <file> <mtime> <class> <label> — push one row
+# onto the caller's parallel cand_* arrays (bash-3.2 dynamic scoping;
+# _resume_cleanup owns the arrays). Owns the per-engine map of "what does
+# deleting this session mean", including claude's sibling `<sid>/` directory
+# (subagent/workflow transcripts) — the old cleanup deleted only the transcript
+# and leaked those directories. Sizing is deferred: paths pile up in sz_paths and
+# ONE batched du prices them after the scan. Titles are deferred too (filled only
+# for rows that survive the filters) — a --min-size scan visits EVERY session,
+# and a title parse per session would make the loop fork-bound again.
+_resume_cleanup_add_candidate() {
+  local f="$1" mt="$2" cls="$3" lbl="$4"
+  local files_to_del brain_part conversations_dir db_file sdir checked=1
+  _resume_session_fields "$f"
+  if [ "$_rs_engine" = "antigravity" ]; then
+    brain_part="${f%/.system_generated/*}"
+    conversations_dir="${brain_part%/brain/*}/conversations"
+    db_file="$conversations_dir/$_rs_sid.db"
+    sz_paths+=("$brain_part" "$db_file"); cand_nsz+=(2)
+    files_to_del="$brain_part;$db_file;$db_file-shm;$db_file-wal"
+  elif [ "$_rs_engine" = "claude" ] && [ -d "${f%.jsonl}" ]; then
+    sdir="${f%.jsonl}"   # the sibling sid dir travels (and is priced) with its transcript
+    sz_paths+=("$f" "$sdir"); cand_nsz+=(2)
+    files_to_del="$f;$sdir"
+  else # codex / claude without a sid dir: the transcript file is the session
+    sz_paths+=("$f"); cand_nsz+=(1)
+    files_to_del="$f"
+  fi
+  [ "$cls" = "diverged" ] && checked=0
+  candidates+=("$f")
+  cand_engine+=("$_rs_engine")
+  cand_tank+=("$_rs_tank")
+  cand_sid+=("$_rs_sid")
+  cand_title+=("")
+  cand_age_str+=("$(( (now - mt) / 86400 ))d ago")
+  cand_files_to_delete+=("$files_to_del")
+  cand_class+=("$cls")
+  cand_label+=("$lbl")
+  cand_checked+=("$checked")
+  return 0
+}
+
+# _resume_cleanup_dedupe_flush — close out one (engine, session) group of the
+# dedupe walk (g_engine/g_sid/g_f/g_mt, dynamically scoped from _resume_cleanup).
+# With two or more copies of one session, keep the LARGEST (see
+# _resume_stale_copy_check on why not the newest) and offer every copy the safety
+# check proves redundant. A copy that fails the check is surfaced as "diverged"
+# instead of being silently skipped — or worse, silently deleted.
+_resume_cleanup_dedupe_flush() {
+  if [ "${#g_f[@]}" -lt 2 ]; then return 0; fi
+  # Never dedupe under a live session: if any process still carries this sid
+  # (e.g. a `--resume <sid>` in another terminal), the session may be mid-write.
+  # Same best-effort ps read as lib/core/proc.sh, snapshotted once per cleanup.
+  local live_sid="$g_sid"
+  if [ "$g_engine" = "codex" ] && [ "${#g_sid}" -gt 36 ]; then
+    live_sid="${g_sid:$(( ${#g_sid} - 36 ))}"   # rollout-<ts>-<uuid> → the uuid
+  fi
+  case "$live_procs" in *"$live_sid"*) return 0 ;; esac
+
+  local i kept=0 kept_sz sz kept_tank
+  kept_sz="$(_file_bytes "${g_f[0]}")"
+  for ((i=1; i<${#g_f[@]}; i++)); do
+    sz="$(_file_bytes "${g_f[i]}")"
+    # Strictly greater: g_f is sorted newest first, so a size tie keeps the
+    # newest copy (a deterministic, least-surprising tie-break).
+    if [ "$sz" -gt "$kept_sz" ]; then kept="$i"; kept_sz="$sz"; fi
+  done
+  _resume_session_fields "${g_f[kept]}"
+  kept_tank="$_rs_tank"
+  for ((i=0; i<${#g_f[@]}; i++)); do
+    if [ "$i" -eq "$kept" ]; then continue; fi
+    if _resume_stale_copy_check "${g_f[kept]}" "${g_f[i]}"; then
+      _resume_cleanup_add_candidate "${g_f[i]}" "${g_mt[i]}" stale "stale copy (kept: $kept_tank)"
+    else
+      _resume_cleanup_add_candidate "${g_f[i]}" "${g_mt[i]}" diverged "diverged — not auto-selected"
+    fi
+    dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
+  done
+  return 0
+}
+
+# _resume_cleanup_scan_orphans — claude sid dirs whose transcript is already
+# gone. Cleanup used to delete only `<sid>.jsonl` and leave the sibling `<sid>/`
+# directory of subagent/workflow transcripts behind; a sid dir with no matching
+# top-level transcript in the same project dir is pure waste.
+_resume_cleanup_scan_orphans() {
+  local d base mt
+  for d in "$CLIKAE_HOME"/profiles/claude/*/projects/*/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    base="${d##*/}"
+    case "$base" in
+      ????????-????-????-????-????????????) ;;   # uuid-shaped sid dirs only
+      *) continue ;;
+    esac
+    [ -f "$d.jsonl" ] && continue
+    mt="$(stat -c '%Y' "$d" 2>/dev/null || stat -f '%m' "$d" 2>/dev/null || echo 0)"
+    _resume_session_fields "$d"    # engine/tank from the path; sid = the dir name
+    sz_paths+=("$d"); cand_nsz+=(1)
+    candidates+=("$d")
+    cand_engine+=("$_rs_engine")
+    cand_tank+=("$_rs_tank")
+    cand_sid+=("$_rs_sid")
+    cand_title+=("(no transcript)")
+    cand_age_str+=("$(( (now - mt) / 86400 ))d ago")
+    cand_files_to_delete+=("$d")
+    cand_class+=(orphan)
+    cand_label+=("orphaned subagent data")
+    cand_checked+=(1)
+  done
+  return 0
+}
+
+# _resume_cleanup_tally — recount the checked set (dynamically scoped ord/cand_*
+# from _resume_cleanup) into sel_n / sel_kb / unsel_n. Called once for the static
+# preview and again after the interactive picker, so the confirm and the final
+# "freed" number always describe what is actually selected.
+_resume_cleanup_tally() {
+  sel_n=0; sel_kb=0; unsel_n=0
+  local i idx
+  for ((i=0; i<${#ord[@]}; i++)); do
+    idx="${ord[i]}"
+    if [ "${cand_checked[idx]}" -eq 1 ]; then
+      sel_n=$((sel_n + 1)); sel_kb=$((sel_kb + ${cand_size_kb[idx]}))
+    else
+      unsel_n=$((unsel_n + 1))
+    fi
+  done
+  return 0
+}
+
+# _resume_cleanup_print_list — the non-interactive preview (--dry-run and the
+# no-TTY refusal path): the same rows the checkbox picker shows, biggest first,
+# each with its default selection state.
+_resume_cleanup_print_list() {
+  local i idx box lbl
+  for ((i=0; i<${#ord[@]}; i++)); do
+    idx="${ord[i]}"
+    if [ "${cand_checked[idx]}" -eq 1 ]; then box="x"; else box=" "; fi
+    lbl=""
+    [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
+    printf "  [%s] %b%s/%s%b · %s · %s · %b(%s)%b%b%s%b\n" \
+      "$box" \
+      "$__C_BOLD" "${cand_engine[idx]}" "${cand_tank[idx]}" "$__C_RESET" \
+      "\"$(_home_trunc "${cand_title[idx]}" 40)\"" \
+      "${cand_age_str[idx]}" \
+      "$__C_DIM" "$(_kb_human "${cand_size_kb[idx]}")" "$__C_RESET" \
+      "$__C_DIM" "$lbl" "$__C_RESET"
+  done
+  return 0
+}
+
+# One frame of the checkbox picker (viewport + header tally), composed in a
+# command substitution and emitted by the caller as ONE printf between BSU/ESU —
+# the same anti-flicker split _resume_pick_draw documents.
+_resume_cleanup_select_body() {
+  local sel="$1" n="$2" max_visible="$3"
+  local start_idx=0 end_idx=$(( n - 1 ))
+  if [ "$n" -gt "$max_visible" ]; then
+    start_idx=$(( sel - (max_visible / 2) ))
+    [ "$start_idx" -lt 0 ] && start_idx=0
+    end_idx=$(( start_idx + max_visible - 1 ))
+    if [ "$end_idx" -ge "$n" ]; then
+      end_idx=$(( n - 1 ))
+      start_idx=$(( end_idx - max_visible + 1 ))
+    fi
+  fi
+
+  local sel_n=0 sel_kb=0 unsel_n=0
+  _resume_cleanup_tally
+
+  printf '\033[H\033[K\n'   # home + one blank top-margin line
+  printf '  %b%s%b  %b· ↑↓ move · space toggle · a all · ⏎ delete selected · q cancel%b\033[K\n' \
+    "$__C_BOLD" "clikae resume cleanup" "$__C_RESET" "$__C_DIM" "$__C_RESET"
+  printf '  %bselected: %d of %d · %s to free%b\033[K\n\n' \
+    "$__C_DIM" "$sel_n" "$n" "$(_kb_human "$sel_kb")" "$__C_RESET"
+
+  if [ "$start_idx" -gt 0 ]; then
+    printf '    %b▲ ... %d more above ...%b\033[K\n' "$__C_DIM" "$start_idx" "$__C_RESET"
+  fi
+  local i idx mark box lbl row
+  for ((i=start_idx; i<=end_idx; i++)); do
+    idx="${ord[i]}"
+    if [ "$i" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
+    if [ "${cand_checked[idx]}" -eq 1 ]; then box="[x]"; else box="[ ]"; fi
+    lbl=""
+    [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
+    row="$(printf '%s · "%s" · %s · (%s)%s' \
+      "$(_home_lpad "${cand_engine[idx]}/${cand_tank[idx]}" 16)" \
+      "$(_home_trunc "${cand_title[idx]}" 36)" \
+      "${cand_age_str[idx]}" "$(_kb_human "${cand_size_kb[idx]}")" "$lbl")"
+    if [ "$i" -eq "$sel" ]; then
+      printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_BOLD" "$row" "$__C_RESET"
+    else
+      printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_DIM" "$row" "$__C_RESET"
+    fi
+  done
+  if [ "$end_idx" -lt $(( n - 1 )) ]; then
+    printf '    %b▼ ... %d more below ...%b\033[K\n' "$__C_DIM" "$(( n - 1 - end_idx ))" "$__C_RESET"
+  fi
+  printf '\033[J'   # erase any leftover lines from a taller previous frame
+  return 0
+}
+
+# _resume_cleanup_select — the checkbox picker over the ord/cand_* arrays:
+# arrows/j/k move (PgUp/PgDn/Home/End page), space toggles a row, `a` toggles
+# everything, Enter hands the checked set to the caller's red confirm, q/ESC
+# cancels. Same /dev/tty isolation + tui_read_key decode as _resume_pick and
+# _relay_menu. Returns 0 to proceed, 1 on cancel, 2 when no TTY could be opened
+# (the caller falls back to the printed list + all-or-nothing confirm).
+_resume_cleanup_select() {
+  exec 3<>/dev/tty 2>/dev/null || return 2
+  stty -echo 2>/dev/null || true
+  printf '\033[?1049h\033[?25l' >&3
+  trap '_home_tty_leave' EXIT
+  trap '_home_tty_leave; exit 130' INT TERM
+
+  local lsz lines=24 max_visible=15
+  lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  if [ -n "$lsz" ]; then
+    lines="${lsz%% *}"
+    max_visible=$(( lines - 8 ))
+    [ "$max_visible" -lt 5 ] && max_visible=5
+  fi
+
+  local n=${#ord[@]} sel=0 rc=1 _frame idx all v i
+  while :; do
+    _frame="$(_resume_cleanup_select_body "$sel" "$n" "$max_visible")"
+    printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$lines" >&3
+    tui_read_key 3 || TUI_KEY="q"
+    case "$TUI_KEY" in
+      up|k|shift-tab)   sel=$(( (sel - 1 + n) % n )) ;;
+      down|j|tab)       sel=$(( (sel + 1) % n )) ;;
+      left|pgup)        sel=$(( sel - max_visible )); [ "$sel" -lt 0 ] && sel=0 ;;
+      right|pgdn)       sel=$(( sel + max_visible )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+      home|g)           sel=0 ;;
+      end|G)            sel=$(( n - 1 )) ;;
+      ' ')
+        idx="${ord[sel]}"
+        cand_checked[idx]=$(( 1 - ${cand_checked[idx]} ))
+        ;;
+      a)
+        # All checked → uncheck all; anything unchecked → check all.
+        all=1
+        for ((i=0; i<n; i++)); do
+          if [ "${cand_checked[${ord[i]}]}" -eq 0 ]; then all=0; break; fi
+        done
+        v=1; [ "$all" -eq 1 ] && v=0
+        for ((i=0; i<n; i++)); do cand_checked[${ord[i]}]="$v"; done
+        ;;
+      enter) rc=0; break ;;
+      q|esc) rc=1; break ;;
+    esac
+  done
+  trap - EXIT INT TERM
+  printf '\033[?25h\033[?1049l' >&3
+  stty echo 2>/dev/null || true
+  exec 3>&- 2>/dev/null || true
+  return "$rc"
+}
+
 _resume_cleanup() {
   local dry_run=0
-  local older_than=30
+  local older_than=30 older_given=0
+  local min_size_mb=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _resume_cleanup_help; return 0 ;;
@@ -649,7 +977,14 @@ _resume_cleanup() {
         if [ -z "${2:-}" ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
           log_fail "Error: --older-than requires a numeric number of days."
         fi
-        older_than="$2"
+        older_than="$2"; older_given=1
+        shift 2
+        ;;
+      -m|--min-size)
+        if [ -z "${2:-}" ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
+          log_fail "Error: --min-size requires a numeric number of megabytes."
+        fi
+        min_size_mb="$2"
         shift 2
         ;;
       *)
@@ -658,13 +993,18 @@ _resume_cleanup() {
     esac
   done
 
+  # Which filters gate the REGULAR candidates. --min-size alone means size is the
+  # only axis (space lives in big recent files, not old ones); age applies by
+  # default, or when --older-than was explicitly given alongside --min-size.
+  # Stale copies and orphaned sid dirs are pure waste and bypass both filters.
+  local apply_age=1
+  if [ -n "$min_size_mb" ] && [ "$older_given" -eq 0 ]; then apply_age=0; fi
+
+  # NB: an empty session list is NOT an early exit — orphaned sid dirs are
+  # precisely what remains after every transcript is gone, so the orphan sweep
+  # below must still run over a transcript-less store.
   local files
   files="$(_resume_all_sessions)"
-
-  if [ -z "$files" ]; then
-    log_ok "No session files found to clean."
-    return 0
-  fi
 
   local now; now="$(date +%s)"
   local limit_secs=$((older_than * 86400))
@@ -678,77 +1018,86 @@ _resume_cleanup() {
   local -a cand_title=()
   local -a cand_age_str=()
   local -a cand_files_to_delete=()
+  local -a cand_class=()     # regular | stale | diverged | orphan
+  local -a cand_label=()     # extra preview note ("stale copy (kept: b)", …)
+  local -a cand_checked=()   # the checkbox state; diverged copies start unchecked
   local -a sz_paths=()    # every path to size, flat — one batched du after the scan
   local -a cand_nsz=()    # how many sz_paths entries belong to candidate i
 
-  local mt f engine tank sid brain_part
-  local size_kb title age_str files_to_del db_file conversations_dir
-  local total_size_kb=0
+  # ── 1. Stale-copy reclaim ─────────────────────────────────────────────────
+  # `clikae to`/relay and a cross-tank resume COPY the transcript into the target
+  # tank and never GC the source, so the same session piles up across tanks (and
+  # across project dirs after a rename — group by session, not by path). On a
+  # real store this was 686 MB of redundant copies. One ps snapshot feeds the
+  # live-session guard in _resume_cleanup_dedupe_flush.
+  local live_procs
+  live_procs="$(ps -axo command= 2>/dev/null || true)"
 
+  # Sorted so copies of one session are adjacent, newest first within the group
+  # ($files is mtime-sorted globally, not per session). LC_ALL=C: BSD sort
+  # mangles CJK otherwise. codex groups by the FULL rollout basename — two
+  # copies of one session share it verbatim, while _rs_sid (the last uuid
+  # segment) could collide across sessions. NB the $( ) body stays heredoc- and
+  # apostrophe-free: bash 3.2 mis-scans both inside a quoted substitution.
+  local us=$'\037' mt f gsid dedupe_sorted
+  dedupe_sorted="$(
+    printf '%s\n' "$files" | while read -r mt f; do
+      [ -n "$f" ] || continue
+      _resume_session_fields "$f"
+      gsid="$_rs_sid"
+      if [ "$_rs_engine" = "codex" ]; then
+        gsid="${f##*/}"; gsid="${gsid%.jsonl}"
+      fi
+      printf '%s\037%s\037%s\037%s\n' "$_rs_engine" "$gsid" "$mt" "$f"
+    done | LC_ALL=C sort -t "$us" -k1,1 -k2,2 -k3,3rn
+  )"
+
+  local dedupe_claimed=""
+  local cur_key="" key g_engine="" g_sid="" eng_l sid_l mt_l f_l
+  local -a g_mt=() g_f=()
+  while IFS="$us" read -r eng_l sid_l mt_l f_l; do
+    [ -n "$f_l" ] || continue
+    key="$eng_l$us$sid_l"
+    if [ "$key" != "$cur_key" ]; then
+      _resume_cleanup_dedupe_flush
+      g_mt=(); g_f=(); cur_key="$key"; g_engine="$eng_l"; g_sid="$sid_l"
+    fi
+    g_mt+=("$mt_l"); g_f+=("$f_l")
+  done <<EOF2
+$dedupe_sorted
+EOF2
+  _resume_cleanup_dedupe_flush
+
+  # ── 2. Orphaned claude sid dirs (subagent/workflow data left behind) ──────
+  _resume_cleanup_scan_orphans
+
+  # ── 3. Regular candidates, gated by the age/size filters ─────────────────
   while read -r mt f; do
     [ -n "$f" ] || continue
-    # Filter by age
-    if [ "$mt" -gt "$cutoff" ]; then
+    case $'\n'"$dedupe_claimed"$'\n' in
+      *$'\n'"$f"$'\n'*) continue ;;   # already offered as a stale/diverged copy
+    esac
+    if [ "$apply_age" -eq 1 ] && [ "$mt" -gt "$cutoff" ]; then
       continue
     fi
-
-    _resume_session_fields "$f"
-    engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
-
-    # Determine the files to delete. Sizing is deferred: paths pile up in
-    # sz_paths and ONE batched du prices them all after the scan (per-candidate
-    # du made this loop fork-bound — 7s+ on a real store).
-    if [ "$engine" = "antigravity" ]; then
-      brain_part="${f%/.system_generated/*}"
-      conversations_dir="${brain_part%/brain/*}/conversations"
-      db_file="$conversations_dir/$sid.db"
-      sz_paths+=("$brain_part" "$db_file"); cand_nsz+=(2)
-      files_to_del="$brain_part;$db_file;$db_file-shm;$db_file-wal"
-    else # claude / codex: the transcript file is the session
-      sz_paths+=("$f"); cand_nsz+=(1)
-      files_to_del="$f"
-    fi
-
-    # Get title cheaply — from the transcript FILE, not (dir, sid):
-    # adapter_session_title derives its path from $PWD's project, so every
-    # session outside the current directory listed as "(no preview)" here.
-    load_adapter "$engine" >/dev/null 2>&1 || true
-    title=""
-    if declare -F adapter_title_for_file >/dev/null 2>&1; then
-      title="$(adapter_title_for_file "$f" 2>/dev/null || true)"
-    fi
-    [ -n "$title" ] || title="(no preview)"
-
-    # Format age string
-    local _d=$(( now - mt ))
-    age_str="$(( _d / 86400 ))d ago"
-
-    # Add to candidates
-    candidates+=("$f")
-    cand_engine+=("$engine")
-    cand_tank+=("$tank")
-    cand_sid+=("$sid")
-    cand_title+=("$title")
-    cand_age_str+=("$age_str")
-    cand_files_to_delete+=("$files_to_del")
+    _resume_cleanup_add_candidate "$f" "$mt" regular ""
   done <<EOF
 $files
 EOF
 
-  if [ "${#candidates[@]}" -eq 0 ]; then
-    log_ok "No sessions found older than $older_than days (0 files to clean)."
-    return 0
-  fi
-
-  # Price everything in one pass. _batch_du_kb prints one kb per sz_paths entry
-  # (in order), so a walking pointer re-attaches each candidate's cand_nsz sizes.
+  # ── 4. Price everything in one pass ───────────────────────────────────────
+  # _batch_du_kb prints one kb per sz_paths entry (in order), so a walking
+  # pointer re-attaches each candidate's cand_nsz sizes (per-candidate du made
+  # this loop fork-bound — 7s+ on a real store).
   local -a all_kb=()
-  local kb_line
-  while IFS= read -r kb_line; do
-    all_kb+=("${kb_line:-0}")
-  done <<EOF
+  local kb_line size_kb
+  if [ "${#sz_paths[@]}" -gt 0 ]; then
+    while IFS= read -r kb_line; do
+      all_kb+=("${kb_line:-0}")
+    done <<EOF
 $(_batch_du_kb "${sz_paths[@]}")
 EOF
+  fi
   local ci p=0 k
   for ((ci=0; ci<${#candidates[@]}; ci++)); do
     size_kb=0
@@ -757,62 +1106,120 @@ EOF
       p=$((p+1))
     done
     cand_size_kb[ci]="$size_kb"
-    total_size_kb=$((total_size_kb + size_kb))
   done
 
-  log_bold "The following sessions are older than $older_than days and will be deleted:"
-  echo
-  local i
-  for ((i=0; i<${#candidates[@]}; i++)); do
-    local eng="${cand_engine[i]}"
-    local tnk="${cand_tank[i]}"
-    local sz_kb="${cand_size_kb[i]}"
-    local ttl="${cand_title[i]}"
-    local ag="${cand_age_str[i]}"
-    local sz_str; sz_str="$(_kb_human "$sz_kb")"
+  # ── 5. Apply --min-size (needs the du prices) and order biggest first ─────
+  local -a ord=()
+  local min_kb=0 oline ordered
+  [ -n "$min_size_mb" ] && min_kb=$(( min_size_mb * 1024 ))
+  ordered="$(
+    for ((ci=0; ci<${#candidates[@]}; ci++)); do
+      if [ "${cand_class[ci]}" = "regular" ] && [ "${cand_size_kb[ci]}" -lt "$min_kb" ]; then
+        continue
+      fi
+      printf '%s %s\n' "${cand_size_kb[ci]}" "$ci"
+    done | sort -rn -k1,1
+  )"
+  while read -r _ oline; do
+    [ -n "$oline" ] || continue
+    ord+=("$oline")
+  done <<EOF
+$ordered
+EOF
 
-    printf "  %b%s/%s%b · %s · %s · %b(%s)%b\n" \
-      "$__C_BOLD" "$eng" "$tnk" "$__C_RESET" \
-      "\"$(_home_trunc "$ttl" 40)\"" \
-      "$ag" \
-      "$__C_DIM" "$sz_str" "$__C_RESET"
-  done
-  echo
-  local total_sz_str; total_sz_str="$(_kb_human "$total_size_kb")"
-  log_bold "Total sessions to clean: ${#candidates[@]}"
-  log_bold "Estimated space to free: $total_sz_str"
-  echo
-
-  if [ "$dry_run" -eq 1 ]; then
-    log_dim "Dry-run mode: no files were deleted."
+  if [ "${#ord[@]}" -eq 0 ]; then
+    if [ -n "$min_size_mb" ] && [ "$apply_age" -eq 0 ]; then
+      log_ok "No sessions of at least ${min_size_mb} MB found (0 files to clean)."
+    elif [ -n "$min_size_mb" ]; then
+      log_ok "No sessions older than $older_than days and at least ${min_size_mb} MB found (0 files to clean)."
+    else
+      log_ok "No sessions found older than $older_than days (0 files to clean)."
+    fi
     return 0
   fi
 
-  # Never delete without a live confirmation: in a pipe / non-TTY there's no one to
-  # press Enter, so refuse rather than proceed on EOF (clikae principle: never
-  # silently destroy). --dry-run above is the safe way to preview non-interactively.
-  if [ ! -t 0 ]; then
+  # ── 6. Titles, only for rows that survived the filters ───────────────────
+  # From the transcript FILE, not (dir, sid): adapter_session_title derives its
+  # path from $PWD's project, so every session outside the current directory
+  # listed as "(no preview)" here.
+  local oi idx title
+  for ((oi=0; oi<${#ord[@]}; oi++)); do
+    idx="${ord[oi]}"
+    if [ -n "${cand_title[idx]}" ]; then continue; fi
+    load_adapter "${cand_engine[idx]}" >/dev/null 2>&1 || true
+    title=""
+    if declare -F adapter_title_for_file >/dev/null 2>&1; then
+      title="$(adapter_title_for_file "${candidates[idx]}" 2>/dev/null || true)"
+    fi
+    [ -n "$title" ] || title="(no preview)"
+    cand_title[idx]="$title"
+  done
+
+  local sel_n=0 sel_kb=0 unsel_n=0
+
+  if [ "$dry_run" -eq 1 ] || [ ! -t 0 ]; then
+    log_bold "Session data that can be cleaned up (biggest first):"
+    echo
+    _resume_cleanup_print_list
+    echo
+    _resume_cleanup_tally
+    log_bold "Total sessions to clean: $sel_n"
+    log_bold "Estimated space to free: $(_kb_human "$sel_kb")"
+    [ "$unsel_n" -gt 0 ] && log_dim "$unsel_n row(s) not selected by default (a diverged copy keeps unique tail content)."
+    echo
+    if [ "$dry_run" -eq 1 ]; then
+      log_dim "Dry-run mode: no files were deleted."
+      return 0
+    fi
+    # Never delete without a live confirmation: in a pipe / non-TTY there's no
+    # one to press Enter, so refuse rather than proceed on EOF (clikae principle:
+    # never silently destroy). --dry-run is the safe non-interactive preview.
     log_fail "Refusing to delete without an interactive confirmation — re-run in a terminal (or use --dry-run to preview)."
   fi
+
+  # Interactive: pick WHAT to delete on a checkbox list, then the red confirm.
+  local sel_rc=0
+  _resume_cleanup_select && sel_rc=0 || sel_rc=$?
+  if [ "$sel_rc" -eq 2 ]; then
+    # No /dev/tty to draw the picker on — fall back to the printed list with its
+    # default selection and the all-or-nothing confirm below.
+    log_bold "Session data that can be cleaned up (biggest first):"
+    echo
+    _resume_cleanup_print_list
+    echo
+  elif [ "$sel_rc" -ne 0 ]; then
+    log_ok "Cancelled — nothing deleted."
+    return 0
+  fi
+
+  _resume_cleanup_tally
+  if [ "$sel_n" -eq 0 ]; then
+    log_ok "Nothing selected — nothing deleted."
+    return 0
+  fi
+
+  log_bold "Selected sessions to clean: $sel_n"
+  log_bold "Estimated space to free: $(_kb_human "$sel_kb")"
+  echo
   printf "%bAre you sure you want to permanently delete these sessions?%b\n" "$__C_RED" "$__C_RESET"
   printf "Press %bEnter%b to proceed, or %bCtrl-C%b to cancel: " "$__C_BOLD" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
   read -r _ || log_fail "No confirmation received — nothing deleted."
 
   log_dim "Deleting session files..."
-  local deleted_kb=0
-  for ((i=0; i<${#candidates[@]}; i++)); do
-    local files_str="${cand_files_to_delete[i]}"
-    local sz_kb="${cand_size_kb[i]}"
-    IFS=';' read -ra path_list <<< "$files_str"
-    local p
-    for p in "${path_list[@]}"; do
-      if [ -d "$p" ]; then
-        rm -rf "$p"
-      elif [ -f "$p" ]; then
-        rm -f "$p"
+  local deleted_kb=0 pth
+  local -a path_list=()
+  for ((oi=0; oi<${#ord[@]}; oi++)); do
+    idx="${ord[oi]}"
+    [ "${cand_checked[idx]}" -eq 1 ] || continue
+    IFS=';' read -ra path_list <<< "${cand_files_to_delete[idx]}"
+    for pth in "${path_list[@]}"; do
+      if [ -d "$pth" ]; then
+        rm -rf "$pth"
+      elif [ -f "$pth" ]; then
+        rm -f "$pth"
       fi
     done
-    deleted_kb=$((deleted_kb + sz_kb))
+    deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))
   done
 
   local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"

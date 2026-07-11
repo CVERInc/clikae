@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`resume cleanup` reclaims stale session copies, on by default.** `clikae to`
+  /relay and a cross-tank resume COPY the transcript into the target tank and
+  never clean the source — on a real store that was 686 MB of redundant copies
+  (26% of the session data). Cleanup now groups every session's copies across
+  all tanks and project dirs, keeps the LARGEST copy (mtime lies: the newest
+  copy is not always the byte-superset), and offers a copy for deletion only
+  when a byte-level safety check proves it redundant — an exact prefix of the
+  kept copy, or a tail of session-metadata lines only. A copy with unique
+  conversation content is listed as "diverged — not auto-selected" and starts
+  unchecked; a session with a live process is skipped entirely. The prefix test
+  is `head -c | cmp`, never `cmp -n` (BSD cmp exits 1 on an exactly-n-byte
+  file, which would misread every byte-identical copy as diverged).
+- **`resume cleanup --min-size <MB>`** — a size axis for the age filter's blind
+  spot: space usually lives in big *recent* sessions, not old ones. Given
+  alone, size is the only filter (no age cutoff); combined with an explicit
+  `--older-than`, a candidate must satisfy both.
+- **A checkbox preview replaces cleanup's all-or-nothing confirm.** The
+  candidate list (always sorted biggest first) is now an interactive picker:
+  arrows move, space toggles a row, `a` toggles all, Enter proceeds to the
+  final red confirmation, q/ESC cancels. `--dry-run` prints the same list
+  non-interactively, and a non-TTY run still refuses to delete anything.
+
+### Fixed
+
+- **`resume cleanup` leaked claude's per-session `<sid>/` directories** (the
+  subagent/workflow transcripts next to each transcript): deleting a session
+  now removes — and the preview prices — the sibling directory too, and
+  already-orphaned sid dirs (dir present, transcript gone) are swept as their
+  own candidate class, labeled `orphaned subagent data`.
+
 ## [0.13.0] — 2026-07-11
 
 The repositioning release: the front page now tells the story VISION.md
