@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-11
+
 A deep no-new-features audit pass: four independent review lenses (performance,
 dead code, correctness/portability, structure) over the whole tree, then the
 verified findings applied.
