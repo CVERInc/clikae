@@ -18,36 +18,98 @@
 
 ## What & why
 
-You're juggling AI coding sessions across more than one account — three Claude Max 20x subscriptions because one always seems to run dry mid-task, a Google AI Pro login for Antigravity, maybe a Codex login too — in different terminals, on different projects, half of them unfinished. *Which one was that in? Which account? What was I even doing?* So you `/clear`, reopen, and re-explain the project to a fresh session.
+You're running more AI coding sessions than you can hold in your head — a
+handful of terminals across two or three engines, half of them mid-task.
+*Which window was that in? Which account? What was I even doing?* So you
+`/clear`, reopen, and re-explain the project to a fresh session.
 
-`clikae` is the on-ramp that fixes it. The home board lists those sessions newest first, each with its one-line **recap** read free from Claude's own session summary; pick one, hit Enter, and you're back — right account, right session. _(It also cleanly switches any env-var CLI — gh, gcloud, kubectl, aws… — but AI coding CLIs are where it shines.)_
+`clikae` is the on-ramp that fixes it. Type `clikae` and the home board lists
+your recent sessions newest first — **across every engine and account** — with
+a one-line **recap** read free from the engine's own session summary where it
+keeps one (Claude Code today; other engines show the session's opening title).
+Pick one, hit Enter, and you're back: right account, right session, right
+directory.
 
-`clikae` is a small, pure-bash tool. The name is 切り替え — *switching* — so
-**clikae is the verb**: `clikae <engine> <tank>` points an engine (a CLI like
-claude, codex, gh) at one of your tanks (an account/config) and runs it. No verb
-to memorise; the program name *is* the verb.
+Underneath the board sits one idea. Your AI work has two halves. The model
+half is rented — engine, capability, quota; the vendor's, and the vendors are
+at war (good: you win). The other half is **yours**: who you are, what you
+know, where you left off, what should leave no trace. Today that half is
+locked inside each vendor's config directory, so switching engines means
+amnesia. clikae is the thin, all-local layer that keeps **your half
+portable** — swap the engine, keep everything that makes it yours.
 
-It:
+Concretely:
 
-1. Creates **isolated tank directories** for each engine (one folder per engine + tank).
-2. Generates **shell aliases** (`claude-work`, `gh-personal`, …) you can use in a new terminal.
-3. On macOS, generates **double-clickable `.app` launchers** that open a Terminal window with the right env vars set and a custom window title so you can tell them apart.
-4. **Carries a live session to another tank** when one runs dry — `clikae to <tank>` keeps the same conversation going on the other account's quota (and `clikae to <other-engine>` hands a written brief across vendors, summarized **on-device** by a local model when you have one — `apfel`, `ollama`, or `llm` — so your session never leaves your machine, costs nothing, and works offline).
-5. **Runs headless tasks across tanks** — `clikae burn <engine> <tank> --artifact <path> -- <cmd>` runs a task on a tank, verifies it by the **artifact** it produces (never the exit code — `codex exec` exits 0 even when it hit its limit), and re-fires it on the next tank if one runs dry. The headless sibling of `clikae to`.
-6. Cleans up after itself when you're done with a tank.
-7. **Your connectors ride along.** A tank isolates the claude.ai login, so the MCP connectors configured on that account come with it — switch tank and the Stripe, Drive, or WordPress tools live in your session switch too. clikae doesn't manage MCP; this is per-account isolation paying off. One more thing that follows the person, not just model auth and memory.
+1. **Sessions that survive.** The board and recap above; `clikae resume`
+   reaches back to any past session by title, across every account and
+   engine — no UUID copy-paste, no "which terminal was that".
+2. **Identities that stay separate.** One isolated **tank** per account: its
+   login, its MCP connectors riding along, its own git commit identity
+   (`clikae git-id`, stamped into your shell by `clikae env`), its own memory. One person, several hats — a client's
+   world never crosses into another's unless you opt in, and `clikae solo`
+   walls a tank off from everything.
+3. **Memory that outlives the engine.** `clikae memory share` points several
+   of your tanks at ONE vendor-neutral markdown brain — a **Soul** you own,
+   so no single model holds your working context hostage. Change engines;
+   it still knows who you are and where the work stands.
+4. **Sessions that leave no trace, when you choose.** `--ephemeral` runs a
+   tank with throwaway memory: the session happens, the remembering doesn't.
+5. **And yes: more than one account.** `clikae to` carries a live
+   conversation onto another tank; `clikae burn` re-fires headless work on
+   your reserve. Powerful, and partly in the vendors' terms gray zone — where
+   the line is, in plain dated language:
+   **[docs/terms-and-your-accounts.md](docs/terms-and-your-accounts.md)**.
 
-It works for any CLI that selects its config via an environment variable (or a flag), ships with built-in adapters for **Claude Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure CLI, npm, Terraform, Pulumi, and Vercel** (plus real **per-account multi-tank for Antigravity / agy** — each tank carries its own Google login via the macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no global state, and exactly one opt-out network call (a throttled update check — `CLIKAE_NO_UPDATE_CHECK=1` silences it) — every line is auditable. It's **MIT** — free to run, fork, or build into a commercial product or paid client work, no separate license to buy.
+It also cleanly switches any env-var CLI (gh, gcloud, kubectl, aws, …) — a
+footnote, not the pitch. It works for any CLI that selects its config via an
+environment variable (or a flag), ships with built-in adapters for **Claude
+Code, OpenAI Codex, GitHub CLI, gcloud, Docker, Helm, kubectl, AWS, Azure
+CLI, npm, Terraform, Pulumi, and Vercel** (plus real per-account multi-tank
+for **Antigravity / agy**, each tank carrying its own Google login via the
+macOS Keychain), and adding a new one is ~10 lines of bash. No daemons, no
+proxy, no global state, exactly one opt-out network call (a throttled update
+check — `CLIKAE_NO_UPDATE_CHECK=1` silences it). It's bash you can actually
+read, and **MIT** — free to run, fork, or build into a commercial product or
+paid client work.
 
-## Command your fleet — cost-aware, across vendors
+## In practice
 
-Once you have more than one account on more than one engine, the home board
-stops being a switcher and starts being a **control plane**: one person directing
-a fleet of AI coding CLIs, each burning its **own** subscription quota, none of
-them quietly eating the budget you're using for your main session. clikae knows
-where each engine keeps its config and transcripts, how each one signals a usage
-limit, and which tank still has fuel — so the arbitrage is two commands, not a
-bag of `--resume` flags and environment-variable juggling:
+**Monday, eight unfinished threads.** You type `clikae`. The board lists the
+weekend's sessions newest first; one recap reads *"fixing the auth redirect —
+next: retry the callback test"*. Enter. You're back in that directory, that
+account, that conversation — no re-explaining.
+
+**Three clients, three worlds.** One tank per client: its login, its MCP
+connectors, its memory, its own git commit identity (`clikae git-id`, applied
+through `clikae env`). `clikae acme` and you're wearing that hat — nothing
+crosses into another client's world unless you opt in. Switching clients is
+one word, not a checklist.
+
+**New model week.** A new engine drops and everyone says it's the one. Your
+tanks share a Soul, so the new engine reads the same markdown brain the old
+one wrote — try it for an afternoon with your context intact, and walk back
+out just as easily. The vendors compete; your memory doesn't care who wins.
+
+**Some sessions shouldn't be remembered.** Get a cold read on your own plan
+from a session with no memory of you: `clikae claude work --ephemeral`. The
+reviewer doesn't know what you believe, and the tank's long-term memory never
+learns the session happened. (True story: clikae's own releases are red-teamed
+exactly this way.)
+
+## More than one account
+
+Some of us do run several accounts — a work and a personal subscription, one
+per client, or a reserve for long agent runs. clikae knows where each engine
+keeps its config and transcripts, how each one signals a usage limit, and
+which tank still has fuel, so moving between your own accounts is two
+commands, not a bag of `--resume` flags and environment-variable juggling.
+
+One honest note first: carrying the **same task** past a usage limit on
+another account sits in the vendors' terms gray zone (different accounts for
+different purposes is explicitly fine). Where the line is, with the actual
+policy language and dates:
+**[docs/terms-and-your-accounts.md](docs/terms-and-your-accounts.md)** —
+clikae shows it to you once before your first carry, then stays out of the way.
 
 - **Hit a wall, keep going — `clikae to`.** When the tank you're on runs dry,
   carry the *same live conversation* onto another tank's quota (a real
@@ -138,10 +200,10 @@ is auditable. From-source and custom-`PREFIX` options:
 ```bash
 clikae init claude work --alias   # create a tank (+ a `claude-work` alias)
 clikae claude work                # switch to it and run — the bare verb
+clikae                            # any time later: land on your sessions
 ```
 
-Hit a usage limit mid-task? Carry the same conversation to your other tank and
-keep going on its quota:
+Need the same conversation on another tank — or another engine?
 
 ```bash
 clikae to personal                # carry the live session to tank `personal`

@@ -1,7 +1,8 @@
 # clikae — Vision
 
 > The north-star for clikae's positioning and roadmap. SSOT for the README intro,
-> the `/oss` card, and release notes. (Decided 2026-06-02.)
+> the `/oss` card, and release notes. (Decided 2026-06-02; positioning sharpened
+> 2026-07-11 after a five-seat adversarial product review.)
 
 ## One line
 
@@ -29,6 +30,35 @@ just a helpful detail.
   session summary (`away_summary`, the `※ recap:` line). For engines without one,
   generated **on-device** by a local model (apfel/ollama/llm) — **lazily, only for
   the row you hover**, so the board stays ~1s. Private, free, offline (reepub DNA).
+
+## The two halves (positioning, 2026-07-11)
+
+Your AI work has two halves. The model half is rented — engine, capability,
+quota; the vendor's. The other half is **yours**: who you are (identities,
+git identity, connectors), what you know (memory), where you left off
+(sessions), what should leave no trace (incognito). clikae is the thin,
+auditable, all-local layer that keeps **your half portable** across engines
+and accounts. Multi-account quota rotation is a *corollary* of this layer,
+not its story — it lives in an advanced chapter with an honest terms page
+(docs/terms-and-your-accounts.md), never on the front page.
+
+## The horizon: agent-first
+
+The end state this points at: **your AI agent is yours; the models are fuel.**
+The persistent thing — a name, an identity, a memory, a session history — is
+the first-class citizen, and engines/accounts are interchangeable depots it
+refuels at. The grammar already half-supports this: `clikae <tank-name>`
+resolves a bare tank name across engines, so the tank's name is the subject
+of the verb today. What's missing before the README may say it out loud:
+the tank+Soul pair needs to feel like ONE nameable being, not two features.
+
+**The line we hold, permanently:** clikae carries *continuity* — identity,
+memory, place. It never claims to carry *capability*. Swap to a weaker model
+and your agent thinks weaker thoughts; that's the vendor's half, priced and
+chosen by you. Every future sentence of marketing gets checked against this
+line — the moment the words promise "the same AI on a different engine",
+they've exceeded the thing (that overclaim was independently torn apart by
+two seats of the 2026-07-11 red team; we keep the scar as the rule).
 
 ## Two faces
 
