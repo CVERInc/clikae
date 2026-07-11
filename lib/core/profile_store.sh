@@ -212,24 +212,43 @@ order_list() {
 next_tank() {
   local engine="$1" current="$2"
   local cur="$engine/$current"
-  # Build the ring: entries AFTER <current>, then entries BEFORE it (wrap-around).
-  local -a ring=()
-  local entry seen=0
+  # Build the ring from ONE order_list pass (it used to run twice — and each run
+  # is a directory walk + per-line greps): note <current>'s index, then slice
+  # after + before (wrap-around). Not listed (edge) → walk everything, in order.
+  local -a all=() ring=()
+  local entry cur_idx=-1 i
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
-    [ "$entry" = "$cur" ] && { seen=1; continue; }
-    [ "$seen" -eq 1 ] && ring+=("$entry")
+    [ "$entry" = "$cur" ] && cur_idx=${#all[@]}
+    all+=("$entry")
   done <<EOF
 $(order_list)
 EOF
-  seen=0
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    [ "$entry" = "$cur" ] && { seen=1; break; }
-    ring+=("$entry")
-  done <<EOF
-$(order_list)
+  if [ "$cur_idx" -ge 0 ]; then
+    for ((i = cur_idx + 1; i < ${#all[@]}; i++)); do ring+=("${all[i]}"); done
+    for ((i = 0; i < cur_idx; i++));               do ring+=("${all[i]}"); done
+  else
+    ring=("${all[@]}")
+  fi
+  [ "${#ring[@]}" -gt 0 ] || return 0
+
+  # Dryness for the whole fleet in ONE batch (limit_dry_set computes each tank's
+  # own signal exactly once, then resolves account contagion from that cache).
+  # The old per-candidate limit_tank_dry re-ran the contagion scan — a full
+  # list_all_profiles + an adapter-load subshell per sibling — for EVERY ring
+  # candidate: O(n²) walks on a fleet of same-account tanks. Same verdicts.
+  # Keys are newline-fenced "engine/tank" (names are validated: no newlines).
+  local dry_keys=$'\n'
+  if declare -F limit_dry_set >/dev/null 2>&1; then
+    local de dt _r
+    while IFS=$'\037' read -r de dt _r; do
+      [ -n "$de" ] || continue
+      dry_keys="$dry_keys$de/$dt"$'\n'
+    done <<EOF
+$(list_all_profiles | limit_dry_set)
 EOF
+  fi
+
   # Pass 1: nearest fuelled SAME-engine tank (real resume). Pass 2: any engine.
   local pass e t
   for pass in same any; do
@@ -241,10 +260,7 @@ EOF
       [ "$e" = "antigravity" ] && continue
       tank_is_solo "$e" "$t" && continue   # a solo tank is out of the fleet — never an auto carry-onward target
       [ "$pass" = "same" ] && [ "$e" != "$engine" ] && continue
-      if declare -F limit_tank_dry >/dev/null 2>&1 \
-         && limit_tank_dry "$e" "$t" >/dev/null 2>&1; then
-        continue
-      fi
+      case "$dry_keys" in *$'\n'"$entry"$'\n'*) continue ;; esac
       printf '%s\t%s' "$e" "$t"; return 0
     done
   done
