@@ -206,3 +206,18 @@ _seed_transcript() {
   run _resume_carry_session claude a b "no-such-session"
   [ "$status" -eq 0 ]
 }
+
+@test "resume works on a SINGLE-engine store (unmatched globs for other engines must not kill it)" {
+  # Regression: with only claude tanks, the codex/antigravity globs reach stat
+  # as literal paths; stat's non-zero + pipefail + set -e killed resume/cleanup
+  # dead silent for every single-engine user. Caught by the 2026-07-11
+  # ephemeral red-team review.
+  mkdir -p "$CLIKAE_HOME/profiles/claude/only/projects/-x"
+  printf '{"type":"summary","aiTitle":"solo"}\n' > "$CLIKAE_HOME/profiles/claude/only/projects/-x/eeee-ffff.jsonl"
+  CLIKAE_NO_INTERACTIVE=1 run clikae resume
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"solo"* ]] || false
+  run clikae resume cleanup --dry-run --older-than 0
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/only"* ]] || false
+}

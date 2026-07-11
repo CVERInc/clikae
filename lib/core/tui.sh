@@ -46,10 +46,37 @@ tui_read_key() {
             Z) TUI_KEY="shift-tab" ;;
             H) TUI_KEY="home" ;;
             F) TUI_KEY="end" ;;
-            1) IFS= read -rsn1 -t 1 -u "$fd" _ || true; TUI_KEY="home" ;;
-            4) IFS= read -rsn1 -t 1 -u "$fd" _ || true; TUI_KEY="end" ;;
-            5) IFS= read -rsn1 -t 1 -u "$fd" _ || true; TUI_KEY="pgup" ;;
-            6) IFS= read -rsn1 -t 1 -u "$fd" _ || true; TUI_KEY="pgdn" ;;
+            [0-9]|\;|\?|\<|\=|\>)
+              # Parameterized CSI: consume EVERY parameter byte up to the final
+              # byte, then decode on (params, final). Consuming only one byte
+              # here used to leak the rest into the buffer as live keystrokes —
+              # Ctrl-Right (ESC [ 1 ; 5 C) read as "home" then a selection-jump
+              # "5"; a terminal's DA report leaked a literal "c", which the
+              # resume picker binds to cleanup (2026-07-11 red-team finding).
+              local params="$c2" b=""
+              while IFS= read -rsn1 -t 1 -u "$fd" b; do
+                case "$b" in
+                  [0-9]|\;|\?|\<|\=|\>|\:) params="$params$b" ;;
+                  *) break ;;   # the final byte (letter / ~) — decode below
+                esac
+              done
+              case "$b" in
+                A) TUI_KEY="up" ;;      # modifier'd arrows still navigate
+                B) TUI_KEY="down" ;;
+                C) TUI_KEY="right" ;;
+                D) TUI_KEY="left" ;;
+                H) TUI_KEY="home" ;;
+                F) TUI_KEY="end" ;;
+                '~')
+                  case "${params%%;*}" in   # modifier suffix (5;3~) doesn't change the key
+                    1|7) TUI_KEY="home" ;;
+                    4|8) TUI_KEY="end" ;;
+                    5)   TUI_KEY="pgup" ;;
+                    6)   TUI_KEY="pgdn" ;;
+                    *)   TUI_KEY="unknown" ;;
+                  esac ;;
+                *) TUI_KEY="unknown" ;;
+              esac ;;
             *) TUI_KEY="unknown" ;;
           esac ;;
         *) TUI_KEY="esc" ;;

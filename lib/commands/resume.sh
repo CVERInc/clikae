@@ -583,6 +583,16 @@ _batch_du_kb() {
   for ((start=0; start<${#ex[@]}; start+=1000)); do
     while IFS=$'\t' read -r kb rest; do
       [ -n "$kb" ] || continue
+      # Re-attach by PATH, not by blind position: a file deleted between our -e
+      # check and the du exec (live stores rotate mid-scan) gets NO output line,
+      # and a positional pointer would shift every later size onto the wrong
+      # candidate — wrong numbers on a delete-confirmation screen (caught by the
+      # 2026-07-11 ephemeral red-team review). Skip forward past vanished paths
+      # (their size stays 0) until this line's path matches.
+      while [ "$j" -lt "${#ex[@]}" ] && [ "$rest" != "${ex[j]}" ]; do
+        j=$((j+1))
+      done
+      [ "$j" -lt "${#ex[@]}" ] || break
       out[${exidx[j]}]="$kb"
       j=$((j+1))
     done <<EOF

@@ -83,12 +83,19 @@ transcript_tail() {
 # loop. The CALLER chooses scope via its globs (all tanks/dirs vs one tank's $PWD
 # project); the kernel just stats+sorts. GNU/BSD-portable (detect, don't `||`-fall
 # back — a partial GNU failure on a non-matching glob would otherwise double-run).
+# NEVER leaks stat's exit status: an unmatched glob reaches stat as a literal
+# path, stat exits non-zero even when the OTHER args succeeded, and under the
+# script-global `set -eo pipefail` that killed `clikae resume`/`cleanup` DEAD
+# SILENT for anyone whose store lacks even one engine's directory (a
+# single-engine new user, i.e. most of them). Missing paths are this function's
+# normal case — the contract is "print what exists", so status is always 0.
 sessions_by_mtime() {
   if stat --version 2>/dev/null | grep -q GNU; then
-    stat -c '%Y %n' "$@" 2>/dev/null | sort -rn
+    stat -c '%Y %n' "$@" 2>/dev/null | sort -rn || true
   else
-    stat -f '%m %N' "$@" 2>/dev/null | sort -rn
+    stat -f '%m %N' "$@" 2>/dev/null | sort -rn || true
   fi
+  return 0
 }
 
 # Validate that <cli> and <profile> are sane names (no slashes, no leading dot, no whitespace).

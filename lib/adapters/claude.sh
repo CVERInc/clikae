@@ -209,9 +209,11 @@ _claude_meta_for_file() {
   # Take the LAST one (a session can be re-titled) — but from BOUNDED slices,
   # never a whole-file regex pass (the documented 100+ MB transcript trap; see
   # profile_store.sh's transcript_head/tail kernel). The newest re-title lives in
-  # the tail slice; a session titled once early has it in the head slice. A
-  # mid-file-only title (huge file, titled mid-run, never again) degrades to the
-  # opening-prompt fallback below — a preview, not a loss.
+  # the tail slice; a session titled once early has it in the head slice. Two
+  # honest degradations vs the old whole-file scan, both preview-only: a
+  # mid-file-ONLY title falls to the opening-prompt fallback below, and a session
+  # titled early then re-titled mid-file (outside both slices) shows the EARLIER
+  # title, not the newest.
   title="$(transcript_tail "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
         | tail -n 1 \
         | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"

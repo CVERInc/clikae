@@ -66,3 +66,34 @@ _decode() {
   while tui_read_key 0; do out="$out$TUI_KEY "; done < <(printf '\033[C\033[6~q')
   [ "$out" = "right pgdn q " ]
 }
+
+@test "tui: modifier'd arrows (ESC[1;5C Ctrl-Right) decode as the arrow — no leaked param bytes" {
+  run _decode '\033[1;5C\033[1;2A'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'right\nup')" ]
+}
+
+@test "tui: Delete/Insert (ESC[3~ / ESC[2~) are unknown with the ~ consumed" {
+  run _decode '\033[3~\033[2~q'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'unknown\nunknown\nq')" ]
+}
+
+@test "tui: a terminal DA report (ESC[?64;1;2c) never leaks its final letter as a keystroke" {
+  # A leaked 'c' would open the resume picker's cleanup flow — red-team finding.
+  run _decode '\033[?64;1;2c\033[>0;276;0cq'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'unknown\nunknown\nq')" ]
+}
+
+@test "tui: modifier'd PgUp (ESC[5;3~) still pages" {
+  run _decode '\033[5;3~\033[6;5~'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'pgup\npgdn')" ]
+}
+
+@test "tui: bracketed-paste markers (ESC[200~/201~) are unknown, not keystrokes" {
+  run _decode '\033[200~\033[201~'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'unknown\nunknown')" ]
+}
