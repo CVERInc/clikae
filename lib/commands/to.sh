@@ -74,6 +74,10 @@ Options (same-engine carries only — forwarded to relay):
   -y, --yes          skip relay's preview/confirm
       --fresh        switch tanks but start a NEW conversation (don't carry)
       --session <id> carry a specific session instead of the newest
+
+Carrying the same task past a usage limit on another account sits in the
+vendors' terms gray zone — where the line is, with the actual policy language
+and dates: docs/terms-and-your-accounts.md (shown once before your first carry).
 EOF
 }
 
@@ -197,6 +201,9 @@ EOF2
   fi
 
   [ "${#passthru[@]}" -eq 0 ] || cmd+=(-- "${passthru[@]}")
+  # First-ever cross-account carry → the one-time accounts note (docs cover the
+  # full picture; this makes sure the headline was seen once).
+  carry_notice_once
   # Record the carry in the "what clikae did" log before we hand off (clikae status
   # shows the recent tail). cmd[0] is $CLIKAE_BIN, so log from the verb on.
   history_log "to: ${cmd[*]:1}"

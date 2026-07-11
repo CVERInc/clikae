@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **docs/terms-and-your-accounts.md** — where the vendors' terms draw the
+  line on multi-account use, with the actual policy language, dated research
+  (2026-07-11), and an honest map of which clikae features sit on which side.
+  Different accounts for different purposes is explicitly fine; carrying the
+  same task past a usage limit is the gray zone — this page says so plainly
+  instead of leaving users to find out from an enforcement email.
+- **A one-time note before your first cross-account carry** (`clikae to`, or
+  `clikae burn` with fall-through armed): a short version of that page, once,
+  then never again. Headless runs print it and never block.
+
 ## [0.12.0] — 2026-07-11
 
 A deep no-new-features audit pass: four independent review lenses (performance,

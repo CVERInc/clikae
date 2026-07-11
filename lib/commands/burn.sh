@@ -82,6 +82,10 @@ Dry-detection leans on each vendor's CURRENT limit wording. If a vendor rewords
 it, a dry tank would be misread as a real task failure (no reroute). Set
 $CLIKAE_LIMIT_PATTERN='<regex>' to teach burn a new phrase (same override clikae
 watch honours).
+
+Re-firing the same task on another account sits in the vendors' terms gray
+zone — where the line is, with the actual policy language and dates:
+docs/terms-and-your-accounts.md (shown once before your first carry).
 EOF
 }
 
@@ -288,6 +292,9 @@ cmd_burn() {
   fi
   validate_name cli "$cli"
   validate_name profile "$tank"
+  # Fall-through armed (the default) means a dry tank re-fires this task on the
+  # next account — the cross-account carry case the one-time note is for.
+  [ "$reroute" -eq 1 ] && carry_notice_once
   case "$cli" in
     agy|antigravity)
       _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
