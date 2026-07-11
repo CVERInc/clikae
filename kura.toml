@@ -4,6 +4,7 @@
 
 markdown  = "commonmark"
 base_path = ""
+site_url  = "https://clikae.cver.net"
 [site]
 name        = "clikae"
 description = "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex & Antigravity account, each with a recap of where you left off."
