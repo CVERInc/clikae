@@ -13,6 +13,10 @@ json_str() {
   s="${s//\"/\\\"}"     # double quote
   s="${s//$'\t'/\\t}"   # tab
   s="${s//$'\n'/\\n}"   # newline
+  s="${s//$'\r'/\\r}"   # carriage return — a CRLF-tainted value (pasted email,
+                        # Windows-written config) must not emit invalid JSON
+  s="${s//$'\b'/\\b}"   # backspace / form feed: same defensive tier
+  s="${s//$'\f'/\\f}"
   printf '"%s"' "$s"
 }
 

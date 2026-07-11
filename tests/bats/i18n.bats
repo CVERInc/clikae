@@ -92,3 +92,28 @@ load '../helpers'
   CLIKAE_LANG=en-US run clikae
   [[ "$output" == *"tanks across"* ]] || false
 }
+
+@test "T_* strings used as printf FORMATS carry exactly their expected placeholder, every language" {
+  # ~10 call sites do `printf "$T_X" arg` — the string IS the format, so a
+  # translation that adds a stray % (e.g. "50% done") corrupts output at
+  # runtime. This pins the contract per language: exactly one placeholder of
+  # the right kind, and no other % (write %% for a literal percent).
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  local lang key fmt want stripped
+  for lang in en-US ja-JP zh-TW; do
+    i18n_load "$lang"
+    for key in T_DRY_SEEN:%s T_LANG_SET:%s T_LANG_UNKNOWN:%s \
+               T_RESUME_CARRY_PICK:%s T_RESUME_OPT_RELAY:%s T_RESUME_OPT_FORCE:%s \
+               T_RESUME_DRY_TITLE:%s T_NEWTANK_PROFILE:%s T_RESUME_FOOTER:%d \
+               T_UPDATE_NOW:%s; do
+      want="${key#*:}"; key="${key%%:*}"
+      eval "fmt=\"\$$key\""
+      [[ "$fmt" == *"$want"* ]] || { echo "$lang $key: missing $want in: $fmt"; false; }
+      # After removing literal %% and the one placeholder, no % may remain.
+      stripped="${fmt//%%/}"
+      stripped="${stripped/"$want"/}"
+      [[ "$stripped" != *%* ]] || { echo "$lang $key: stray %% in: $fmt"; false; }
+    done
+  done
+}

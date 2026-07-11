@@ -265,6 +265,8 @@ EOF
 
   local tmp
   tmp="$(mktemp)"
+  # Guarded: if the rewrite fails mid-way, drop the temp file and abort BEFORE
+  # touching the rc file (the mv below is the only mutation; log_fail exits).
   awk -v names="$names" '
     BEGIN { nn = split(names, a, " "); for (k = 1; k <= nn; k++) if (a[k] != "") drop[a[k]] = 1 }
     /^# >>> claude dual accounts/ { next }
@@ -280,7 +282,7 @@ EOF
       }
       print
     }
-  ' "$rc_file" > "$tmp"
+  ' "$rc_file" > "$tmp" || { rm -f "$tmp"; log_fail "Rewriting $rc_file failed — it was left untouched (backup kept)."; }
 
   for ((i = 0; i < n; i++)); do
     local env_prefix

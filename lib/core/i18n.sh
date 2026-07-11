@@ -19,6 +19,12 @@
 # Resolution order (first hit wins): $CLIKAE_LANG env > persisted $CLIKAE_HOME/lang
 # > $LC_ALL / $LANG > en. The `h` key in the dashboard and `clikae lang <code>`
 # both call i18n_set to persist + reload live.
+#
+# ⚠ Strings containing %s / %d are used as printf FORMATS (the placeholder is
+# where the tank name / count lands). When editing or translating one of those,
+# keep exactly that placeholder, and write %% for a literal percent sign — a
+# stray % corrupts the printf at runtime. tests/bats/i18n.bats pins this
+# contract for every language.
 
 # Map any locale-ish string to one of clikae's three full codes.
 _i18n_normalize() {
