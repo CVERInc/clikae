@@ -12,8 +12,8 @@
 class Clikae < Formula
   desc "CLI profile switcher — manage multiple accounts/configs for any CLI"
   homepage "https://github.com/CVERInc/clikae"
-  url "https://github.com/CVERInc/clikae/archive/refs/tags/v0.11.1.tar.gz"
-  sha256 "53df56d7ca68ed9ebb62e2aa7d172662c25344db1c201a543f4bfe259feccdbf"
+  url "https://github.com/CVERInc/clikae/archive/refs/tags/v0.12.0.tar.gz"
+  sha256 "dda00db30906bcac284a63e840421e7e08db0eb1edd173b002c52289fd904a9e"
   license "MIT"
   head "https://github.com/CVERInc/clikae.git", branch: "main"
 
