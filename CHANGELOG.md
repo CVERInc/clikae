@@ -13,6 +13,11 @@ verified findings applied.
 
 ### Fixed
 
+- **`clikae resume` / `resume cleanup` died silently on a single-engine
+  store** — with even one engine's directory absent, the unmatched session
+  glob made `stat` exit non-zero and `set -eo pipefail` killed the command
+  with no output at all. Present since v0.7.1; caught by pointing an
+  incognito (`--ephemeral`) reviewer at this release's own diff.
 - **`clikae resume` picker had no way to reach `cleanup`** — it shipped as a
   separate subcommand (`clikae resume cleanup`) with no affordance from the
   interactive picker, so it was easy to not know it existed. Press `c` from
