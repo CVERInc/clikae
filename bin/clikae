@@ -44,6 +44,8 @@ source "$CLIKAE_LIB/core/soul.sh"
 source "$CLIKAE_LIB/core/fleet_mcp.sh"
 # shellcheck source=../lib/core/shell_rc.sh
 source "$CLIKAE_LIB/core/shell_rc.sh"
+# shellcheck source=../lib/core/tui.sh
+source "$CLIKAE_LIB/core/tui.sh"
 # shellcheck source=../lib/core/adapter_loader.sh
 source "$CLIKAE_LIB/core/adapter_loader.sh"
 # shellcheck source=../lib/core/handoff.sh

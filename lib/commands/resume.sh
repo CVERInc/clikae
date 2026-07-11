@@ -173,19 +173,19 @@ EOF
   adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
 }
 
-# Draw the resume menu with row index $2 highlighted, from items in $1.
+# Draw the resume menu with row index $1 highlighted, from the inherited
+# `filtered`/`sessions` arrays. Split like the home board's draw: the wrapper
+# computes the viewport, warms the lazy caches (cache writes must happen in THIS
+# process — a $( ) body would lose them), composes the frame via the body, and
+# emits it as ONE printf between BSU/ESU. The old per-line printf stream between
+# the synchronized-update markers still flickered on terminals that ignore
+# ?2026 — the same fix the board's _home_pick_draw documents.
 _resume_pick_draw() {
   local sel="$1"
   local n=${#filtered[@]}
 
-  # Begin Synchronized Update — terminal buffers all output until ESU,
-  # then renders the entire frame atomically in one pass. This prevents
-  # the terminal from sampling intermediate cursor positions during drawing.
-  printf '\033[?2026h'
-
-  # Use terminal size and viewport from inherited max_visible
+  # Viewport from the inherited max_visible, centred on the selection.
   local start_idx=0 end_idx=$(( n - 1 ))
-
   if [ "$n" -gt "$max_visible" ]; then
     start_idx=$(( sel - (max_visible / 2) ))
     [ "$start_idx" -lt 0 ] && start_idx=0
@@ -196,6 +196,23 @@ _resume_pick_draw() {
     fi
   fi
 
+  # Warm the caches for every visible row here, in the parent (the body runs in
+  # a command-substitution subshell, where cache writes would evaporate and
+  # every frame would re-parse every visible transcript).
+  local idx
+  for ((idx=start_idx; idx<=end_idx; idx++)); do
+    _lazy_parse "${filtered[idx]}"
+  done
+  _lazy_parse_cwd "${filtered[sel]}"
+
+  local _frame
+  _frame="$(_resume_pick_draw_body "$sel" "$start_idx" "$end_idx" "$n")"
+  # BSU → whole frame → park the cursor bottom-left → ESU: one write, atomic.
+  printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "${lines:-24}"
+}
+
+_resume_pick_draw_body() {
+  local sel="$1" start_idx="$2" end_idx="$3" n="$4"
   local idx s_idx engine tank sid label rage cwd mark rdot active_p
   printf '\033[H\033[K\n'   # home + one blank top-margin line
 
@@ -210,7 +227,6 @@ _resume_pick_draw() {
 
   for ((idx=start_idx; idx<=end_idx; idx++)); do
     s_idx="${filtered[idx]}"
-    _lazy_parse "$s_idx"
     _resume_split "${sessions[s_idx]}"
     engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
     label="${cached_title[s_idx]}"
@@ -228,7 +244,6 @@ _resume_pick_draw() {
     # Same columns as the home board — dot · name · engine — then the title and age.
     local _rnm _ren; _rnm="$(_home_lpad "$tank" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$engine")" 8)"
     if [ "$idx" -eq "$sel" ]; then
-      _lazy_parse_cwd "$s_idx"
       cwd="${cached_cwd[s_idx]}"
       printf '    %b %b %b%s%b %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
       printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "${cwd:-?}" "$sid" "$T_ENTER_RESUME" "$__C_RESET"
@@ -242,14 +257,7 @@ _resume_pick_draw() {
     printf '    %b▼ ... %d more sessions below ...%b\033[K\n' "$__C_DIM" "$(( n - 1 - end_idx ))" "$__C_RESET"
   fi
 
-  printf '\033[J'   # erase any leftover lines
-
-  # Park the cursor at the bottom-left corner of the window
-  local target_rows="${lines:-24}"
-  printf '\033[%d;1H' "$target_rows"
-
-  # End Synchronized Update — terminal now renders the buffered frame atomically
-  printf '\033[?2026l'
+  printf '\033[J'   # erase any leftover lines from a taller previous frame
 }
 
 _lazy_parse() {
@@ -327,78 +335,30 @@ _resume_pick() {
 
   local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_cleanup=0
 
+  # Keys arrive pre-decoded by tui_read_key (lib/core/tui.sh) as symbolic names
+  # — the byte-level ESC state machine that used to live here (and regressed
+  # twice in dogfood) is now the shared, unit-tested kernel.
   _handle_key() {
-    local k="$1"
-    case "$k" in
-      $'\e')
-        if IFS= read -rsn1 -t 1 char1 <&3 && [ "$char1" = "[" ]; then
-          if IFS= read -rsn1 -t 1 char2 <&3; then
-            local max_visible_in="$max_visible"
-            # Debug probe (opt-in): CLIKAE_RESUME_DEBUG=<file> logs each escape
-            # sequence's bytes + the paging step, so a "broken arrow" report can be
-            # diagnosed from a real run instead of guessed. No-op when unset.
-            [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
-              printf 'ESC char1=%q char2=%q max_visible_in=[%s] sel=%s n=%s\n' \
-                "${char1:-}" "${char2:-}" "$max_visible_in" "$sel" "$n" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
-            case "$char2" in
-              A) # Up Arrow
-                 sel=$(( (sel - 1 + n) % n )) ;;
-              B) # Down Arrow
-                 sel=$(( (sel + 1) % n )) ;;
-              D) # Left Arrow -> Page Up
-                 sel=$(( sel - max_visible_in ))
-                 [ "$sel" -lt 0 ] && sel=0
-                 ;;
-              C) # Right Arrow -> Page Down
-                 sel=$(( sel + max_visible_in ))
-                 [ "$sel" -ge "$n" ] && sel=$(( n - 1 ))
-                 ;;
-              Z) # Shift-Tab
-                 sel=$(( (sel - 1 + n) % n )) ;;
-              5) # Page Up
-                 IFS= read -rsn1 -t 1 _ <&3 # consume the '~'
-                 sel=$(( sel - max_visible_in ))
-                 [ "$sel" -lt 0 ] && sel=0
-                 ;;
-              6) # Page Down
-                 IFS= read -rsn1 -t 1 _ <&3 # consume the '~'
-                 sel=$(( sel + max_visible_in ))
-                 [ "$sel" -ge "$n" ] && sel=$(( n - 1 ))
-                 ;;
-              H|1) # Home key
-                 [ "$char2" = "1" ] && IFS= read -rsn1 -t 1 _ <&3
-                 sel=0
-                 ;;
-              F|4) # End key
-                 [ "$char2" = "4" ] && IFS= read -rsn1 -t 1 _ <&3
-                 sel=$(( n - 1 ))
-                 ;;
-            esac
-          fi
-        else
-          exit_loop=1
-        fi
-        ;;
-      $'\t') sel=$(( (sel + 1) % n )) ;;
-      k) sel=$(( (sel - 1 + n) % n )) ;;
-      j) sel=$(( (sel + 1) % n )) ;;
-      g) sel=0 ;;
-      G) sel=$(( n - 1 )) ;;
-      [1-9])
-        sel=$(( k - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
-      q) exit_loop=1 ;;
-      /) trigger_filter=1 ;;
-      c) trigger_cleanup=1 ;;
-      ''|$'\n'|$'\r') trigger_select=1 ;;
+    case "$1" in
+      up|k|shift-tab)   sel=$(( (sel - 1 + n) % n )) ;;
+      down|j|tab)       sel=$(( (sel + 1) % n )) ;;
+      left|pgup)        sel=$(( sel - max_visible )); [ "$sel" -lt 0 ] && sel=0 ;;
+      right|pgdn)       sel=$(( sel + max_visible )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+      home|g)           sel=0 ;;
+      end|G)            sel=$(( n - 1 )) ;;
+      [1-9])            sel=$(( $1 - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+      q|esc)            exit_loop=1 ;;
+      /)                trigger_filter=1 ;;
+      c)                trigger_cleanup=1 ;;
+      enter)            trigger_select=1 ;;
     esac
     # MUST end with success: a branch whose last command is `[ cond ] && assign`
-    # (the paging clamps) returns non-zero when cond is false. _handle_key is called
-    # bare in the loop, so under `set -eo pipefail` that non-zero return crashed the
-    # whole picker (dogfood 2026-06-29: → / PgDn exited clikae). Never let it leak.
+    # (the paging clamps) returns non-zero when cond is false; called bare under
+    # `set -eo pipefail`, that leak crashed the picker (dogfood 2026-06-29).
     return 0
   }
 
-  local sel=0 key n filter="" i last_filter="--initial--"
+  local sel=0 n filter="" i last_filter="--initial--"
   while :; do
     if [ "$filter" != "$last_filter" ]; then
       local -a filtered=()
@@ -424,8 +384,8 @@ _resume_pick() {
     if [ "$n" -le 0 ]; then
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
-      IFS= read -rsn1 key <&3 || key="q"
-      case "$key" in
+      tui_read_key 3 || TUI_KEY="q"
+      case "$TUI_KEY" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
@@ -438,20 +398,18 @@ _resume_pick() {
     [ "$sel" -lt 0 ] && sel=0
     _resume_pick_draw "$sel"
 
-    # Block-read ONE key from the dedicated tty fd, handle it, redraw. No `-t 0`
-    # typeahead drain: it read from bare stdin and swallowed stray feedback bytes
-    # as keystrokes (the paging-reset bug). One key per frame + the synchronized
-    # flicker-free redraw is plenty smooth, and correct.
-    IFS= read -rsn1 key <&3 || { key="q"; }
+    # Block-read ONE decoded key from the dedicated tty fd, handle it, redraw.
+    # (No `-t 0` typeahead drain — see tui.sh's decode notes for the history.)
+    tui_read_key 3 || TUI_KEY="q"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
-      printf 'READ key=%q sel(before)=%s n=%s max_visible=%s\n' "$key" "$sel" "$n" "$max_visible" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
+      printf 'READ key=%q sel(before)=%s n=%s max_visible=%s\n' "$TUI_KEY" "$sel" "$n" "$max_visible" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
 
     exit_loop=0
     trigger_filter=0
     trigger_select=0
     trigger_cleanup=0
 
-    _handle_key "$key"
+    _handle_key "$TUI_KEY"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
       printf '  -> sel(after)=%s exit=%s filt=%s sel_trig=%s\n' "$sel" "$exit_loop" "$trigger_filter" "$trigger_select" >> "$CLIKAE_RESUME_DEBUG" 2>/dev/null
 

@@ -687,7 +687,7 @@ EOF
   # write-only (3>) fd would EOF on the first read and cancel instantly.
   exec 3<>/dev/tty 2>/dev/null || return 1
 
-  local sel=0 i key rest
+  local sel=0 i
   for ((i = 0; i < n; i++)); do [ "${opts[$i]}" = "$pre" ] && sel=$i; done
 
   printf '\033[?1049h\033[?25l' >&3
@@ -702,16 +702,14 @@ EOF
         else printf '    %s\n' "${opts[$i]}"; fi
       done
     } >&3
-    IFS= read -rsn1 key <&3 || break
-    case "$key" in
-      $'\e')
-        if IFS= read -rsn2 -t 1 rest <&3; then
-          case "$rest" in '[A') sel=$(((sel - 1 + n) % n)) ;; '[B') sel=$(((sel + 1) % n)) ;; esac
-        else break; fi ;;
-      k) sel=$(((sel - 1 + n) % n)) ;;
-      j) sel=$(((sel + 1) % n)) ;;
-      q) break ;;
-      ''|$'\n'|$'\r')
+    tui_read_key 3 || break
+    case "$TUI_KEY" in
+      up|k|shift-tab) sel=$(((sel - 1 + n) % n)) ;;
+      down|j|tab)     sel=$(((sel + 1) % n)) ;;
+      home|pgup)      sel=0 ;;
+      end|pgdn)       sel=$((n - 1)) ;;
+      q|esc) break ;;
+      enter)
         printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
         printf '%s\n' "${opts[$sel]}"
         return 0 ;;
@@ -1242,11 +1240,15 @@ _home_pick() {
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true
   printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
+  # Keys come from a DEDICATED /dev/tty fd, never bare stdin — the same isolation
+  # _home_choose and the resume picker already had (this board was the straggler;
+  # stray stdout feedback bytes read as keystrokes on some terminals).
+  exec 3</dev/tty 2>/dev/null || exec 3<&0
 
   # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
   # the live `/` query. Everything navigational works on `view`; relay still reads
   # the FULL `items` so it can find the active source tank even when filtered out.
-  local sel=0 key rest n sel_row sel_kind sel_cli filter="" view
+  local sel=0 n sel_row sel_kind sel_cli filter="" view
   view="$items"
   while :; do
     view="$(_home_filter "$items" "$filter")"
@@ -1256,10 +1258,10 @@ _home_pick() {
       # user clear the filter or quit. Never get stuck on an empty board.
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
-      IFS= read -rsn1 key || key="q"
-      case "$key" in
+      tui_read_key 3 || TUI_KEY="q"
+      case "$TUI_KEY" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
-           IFS= read -r filter || filter=""
+           IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
            printf '\033[?1049h\033[?25l'; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
@@ -1268,32 +1270,21 @@ _home_pick() {
     [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete/filter
     [ "$sel" -lt 0 ] && sel=0
     _home_pick_draw "$view" "$sel" "$dry"
-    IFS= read -rsn1 key || { key="q"; }
+    # One decoded key per frame from the tty fd (tui_read_key, lib/core/tui.sh);
+    # a lone ESC quits, PgUp/Home jump top, PgDn/End jump bottom (the board has
+    # no viewport, so page = jump).
+    tui_read_key 3 || TUI_KEY="q"
     sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
     sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
-    case "$key" in
-      $'\e')
-        # Arrow keys arrive as ESC [ A/B; Shift-Tab as ESC [ Z; a lone ESC (1s
-        # integer timeout) quits.
-        if IFS= read -rsn2 -t 1 rest; then
-          case "$rest" in
-            '[A') sel=$(( (sel - 1 + n) % n )) ;;
-            '[B') sel=$(( (sel + 1) % n )) ;;
-            '[Z') sel=$(( (sel - 1 + n) % n )) ;;   # Shift-Tab → previous
-          esac
-        else
-          break
-        fi
-        ;;
-      $'\t') sel=$(( (sel + 1) % n )) ;;            # Tab → next
-      k) sel=$(( (sel - 1 + n) % n )) ;;
-      j) sel=$(( (sel + 1) % n )) ;;
-      g) sel=0 ;;                                    # top
-      G) sel=$(( n - 1 )) ;;                         # bottom
+    case "$TUI_KEY" in
+      up|k|shift-tab) sel=$(( (sel - 1 + n) % n )) ;;
+      down|j|tab)     sel=$(( (sel + 1) % n )) ;;
+      home|pgup|g) sel=0 ;;                          # top
+      end|pgdn|G)  sel=$(( n - 1 )) ;;               # bottom
       [1-9])
         # Jump to the Nth row (clamped). Fast access on a long board.
-        sel=$(( key - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
+        sel=$(( TUI_KEY - 1 )); [ "$sel" -ge "$n" ] && sel=$(( n - 1 )) ;;
       '[')
         # Move the selected tank UP in the burn order (the board IS the order).
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" -1; then
@@ -1304,11 +1295,11 @@ _home_pick() {
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" 1; then
           items="$(_home_items)"; sel=$(( sel + 1 ))
         fi ;;
-      q) break ;;
+      q|esc) break ;;
       /)
         _home_tty_leave
         printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
-        IFS= read -r filter || filter=""
+        IFS= read -r filter <&3 || filter=""
         stty -echo 2>/dev/null || true
         printf '\033[?1049h\033[?25l'; sel=0
         ;;
@@ -1336,24 +1327,30 @@ _home_pick() {
         ;;
 
       # --- leave actions: these launch a CLI, so exiting the picker is expected
-      ''|$'\n'|$'\r')
+      # (each closes fd 3 first so the tty fd never leaks into the engine).
+      enter)
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
           _home_tty_leave; trap - EXIT INT TERM
+          exec 3<&- 2>/dev/null || true
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             stty -echo 2>/dev/null || true
-            printf '\033[?1049h\033[?25l'; continue
+            printf '\033[?1049h\033[?25l'
+            exec 3</dev/tty 2>/dev/null || exec 3<&0
+            continue
           }
           return 0
         fi
         _home_tty_leave; trap - EXIT INT TERM
+        exec 3<&- 2>/dev/null || true
         _home_launch "$sel_row"
         return 0
         ;;
       r)
         if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
+          exec 3<&- 2>/dev/null || true
           _home_relay "$items" "$sel_row"
           return 0
         fi
@@ -1364,6 +1361,7 @@ _home_pick() {
         # resume.sh, which isn't sourced in the home process — and can't be sourced
         # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
         _home_tty_leave; trap - EXIT INT TERM
+        exec 3<&- 2>/dev/null || true
         exec "$CLIKAE_BIN" resume
         ;;
       x)
@@ -1372,6 +1370,7 @@ _home_pick() {
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
+          exec 3<&- 2>/dev/null || true
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
         fi
         ;;
@@ -1428,6 +1427,7 @@ EOF
     esac
   done
 
+  exec 3<&- 2>/dev/null || true
   _home_tty_leave; trap - EXIT INT TERM
   # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"
