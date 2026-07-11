@@ -27,6 +27,11 @@ verified findings applied.
   which had also drifted from antigravity's canonical whitespace handling.
 - **A space in `$HOME` / `$CLIKAE_HOME` silently dropped every codex session**
   from the board's Continue list (unquoted word-splitting of the rollout list).
+- **A translation gaining a stray `%` can no longer corrupt output silently**
+  — the ~10 `T_*` strings used as printf formats now have their placeholder
+  contract pinned by a per-language test; `json_str` escapes `\r`/`\b`/`\f`
+  so a CRLF-tainted value can't emit invalid `--json`; `migrate`'s rc-file
+  rewrite cleans up its temp file and aborts untouched on failure.
 - **`dry_seen_suffix` could print a wrong time on Linux** — BSD-style
   `date -r <epoch>` means "<file>'s mtime" on GNU, so a numeric-named file in
   $PWD made it succeed with garbage; the GNU form now runs first (the same
@@ -34,6 +39,19 @@ verified findings applied.
 
 ### Changed
 
+- **One keyboard decoder for every picker** (`lib/core/tui.sh`). The home
+  board, its sub-menus, and the resume picker each carried their own inline
+  ESC state machine — the layer that regressed in dogfood more than once —
+  and they had drifted. Now: the board gains PgUp/PgDn/Home/End, reads a
+  dedicated /dev/tty fd like the others (it was the last bare-stdin reader)
+  and never leaks that fd into a launched engine, application-mode arrows
+  (ESC O A…) decode instead of leaving stray letters, and the resume picker
+  paints each frame as one atomic write (the board's anti-flicker fix).
+  Covered by decoder unit tests (`tests/bats/tui.bats`) and a real-pty
+  end-to-end driver (`tests/tools/pty-smoke.py`).
+- **`next_tank` no longer does O(n²) work**: one `order_list` pass and one
+  batched dry-set (the board's kernel) instead of a per-candidate account-
+  contagion scan that re-walked every profile.
 - **Faster everywhere, measured on a real 2300-session store:** `resume
   cleanup` prices candidates with ONE batched `du` instead of one per session
   (7.4s → 3.7s at `--older-than 0`); `load_adapter` is memoized (one board
