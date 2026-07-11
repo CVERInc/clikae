@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-07-11
+
+The repositioning release: the front page now tells the story VISION.md
+always pointed at — your AI work has two halves, and clikae keeps YOUR half
+(identity, memory, sessions, incognito) portable across engines. Multi-account
+quota rotation steps down to an advanced chapter with an honest, dated terms
+page. Gated, like v0.12.0, by an incognito red-team pass over the final diff
+(which caught and killed two claims that overshot shipped behavior).
+
 ### Added
 
 - **docs/terms-and-your-accounts.md** — where the vendors' terms draw the
