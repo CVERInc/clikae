@@ -21,10 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   placeholder-compatible with en-US, so adding a language is a self-contained
   PR (one string file + one resolver line — see the new
   [docs/adding-a-locale.md](docs/adding-a-locale.md)) and a partial
-  translation can never merge silently. Chinese is now keyed by writing
-  system: Traditional (`zh-TW`, also serving `zh_HK`/`*Hant*`) and Simplified
-  (`zh-Hans`, arriving) are separate locales, with the resolver slot for
-  zh-Hans marked; until it ships, all other `zh` reads `zh-TW` as before.
+  translation can never merge silently.
+
+- **clikae speaks nine languages.** Joining English, 日本語 and 繁體中文:
+  简体中文, 한국어, Español, Deutsch, Français and Português (Brasil). Each was
+  transcreated against that language's own Apple macOS system strings rather
+  than machine-translated from English, and translated *by grade*: the
+  sentences you must understand to consent — deleting sessions, spending a
+  tank's last fuel — are fully localized, while the things you type or copy
+  (commands, flags, paths, sizes, session ids) stay technical. Chinese is keyed
+  by writing system, not region: `zh_CN`/`zh_SG`/`*Hans*` read `zh-Hans`,
+  `zh_HK`/`*Hant*` read `zh-TW`, and a bare `zh` keeps Traditional, the
+  incumbent default. Any other regional variant (`pt_PT`, `fr_CA`, `ko_KR`…)
+  lands through the generic language-subtag rule — no resolver line needed.
+
+  The six new tables were reviewed by a model from a different family, reading
+  each one cold against the English — which caught real inversions (a German
+  line that promised the disk space you *have* rather than the space you'd
+  *reclaim*) and, just as usefully, produced a pile of confident nonsense that
+  did not survive checking. They are an honest LLM-grade baseline, not a
+  native-speaker's work: if a string reads wrong in your language, the file to
+  fix is `lib/i18n/<locale>.sh` and the PR is welcome.
 
 - **`clikae clean` — disk cleanup is a top-level command now.** The flow that
   shipped inside `resume cleanup` (v0.13.1) was a capability buried under

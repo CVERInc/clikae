@@ -16,8 +16,8 @@
 #
 # Chinese is keyed by WRITING SYSTEM, not region: Traditional (zh-TW — also
 # serves zh_HK / *Hant*) and Simplified (zh-Hans — zh_CN / zh_SG / *Hans*) are
-# SEPARATE locales. zh-Hans hasn't shipped yet; until its file lands, the
-# resolver reads any other zh as zh-TW (see the marked slot in _i18n_normalize).
+# SEPARATE locales, each with its own file. A bare `zh` (no script named) reads
+# Traditional — the incumbent default.
 #
 # Resolution order (first hit wins): $CLIKAE_LANG env > persisted $CLIKAE_HOME/lang
 # > $LC_ALL / $LANG > en-US. The `l` key in the dashboard and `clikae lang <code>`
@@ -45,7 +45,13 @@ _i18n_locales() {
   printf '%s\n' \
     en-US \
     ja-JP \
-    zh-TW
+    zh-TW \
+    zh-Hans \
+    ko-KR \
+    es-ES \
+    de-DE \
+    fr-FR \
+    pt-BR
 }
 
 # _i18n_normalize <locale-ish> — map any locale-ish string (a full code, a short
@@ -67,12 +73,11 @@ _i18n_normalize() {
   case "$low" in
     # 2. Chinese: split by SCRIPT, not region — Traditional reads zh-TW…
     zh_tw*|zh-tw*|*hant*|zh_hk*|zh-hk*|繁體中文|台|台灣) printf 'zh-TW'; return 0 ;;
-    # ---- zh-Hans SLOT ------------------------------------------------------
-    # …Simplified reads zh-Hans. Activate this line (and delete the zh*
-    # fallback below) when lib/i18n/zh-Hans.sh ships — NOT before:
-    #   zh_cn*|zh-cn*|zh_sg*|zh-sg*|*hans*|简体中文) printf 'zh-Hans'; return 0 ;;
-    # ------------------------------------------------------------------------
-    zh*) printf 'zh-TW'; return 0 ;;   # until zh-Hans lands, any other zh reads Traditional
+    # …Simplified reads zh-Hans (Mainland + Singapore).
+    zh_cn*|zh-cn*|zh_sg*|zh-sg*|*hans*|简体中文) printf 'zh-Hans'; return 0 ;;
+    # A bare `zh` names no script, so it needs a default: Traditional, the
+    # incumbent (clikae shipped zh-TW alone for its first three releases).
+    zh*) printf 'zh-TW'; return 0 ;;
     # Human spellings that don't start with the language subtag:
     english)         printf 'en-US'; return 0 ;;
     *japanese*|日本語) printf 'ja-JP'; return 0 ;;
