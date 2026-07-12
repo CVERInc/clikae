@@ -346,6 +346,28 @@ _home_fuel_dot() {
   printf '%b○%b\037' "$__C_DIM" "$__C_RESET"
 }
 
+# _home_chunk <word> <width> -> the word cut into space-separated chunks, each at
+# most <width> DISPLAY columns. The escape hatch for text a word-wrapper cannot
+# break: CJK (no interword spaces — a whole sentence is one "word") and long
+# unbroken ASCII runs. Character-by-character by display width, so a fullwidth
+# glyph is never split down the middle of its two columns.
+_home_chunk() {
+  local s="$1" w="$2" i=0 n=${#1} ch cur="" curw=0 chw out=""
+  [ "$w" -ge 2 ] || w=2
+  while [ "$i" -lt "$n" ]; do
+    ch="${s:$i:1}"
+    chw="$(_dwidth "$ch")"
+    if [ $(( curw + chw )) -gt "$w" ] && [ -n "$cur" ]; then
+      out="$out $cur"; cur="$ch"; curw="$chw"
+    else
+      cur="$cur$ch"; curw=$(( curw + chw ))
+    fi
+    i=$(( i + 1 ))
+  done
+  [ -n "$cur" ] && out="$out $cur"
+  printf '%s' "${out# }"
+}
+
 # _home_wrap_prefixed <text> <prefix> <hang> <color> <reset> [extra]
 # Word-wrap <text> to the live terminal width, printing the FIRST line as
 # "<prefix><chunk>" and every continuation line as "<hang spaces><chunk>" — a
@@ -369,6 +391,23 @@ _home_wrap_prefixed() {
   [ "$avail" -ge 12 ] || avail=$(( cols - extra - 1 ))
   # Don't let a `*` in a recap glob against the cwd while we word-split.
   case $- in *f*) ;; *) glob=1; set -f ;; esac
+  # CJK has NO INTERWORD SPACES, so a Japanese/Chinese sentence is ONE "word" to
+  # the splitter below and word-wrapping alone can never break it — it would run
+  # off the edge no matter how much budget we computed (ja-JP's clean heading,
+  # 61 cols at a 60-col terminal, was exactly this). So first hard-break any
+  # single word that is wider than the whole line budget into <avail>-wide
+  # chunks, by DISPLAY width; the chunks contain no spaces, so re-splitting them
+  # back into the word loop is safe. ASCII runs with no spaces (a long path) get
+  # the same treatment, which is also what you want.
+  local _rebuilt="" _w
+  for _w in $text; do
+    if [ "$(_dwidth "$_w")" -gt "$avail" ]; then
+      _rebuilt="$_rebuilt $(_home_chunk "$_w" "$avail")"
+    else
+      _rebuilt="$_rebuilt $_w"
+    fi
+  done
+  text="$_rebuilt"
   for word in $text; do
     if [ -z "$line" ]; then
       line="$word"
@@ -551,17 +590,24 @@ _home_render_static() {
         # A single-account launch target (e.g. agy) lives under "Also available",
         # NOT a floating group of its own. Enter launches it single-account; to make
         # it a tank, `n` → agy runs the SU takeover. Dry → ! + reset phrase inline.
-        local _treset _tline
+        # The `note` is a full localized sentence ("single account · global
+        # login (one account, every shell)" — 83-90 cols in es/fr at 80), so it
+        # WRAPS with a hanging indent under its own column rather than running
+        # off the edge. Column 19 = 4 lead + dot + space + 12-wide engine + space.
+        local _treset _tnote
         if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-          _tline="$(printf '    %b●%b %-12s %b%s%b  %b%s%b' "$__C_RED" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "${_treset:-over quota}" "$__C_RESET")"
+          _tnote="$note  ${_treset:-over quota}"
+          also="$also$(_home_wrap_prefixed "$_tnote" \
+            "$(printf '    %b●%b %-12s ' "$__C_RED" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
           any_dry=1
         else
-          _tline="$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"
+          also="$also$(_home_wrap_prefixed "$note" \
+            "$(printf '    %b·%b %-12s ' "$__C_DIM" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
         fi
-        also="$also$_tline"$'\n'
         ;;
       agent)
-        also="$also$(printf '    %b·%b %-12s %b%s%b' "$__C_DIM" "$__C_RESET" "$cli" "$__C_DIM" "$note" "$__C_RESET")"$'\n'
+        also="$also$(_home_wrap_prefixed "$note" \
+          "$(printf '    %b·%b %-12s ' "$__C_DIM" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
         ;;
     esac
   done <<EOF
@@ -1150,9 +1196,15 @@ _home_pick_draw_body() {
   # Compact footer: the everyday keys + a pointer to `?` for the full, localised
   # legend (relay / incognito / new / rename / delete / jump). Keeps the board
   # clean while every action stays discoverable.
-  printf '%b%s%b  %b· ↑↓/Tab %s · ⏎ %s · [ ] %s · / %s · ? %s · q %s%b\n' \
-    "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" \
-    "$T_K_MOVE" "$T_K_OPEN" "$T_K_REORDER" "$T_K_FILTER" "$T_K_HELP" "$T_K_QUIT" "$__C_RESET"
+  # WRAPPED, not shortened: the localized key labels are correct Apple-register
+  # words and de/fr/es legitimately need more columns than en (es-ED measured 90
+  # at 80 cols) — the render adapts to the terminal, the words don't shrink.
+  # Hangs under the wordmark (whose display width is locale-dependent — ja's
+  # katakana wordmark is not 6 columns — so it's measured, not assumed).
+  _home_wrap_prefixed \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
+    "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
+    "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET"
   printf '%b%s: %s · [A] change (BETA, claude)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -1222,10 +1274,16 @@ _home_pick_draw_body() {
         fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
+        # Same wrap as the static board's "Also available" row: the note is a
+        # full localized sentence, so it hangs under column 19 (2 lead + mark +
+        # space + dot + space + 12-wide engine + space) instead of overflowing.
+        _line="$note"; [ -n "$_reset" ] && _line="$note $_reset"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%-12s%b %b%s %s%b\n' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET" "$__C_DIM" "$note" "$_reset" "$__C_RESET"
+          _home_wrap_prefixed "$_line" \
+            "$(printf '  %b %b %b%-12s%b ' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET")" 19 "$__C_DIM" "$__C_RESET"
         else
-          printf '  %b %b %-12s %b%s%b %b%s%b\n' "$mark" "$tdot" "$cli" "$__C_DIM" "$note" "$__C_RESET" "$__C_YELLOW" "$_reset" "$__C_RESET"
+          _home_wrap_prefixed "$_line" \
+            "$(printf '  %b %b %-12s ' "$mark" "$tdot" "$cli")" 19 "$__C_DIM" "$__C_RESET"
         fi
         ;;
       agent)
@@ -1235,9 +1293,11 @@ _home_pick_draw_body() {
           printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b· %-12s %s%b\n' "$mark" "$__C_BOLD" "$cli" "$note" "$__C_RESET"
+          _home_wrap_prefixed "$note" \
+            "$(printf '  %b %b· %-12s ' "$mark" "$__C_BOLD" "$cli")" 19 "$__C_BOLD" "$__C_RESET"
         else
-          printf '  %b · %-12s %b%s%b\n' "$mark" "$cli" "$__C_DIM" "$note" "$__C_RESET"
+          _home_wrap_prefixed "$note" \
+            "$(printf '  %b · %-12s ' "$mark" "$cli")" 19 "$__C_DIM" "$__C_RESET"
         fi
         ;;
     esac

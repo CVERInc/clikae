@@ -164,6 +164,112 @@ _kb_human() {
   fi
 }
 
+# _kb_compact <kb> — the SQUEEZED size ("512K" / "21M" / "2.3G"): the same number
+# with the space and the second unit letter dropped. Step 2 of the row's
+# progressive disclosure (_clean_row_fit) — a size still worth showing, in ~half
+# the columns, before we give up on showing it at all.
+_kb_compact() {
+  local kb="$1" v
+  if [ "$kb" -lt 1024 ]; then
+    printf '%dK' "$kb"
+  elif [ "$kb" -lt 1048576 ]; then
+    v=$(( (kb * 10 + 512) / 1024 ))
+    if [ $((v % 10)) -eq 0 ] || [ $((v / 10)) -ge 10 ]; then printf '%dM' $((v / 10))
+    else printf '%d.%dM' $((v / 10)) $((v % 10)); fi
+  else
+    v=$(( (kb * 10 + 524288) / 1048576 ))
+    printf '%d.%dG' $((v / 10)) $((v % 10))
+  fi
+}
+
+# _clean_row_fit <avail> <ident_w> <title> <age> <size_kb> <lbl> — decide WHAT a
+# candidate row can afford to show in <avail> display columns, and set
+#   _CR_TITLE  (truncated to what's left)
+#   _CR_AGE    (the age string, or "" = dropped)
+#   _CR_SIZE   (full / compact / "" = dropped)
+#   _CR_WRAP   (1 = the label did not fit on line 1; caller puts it on a
+#               continuation line)
+#
+# PROGRESSIVE DISCLOSURE BY IMPORTANCE. A row that cannot fit must DROP its
+# least valuable column, never overflow the terminal. The sacrifice order is a
+# product decision, not an arbitrary one: this is a DELETION list, so the two
+# things that must survive to the last column are
+#   * the LABEL — it carries the safety semantics ("stale copy (kept: b)",
+#     fr "copie obsolète (celle de %s est gardée)"). NEVER truncated. In some
+#     languages it is legitimately long; the render adapts, the words don't.
+#   * the TITLE — you must be able to RECOGNIZE the session you're about to
+#     delete. That is the whole reason this list exists, so the title does not
+#     merely survive: it gets FIRST CLAIM on the columns. Age and size may only
+#     spend what's left once the title has _CR_TITLE_GOOD columns; below that
+#     they are sacrificed to buy the title room, and only when the title still
+#     can't reach _CR_TITLE_GOOD do we settle for a title as small as
+#     _CR_TITLE_MIN. (A 12-column title is a last resort, not a target — a row
+#     that shows "0d ago · (20 KB)" next to "Refactor the …" spends its columns
+#     on exactly the wrong things, which is how the incident happened.)
+# Age and size are merely nice-to-have, so they go first, in this order:
+#   1. age            (dropped outright)
+#   2. size           (compressed "21.0 MB" -> "21M", then dropped)
+#   3. title          (truncated, floor _CR_TITLE_MIN)
+#   4. still doesn't fit -> the label moves to its own continuation line
+#      (_CR_WRAP=1), which frees line 1 to show age/size again.
+# <lbl> is passed WITH its " · " separator already attached (so an absent label
+# is simply the empty string and costs 0 columns).
+_CR_TITLE_MIN=12
+_CR_TITLE_GOOD=24
+_clean_row_fit() {
+  local avail="$1" ident_w="$2" title="$3" age="$4" size_kb="$5" lbl="$6"
+  local title_w lbl_w base cfg age_on size_s over budget need want
+  title_w="$(_dwidth "$title")"
+  lbl_w="$(_dwidth "$lbl")"
+  # Always-present chrome around the variable pieces: " · " before the title,
+  # the title's two quotes, and 1 more column for the "…" `_home_trunc` appends
+  # when it DOES truncate (its <n> argument is the pre-ellipsis length, so a
+  # truncated title actually renders <n>+1 columns wide — forgetting that is a
+  # silent off-by-one that puts every truncated row 1 column over the terminal).
+  base=$(( ident_w + 3 + 2 + 1 ))
+  local sz_full sz_comp
+  sz_full="$(_kb_human "$size_kb")"
+  sz_comp="$(_kb_compact "$size_kb")"
+
+  # TWO passes over the sacrifice ladder. Pass 1 demands the title reach
+  # _CR_TITLE_GOOD (or fit whole) — so a config that would show age/size while
+  # squeezing the title to a stub is REJECTED, and we drop age/size instead.
+  # Only if nothing on the ladder can give the title a good width does pass 2
+  # relax the demand to _CR_TITLE_MIN. `1`/`0` = age shown/dropped.
+  local try_lbl_w="$lbl_w" wrap=0
+  while :; do
+    for want in "$_CR_TITLE_GOOD" "$_CR_TITLE_MIN"; do
+      need="$want"; [ "$title_w" -lt "$need" ] && need="$title_w"
+      for cfg in "1:$sz_full" "0:$sz_full" "0:$sz_comp" "0:"; do
+        age_on="${cfg%%:*}"; size_s="${cfg#*:}"
+        over=$(( base + try_lbl_w ))
+        [ "$age_on" = "1" ] && over=$(( over + 3 + $(_dwidth "$age") ))
+        [ -n "$size_s" ] && over=$(( over + 5 + $(_dwidth "$size_s") ))
+        budget=$(( avail - over ))
+        if [ "$budget" -ge "$need" ]; then
+          _CR_TITLE="$(_home_trunc "$title" "$budget")"
+          [ "$age_on" = "1" ] && _CR_AGE="$age" || _CR_AGE=""
+          _CR_SIZE="$size_s"
+          _CR_WRAP="$wrap"
+          return 0
+        fi
+      done
+    done
+    # Nothing fit even with age AND size gone. If the label is still on line 1,
+    # move it to a continuation line and retry — that's what frees the room.
+    if [ "$wrap" -eq 0 ] && [ "$lbl_w" -gt 0 ]; then
+      wrap=1; try_lbl_w=0; continue
+    fi
+    # No label to move (or already moved) and STILL too narrow: an absurdly
+    # narrow terminal. Show the title at its floor and nothing else — the row
+    # may exceed `avail` here, but only because `avail` is smaller than
+    # ident + a 12-col title, which no column-dropping can fix.
+    _CR_TITLE="$(_home_trunc "$title" "$_CR_TITLE_MIN")"
+    _CR_AGE=""; _CR_SIZE=""; _CR_WRAP="$wrap"
+    return 0
+  done
+}
+
 # _file_bytes <path> — the file's exact byte size (0 if missing). du prices
 # candidates for the preview, but picking WHICH copy of a duplicated session to
 # keep needs exact bytes, not blocks: the kept copy must be the byte-superset.
@@ -500,39 +606,60 @@ _clean_print_list() {
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="x"; else box=" "; fi
     lbl=""
     [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
-    # Title budget: cols minus EVERYTHING else on the row — fixed chrome ("  [x]
-    # ", "/", the " · " separators, the title's own quotes, "(", ")" = 19
-    # literal cols, +1 for `_home_trunc`'s trailing "…") AND the row's other
-    # variable pieces (engine/tank, age, human size, and — the whole point —
-    # the localized LABEL, which in some languages is now longer than the
-    # title used to assume, e.g. fr: "copie obsolète (celle de %s est
-    # gardée)"). The label is measured and MUST fit; the title yields to it,
-    # never the other way round — floor of 3 (not the usual 12-20) because a
-    # long label can legitimately eat most of an 80-col row on its own; the
-    # title's job here is to add what little context still fits, not to stay
-    # readable at a fixed minimum. NOTE (honest limit): when engine + tank +
-    # age + size + label ALONE already approach/exceed the terminal width —
-    # the worst case is a long localized label pairing with a real long tank
-    # name — no amount of title-shrinking can pull the row back under budget;
-    # this brings that case down into the same few-cols-over territory the
-    # correct-but-long German/French help text already lives in, not down to
-    # a hard guarantee (that would require WRAPPING the row, out of scope here).
-    local _size_human _overhead _title_budget
-    _size_human="$(_kb_human "${cand_size_kb[idx]}")"
-    _overhead=$(( 19 + 1 \
-      + $(_dwidth "${cand_engine[idx]}") + $(_dwidth "${cand_tank[idx]}") \
-      + $(_dwidth "${cand_age_str[idx]}") + $(_dwidth "$_size_human") \
-      + $(_dwidth "$lbl") ))
-    _title_budget="$(_home_row_budget "$cols" "$_overhead" 3)"
-    printf "  [%s] %b%s/%s%b · %s · %s · %b(%s)%b%b%s%b\n" \
-      "$box" \
-      "$__C_BOLD" "${cand_engine[idx]}" "${cand_tank[idx]}" "$__C_RESET" \
-      "\"$(_home_trunc "${cand_title[idx]}" "$_title_budget")\"" \
-      "${cand_age_str[idx]}" \
-      "$__C_DIM" "$_size_human" "$__C_RESET" \
-      "$__C_DIM" "$lbl" "$__C_RESET"
+    # What this row can afford, in importance order (see _clean_row_fit): the
+    # label is never truncated, the title never drops below _CR_TITLE_MIN, and
+    # age/size are sacrificed — in that order — to buy the room. The lead
+    # chrome is "  [x] " = 6 columns.
+    local _ident
+    _ident="${cand_engine[idx]}/${cand_tank[idx]}"
+    _clean_row_fit "$(( cols - 6 ))" "$(_dwidth "$_ident")" \
+      "${cand_title[idx]}" "${cand_age_str[idx]}" "${cand_size_kb[idx]}" "$lbl"
+    local _mid=""
+    [ -n "$_CR_AGE" ]  && _mid="$_mid · $_CR_AGE"
+    [ -n "$_CR_SIZE" ] && _mid="$_mid · ($_CR_SIZE)"
+    if [ "$_CR_WRAP" -eq 1 ]; then
+      # The label didn't fit beside the rest: give it its own line, indented
+      # under the row it belongs to. It is the safety semantics — it is shown
+      # in full, always.
+      printf '  [%s] %b%s%b · "%s"%b%s%b\n' \
+        "$box" "$__C_BOLD" "$_ident" "$__C_RESET" "$_CR_TITLE" "$__C_DIM" "$_mid" "$__C_RESET"
+      printf '      %b%s%b\n' "$__C_DIM" "${lbl# }" "$__C_RESET"
+    else
+      printf '  [%s] %b%s%b · "%s"%b%s%s%b\n' \
+        "$box" "$__C_BOLD" "$_ident" "$__C_RESET" "$_CR_TITLE" "$__C_DIM" "$_mid" "$lbl" "$__C_RESET"
+    fi
   done
   return 0
+}
+
+# _clean_prose <color> <text> — one line of clean's prose (the list heading, the
+# totals, the unchecked hint, the dry-run note), WRAPPED to the terminal instead
+# of running off the edge. These are full localized sentences: German's list
+# heading alone measures 78 columns, so at 60 it must wrap. Drop-in for
+# log_bold/log_dim here (they are plain `printf '%b%s%b\n'`, no prefix of their
+# own, so wrapping loses nothing).
+_clean_prose() {
+  _home_wrap_prefixed "$2" "" 0 "$1" "$__C_RESET"
+}
+
+# _clean_row_h <cols> -> the height, in LINES, of EVERY candidate row in this
+# frame: 2 if any candidate's label has to wrap onto a continuation line at
+# <cols>, else 1. One height for all rows (not per-row) on purpose: the
+# picker's viewport arithmetic is a plain row count, so a variable-height row
+# would let the frame grow past the terminal's last line and scroll the alt
+# screen. Reads the ord/cand_* arrays dynamically scoped from cmd_clean.
+_clean_row_h() {
+  local cols="$1" i idx lbl
+  for ((i=0; i<${#ord[@]}; i++)); do
+    idx="${ord[i]}"
+    lbl=""
+    [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
+    [ -n "$lbl" ] || continue
+    _clean_row_fit "$(( cols - 10 ))" 16 \
+      "${cand_title[idx]}" "${cand_age_str[idx]}" "${cand_size_kb[idx]}" "$lbl"
+    [ "$_CR_WRAP" -eq 1 ] && { printf '2'; return 0; }
+  done
+  printf '1'
 }
 
 # One frame of the checkbox picker (viewport + header tally + section
@@ -541,7 +668,9 @@ _clean_print_list() {
 # documents.
 _clean_select_body() {
   local sel="$1" n="$2" max_visible="$3"
-  local start_idx=0 end_idx=$(( n - 1 )) _cols; _cols="$(_home_cols)"
+  local start_idx=0 end_idx=$(( n - 1 )) _cols row_h
+  _cols="$(_home_cols)"
+  row_h="$(_clean_row_h "$_cols")"
   if [ "$n" -gt "$max_visible" ]; then
     start_idx=$(( sel - (max_visible / 2) ))
     [ "$start_idx" -lt 0 ] && start_idx=0
@@ -556,8 +685,9 @@ _clean_select_body() {
   _clean_tally
 
   printf '\033[H\033[K\n'   # home + one blank top-margin line
-  printf '  %b%s%b  %b%s%b\033[K\n' \
-    "$__C_BOLD" "clikae clean" "$__C_RESET" "$__C_DIM" "$T_CLEAN_PICKER_HINT" "$__C_RESET"
+  # Hint WRAPPED, not shortened — same treatment as the board/resume keybars.
+  _home_wrap_prefixed "$T_CLEAN_PICKER_HINT" \
+    "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae clean" "$__C_RESET")" 16 "$__C_DIM" "$__C_RESET"
   # shellcheck disable=SC2059
   printf '  %b%s%b\033[K\n\n' \
     "$__C_DIM" "$(printf "$T_CLEAN_TALLY" "$sel_n" "$n" "$(_kb_human "$sel_kb")")" "$__C_RESET"
@@ -580,25 +710,33 @@ _clean_select_body() {
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="[x]"; else box="[ ]"; fi
     lbl=""
     [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
-    # Same "the label wins, the title yields" budget as _clean_print_list:
-    # "    " lead(4) + mark(1) + " "(1) + box(3) + " "(1) + the 16-col padded
-    # engine/tank + " · "(3) + 2 title quotes + " · "(3) + " · ("(4) + ")"(1)
-    # = 40 literal cols (incl. 1 margin for `_home_trunc`'s "…"), then the
-    # row's own variable age/size/label on top of that.
-    local _size_human _overhead _title_budget
-    _size_human="$(_kb_human "${cand_size_kb[idx]}")"
-    _overhead=$(( 40 \
-      + $(_dwidth "${cand_age_str[idx]}") + $(_dwidth "$_size_human") \
-      + $(_dwidth "$lbl") ))
-    _title_budget="$(_home_row_budget "$_cols" "$_overhead" 3)"
-    row="$(printf '%s · "%s" · %s · (%s)%s' \
-      "$(_home_lpad "${cand_engine[idx]}/${cand_tank[idx]}" 16)" \
-      "$(_home_trunc "${cand_title[idx]}" "$_title_budget")" \
-      "${cand_age_str[idx]}" "$_size_human" "$lbl")"
+    # Same progressive disclosure as _clean_print_list (_clean_row_fit): label
+    # never truncated, title never below _CR_TITLE_MIN, age then size dropped
+    # to buy the room. Lead chrome here is "    " + mark + " " + box + " " = 10
+    # columns; the engine/tank stays lpad'd to 16 so the columns still line up.
+    _clean_row_fit "$(( _cols - 10 ))" 16 \
+      "${cand_title[idx]}" "${cand_age_str[idx]}" "${cand_size_kb[idx]}" "$lbl"
+    local _mid=""
+    [ -n "$_CR_AGE" ]  && _mid="$_mid · $_CR_AGE"
+    [ -n "$_CR_SIZE" ] && _mid="$_mid · ($_CR_SIZE)"
+    # UNIFORM ROW HEIGHT: `row_h` (2 when ANY candidate's label had to wrap) is
+    # decided once per frame by the caller, so every row occupies exactly the
+    # same number of lines. That keeps the viewport arithmetic (max_visible,
+    # start/end idx) a plain row count — a variable-height row would let a
+    # frame grow taller than the terminal and scroll the alt-screen.
+    row="$(printf '%s · "%s"%s' \
+      "$(_home_lpad "${cand_engine[idx]}/${cand_tank[idx]}" 16)" "$_CR_TITLE" "$_mid")"
+    if [ "$row_h" -eq 1 ]; then row="$row$lbl"; fi
     if [ "$i" -eq "$sel" ]; then
       printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_BOLD" "$row" "$__C_RESET"
     else
       printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_DIM" "$row" "$__C_RESET"
+    fi
+    if [ "$row_h" -eq 2 ]; then
+      # The label's own line — shown in full, never truncated (safety
+      # semantics). A row with no label still prints an (empty) second line, so
+      # all rows keep the same height.
+      printf '          %b%s%b\033[K\n' "$__C_DIM" "${lbl# }" "$__C_RESET"
     fi
   done
   if [ "$end_idx" -lt $(( n - 1 )) ]; then
@@ -622,11 +760,16 @@ _clean_select() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
 
-  local lsz lines=24 max_visible=15
+  local lsz lines=24 max_visible=15 _rh
+  # Every row is _clean_row_h lines tall (2 when a long localized label has to
+  # wrap), so the number of rows that FIT is the line budget divided by that
+  # height — otherwise a wrapped frame would be twice as tall as the viewport
+  # thinks and scroll the alt screen.
+  _rh="$(_clean_row_h "$(_home_cols)")"
   lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
   if [ -n "$lsz" ]; then
     lines="${lsz%% *}"
-    max_visible=$(( lines - 11 ))   # 8 rows of chrome + up to 3 section headings
+    max_visible=$(( (lines - 11) / _rh ))   # 8 rows of chrome + up to 3 section headings
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
@@ -884,20 +1027,20 @@ EOF
   local sel_n=0 sel_kb=0 unsel_n=0
 
   if [ "$dry_run" -eq 1 ] || [ ! -t 0 ]; then
-    log_bold "$T_CLEAN_LIST_HEADING"
+    _clean_prose "$__C_BOLD" "$T_CLEAN_LIST_HEADING"
     echo
     _clean_print_list
     echo
     _clean_tally
     # shellcheck disable=SC2059
-    log_bold "$(printf "$T_CLEAN_TOTAL" "$sel_n")"
+    _clean_prose "$__C_BOLD" "$(printf "$T_CLEAN_TOTAL" "$sel_n")"
     # shellcheck disable=SC2059
-    log_bold "$(printf "$T_CLEAN_SPACE_TO_FREE" "$(_kb_human "$sel_kb")")"
+    _clean_prose "$__C_BOLD" "$(printf "$T_CLEAN_SPACE_TO_FREE" "$(_kb_human "$sel_kb")")"
     # shellcheck disable=SC2059
-    [ "$unsel_n" -gt 0 ] && log_dim "$(printf "$T_CLEAN_UNCHECKED_HINT" "$unsel_n")"
+    [ "$unsel_n" -gt 0 ] && _clean_prose "$__C_DIM" "$(printf "$T_CLEAN_UNCHECKED_HINT" "$unsel_n")"
     echo
     if [ "$dry_run" -eq 1 ]; then
-      log_dim "$T_CLEAN_DRYRUN_NOTE"
+      _clean_prose "$__C_DIM" "$T_CLEAN_DRYRUN_NOTE"
       return 0
     fi
     # Never delete without a live confirmation: in a pipe / non-TTY there's no
@@ -913,7 +1056,7 @@ EOF
   if [ "$sel_rc" -eq 2 ]; then
     # No /dev/tty to draw the picker on — fall back to the printed list with its
     # default selection and the all-or-nothing confirm below.
-    log_bold "$T_CLEAN_LIST_HEADING"
+    _clean_prose "$__C_BOLD" "$T_CLEAN_LIST_HEADING"
     echo
     _clean_print_list
     echo

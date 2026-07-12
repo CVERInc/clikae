@@ -215,9 +215,13 @@ _resume_pick_draw_body() {
   local _cols; _cols="$(_home_cols)"
   printf '\033[H\033[K\n'   # home + one blank top-margin line
 
-  printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · c %s · q %s%b\033[K\n\n' \
-    "$__C_BOLD" "clikae resume" "$__C_RESET" "$__C_DIM" \
-    "$T_K_MOVE" "$T_RESUME" "$T_K_FILTER" "$T_K_CLEANUP" "$T_K_QUIT" "$__C_RESET"
+  # Keybar WRAPPED, not shortened (same treatment as the board's footer): the
+  # localized key labels are correct and de/es/fr legitimately need the room
+  # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
+  _home_wrap_prefixed \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · q $T_K_QUIT" \
+    "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
+  printf '\n'
 
   # Top overflow indicator
   if [ "$start_idx" -gt 0 ]; then
@@ -256,10 +260,28 @@ _resume_pick_draw_body() {
       # file (line ~166/~644) when announcing a session, not the raw UUID; the
       # cwd is middle-ellipsised (head kept short, tail — the meaningful leaf
       # dir — kept long) to whatever's left of the row's budget.
-      local _short_sid _dir_budget
+      #
+      # PROGRESSIVE DISCLOSURE, same principle as clean's rows: when the line
+      # can't fit, DROP the least valuable piece rather than overflow. The dir
+      # is what you're identifying the session by, so it is last to yield; the
+      # "Enter to resume" hint goes first (it's repeated on every selected row
+      # and the keybar already says it), then the id. Below ~60 columns the
+      # fixed floor alone used to push this line 3-7 cols over the edge.
+      local _short_sid _dir_budget _tail
       _short_sid="${sid%%-*}…"
-      _dir_budget="$(_home_row_budget "$_cols" "$(( 25 + $(_dwidth "$_short_sid") + $(_dwidth "$T_ENTER_RESUME") ))" 15)"
-      printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "$(_home_trunc_mid "${cwd:-?}" "$_dir_budget")" "$_short_sid" "$T_ENTER_RESUME" "$__C_RESET"
+      # lead(10) + "dir: "(5) + " · id: "(7) + " · "(3) = 25 with everything
+      _dir_budget=$(( _cols - 25 - $(_dwidth "$_short_sid") - $(_dwidth "$T_ENTER_RESUME") ))
+      _tail="$(printf ' · id: %s · %s' "$_short_sid" "$T_ENTER_RESUME")"
+      if [ "$_dir_budget" -lt 15 ]; then      # drop the hint
+        _dir_budget=$(( _cols - 22 - $(_dwidth "$_short_sid") ))
+        _tail="$(printf ' · id: %s' "$_short_sid")"
+      fi
+      if [ "$_dir_budget" -lt 15 ]; then      # drop the id too — dir only
+        _dir_budget=$(( _cols - 15 ))
+        _tail=""
+      fi
+      [ "$_dir_budget" -ge 8 ] || _dir_budget=8
+      printf '          %bdir: %s%s%b\033[K\n' "$__C_DIM" "$(_home_trunc_mid "${cwd:-?}" "$_dir_budget")" "$_tail" "$__C_RESET"
     else
       printf '    %b %b %s %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_title_budget")" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
     fi

@@ -535,3 +535,108 @@ PSSTUB
   [[ "$output" != *"Estimated space to free"* ]] || false
   [[ "$output" != *"Freed"* ]] || false
 }
+
+# --- row width budget: progressive disclosure by importance (fix/tui-width) ---
+# The row must never exceed the terminal, and when it tightens it must sacrifice
+# in importance order: age first, then size (compressed, then dropped), and only
+# then the title — which still never drops below _CR_TITLE_MIN. The LABEL (the
+# safety semantics) is never truncated; if it can't fit beside the rest it moves
+# to its own continuation line.
+
+@test "_kb_compact squeezes the size (21.0 MB -> 21M) without lying about it" {
+  _source_clean
+  [ "$(_kb_compact 512)" = "512K" ]
+  [ "$(_kb_compact 21504)" = "21M" ]        # 21.0 MB
+  [ "$(_kb_compact 1536)" = "1.5M" ]        # 1.5 MB keeps its decimal
+  [[ "$(_kb_compact 2097152)" == *G ]] || false
+  # always narrower than the spaced-out form it replaces
+  [ "$(_dwidth "$(_kb_compact 21504)")" -lt "$(_dwidth "$(_kb_human 21504)")" ]
+}
+
+@test "_clean_row_fit: a wide row keeps everything (age, full size, whole title)" {
+  _source_clean
+  _clean_row_fit 120 16 "Short title" "0d ago" 21504 " · stale copy (kept: b)"
+  [ "$_CR_TITLE" = "Short title" ]          # not truncated
+  [ "$_CR_AGE" = "0d ago" ]
+  [ "$_CR_SIZE" = "21.0 MB" ]               # full, uncompressed
+  [ "$_CR_WRAP" -eq 0 ]
+}
+
+@test "_clean_row_fit: AGE is the first thing sacrificed, and the title outranks it" {
+  _source_clean
+  local long="Refactor the payment reconciliation pipeline for retried webhooks"
+  # 60-col terminal, 10 cols of lead chrome -> avail 50.
+  _clean_row_fit 50 16 "$long" "0d ago" 21504 ""
+  [ -z "$_CR_AGE" ]                                  # age dropped...
+  [ "$_CR_TITLE" != "" ]
+  # ...to buy the title a RECOGNIZABLE width, not a 12-col stub.
+  [ "$(_dwidth "$_CR_TITLE")" -ge "$_CR_TITLE_GOOD" ]
+}
+
+@test "_clean_row_fit: the title never drops below _CR_TITLE_MIN" {
+  _source_clean
+  local long="Refactor the payment reconciliation pipeline for retried webhooks"
+  _clean_row_fit 34 16 "$long" "0d ago" 21504 ""
+  [ "$(_dwidth "$_CR_TITLE")" -ge "$_CR_TITLE_MIN" ]
+}
+
+@test "_clean_row_fit: a long localized label is NEVER truncated — it wraps to its own line" {
+  _source_clean
+  local long="Refactor the payment reconciliation pipeline for retried webhooks"
+  local fr=" · copie obsolète (celle de work est gardée)"   # the fr-FR stale-copy label
+  _clean_row_fit 70 16 "$long" "il y a 0j" 21504 "$fr"
+  [ "$_CR_WRAP" -eq 1 ]                              # label pushed to line 2
+  [ "$(_dwidth "$_CR_TITLE")" -ge "$_CR_TITLE_MIN" ] # title still readable
+}
+
+@test "no clean --dry-run line exceeds 80 columns, in any of the nine locales" {
+  # Measured with unicodedata.east_asian_width — the TRUE display width — not
+  # with lib's own `_dwidth`. _dwidth is a bash-3.2-safe byte heuristic that
+  # OVER-counts (an accented Latin char costs 2 bytes -> +0.5 col, a 3-byte "…"
+  # -> 2 cols), which is exactly what you want in the RENDER (it budgets
+  # conservatively, so it can only under-fill, never overflow) but would make
+  # this assertion lie in both directions. Skip rather than fake it if python3
+  # isn't around — same pattern as list.bats/status.bats' JSON checks.
+  command -v python3 >/dev/null || skip "python3 not available to measure display width"
+  local sid="34343434-2222-3333-4444-555555555555"
+  _seed_lines a "$sid" 200 >/dev/null
+  mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
+  head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
+    > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
+  local loc
+  for loc in en-US ja-JP zh-TW zh-Hans ko-KR es-ES de-DE fr-FR pt-BR; do
+    # Not a tty here, so the render takes its documented 80-col fallback — the
+    # floor these tests are specified against. (The 60-col + live-tty behaviour
+    # is covered by the PTY audit, which drives a real pty at both widths.)
+    CLIKAE_LANG="$loc" run clikae clean --dry-run
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" | python3 -c '
+import sys, unicodedata
+bad = []
+for line in sys.stdin.read().splitlines():
+    line = line.rstrip()
+    if not line:
+        continue
+    w = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in line)
+    if w > 80:
+        bad.append((w, line))
+for w, line in bad:
+    print("%d cols: %s" % (w, line), file=sys.stderr)
+sys.exit(1 if bad else 0)
+' || { echo "locale $loc has an over-width line (above)"; false; }
+  done
+}
+
+@test "the localized stale-copy LABEL is never truncated, even in the longest language (fr)" {
+  local sid="45454545-2222-3333-4444-555555555555"
+  _seed_lines a "$sid" 200 >/dev/null
+  mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
+  head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
+    > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
+  # fr-FR's label is the longest of the nine — it must appear IN FULL (it carries
+  # the safety semantics: which copy is being kept). The title is what yields.
+  CLIKAE_LANG=fr-FR run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"copie obsolète (celle de a est gardée)"* ]] || false
+  [[ "$output" != *"copie obsolète (celle de a est gard…"* ]] || false   # not cut
+}

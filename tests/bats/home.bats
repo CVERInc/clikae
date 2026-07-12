@@ -577,3 +577,37 @@ _agy_log() { # <line>
     ) || false
   done
 }
+
+@test "_home_chunk hard-breaks text a word-wrapper cannot: CJK (no interword spaces)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # A Japanese sentence is ONE "word" to a space-splitter — without a hard break
+  # it can never wrap and runs off the edge (ja-JP's clean heading did exactly
+  # that: 61 cols on a 60-col terminal).
+  local ja="整理できるセッションデータ（各セクションでサイズの大きい順）:"
+  local out chunk
+  out="$(_home_chunk "$ja" 20)"
+  [ -n "$out" ]
+  for chunk in $out; do
+    [ "$(_dwidth "$chunk")" -le 20 ] || { echo "chunk too wide: $chunk"; false; }
+  done
+  # No character is lost or duplicated by the split.
+  local rejoined=""
+  for chunk in $out; do rejoined="$rejoined$chunk"; done
+  [ "$rejoined" = "$ja" ]
+}
+
+@test "_home_wrap_prefixed wraps a CJK sentence (no spaces) within the width" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local ja="整理できるセッションデータ各セクションでサイズの大きい順に並びます一行に収まらない長い文章"
+  run _home_wrap_prefixed "$ja" "" 0 "" ""
+  [ "$status" -eq 0 ]
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$(_dwidth "$line")" -le 80 ] || { echo ">80 cols: $line"; false; }
+  done <<< "$output"
+}
