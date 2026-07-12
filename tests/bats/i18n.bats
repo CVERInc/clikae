@@ -106,6 +106,7 @@ load '../helpers'
     for key in T_DRY_SEEN:%s T_LANG_SET:%s T_LANG_UNKNOWN:%s \
                T_RESUME_CARRY_PICK:%s T_RESUME_OPT_RELAY:%s T_RESUME_OPT_FORCE:%s \
                T_RESUME_DRY_TITLE:%s T_NEWTANK_PROFILE:%s T_RESUME_FOOTER:%d \
+               T_CLEAN_SECT_OLD:%s T_CLEAN_SECT_MIN:%s \
                T_UPDATE_NOW:%s; do
       want="${key#*:}"; key="${key%%:*}"
       eval "fmt=\"\$$key\""

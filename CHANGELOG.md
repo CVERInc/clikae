@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`clikae clean` — disk cleanup is a top-level command now.** The flow that
+  shipped inside `resume cleanup` (v0.13.1) was a capability buried under
+  another command's subtree — nearly undiscoverable, and disk hygiene was
+  never a resume concern. It's extracted whole into `clikae clean` (grammar
+  §3.3; `clikae resume cleanup` keeps working as a hidden §7 alias that
+  forwards verbatim), and the zero-knowledge path is the point: type
+  `clikae clean`, look at ONE list, Enter, red confirm — no flags needed.
+- **The preview is sectioned, with smart defaults.** The flat biggest-first
+  list becomes three labeled sections (still biggest first within each):
+  *Redundant (safe)* — stale copies + orphaned subagent data, pre-checked;
+  *Untouched for 30+ days* (or your `--older-than`), pre-checked; and *Big
+  but recent — your call* — sessions of 20 MB or more that no filter selected,
+  plus copies with unique content (`diverged — has unique content`), shown
+  UNCHECKED so the space hogs are visible with zero flags but never deleted
+  without an explicit opt-in. `--dry-run`, the non-TTY refusal, and the
+  `--older-than`/`--min-size` semantics carry over unchanged.
+- **The board is the hub (grammar §8.1).** `c` on the home board opens the
+  clean screen and returns to the board when it exits — same first-class-key
+  treatment `R` gives the resume picker — and it's in the `?` legend in all
+  three languages. The resume picker's `c` key no longer embeds its own
+  cleanup pass: it opens the same `clikae clean` screen and, when that exits,
+  rescans the store and redraws the picker instead of dropping you to the
+  shell over a stale list.
+
 ## [0.13.1] — 2026-07-11
 
 ### Added

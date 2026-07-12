@@ -57,6 +57,8 @@ Use & inspect:
   lang [en-US|ja-JP|zh-TW]         interface language (dashboard + prompts)
   tanks                            list all tanks (with the logged-in account)
   status [engine]                  which tank each engine is on (+ recent carries)
+  clean                            free disk space: one smart list of deletable
+                                   session data, preview first, asks before deleting
   doctor                           read-only health check: what clikae can do here
   adapters                         list supported engines
   demo                             a 30-second guided tour in a throwaway sandbox

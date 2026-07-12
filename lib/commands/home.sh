@@ -1001,6 +1001,7 @@ _home_help_overlay() {
   _home_help_row "d"             "$T_K_DELETE"
   _home_help_row "s"             "$T_K_SOLO"
   _home_help_row "m"             "$T_K_MEMORY"
+  _home_help_row "c"             "$T_K_CLEAN"
   _home_help_row "/"             "$T_K_FILTER"
   _home_help_row "A"             "$T_K_AUTO (ask/safe/full · BETA)"
   _home_help_row "l"             "$T_K_LANG"
@@ -1424,6 +1425,14 @@ EOF
           items="$(_home_items)"; dry="$(_home_dry_set)"
         fi
         ;;
+      c)
+        # Free disk space: open `clikae clean` (its own screen, its own red
+        # confirm), then come back to the board — every capability gets a
+        # first-class key from the hub, and an adjacent screen returns where
+        # you came from (grammar §8.1). Row-independent, like `n`.
+        _home_stay "$CLIKAE_BIN" clean
+        items="$(_home_items)"; dry="$(_home_dry_set)"
+        ;;
     esac
   done
 
@@ -1486,6 +1495,7 @@ legend):
   r   relay this shell's session into it     x   open it incognito (--ephemeral)
   n   new tank                a   rename the tank (carries alias + login)
   d   delete a tank (asks)    s   solo (out of the fleet)   m   memory (Soul)
+  c   clean up session data — free disk space (opens `clikae clean`, comes back)
   /   filter                  A   autonomy (BETA)           l   language
   q/Esc  quit
 
