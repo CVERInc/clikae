@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **i18n is ready for more languages: per-locale string files + mechanical CI.**
+  The three string tables moved out of `lib/core/i18n.sh` into
+  `lib/i18n/<locale>.sh` (en-US is the canonical key list; still loaded with a
+  plain `source` — instant, offline, ships with the body), and the resolver's
+  `_i18n_locales` became the single source of truth for the supported-locale
+  list: `clikae lang`'s choices, the board's `l` picker, and the tests all
+  derive from it — no second hardcoded list anywhere. A new completeness test
+  in `tests/bats/i18n.bats` extracts the key list and the locale list from the
+  code itself and asserts every key × every locale is defined, non-empty, and
+  placeholder-compatible with en-US, so adding a language is a self-contained
+  PR (one string file + one resolver line — see the new
+  [docs/adding-a-locale.md](docs/adding-a-locale.md)) and a partial
+  translation can never merge silently. Chinese is now keyed by writing
+  system: Traditional (`zh-TW`, also serving `zh_HK`/`*Hant*`) and Simplified
+  (`zh-Hans`, arriving) are separate locales, with the resolver slot for
+  zh-Hans marked; until it ships, all other `zh` reads `zh-TW` as before.
+
 - **`clikae clean` — disk cleanup is a top-level command now.** The flow that
   shipped inside `resume cleanup` (v0.13.1) was a capability buried under
   another command's subtree — nearly undiscoverable, and disk hygiene was

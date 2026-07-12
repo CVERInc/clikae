@@ -135,7 +135,7 @@ fuel words forced on them.
 | `clikae conduct --leg <e>/<t>… (--prompt-file <f> \| --prompt <s>)` | **(BETA)** The vertical-orchestration primitive: fan ONE prompt across N accounts **in parallel**, each running headless **read-only** on its own tank (its own quota), then collect every leg's full output and print a captured/dry table. clikae does **not** judge — it hands you N result files and an honest table; you (or the session model acting as conductor) pick the winner. Brain/muscle split: clikae is the muscle (accounts, dry-detection, parallel routing), the conductor is the brain. Read-only by design so legs can't clobber a shared tree; write/impl tournaments stay an orchestrator's job. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
-| `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `l` key opens a language picker. |
+| `clikae lang [<locale>]` | Show or set the interface language (dashboard + prompts); bare `clikae lang` lists the supported locales, and the board's `l` key opens a language picker. |
 | `clikae doctor` / `info` / `adapters` / `demo` / `help` / `version` | Inspect / meta. |
 
 ---

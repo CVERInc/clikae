@@ -93,28 +93,111 @@ load '../helpers'
   [[ "$output" == *"tanks across"* ]] || false
 }
 
-@test "T_* strings used as printf FORMATS carry exactly their expected placeholder, every language" {
-  # ~10 call sites do `printf "$T_X" arg` — the string IS the format, so a
-  # translation that adds a stray % (e.g. "50% done") corrupts output at
-  # runtime. This pins the contract per language: exactly one placeholder of
-  # the right kind, and no other % (write %% for a literal percent).
+# --- mechanical completeness (the nine-locale standard's CI clause) -----------
+# The KEY list is extracted from lib/i18n/en-US.sh (the canonical table: one
+# `T_KEY="…"` per line at column 0) and the LOCALE list from the resolver's
+# _i18n_locales — both mechanically, so adding a locale line to the resolver
+# (plus its lib/i18n/<code>.sh) pulls it into enforcement with ZERO test edits,
+# and a partial translation can never merge silently.
+
+# _i18n_sig <string> — the printf-placeholder signature: literal %% stripped,
+# then every %<letter> in order (e.g. "%s%d"). Empty for display-only strings.
+_i18n_sig() {
+  printf '%s' "$1" | sed 's/%%//g' | grep -oE '%[a-zA-Z]' | tr -d '\n' || true
+}
+
+# _i18n_has_stray_pct <string> — 0 if a % remains after removing %% and %<letter>.
+_i18n_has_stray_pct() {
+  case "$(printf '%s' "$1" | sed 's/%%//g; s/%[a-zA-Z]//g')" in
+    *%*) return 0 ;; *) return 1 ;;
+  esac
+}
+
+@test "completeness: every en-US key exists non-empty in every locale, printf placeholders matching (mechanical extraction)" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
-  local lang key fmt want stripped
-  for lang in en-US ja-JP zh-TW; do
-    i18n_load "$lang"
-    for key in T_DRY_SEEN:%s T_LANG_SET:%s T_LANG_UNKNOWN:%s \
-               T_RESUME_CARRY_PICK:%s T_RESUME_OPT_RELAY:%s T_RESUME_OPT_FORCE:%s \
-               T_RESUME_DRY_TITLE:%s T_NEWTANK_PROFILE:%s T_RESUME_FOOTER:%d \
-               T_CLEAN_SECT_OLD:%s T_CLEAN_SECT_MIN:%s \
-               T_UPDATE_NOW:%s; do
-      want="${key#*:}"; key="${key%%:*}"
-      eval "fmt=\"\$$key\""
-      [[ "$fmt" == *"$want"* ]] || { echo "$lang $key: missing $want in: $fmt"; false; }
-      # After removing literal %% and the one placeholder, no % may remain.
-      stripped="${fmt//%%/}"
-      stripped="${stripped/"$want"/}"
-      [[ "$stripped" != *%* ]] || { echo "$lang $key: stray %% in: $fmt"; false; }
-    done
+
+  # (a) the canonical key list, from en-US's file
+  local keys n_keys
+  keys="$(grep -E '^T_[A-Z0-9_]+=' "$_CLIKAE_I18N_DIR/en-US.sh" | cut -d= -f1 | sort)"
+  n_keys="$(printf '%s\n' "$keys" | grep -c .)"
+  [ "$n_keys" -ge 80 ] || { echo "key extraction broke: only $n_keys keys"; false; }
+
+  # (b) the locale list, from the resolver (the SSOT)
+  local locales n_locs
+  locales="$(_i18n_locales)"
+  n_locs="$(printf '%s\n' "$locales" | grep -c .)"
+  [ "$n_locs" -ge 3 ] || { echo "locale extraction broke: only $n_locs locales"; false; }
+  printf '%s\n' "$locales" > "$TEST_HOME/locales"
+  printf '%s\n' "$keys"    > "$TEST_HOME/en.keys"
+
+  # en-US placeholder signature per key (KEY<TAB>SIG), from the file alone
+  local key v
+  ( # shellcheck source=/dev/null
+    . "$_CLIKAE_I18N_DIR/en-US.sh"
+    while IFS= read -r key; do
+      eval "v=\${$key-}"
+      printf '%s\t%s\n' "$key" "$(_i18n_sig "$v")"
+    done < "$TEST_HOME/en.keys"
+  ) > "$TEST_HOME/en.sig"
+
+  # (c)+(d) per locale: every key defined IN ITS OWN FILE (the en-US fallback
+  # must not mask a hole), non-empty, placeholder-parity with en-US, no stray %
+  # on format keys — and no orphan key en-US doesn't know.
+  local loc
+  : > "$TEST_HOME/fails"
+  while IFS= read -r loc; do
+    ( set +e
+      f="$_CLIKAE_I18N_DIR/$loc.sh"
+      [ -f "$f" ] || { echo "$loc: MISSING file lib/i18n/$loc.sh"; exit 0; }
+      # shellcheck source=/dev/null
+      . "$f" || { echo "$loc: lib/i18n/$loc.sh failed to source"; exit 0; }
+      grep -E '^T_[A-Z0-9_]+=' "$f" | cut -d= -f1 | sort > "$TEST_HOME/loc.keys"
+      comm -23 "$TEST_HOME/en.keys" "$TEST_HOME/loc.keys" | sed "s/^/$loc: MISSING key /"
+      comm -13 "$TEST_HOME/en.keys" "$TEST_HOME/loc.keys" | sed "s/^/$loc: ORPHAN key (not in en-US) /"
+      while IFS= read -r key; do
+        eval "v=\${$key-}"
+        [ -n "$v" ] || { echo "$loc: EMPTY $key"; continue; }
+        want="$(grep "^$key$(printf '\t')" "$TEST_HOME/en.sig" | cut -f2)"
+        got="$(_i18n_sig "$v")"
+        [ "$got" = "$want" ] || echo "$loc: $key placeholders [$got] != en-US [$want]"
+        if [ -n "$want" ] && _i18n_has_stray_pct "$v"; then
+          echo "$loc: $key has a stray % (printf format — write %% for a literal percent): $v"
+        fi
+      done < <(comm -12 "$TEST_HOME/en.keys" "$TEST_HOME/loc.keys")
+    ) >> "$TEST_HOME/fails"
+  done < "$TEST_HOME/locales"
+  if [ -s "$TEST_HOME/fails" ]; then cat "$TEST_HOME/fails"; false; fi
+}
+
+@test "the resolver maps regions/scripts correctly (zh by SCRIPT; unknown → empty, not en)" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  # Traditional Chinese, wherever it's read:
+  [ "$(_i18n_normalize zh_TW.UTF-8)" = "zh-TW" ]
+  [ "$(_i18n_normalize zh_HK)" = "zh-TW" ]
+  [ "$(_i18n_normalize zh-Hant-TW)" = "zh-TW" ]
+  # Simplified inputs read zh-TW ONLY until zh-Hans ships (flip these to
+  # zh-Hans in the PR that adds lib/i18n/zh-Hans.sh + its resolver line):
+  [ "$(_i18n_normalize zh_CN)" = "zh-TW" ]
+  [ "$(_i18n_normalize zh_SG.UTF-8)" = "zh-TW" ]
+  # The generic language-subtag rule (no per-locale case line needed):
+  [ "$(_i18n_normalize ja_JP.UTF-8)" = "ja-JP" ]
+  [ "$(_i18n_normalize EN_us)" = "en-US" ]
+  # Unknown stays EMPTY — clikae_lang falls back to en-US, i18n_set rejects.
+  [ -z "$(_i18n_normalize it_IT)" ]
+  [ -z "$(_i18n_normalize klingon)" ]
+  [ -z "$(_i18n_normalize '')" ]
+}
+
+@test "clikae lang lists every supported locale (menu derives from _i18n_locales, no second list)" {
+  unset CLIKAE_LANG
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  run clikae lang
+  [ "$status" -eq 0 ]
+  local loc
+  for loc in $(_i18n_locales); do
+    [[ "$output" == *"$loc"* ]] || { echo "missing $loc in: $output"; false; }
   done
 }

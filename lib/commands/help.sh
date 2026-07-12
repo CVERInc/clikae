@@ -54,7 +54,7 @@ Keep burning when a tank runs dry:
 Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app
   alias <engine> <tank>            write a shell alias for the tank
-  lang [en-US|ja-JP|zh-TW]         interface language (dashboard + prompts)
+  lang [<locale>]                  interface language (bare `clikae lang` lists them)
   tanks                            list all tanks (with the logged-in account)
   status [engine]                  which tank each engine is on (+ recent carries)
   clean                            free disk space: one smart list of deletable

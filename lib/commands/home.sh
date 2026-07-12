@@ -1310,7 +1310,7 @@ _home_pick() {
       l)
         _home_tty_leave; trap - EXIT INT TERM
         local _lang
-        _lang="$(_home_choose "$T_LANG_PICK    $T_PICKER_HINT" "$(printf 'en-US\nja-JP\nzh-TW')" "$(clikae_lang)")" || _lang=""
+        _lang="$(_home_choose "$T_LANG_PICK    $T_PICKER_HINT" "$(_i18n_locales)" "$(clikae_lang)")" || _lang=""
         [ -n "$_lang" ] && i18n_set "$_lang"
         trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
@@ -1505,8 +1505,8 @@ ORDER (not grouped by engine; engine shown as an inline tag) — arrange it with
 [ / ]. It also has an "Also available" section of relay-capable CLIs/targets you
 can open without a tank (codex, agy).
 
-Interface language (en-US / ja-JP / zh-TW) follows `clikae lang`; the `l` key
-opens a language picker. When output isn't a terminal (a pipe, a script, the GUI), it
+Interface language follows `clikae lang` (bare `clikae lang` lists the
+choices); the `l` key opens a language picker. When output isn't a terminal (a pipe, a script, the GUI), it
 prints the same board as plain text. With no tanks yet it welcomes you and
 points at the first step.
 

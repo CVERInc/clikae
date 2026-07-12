@@ -234,6 +234,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Expectations](docs/EXPECTATIONS.md)** — "is this a bug?" — behaviours that look surprising but are deliberate (the fuel dot, codex resume/time, agy's global switch, …).
 - **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
+- **[Adding a language](docs/adding-a-locale.md)** — give the board and prompts a new locale: one string file + one resolver line, CI enforces the rest.
 
 ## Milestones
 
@@ -290,7 +291,7 @@ Developed and hand-tested on **macOS**; Linux is covered by CI. **Linux / WSL / 
 
 ## Contributing
 
-PRs are very welcome — especially new adapters. Please read [docs/adding-an-adapter.md](docs/adding-an-adapter.md) first. For non-trivial changes, open an issue to discuss the approach before sending a PR.
+PRs are very welcome — especially new adapters and new languages. Please read [docs/adding-an-adapter.md](docs/adding-an-adapter.md) / [docs/adding-a-locale.md](docs/adding-a-locale.md) first. For non-trivial changes, open an issue to discuss the approach before sending a PR.
 
 ## License
 
