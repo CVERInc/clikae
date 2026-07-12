@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   incumbent default. Any other regional variant (`pt_PT`, `fr_CA`, `ko_KR`…)
   lands through the generic language-subtag rule — no resolver line needed.
 
+  The six new tables were reviewed by a model from a different family, reading
+  each one cold against the English — which caught real inversions (a German
+  line that promised the disk space you *have* rather than the space you'd
+  *reclaim*) and, just as usefully, produced a pile of confident nonsense that
+  did not survive checking. They are an honest LLM-grade baseline, not a
+  native-speaker's work: if a string reads wrong in your language, the file to
+  fix is `lib/i18n/<locale>.sh` and the PR is welcome.
+
 - **`clikae clean` — disk cleanup is a top-level command now.** The flow that
   shipped inside `resume cleanup` (v0.13.1) was a capability buried under
   another command's subtree — nearly undiscoverable, and disk hygiene was

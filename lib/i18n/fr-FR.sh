@@ -56,7 +56,7 @@ T_CLEAN_SECT_REDUNDANT="Doublons (sans risque)"
 T_CLEAN_SECT_OLD="Inutilisé depuis plus de %s jours"
 T_CLEAN_SECT_MIN="%s Mo ou plus"
 T_CLEAN_SECT_BIG="Gros mais récent — à vous de voir"
-T_CLEAN_LBL_STALE="copie obsolète (gardée : %s)"
+T_CLEAN_LBL_STALE="copie obsolète (celle de %s est gardée)"
 T_CLEAN_LBL_ORPHAN="données de sous-agent orphelines"
 T_CLEAN_LBL_DIVERGED="divergente — contenu unique"
 T_CLEAN_NO_TRANSCRIPT="(pas de transcription)"
@@ -90,7 +90,7 @@ T_K_HELP="aide"
 T_K_LANG="langue"
 T_K_TOPBOTTOM="haut/bas"
 T_K_JUMP="aller au N-ième"
-T_K_REORDER="déplacer"                       # correct + terser than "réordonner" — moves a tank's position, distinct from T_K_MOVE's "aller" (cursor nav)
+T_K_REORDER="réordonner"                     # agy re-grade: "déplacer" collides with cursor movement; correctness beats the 2 columns
 T_K_AUTO="autonomie"
 T_K_INCOGNITO="incognito"
 # welcome
