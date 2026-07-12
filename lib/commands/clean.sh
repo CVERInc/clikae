@@ -240,7 +240,8 @@ _clean_add_candidate() {
   cand_tank+=("$_rs_tank")
   cand_sid+=("$_rs_sid")
   cand_title+=("")
-  cand_age_str+=("$(( (now - mt) / 86400 ))d ago")
+  # shellcheck disable=SC2059
+  cand_age_str+=("$(printf "$T_CLEAN_AGE_AGO" "$(( (now - mt) / 86400 ))")")
   cand_files_to_delete+=("$files_to_del")
   cand_class+=("$cls")
   cand_label+=("$lbl")
@@ -277,12 +278,15 @@ _clean_dedupe_flush() {
   done
   _resume_session_fields "${g_f[kept]}"
   kept_tank="$_rs_tank"
+  local stale_lbl
+  # shellcheck disable=SC2059
+  stale_lbl="$(printf "$T_CLEAN_LBL_STALE" "$kept_tank")"
   for ((i=0; i<${#g_f[@]}; i++)); do
     if [ "$i" -eq "$kept" ]; then continue; fi
     if _clean_stale_copy_check "${g_f[kept]}" "${g_f[i]}"; then
-      _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" stale "stale copy (kept: $kept_tank)"
+      _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" stale "$stale_lbl"
     else
-      _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" diverged "diverged — has unique content"
+      _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" diverged "$T_CLEAN_LBL_DIVERGED"
     fi
     dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
   done
@@ -311,11 +315,12 @@ _clean_scan_orphans() {
     cand_engine+=("$_rs_engine")
     cand_tank+=("$_rs_tank")
     cand_sid+=("$_rs_sid")
-    cand_title+=("(no transcript)")
-    cand_age_str+=("$(( (now - mt) / 86400 ))d ago")
+    cand_title+=("$T_CLEAN_NO_TRANSCRIPT")
+    # shellcheck disable=SC2059
+    cand_age_str+=("$(printf "$T_CLEAN_AGE_AGO" "$(( (now - mt) / 86400 ))")")
     cand_files_to_delete+=("$d")
     cand_class+=(orphan)
-    cand_label+=("orphaned subagent data")
+    cand_label+=("$T_CLEAN_LBL_ORPHAN")
     cand_checked+=(1)
     cand_section+=(1)
   done
@@ -414,13 +419,15 @@ _clean_select_body() {
   _clean_tally
 
   printf '\033[H\033[K\n'   # home + one blank top-margin line
-  printf '  %b%s%b  %b· ↑↓ move · space toggle · a all · ⏎ delete selected · q cancel%b\033[K\n' \
-    "$__C_BOLD" "clikae clean" "$__C_RESET" "$__C_DIM" "$__C_RESET"
-  printf '  %bselected: %d of %d · %s to free%b\033[K\n\n' \
-    "$__C_DIM" "$sel_n" "$n" "$(_kb_human "$sel_kb")" "$__C_RESET"
+  printf '  %b%s%b  %b%s%b\033[K\n' \
+    "$__C_BOLD" "clikae clean" "$__C_RESET" "$__C_DIM" "$T_CLEAN_PICKER_HINT" "$__C_RESET"
+  # shellcheck disable=SC2059
+  printf '  %b%s%b\033[K\n\n' \
+    "$__C_DIM" "$(printf "$T_CLEAN_TALLY" "$sel_n" "$n" "$(_kb_human "$sel_kb")")" "$__C_RESET"
 
   if [ "$start_idx" -gt 0 ]; then
-    printf '    %b▲ ... %d more above ...%b\033[K\n' "$__C_DIM" "$start_idx" "$__C_RESET"
+    # shellcheck disable=SC2059
+    printf '    %b%s%b\033[K\n' "$__C_DIM" "$(printf "$T_CLEAN_MORE_ABOVE" "$start_idx")" "$__C_RESET"
   fi
   local i idx mark box lbl row sect prev_sect=""
   for ((i=start_idx; i<=end_idx; i++)); do
@@ -447,7 +454,8 @@ _clean_select_body() {
     fi
   done
   if [ "$end_idx" -lt $(( n - 1 )) ]; then
-    printf '    %b▼ ... %d more below ...%b\033[K\n' "$__C_DIM" "$(( n - 1 - end_idx ))" "$__C_RESET"
+    # shellcheck disable=SC2059
+    printf '    %b%s%b\033[K\n' "$__C_DIM" "$(printf "$T_CLEAN_MORE_BELOW" "$(( n - 1 - end_idx ))")" "$__C_RESET"
   fi
   printf '\033[J'   # erase any leftover lines from a taller previous frame
   return 0
@@ -520,20 +528,21 @@ cmd_clean() {
       -d|--dry-run) dry_run=1; shift ;;
       -o|--older-than)
         if [ -z "${2:-}" ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
-          log_fail "Error: --older-than requires a numeric number of days."
+          log_fail "$T_CLEAN_ERR_OLDER_THAN"
         fi
         older_than="$2"; older_given=1
         shift 2
         ;;
       -m|--min-size)
         if [ -z "${2:-}" ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then
-          log_fail "Error: --min-size requires a numeric number of megabytes."
+          log_fail "$T_CLEAN_ERR_MIN_SIZE"
         fi
         min_size_mb="$2"
         shift 2
         ;;
       *)
-        log_fail "Unknown argument: $1  (see: clikae clean --help)"
+        # shellcheck disable=SC2059
+        log_fail "$(printf "$T_CLEAN_ERR_UNKNOWN_ARG" "$1")"
         ;;
     esac
   done
@@ -690,11 +699,14 @@ EOF
 
   if [ "${#ord[@]}" -eq 0 ]; then
     if [ -n "$min_size_mb" ] && [ "$apply_age" -eq 0 ]; then
-      log_ok "No sessions of at least ${min_size_mb} MB found (0 files to clean)."
+      # shellcheck disable=SC2059
+      log_ok "$(printf "$T_CLEAN_NONE_MINSIZE" "$min_size_mb")"
     elif [ -n "$min_size_mb" ]; then
-      log_ok "No sessions older than $older_than days and at least ${min_size_mb} MB found (0 files to clean)."
+      # shellcheck disable=SC2059
+      log_ok "$(printf "$T_CLEAN_NONE_AGE_MINSIZE" "$older_than" "$min_size_mb")"
     else
-      log_ok "Nothing to clean — no redundant copies, no sessions older than $older_than days, none over ${CLIKAE_CLEAN_BIG_MB} MB."
+      # shellcheck disable=SC2059
+      log_ok "$(printf "$T_CLEAN_NONE_ALL" "$older_than" "$CLIKAE_CLEAN_BIG_MB")"
     fi
     return 0
   fi
@@ -702,7 +714,7 @@ EOF
   # ── 6. Titles, only for rows that survived the filters ───────────────────
   # From the transcript FILE, not (dir, sid): adapter_session_title derives its
   # path from $PWD's project, so every session outside the current directory
-  # listed as "(no preview)" here.
+  # listed as T_CLEAN_NO_PREVIEW here.
   local oi idx title
   for ((oi=0; oi<${#ord[@]}; oi++)); do
     idx="${ord[oi]}"
@@ -712,30 +724,33 @@ EOF
     if declare -F adapter_title_for_file >/dev/null 2>&1; then
       title="$(adapter_title_for_file "${candidates[idx]}" 2>/dev/null || true)"
     fi
-    [ -n "$title" ] || title="(no preview)"
+    [ -n "$title" ] || title="$T_CLEAN_NO_PREVIEW"
     cand_title[idx]="$title"
   done
 
   local sel_n=0 sel_kb=0 unsel_n=0
 
   if [ "$dry_run" -eq 1 ] || [ ! -t 0 ]; then
-    log_bold "Session data that can be cleaned up (biggest first in each section):"
+    log_bold "$T_CLEAN_LIST_HEADING"
     echo
     _clean_print_list
     echo
     _clean_tally
-    log_bold "Total sessions to clean: $sel_n"
-    log_bold "Estimated space to free: $(_kb_human "$sel_kb")"
-    [ "$unsel_n" -gt 0 ] && log_dim "$unsel_n row(s) start unchecked — big-but-recent sessions and diverged copies are your call."
+    # shellcheck disable=SC2059
+    log_bold "$(printf "$T_CLEAN_TOTAL" "$sel_n")"
+    # shellcheck disable=SC2059
+    log_bold "$(printf "$T_CLEAN_SPACE_TO_FREE" "$(_kb_human "$sel_kb")")"
+    # shellcheck disable=SC2059
+    [ "$unsel_n" -gt 0 ] && log_dim "$(printf "$T_CLEAN_UNCHECKED_HINT" "$unsel_n")"
     echo
     if [ "$dry_run" -eq 1 ]; then
-      log_dim "Dry-run mode: no files were deleted."
+      log_dim "$T_CLEAN_DRYRUN_NOTE"
       return 0
     fi
     # Never delete without a live confirmation: in a pipe / non-TTY there's no
     # one to press Enter, so refuse rather than proceed on EOF (clikae principle:
     # never silently destroy). --dry-run is the safe non-interactive preview.
-    log_fail "Refusing to delete without an interactive confirmation — re-run in a terminal (or use --dry-run to preview)."
+    log_fail "$T_CLEAN_REFUSE_NONINTERACTIVE"
   fi
 
   # Interactive: pick WHAT to delete on the sectioned checkbox list, then the
@@ -745,29 +760,31 @@ EOF
   if [ "$sel_rc" -eq 2 ]; then
     # No /dev/tty to draw the picker on — fall back to the printed list with its
     # default selection and the all-or-nothing confirm below.
-    log_bold "Session data that can be cleaned up (biggest first in each section):"
+    log_bold "$T_CLEAN_LIST_HEADING"
     echo
     _clean_print_list
     echo
   elif [ "$sel_rc" -ne 0 ]; then
-    log_ok "Cancelled — nothing deleted."
+    log_ok "$T_CLEAN_CANCELLED"
     return 0
   fi
 
   _clean_tally
   if [ "$sel_n" -eq 0 ]; then
-    log_ok "Nothing selected — nothing deleted."
+    log_ok "$T_CLEAN_NOTHING_SELECTED"
     return 0
   fi
 
-  log_bold "Selected sessions to clean: $sel_n"
-  log_bold "Estimated space to free: $(_kb_human "$sel_kb")"
+  # shellcheck disable=SC2059
+  log_bold "$(printf "$T_CLEAN_SELECTED" "$sel_n")"
+  # shellcheck disable=SC2059
+  log_bold "$(printf "$T_CLEAN_SPACE_TO_FREE" "$(_kb_human "$sel_kb")")"
   echo
-  printf "%bAre you sure you want to permanently delete these sessions?%b\n" "$__C_RED" "$__C_RESET"
-  printf "Press %bEnter%b to proceed, or %bCtrl-C%b to cancel: " "$__C_BOLD" "$__C_RESET" "$__C_BOLD" "$__C_RESET"
-  read -r _ || log_fail "No confirmation received — nothing deleted."
+  printf "%b%s%b\n" "$__C_RED" "$T_CLEAN_CONFIRM_Q" "$__C_RESET"
+  printf "%b%s%b" "$__C_BOLD" "$T_CLEAN_CONFIRM_PROMPT" "$__C_RESET"
+  read -r _ || log_fail "$T_CLEAN_NO_CONFIRM"
 
-  log_dim "Deleting session files..."
+  log_dim "$T_CLEAN_DELETING"
   local deleted_kb=0 pth
   local -a path_list=()
   for ((oi=0; oi<${#ord[@]}; oi++)); do
@@ -785,5 +802,6 @@ EOF
   done
 
   local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"
-  log_ok "Cleanup complete. Freed approximately $deleted_sz_str."
+  # shellcheck disable=SC2059
+  log_ok "$(printf "$T_CLEAN_DONE" "$deleted_sz_str")"
 }
