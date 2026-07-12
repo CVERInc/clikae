@@ -55,7 +55,7 @@ T_K_HELP="ヘルプ"
 T_K_LANG="言語"
 T_K_TOPBOTTOM="先頭/末尾"
 T_K_JUMP="N番へ移動"
-T_K_REORDER="並べ替え"
+T_K_REORDER="並替"                            # terser than 並べ替え — the katakana wordmark bonus needs the room on the compact footer
 T_K_AUTO="自動度"
 T_K_INCOGNITO="シークレット"
 # welcome

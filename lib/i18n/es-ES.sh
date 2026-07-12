@@ -56,7 +56,7 @@ T_K_HELP="ayuda"
 T_K_LANG="idioma"
 T_K_TOPBOTTOM="inicio/fin"
 T_K_JUMP="ir al N.º"
-T_K_REORDER="reordenar"
+T_K_REORDER="ordenar"                        # terser than "reordenar" (Finder's own "Ordenar por") — the compact footer needed the columns
 T_K_AUTO="autonomía"
 T_K_INCOGNITO="incógnito"
 # welcome

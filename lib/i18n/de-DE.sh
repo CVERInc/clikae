@@ -60,7 +60,7 @@ T_K_HELP="Hilfe"
 T_K_LANG="Sprache"
 T_K_TOPBOTTOM="Anfang/Ende"
 T_K_JUMP="zu N springen"
-T_K_REORDER="sortieren"
+T_K_REORDER="ordnen"                         # terser than "sortieren" — the compact footer needed the columns
 T_K_AUTO="Autonomie"
 T_K_INCOGNITO="Inkognito"
 # welcome

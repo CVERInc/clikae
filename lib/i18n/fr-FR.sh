@@ -33,7 +33,7 @@ T_MORE="plus"
 T_OVER_QUOTA="quota épuisé"
 T_OVER_QUOTA_HINT="transférez la session vers le réservoir suivant :  clikae to"
 # footer key hints
-T_K_MOVE="déplacer"
+T_K_MOVE="aller"                             # terser than "déplacer" (common Apple French for arrow-key navigation, e.g. "Aller à") — the compact footer needed the columns
 T_K_OPEN="ouvrir"
 T_K_RELAY="relais"
 T_K_NEW="créer"
@@ -49,7 +49,7 @@ T_MEM_SHARE_FOR="Partager la mémoire de"
 T_MEM_GROUP_PROMPT="Nom du groupe : "
 T_MEM_NOGROUP="Aucun nom de groupe — annulé."
 T_K_QUIT="quitter"
-T_K_FILTER="filtrer"
+T_K_FILTER="filtre"                          # noun form, terser than "filtrer" — the compact footer needed the columns
 T_K_CLEANUP="nettoyer"
 T_K_CLEAN="nettoyer les données de session — libérer de l'espace disque"
 T_CLEAN_SECT_REDUNDANT="Doublons (sans risque)"
@@ -60,7 +60,7 @@ T_K_HELP="aide"
 T_K_LANG="langue"
 T_K_TOPBOTTOM="haut/bas"
 T_K_JUMP="aller au N-ième"
-T_K_REORDER="réordonner"
+T_K_REORDER="ranger"                         # terser than "réordonner" — the compact footer needed the columns
 T_K_AUTO="autonomie"
 T_K_INCOGNITO="incognito"
 # welcome
