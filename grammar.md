@@ -125,6 +125,7 @@ fuel words forced on them.
 | `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22 / HANDOFF §13). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
 | `clikae memory <share\|isolate\|status> [<engine> <tank>]` | The **memory dial** (§10.1, docs/memory.md). `share <group>` points a tank's long-term memory at ONE vendor-neutral markdown store (`souls/<group>/memory`, a "Soul") so several of *your own* tanks — **across engines** — read/write the same brain; `isolate` restores a tank's own memory; `status` shows the share state. Two strategies by what the engine exposes: **claude** fans its memory DIR into the store (symlink, per-`$PWD`); **codex** gets a fenced pointer note in its `AGENTS.md` and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 opt-in and per-tank — clikae never auto-crosses accounts; crossing your own accounts is announced (`--yes` skips the prompt). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of `--ephemeral`'s fan-out. agy points the same way via `~/.gemini/GEMINI.md`. |
 | `clikae solo <engine> <tank> [reason \| --off]` | Mark a tank **standalone** — out of the fleet. A solo tank is never a `to`/relay target, the burn/`watch` rotation skips it, and `clikae memory share` refuses it. For a dedicated tank (a bot/persona tank on your own account, a client-only tank) that must never receive carried work or share a brain. Bare `clikae solo` lists them. The cross-account guard can't protect a same-account, different-purpose tank — solo is how you wall it off. State: a marker file `<tank>/clikae-meta/solo`; the predicate `tank_is_solo` is what the fleet checks. |
+| `clikae clean [--dry-run \| --older-than <days> \| --min-size <MB>]` | Free disk space: ONE sectioned checkbox list of deletable session data across every tank — redundant copies/orphans and long-untouched sessions pre-checked, big-but-recent sessions shown unchecked (opt-in) — then a red confirm; `--dry-run` prints the same list, a non-TTY run refuses to delete. A plain conventional verb (`git clean`, the prune family) — deleting is not switching, so no fuel word; the flags are the power-user vocabulary, zero flags is the whole ordinary-user path. |
 | `clikae tanks` (alias: `clikae list` / `ls`) | List every tank, with the logged-in account. `tanks` is canonical — a **noun query**, like the existing `adapters` command, not a coined verb. `list`/`ls` stay for convention and for the GUI's `list --json`. |
 | `clikae status [cli]` | Which tank each CLI is on **in this shell**. |
 | `clikae to [target]` | Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve). |
@@ -134,7 +135,7 @@ fuel words forced on them.
 | `clikae conduct --leg <e>/<t>… (--prompt-file <f> \| --prompt <s>)` | **(BETA)** The vertical-orchestration primitive: fan ONE prompt across N accounts **in parallel**, each running headless **read-only** on its own tank (its own quota), then collect every leg's full output and print a captured/dry table. clikae does **not** judge — it hands you N result files and an honest table; you (or the session model acting as conductor) pick the winner. Brain/muscle split: clikae is the muscle (accounts, dry-detection, parallel routing), the conductor is the brain. Read-only by design so legs can't clobber a shared tree; write/impl tournaments stay an orchestrator's job. |
 | `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
 | `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
-| `clikae lang [en-US\|ja-JP\|zh-TW]` | Show or set the interface language (dashboard + prompts); the board's `l` key opens a language picker. |
+| `clikae lang [<locale>]` | Show or set the interface language (dashboard + prompts); bare `clikae lang` lists the supported locales, and the board's `l` key opens a language picker. |
 | `clikae doctor` / `info` / `adapters` / `demo` / `help` / `version` | Inspect / meta. |
 
 ---
@@ -144,7 +145,7 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `auto`, `burn`, `conduct`, `rename`, `git-id`, `memory`, `migrate`, `env`, `app`, `alias`,
+   `watch`, `auto`, `burn`, `conduct`, `clean`, `rename`, `git-id`, `memory`, `migrate`, `env`, `app`, `alias`,
    `lang`, `run`, `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`,
    `demo`, `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases
    and `-h/--help/-v/--version`) → run that command. (`git-id` routes to the
@@ -254,6 +255,7 @@ in `clikae help <cmd>`):
 | `continue` / `relay` / `handoff` | `clikae to …` |
 | `antigravity add` / `use` / `enable` / `disable` | folded into `init` / bare-switch / first-`init` / `remove`-last-tank + `--release` |
 | `antigravity` (as the engine name) | `agy` (canonical engine name; `antigravity` is a hidden long alias) |
+| `resume cleanup` | `clikae clean` (extracted per §8.1; same flags, forwarded verbatim) |
 | `list` / `ls` → `tanks`, `rm` → `remove`, `dashboard` → `home` | `tanks` is canonical; `list`/`ls` are aliases |
 
 Scripts and CI should prefer the explicit aliases (`clikae run …`) where
@@ -273,6 +275,19 @@ clikae                  your tank board
 clikae init <engine> <tank>   create a new tank
 clikae help                full command reference
 ```
+
+### 8.1 The board is the hub
+
+Every capability gets a first-class entry from the home board, by key: the
+board is where a user lives, so a screen you can't reach from it barely exists.
+Screens cross-link to their adjacent screens — `R` opens the resume picker, `c`
+opens clean, `c` inside the resume picker opens the same clean screen — and
+when the adjacent screen exits you return where you came from, never get
+dumped back to the shell. A capability buried under another command's subtree
+is a design smell: `resume cleanup` shipped that way, went a whole release
+being nearly undiscoverable, and was extracted into the top-level
+`clikae clean` (the old spelling survives as a §7 hidden alias). Bury nothing;
+link everything; always return.
 
 ---
 
