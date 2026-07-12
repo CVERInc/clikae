@@ -43,6 +43,21 @@ _seed_lines() {
   printf '%s\n' "$dir/$sid.jsonl"
 }
 
+# Same, but with an explicit ai-title ($3) — for the width tests, whose whole
+# point is that the title may be CJK (2 display columns per glyph) rather than
+# Latin. Raw UTF-8, exactly as a real transcript stores it.
+_seed_titled() {
+  local profile="$1" sid="$2" title="$3" n="$4" i
+  local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
+  mkdir -p "$dir"
+  { printf '{"type":"ai-title","aiTitle":"%s","sessionId":"%s"}\n' "$title" "$sid"
+    for ((i=1; i<=n; i++)); do
+      printf '{"type":"user","cwd":"/tmp/w","message":{"role":"user","content":"conversation line %d"}}\n' "$i"
+    done
+  } > "$dir/$sid.jsonl"
+  printf '%s\n' "$dir/$sid.jsonl"
+}
+
 # Seed a RECENT claude transcript whose first line titles it $3 and whose body
 # pads it to ~$4 MB — the "big but recent" fixture (the built-in floor is 20 MB).
 _seed_big() {
@@ -589,20 +604,34 @@ PSSTUB
   [ "$(_dwidth "$_CR_TITLE")" -ge "$_CR_TITLE_MIN" ] # title still readable
 }
 
-@test "no clean --dry-run line exceeds 80 columns, in any of the nine locales" {
+@test "no clean --dry-run line exceeds 80 columns, in any of the nine locales (CJK titles)" {
   # Measured with unicodedata.east_asian_width — the TRUE display width — not
-  # with lib's own `_dwidth`. _dwidth is a bash-3.2-safe byte heuristic that
-  # OVER-counts (an accented Latin char costs 2 bytes -> +0.5 col, a 3-byte "…"
-  # -> 2 cols), which is exactly what you want in the RENDER (it budgets
-  # conservatively, so it can only under-fill, never overflow) but would make
-  # this assertion lie in both directions. Skip rather than fake it if python3
-  # isn't around — same pattern as list.bats/status.bats' JSON checks.
+  # with lib's own `_dwidth` (asserting the render with the render's own ruler
+  # would prove nothing if the ruler is what's wrong). Skip rather than fake it
+  # if python3 isn't around — same pattern as list.bats/status.bats' JSON checks.
+  #
+  # 🔴 The TITLES ARE CJK ON PURPOSE. This test previously seeded Latin titles
+  # only, and passed while the real store rendered 120+ column rows: for Latin,
+  # 1 character == 1 display column, so it could not distinguish a truncator
+  # that cuts by characters (the bug) from one that cuts by columns (the fix).
+  # A width test with no wide characters in its data is not a width test.
   command -v python3 >/dev/null || skip "python3 not available to measure display width"
-  local sid="34343434-2222-3333-4444-555555555555"
-  _seed_lines a "$sid" 200 >/dev/null
-  mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
-  head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
-    > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
+  local zh="規則：僅根據本訊息內文作答。不得讀取任何檔案、不得使用任何工具、不得引用你可能記得"
+  local ja="リファクタリング：支払い照合パイプラインの重複課金を修正し再試行を処理する"
+  local ko="결제 조정 파이프라인에서 재시도된 웹훅의 이중 청구를 수정하고 백필을 추가"
+  local mixed="Refactor 支払い pipeline 重複課金 fix — retried webhooks 的 key 修正"
+  local i=0 t sid
+  for t in "$zh" "$ja" "$ko" "$mixed" "Plain latin title for contrast"; do
+    i=$((i + 1))
+    sid="3434343${i}-2222-3333-4444-555555555555"
+    _seed_titled a "$sid" "$t" 200
+    # a stale cross-tank copy -> a "Redundant (safe)" row, i.e. the row that
+    # carries the LONG localized label right next to the CJK title. That
+    # combination is what measured 120-124 cols on the maintainer's real store.
+    mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
+    head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
+      > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
+  done
   local loc
   for loc in en-US ja-JP zh-TW zh-Hans ko-KR es-ES de-DE fr-FR pt-BR; do
     # Not a tty here, so the render takes its documented 80-col fallback — the

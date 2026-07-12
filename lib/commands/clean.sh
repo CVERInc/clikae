@@ -149,38 +149,45 @@ EOF
   return 0
 }
 
-# _kb_human <kb> — "512 KB" / "1.5 MB" / "2.32 GB", pure bash (no awk fork; the
-# per-row awk added one fork per listed candidate).
-_kb_human() {
+# _kb_human_v <kb> — "512 KB" / "1.5 MB" / "2.32 GB" into $_KBH. The `printf -v`
+# form is the CORE (not a wrapper around the echoing one): `x="$(_kb_human …)"` is
+# a subshell (~1.5ms on macOS) and the row render needs a size per candidate, per
+# frame, so the redraw path must be able to get one without forking.
+_kb_human_v() {
   local kb="$1" v
   if [ "$kb" -lt 1024 ]; then
-    printf '%d KB' "$kb"
+    printf -v _KBH '%d KB' "$kb"
   elif [ "$kb" -lt 1048576 ]; then
     v=$(( (kb * 10 + 512) / 1024 ))
-    printf '%d.%d MB' $((v / 10)) $((v % 10))
+    printf -v _KBH '%d.%d MB' $((v / 10)) $((v % 10))
   else
     v=$(( (kb * 100 + 524288) / 1048576 ))
-    printf '%d.%02d GB' $((v / 100)) $((v % 100))
+    printf -v _KBH '%d.%02d GB' $((v / 100)) $((v % 100))
   fi
 }
 
-# _kb_compact <kb> — the SQUEEZED size ("512K" / "21M" / "2.3G"): the same number
-# with the space and the second unit letter dropped. Step 2 of the row's
-# progressive disclosure (_clean_row_fit) — a size still worth showing, in ~half
-# the columns, before we give up on showing it at all.
-_kb_compact() {
+# _kb_compact_v <kb> — the SQUEEZED size ("512K" / "21M" / "2.3G") into $_KBC: the
+# same number with the space and the second unit letter dropped. Step 2 of the
+# row's progressive disclosure (_clean_row_fit) — a size still worth showing, in
+# ~half the columns, before we give up on showing it at all.
+_kb_compact_v() {
   local kb="$1" v
   if [ "$kb" -lt 1024 ]; then
-    printf '%dK' "$kb"
+    printf -v _KBC '%dK' "$kb"
   elif [ "$kb" -lt 1048576 ]; then
     v=$(( (kb * 10 + 512) / 1024 ))
-    if [ $((v % 10)) -eq 0 ] || [ $((v / 10)) -ge 10 ]; then printf '%dM' $((v / 10))
-    else printf '%d.%dM' $((v / 10)) $((v % 10)); fi
+    if [ $((v % 10)) -eq 0 ] || [ $((v / 10)) -ge 10 ]; then printf -v _KBC '%dM' $((v / 10))
+    else printf -v _KBC '%d.%dM' $((v / 10)) $((v % 10)); fi
   else
     v=$(( (kb * 10 + 524288) / 1048576 ))
-    printf '%d.%dG' $((v / 10)) $((v % 10))
+    printf -v _KBC '%d.%dG' $((v / 10)) $((v % 10))
   fi
 }
+
+# Echoing wrappers, for the non-hot callers (summaries, confirmations) that just
+# want a value inline. `_kb_human` keeps its original name and contract.
+_kb_human()   { _kb_human_v "$1";   printf '%s' "$_KBH"; }
+_kb_compact() { _kb_compact_v "$1"; printf '%s' "$_KBC"; }
 
 # _clean_row_fit <avail> <ident_w> <title> <age> <size_kb> <lbl> — decide WHAT a
 # candidate row can afford to show in <avail> display columns, and set
@@ -216,20 +223,29 @@ _kb_compact() {
 # is simply the empty string and costs 0 columns).
 _CR_TITLE_MIN=12
 _CR_TITLE_GOOD=24
+# PERF: every width here is taken with `_dwv` (fork-free, answer in $_DW_W), NOT
+# `$(_dwidth …)`. This runs once per candidate row and _clean_row_h runs it over
+# EVERY candidate, so on a real 300+ session store the `$(...)` form cost ~6
+# subshells per candidate and made a single keypress take ~700ms.
 _clean_row_fit() {
   local avail="$1" ident_w="$2" title="$3" age="$4" size_kb="$5" lbl="$6"
-  local title_w lbl_w base cfg age_on size_s over budget need want
-  title_w="$(_dwidth "$title")"
-  lbl_w="$(_dwidth "$lbl")"
-  # Always-present chrome around the variable pieces: " · " before the title,
-  # the title's two quotes, and 1 more column for the "…" `_home_trunc` appends
-  # when it DOES truncate (its <n> argument is the pre-ellipsis length, so a
-  # truncated title actually renders <n>+1 columns wide — forgetting that is a
-  # silent off-by-one that puts every truncated row 1 column over the terminal).
-  base=$(( ident_w + 3 + 2 + 1 ))
+  local title_w lbl_w base cfg age_on size_s over budget need want age_w size_w
+  # title_w is only ever compared against _CR_TITLE_GOOD, so measure it with an
+  # EARLY EXIT at that bound: a 400-column runaway ai-title must not cost a full
+  # walk on every row of every frame. If it reaches the bound we don't care by how
+  # much — clamp it there (`need` never exceeds _CR_TITLE_GOOD anyway).
+  if _dw_atleast "$title" "$_CR_TITLE_GOOD"; then title_w="$_CR_TITLE_GOOD"
+  else title_w="$_DW_W"; fi
+  _dwv "$lbl";   lbl_w="$_DW_W"
+  _dwv "$age";   age_w="$_DW_W"
+  # Always-present chrome around the variable pieces: " · " before the title and
+  # the title's two quotes. No column reserved for the "…": _home_trunc keeps its
+  # ellipsis INSIDE the budget it is handed (and cuts by DISPLAY COLUMNS, so a
+  # CJK title costs what it actually renders — see its red note).
+  base=$(( ident_w + 3 + 2 ))
   local sz_full sz_comp
-  sz_full="$(_kb_human "$size_kb")"
-  sz_comp="$(_kb_compact "$size_kb")"
+  _kb_human_v "$size_kb";   sz_full="$_KBH"
+  _kb_compact_v "$size_kb"; sz_comp="$_KBC"
 
   # TWO passes over the sacrifice ladder. Pass 1 demands the title reach
   # _CR_TITLE_GOOD (or fit whole) — so a config that would show age/size while
@@ -243,11 +259,11 @@ _clean_row_fit() {
       for cfg in "1:$sz_full" "0:$sz_full" "0:$sz_comp" "0:"; do
         age_on="${cfg%%:*}"; size_s="${cfg#*:}"
         over=$(( base + try_lbl_w ))
-        [ "$age_on" = "1" ] && over=$(( over + 3 + $(_dwidth "$age") ))
-        [ -n "$size_s" ] && over=$(( over + 5 + $(_dwidth "$size_s") ))
+        [ "$age_on" = "1" ] && over=$(( over + 3 + age_w ))
+        if [ -n "$size_s" ]; then _dwv "$size_s"; size_w="$_DW_W"; over=$(( over + 5 + size_w )); fi
         budget=$(( avail - over ))
         if [ "$budget" -ge "$need" ]; then
-          _CR_TITLE="$(_home_trunc "$title" "$budget")"
+          _home_truncv "$title" "$budget"; _CR_TITLE="$_TRUNC"
           [ "$age_on" = "1" ] && _CR_AGE="$age" || _CR_AGE=""
           _CR_SIZE="$size_s"
           _CR_WRAP="$wrap"
@@ -264,7 +280,7 @@ _clean_row_fit() {
     # narrow terminal. Show the title at its floor and nothing else — the row
     # may exceed `avail` here, but only because `avail` is smaller than
     # ident + a 12-col title, which no column-dropping can fix.
-    _CR_TITLE="$(_home_trunc "$title" "$_CR_TITLE_MIN")"
+    _home_truncv "$title" "$_CR_TITLE_MIN"; _CR_TITLE="$_TRUNC"
     _CR_AGE=""; _CR_SIZE=""; _CR_WRAP="$wrap"
     return 0
   done
@@ -642,12 +658,19 @@ _clean_prose() {
   _home_wrap_prefixed "$2" "" 0 "$1" "$__C_RESET"
 }
 
-# _clean_row_h <cols> -> the height, in LINES, of EVERY candidate row in this
-# frame: 2 if any candidate's label has to wrap onto a continuation line at
-# <cols>, else 1. One height for all rows (not per-row) on purpose: the
-# picker's viewport arithmetic is a plain row count, so a variable-height row
-# would let the frame grow past the terminal's last line and scroll the alt
-# screen. Reads the ord/cand_* arrays dynamically scoped from cmd_clean.
+# _clean_row_h <cols> -> the height, in LINES, of EVERY candidate row: 2 if any
+# candidate's label has to wrap onto a continuation line at <cols>, else 1. One
+# height for all rows (not per-row) on purpose: the picker's viewport arithmetic
+# is a plain row count, so a variable-height row would let the frame grow past
+# the terminal's last line and scroll the alt screen. Reads the ord/cand_* arrays
+# dynamically scoped from cmd_clean.
+#
+# ⚠ O(candidates) — it inspects EVERY candidate, not just the visible ones. So it
+# is computed ONCE (in _clean_select, into $row_h) and read from there; calling it
+# per FRAME meant re-fitting all 300+ rows on every keypress (~700ms/keypress on
+# the maintainer's real store — a redraw budget blown by a function that cannot
+# change between frames: the answer depends on the terminal width and the
+# candidate set, and neither moves while the picker is up).
 _clean_row_h() {
   local cols="$1" i idx lbl
   for ((i=0; i<${#ord[@]}; i++)); do
@@ -667,10 +690,11 @@ _clean_row_h() {
 # ONE printf between BSU/ESU — the same anti-flicker split _resume_pick_draw
 # documents.
 _clean_select_body() {
-  local sel="$1" n="$2" max_visible="$3"
-  local start_idx=0 end_idx=$(( n - 1 )) _cols row_h
-  _cols="$(_home_cols)"
-  row_h="$(_clean_row_h "$_cols")"
+  # row_h ($4) and the column width ($5) are computed ONCE by _clean_select and
+  # passed in: neither can change between frames, and recomputing row_h here
+  # re-fit every candidate on every keypress (see its ⚠ note).
+  local sel="$1" n="$2" max_visible="$3" row_h="${4:-1}" _cols="${5:-80}"
+  local start_idx=0 end_idx=$(( n - 1 ))
   if [ "$n" -gt "$max_visible" ]; then
     start_idx=$(( sel - (max_visible / 2) ))
     [ "$start_idx" -lt 0 ] && start_idx=0
@@ -724,8 +748,9 @@ _clean_select_body() {
     # same number of lines. That keeps the viewport arithmetic (max_visible,
     # start/end idx) a plain row count — a variable-height row would let a
     # frame grow taller than the terminal and scroll the alt-screen.
-    row="$(printf '%s · "%s"%s' \
-      "$(_home_lpad "${cand_engine[idx]}/${cand_tank[idx]}" 16)" "$_CR_TITLE" "$_mid")"
+    # Both `printf -v` (no subshell): this is per row, per frame.
+    _home_lpadv "${cand_engine[idx]}/${cand_tank[idx]}" 16
+    printf -v row '%s · "%s"%s' "$_LPAD" "$_CR_TITLE" "$_mid"
     if [ "$row_h" -eq 1 ]; then row="$row$lbl"; fi
     if [ "$i" -eq "$sel" ]; then
       printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_BOLD" "$row" "$__C_RESET"
@@ -760,12 +785,16 @@ _clean_select() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
 
-  local lsz lines=24 max_visible=15 _rh
-  # Every row is _clean_row_h lines tall (2 when a long localized label has to
-  # wrap), so the number of rows that FIT is the line budget divided by that
-  # height — otherwise a wrapped frame would be twice as tall as the viewport
-  # thinks and scroll the alt screen.
-  _rh="$(_clean_row_h "$(_home_cols)")"
+  local lsz lines=24 max_visible=15 _rh _cols
+  # Computed ONCE, outside the redraw loop: neither the terminal width nor the
+  # candidate set changes while the picker is up, and _clean_row_h is
+  # O(candidates) — running it per frame cost ~700ms per keypress on a real
+  # 300+ session store. Every row is _rh lines tall (2 when a long localized
+  # label has to wrap), so the number of rows that FIT is the line budget
+  # divided by that height — otherwise a wrapped frame would be twice as tall
+  # as the viewport thinks and would scroll the alt screen.
+  _cols="$(_home_cols)"
+  _rh="$(_clean_row_h "$_cols")"
   lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
   if [ -n "$lsz" ]; then
     lines="${lsz%% *}"
@@ -775,7 +804,7 @@ _clean_select() {
 
   local n=${#ord[@]} sel=0 rc=1 _frame idx all v i
   while :; do
-    _frame="$(_clean_select_body "$sel" "$n" "$max_visible")"
+    _frame="$(_clean_select_body "$sel" "$n" "$max_visible" "$_rh" "$_cols")"
     printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$lines" >&3
     tui_read_key 3 || TUI_KEY="q"
     case "$TUI_KEY" in

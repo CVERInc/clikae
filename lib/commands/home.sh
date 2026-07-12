@@ -352,19 +352,18 @@ _home_fuel_dot() {
 # unbroken ASCII runs. Character-by-character by display width, so a fullwidth
 # glyph is never split down the middle of its two columns.
 _home_chunk() {
-  local s="$1" w="$2" i=0 n=${#1} ch cur="" curw=0 chw out=""
+  local w="$2"
   [ "$w" -ge 2 ] || w=2
-  while [ "$i" -lt "$n" ]; do
-    ch="${s:$i:1}"
-    chw="$(_dwidth "$ch")"
-    if [ $(( curw + chw )) -gt "$w" ] && [ -n "$cur" ]; then
-      out="$out $cur"; cur="$ch"; curw="$chw"
-    else
-      cur="$cur$ch"; curw=$(( curw + chw ))
-    fi
-    i=$(( i + 1 ))
+  local LC_ALL=C                 # _DW_CUT is a byte index; slice in bytes
+  local s="$1" out="" cut
+  while [ -n "$s" ]; do
+    _dw_walk "$s" -1
+    if [ "$_DW_W" -le "$w" ]; then out="$out $s"; break; fi
+    _dw_walk "$s" "$w"
+    cut="$_DW_CUT"; [ "$cut" -gt 0 ] || cut=1   # always make progress
+    out="$out ${s:0:$cut}"
+    s="${s:$cut}"
   done
-  [ -n "$cur" ] && out="$out $cur"
   printf '%s' "${out# }"
 }
 
@@ -427,25 +426,178 @@ _home_wrap_prefixed() {
   return 0
 }
 
-# _dwidth <str> -> the string's DISPLAY width in terminal columns, counting CJK /
-# fullwidth glyphs as 2. Heuristic but bash-3.2-safe and dependency-free: in a
-# UTF-8 locale `${#s}` is the CHARACTER count and `wc -c` the BYTE count, so the
-# 3-byte (CJK) chars contribute (bytes-chars)/2 extra columns. In a C/POSIX locale
-# `${#s}` already equals bytes, so this collapses to the byte count — i.e. it
-# degrades gracefully to the old %-Ns behaviour, never worse.
-_dwidth() {
-  local s="$1" chars bytes
-  chars=${#s}
-  bytes=$(printf '%s' "$s" | wc -c); bytes=${bytes//[^0-9]/}
-  printf '%s' "$(( chars + (bytes - chars) / 2 ))"
+# ── Display width: the ONE measuring stick ──────────────────────────────────
+#
+# Everything that lays out a row measures in DISPLAY COLUMNS (a CJK ideograph is
+# 2, an ASCII letter is 1). The truncators below therefore also CUT by display
+# columns — not by characters. That distinction is the whole ballgame:
+#
+#   `_home_trunc "$title" 40` used to cut to 40 CHARACTERS, but every budget
+#   handed to it is in COLUMNS. For Latin text the two coincide (40 chars = 40
+#   cols), so it looked right forever — and a fixture of Latin titles can never
+#   catch it. A 40-char CJK title renders 80 COLUMNS, so a "budgeted" row blew
+#   through an 80-col terminal by 40+ columns on the maintainer's real store.
+#   Units must agree end to end: budget in columns -> truncate in columns.
+#
+# _dw_walk <str> <maxcols> — the shared UTF-8 scanner. Walks <str> one character
+# at a time, summing display width. With <maxcols> >= 0 it STOPS before the
+# character that would exceed the budget. Sets:
+#   _DW_W    the display width actually consumed
+#   _DW_CUT  the BYTE index it stopped at (-1 = the whole string fit)
+#
+# ⚠ CONTRACT: the CALLER must already be in the C locale (`local LC_ALL=C`), so
+# `${#s}` and `${s:i:1}` are BYTES and we can decode UTF-8 by hand. The four
+# public entry points (_dwidth, _home_trunc, _home_trunc_mid, _home_chunk) each
+# do that ONCE for the whole call — bash re-runs setlocale on the assignment and
+# restores it on return, and setlocale (not the loop) is what this costs. Doing
+# it per scanner call instead made a truncation ~3x more expensive; this runs per
+# row, per keypress, in the redraw path.
+#
+# No `wc`, no `iconv`, no subprocess at all — the heuristic this replaced forked
+# `printf | wc -c` on every single call.
+_dw_walk() {
+  local s="$1" max="$2"
+  local i=0 n=${#s} v b2 b3 cp len cw w=0
+  _DW_CUT=-1
+  while [ "$i" -lt "$n" ]; do
+    printf -v v '%d' "'${s:i:1}"
+    [ "$v" -lt 0 ] && v=$(( v + 256 ))
+    if [ "$v" -lt 128 ]; then len=1; cw=1
+    elif [ "$v" -lt 224 ]; then len=2; cw=1          # Latin-1/Greek/Cyrillic…: 1 col
+    elif [ "$v" -lt 240 ]; then
+      len=3
+      printf -v b2 '%d' "'${s:i+1:1}"; [ "$b2" -lt 0 ] && b2=$(( b2 + 256 ))
+      printf -v b3 '%d' "'${s:i+2:1}"; [ "$b3" -lt 0 ] && b3=$(( b3 + 256 ))
+      cp=$(( ((v - 224) << 12) | ((b2 - 128) << 6) | (b3 - 128) ))
+      # Unicode East Asian Wide/Fullwidth. Everything else in the 3-byte space —
+      # the box glyphs, arrows, "…", "·", "❯" this TUI is built from — is 1 col.
+      # NB U+FF61-U+FFDC (HALFwidth katakana, e.g. the ja-JP wordmark ｷﾘｶｴ) is
+      # deliberately NOT in the FF00-FF60 fullwidth range: it measures 1.
+      cw=1
+      if   [ "$cp" -ge 4352 ]  && [ "$cp" -le 4447 ];  then cw=2   # 1100-115F Hangul Jamo
+      elif [ "$cp" -ge 11904 ] && [ "$cp" -le 12350 ]; then cw=2   # 2E80-303E CJK radicals/punct
+      elif [ "$cp" -ge 12353 ] && [ "$cp" -le 13311 ]; then cw=2   # 3041-33FF kana, CJK compat
+      elif [ "$cp" -ge 13312 ] && [ "$cp" -le 19903 ]; then cw=2   # 3400-4DBF ext-A
+      elif [ "$cp" -ge 19968 ] && [ "$cp" -le 40959 ]; then cw=2   # 4E00-9FFF unified
+      elif [ "$cp" -ge 40960 ] && [ "$cp" -le 42191 ]; then cw=2   # A000-A4CF Yi
+      elif [ "$cp" -ge 44032 ] && [ "$cp" -le 55203 ]; then cw=2   # AC00-D7A3 Hangul syllables
+      elif [ "$cp" -ge 63744 ] && [ "$cp" -le 64255 ]; then cw=2   # F900-FAFF CJK compat ideographs
+      elif [ "$cp" -ge 65040 ] && [ "$cp" -le 65049 ]; then cw=2   # FE10-FE19 vertical forms
+      elif [ "$cp" -ge 65072 ] && [ "$cp" -le 65135 ]; then cw=2   # FE30-FE6F CJK compat forms
+      elif [ "$cp" -ge 65280 ] && [ "$cp" -le 65376 ]; then cw=2   # FF00-FF60 fullwidth forms
+      elif [ "$cp" -ge 65504 ] && [ "$cp" -le 65510 ]; then cw=2   # FFE0-FFE6 fullwidth signs
+      fi
+    else len=4; cw=2                                  # emoji / CJK ext-B+: 2 cols
+    fi
+    if [ "$max" -ge 0 ] && [ $(( w + cw )) -gt "$max" ]; then _DW_CUT=$i; break; fi
+    w=$(( w + cw )); i=$(( i + len ))
+  done
+  _DW_W=$w
 }
 
-# _home_trunc <str> <maxchars> -> <str> cut to <maxchars> (UTF-8 chars, since bash
-# substring is char-aware in a UTF-8 locale) with an ellipsis when shortened. Keeps
-# a runaway title (e.g. a polluted ai-title) to one line instead of wrapping.
-_home_trunc() {
+# _dw_skip <str> <cols> — the mirror of _dw_walk for the TAIL: the byte index
+# after consuming AT LEAST <cols> display columns, so `${str:idx}` (in C locale)
+# is the widest suffix costing at most width-<cols>. Used by _home_trunc_mid to
+# keep a path's meaningful tail. Never lands mid-glyph.
+_dw_skip() {
+  local s="$1" want="$2"
+  local i=0 n=${#s} v b2 b3 cp len cw w=0
+  while [ "$i" -lt "$n" ] && [ "$w" -lt "$want" ]; do
+    printf -v v '%d' "'${s:i:1}"
+    [ "$v" -lt 0 ] && v=$(( v + 256 ))
+    if [ "$v" -lt 128 ]; then len=1; cw=1
+    elif [ "$v" -lt 224 ]; then len=2; cw=1
+    elif [ "$v" -lt 240 ]; then
+      len=3
+      printf -v b2 '%d' "'${s:i+1:1}"; [ "$b2" -lt 0 ] && b2=$(( b2 + 256 ))
+      printf -v b3 '%d' "'${s:i+2:1}"; [ "$b3" -lt 0 ] && b3=$(( b3 + 256 ))
+      cp=$(( ((v - 224) << 12) | ((b2 - 128) << 6) | (b3 - 128) ))
+      cw=1
+      if   [ "$cp" -ge 4352 ]  && [ "$cp" -le 4447 ];  then cw=2
+      elif [ "$cp" -ge 11904 ] && [ "$cp" -le 12350 ]; then cw=2
+      elif [ "$cp" -ge 12353 ] && [ "$cp" -le 13311 ]; then cw=2
+      elif [ "$cp" -ge 13312 ] && [ "$cp" -le 19903 ]; then cw=2
+      elif [ "$cp" -ge 19968 ] && [ "$cp" -le 40959 ]; then cw=2
+      elif [ "$cp" -ge 40960 ] && [ "$cp" -le 42191 ]; then cw=2
+      elif [ "$cp" -ge 44032 ] && [ "$cp" -le 55203 ]; then cw=2
+      elif [ "$cp" -ge 63744 ] && [ "$cp" -le 64255 ]; then cw=2
+      elif [ "$cp" -ge 65040 ] && [ "$cp" -le 65049 ]; then cw=2
+      elif [ "$cp" -ge 65072 ] && [ "$cp" -le 65135 ]; then cw=2
+      elif [ "$cp" -ge 65280 ] && [ "$cp" -le 65376 ]; then cw=2
+      elif [ "$cp" -ge 65504 ] && [ "$cp" -le 65510 ]; then cw=2
+      fi
+    else len=4; cw=2
+    fi
+    w=$(( w + cw )); i=$(( i + len ))
+  done
+  _DW_CUT=$i
+}
+
+# _dwidth <str> -> the string's DISPLAY width in terminal columns (CJK = 2).
+_dwidth() { local LC_ALL=C; _dw_walk "$1" -1; printf '%s' "$_DW_W"; }
+
+# _dw_atleast <str> <n> — "is <str> at least <n> columns wide?" without scanning
+# the whole string: stops at <n>. Sets _DW_W to the width consumed and returns 0
+# when the string reaches <n> columns, 1 when it ran out first (then _DW_W is its
+# TRUE full width). The point is the early exit — deciding "is this title longer
+# than 24 columns?" must not cost a full walk of a 400-column runaway ai-title,
+# because it happens per row in the redraw path.
+_dw_atleast() {
+  local LC_ALL=C
+  _dw_walk "$1" "$2"
+  [ "$_DW_CUT" -ge 0 ]
+}
+
+# _home_truncv <str> <maxcols> — _home_trunc without the `$(...)` subshell: the
+# result lands in $_TRUNC. Same column semantics (see _home_trunc). Used by the
+# per-row render paths, where a fork per row is ~1.5ms of pure latency.
+_home_truncv() {
+  local LC_ALL=C
   local s="$1" n="$2"
-  if [ "${#s}" -gt "$n" ]; then printf '%s…' "${s:0:$n}"; else printf '%s' "$s"; fi
+  [ "$n" -ge 1 ] || n=1
+  _dw_walk "$s" "$n"
+  if [ "$_DW_CUT" -lt 0 ]; then _TRUNC="$s"; return; fi
+  _dw_walk "$s" $(( n - 1 ))
+  _TRUNC="${s:0:$_DW_CUT}…"
+}
+
+# _home_lpadv <str> <width> — _home_lpad without the subshell; result in $_LPAD.
+_home_lpadv() {
+  local s="$1" w="$2" pad
+  _dwv "$s"
+  pad=$(( w - _DW_W )); [ "$pad" -lt 0 ] && pad=0
+  printf -v _LPAD '%s%*s' "$s" "$pad" ''
+}
+
+# _dwv <str> — the FORK-FREE _dwidth: leaves the answer in $_DW_W instead of
+# echoing it, so a caller in the redraw path can read a width without paying for
+# a `$(...)` subshell (~1.5ms each on macOS). Use this, not `w=$(_dwidth …)`, in
+# any loop that runs per row or per frame; use _dwidth where you just need a
+# value inline and the call is not hot.
+_dwv() { local LC_ALL=C; _dw_walk "$1" -1; }
+
+# _home_trunc <str> <maxcols> -> <str> guaranteed to render in AT MOST <maxcols>
+# DISPLAY COLUMNS, with a trailing "…" when it had to shorten. The ellipsis's own
+# column is INSIDE the budget (so the caller's arithmetic is simply "this cell is
+# <maxcols> wide"), and a fullwidth glyph is never split down the middle of its
+# two columns.
+#
+# 🔴 This used to cut by CHARACTERS (`${#s}` / `${s:0:$n}`) while every caller
+# passed a budget in COLUMNS. Latin text hid it (1 char = 1 col); a CJK title cut
+# to 40 "chars" rendered 80 columns and blew an 80-col terminal wide open. Any
+# future truncator MUST measure in the same unit its budget is expressed in.
+_home_trunc() {
+  local LC_ALL=C          # ONE setlocale for the whole call (see _dw_walk)
+  local s="$1" n="$2"
+  [ "$n" -ge 1 ] || n=1
+  # Walk only as far as the BUDGET — never the whole string. A runaway 4000-column
+  # ai-title then costs the same as a 40-column one, which matters because this
+  # runs per row, per keypress in the redraw path. _DW_CUT == -1 means the string
+  # ran out before the budget did, i.e. it fits whole and is returned untouched.
+  _dw_walk "$s" "$n"
+  [ "$_DW_CUT" -ge 0 ] || { printf '%s' "$s"; return; }
+  _dw_walk "$s" $(( n - 1 ))          # reserve exactly 1 column for the "…"
+  printf '%s…' "${s:0:$_DW_CUT}"      # _DW_CUT is a BYTE index; we are in C locale
 }
 
 # _home_engine_label <cli> -> the display name for an engine tag. The antigravity
@@ -501,22 +653,26 @@ _home_row_budget() {
 }
 
 # _home_trunc_mid <str> <maxcols> -> <str> unchanged if it already fits within
-# <maxcols> DISPLAY columns; otherwise middle-ellipsised — head kept short,
-# TAIL kept long (a path's meaningful part, e.g. the leaf directory, sits at
-# the end) — so the whole result (head + "…" + tail) is AT MOST <maxcols> wide.
-# Char-based substring (bash is char-aware in a UTF-8 locale), same simplifying
-# assumption _home_trunc already makes — fine for filesystem paths, which are
-# overwhelmingly ASCII. Reserves 2 cols (not 1) for the "…" itself: by
-# _dwidth's own byte-vs-char heuristic a 3-byte UTF-8 char like "…" measures as
-# 2, so budgeting only 1 would let the ellipsis alone push the result 1 col
-# over <maxcols>.
+# <maxcols> DISPLAY COLUMNS; otherwise middle-ellipsised — head kept short, TAIL
+# kept long (a path's meaningful part, the leaf dir, sits at the end) — so the
+# whole result (head + "…" + tail) is AT MOST <maxcols> columns.
+#
+# Columns, NOT characters (see _home_trunc's red note): a cwd can absolutely
+# contain CJK (`~/Developer/専案/…`), and cutting it by character count would
+# render up to 2x its budget. Both ends land on character boundaries, so a
+# fullwidth glyph is never sliced in half.
 _home_trunc_mid() {
-  local s="$1" n="$2" dw head tail
-  dw="$(_dwidth "$s")"
-  [ "$dw" -gt "$n" ] || { printf '%s' "$s"; return; }
-  [ "$n" -ge 5 ] || n=5
-  head=$(( (n - 2) / 3 )); tail=$(( n - 2 - head ))
-  printf '%s…%s' "${s:0:$head}" "${s: -$tail}"
+  local LC_ALL=C          # ONE setlocale; _DW_* indices are BYTE offsets
+  local s="$1" n="$2" total head_cols tail_cols hcut tcut
+  _dw_walk "$s" -1; total="$_DW_W"
+  [ "$total" -gt "$n" ] || { printf '%s' "$s"; return; }
+  [ "$n" -ge 4 ] || n=4
+  # 1 column for the "…"; the rest split 1/3 head, 2/3 tail.
+  head_cols=$(( (n - 1) / 3 )); tail_cols=$(( n - 1 - head_cols ))
+  _dw_walk "$s" "$head_cols"; hcut="$_DW_CUT"; [ "$hcut" -ge 0 ] || hcut=0
+  _dw_skip "$s" $(( total - tail_cols )); tcut="$_DW_CUT"
+  [ "$tcut" -ge "$hcut" ] || tcut="$hcut"      # never let the two halves overlap
+  printf '%s…%s' "${s:0:$hcut}" "${s:$tcut}"
 }
 
 # Render the launchable items (passed as $1) as the static tank board. The dry
@@ -534,11 +690,12 @@ _home_render_static() {
 
   local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 rdot
   local launch_cli="" launch_profile=""
-  # Title budget: cols minus this row's own fixed chrome (4-space lead + dot +
-  # space + 7-col name + space + 8-col engine + space + 2 quotes = 25) minus 1
-  # more for `_home_trunc`'s own trailing "…" when it truncates — computed ONCE
-  # (the chrome is the same on every resume row) rather than per row.
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 26 20)"
+  # Title budget, in DISPLAY COLUMNS: cols minus this row's own fixed chrome
+  # (4-space lead + dot + space + 7-col name + space + 8-col engine + space + 2
+  # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
+  # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
+  # every resume row) rather than per row.
+  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
@@ -1184,9 +1341,9 @@ _home_pick_draw_body() {
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line rdot rage
   # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
   # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
-  # engine + space + 2 quotes) plus 1 for `_home_trunc`'s own "…" — computed
-  # ONCE, not per row (the chrome is identical on every resume row).
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 26 20)"
+  # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
+  # no extra column here. Computed ONCE, not per row.
+  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -1201,10 +1358,15 @@ _home_pick_draw_body() {
   # at 80 cols) — the render adapts to the terminal, the words don't shrink.
   # Hangs under the wordmark (whose display width is locale-dependent — ja's
   # katakana wordmark is not 6 columns — so it's measured, not assumed).
+  # extra=2: this whole block is piped through the `printf '  %s'` indenter at the
+  # END of this function, so every line it emits lands 2 columns right of where it
+  # was composed. The wrapper cannot see that outer indent, so it must be TOLD —
+  # the same reason the recap call below passes 2. Without it the keybar wraps 2
+  # columns too late and overruns a 60-col terminal by 1.
   _home_wrap_prefixed \
     "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
-    "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET"
+    "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
   printf '%b%s: %s · [A] change (BETA, claude)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -1280,10 +1442,10 @@ _home_pick_draw_body() {
         _line="$note"; [ -n "$_reset" ] && _line="$note $_reset"
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$_line" \
-            "$(printf '  %b %b %b%-12s%b ' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET")" 19 "$__C_DIM" "$__C_RESET"
+            "$(printf '  %b %b %b%-12s%b ' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET")" 19 "$__C_DIM" "$__C_RESET" 2
         else
           _home_wrap_prefixed "$_line" \
-            "$(printf '  %b %b %-12s ' "$mark" "$tdot" "$cli")" 19 "$__C_DIM" "$__C_RESET"
+            "$(printf '  %b %b %-12s ' "$mark" "$tdot" "$cli")" 19 "$__C_DIM" "$__C_RESET" 2
         fi
         ;;
       agent)
@@ -1294,10 +1456,10 @@ _home_pick_draw_body() {
         fi
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \
-            "$(printf '  %b %b· %-12s ' "$mark" "$__C_BOLD" "$cli")" 19 "$__C_BOLD" "$__C_RESET"
+            "$(printf '  %b %b· %-12s ' "$mark" "$__C_BOLD" "$cli")" 19 "$__C_BOLD" "$__C_RESET" 2
         else
           _home_wrap_prefixed "$note" \
-            "$(printf '  %b · %-12s ' "$mark" "$cli")" 19 "$__C_DIM" "$__C_RESET"
+            "$(printf '  %b · %-12s ' "$mark" "$cli")" 19 "$__C_DIM" "$__C_RESET" 2
         fi
         ;;
     esac

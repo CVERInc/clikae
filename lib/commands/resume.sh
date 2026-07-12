@@ -246,11 +246,11 @@ _resume_pick_draw_body() {
 
     # Same columns as the home board — dot · name · engine — then the title and age.
     local _rnm _ren; _rnm="$(_home_lpad "$tank" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$engine")" 8)"
-    # Title budget: cols minus this row's fixed chrome (4-lead+mark+dot+space
-    # +7-col name+space+8-col engine+space+2 quotes+2 spaces+parens = 31) minus
-    # the trailing age string's OWN width (variable per row) minus 1 more for
-    # `_home_trunc`'s trailing "…".
-    local _title_budget; _title_budget="$(_home_row_budget "$_cols" "$(( 31 + $(_dwidth "$rage") + 1 ))" 20)"
+    # Title budget in DISPLAY COLUMNS: cols minus this row's fixed chrome
+    # (4-lead+mark+dot+space+7-col name+space+8-col engine+space+2 quotes+2
+    # spaces+parens = 31) minus the age string's OWN display width (variable per
+    # row). The "…" lives inside _home_trunc's budget — no extra column here.
+    local _title_budget; _title_budget="$(_home_row_budget "$_cols" "$(( 31 + $(_dwidth "$rage") ))" 20)"
     if [ "$idx" -eq "$sel" ]; then
       cwd="${cached_cwd[s_idx]}"
       printf '    %b %b %b%s%b %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_title_budget")" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"

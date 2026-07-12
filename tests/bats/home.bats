@@ -611,3 +611,76 @@ _agy_log() { # <line>
     [ "$(_dwidth "$line")" -le 80 ] || { echo ">80 cols: $line"; false; }
   done <<< "$output"
 }
+
+# --- display width: COLUMNS, not characters (the false-green regression) ------
+# A width test whose data is all Latin cannot tell a column from a character —
+# for Latin they are the same number. That is exactly how `_home_trunc` shipped
+# cutting by CHARACTERS against budgets expressed in COLUMNS: a 40-char CJK
+# title rendered 80 columns and blew an 80-col terminal apart on a real store,
+# while an all-Latin fixture reported green. Every case below therefore carries
+# wide characters.
+
+@test "_dwidth measures DISPLAY COLUMNS (CJK=2, halfwidth kana=1, box glyphs=1)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ "$(_dwidth "hello")" -eq 5 ]
+  [ "$(_dwidth "規則：僅根據")" -eq 12 ]      # 6 ideographs = 12 columns
+  [ "$(_dwidth "リファクタ")" -eq 10 ]
+  [ "$(_dwidth "결제 조정")" -eq 9 ]          # hangul 2 + space 1
+  [ "$(_dwidth "ｷﾘｶｴ")" -eq 4 ]              # HALFwidth katakana is 1 col, not 2
+  [ "$(_dwidth "…")" -eq 1 ]                  # the ellipsis is ONE column
+  [ "$(_dwidth "●○❯▲⏎")" -eq 5 ]              # the TUI's box glyphs are 1 col each
+  [ "$(_dwidth "café")" -eq 4 ]               # accented Latin is 1 col (2 bytes)
+  [ "$(_dwidth "Refactor 支払い x")" -eq 17 ] # mixed: 9 + 6 + 2
+}
+
+@test "_home_trunc cuts by COLUMNS, not characters — a CJK title honours its budget" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # 40 ideographs = 80 columns. Cut to a 40-COLUMN budget it must render <= 40,
+  # not 80 (the old char-based cut returned all 40 chars = 80 columns).
+  local zh="規則：僅根據本訊息內文作答。不得讀取任何檔案、不得使用任何工具、不得引用你可能記得"
+  local got; got="$(_home_trunc "$zh" 40)"
+  [ "$(_dwidth "$got")" -le 40 ]
+  [ "$(_dwidth "$got")" -ge 38 ]              # and it USES the budget (no over-cutting)
+  [[ "$got" == *…* ]] || false
+  # A budget the string already fits in leaves it untouched.
+  [ "$(_home_trunc "短" 10)" = "短" ]
+  # Latin still behaves.
+  [ "$(_dwidth "$(_home_trunc "Refactor the payment pipeline" 12)")" -le 12 ]
+  # Mixed CJK/Latin: the cut may land either side of the boundary, never over.
+  local mixed="Refactor 支払い pipeline 重複課金 fix retried webhooks"
+  local i
+  for i in 8 13 20 27 33 41; do
+    [ "$(_dwidth "$(_home_trunc "$mixed" $i)")" -le "$i" ] || { echo "budget $i overflowed"; false; }
+  done
+}
+
+@test "_home_trunc never splits a fullwidth glyph in half" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # An ODD budget against an all-wide string must round DOWN to a whole glyph,
+  # never emit half a character (which would be mojibake, not a narrow cell).
+  local zh="規則僅根據本訊息內文作答"
+  local got i
+  for i in 5 7 9 11; do
+    got="$(_home_trunc "$zh" $i)"
+    [ "$(_dwidth "$got")" -le "$i" ] || { echo "budget $i overflowed"; false; }
+    # round-trips as valid UTF-8 (a split glyph would not)
+    [ "$(printf '%s' "$got" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; echo $?)" -eq 0 ]
+  done
+}
+
+@test "_home_trunc_mid cuts a CJK path by columns, keeping the tail" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local p="/Users/x/Developer/專案目錄名稱很長/深層資料夾/lib/commands/resume.sh"
+  local got; got="$(_home_trunc_mid "$p" 30)"
+  [ "$(_dwidth "$got")" -le 30 ]
+  [[ "$got" == /Users* ]] || false
+  [[ "$got" == *resume.sh ]] || false
+}
