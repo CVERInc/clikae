@@ -5,7 +5,7 @@
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.14.0-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/badge/status-v0.14.1-blue.svg)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-clikae.cver.net-2563eb.svg)](https://clikae.cver.net)
 
 📖 **Docs:** [clikae.cver.net](https://clikae.cver.net) — humans read it, agents call `/mcp`.
