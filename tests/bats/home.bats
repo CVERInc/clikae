@@ -508,13 +508,42 @@ _agy_log() { # <line>
   [ "$(_home_row_budget garbage 10)" = "70" ]      # non-numeric cols -> the 80 fallback
 }
 
-@test "_home_cols falls back to 80 with no controlling tty (the bats/pipe case)" {
+@test "_home_cols with no controlling tty: honours \$COLUMNS, else falls back to 80" {
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  run _home_cols
+  unset COLUMNS
+  [ "$(_home_cols)" = "80" ]                 # nothing to go on -> the floor
+  # The window is still THERE when output is piped; we just can't ask the tty.
+  # $COLUMNS is what the shell knows, so `clikae clean --dry-run > f` in a
+  # 60-column window must budget for 60, not 80.
+  COLUMNS=60 ; [ "$(_home_cols)" = "60" ]
+  COLUMNS=120; [ "$(_home_cols)" = "120" ]
+  COLUMNS=12 ; [ "$(_home_cols)" = "80" ]    # implausibly narrow -> the floor
+  COLUMNS=xx ; [ "$(_home_cols)" = "80" ]    # garbage -> the floor
+}
+
+# Regression (2026-07-13): _home_wrap_prefixed used to read `stty size` ITSELF
+# instead of calling _home_cols, so $COLUMNS never reached it. With output piped
+# in a 60-column window the ROWS (via _home_cols) correctly budgeted 60 while the
+# PROSE around them still believed in 80 — and every heading between 61 and 79
+# columns ran off the edge. One width source, or the two drift apart.
+@test "_home_wrap_prefixed shares _home_cols' width source (honours \$COLUMNS)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  # 68 columns of prose: fits in 80 (so a stale 80 would emit it on ONE line),
+  # overflows 60 (so honouring $COLUMNS MUST split it).
+  local s="Session data that can be cleaned up (biggest first in each section):"
+  [ "$(_dwidth "$s")" -eq 68 ]
+  COLUMNS=60 run _home_wrap_prefixed "$s" "" 0 "" ""
   [ "$status" -eq 0 ]
-  [ "$output" = "80" ]
+  local line n=0
+  while IFS= read -r line; do
+    n=$(( n + 1 ))
+    [ "$(_dwidth "$line")" -le 60 ] || { echo ">60 cols: $line"; false; }
+  done <<< "$output"
+  [ "$n" -ge 2 ]                             # actually wrapped, not just "fits"
 }
 
 @test "_home_trunc_mid: fits unchanged; overflow gets a MIDDLE ellipsis biased to the tail" {

@@ -375,16 +375,18 @@ _home_chunk() {
 # dim style survives the newline). <extra> is any outer indent the CALLER adds
 # around this block (the interactive picker pipes through a `  ` prefix, so it
 # passes 2) — subtracted from the width budget so the first line can't overflow.
-# Width via `stty size </dev/tty` (works inside $()); 80 fallback. Budget is by
+# Width from _home_cols (the ONE width source: tty → $COLUMNS → 80). It used to
+# read `stty size` itself, which meant `$COLUMNS` never reached it: with output
+# piped, prose fell back to 80 while the rows around it correctly used the real
+# (narrower) window, and any heading between 60 and 79 columns silently ran off
+# the edge. Budget is by
 # DISPLAY width (_dwidth, CJK = 2 cols), NOT character count — `${#}` is char-count
 # in a UTF-8 locale, which under-measures CJK ~2× and let lines overflow + hard-wrap
 # to column 0. (Root cause of the recap wrap bug, dogfood 2026-06-03.)
 _home_wrap_prefixed() {
   local text="$1" prefix="$2" hang="$3" color="$4" reset="$5" extra="${6:-0}"
   local cols pad first=1 word line="" avail glob=0
-  cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
-  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
-  [ "$cols" -ge 30 ] || cols=80
+  cols="$(_home_cols)"
   pad="$(printf '%*s' "$hang" '')"
   avail=$(( cols - hang - extra - 1 ))
   [ "$avail" -ge 12 ] || avail=$(( cols - extra - 1 ))
@@ -627,6 +629,12 @@ _home_lpad() {
 _home_cols() {
   local cols
   cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+  # No /dev/tty (piped, redirected, CI) — the terminal is still THERE, we just
+  # can't ask it. $COLUMNS is what the shell knows, so honour it before the
+  # floor: `clikae clean --dry-run > file` in an 60-column window must still
+  # produce rows that fit that window, and it makes the width testable without
+  # a PTY.
+  case "$cols" in ''|*[!0-9]*) cols="${COLUMNS:-}" ;; esac
   case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
   [ "$cols" -ge 30 ] || cols=80
   printf '%s' "$cols"
@@ -844,14 +852,9 @@ EOF
   # real window — useless here. `stty size </dev/tty` reads the controlling
   # terminal directly, so it's correct even inside a command substitution.
   local logo="$CLIKAE_ROOT/assets/logo.txt" cols
-  # Only measure width when actually on a terminal (a pipe is stacked anyway, and
-  # reading /dev/tty off a pipe just errors). NB: `stty size </dev/tty` — NOT
-  # `tput cols`, which returns the terminfo default (80) when its stdout is the
-  # command-substitution pipe, so it can't see a narrow window. Group-redirect
-  # stderr so a missing /dev/tty stays silent; `|| true` so set -e can't abort.
+  # Only measure width when actually on a terminal (a pipe is stacked anyway).
   if [ -t 1 ] && [ -f "$logo" ]; then
-    cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
-    [ -n "$cols" ] || cols="$(tput cols 2>/dev/null || echo 80)"
+    cols="$(_home_cols)"
     if [ "${cols:-0}" -ge 76 ]; then
       _home_welcome_beside "$logo"
       return
