@@ -286,22 +286,27 @@ _agy_switch() {
   _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $name"
   local slots link; slots="$(_agy_slots)"; link="$(_agy_link)"
   [ -d "$slots/$name" ] || log_fail "No such agy tank: $name  (create it:  clikae init agy $name)"
-  _agy_assert_not_running
-  # Switching tanks carries the Google login WITH the tank: stash the outgoing
-  # tank's login (if any), restore the incoming tank's (or log out cleanly if it
-  # has never logged in), then VERIFY the restore actually took before handing
-  # control to agy. Skip entirely when you're already on this tank (stay signed
-  # in) or off macOS (no-ops there).
+  # A switch to the tank you're ALREADY on is a no-op: it repoints nothing, so it
+  # is safe even while an agy session is live — this is exactly how you drive agy
+  # headless on the active account (`clikae agy <active-tank> -- -p …`). Only a
+  # REAL switch to a DIFFERENT tank would yank ~/.gemini out from under a running
+  # session, so the not-running guard AND the login carry AND the symlink repoint
+  # all belong inside that branch. (Before this, the guard + rm/ln ran even for a
+  # no-op, so `clikae agy <active> -- …` refused whenever any agy process was up.)
   local active; active="$(_agy_active)"
   if [ "$name" != "$active" ]; then
+    _agy_assert_not_running
+    # Carry the Google login WITH the tank: stash the outgoing tank's login (if
+    # any), restore the incoming tank's (or log out cleanly if it never logged
+    # in), VERIFY the restore actually took, then repoint the global symlink.
     [ -n "$active" ] && _agy_kc_stash "$active"
     _agy_kc_restore "$name"
     _agy_kc_verify_restore "$name"
+    rm -f "$link"
+    ln -s "$slots/$name" "$link"
+    log_ok "agy is now on tank: $name"
+    log_dim "agy is global — switched all terminals to $name."
   fi
-  rm -f "$link"
-  ln -s "$slots/$name" "$link"
-  log_ok "agy is now on tank: $name"
-  log_dim "agy is global — switched all terminals to $name."
   exec agy "$@"
 }
 

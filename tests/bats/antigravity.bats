@@ -174,6 +174,38 @@ _stub_agy() {
   [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # still signed in, untouched
 }
 
+@test "agy switch to the already-active tank is a no-op even with a live agy process (headless-on-active)" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1      # 'default' is the active tank
+  printf 'token-default' > "$CLIKAE_TEST_KEYCHAIN/gemini"
+  # Simulate a LIVE agy session: pgrep -x agy reports a match.
+  printf '#!/usr/bin/env bash\n[ "$1" = "-x" ] && [ "$2" = "agy" ] && exit 0\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/pgrep"
+  chmod +x "$BATS_TEST_TMPDIR/bin/pgrep"
+  # Switching to the tank you're ALREADY on repoints nothing, so it must NOT be
+  # refused — this is how you drive agy headless on the active account.
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy default
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Quit it first"* ]] || false                  # NOT the not-running refusal
+  [ "$(cat "$CLIKAE_TEST_KEYCHAIN/gemini")" = "token-default" ]   # login untouched
+  [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/default" ]  # symlink intact
+}
+
+@test "agy switch to a DIFFERENT tank still refuses while an agy process is live" {
+  [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
+  _stub_agy
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1      # 'default' active, 'work' exists
+  printf '#!/usr/bin/env bash\n[ "$1" = "-x" ] && [ "$2" = "agy" ] && exit 0\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/pgrep"
+  chmod +x "$BATS_TEST_TMPDIR/bin/pgrep"
+  # A REAL switch (work != default) WOULD yank ~/.gemini out from under the live
+  # session — the guard must still block it.
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae agy work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Quit it first"* ]] || false
+}
+
 @test "agy switch refuses to proceed if the restore doesn't verify" {
   [[ "$OSTYPE" == darwin* ]] || skip "agy keychain carry is macOS-only"
   _stub_agy
