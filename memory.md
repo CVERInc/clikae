@@ -25,15 +25,25 @@ behaviour:
 | **evaporate** | N → **0** (throwaway) | symlink to `mktemp -d` | the ephemeral power user (`--ephemeral`, ✅ shipped) |
 
 > ⚠️ **`isolate` is not "incognito".** If what you want is a clean, throwaway
-> session — a cold read, an unbiased audit — that is **evaporate**
-> (`--ephemeral`): it affects *this one run* and touches no wiring. `isolate`
-> **rewires the live tank permanently**: every project directory's memory
-> symlink is removed on the spot and the tank stops sharing until someone
-> dials it back (`memory share <group> <engine> <tank>`; symlinks re-project
-> on the next launch). Field incident, 2026-07-12: an agent wanting a
-> memory-clean workspace ran `isolate` on a live tank and silently unplugged
-> its whole shared brain. Mnemonic: **ephemeral changes this once; isolate
-> changes from now on.**
+> session — a cold read, an unbiased audit, a reviewer who doesn't know what you
+> believe — that is **evaporate** (`--ephemeral`): it affects *this one run*, it
+> touches no wiring, and it puts the Soul back when the run ends. `isolate`
+> **rewires the live tank**: every project directory's memory symlink is removed
+> on the spot, and the tank stops sharing until someone dials it back.
+>
+> Field incident, 2026-07-12: an agent that wanted a memory-clean workspace ran
+> `isolate` on a live tank, then re-shared it twenty minutes later — and the
+> shared brain never came back. Two things made that silent and permanent:
+> `share` only re-linked project directories that still *had* a memory slot, and
+> `isolate` had just removed them all; and the per-directory symlink is otherwise
+> re-projected **at launch** — but a session already *running* in that directory
+> never gets a relaunch, so it simply went amnesiac mid-flight while
+> `memory status` went on reporting "shared". Both are fixed as of v0.14.3
+> (`share` now fans into every project directory of the tank, creating the slot),
+> but the lesson stands: **don't reach for `isolate` when you meant
+> `--ephemeral`.**
+>
+> Mnemonic: **ephemeral changes this once; isolate changes from now on.**
 
 Sharing is **per-tank, whole-brain**: the consent unit is the tank (the members
 file under `souls/<group>/`), never a single directory. claude keeps one memory
