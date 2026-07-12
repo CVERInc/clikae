@@ -91,6 +91,33 @@ seed_session_titled() {
   [[ "$output" == *"換油箱續接驗證"* ]] || false
 }
 
+# --- customTitle precedence (2026-07-12: `/rename` writes {"type":"custom-title",
+# "customTitle":"…"} — a deliberate rename must outrank the stale
+# machine-generated aiTitle everywhere a title is shown, INCLUDING clean's
+# deletion list; that's why a renamed live session wasn't recognized before it
+# got checked for deletion) ---------------------------------------------------
+
+@test "session_meta prefers a USER-set custom-title over a later ai-title" {
+  _setup_session_meta
+  {
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"raw prompt"}]}}\n'
+    printf '{"type":"custom-title","customTitle":"My Renamed Session","sessionId":"x"}\n'
+    printf '{"type":"ai-title","aiTitle":"Machine title","sessionId":"x"}\n'
+  } > "$PROJ/cus00000-0000-0000-0000-000000000000.jsonl"
+  run adapter_session_meta "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"My Renamed Session"* ]] || false
+  [[ "$output" != *"Machine title"* ]] || false
+}
+
+@test "session_meta with only an ai-title (no rename) is unchanged" {
+  _setup_session_meta
+  seed_session_titled aion0000-0000-0000-0000-000000000000 "raw prompt" "Only AI Title"
+  run adapter_session_meta "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Only AI Title"* ]] || false
+}
+
 @test "session_meta can target a specific session id" {
   _setup_session_meta
   seed_session aaa00000-0000-0000-0000-000000000000 "the first one"

@@ -1,6 +1,10 @@
 # shellcheck shell=bash
-# lib/commands/clean.sh — `clikae clean`: free disk space by deleting old session
-# data (transcripts, databases, brain assets) across every tank.
+# lib/commands/clean.sh — `clikae clean`: free disk space by moving old session
+# data (transcripts, databases, brain assets) to the Trash, across every tank.
+# clean never `rm`s a session outright — a transcript is a conversation, not a
+# cache; nothing regenerates it — so it moves to $HOME/.Trash and the space
+# comes back only once the Trash is emptied. (Sibling product sheersweep holds
+# the same line for macOS uninstalls; see its `to_trash()`.)
 #
 # Extracted from `resume cleanup` (shipped v0.13.1) into a first-class command:
 # disk hygiene isn't a resume concern, and a capability buried under another
@@ -10,10 +14,16 @@
 # back-compat alias (§7) that forwards here.
 #
 # The zero-knowledge path: type `clikae clean`, look at ONE list in three
-# sections — pre-checked where deleting is provably safe or plainly overdue,
-# unchecked where it's a judgment call — press Enter, confirm in red. The
-# flags (--dry-run / --older-than / --min-size) are the power-user vocabulary
-# over the same pool; none is required to see where the space went.
+# sections — pre-checked where moving it out is provably safe or plainly
+# overdue, unchecked where it's a judgment call — press Enter, confirm in red.
+# The flags (--dry-run / --older-than / --min-size) are the power-user
+# vocabulary over the same pool; none is required to see where the space went.
+# A session any process still has open is never a candidate, in any section —
+# `_clean_session_is_live` is the one guard every class routes through (a
+# 2026-07-11 incident shipped in v0.14.0: the dedupe path checked live
+# processes, the main scan loop didn't, and a still-open 612 MB session
+# surfaced unchecked and got `rm`'d — unrecoverable, since Claude Code holds no
+# open handle on its per-event-append transcripts for `lsof` to rescue).
 
 # Sourcing resume.sh brings the shared session plumbing this scan rides on
 # (_resume_all_sessions, _resume_session_fields) plus — through it — home.sh's
@@ -38,9 +48,14 @@ _clean_help() {
   cat <<'EOF'
 Usage: clikae clean [options]
 
-Delete old session data files (transcripts, databases, brain assets) to free disk
-space. This only deletes session history files. It never deletes tank
-configurations, memory files, caches, or settings.
+Move old session data files (transcripts, databases, brain assets) to the Trash
+to free disk space — a session transcript is a conversation, not a cache, so
+clean never shreds it outright; emptying the Trash afterward is what actually
+reclaims the space. This only moves session history files. It never touches
+tank configurations, memory files, caches, or settings. (If the Trash itself is
+unusable, a row falls back to a direct delete and says so, instead of silently
+lying about where the data went.) A session a process still has open is never
+offered, in any section.
 
 The preview is ONE checkbox list in three sections, biggest first within each:
 
@@ -66,14 +81,15 @@ The preview is ONE checkbox list in three sections, biggest first within each:
                                 hogs are visible with no flags — plus copies with
                                 unique conversation content, labeled
                                 "diverged — has unique content". Nothing here is
-                                deleted unless you check it yourself.
+                                moved to the Trash unless you check it yourself.
 
 Arrows move, space toggles a row, `a` toggles all, Enter proceeds to the final
-red confirmation, q/ESC cancels. Nothing is deleted before that confirmation.
+red confirmation, q/ESC cancels. Nothing moves before that confirmation.
 
 Options:
-  -d, --dry-run             Preview what would be deleted (the same sectioned list,
-                            with each row's default [x]/[ ] state), without deleting.
+  -d, --dry-run             Preview what would move to the Trash (the same
+                            sectioned list, with each row's default [x]/[ ]
+                            state), without moving anything.
   -o, --older-than <days>   Only pre-check sessions older than <days> (default: 30).
   -m, --min-size <MB>       Only target sessions of at least <MB> MB. Given alone,
                             size is the only filter (no age cutoff); combine with
@@ -153,6 +169,106 @@ _kb_human() {
 # keep needs exact bytes, not blocks: the kept copy must be the byte-superset.
 _file_bytes() {
   stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null || echo 0
+  return 0
+}
+
+# ── The live-session guard ──────────────────────────────────────────────────
+
+# _clean_session_is_live <path-or-sid> <ps-snapshot> — is a process still bound
+# to this session? <ps-snapshot> is one `ps -axo command=` read (best-effort,
+# taken once per run by the caller — see live_procs below); an empty/unreadable
+# snapshot means "can't tell", and this must NEVER manufacture a false skip from
+# that, only ever suppress a true one when the evidence is actually there.
+#
+# The ONE session-id derivation every candidate class shares, so a live session
+# can never slip through as a candidate under a class this guard forgot to call
+# (2026-07-11 incident: the dedupe path checked live_procs, the main scan loop
+# never did, so a still-open session surfaced unchecked under "Big but recent"
+# — one keypress from deletion):
+#   - antigravity: the transcript sits at .../brain/<sid>/.system_generated/…,
+#     so the sid is the brain/<sid>/ directory name, not the filename.
+#   - claude: the sid IS the transcript's basename minus `.jsonl`.
+#   - codex: the rollout file is `rollout-<ts>-<uuid>.jsonl`; `ps` only ever
+#     shows the bare uuid a live `codex --resume` was given, never the
+#     timestamp-prefixed filename, so once what's left after stripping the
+#     directory and extension is longer than a uuid (36 chars), keep only its
+#     trailing 36 — this also makes a bare sid string (as `_clean_dedupe_flush`
+#     already has post-grouping, for both engines) a valid input as-is.
+_clean_session_is_live() {
+  local raw="$1" snap="$2" sid
+  [ -n "$snap" ] || return 1
+  [ -n "$raw" ] || return 1
+  case "$raw" in
+    */.system_generated/*)
+      sid="${raw%/.system_generated/*}"; sid="${sid##*/}" ;;
+    *)
+      sid="${raw##*/}"      # drop any directory part
+      sid="${sid%.jsonl}"   # drop the transcript extension, if present
+      if [ "${#sid}" -gt 36 ]; then
+        sid="${sid:$(( ${#sid} - 36 ))}"
+      fi
+      ;;
+  esac
+  [ -n "$sid" ] || return 1
+  case "$snap" in *"$sid"*) return 0 ;; esac
+  return 1
+}
+
+# ── The Trash move ──────────────────────────────────────────────────────────
+
+# _clean_to_trash <path> — move <path> into $HOME/.Trash instead of destroying
+# it: a session transcript is a CONVERSATION, not a cache — nothing regenerates
+# it, so `rm` is never the right tool here (2026-07-11 incident: a live 612 MB,
+# 6-day-old transcript was `rm -rf`'d; Claude Code holds no open handle on its
+# per-event-append transcripts, so there was no inode left for `lsof` to rescue,
+# and `rm` never reaches the Trash in the first place — unrecoverable).
+# Collision-safe: two tanks can hold same-named copies of one session id, so a
+# name clash gets a " (1)", " (2)", … suffix — an existing Trash entry is NEVER
+# clobbered. Sets on return:
+#   CLEAN_TRASH_DEST      the path it landed at (empty if <path> didn't exist)
+#   CLEAN_TRASH_FELL_BACK 1 if the Trash was unusable (no $HOME, missing/
+#                          unwritable .Trash, or the mv itself failed) and
+#                          <path> was rm'd directly instead — the caller MUST
+#                          say so on that row; a silent fallback would be a lie
+#                          about where the data went.
+_clean_to_trash() {
+  local item="$1" tdir base dest i
+  CLEAN_TRASH_DEST=""
+  CLEAN_TRASH_FELL_BACK=0
+  [ -e "$item" ] || return 0
+  if [ -n "${HOME:-}" ]; then
+    tdir="$HOME/.Trash"
+    # bin/clikae runs the whole tree under `set -eo pipefail`: a bare `mkdir`
+    # as the last command of a `||` statement would abort the ENTIRE clikae
+    # process on failure instead of falling through to the rm fallback below
+    # (mid-deletion-loop, after some rows already moved — worse than the bug
+    # this closes). `|| true` inside the `if` body keeps this graceful.
+    if [ ! -d "$tdir" ]; then mkdir -p "$tdir" 2>/dev/null || true; fi
+    if [ -d "$tdir" ] && [ -w "$tdir" ]; then
+      base="$(basename "$item")"
+      dest="$tdir/$base"
+      if [ -e "$dest" ]; then
+        i=1
+        while [ -e "$tdir/$base ($i)" ]; do i=$((i + 1)); done
+        dest="$tdir/$base ($i)"
+      fi
+      if mv "$item" "$dest" 2>/dev/null; then
+        # shellcheck disable=SC2034  # read by the caller / test harness, not this file
+        CLEAN_TRASH_DEST="$dest"
+        return 0
+      fi
+    fi
+  fi
+  # Trash unusable, or the mv itself failed (cross-device, permissions, …):
+  # fall back to rm rather than leaving the row stuck — but CLEAN_TRASH_FELL_BACK
+  # tells the caller to say so. `|| true` on both: same set -e note as above —
+  # this fallback must never itself take the whole process down.
+  CLEAN_TRASH_FELL_BACK=1
+  if [ -d "$item" ]; then
+    rm -rf "$item" 2>/dev/null || true
+  elif [ -f "$item" ]; then
+    rm -f "$item" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -251,7 +367,7 @@ _clean_add_candidate() {
 }
 
 # _clean_dedupe_flush — close out one (engine, session) group of the dedupe
-# walk (g_engine/g_sid/g_f/g_mt, dynamically scoped from cmd_clean). With two
+# walk (g_sid/g_f/g_mt, dynamically scoped from cmd_clean). With two
 # or more copies of one session, keep the LARGEST (see _clean_stale_copy_check
 # on why not the newest) and offer every copy the safety check proves
 # redundant. A copy that fails the check is surfaced as "diverged — has unique
@@ -261,12 +377,8 @@ _clean_dedupe_flush() {
   if [ "${#g_f[@]}" -lt 2 ]; then return 0; fi
   # Never dedupe under a live session: if any process still carries this sid
   # (e.g. a `--resume <sid>` in another terminal), the session may be mid-write.
-  # Same best-effort ps read as lib/core/proc.sh, snapshotted once per run.
-  local live_sid="$g_sid"
-  if [ "$g_engine" = "codex" ] && [ "${#g_sid}" -gt 36 ]; then
-    live_sid="${g_sid:$(( ${#g_sid} - 36 ))}"   # rollout-<ts>-<uuid> → the uuid
-  fi
-  case "$live_procs" in *"$live_sid"*) return 0 ;; esac
+  # One guard, one truth — same call the main scan loop makes below.
+  _clean_session_is_live "$g_sid" "$live_procs" && return 0
 
   local i kept=0 kept_sz sz kept_tank
   kept_sz="$(_file_bytes "${g_f[0]}")"
@@ -609,14 +721,14 @@ cmd_clean() {
   )"
 
   local dedupe_claimed=""
-  local cur_key="" key g_engine="" g_sid="" eng_l sid_l mt_l f_l
+  local cur_key="" key g_sid="" eng_l sid_l mt_l f_l
   local -a g_mt=() g_f=()
   while IFS="$us" read -r eng_l sid_l mt_l f_l; do
     [ -n "$f_l" ] || continue
     key="$eng_l$us$sid_l"
     if [ "$key" != "$cur_key" ]; then
       _clean_dedupe_flush
-      g_mt=(); g_f=(); cur_key="$key"; g_engine="$eng_l"; g_sid="$sid_l"
+      g_mt=(); g_f=(); cur_key="$key"; g_sid="$sid_l"
     fi
     g_mt+=("$mt_l"); g_f+=("$f_l")
   done <<EOF2
@@ -639,6 +751,11 @@ EOF2
     case $'\n'"$dedupe_claimed"$'\n' in
       *$'\n'"$f"$'\n'*) continue ;;   # already offered as a stale/diverged copy
     esac
+    # Same live-session guard as the dedupe path above (§1): a session a
+    # process still holds must never become a candidate in ANY class. Skip it
+    # silently — an unchecked row under "Big but recent" is still one keypress
+    # from deletion, which is exactly the 2026-07-11 incident this closes.
+    _clean_session_is_live "$f" "$live_procs" && continue
     if [ "$apply_age" -eq 1 ] && [ "$mt" -gt "$cutoff" ]; then
       _clean_add_candidate "$f" "$mt" big ""
     else
@@ -792,10 +909,12 @@ EOF
     [ "${cand_checked[idx]}" -eq 1 ] || continue
     IFS=';' read -ra path_list <<< "${cand_files_to_delete[idx]}"
     for pth in "${path_list[@]}"; do
-      if [ -d "$pth" ]; then
-        rm -rf "$pth"
-      elif [ -f "$pth" ]; then
-        rm -f "$pth"
+      _clean_to_trash "$pth"
+      if [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]; then
+        # A silent rm fallback would lie about where the data went — say so on
+        # this row, every time it happens.
+        # shellcheck disable=SC2059
+        log_warn "$(printf "$T_CLEAN_TRASH_UNAVAILABLE" "$pth")"
       fi
     done
     deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))

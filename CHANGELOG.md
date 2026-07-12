@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`clikae clean` could offer a LIVE session for deletion, unchecked, and then
+  `rm` it outright — a real data-loss incident, on the maintainer's own
+  machine, the day v0.14.0 shipped.** `clean`'s live-process guard only ever
+  covered the stale-copy dedupe path; the main scan loop that classifies
+  sessions as "Untouched for 30+ days" or "Big but recent" never consulted it,
+  so a session with a process still attached (`claude --resume <sid>` open in
+  another terminal) could surface unchecked under "Big but recent" — one
+  keypress from deletion. It was checked, and deleted. The transcript was 612
+  MB and 6 days old; Claude Code appends per-event and holds no open handle on
+  it, so there was no inode for `lsof` to rescue, and `clean` used `rm`, which
+  never reaches the Trash in the first place. Unrecoverable. Two fixes ship
+  together: (1) one shared guard (`_clean_session_is_live`), called from every
+  candidate class, not just dedupe — a live session is never offered, in any
+  section, full stop; (2) `clean` now moves candidates to `~/.Trash` instead
+  of `rm`ing them (collision-safe — same-named copies from different tanks get
+  a ` (1)`, ` (2)`… suffix, never clobbering an existing entry), matching the
+  line sibling tool sheersweep already holds for macOS uninstalls. Every
+  string that used to promise space was "freed" now says it moved to the
+  Trash, across all nine locales; if the Trash itself is unusable, a row falls
+  back to a direct delete and SAYS SO on that row, rather than silently lying
+  about where the data went.
+- **A session's own `/rename` was invisible everywhere, including `clean`'s
+  deletion list — which is why the live session above wasn't recognized
+  before it got checked.** The claude adapter derived every title from
+  Claude's machine-generated `aiTitle` only; `/rename`'s
+  `{"type":"custom-title","customTitle":"…"}` was never read, so a
+  deliberately renamed session kept showing its stale machine title on the
+  board, in the resume picker, and in `clean`'s own list — 11 renamed sessions
+  on the maintainer's machine showed none of their real names. A user-set
+  title now outranks the machine-generated one everywhere the adapter derives
+  a title from a transcript (codex and antigravity have no equivalent rename
+  event to prefer — checked, not invented).
+
 ## [0.14.0] — 2026-07-12
 
 ### Added

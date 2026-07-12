@@ -201,6 +201,9 @@ adapter_session_title() {
 # Optional hook: title straight from a rollout FILE (see claude.sh's twin for
 # why: cross-project listings can't derive the path from $PWD). Escape-aware
 # =~ extraction — the old ${line%%\"*} surgery truncated at an internal \".
+# No customTitle-equivalent here: codex's rollout format has no user-rename
+# event to prefer (checked 2026-07-12 alongside claude.sh's customTitle fix;
+# nothing invented — first user_message stays the only title source).
 adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
