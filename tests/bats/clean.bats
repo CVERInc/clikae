@@ -337,7 +337,7 @@ PSSTUB
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
   run clikae clean
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Refusing to delete without an interactive confirmation"* ]] || false
+  [[ "$output" == *"Refusing to move anything to the Trash without an interactive confirmation"* ]] || false
   [ -f "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" ]
 }
 
@@ -349,4 +349,189 @@ PSSTUB
   [[ "$output" == *"stale copies"* ]] || false
   [[ "$output" == *"orphaned subagent data"* ]] || false
   [[ "$output" == *"Big but recent"* ]] || false
+}
+
+@test "clean --help talks about the Trash, not deleting files outright" {
+  run clikae clean --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Trash"* ]] || false
+  [[ "$output" != *"Delete old session"* ]] || false
+}
+
+# --- live-session guard: ONE guard, every class (2026-07-11 incident) ------------
+# A session a process still holds must never become a candidate in ANY section.
+# The dedupe path already had its own inline check (see "clean skips a dedupe
+# group..." above, now routed through the shared `_clean_session_is_live`); these
+# cover the classes that had NO guard at all — the actual incident: a live
+# session surfaced UNCHECKED under "Big but recent", one keypress from deletion.
+
+@test "clean's live guard covers 'Big but recent' too — a live big-recent session is never listed" {
+  local sid="c0ffee00-2222-3333-4444-555555555555"
+  _seed_big a "$sid" "still open right now" 25
+  cat > "$TEST_HOME/.testbin/ps" <<PSSTUB
+#!/usr/bin/env bash
+echo "claude --resume $sid"
+PSSTUB
+  chmod +x "$TEST_HOME/.testbin/ps"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"still open right now"* ]] || false
+  [[ "$output" != *"Big but recent"* ]] || false
+}
+
+@test "clean's live guard covers the old/regular class too — a live old session is never listed" {
+  local sid="d0ffee00-2222-3333-4444-555555555555"
+  _seed_lines a "$sid" 5 >/dev/null
+  touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
+  cat > "$TEST_HOME/.testbin/ps" <<PSSTUB
+#!/usr/bin/env bash
+echo "claude --resume $sid"
+PSSTUB
+  chmod +x "$TEST_HOME/.testbin/ps"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  # The only session in the store is filtered out entirely by the live guard —
+  # not merely left unchecked — so the pool is empty and clean says so.
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"Nothing to clean"* ]] || false
+}
+
+# --- _clean_session_is_live (unit): the ONE guard every class shares -------------
+
+@test "session_is_live: matches a claude sid (bare uuid) against a ps snapshot" {
+  _source_clean
+  local f="$CLIKAE_HOME/profiles/claude/a/projects/-w/11111111-2222-3333-4444-555555555555.jsonl"
+  _clean_session_is_live "$f" "claude --resume 11111111-2222-3333-4444-555555555555"
+}
+
+@test "session_is_live: matches a codex rollout path by its trailing 36-char uuid" {
+  _source_clean
+  local f="$CLIKAE_HOME/profiles/codex/a/sessions/2026/07/11/rollout-2026-07-11T12-00-00-99999999-2222-3333-4444-555555555555.jsonl"
+  _clean_session_is_live "$f" "codex --resume 99999999-2222-3333-4444-555555555555"
+}
+
+@test "session_is_live: matches an antigravity brain/<sid>/ directory, not the transcript filename" {
+  _source_clean
+  local f="$CLIKAE_HOME/profiles/antigravity/a/antigravity-cli/brain/88888888-2222-3333-4444-555555555555/.system_generated/logs/transcript.jsonl"
+  _clean_session_is_live "$f" "some-agy-process --sid 88888888-2222-3333-4444-555555555555"
+}
+
+@test "session_is_live: a bare sid string (dedupe's g_sid) works without a path" {
+  _source_clean
+  _clean_session_is_live "77777777-2222-3333-4444-555555555555" "claude --resume 77777777-2222-3333-4444-555555555555"
+}
+
+@test "session_is_live: no match when the snapshot doesn't mention the sid" {
+  _source_clean
+  local f="$CLIKAE_HOME/profiles/claude/a/projects/-w/11111111-2222-3333-4444-555555555555.jsonl"
+  run _clean_session_is_live "$f" "some other unrelated process"
+  [ "$status" -ne 0 ]
+}
+
+@test "session_is_live: an empty ps snapshot never manufactures a false skip" {
+  _source_clean
+  local f="$CLIKAE_HOME/profiles/claude/a/projects/-w/11111111-2222-3333-4444-555555555555.jsonl"
+  run _clean_session_is_live "$f" ""
+  [ "$status" -ne 0 ]
+}
+
+# --- _clean_to_trash (unit): move, never rm — collision-safe, honest fallback ---
+# HOME == TEST_HOME (helpers.bash), so $HOME/.Trash is a throwaway fixture path;
+# never the real ~/.Trash.
+
+@test "to_trash moves a file into \$HOME/.Trash and the original is gone" {
+  _source_clean
+  local f="$TEST_HOME/session-a.jsonl"
+  echo "conversation" > "$f"
+  _clean_to_trash "$f"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ -f "$HOME/.Trash/session-a.jsonl" ]
+  [ ! -e "$f" ]
+  [ "$CLEAN_TRASH_DEST" = "$HOME/.Trash/session-a.jsonl" ]
+}
+
+@test "to_trash moves a directory (a sibling sid dir) into \$HOME/.Trash intact" {
+  _source_clean
+  local d="$TEST_HOME/sid-dir"
+  mkdir -p "$d/subagents"
+  echo x > "$d/subagents/t.jsonl"
+  _clean_to_trash "$d"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ -d "$HOME/.Trash/sid-dir" ]
+  [ -f "$HOME/.Trash/sid-dir/subagents/t.jsonl" ]
+  [ ! -e "$d" ]
+}
+
+@test "to_trash suffixes a name collision — never clobbers an existing Trash entry" {
+  _source_clean
+  mkdir -p "$HOME/.Trash"
+  printf 'first tank copy' > "$HOME/.Trash/dupe.jsonl"          # already there
+  local f="$TEST_HOME/dupe.jsonl"
+  printf 'second tank copy' > "$f"
+  _clean_to_trash "$f"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ "$CLEAN_TRASH_DEST" = "$HOME/.Trash/dupe.jsonl (1)" ]
+  [ "$(cat "$HOME/.Trash/dupe.jsonl")" = "first tank copy" ]      # untouched
+  [ "$(cat "$HOME/.Trash/dupe.jsonl (1)")" = "second tank copy" ]
+  [ ! -e "$f" ]
+}
+
+@test "to_trash suffixes a SECOND collision as (2), still never clobbering" {
+  _source_clean
+  mkdir -p "$HOME/.Trash"
+  printf 'a' > "$HOME/.Trash/trip.jsonl"
+  printf 'b' > "$HOME/.Trash/trip.jsonl (1)"
+  local f="$TEST_HOME/trip.jsonl"
+  printf 'c' > "$f"
+  _clean_to_trash "$f"
+  [ "$CLEAN_TRASH_DEST" = "$HOME/.Trash/trip.jsonl (2)" ]
+  [ "$(cat "$HOME/.Trash/trip.jsonl")" = "a" ]
+  [ "$(cat "$HOME/.Trash/trip.jsonl (1)")" = "b" ]
+  [ "$(cat "$HOME/.Trash/trip.jsonl (2)")" = "c" ]
+}
+
+@test "to_trash falls back to rm AND reports it when the Trash is unusable" {
+  _source_clean
+  # A FILE (not a dir) sitting where ~/.Trash should be: mkdir -p fails, and the
+  # pre-existing-dir check also fails — the realistic shape of "Trash got
+  # replaced/corrupted", no root/chmod tricks needed.
+  rm -rf "$HOME/.Trash"
+  printf 'not a directory' > "$HOME/.Trash"
+  local f="$TEST_HOME/orphan.jsonl"
+  echo "data" > "$f"
+  _clean_to_trash "$f"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]
+  [ -z "$CLEAN_TRASH_DEST" ]
+  [ ! -e "$f" ]     # gone via the honest rm fallback, not stuck
+}
+
+@test "to_trash with no \$HOME falls back to rm and reports it" {
+  _source_clean
+  local f="$TEST_HOME/nohome.jsonl"
+  echo "data" > "$f"
+  HOME="" _clean_to_trash "$f"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]
+  [ ! -e "$f" ]
+}
+
+@test "to_trash on a path that doesn't exist is a no-op, not a fallback" {
+  _source_clean
+  _clean_to_trash "$TEST_HOME/never-existed.jsonl"
+  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ -z "$CLEAN_TRASH_DEST" ]
+}
+
+# --- honest strings: nothing here promises "freed" until the Trash is emptied ---
+
+@test "the dry-run summary talks about moving to the Trash, not freeing space outright" {
+  local sid="e0e0e0e0-2222-3333-4444-555555555555"
+  _seed_lines a "$sid" 5 >/dev/null
+  touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Estimated space to move to the Trash"* ]] || false
+  [[ "$output" != *"Estimated space to free"* ]] || false
+  [[ "$output" != *"Freed"* ]] || false
 }

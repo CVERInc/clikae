@@ -202,19 +202,33 @@ _claude_meta_for_file() {
   # on the multi-MB transcripts this can hit, with identical counts.
   nmsgs="$(LC_ALL=C grep -c '"role"' "$f" 2>/dev/null || true)"
   [ -n "$nmsgs" ] || nmsgs=0
-  # Title: prefer Claude's OWN ai-generated session title. The transcript carries
-  # a  {"type":"ai-title","aiTitle":"…"}  line — the same human-readable name
-  # Claude shows in its session list (e.g. "Lucky number confirmation"). It's
-  # already in the file, so a real title costs nothing: no local model needed.
-  # Take the LAST one (a session can be re-titled) — but from BOUNDED slices,
-  # never a whole-file regex pass (the documented 100+ MB transcript trap; see
-  # profile_store.sh's transcript_head/tail kernel). The newest re-title lives in
-  # the tail slice; a session titled once early has it in the head slice. Two
-  # honest degradations vs the old whole-file scan, both preview-only: a
-  # mid-file-ONLY title falls to the opening-prompt fallback below, and a session
-  # titled early then re-titled mid-file (outside both slices) shows the EARLIER
-  # title, not the newest.
-  title="$(transcript_tail "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+  # Title: a USER-set title outranks Claude's machine-generated one. `/rename`
+  # writes  {"type":"custom-title","customTitle":"…"}  — a deliberate rename is
+  # the strongest signal there is, and letting a stale ai-title shadow it made a
+  # renamed session unrecognizable everywhere it's shown, INCLUDING `clikae
+  # clean`'s deletion list (the 2026-07-11 incident: 11 renamed sessions on the
+  # maintainer's own machine showed nothing but stale machine titles, which is
+  # why a still-live session wasn't recognized before it got checked for
+  # deletion). Absent a customTitle, fall back to the ai-generated one — the
+  # transcript carries a  {"type":"ai-title","aiTitle":"…"}  line, the same
+  # human-readable name Claude shows in its session list (e.g. "Lucky number
+  # confirmation"); either is already in the file, so a real title costs
+  # nothing: no local model needed. Take the LAST match of whichever field wins
+  # (either can be set more than once) — but from BOUNDED slices, never a
+  # whole-file regex pass (the documented 100+ MB transcript trap; see
+  # profile_store.sh's transcript_head/tail kernel). The newest write lives in
+  # the tail slice; a session titled/renamed once early has it in the head
+  # slice only. Two honest degradations vs. a whole-file scan, both
+  # preview-only: a mid-file-ONLY title falls to the opening-prompt fallback
+  # below, and a title set early then changed mid-file (outside both slices)
+  # shows the EARLIER value, not the newest.
+  title="$(transcript_tail "$f" | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+        | tail -n 1 \
+        | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  [ -n "$title" ] || title="$(transcript_head "$f" | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+        | tail -n 1 \
+        | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  [ -n "$title" ] || title="$(transcript_tail "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
         | tail -n 1 \
         | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
   [ -n "$title" ] || title="$(transcript_head "$f" | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
@@ -305,16 +319,25 @@ adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 
+  # A USER-set title (/rename → {"type":"custom-title","customTitle":"…"})
+  # outranks the machine-generated aiTitle — see the twin comment on
+  # _claude_meta_for_file's title extraction above for why (2026-07-11
+  # incident). Scan the full bounded window (no early break) so a rename that
+  # lands AFTER an earlier ai-title within these 100 lines still wins — take
+  # the LAST customTitle seen; absent one, the LAST aiTitle; absent both, the
+  # opening user message.
+  local re_custom='"customTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_title='"aiTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_text='"text"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_content='"content"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local line_in idx_in=0 max_lines_in=100 title_in="" user_msg_in=""
+  local line_in idx_in=0 max_lines_in=100 custom_in="" ai_in="" user_msg_in=""
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
     [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"aiTitle"'* ]] && [[ $line_in =~ $re_title ]]; then
-      title_in="${BASH_REMATCH[1]}"
-      break
+    if [[ "$line_in" == *'"customTitle"'* ]] && [[ $line_in =~ $re_custom ]]; then
+      custom_in="${BASH_REMATCH[1]}"
+    elif [[ "$line_in" == *'"aiTitle"'* ]] && [[ $line_in =~ $re_title ]]; then
+      ai_in="${BASH_REMATCH[1]}"
     fi
     if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
       if [[ $line_in =~ $re_text ]]; then
@@ -325,7 +348,8 @@ adapter_title_for_file() {
     fi
   done < "$f" 2>/dev/null
 
-  local stitle="$title_in"
+  local stitle="$custom_in"
+  [ -n "$stitle" ] || stitle="$ai_in"
   [ -n "$stitle" ] || stitle="$user_msg_in"
   stitle="${stitle//\\n/ }"
   stitle="${stitle//\\t/ }"

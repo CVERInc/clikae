@@ -68,7 +68,10 @@ adapter_session_title() {
 # Optional hook: title straight from a transcript FILE (see claude.sh's twin).
 # The resume picker used to re-implement this extraction inline — minus the
 # whitespace-collapse below, so the same session titled differently in the
-# picker vs the home board.
+# picker vs the home board. No customTitle-equivalent here: antigravity's
+# transcript has no user-rename event to prefer (checked 2026-07-12 alongside
+# claude.sh's customTitle fix; nothing invented — the opening request stays
+# the only title source).
 adapter_title_for_file() {
   local f="$1" t
   [ -n "$f" ] && [ -f "$f" ] || return 0

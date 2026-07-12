@@ -50,3 +50,30 @@ load '../../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"hello from the opening prompt"* ]] || false
 }
+
+# --- customTitle precedence (2026-07-12: a `/rename` must outrank the stale
+# machine-generated aiTitle everywhere a title is derived, INCLUDING clean's
+# deletion list — a renamed live session was unrecognizable there) ------------
+
+@test "claude title_for_file: a USER-set custom-title outranks a later aiTitle" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/t5.jsonl"
+  {
+    printf '{"type":"custom-title","customTitle":"My Renamed Session"}\n'
+    printf '{"type":"ai-title","aiTitle":"Machine title"}\n'
+  } > "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "My Renamed Session" ]
+}
+
+@test "claude title_for_file: a transcript with only aiTitle is unchanged" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/t6.jsonl"
+  printf '{"type":"summary","aiTitle":"Just the AI title"}\n' > "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Just the AI title" ]
+}
