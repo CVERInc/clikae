@@ -1,0 +1,122 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # T_* are a string table consumed by the renderers.
+# lib/i18n/de-DE.sh — Deutsch (German). Loaded OVER the en-US base by i18n_load,
+# and must define every key lib/i18n/en-US.sh defines (tests/bats/i18n.bats
+# enforces it, including printf placeholder parity). Same file contract as
+# en-US.sh: one `T_KEY="value"` per line at column 0, %s/%d kept in en-US's
+# order, %% for a literal percent.
+#
+# Voice: Apple's German macOS strings — du, never Sie; verb-first button labels;
+# accepted loanwords (Update, Login, Engine) over compound-noun monsters, to
+# keep the column-aligned board tight.
+
+T_LANG_NAME="Deutsch"
+
+# board
+T_WORDMARK="clikae"                          # deliberately the plain wordmark (the katakana bonus is ja-JP-only)
+T_TAGLINE1="jedes CLI zwischen Accounts wechseln"
+T_TAGLINE2="— Tank tauschen, weiterbrennen"
+T_CONTINUE="Fortsetzen"
+T_RESUME_FOOTER="%d Sitzungen insgesamt · [R] für alle / Suche"
+T_TANKS="Tanks"
+T_SOLO_SECTION="Solo"
+T_LANG_PICK="Anzeigesprache"
+T_RESUME="weiter"
+T_ENTER_RESUME="Enter: fortsetzen"
+T_ALSO_AVAILABLE="Auch verfügbar"
+T_NO_TANK_DEFAULT="noch kein Tank — öffnet Standard"
+T_AGY_NOTE="Einzel-Account · globales Login (ein Account, alle Shells)"
+T_AGY_BURN_NOTE="Das agy-Login ist global (immer nur ein Account, nie zwei parallel) — 'clikae burn agy <tank>' kann es bei leerem Tank der Reihe nach auf den nächsten umleiten (Keychain-Übernahme, kein OAuth nötig), oder du fährst es per 'agy -p' headless auf dem aktiven Account."
+T_LAUNCH="starten"
+T_MORE="mehr"
+T_OVER_QUOTA="Limit erreicht"
+T_OVER_QUOTA_HINT="nimm deine Sitzung zum nächsten Tank mit:  clikae to"
+# footer key hints
+T_K_MOVE="bewegen"
+T_K_OPEN="öffnen"
+T_K_RELAY="Übergabe"
+T_K_NEW="neu"
+T_K_RENAME="umbenennen"
+T_K_DELETE="löschen"
+T_K_SOLO="Solo an/aus (raus aus der Flotte — keine Übergabe/burn/Teilen)"
+T_K_MEMORY="Gedächtnis (Soul) — das Hirn dieses Tanks teilen / isolieren"
+T_MEM_TITLE="Gedächtnis (Soul)"
+T_MEM_OPT_SHARE="in eine Gruppe teilen…"
+T_MEM_OPT_ISOLATE="isolieren (eigenes Gedächtnis)"
+T_MEM_OPT_STATUS="Status (Teilen anzeigen)"
+T_MEM_SHARE_FOR="Gedächtnis teilen für"
+T_MEM_GROUP_PROMPT="Gruppenname: "
+T_MEM_NOGROUP="Keine Gruppe angegeben — abgebrochen."
+T_K_QUIT="beenden"
+T_K_FILTER="Filter"
+T_K_CLEANUP="aufräumen"
+T_K_CLEAN="Sitzungsdaten aufräumen — Speicherplatz freigeben"
+# `clikae clean` section headings (T_CLEAN_SECT_OLD/_MIN are printf formats)
+T_CLEAN_SECT_REDUNDANT="Redundant (sicher)"
+T_CLEAN_SECT_OLD="Seit %s+ Tagen unberührt"
+T_CLEAN_SECT_MIN="%s MB oder größer"
+T_CLEAN_SECT_BIG="Groß, aber frisch — du entscheidest"
+T_K_HELP="Hilfe"
+T_K_LANG="Sprache"
+T_K_TOPBOTTOM="Anfang/Ende"
+T_K_JUMP="zu N springen"
+T_K_REORDER="sortieren"
+T_K_AUTO="Autonomie"
+T_K_INCOGNITO="Inkognito"
+# welcome
+T_NO_TANKS_YET="Noch keine Tanks"
+T_ENGINES_HERE="Engines, hier:"
+T_ENGINES_SUPPORTED="Engines unterstützt"
+T_NONE_DETECTED="(keine im PATH gefunden)"
+T_FILL_FIRST="Fülle deinen ersten Tank:"
+T_CURIOUS_DEMO="Neugierig?  clikae demo"
+# resume submenu
+T_RESUME_TITLE="Diese Sitzung — wie weiter?"
+T_RESUME_OPT_RESUME="Da weitermachen, wo du warst"
+T_RESUME_OPT_SWITCH="Diesen Tank frisch öffnen (nicht fortsetzen)"
+T_RESUME_DRY_TITLE="%s ist leergebrannt — wie weiter?"
+T_RESUME_OPT_RELAY="Diese Sitzung zu %s mitnehmen"
+T_RESUME_OPT_FORCE="%s trotzdem fortsetzen (läuft ins Limit)"
+T_RESUME_OPT_CARRY="Diese Sitzung in einen anderen Tank mitnehmen"
+T_RESUME_CARRY_PICK="%s mitnehmen — Tank zum Weitermachen wählen"
+T_RESUME_WHICH_TANK="Auf welchem Tank fortsetzen?"
+T_UPDATE_AVAIL="Update verfügbar!"
+T_UPDATE_NOTES="Release Notes:"
+T_UPDATE_NOW="Jetzt aktualisieren (führt \`%s\` aus)"
+T_UPDATE_SHOW="Update-Befehl anzeigen"
+T_UPDATE_SKIP="Überspringen"
+T_UPDATE_SKIP_VER="Bis zur nächsten Version überspringen"
+T_UPDATE_DONE="Aktualisiert — starte clikae neu für die neue Version."
+T_UPDATE_FAILED="Update-Befehl fehlgeschlagen — führe ihn selbst aus oder sieh auf der Release-Seite nach."
+T_UPDATE_MANUAL="Aktualisiere clikae mit deinem Installer, oder hol es hier:"
+T_DRY_SEEN="Stand %s"
+# new-tank / rename prompts
+T_NEWTANK_TITLE="Neuer Tank — CLI wählen"
+T_NEWTANK_PROFILE="Tankname für %s (z. B. work, personal): "
+T_NEWTANK_CANCEL="Abgebrochen — kein Tank erstellt."
+T_NEWTANK_NONAME="Abgebrochen — kein Name angegeben."
+T_RENAME_FOR="Umbenennen"
+T_RENAME_NEW="Neuer Name: "
+T_RENAME_CANCEL="Abgebrochen — Name unverändert."
+# filter / help / misc
+T_FILTER_PROMPT="Filter: "
+T_FILTER_NONE="keine Treffer"
+T_HELP_TITLE="clikae — Tasten"
+T_HELP_AGY="agy (Antigravity) ist der Power-Modus: 'n' → agy oder 'clikae init agy <name>', übernimmt ~/.gemini (fragt vorher)."
+T_DOTS_TITLE="Punkte = Sprit"
+T_DOT_READY="bereit"
+T_DOT_DRY="leer (über Limit)"
+T_DOT_WEEK="Wochen-% (BETA)"
+T_DOT_NONE="keine Anzeige"
+T_HELP_DISMISS="beliebige Taste schließt"
+T_PICKER_HINT="auf/ab bewegen · Enter wählen · q abbrechen"
+T_LANG_SET="Anzeigesprache: %s"
+T_LANG_UNKNOWN="Unbekannte Sprache: %s  (verfügbar: %s)"
+
+# German pluralises Tank/Engine with a plain -s, but "across" needs rephrasing —
+# override the English summary ("3 Tanks für 2 Engines").
+i18n_summary() {
+  local n="$1" m="$2"
+  printf '%s Tank%s für %s Engine%s' \
+    "$n" "$([ "$n" = 1 ] || echo s)" "$m" "$([ "$m" = 1 ] || echo s)"
+}

@@ -177,10 +177,17 @@ _i18n_has_stray_pct() {
   [ "$(_i18n_normalize zh_TW.UTF-8)" = "zh-TW" ]
   [ "$(_i18n_normalize zh_HK)" = "zh-TW" ]
   [ "$(_i18n_normalize zh-Hant-TW)" = "zh-TW" ]
-  # Simplified inputs read zh-TW ONLY until zh-Hans ships (flip these to
-  # zh-Hans in the PR that adds lib/i18n/zh-Hans.sh + its resolver line):
-  [ "$(_i18n_normalize zh_CN)" = "zh-TW" ]
-  [ "$(_i18n_normalize zh_SG.UTF-8)" = "zh-TW" ]
+  # Simplified inputs read zh-Hans (shipped); a bare `zh` names no script, so it
+  # keeps the incumbent default, Traditional.
+  [ "$(_i18n_normalize zh_CN)" = "zh-Hans" ]
+  [ "$(_i18n_normalize zh_SG.UTF-8)" = "zh-Hans" ]
+  [ "$(_i18n_normalize zh-Hans-CN)" = "zh-Hans" ]
+  [ "$(_i18n_normalize zh)" = "zh-TW" ]
+  # A regional variant of a shipped locale needs no case line — the generic
+  # language-subtag rule catches it.
+  [ "$(_i18n_normalize pt_PT.UTF-8)" = "pt-BR" ]
+  [ "$(_i18n_normalize fr_CA)" = "fr-FR" ]
+  [ "$(_i18n_normalize ko_KR.UTF-8)" = "ko-KR" ]
   # The generic language-subtag rule (no per-locale case line needed):
   [ "$(_i18n_normalize ja_JP.UTF-8)" = "ja-JP" ]
   [ "$(_i18n_normalize EN_us)" = "en-US" ]

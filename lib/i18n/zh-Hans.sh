@@ -1,0 +1,116 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # T_* are a string table consumed by the renderers.
+# lib/i18n/zh-Hans.sh — 简体中文（Simplified Chinese）. Chinese is keyed by WRITING
+# SYSTEM, not region: this file serves zh_CN / zh_SG / anything *Hans*; Traditional
+# (zh-TW — zh_TW / zh_HK / *Hant*) is a SEPARATE locale file. Loaded OVER the
+# en-US base by i18n_load and must define every key lib/i18n/en-US.sh defines
+# (tests/bats/i18n.bats enforces it, including printf placeholder parity).
+# Same file contract as en-US.sh: one `T_KEY="value"` per line at column 0,
+# %s/%d kept in en-US's order, %% for a literal percent.
+
+T_LANG_NAME="简体中文"
+
+# board
+T_WORDMARK="clikae"                          # deliberately the plain wordmark (the katakana bonus is ja-JP-only)
+T_TAGLINE1="在帐户之间切换任何 CLI"
+T_TAGLINE2="— 换个油箱，继续燃烧"
+T_CONTINUE="继续 (Resume)"
+T_RESUME_FOOTER="共 %d 个会话 · 按 [R] 搜索或查看全部"
+T_TANKS="油箱"
+T_SOLO_SECTION="单飞 (Solo)"
+T_LANG_PICK="选择界面语言"
+T_RESUME="恢复"
+T_ENTER_RESUME="Enter 恢复"
+T_ALSO_AVAILABLE="也可打开"
+T_NO_TANK_DEFAULT="还没有油箱 — 按默认打开"
+T_AGY_NOTE="单帐户 · 全局登录（所有 shell 共用一个帐户）"
+T_AGY_BURN_NOTE="agy 的登录是全局的（同一时间只有一个帐户，无法并行）— 'clikae burn agy <tank>' 能在烧干时按顺序接力到下一个油箱（Keychain 携带登录，不必 OAuth）；也能用 'agy -p' 在当前帐户跑 headless。"
+T_LAUNCH="启动"
+T_MORE="更多"
+T_OVER_QUOTA="已达上限"
+T_OVER_QUOTA_HINT="把会话接到下一个油箱：clikae to"
+# footer key hints
+T_K_MOVE="移动"
+T_K_OPEN="打开"
+T_K_RELAY="接力"
+T_K_NEW="新建"
+T_K_RENAME="重命名"
+T_K_DELETE="删除"
+T_K_SOLO="单飞／归队（移出车队 — 不参与接力／burn／共享）"
+T_K_MEMORY="记忆（Soul）— 共享／隔离这个油箱的大脑"
+T_MEM_TITLE="记忆（Soul）"
+T_MEM_OPT_SHARE="共享进一个分组…"
+T_MEM_OPT_ISOLATE="隔离（用自己的记忆）"
+T_MEM_OPT_STATUS="状态（显示共享情况）"
+T_MEM_SHARE_FOR="共享记忆"
+T_MEM_GROUP_PROMPT="分组名称："
+T_MEM_NOGROUP="没有输入分组名 — 已取消。"
+T_K_QUIT="退出"
+T_K_FILTER="筛选"
+T_K_CLEANUP="清理"
+T_K_CLEAN="清理会话数据 — 释放磁盘空间"
+T_CLEAN_SECT_REDUNDANT="冗余数据（可安全删除）"
+T_CLEAN_SECT_OLD="超过 %s 天未使用"
+T_CLEAN_SECT_MIN="%s MB 及以上"
+T_CLEAN_SECT_BIG="很大但最近用过 — 由你决定"
+T_K_HELP="帮助"
+T_K_LANG="语言"
+T_K_TOPBOTTOM="顶部/底部"
+T_K_JUMP="跳到第 N 个"
+T_K_REORDER="排序"
+T_K_AUTO="自主度"
+T_K_INCOGNITO="无痕"
+# welcome
+T_NO_TANKS_YET="还没有油箱"
+T_ENGINES_HERE="个引擎，就在这里："
+T_ENGINES_SUPPORTED="个引擎受支持"
+T_NONE_DETECTED="（此处 PATH 上未检测到）"
+T_FILL_FIRST="装满你的第一个油箱："
+T_CURIOUS_DEMO="好奇？  clikae demo"
+# resume submenu
+T_RESUME_TITLE="这个会话 — 接下来？"
+T_RESUME_OPT_RESUME="从上次离开的地方继续"
+T_RESUME_OPT_SWITCH="这个油箱、开新局（不接旧进度）"
+T_RESUME_DRY_TITLE="%s 已烧干 — 接下来？"
+T_RESUME_OPT_RELAY="接到 %s 继续"
+T_RESUME_OPT_FORCE="硬要恢复 %s（会立刻撞上限额）"
+T_RESUME_OPT_CARRY="带上这段会话，换到另一个油箱"
+T_RESUME_CARRY_PICK="带上 %s 换油箱 — 选一个继续"
+T_RESUME_WHICH_TANK="要在哪个油箱上恢复？"
+T_UPDATE_AVAIL="有新版本！"
+T_UPDATE_NOTES="更新说明："
+T_UPDATE_NOW="立即更新（执行 \`%s\`）"
+T_UPDATE_SHOW="显示更新命令"
+T_UPDATE_SKIP="跳过"
+T_UPDATE_SKIP_VER="跳过这一版，出更新版本再提醒"
+T_UPDATE_DONE="已更新 — 重新运行 clikae 即可生效。"
+T_UPDATE_FAILED="更新命令失败 — 请手动执行，或查看 release 页面。"
+T_UPDATE_MANUAL="用你的安装方式更新 clikae，或从这里获取："
+T_DRY_SEEN="获取于 %s"
+# new-tank / rename prompts
+T_NEWTANK_TITLE="新建油箱 — 选一个 CLI"
+T_NEWTANK_PROFILE="%s 的油箱名称（如：work、personal）："
+T_NEWTANK_CANCEL="已取消 — 未创建油箱。"
+T_NEWTANK_NONAME="已取消 — 未输入名称。"
+T_RENAME_FOR="重命名"
+T_RENAME_NEW="新名称："
+T_RENAME_CANCEL="已取消 — 名称保持不变。"
+# filter / help / misc
+T_FILTER_PROMPT="筛选："
+T_FILTER_NONE="无匹配项"
+T_HELP_TITLE="clikae — 按键"
+T_HELP_AGY="agy (Antigravity) 是 power 模式：'n' → agy 或 'clikae init agy <名称>'，会接管 ~/.gemini（会先问你）。"
+T_DOTS_TITLE="圆点 = 油量"
+T_DOT_READY="有油"
+T_DOT_DRY="烧干（超限）"
+T_DOT_WEEK="本周用量（BETA）"
+T_DOT_NONE="无读数"
+T_HELP_DISMISS="按任意键关闭"
+T_PICKER_HINT="上下移动 · Enter 选择 · q 取消"
+T_LANG_SET="界面语言：%s"
+T_LANG_UNKNOWN="未知语言：%s （可用：%s）"
+
+# Chinese measures with 个, no plural forms — override the English summary.
+i18n_summary() {
+  printf '%s 个油箱、%s 个引擎' "$1" "$2"
+}
