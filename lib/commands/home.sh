@@ -429,6 +429,57 @@ _home_lpad() {
   printf '%s%*s' "$s" "$pad" ''
 }
 
+# _home_cols -> the live terminal COLUMN width, via `stty size </dev/tty`
+# (works inside $(), unlike `tput cols` which reads its piped stdout — see the
+# NB in _home_welcome). Falls back to 80 when not a real terminal, unreadable,
+# or implausibly narrow (<30) — same floor _home_wrap_prefixed already uses.
+_home_cols() {
+  local cols
+  cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
+  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+  [ "$cols" -ge 30 ] || cols=80
+  printf '%s' "$cols"
+}
+
+# _home_row_budget <cols> <overhead> [min] -> how many DISPLAY columns are left
+# for a row's variable text (a title, a label…) after subtracting <overhead> —
+# the DISPLAY width of everything else on the row: fixed chrome (dots, padded
+# name/engine columns, separators, quotes) PLUS any other already-known
+# variable pieces on the same row (age, size, a localized label…), which the
+# caller measures with `_dwidth` and folds into <overhead> before calling this.
+# Floors at [min] (default 12) so a narrow/odd terminal, or a row whose OTHER
+# pieces already eat most of the width, can't drive the budget negative or
+# unusably tiny. Pure arithmetic (cols passed in, not read here) so it's
+# trivially unit-testable without a tty. This is the fix for the bug where a
+# fixed `_home_trunc "$x" 56`-style cap ignored the row's own prefix/suffix
+# against the terminal's actual budget and could overflow on its own.
+_home_row_budget() {
+  local cols="$1" overhead="$2" min="${3:-12}" b
+  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+  b=$(( cols - overhead ))
+  [ "$b" -ge "$min" ] || b="$min"
+  printf '%s' "$b"
+}
+
+# _home_trunc_mid <str> <maxcols> -> <str> unchanged if it already fits within
+# <maxcols> DISPLAY columns; otherwise middle-ellipsised — head kept short,
+# TAIL kept long (a path's meaningful part, e.g. the leaf directory, sits at
+# the end) — so the whole result (head + "…" + tail) is AT MOST <maxcols> wide.
+# Char-based substring (bash is char-aware in a UTF-8 locale), same simplifying
+# assumption _home_trunc already makes — fine for filesystem paths, which are
+# overwhelmingly ASCII. Reserves 2 cols (not 1) for the "…" itself: by
+# _dwidth's own byte-vs-char heuristic a 3-byte UTF-8 char like "…" measures as
+# 2, so budgeting only 1 would let the ellipsis alone push the result 1 col
+# over <maxcols>.
+_home_trunc_mid() {
+  local s="$1" n="$2" dw head tail
+  dw="$(_dwidth "$s")"
+  [ "$dw" -gt "$n" ] || { printf '%s' "$s"; return; }
+  [ "$n" -ge 5 ] || n=5
+  head=$(( (n - 2) / 3 )); tail=$(( n - 2 - head ))
+  printf '%s…%s' "${s:0:$head}" "${s: -$tail}"
+}
+
 # Render the launchable items (passed as $1) as the static tank board. The dry
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
@@ -444,6 +495,11 @@ _home_render_static() {
 
   local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 rdot
   local launch_cli="" launch_profile=""
+  # Title budget: cols minus this row's own fixed chrome (4-space lead + dot +
+  # space + 7-col name + space + 8-col engine + space + 2 quotes = 25) minus 1
+  # more for `_home_trunc`'s own trailing "…" when it truncates — computed ONCE
+  # (the chrome is the same on every resume row) rather than per row.
+  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 26 20)"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
@@ -455,7 +511,7 @@ _home_render_static() {
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
         local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
-        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET"
+        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -557,11 +613,19 @@ EOF
   BODY+=("${T_TAGLINE1}")
   BODY+=("${__C_DIM}${T_TAGLINE2}${__C_RESET}")
   BODY+=("")
+  # T_ENGINES_HERE/T_ENGINES_SUPPORTED carry the count as a %s placeholder
+  # (not prepended by the render pattern): "${total} ${T_STRING}" put an ASCII
+  # space between the number and the word unconditionally, which is wrong
+  # typography for a Chinese/Korean classifier ("14 個引擎" / "14 개 엔진"
+  # should be "14個引擎" / "14개 엔진" — the classifier attaches directly to
+  # the number). Each locale now owns its own spacing inside the string.
   if [ -n "$installed" ]; then
-    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · ${total} ${T_ENGINES_HERE}")
+    # shellcheck disable=SC2059
+    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · $(printf "$T_ENGINES_HERE" "$total")")
     BODY+=("  ${__C_GREEN}${installed}${__C_RESET}")
   else
-    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · ${total} ${T_ENGINES_SUPPORTED}")
+    # shellcheck disable=SC2059
+    BODY+=("${__C_BOLD}${T_NO_TANKS_YET}${__C_RESET} · $(printf "$T_ENGINES_SUPPORTED" "$total")")
     BODY+=("  ${__C_DIM}${T_NONE_DETECTED}${__C_RESET}")
   fi
   BODY+=("")
@@ -978,11 +1042,23 @@ EOF
   return 0
 }
 
-# _home_help_row <keys> <description> — one aligned line in the help overlay. The
-# description is placed at an ABSOLUTE column (\033[24G) rather than padding the key
-# with %-16s: keys like "↑ ↓  j k  Tab" / "⏎ Enter" contain multibyte glyphs, and
-# printf field width counts bytes, not display columns, so %-16s misaligns them.
-_home_help_row() { printf '    %b%s%b\033[24G%s\n' "$__C_BOLD" "$1" "$__C_RESET" "$2"; }
+# _home_help_row <keys> <description> — one aligned line in the help overlay.
+# The description STARTS at an ABSOLUTE column (\033[24G) rather than padding
+# the key with %-16s: keys like "↑ ↓  j k  Tab" / "⏎ Enter" contain multibyte
+# glyphs, and printf field width counts bytes, not display columns, so %-16s
+# misaligns them. That jump was always column-correct — the bug was that a
+# LONG description (T_K_SOLO/T_K_MEMORY are full sentences, 82-92 cols in
+# es/de/fr/pt) just ran off the right edge unwrapped. Reuses
+# _home_wrap_prefixed (the same helper the recap text wraps with): the first
+# line's "prefix" is the bold key plus a literal \033[24G (an escape sequence
+# the wrapper never measures — it only sizes the WRAPPED text against the
+# budget, so embedding it here is safe), continuation lines hang-indent with
+# 24 literal spaces so they land under the same column.
+_home_help_row() {
+  local keys="$1" desc="$2" prefix
+  prefix="$(printf '    %b%s%b\033[24G' "$__C_BOLD" "$keys" "$__C_RESET")"
+  _home_wrap_prefixed "$desc" "$prefix" 24 "" ""
+}
 
 # The `?` key: a full, localised key legend drawn over the board (alt screen is
 # already active). Any key dismisses it; the loop then repaints the board.
@@ -1007,13 +1083,26 @@ _home_help_overlay() {
   _home_help_row "l"             "$T_K_LANG"
   _home_help_row "q / Esc"       "$T_K_QUIT"
   # The status dot is a fuel gauge, not "you are here" (docs/DESIGN-board-fuel-dots.md).
-  printf '\n  %b%s:%b  %b●%b %s · %b●%b %s · %b●%b %s · %b○%b %s\n' \
-    "$__C_BOLD" "$T_DOTS_TITLE" "$__C_RESET" \
+  # Was one unwrapped line (T_DOTS_TITLE + all four dot labels concatenated):
+  # 87-97 cols in es/de/fr/pt. Same wrap treatment as the recap text: each
+  # "●label" pair is pre-coloured into one chunk (so per-dot colour survives a
+  # wrap), joined with " · " into one text blob, then wrapped with a hanging
+  # indent under the title (whose OWN display width — CJK-safe via _dwidth —
+  # sets the hang column, since "Dots = fuel:" isn't a fixed width across locales).
+  local _dots_prefix _dots_hang _dots_legend
+  _dots_prefix="$(printf '  %b%s:%b  ' "$__C_BOLD" "$T_DOTS_TITLE" "$__C_RESET")"
+  _dots_hang=$(( 5 + $(_dwidth "$T_DOTS_TITLE") ))
+  _dots_legend="$(printf '%b●%b %s · %b●%b %s · %b●%b %s · %b○%b %s' \
     "$__C_GREEN"  "$__C_RESET" "$T_DOT_READY" \
     "$__C_RED"    "$__C_RESET" "$T_DOT_DRY" \
     "$__C_YELLOW" "$__C_RESET" "$T_DOT_WEEK" \
-    "$__C_DIM"    "$__C_RESET" "$T_DOT_NONE"
-  printf '\n  %b%s%b\n' "$__C_DIM" "$T_HELP_AGY" "$__C_RESET"
+    "$__C_DIM"    "$__C_RESET" "$T_DOT_NONE")"
+  printf '\n'
+  _home_wrap_prefixed "$_dots_legend" "$_dots_prefix" "$_dots_hang" "" ""
+  # T_HELP_AGY is a full sentence (109 cols even in en-US) that used to be
+  # printf'd raw with no wrap at all.
+  printf '\n'
+  _home_wrap_prefixed "$T_HELP_AGY" "  " 2 "$__C_DIM" "$__C_RESET"
   printf '  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
   local _k; IFS= read -rsn1 _k || true
 }
@@ -1047,6 +1136,11 @@ _home_pick_draw_body() {
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line rdot rage
+  # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
+  # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
+  # engine + space + 2 quotes) plus 1 for `_home_trunc`'s own "…" — computed
+  # ONCE, not per row (the chrome is identical on every resume row).
+  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 26 20)"
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -1078,7 +1172,7 @@ _home_pick_draw_body() {
         # Same columns as a Tank row — dot · name · engine — then the session title.
         local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 50)" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -1086,7 +1180,7 @@ _home_pick_draw_body() {
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 50)" "$__C_RESET"
+          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         fi
         ;;
       tank)

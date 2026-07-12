@@ -494,3 +494,86 @@ _agy_log() { # <line>
   [[ "$output" == *"0 tanks"* ]] || false
   [[ "$output" != *"[gh]"* ]] || false
 }
+
+# --- TUI width fixes (fix/tui-width) -----------------------------------------
+
+@test "_home_row_budget: cols minus overhead, floored at min" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ "$(_home_row_budget 80 25)" = "55" ]           # plain subtraction
+  [ "$(_home_row_budget 80 26 20)" = "54" ]
+  [ "$(_home_row_budget 60 55 20)" = "20" ]        # would go negative -> floors at min
+  [ "$(_home_row_budget 40 70)" = "12" ]           # default floor (12) when no min given
+  [ "$(_home_row_budget garbage 10)" = "70" ]      # non-numeric cols -> the 80 fallback
+}
+
+@test "_home_cols falls back to 80 with no controlling tty (the bats/pipe case)" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  run _home_cols
+  [ "$status" -eq 0 ]
+  [ "$output" = "80" ]
+}
+
+@test "_home_trunc_mid: fits unchanged; overflow gets a MIDDLE ellipsis biased to the tail" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ "$(_home_trunc_mid "/short/path" 40)" = "/short/path" ]   # already fits: untouched
+  local long="/Users/someone/Developer/a-very-long-repo-name/lib/commands/resume.sh"
+  local got; got="$(_home_trunc_mid "$long" 30)"
+  [ "$(_dwidth "$got")" -le 30 ]                 # never exceeds the budget
+  [[ "$got" == *…* ]] || false                   # actually elided
+  [[ "$got" == /Users* ]] || false                # head is kept (starts like the original)
+  [[ "$got" == *resume.sh ]] || false             # TAIL is kept (the leaf filename, not the head)
+}
+
+@test "engine-count classifier: the number is a placeholder INSIDE the string, so zh-TW/ko-KR attach it correctly and en-US keeps its space" {
+  CLIKAE_LANG=zh-TW run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ [0-9]個引擎 ]] || false          # attached, no space (correct zh typography)
+  if [[ "$output" =~ [0-9]\ 個引擎 ]]; then echo "unwanted space before 個引擎: $output"; false; fi
+
+  CLIKAE_LANG=ko-KR run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ [0-9]개\ 엔진 ]] || false        # 개 attaches to the number, space before 엔진
+  if [[ "$output" =~ [0-9]\ 개\ 엔진 ]]; then echo "unwanted space before 개: $output"; false; fi
+
+  CLIKAE_LANG=en-US run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"14 engines"* ]] || false       # English keeps the space
+}
+
+@test "_home_help_row wraps a long es/de/fr/pt description without overflowing 80 cols" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  local loc
+  for loc in es-ES de-DE fr-FR pt-BR; do
+    ( source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
+      source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+      # T_K_SOLO/T_K_MEMORY are full sentences (82-92 cols) that used to be
+      # printed on one unwrapped line via an absolute \033[24G column jump.
+      out="$(_home_help_row "s" "$T_K_SOLO")"
+      maxdw=0
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        # Line 1 embeds a literal `\033[24G` cursor jump — a REAL terminal
+        # reads that as "go to column 24", not as printable characters, so
+        # naive _dwidth (which has no notion of cursor motion) would
+        # UNDER-count it. Model what the terminal actually does: everything
+        # after the jump starts at column 24; continuation lines have no
+        # escape (they're plain 24-space padding) and measure directly.
+        case "$line" in
+          *$'\033[24G'*)
+            rem="${line#*$'\033[24G'}"
+            dw=$(( 24 + $(_dwidth "$rem") )) ;;
+          *) dw="$(_dwidth "$line")" ;;
+        esac
+        [ "$dw" -gt "$maxdw" ] && maxdw="$dw"
+      done <<< "$out"
+      [ "$maxdw" -le 80 ] || { echo "$loc T_K_SOLO overflowed: $maxdw cols"; exit 1; }
+    ) || false
+  done
+}

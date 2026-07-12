@@ -487,7 +487,8 @@ _clean_tally() {
 # first within each section, each with its default selection state. Only
 # non-empty sections print a heading.
 _clean_print_list() {
-  local i idx box lbl sect last_sect=""
+  local i idx box lbl sect last_sect="" cols
+  cols="$(_home_cols)"
   for ((i=0; i<${#ord[@]}; i++)); do
     idx="${ord[i]}"
     sect="${cand_section[idx]}"
@@ -499,12 +500,36 @@ _clean_print_list() {
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="x"; else box=" "; fi
     lbl=""
     [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
+    # Title budget: cols minus EVERYTHING else on the row — fixed chrome ("  [x]
+    # ", "/", the " · " separators, the title's own quotes, "(", ")" = 19
+    # literal cols, +1 for `_home_trunc`'s trailing "…") AND the row's other
+    # variable pieces (engine/tank, age, human size, and — the whole point —
+    # the localized LABEL, which in some languages is now longer than the
+    # title used to assume, e.g. fr: "copie obsolète (celle de %s est
+    # gardée)"). The label is measured and MUST fit; the title yields to it,
+    # never the other way round — floor of 3 (not the usual 12-20) because a
+    # long label can legitimately eat most of an 80-col row on its own; the
+    # title's job here is to add what little context still fits, not to stay
+    # readable at a fixed minimum. NOTE (honest limit): when engine + tank +
+    # age + size + label ALONE already approach/exceed the terminal width —
+    # the worst case is a long localized label pairing with a real long tank
+    # name — no amount of title-shrinking can pull the row back under budget;
+    # this brings that case down into the same few-cols-over territory the
+    # correct-but-long German/French help text already lives in, not down to
+    # a hard guarantee (that would require WRAPPING the row, out of scope here).
+    local _size_human _overhead _title_budget
+    _size_human="$(_kb_human "${cand_size_kb[idx]}")"
+    _overhead=$(( 19 + 1 \
+      + $(_dwidth "${cand_engine[idx]}") + $(_dwidth "${cand_tank[idx]}") \
+      + $(_dwidth "${cand_age_str[idx]}") + $(_dwidth "$_size_human") \
+      + $(_dwidth "$lbl") ))
+    _title_budget="$(_home_row_budget "$cols" "$_overhead" 3)"
     printf "  [%s] %b%s/%s%b · %s · %s · %b(%s)%b%b%s%b\n" \
       "$box" \
       "$__C_BOLD" "${cand_engine[idx]}" "${cand_tank[idx]}" "$__C_RESET" \
-      "\"$(_home_trunc "${cand_title[idx]}" 40)\"" \
+      "\"$(_home_trunc "${cand_title[idx]}" "$_title_budget")\"" \
       "${cand_age_str[idx]}" \
-      "$__C_DIM" "$(_kb_human "${cand_size_kb[idx]}")" "$__C_RESET" \
+      "$__C_DIM" "$_size_human" "$__C_RESET" \
       "$__C_DIM" "$lbl" "$__C_RESET"
   done
   return 0
@@ -516,7 +541,7 @@ _clean_print_list() {
 # documents.
 _clean_select_body() {
   local sel="$1" n="$2" max_visible="$3"
-  local start_idx=0 end_idx=$(( n - 1 ))
+  local start_idx=0 end_idx=$(( n - 1 )) _cols; _cols="$(_home_cols)"
   if [ "$n" -gt "$max_visible" ]; then
     start_idx=$(( sel - (max_visible / 2) ))
     [ "$start_idx" -lt 0 ] && start_idx=0
@@ -555,10 +580,21 @@ _clean_select_body() {
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="[x]"; else box="[ ]"; fi
     lbl=""
     [ -n "${cand_label[idx]}" ] && lbl=" · ${cand_label[idx]}"
+    # Same "the label wins, the title yields" budget as _clean_print_list:
+    # "    " lead(4) + mark(1) + " "(1) + box(3) + " "(1) + the 16-col padded
+    # engine/tank + " · "(3) + 2 title quotes + " · "(3) + " · ("(4) + ")"(1)
+    # = 40 literal cols (incl. 1 margin for `_home_trunc`'s "…"), then the
+    # row's own variable age/size/label on top of that.
+    local _size_human _overhead _title_budget
+    _size_human="$(_kb_human "${cand_size_kb[idx]}")"
+    _overhead=$(( 40 \
+      + $(_dwidth "${cand_age_str[idx]}") + $(_dwidth "$_size_human") \
+      + $(_dwidth "$lbl") ))
+    _title_budget="$(_home_row_budget "$_cols" "$_overhead" 3)"
     row="$(printf '%s · "%s" · %s · (%s)%s' \
       "$(_home_lpad "${cand_engine[idx]}/${cand_tank[idx]}" 16)" \
-      "$(_home_trunc "${cand_title[idx]}" 36)" \
-      "${cand_age_str[idx]}" "$(_kb_human "${cand_size_kb[idx]}")" "$lbl")"
+      "$(_home_trunc "${cand_title[idx]}" "$_title_budget")" \
+      "${cand_age_str[idx]}" "$_size_human" "$lbl")"
     if [ "$i" -eq "$sel" ]; then
       printf '    %b %s %b%s%b\033[K\n' "$mark" "$box" "$__C_BOLD" "$row" "$__C_RESET"
     else

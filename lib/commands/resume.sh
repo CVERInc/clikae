@@ -212,6 +212,7 @@ _resume_pick_draw() {
 _resume_pick_draw_body() {
   local sel="$1" start_idx="$2" end_idx="$3" n="$4"
   local idx s_idx engine tank sid label rage cwd mark rdot active_p
+  local _cols; _cols="$(_home_cols)"
   printf '\033[H\033[K\n'   # home + one blank top-margin line
 
   printf '  %b%s%b  %b· ↑↓/Tab %s · ⏎ %s · / %s · c %s · q %s%b\033[K\n\n' \
@@ -241,12 +242,26 @@ _resume_pick_draw_body() {
 
     # Same columns as the home board — dot · name · engine — then the title and age.
     local _rnm _ren; _rnm="$(_home_lpad "$tank" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$engine")" 8)"
+    # Title budget: cols minus this row's fixed chrome (4-lead+mark+dot+space
+    # +7-col name+space+8-col engine+space+2 quotes+2 spaces+parens = 31) minus
+    # the trailing age string's OWN width (variable per row) minus 1 more for
+    # `_home_trunc`'s trailing "…".
+    local _title_budget; _title_budget="$(_home_row_budget "$_cols" "$(( 31 + $(_dwidth "$rage") + 1 ))" 20)"
     if [ "$idx" -eq "$sel" ]; then
       cwd="${cached_cwd[s_idx]}"
-      printf '    %b %b %b%s%b %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
-      printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "${cwd:-?}" "$sid" "$T_ENTER_RESUME" "$__C_RESET"
+      printf '    %b %b %b%s%b %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_title_budget")" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
+      # The hanging line used to print the full 36-char UUID plus an
+      # UNTRUNCATED cwd (85 cols in en-US baseline, worse with a real absolute
+      # path). Short id = the same "${sid%%-*}…" form used elsewhere in this
+      # file (line ~166/~644) when announcing a session, not the raw UUID; the
+      # cwd is middle-ellipsised (head kept short, tail — the meaningful leaf
+      # dir — kept long) to whatever's left of the row's budget.
+      local _short_sid _dir_budget
+      _short_sid="${sid%%-*}…"
+      _dir_budget="$(_home_row_budget "$_cols" "$(( 25 + $(_dwidth "$_short_sid") + $(_dwidth "$T_ENTER_RESUME") ))" 15)"
+      printf '          %bdir: %s · id: %s · %s%b\033[K\n' "$__C_DIM" "$(_home_trunc_mid "${cwd:-?}" "$_dir_budget")" "$_short_sid" "$T_ENTER_RESUME" "$__C_RESET"
     else
-      printf '    %b %b %s %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" 56)" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
+      printf '    %b %b %s %b%s%b %b"%s"%b  %b(%s)%b\033[K\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_title_budget")" "$__C_RESET" "$__C_DIM" "$rage" "$__C_RESET"
     fi
   done
 
