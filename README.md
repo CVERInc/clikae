@@ -135,6 +135,24 @@ session or a memory slice is carried as a **copy**; the tank you came from is
 left exactly as it was. No proxy, no daemon, no traffic interception — clikae
 reshapes *where your state lives*, it never sits in the middle of your requests.
 
+## Wield the fleet, don't just switch
+
+Switching accounts is table stakes. The reason to keep a fleet is what you can *do*
+with it that one account can't:
+
+- **A review with no self-bias** — get a cold read from a different model family, in a
+  clean room that holds no memory of your work (`clikae agy … -p`, or `--ephemeral`).
+- **Grunt work off your main quota** — `clikae burn` a mechanical job onto a cheap tank,
+  verified by the file it produces; the expensive model stays free for the hard part.
+- **A real second opinion** — `clikae conduct` fans one prompt across rival vendors and
+  hands you every answer to judge: a vote, not a coin flip.
+- **A long job that survives a dry tank** — burn re-fires it on your next reserve
+  automatically, so unattended work finishes *somewhere*.
+
+Situation-by-situation recipes, with the exact calls, are in
+**[docs/playbooks.md](docs/playbooks.md)**. An account switcher gives you another login;
+this gives you a fleet you orchestrate.
+
 ## Swap the engine, keep the soul — shared memory
 
 A tank holds more than fuel — it holds the engine's long-term **memory**. `clikae

@@ -31,6 +31,9 @@ Three dispatch shapes — full field guide in
   output. clikae never judges — you pick the winner.
 - **`clikae to <target>`** — carry a live session onward when a tank runs dry.
 
+Which shape for which situation — the decision layer above these mechanics — is
+[docs/playbooks.md](docs/playbooks.md).
+
 ## Non-negotiable rules (break one and you fire a blank)
 
 1. **Judge by the artifact/output, never the exit code.** A headless `codex exec` /
@@ -62,6 +65,7 @@ account email. clikae can only prevent the *next* mis-stamp, never rewrite histo
 
 ## Where to look
 
+- [docs/playbooks.md](docs/playbooks.md) — which play for which situation (the decision layer above the mechanics).
 - [docs/grammar.md](docs/grammar.md) — the command surface, SSOT.
 - [docs/orchestration.md](docs/orchestration.md) — headless dispatch playbook.
 - [docs/agy-dispatch.md](docs/agy-dispatch.md) — the agy recipe (read before using agy).
