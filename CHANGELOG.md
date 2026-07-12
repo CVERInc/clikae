@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] — 2026-07-13
+
+### Fixed
+
+- **Rows and prose no longer disagree about how wide the terminal is.** The
+  board, `resume` and `clean` measured and cut titles by *characters* while
+  their budgets were expressed in *columns* — so a CJK title, whose glyphs are
+  two columns wide, rendered at roughly twice its budget and hard-wrapped back
+  to column 0. Latin-only test fixtures can't tell the two apart, which is why
+  the suite stayed green while real rows ran off the edge. Width is now measured
+  by display columns throughout (`_dwidth`, East Asian width), the fixtures
+  carry CJK titles, and `clikae clean` sacrifices columns by importance — age
+  first, then size, then the title (never below a readable floor), and the
+  keybar wraps rather than overflowing. The safety label is never truncated.
+- **`_home_wrap_prefixed` read the terminal behind `_home_cols`' back**, so
+  prose fell back to 80 columns whenever output was piped — every heading
+  between 61 and 79 columns overflowed a narrower window. There is now one
+  width source, and it honours `$COLUMNS` when there is no tty to ask.
+
+Audited across nine locales at 60, 80 and 100 columns against a real session
+store: no rendered line exceeds the terminal width.
+
 ## [0.14.1] — 2026-07-12
 
 ### Fixed
