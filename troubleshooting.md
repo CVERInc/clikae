@@ -178,5 +178,5 @@ shellcheck bin/clikae lib/**/*.sh install.sh
 bats tests/bats
 ```
 
-See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/ba8c33a40e23ac1e86b4356c655e05eef1b019c1/HANDOFF.md) §6 for the full verification recipe, including an
+See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/b082cff4d3e3f0c651dd51bbc558c5805f8b4ef5/HANDOFF.md) §6 for the full verification recipe, including an
 isolated end-to-end run that doesn't touch your real `$HOME`.
