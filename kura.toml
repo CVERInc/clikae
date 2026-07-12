@@ -27,7 +27,7 @@ pages = [
   { slug = "installation", title = "Installation" }, { slug = "usage", title = "Usage" },
   { slug = "grammar", title = "Grammar & lexicon" }, { slug = "playbooks", title = "Playbooks — wielding the fleet" },
   { slug = "orchestration", title = "Orchestration" },
-  { slug = "agy-dispatch", title = "Driving agy headless" }, { slug = "adding-an-adapter", title = "Adding an adapter" },
+  { slug = "agy-dispatch", title = "Driving agy headless" }, { slug = "adding-an-adapter", title = "Adding an adapter" }, { slug = "adding-a-locale", title = "Adding a language" },
   { slug = "memory", title = "Memory (Soul layer)" }, { slug = "claude-on-macos", title = "Claude Code on macOS" },
   { slug = "troubleshooting", title = "Troubleshooting" },
 ]
