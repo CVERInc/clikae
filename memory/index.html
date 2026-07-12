@@ -55,6 +55,18 @@ behaviour:</p>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p>⚠️ <strong><code>isolate</code> is not &quot;incognito&quot;.</strong> If what you want is a clean, throwaway
+session — a cold read, an unbiased audit — that is <strong>evaporate</strong>
+(<code>--ephemeral</code>): it affects <em>this one run</em> and touches no wiring. <code>isolate</code>
+<strong>rewires the live tank permanently</strong>: every project directory's memory
+symlink is removed on the spot and the tank stops sharing until someone
+dials it back (<code>memory share &lt;group&gt; &lt;engine&gt; &lt;tank&gt;</code>; symlinks re-project
+on the next launch). Field incident, 2026-07-12: an agent wanting a
+memory-clean workspace ran <code>isolate</code> on a live tank and silently unplugged
+its whole shared brain. Mnemonic: <strong>ephemeral changes this once; isolate
+changes from now on.</strong></p>
+</blockquote>
 <p>Sharing is <strong>per-tank, whole-brain</strong>: the consent unit is the tank (the members
 file under <code>souls/&lt;group&gt;/</code>), never a single directory. claude keeps one memory
 dir <em>per project directory</em>, so those symlinks are just per-directory

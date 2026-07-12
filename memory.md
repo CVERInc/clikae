@@ -24,6 +24,17 @@ behaviour:
 | **isolate** | N → **N** (today's default) | none (separate dirs) | blast-radius containment |
 | **evaporate** | N → **0** (throwaway) | symlink to `mktemp -d` | the ephemeral power user (`--ephemeral`, ✅ shipped) |
 
+> ⚠️ **`isolate` is not "incognito".** If what you want is a clean, throwaway
+> session — a cold read, an unbiased audit — that is **evaporate**
+> (`--ephemeral`): it affects *this one run* and touches no wiring. `isolate`
+> **rewires the live tank permanently**: every project directory's memory
+> symlink is removed on the spot and the tank stops sharing until someone
+> dials it back (`memory share <group> <engine> <tank>`; symlinks re-project
+> on the next launch). Field incident, 2026-07-12: an agent wanting a
+> memory-clean workspace ran `isolate` on a live tank and silently unplugged
+> its whole shared brain. Mnemonic: **ephemeral changes this once; isolate
+> changes from now on.**
+
 Sharing is **per-tank, whole-brain**: the consent unit is the tank (the members
 file under `souls/<group>/`), never a single directory. claude keeps one memory
 dir *per project directory*, so those symlinks are just per-directory
