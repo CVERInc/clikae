@@ -92,6 +92,71 @@ _seed_memory() {
   [[ "$output" == *"private to a"* ]] || false               # the stashed fact restored
 }
 
+# Regression (2026-07-13, dogfood — a running session went amnesiac mid-flight).
+# `share` used to fan in only the project-directory slots that ALREADY existed,
+# leaving the rest to soul_prelaunch's lazy link at the next launch. `isolate`
+# rm's every slot, and a directory whose memory was a PURE SYMLINK has no own
+# memory to restore — so it came back as nothing, the re-share found no slot to
+# fan into, and the tank's memory never returned. Worse, `memory status` reads
+# the membership file, so it kept saying "shared" while the disk had nothing:
+# the tool lied. A session already running in that directory never gets a
+# relaunch, so the lazy link never saves it.
+@test "🔴 memory isolate → share round-trips a project dir whose memory is a PURE symlink" {
+  clikae init claude a
+  _seed_memory a MEMORY.md "shared brain v1"
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+
+  # A SECOND project directory of the same tank, linked into the Soul but with
+  # NO own memory of its own — this is the shape that used to vanish.
+  local other="$CLIKAE_HOME/profiles/claude/a/projects/-Users-someone-elsewhere"
+  local store="$CLIKAE_HOME/souls/me/memory"
+  mkdir -p "$other"
+  ln -s "$store" "$other/memory"
+  [ -L "$other/memory" ]
+
+  run clikae memory isolate claude a
+  [ "$status" -eq 0 ]
+  [ ! -e "$other/memory" ]                                  # isolate DID unlink it
+
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [ -L "$other/memory" ] || { echo "the pure-symlink slot never came back"; false; }
+  [ "$(readlink "$other/memory")" = "$store" ]              # and points at the Soul again
+  [ -f "$other/memory/MEMORY.md" ]                          # which is readable through it
+
+  # And the disk agrees with what status claims.
+  run clikae memory status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"shared 'me'"* ]] || false
+}
+
+@test "memory share: a project dir keeping its OWN memory is stashed, not destroyed" {
+  clikae init claude a
+  _seed_memory a MEMORY.md "shared brain v1"
+
+  # Another project dir with a REAL memory dir of its own (not a symlink), in
+  # place BEFORE the tank joins the group — the fan-in must adopt it without
+  # destroying it. (Re-sharing an already-member tank is a deliberate no-op, so
+  # the stash path only ever runs on the join.)
+  local other="$CLIKAE_HOME/profiles/claude/a/projects/-Users-someone-own"
+  mkdir -p "$other/memory"
+  printf 'local-only fact\n' > "$other/memory/MEMORY.md"
+
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [ -L "$other/memory" ]                                    # now points at the Soul
+  [ -f "$other/memory.clikae-soul-stash/MEMORY.md" ]        # own memory stashed, intact
+  run cat "$other/memory.clikae-soul-stash/MEMORY.md"
+  [[ "$output" == *"local-only fact"* ]] || false
+
+  run clikae memory isolate claude a                        # …and isolate gives it back
+  [ "$status" -eq 0 ]
+  [ ! -L "$other/memory" ]
+  run cat "$other/memory/MEMORY.md"
+  [[ "$output" == *"local-only fact"* ]] || false
+}
+
 @test "🔴 account isolation: a tank that never opted in cannot see the store" {
   clikae init claude a
   _seed_memory a MEMORY.md "a's brain"

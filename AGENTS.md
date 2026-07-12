@@ -45,6 +45,17 @@ Which shape for which situation — the decision layer above these mechanics —
    `--dangerously-skip-permissions`), that's for the *human* to run — never trick
    your way around it with `cat`→`head`-style substitutions. User excitement is not
    authorization.
+5. **Want a memory-less session? That's `--ephemeral`, NEVER `clikae memory
+   isolate`.** To spawn a cold reader — an unbiased audit, a reviewer who doesn't
+   know what you believe — launch it with `clikae claude <tank> --ephemeral`: that
+   run gets a throwaway memory and the tank's Soul is put back afterwards.
+   `memory isolate` is not "incognito": it **rewires the live tank**, unplugging
+   its shared brain for every project directory and every *other session already
+   running in them* — including, quite possibly, yours. An agent did exactly this
+   on 2026-07-12 (isolate → re-share 20 minutes later) and the human's session
+   lost its memory mid-flight. **Ephemeral changes this once; isolate changes from
+   now on.** Same rule across engines: for a cold read on another family, use
+   `agy --sandbox` in an empty directory, not a rewire.
 
 ## agy (Antigravity) is the trap — read its recipe first
 

@@ -358,22 +358,41 @@ _memory_share() {
     fi
     mkdir -p "$(dirname "$MEM_DIR")"
     ln -s "$store" "$MEM_DIR"
-    # Project the WHOLE tank, not just $PWD: fan in every other project
-    # directory's existing slot too (own memory stashed alongside, reversible);
-    # brand-new directories are linked lazily by soul_prelaunch at launch.
-    # Membership is per-tank, so one consented `share` covers them all.
-    local slot sstash fanned=0
-    for slot in "$MEM_CFG"/projects/*/memory; do
-      [ -e "$slot" ] || [ -L "$slot" ] || continue
+    # Project the WHOLE tank, not just $PWD: fan in EVERY project directory of
+    # this tank, creating the slot when it isn't there (own memory stashed
+    # alongside, reversible). Membership is per-tank, so one consented `share`
+    # covers them all.
+    #
+    # 🔴 This used to iterate `projects/*/memory` and skip any slot that didn't
+    # already exist, leaving those to soul_prelaunch's lazy link at the next
+    # launch — which made `isolate` → `share` a MEMORY-LOSING round trip.
+    # isolate rm's every slot; a directory whose memory was a pure symlink (no
+    # own-memory stash to restore) came back as NOTHING, so the re-share found
+    # no slot there and silently skipped it. `memory status` reads the
+    # membership file, so it went on reporting "shared" while the tank's memory
+    # was gone from disk — and a session ALREADY RUNNING in that directory never
+    # gets a relaunch, so never gets the lazy link: it just goes amnesiac
+    # mid-flight. That is what happened to tank `l` on 2026-07-12 — a session
+    # isolated it to spawn a cold-read agent, re-shared it 20 minutes later, and
+    # the Soul never came back. Linking every project dir eagerly reaches the
+    # same end state soul_prelaunch would, with no window where the membership
+    # file and the disk disagree.
+    local pdir slot sstash fanned=0
+    for pdir in "$MEM_CFG"/projects/*/; do
+      [ -d "$pdir" ] || continue
+      slot="${pdir}memory"
       [ "$slot" = "$MEM_DIR" ] && continue
       if [ -L "$slot" ]; then
         [ "$(readlink "$slot" 2>/dev/null || true)" = "$store" ] && continue
         rm -f "$slot"
-      else
+      elif [ -e "$slot" ]; then
+        # The directory keeps its OWN memory: stash it alongside, never destroy
+        # it — `isolate` moves it back.
         sstash="$slot.clikae-soul-stash"
         [ -e "$sstash" ] && sstash="$sstash.$$"
         mv "$slot" "$sstash"
       fi
+      # No slot at all (a fresh dir, or one isolate emptied): just link it.
       ln -s "$store" "$slot" && fanned=$((fanned+1))
     done
     [ "$fanned" -gt 0 ] && log_dim "also fanned in $fanned other project-directory slot(s) of this tank."

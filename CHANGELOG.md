@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] — 2026-07-13
+
+### Fixed
+
+- **`memory isolate` → `memory share` was a memory-LOSING round trip, and
+  `memory status` lied about it.** `share` fanned in only the project-directory
+  slots that still existed, and `isolate` had just removed every one of them —
+  so a directory whose memory was a pure symlink (nothing of its own to stash)
+  came back as *nothing*, and the re-share silently skipped it. Membership lives
+  in the group's members file, so `memory status` went on reporting `shared`
+  while the tank's memory was gone from disk. The per-directory symlink is
+  otherwise re-projected at launch, but a session **already running** in that
+  directory never gets a relaunch: it just goes amnesiac mid-flight. Found the
+  hard way — an agent ran `isolate` on a live tank to spawn a cold reader, and
+  the maintainer's running session lost its long-term memory.
+
+  `share` now fans into **every** project directory of the tank, creating the
+  slot when it isn't there. A directory that keeps its own memory is still
+  stashed alongside, never destroyed, and `isolate` still gives it back.
+
+### Documentation
+
+- `AGENTS.md` now states the rule where an agent will actually hit it: **a
+  memory-less session is `--ephemeral`, never `memory isolate`.** `isolate` is
+  not "incognito" — it rewires the live tank, including every other session
+  already running in it. *Ephemeral changes this once; isolate changes from now
+  on.*
+
 ## [0.14.2] — 2026-07-13
 
 ### Fixed
