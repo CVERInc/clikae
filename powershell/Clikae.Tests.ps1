@@ -205,14 +205,19 @@ Describe 'ConvertTo-ClikaeJsonArray' {
         $json = ConvertTo-ClikaeJsonArray -Items @([pscustomobject]@{ a = 1 })
         $json | Should -Match '^\['
         $json | Should -Match '\]$'
-        $parsed = @($json | ConvertFrom-Json)
+        # WinPS 5.1 trap: ConvertFrom-Json emits an array as ONE non-enumerated
+        # pipeline object, so @(... | ConvertFrom-Json) collects it as a single
+        # element (Count 1). Assign first, THEN force-array — portable on 5.1 & 7+.
+        $parsed = $json | ConvertFrom-Json
+        $parsed = @($parsed)
         $parsed.Count | Should -Be 1
         $parsed[0].a  | Should -Be 1
     }
     It 'renders multiple objects as a 2-element array' {
         $json = ConvertTo-ClikaeJsonArray -Items @(
             [pscustomobject]@{ a = 1 }, [pscustomobject]@{ a = 2 })
-        $parsed = @($json | ConvertFrom-Json)
+        $parsed = $json | ConvertFrom-Json
+        $parsed = @($parsed)
         $parsed.Count | Should -Be 2
     }
 }
@@ -225,7 +230,8 @@ Describe 'Get-ClikaeProfile -Json' {
         New-ClikaeProfile -Cli gh -Profile jsontest -ProfilePath $script:ProfileScript | Out-Null
         $json   = Get-ClikaeProfile -Cli gh -Json
         $json | Should -Match '^\['
-        $parsed = @($json | ConvertFrom-Json)
+        $parsed = $json | ConvertFrom-Json
+        $parsed = @($parsed)
         ($parsed | Where-Object Profile -eq 'jsontest') | Should -Not -BeNullOrEmpty
         ($parsed | Where-Object Profile -eq 'jsontest').Cli | Should -Be 'gh'
     }
@@ -294,7 +300,8 @@ Describe 'Get-ClikaeStatus (status equivalent)' {
         $json = Get-ClikaeStatus -Cli vercel -Json
         $json | Should -Match '^\['
         $json | Should -Match '\]$'
-        $parsed = @($json | ConvertFrom-Json)
+        $parsed = $json | ConvertFrom-Json
+        $parsed = @($parsed)
         $parsed.Count    | Should -Be 1
         $parsed[0].State | Should -Be 'flag'
     }
