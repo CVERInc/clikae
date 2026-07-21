@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] — 2026-07-21
+
+### Fixed
+
+- **`clikae resume` and the home board showed a session's PRE-`/rename`
+  name.** `adapter_title_for_file` — the extractor behind the resume picker,
+  the home board's continue list, and `clikae clean`'s deletion list — scanned
+  only the first 100 lines of a transcript. But a `/rename` can land anywhere:
+  Claude writes `{"type":"custom-title","customTitle":"…"}` at the point of the
+  rename, so a session renamed deep in a long conversation kept listing its old
+  name, while the board's own `_claude_meta_for_file` (which reads the tail)
+  showed the new one. The two title paths had silently drifted — exactly the
+  failure the "one place owns this format" note warned against, and the same
+  code path behind the 2026-07-11 near-miss where a renamed live session almost
+  landed on the `clean` deletion list. Found on the maintainer's machine: a
+  60 MB session renamed `voxel@cvertex` at transcript line 13845 still listed
+  as `cvertex`.
+
+  `adapter_title_for_file` now scans the bounded tail slice **first** for the
+  newest `customTitle`/`aiTitle` (`tail -c` seeks from the end — cost is the
+  slice, not the file; the same primitive `_claude_meta_for_file` uses), then
+  falls back to the head window and opening prompt. Precedence now mirrors the
+  board extractor — `customTitle`(tail→head) > `aiTitle`(tail→head) > opening
+  message — so the resume/home/clean views can't drift from the board again.
+
 ## [0.14.3] — 2026-07-13
 
 ### Fixed
