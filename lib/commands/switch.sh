@@ -291,6 +291,14 @@ _switch_run_ephemeral() {
   # Restore order: stashed own memory first; else re-link a Soul-shared slot.
   # shellcheck disable=SC2064
   trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'" EXIT
+  # A hard terminal close (SIGHUP) or a SIGTERM would otherwise kill the parent
+  # WITHOUT running the EXIT trap, leaving memory pointed at the throwaway we're
+  # about to delete (dangling) and the real memory stranded in the stash — the
+  # 2026-07-19 incident. Re-raise both as a normal exit so the EXIT trap restores.
+  # (A SIGKILL or power loss still can't be caught — soul_prelaunch's
+  # memory_heal_ephemeral repairs that leftover on the tank's next launch.)
+  trap 'exit 129' HUP
+  trap 'exit 143' TERM
   trap '' INT
 
   log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."

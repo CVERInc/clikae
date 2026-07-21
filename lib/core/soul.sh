@@ -55,16 +55,48 @@ soul_rename_member() {
 # adapter is loaded. No-op for: engines without a memory dir (pointer engines
 # read the store via their instructions note — nothing per-directory to link),
 # non-member tanks, solo tanks, and slots already linked.
+# Repair an --ephemeral run that never restored. A hard terminal close (SIGHUP)
+# or a SIGTERM kills the ephemeral parent before its EXIT trap runs (switch.sh
+# now also traps HUP/TERM, but a SIGKILL or power loss still can't be caught), so
+# <mem> is left a symlink to a now-deleted throwaway (dangling) and the tank's
+# real memory sits in <mem>.clikae-ephemeral-stash — the slot reads as NOTHING
+# until a human fixes it. The ephemeral path self-heals only on the NEXT
+# ephemeral launch; this runs on EVERY launch (soul_prelaunch is the universal
+# memory-prelaunch hook — solo, member, and own-memory tanks all pass through),
+# so a plain session recovers too. Soul-shared slots carry no stash: dropping the
+# dangling link lets soul_prelaunch re-link the store just below. Never clobbers a
+# live memory — the stash is restored only when the slot is genuinely free.
+# (Incident 2026-07-19: a hard-closed ejecta ephemeral left the `l` tank's memory
+# dangling; the Soul store itself was never touched, only the pointer.)
+memory_heal_ephemeral() {
+  local mem="$1" stash="$1.clikae-ephemeral-stash" tgt
+  [ -n "$mem" ] || return 0
+  if [ -L "$mem" ] && [ ! -e "$mem" ]; then          # a dangling symlink
+    tgt="$(readlink "$mem" 2>/dev/null || true)"
+    case "$tgt" in
+      */clikae-ephemeral.*) rm -f "$mem" ;;          # our throwaway — safe to drop
+    esac
+  fi
+  if [ -d "$stash" ] && [ ! -e "$mem" ] && [ ! -L "$mem" ]; then
+    mv "$stash" "$mem"
+    log_dim "recovered this tank's memory from an interrupted --ephemeral run."
+  fi
+}
+
 soul_prelaunch() {
   local engine="$1" tank="$2" cfg="$3"
   declare -F adapter_memory_dir >/dev/null 2>&1 || return 0
-  tank_is_solo "$engine" "$tank" && return 0
   local group store mem cur
+  mem="$(adapter_memory_dir "$cfg" 2>/dev/null || true)"
+  # Heal a crashed --ephemeral run FIRST — before the solo/non-member early
+  # returns, since those tanks can be run ephemeral too and would otherwise never
+  # self-repair on a normal launch.
+  [ -n "$mem" ] && memory_heal_ephemeral "$mem"
+  tank_is_solo "$engine" "$tank" && return 0
   group="$(soul_group_for_tank "$engine" "$tank")"
   [ -n "$group" ] || return 0
   store="$(soul_store_path "$group")"
   [ -d "$store" ] || return 0
-  mem="$(adapter_memory_dir "$cfg" 2>/dev/null || true)"
   [ -n "$mem" ] || return 0
   cur="$(readlink "$mem" 2>/dev/null || true)"
   [ "$cur" = "$store" ] && return 0
