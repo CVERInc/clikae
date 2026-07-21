@@ -27,6 +27,7 @@ Built with Kura, the agent-native docs framework — https://kura.build
 - [Devlog](/docs/DEVLOG.md)
 - [Expectation vs implementation — "is this a bug?"](/docs/EXPECTATIONS.md)
 - [clikae grammar & lexicon — the single source of truth](/docs/grammar.md)
+- [HANDOFF — 回憶命中率：記憶層的真指標](/docs/HANDOFF-recall-hit-rate.md)
 - [HANDOFF — world-class gaps](/docs/HANDOFF-world-class-gaps.md)
 - [Installing clikae](/docs/installation.md)
 - [clikae memory — the Soul layer (convention)](/docs/memory.md)
