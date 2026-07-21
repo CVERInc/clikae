@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.5] — 2026-07-21
+
+### Fixed
+
+- **A hard terminal close during `--ephemeral` stranded the tank's real
+  memory.** An ephemeral run points the tank's memory dir at a throwaway and
+  stashes the real memory aside, restoring it from a `trap … EXIT`. But the trap
+  caught only `EXIT`/`INT` — **not `HUP`/`TERM`**. Close the terminal window and
+  the process takes a `SIGHUP`, whose default action terminates it *without*
+  running the EXIT trap: the memory dir is left a dangling symlink to a
+  now-deleted `clikae-ephemeral.XXXXXX` temp, the real memory marooned in
+  `<mem>.clikae-ephemeral-stash`, and the slot reads as **empty**. Worse, the
+  ephemeral path self-healed only on the *next* ephemeral launch, so an ordinary
+  `clikae claude <tank>` session never recovered it — the tank stayed broken
+  until fixed by hand. (Incident 2026-07-19: a hard-closed ephemeral left a
+  tank's memory dangling; the Soul store itself was untouched — only the
+  pointer.) Two guards, both shipped:
+
+  1. `_switch_run_ephemeral` now traps `HUP`/`TERM` too, re-raising each as a
+     normal exit so the restore runs on a terminal close.
+  2. `soul_prelaunch` — the universal memory-prelaunch hook every launch path
+     goes through — now runs `memory_heal_ephemeral` first: a dangling
+     `clikae-ephemeral.*` link is dropped and the stashed memory restored, on
+     *any* launch (solo, member, own-memory tanks alike). This also recovers the
+     cases no trap can catch (`SIGKILL`, power loss). It never clobbers a live
+     memory, and leaves foreign symlinks alone.
+
 ## [0.14.4] — 2026-07-21
 
 ### Fixed
