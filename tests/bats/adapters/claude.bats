@@ -77,3 +77,24 @@ load '../../helpers'
   [ "$status" -eq 0 ]
   [ "$output" = "Just the AI title" ]
 }
+
+# --- a /rename PAST the head window is still the name (2026-07-21: the resume
+# picker and home board scanned only the first 100 lines, so a session renamed
+# deep in a long conversation kept showing its PRE-rename name — while the
+# board's own _claude_meta_for_file, which reads the tail, showed the new one) --
+
+@test "claude title_for_file: a rename past line 100 wins over an early name" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/t7.jsonl"
+  # Early name in the head window, then 200 filler lines, then the real /rename
+  # far past the 100-line head cutoff — only a tail scan can see it.
+  printf '{"type":"custom-title","customTitle":"early-name"}\n' > "$f"
+  local i; for ((i = 0; i < 200; i++)); do
+    printf '{"type":"assistant","message":{"role":"assistant","content":"filler %d"}}\n' "$i" >> "$f"
+  done
+  printf '{"type":"custom-title","customTitle":"renamed-late"}\n' >> "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "renamed-late" ]
+}

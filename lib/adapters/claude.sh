@@ -312,24 +312,44 @@ adapter_session_title() {
 # `resume cleanup` list sessions across ALL projects, so deriving the path from
 # $PWD (what adapter_session_title above does, correctly, for the board's
 # this-directory list) made every out-of-$PWD session show "(no preview)".
-# Extraction is bash-native =~ (zero forks per line) and escape-aware: the old
-# ${line%%\"*} surgery cut a title at its first internal \" — an ai-title like
-# `Fix the \"off-by-one\" bug` lost everything past `Fix the `.
+# Extraction is bash-native =~ (escape-aware: the old ${line%%\"*} surgery cut a
+# title at its first internal \" — an ai-title like `Fix the \"off-by-one\" bug`
+# lost everything past `Fix the `). Self-contained: it sources no core lib (the
+# adapter unit tests exercise it standalone), so the only fork is one `tail -c`.
 adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 
-  # A USER-set title (/rename → {"type":"custom-title","customTitle":"…"})
-  # outranks the machine-generated aiTitle — see the twin comment on
-  # _claude_meta_for_file's title extraction above for why (2026-07-11
-  # incident). Scan the full bounded window (no early break) so a rename that
-  # lands AFTER an earlier ai-title within these 100 lines still wins — take
-  # the LAST customTitle seen; absent one, the LAST aiTitle; absent both, the
-  # opening user message.
   local re_custom='"customTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_title='"aiTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_text='"text"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
   local re_content='"content"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
+
+  # TAIL-FIRST (bounded): a /rename can land ANYWHERE in the transcript — deep in
+  # a long session, far past the head window below. Claude re-emits the
+  # custom-title line near the end, so scan the last slice FIRST for the NEWEST
+  # customTitle / aiTitle. `tail -c` seeks from the end (cost is the slice, not
+  # the file) — the sole fork this otherwise bash-native extractor makes; a small
+  # transcript just yields the whole file. Take the LAST match in the slice (=
+  # newest). Without this, a head-100-only scan showed the PRE-rename name in
+  # `clikae resume`/home/clean for any session renamed after its first 100 lines
+  # — the two views silently drifted from the board (2026-07-21 incident: a
+  # session renamed "voxel@cvertex" at transcript line 13845 listed as "cvertex").
+  local tail_custom="" tail_ai="" line
+  while IFS= read -r line; do
+    if [[ "$line" == *'"customTitle"'* ]] && [[ $line =~ $re_custom ]]; then
+      tail_custom="${BASH_REMATCH[1]}"
+    elif [[ "$line" == *'"aiTitle"'* ]] && [[ $line =~ $re_title ]]; then
+      tail_ai="${BASH_REMATCH[1]}"
+    fi
+  done < <(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null)
+
+  # HEAD window (bounded): an EARLY customTitle, else the latest aiTitle, else the
+  # opening user message. A USER-set title (/rename →
+  # {"type":"custom-title","customTitle":"…"}) outranks the machine-generated
+  # aiTitle — see the twin comment on _claude_meta_for_file above for why
+  # (2026-07-11 incident). Scan the full bounded window (no early break) so a
+  # rename that lands AFTER an earlier ai-title within these 100 lines still wins.
   local line_in idx_in=0 max_lines_in=100 custom_in="" ai_in="" user_msg_in=""
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
@@ -348,7 +368,12 @@ adapter_title_for_file() {
     fi
   done < "$f" 2>/dev/null
 
-  local stitle="$custom_in"
+  # Precedence mirrors _claude_meta_for_file (the board's extractor) so the two
+  # views can't drift again: newest customTitle (tail → head) outranks aiTitle
+  # (tail → head), which outranks the opening user message.
+  local stitle="$tail_custom"
+  [ -n "$stitle" ] || stitle="$custom_in"
+  [ -n "$stitle" ] || stitle="$tail_ai"
   [ -n "$stitle" ] || stitle="$ai_in"
   [ -n "$stitle" ] || stitle="$user_msg_in"
   stitle="${stitle//\\n/ }"
