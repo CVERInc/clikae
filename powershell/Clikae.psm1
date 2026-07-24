@@ -36,13 +36,13 @@ $script:ClikaeAdapters = [ordered]@{
     gcloud    = @{ Name = 'Google Cloud CLI'; Binary = 'gcloud';    EnvVar = 'CLOUDSDK_CONFIG';       Strategy = 'env-dir';  Description = 'Google Cloud CLI (auth + active config in CLOUDSDK_CONFIG)' }
     docker    = @{ Name = 'Docker CLI';       Binary = 'docker';    EnvVar = 'DOCKER_CONFIG';         Strategy = 'env-dir';  Description = 'Docker CLI (registry auth + contexts in DOCKER_CONFIG)' }
     helm      = @{ Name = 'Helm';             Binary = 'helm';      EnvVar = 'HELM_CONFIG_HOME';      Strategy = 'env-dir';  Description = 'Helm (repo list + registry auth in HELM_CONFIG_HOME)' }
-    kubectl   = @{ Name = 'kubectl';          Binary = 'kubectl';   EnvVar = 'KUBECONFIG';            Strategy = 'env-file'; File = 'config';      Description = 'Kubernetes CLI (cluster/context/creds in a KUBECONFIG file)' }
-    aws       = @{ Name = 'AWS CLI';          Binary = 'aws';       EnvVar = 'AWS_PROFILE';           Strategy = 'env-var';  Description = 'AWS CLI (selects a named profile from your shared AWS config via AWS_PROFILE)' }
+    kubectl   = @{ Name = 'kubectl';          Binary = 'kubectl';   EnvVar = 'KUBECONFIG';            Strategy = 'env-file'; File = 'config';      Description = 'Kubernetes CLI (cluster/context/credentials in KUBECONFIG)' }
+    aws       = @{ Name = 'AWS CLI';          Binary = 'aws';       EnvVar = 'AWS_PROFILE';           Strategy = 'env-var';  Description = 'AWS CLI (selects a named profile from your shared AWS config)' }
     az        = @{ Name = 'Azure CLI';        Binary = 'az';        EnvVar = 'AZURE_CONFIG_DIR';      Strategy = 'env-dir';  Description = 'Azure CLI (subscriptions + token cache in AZURE_CONFIG_DIR)' }
-    npm       = @{ Name = 'npm';              Binary = 'npm';       EnvVar = 'NPM_CONFIG_USERCONFIG'; Strategy = 'env-file'; File = 'npmrc';       Description = 'npm (registry auth tokens in a per-profile .npmrc file)' }
-    terraform = @{ Name = 'Terraform';        Binary = 'terraform'; EnvVar = 'TF_CLI_CONFIG_FILE';    Strategy = 'env-file'; File = 'terraformrc'; Description = 'Terraform (Terraform Cloud / registry credentials in a CLI config file)' }
+    npm       = @{ Name = 'npm';              Binary = 'npm';       EnvVar = 'NPM_CONFIG_USERCONFIG'; Strategy = 'env-file'; File = 'npmrc';       Description = 'npm (registry auth tokens in a per-profile .npmrc)' }
+    terraform = @{ Name = 'Terraform';        Binary = 'terraform'; EnvVar = 'TF_CLI_CONFIG_FILE';    Strategy = 'env-file'; File = 'terraformrc'; Description = 'Terraform (Terraform Cloud / registry auth in terraformrc)' }
     pulumi    = @{ Name = 'Pulumi';           Binary = 'pulumi';    EnvVar = 'PULUMI_HOME';           Strategy = 'env-dir';  Description = 'Pulumi (backend login + credentials in PULUMI_HOME)' }
-    vercel    = @{ Name = 'Vercel CLI';       Binary = 'vercel';    EnvVar = '';                      Strategy = 'flag';     Flag = '--global-config'; Description = 'Vercel CLI (per-profile dir via --global-config)' }
+    vercel    = @{ Name = 'Vercel CLI';       Binary = 'vercel';    EnvVar = '';                      Strategy = 'flag';     Flag = '--global-config'; Description = 'Vercel CLI (per-profile dir via --global-config flag)' }
 }
 
 # Sentinel markers — identical in spirit to the bash tool so a block written by
@@ -148,8 +148,8 @@ function Get-ClikaeProfileEnv {
 function Get-ClikaeFlagArgs {
     <#
     .SYNOPSIS  The flag args to append after the binary for a `flag`-strategy
-               profile (e.g. @('--global-config', '<dir>')). Empty for others.
-               Mirrors the bash adapter_flag_args hook.
+                profile (e.g. @('--global-config', '<dir>')). Empty for others.
+                Mirrors the bash adapter_flag_args hook.
     #>
     [CmdletBinding()]
     param(
@@ -177,12 +177,17 @@ function ConvertTo-ClikaeJsonArray {
       object (and -AsArray doesn't exist before PS 7), so we convert each element
       and join. This keeps `-Json` output a real array on every edition, matching
       the bash `--json` contract (empty -> [], one row -> [ {…} ]).
+
+      PS 5.1 also has issues serializing ordered hashtables consistently, so we
+      use Select-Object * to normalize properties before serialization.
     #>
     [CmdletBinding()]
     param([object[]]$Items)
     $arr = @($Items | Where-Object { $null -ne $_ })
     if ($arr.Count -eq 0) { return '[]' }
-    $parts = foreach ($it in $arr) { $it | ConvertTo-Json -Depth 6 -Compress }
+    # Select-Object * normalizes the object structure, ensuring consistent
+    # serialization across PS 5.1 (.NET Framework) and PS 7+ (.NET Core).
+    $parts = foreach ($it in $arr) { $it | Select-Object * | ConvertTo-Json -Depth 6 -Compress }
     return '[' + ($parts -join ',') + ']'
 }
 
