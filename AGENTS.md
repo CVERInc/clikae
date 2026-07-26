@@ -7,15 +7,28 @@ is [docs/grammar.md](docs/grammar.md).)
 
 ## What clikae is, in one breath
 
-clikae routes your work across multiple accounts/engines on one machine — "swap the
-tank, keep burning." It's a small, auditable bash CLI with **no telemetry, no daemon,
-no network calls** (one opt-out update check). It only ever sets an engine's config
-env var (e.g. `CLAUDE_CONFIG_DIR`); it never logs in for the user and never touches
-their data without a backup.
+The human's AI work has two halves. The model half is rented — engine, capability,
+quota. The other half is **theirs**: who they are, what they know, where they left
+off, what should leave no trace. clikae is the thin, all-local layer that keeps that
+half portable, so changing engine or account doesn't mean amnesia. Juggling several
+accounts falls out of that; it is **not** the point, and clikae is deliberately not
+positioned as an "account switcher" ([docs/VISION.md](docs/VISION.md) is the SSOT —
+read it before you write any user-facing copy).
+
+Mechanically it is a small, auditable bash CLI with **no telemetry, no daemon, no
+network calls** (one opt-out update check). It only ever sets an engine's config env
+var (e.g. `CLAUDE_CONFIG_DIR`); it never logs in for the user and never touches their
+data without a backup.
 
 Vocabulary: **engine** = a CLI it manages (claude, codex, agy…). **tank** = one
-account/config for that engine. **fuel** = that account's quota. clikae is the verb:
+account/config for that engine. **fuel** = that account's quota. **Soul** = a
+vendor-neutral markdown brain several tanks can share. clikae is the verb:
 `clikae <engine> <tank>` switches; `clikae <engine> <tank> -- <args>` passes through.
+
+The human's own entry point is bare `clikae` — a board of their recent sessions
+across every account and engine, with `clikae resume` reaching back to any past one
+by title. You will rarely drive that; know it exists, because it is what a tank is
+*for*. A tank is a working identity with memory and history, not a quota bucket.
 
 ## Driving it headless (the part you'll actually use)
 
@@ -56,6 +69,11 @@ Which shape for which situation — the decision layer above these mechanics —
    lost its memory mid-flight. **Ephemeral changes this once; isolate changes from
    now on.** Same rule across engines: for a cold read on another family, use
    `agy --sandbox` in an empty directory, not a rewire.
+6. **A solo tank is not yours to dispatch.** Existing ≠ available. `clikae solo`
+   lists them and `clikae memory status` marks them `🔒 solo`; check before you fan
+   work out. A solo tank is walled out of the fleet by design — `burn` never
+   auto-reroutes onto one, `memory share` refuses it, and the fleet's MCP fan-in
+   skips it. It is the human's private cockpit, not a spare seat.
 
 ## agy (Antigravity) is the trap — read its recipe first
 
@@ -78,6 +96,9 @@ account email. clikae can only prevent the *next* mis-stamp, never rewrite histo
 
 - [docs/playbooks.md](docs/playbooks.md) — which play for which situation (the decision layer above the mechanics).
 - [docs/grammar.md](docs/grammar.md) — the command surface, SSOT.
+- [docs/memory.md](docs/memory.md) — the Soul layer, SSOT. Read before touching
+  anything under `clikae memory`; §4 holds the locked values (account isolation is
+  opt-in and never auto-crossed; seed by copy, never mutate the source).
 - [docs/orchestration.md](docs/orchestration.md) — headless dispatch playbook.
 - [docs/agy-dispatch.md](docs/agy-dispatch.md) — the agy recipe (read before using agy).
 - `clikae <command> --help` — every command self-documents; trust it over guessing.
