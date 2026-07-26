@@ -4,7 +4,7 @@
 # Give a tank an OPTIONAL intended git commit identity. Once set, `eval "$(clikae
 # env <engine> <tank>)"` also exports GIT_AUTHOR_* / GIT_COMMITTER_*, so commits
 # made in that shell are stamped with the identity you MEANT — not whatever the
-# engine's account email happens to be. (issue #22 / HANDOFF §13: a headless run
+# engine's account email happens to be. (issue #22: a headless run
 # once authored 9 commits under the wrong GitHub account; this prevents the NEXT
 # mis-stamp.)
 #

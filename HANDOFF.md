@@ -1,621 +1,473 @@
 # HANDOFF — clikae
 
-This document briefs a fresh AI coding assistant (or human contributor) on how to continue this project. Read it end-to-end before changing anything.
+Brief for a fresh contributor (human or AI) picking this project up.
+
+**This file describes the present tense only.** History lives in
+[CHANGELOG.md](CHANGELOG.md) (per-release record), [docs/DEVLOG.md](docs/DEVLOG.md)
+(the narrative), and `git log`. Nothing here is a trophy case.
 
 ---
 
-## 0. What this project is
+## 0. The maintenance contract (read before you edit this file)
 
-**clikae** (ｷﾘｶｴ, 切り替え — "switching") is a small bash CLI that lets one person juggle multiple accounts/configs for any CLI tool that uses an environment variable for its settings (e.g. `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`, `KUBECONFIG`).
+This document rotted once: it grew to 1089 lines of dated status blocks, kept
+`✅ DONE` sections for work shipped months earlier, and its own "READ THIS FIRST"
+header was five releases behind. An incoming agent then trusted it. That is the
+failure mode this contract exists to prevent.
 
-It does three things per profile:
+**Every line in this file is exactly one of three things:**
 
-1. Creates an isolated config directory at `~/.clikae/profiles/<cli>/<profile>/`.
-2. Optionally writes a sentinel-wrapped shell alias to the user's shell rc (`<cli>-<profile>`, e.g. `claude-work`).
-3. On macOS, optionally generates a double-clickable `.app` launcher that opens Terminal with the right env vars and a custom window title.
+| Kind | Meaning | Lifecycle |
+|---|---|---|
+| **LIVE RULE** | A constraint that still binds today | Stays until the constraint stops being true |
+| **OPEN** | Known, unsolved, and someone will have to deal with it | Deleted in the same commit that closes it |
+| — | Anything else | **Does not belong here** |
 
-The repo is at `~/Developer/clikae/`. License: MIT. It's labelled as an unofficial community tool (not affiliated with Anthropic or any CLI vendor).
+Rules:
 
----
-
-## 1. Working principles (NON-NEGOTIABLE)
-
-These mirror how this project was built and must be preserved:
-
-1. **Check, then act.** Every destructive step (rm, edit shell rc, overwrite .app) must verify preconditions and stop with a clear message on anomaly. Never silently overwrite the user's data.
-2. **Back up before editing user files.** Shell rc edits create `*.clikae.bak.<timestamp>`. The user must always be able to undo by hand.
-3. **Sentinel-wrap any block you write into user-owned files.** Use the existing `# >>> clikae:<id> >>>` … `# <<< clikae:<id> <<<` pattern so `clikae remove` can clean up reliably.
-4. **Never log in for the user.** OAuth / password flows are theirs. Never type credentials, never auto-accept terms.
-5. **Never touch system files.** Only `~/.clikae/`, the user's shell rc, and (with `--out` override) `~/Applications/`.
-6. **If anything is unexpected, stop and report.** Don't paper over errors. Don't try alternate approaches without asking the user.
-7. **No silent telemetry. Ever.**
-
----
-
-## ⭐ CURRENT STATE — 2026-06-30 (READ THIS FIRST; supersedes every dated block below)
-
-**Shipped tag: `v0.9.0`** (2026-06-30) — the Soul layer plus the interactive
-board-cockpit redesign. Tag + GitHub release + Homebrew (in-repo `homebrew/clikae.rb`
-**and** the tap `~/Developer/homebrew-clikae/Formula/clikae.rb`) all bumped; `main` is
-clean. `bash scripts/test.sh` is the gate (shellcheck + bats, currently green at ~454).
-🔴 **Never verify bats through a pipe** (`bats | tail; echo $?` reports tail's exit, not
-bats') — see `tests/README.md`. Everything in §2–§14 below is accurate as HISTORY but
-predates the two big arcs described here.
-
-### The headline since v0.7 — the **Soul** layer (cross-engine shared memory)
-`clikae memory <share|isolate|status>` points a tank's long-term memory at ONE shared
-markdown "Soul", so several of YOUR OWN tanks — across engines — read/write a single
-brain. SSOT: **`docs/memory.md`** + **`docs/grammar.md §10`**. Code: `lib/commands/memory.sh`.
-- Canonical store: `$CLIKAE_HOME/souls/<group>/memory` (flat, vendor-neutral markdown) +
-  `PROTOCOL.md` (the read/write-back manual seeded into every store) + `members` (the
-  membership ledger).
-- Two strategies, by what the engine exposes: **symlink** (claude — fan its memory DIR
-  into the store; the persistent sibling of `--ephemeral`'s fan-OUT) and **pointer**
-  (codex/agy — a fenced note in `AGENTS.md` / `GEMINI.md` pointing at the store; the
-  engine reads+writes the same markdown via the protocol, so cross-engine needs NO
-  translator and never drifts). Hooks: `adapter_memory_dir` vs
-  `adapter_memory_pointer_path` / `target_memory_pointer_path`.
-- 🔴 Locked values (`docs/memory.md §4`): account isolation is sacred (opt-in, per-tank,
-  NEVER auto-cross; crossing your own accounts is announced); aggregate-never-mutate-the-
-  source (seed by COPY, the joiner's own memory stashed aside, reversible via `isolate`);
-  no phantom continuity (Soul carries context, not the model's capability).
-- Live dogfood: a `me` group shares one brain across claude/C + agy/c + codex/H.
-
-### `clikae solo` — a tank OUT of the fleet
-A solo tank is standalone: skipped by burn/watch rotation and `to`/relay, and `memory
-share` REFUSES it. Marker `<tank>/clikae-meta/solo`; predicates `tank_is_solo` /
-`solo_marker_file` in `profile_store.sh`. This walls off **MFC** (the gaido bot persona on
-the maintainer's OWN account — invisible to the cross-account guard) so it can never be
-commingled. **claude/MFC IS solo as of 2026-06-30.**
-
-### The board is now an interactive cockpit (this session's redesign)
-`clikae` with no args on a TTY is a full launcher. Verbs on the selected tank: Enter open ·
-r relay · R resume-picker · x incognito · n/a/d new/rename/delete · **s solo-toggle** ·
-**m memory dial** · [ ] reorder · / filter · ? help · l lang · A autonomy · g/G · 1-9.
-Visual language — **LOCKED with the maintainer, do not regress:**
-- **Three sections: Tanks / Solo / Resume.** A SECTION is the badge — solo tanks live in
-  their own block, not a per-row icon. No emoji on the board.
-- **Soul-sharing is NOT shown inline** — in the fleet a shared brain is the normal state
-  (that is what relay/`to` are for); not worth shouting.
-- **Aligned columns**: dot · name · engine · account, display-width padded (`_home_lpad`,
-  CJK-safe). Resume rows use the SAME columns (name · engine · "title").
-- **No "current shell" marker** — with many tanks open at once it is noise; `active` is
-  still computed for the launch hint + relay source, just not drawn.
-
-### The ONE remaining roadmap item — Soul **Phase 4** (DOGFOOD-GATED, not now)
-Plan: `~/.clikae/profiles/claude/C/plans/fizzy-drifting-liskov.md`. Phases 0–3 are DONE
-(structure; claude share; codex/agy pointer). **Phase 4** = (a) per-ENTRY scope dial
-(`scope: share|isolate|evaporate` on a single memory file, vs today's whole-tank share);
-(b) a per-person default + per-area override policy; (c) conduct/burn integration so the
-orchestrator wakes the cheapest-sufficient brain WITH the shared Soul context (the two
-north stars — continuity × cost-aware routing — converging). 🔴 The plan itself gates this
-behind dogfooding Phase 1 first: do NOT build Phase 4 until the `me` group has been lived
-in for a while and its shape is proven. **Right state: PARKED, waiting for usage signal**
-— not an unfinished debt.
+1. **Closing an OPEN item means deleting its entry**, in the same commit as the
+   fix. Do not rewrite it as `✅ DONE`. CHANGELOG records the ship; git records
+   the reasoning; this file records only what is still true.
+2. **Never write a status block dated to today** ("Current state as of …",
+   "shipped tag: vX.Y.Z", "bats currently green at N"). Those decay silently and
+   are indistinguishable from fact when stale. Write **how to check** instead:
+   `clikae --version`, `bash scripts/test.sh`, `git log`.
+3. **Before trusting any claim in here, verify it in code.** If you find a
+   mismatch, fix the file first, then continue. A wrong handoff is worse than no
+   handoff.
+4. **Do not restate what a SSOT already owns.** Point at it:
+   `docs/VISION.md` (positioning), `docs/grammar.md` (command surface),
+   `docs/memory.md` (Soul), `docs/orchestration.md` + `docs/playbooks.md`
+   (headless dispatch), `AGENTS.md` (driving clikae as an agent).
+5. **Never cite this file by section number** from code comments or other docs.
+   Sections move; the citation dangles and the next reader can't tell whether the
+   claim died or just relocated. Make the comment self-contained, or name the
+   thing (`clikae_is_target`, the BSD-sed footgun) instead of a `§`.
+6. **A finished plan is not a document.** `PLAN.md` and
+   `docs/HANDOFF-world-class-gaps.md` were both deleted on 2026-07-27: each had
+   declared itself shipped/cleared at the top and then sat in the repo for weeks
+   where an incoming agent would read it as live work. If a plan is done, `git rm`
+   it — `git log` is the archive.
 
 ---
 
-## 2. Status — last tag `v0.4.0` (SHIPPED 2026-05-30) — HISTORICAL (see CURRENT STATE above)
+## 1. What clikae is
 
-> **⭐ READ FIRST (2026-06-01): the fuel-tank grammar landed on
-> `feat/relay-and-status`** (committed, not pushed). clikae is now **the verb** —
-> `clikae <engine> <tank>` is the bare switch (no `run`), `clikae to <target>`
-> carries a session onward (merges relay+handoff), `clikae tanks` lists, and agy
-> folds into the same verbs (`init agy`/`agy <tank>`/`remove agy`/`agy --release`,
-> no subcommand tree). Vocabulary is **engine/tank/fuel** everywhere (disk
-> `profiles/` + core fn names unchanged). **`docs/grammar.md` is the SSOT** for all
-> of this — read it before touching the command surface; §10 holds the open
-> "memory control plane" frontier (share/isolate/evaporate + a local-model
-> translator). bats **200/200**, shellcheck clean. The prose below predates this
-> and describes the relay/status/app work it's built on; still accurate as history.
->
-> Resolved since: ✅ **`feat/agy-limit-detection` merged** (`bd05f75`); ✅ **bats
-> hardened** so every assertion counts (`set -e` + `|| false` on `[[ … ]]`, see
-> `tests/README.md`); ✅ **Windows is now community/unsupported** — clikae is a
-> macOS/Linux bash tool, the PowerShell module is an unsupported community port
-> (its CI job is `continue-on-error`, never gates), so **don't spend effort
-> syncing PS to the grammar**. Still open (needs a greenlight, not a guess):
-> **implement** any §10 memory mode (ephemeral / per-`to` injection / canonical —
-> designed + ship-order agreed, not yet built).
+A small, auditable bash CLI that keeps **your half** of AI CLI work portable —
+who you are, what you know, where you left off — across accounts and engines.
+Bare `clikae` opens a board of your recent sessions; picking one puts you back on
+the right account, session, and directory.
 
-> **UNRELEASED work on branch `feat/relay-and-status` (not yet tagged).** Two new
-> commands landed since v0.4.0, fully bats-covered (suite now **83 tests**, was
-> 71) and shellcheck-clean at `warning`:
->
-> - **`clikae relay <cli> [<from>] <to>`** — the headline. Hand a live session to
->   another profile and keep going on *its* quota (clikae's origin story: a second
->   account exists because one runs out mid-task). New optional adapter hook
->   `adapter_relay <from_dir> <to_dir>` in `lib/adapters/claude.sh`: it slugs `$PWD`
->   the way Claude Code does (`[^A-Za-z0-9]`→`-`), finds the current dir's most
->   recent `projects/<slug>/<id>.jsonl` transcript under the source profile, copies
->   it into the target profile, and `exec`s `claude --resume <id>` under the target
->   `CLAUDE_CONFIG_DIR`. Non-destructive (copy, never move). Adapters without the
->   hook fall back to a plain start under the target. `cmd_relay` auto-detects
->   `<from>` from the live env var when only the target is given.
->   **⚠️ NEEDS REAL-CLAUDE DOGFOOD:** the resume path was verified with a stubbed
->   `claude` binary (transcript copy + correct `--resume <id>`/`CLAUDE_CONFIG_DIR`
->   argv), NOT yet against the real CLI resuming a transcript copied across config
->   dirs. Confirm `claude --resume <id>` actually picks up a cross-profile-copied
->   transcript before tagging. If a claude version needs more than the jsonl (e.g.
->   a `.claude.json` index entry), extend `adapter_relay`.
-> - **`clikae status [<cli>]`** — shows which profile each CLI is on *in this
->   shell* by resolving the live env var back to a profile (`(default)` = unset,
->   `(external)` = points outside the store). Foundational for the v1.0 GUI.
->   Shared resolver `resolve_active_profile` lives in `lib/core/profile_store.sh`
->   (used by both status and relay — don't re-inline it).
->
-> Both are wired into the dispatcher (`bin/clikae`), `help`, and `docs/usage.md`;
-> CHANGELOG `[Unreleased]` describes them.
->
-> - **`clikae app --terminal <terminal|iterm2|ghostty>`** — the `.app` launcher
->   can now open iTerm2 or Ghostty, not just Terminal.app (closes most of §9.2 /
->   roadmap #6). `lib/commands/app.sh` was refactored: a `_app_render_script`
->   dispatch picks a per-terminal AppleScript template
->   (`lib/templates/launcher.{,iterm2.,ghostty.}applescript.tmpl`). Terminal.app &
->   iTerm2 use their scripting APIs; **Ghostty can't open a window from the CLI on
->   macOS** (`ghostty` only runs `+actions`), so its launcher is an AppleScript
->   `do shell script "open -na Ghostty.app --args --title=… -e /bin/zsh -lc '…'"`.
->   Default target overridable via `$CLIKAE_TERMINAL`. Target must be installed
->   (checked via /Applications, ~/Applications, then `mdfind` bundle-id) else a
->   clear failure. **NB on templates:** the existing convention is that a
->   template's comment must NOT contain the literal `@TOKEN@` (with @ delimiters)
->   or the `${//}` substitution mangles the comment — I hit this; the new template
->   comments refer to tokens without the @s. **Ghostty path is fully tested**
->   (mechanism verified end-to-end incl. a space-containing config path; bats
->   asserts the generated launcher). **iTerm2 path is NOT machine-verified here**
->   (iTerm2 isn't installed on the maintainer's Mac) — the maintainer's partner
->   (profile b) will dogfood it; if iTerm2's `create window with default profile
->   command` needs tweaking, it's all in the one template file. **Warp is still
->   not supported** (no clean command-launch story) — left as a small follow-up.
->
-> - **macOS menu bar app skeleton (`gui/ClikaeMenuBar/`, v1.0 track).** SwiftPM +
->   AppKit `NSStatusItem` app — **builds with the Command Line Tools, no Xcode
->   needed** (`cd gui/ClikaeMenuBar && swift build`; verified, `Build complete!`).
->   `Clikae.swift` shells out to the CLI (`/bin/zsh -lc "clikae …"` so GUI PATH
->   resolves) and parses `clikae list -p` / `clikae status`; `main.swift` builds
->   the menu (profiles per CLI, active check-marked, click → `clikae run`, per-CLI
->   Relay submenu → `clikae relay`, Refresh, Quit). Launches via Ghostty
->   (`open -na Ghostty.app --args -e /bin/zsh -lc "…"`), Terminal.app fallback.
->   **NOT runtime-tested here** — it's a menu-bar agent needing a real login /
->   window-server session, so I only compile-verified it (running it headless
->   would crash on the WindowServer connection). Next: package as a signed
->   LSUIElement `.app` bundle, login-item toggle, per-CLI terminal preference.
->   `.build/` is gitignored.
->
-> - **`flag` strategy + 2 new adapters (now 13).** New adapter strategy `flag`
->   for CLIs with no config-dir env var (the dir is passed as a CLI flag). Added
->   via optional hook `adapter_flag_args <dir>`; the alias/`.app` command is now
->   assembled centrally in `adapter_command` (env prefix + binary + flag suffix),
->   used by both `alias.sh` and `app.sh` — don't re-inline. New adapters:
->   **`codex`** (env-dir `CODEX_HOME` — the product pivot: route cheap/dirty work
->   to a cheaper model/vendor; see §10.1) and **`vercel`** (flag,
->   `--global-config`). `clikae status` shows `(n/a)` for flag CLIs. **PowerShell
->   mirrored** (codex+vercel in the table, `flag` handling in
->   env/function/invoke/shortcut, new `Get-ClikaeFlagArgs`); Pester count 11→13.
->   **PS NOT locally tested** (no pwsh on the Mac) — windows CI is the verifier.
->   bats 71→**91**. NB: **`antigravity` was investigated and deliberately NOT
->   added** — `~/.antigravitycli` is just a symlink into `~/.gemini`, there's no
->   `antigravity` CLI binary and no clean config-dir env var; needs real info
->   before an adapter can be written.
->
-> Still TODO before a v0.5 tag: real-claude relay verification, iTerm2 dogfood
-> (partner has iTerm2), optional Warp target, codex dogfood (user will install
-> it), GUI runtime dogfood + `.app` packaging, the bigger product arc (see §10.1
-> below: ambient auto-relay + free naming/account labels + `clikae rename`), and a
-> roadmap decision on whether relay deserves its own headline in README's roadmap
-> list.
+**`docs/VISION.md` is the SSOT for positioning.** Read it before writing any
+user-facing copy. Note in particular that clikae is *deliberately not* framed as
+an "account switcher" — switching accounts is incidental to never losing your
+place.
 
-**HEAD state (read this first — updated 2026-06-29).** Latest in-tree work is the
-**v0.7 `resume` line** on branch `feat/resume-tui` — drafted largely by a cheaper
-model, then hardened to ship quality (details below). `v0.7.0`/`v0.7.1` already
-shipped `clikae resume` (reopen a past session by id across tanks). `feat/resume-tui`
-extends it:
+Vocabulary: **engine** = a managed CLI (claude, codex, agy…). **tank** = one
+account/config for that engine. **fuel** = that account's quota. clikae is the
+verb. Full grammar: `docs/grammar.md`.
 
-- **`clikae resume` interactive picker** — no-id opens a TUI across ALL tanks
-  (filter, paging, synchronized-output flicker-free render); `[R]` from the home
-  board opens it. Cross-engine: claude + codex + antigravity. The non-interactive
-  (piped) list now surfaces each session id so it's copy-paste actionable.
-- **codex + antigravity resume** — adapters/targets gained find/resume-by-id hooks;
-  antigravity additionally copies `brain/` + `conversations/*.db` on a cross-tank
-  resume — exactly the fix the 2026-06-28 dogfood called for (see §"agy tank-switch").
-- **`clikae resume cleanup`** — interactive, age-filtered session-data GC. Refuses
-  to delete without a TTY confirmation (never silently destroys); `--dry-run` /
-  `--older-than`.
-
-**Hardening done while landing it (2026-06-29).** The cheap-model draft made
-antigravity a FULL adapter, which silently reclassified it everywhere keyed on "an
-adapter file exists" (status / handoff / watch / validate / PowerShell parity) —
-11 regressions vs a green baseline. Root fix: ONE canonical predicate
-**`clikae_is_target`** (lib/core/profile_store.sh) that wins over adapter-file
-presence, so antigravity stays the launch-only TARGET it is, while its thin
-`lib/adapters/antigravity.sh` is a documented RESUME-ONLY shim (`subcommand`
-strategy, empty env var). Classification code now reads target-ness FIRST, never
-"an adapter file exists" (the old proxy the resume shim broke). Also fixed: a printf
-arg-count bug in the picker's empty-filter path (the localized "no matches" string
-was never shown), 5 unused-var warnings, and the i18n headline rename
-Continue→Resume. `bats -r tests` green, shellcheck clean at warning.
-
-**⭐ antigravity: LOGIN isolation is PROVEN; whether quota STACKS across accounts is
-UNRESOLVED (do not claim either way yet).** clikae's `_agy_kc_*` login carry
-genuinely holds two DISTINCT Google accounts per tank (Keychain service `gemini`,
-account `antigravity`; verified by hash comparison + cli.log `applyAuthResult:
-email=…, authMethod=consumer`), and a clean `clikae agy <tank>` loads that tank's
-token into the single live slot agy reads. So the SECOND tank runs as a different
-account — login/session/memory isolation is real and solid.
-The OPEN question is quota. HARD FACT: agy's `/usage` shows BYTE-IDENTICAL figures
-to two different accounts (c888700 vs chodaict both at Gemini-weekly 68.86% /
-Gemini-5h 85.41% / Claude-GPT-weekly 29.84%). That is the ONLY thing proven — it
-shows the DISPLAY is identical, NOT that real consumption is shared. Caveats that
-keep this open: (a) Google sells tiers (Free/Pro/Ultra), so quota MUST ultimately be
-per-account — a literal "global shared pool" contradicts the paid product; the 5-h
-"fairly distribute global capacity across all users" text most likely means a
-per-user rate window sized by global-fairness logic, not one shared counter; (b) the
-identical display is therefore most likely a PREVIEW ARTIFACT (Antigravity's `/usage`
-not yet wired to real per-account numbers) — which would mean quota DOES stack and
-the display just doesn't show it. (Author note: this analysis flip-flopped several
-times — "device-shared" → "leans per-account" → "screenshots settle it doesn't
-stack" — all overconfident. The honest state: only a BURN-TEST settles it.)
-THE decisive test (maintainer, real terminal): record each account's weekly %, burn
-account 8's weekly down meaningfully, then check account c's weekly — unchanged ⇒
-per-account (stacks), drops too ⇒ shared. Until then, docs must NOT claim agy
-tank-switching stacks quota NOR that it can't. Independent of quota, position agy as
-a BREADTH leg (one entry → Gemini+Claude+GPT-OSS; already a read-only conduct breadth
-leg since v0.6); the binding burst constraint is the 5-h window regardless.
-
-To make agy a RELIABLE burnable worker (orthogonal to quota — these are the real
-gaps, all from the 2026-06-28 dogfood): (1) headless permission hangs → standardize
-stdin-only dispatch `cat in | agy -p "…"`; (2) `agy exec` exits 0 even when limited
-→ dry-detect by PARSING OUTPUT, never exit code; (3) agy can't be a handoff SOURCE
-(opaque `.pb`) → alert + re-dispatch, no session carry; (4) tank switch orphans the
-agy in-session monitor timers → re-register in the new session.
-
-KNOWN TEST GAP: `antigravity.bats` STUBS `security`, so the `_agy_kc_*` copy
-mechanics are tested but the service-NAME assumption (`gemini`/`antigravity`) is
-only ever verified by live dogfood, never CI — a read-only `clikae doctor`
-keychain-coordinate check is the suggested permanent guard.
+Repo: `~/Developer/clikae/`. MIT. Unofficial community tool, not affiliated with
+any CLI vendor.
 
 ---
 
-**Earlier HEAD state (2026-06-20).** The latest release in-tree is
-**`v0.6.1`** (branch `release-v0.6.1`, pending tag + push by the maintainer).
-`v0.6.0` (2026-06-14) shipped the vertical-orchestration feature set: `clikae
-conduct`, `clikae git-id`, `clikae burn --prompt-file/--prompt/--add-dir`, and
-the orchestration playbook (`docs/orchestration.md`). **`v0.6.1`** (2026-06-20)
-is a hardening patch on top of that — no new command surface:
+## 2. LIVE RULES — non-negotiable
 
-- ✅ **`conduct --leg` name validation** — path-escape bug fixed; slugs can't leave the out-dir.
-- ✅ **`proc` interactive-vs-background guard** — env-block false positives fixed.
-- ✅ **`_app_shell_squote`** — single-quote handling corrected; `.app` launchers
-  work for paths/prompts with apostrophes.
-- ✅ **`codex` cwd trailing-slash matching** — sessions with/without trailing slash
-  both surface in the Continue list.
-- ✅ **`state-version` migration message** — garbled failure message fixed; v1→v2
-  migration path pinned in bats.
-- ✅ **`$CLIKAE_LIMIT_PATTERN` in headless output-dry path** — env override now
-  honoured consistently in both transcript and output-dry detection paths.
-- ✅ **PowerShell adapter-drift test** — bats now guards the PS adapter table
-  against bash-adapter additions, catching cross-language drift early.
-- ✅ **`conduct --help` honesty test** — bats asserts the help text discloses its
-  read-only, non-judging limits.
-- ✅ **Orchestration playbook expanded** (`docs/orchestration.md`) — cost-aware
-  model-tiering guidance and independent-verification principles added.
-- ✅ **Demo board hardened** — ToS-safe multi-engine demo, sandbox path removed.
-- ✅ **`homebrew/RELEASING.md`** — exact publish commands captured in-repo.
+### 2.1 Toward the user's machine
 
-The tree is clean and CI is green — **6 jobs**: shellcheck, smoke (ubuntu+macos),
-bats (ubuntu+macos), and pester (windows). `bats -r tests` = **408/408**
-(verified locally 2026-06-20, 0 failures). The live punch-list
-is `docs/HANDOFF-world-class-gaps.md`; the older §2 below is v0.4-era context.
+1. **Check, then act.** Every destructive step (rm, edit shell rc, overwrite
+   `.app`) verifies preconditions and stops with a clear message on anomaly.
+2. **Back up before editing user files.** Shell rc edits leave
+   `*.clikae.bak.<timestamp>`. The user must always be able to undo by hand.
+3. **Sentinel-wrap anything written into user-owned files** —
+   `# >>> clikae:<id> >>>` … `# <<< clikae:<id> <<<` — so `clikae remove` can
+   clean up reliably. Don't change the format without a migration path.
+4. **Never log in for the user.** OAuth/password flows are theirs.
+5. **Never touch system files.** Only `~/.clikae/`, the user's shell rc, and
+   (with `--out`) `~/Applications/`.
+6. **If anything is unexpected, stop and report.** Don't paper over errors.
+7. **No silent telemetry. Ever.** No daemon, no network calls beyond the one
+   opt-out update check.
+8. **When a destructive path degrades, say so on the row.** `clean` falls back
+   to `rm` when the Trash is unusable; that fallback must always announce
+   itself. (See OPEN-1 — today that announcement is swallowed.)
 
-**Release recipe (for next time you cut a tag) — what `v0.4.0` did:** bump
-`CLIKAE_VERSION` in `bin/clikae`; move CHANGELOG `[Unreleased]` → `[X.Y.Z] —
-<date>` and add a new empty `[Unreleased]`; commit "Release vX.Y.Z"; `git tag -a`
-+ push commit & tag; `gh release create` with notes; **then** `curl -sL` the
-GitHub tarball, `shasum -a 256` it, and bump `url`+`sha256` in **both**
-`homebrew/clikae.rb` (in-repo) **and** the tap repo's `Formula/clikae.rb`
-(separate repo at `~/Desktop/GitHub/homebrew-clikae` → `CVERInc/homebrew-clikae`;
-the sha256 must come from GitHub's generated tarball, not `git archive`). Verify
-with `brew fetch/style/audit CVERInc/clikae/clikae`. NB: keep the local tap clone
-`git pull`ed — it was found stale (a release behind) when cutting v0.4.
+### 2.2 Code
 
-**Shipped in `v0.4.0`:**
+- **bash 3.2 compatible** (macOS ships 3.2). No `mapfile`, no `${var,,}`.
+- **No GNU coreutils-isms.** BSD `sed`/`awk`: `sed -i ''` on macOS vs `sed -i` on
+  Linux → prefer `awk` or write-to-tempfile-then-`mv`
+  (`lib/core/shell_rc.sh:rc_remove_block`). No `readlink -f`.
+  BSD `sed` also strips backslashes from the replacement — `clikae app` was
+  broken by exactly this once; substitute via bash parameter expansion instead.
+- **`set -eo pipefail`** at the top of standalone scripts. **Never `set -u`** —
+  it has burned this project and causes surprises in interactive flows.
+- **Quote everything.** Paths contain spaces.
+- **Keep the modular layout** (`bin` + `lib/commands` + `lib/core` +
+  `lib/adapters`). One file per adapter is the contribution story.
+- **Don't re-inline the shared helpers.** Each exists because the same logic was
+  duplicated once already: `adapter_command` / `adapter_env_prefix`
+  (`adapter_loader.sh`), `rc_wrap_block` (`shell_rc.sh`),
+  `resolve_active_profile` (`profile_store.sh`), `live_dir_users` (`proc.sh`),
+  `_home_lpad` (display-width padding, CJK-safe).
+- **No Python or Node dependency.** The pitch is "every line is auditable bash".
+- **Template footgun:** a template's comments must not contain a literal
+  `@TOKEN@` with the `@` delimiters, or `${//}` substitution mangles the comment.
 
-- **Four more built-in adapters (now 11 total)** — `az` (env-dir
-  `AZURE_CONFIG_DIR`), `npm` (env-file `NPM_CONFIG_USERCONFIG`), `terraform`
-  (env-file `TF_CLI_CONFIG_FILE`) and `pulumi` (env-dir `PULUMI_HOME`). The
-  env-file pair seeds an empty config file on `init` (like kubectl). PS adapter
-  table + Pester count kept in sync. NB: `vercel` was considered but uses a
-  `--global-config` flag (no clean env var), so it needs `flag`-strategy support
-  in the alias/app generators first — left as an open item, not added.
-- **v0.4 Windows / PowerShell module** — `powershell/Clikae.psm1` plus a Pester
-  suite (`powershell/Clikae.Tests.ps1`) and a `windows-latest` CI job. 21 Pester
-  tests pass under **both** PowerShell 7 (`pwsh`) and Windows PowerShell 5.1
-  (`powershell`). Full detail in §3's v0.4 entry. There is no Windows machine in
-  the loop — CI on windows-latest IS the verification path.
-- **`clikae migrate` in-use guard** — refuses (NOT bypassable by `--force`,
-  never blocks `--dry-run`) when the live `$<ENVVAR>` points at a dir slated to
-  move. See the migrate note in the v0.2 list below; bats coverage added.
-- **CI maintenance** — `actions/checkout` v4→v5 (the v4 pin runs on the
-  deprecated Node 20 runtime) and the new pester job. NB: the `shell:` key cannot
-  take a `${{ matrix.* }}` expression — that's why the windows job uses two
-  explicit-shell steps, not a matrix. Validate workflow edits with `actionlint`.
+### 2.3 Classification
 
-Added in **v0.3** (publish polish — all of §3's v0.3 milestones are done; tagged):
+**`clikae_is_target` (`lib/core/profile_store.sh`) is the canonical predicate.**
+Never classify an engine by "an adapter file exists" — `antigravity` has a
+deliberately thin, resume-only adapter shim while remaining a launch-only
+TARGET. Reading adapter-file presence instead of target-ness caused 11
+regressions in one sitting. Classification code reads target-ness first.
 
-- **Homebrew tap is live.** `brew install CVERInc/clikae/clikae` works, served
-  from `github.com/CVERInc/homebrew-clikae`. Both the tap's `Formula/clikae.rb`
-  and the in-repo `homebrew/clikae.rb` track **v0.3.0** (url + sha256 verified
-  against the tagged tarball). On each new tag, bump `url`+`sha256` in **both**.
-- **`clikae migrate --keep-login`** (opt-in). On macOS, claude stores its OAuth
-  token in the login **Keychain**, NOT in `CLAUDE_CONFIG_DIR`. The keychain
-  service is `Claude Code-credentials-<sha256(config-dir path)[:8]>`, so moving
-  the dir orphans the token → a one-time re-login per migrated profile.
-  `--keep-login` copies the token from the old path's keychain slot to the new
-  one, via an optional adapter hook `adapter_migrate_credentials <old> <new>`
-  (claude-only, in `lib/adapters/claude.sh`; other adapters simply don't define
-  it). Off by default; documented; covered by bats (macOS-only test stubs
-  `security`). The token never leaves the Keychain.
-- **Docs split.** README trimmed to what+why + 30-second demo + links; install /
-  full usage / `migrate` guide / how-it-works moved into `docs/installation.md`
-  and `docs/usage.md`; new `docs/troubleshooting.md`.
-- **`docs/claude-on-macos.md`** records two macOS-specific Claude Code behaviours
-  found while dogfooding (Keychain-stored login token keyed by the config-dir
-  path; "Welcome back" box vs compact logo driven by `.claude.json` counters +
-  `CLAUDE_CODE_FORCE_FULL_LOGO`). Confirmed against Claude Code 2.1.156.
-- Tagged **`v0.3.0`** with a matching GitHub Release; merged to `main`.
+### 2.4 Verification
 
-Added in **v0.2** (all of §3's v0.2 milestones are done):
+- **Never verify bats through a pipe.** `bats | tail; echo $?` reports *tail's*
+  exit code, not bats'. See `tests/README.md`.
+- **Judge headless work by the artifact, never the exit code.** `codex exec` and
+  `claude -p` exit `0` even when they hit a usage limit and wrote nothing. The
+  reliable signals are the limit string in the output and a missing artifact.
+- **Never print token prefixes** when diagnosing credentials. Print field
+  *presence* only. The claude OAuth token lives in the login Keychain under
+  `Claude Code-credentials-<sha256(CONFIG_DIR)[:8]>`, not in `CLAUDE_CONFIG_DIR`.
+- **`bash scripts/test.sh` is the gate** — shellcheck at `warning` + bats. It is
+  what CI runs. See §6 for what the gate does *not* cover.
 
-- Six more built-in adapters: `gh`, `gcloud`, `docker`, `helm` (env-dir),
-  `kubectl` (env-file), `aws` (env-var). Total: 7.
-- `clikae migrate [<cli>]` — adopts a hand-rolled config-dir + alias setup
-  (the `~/.claude-acct-{a,b}` pattern) into clikae. See `lib/commands/migrate.sh`.
-  **Known sharp edge:** migrate *moves* the config dir, so it must not run while
-  that CLI is using the dir — notably, do NOT migrate `claude` from inside a
-  `claude` session whose `CLAUDE_CONFIG_DIR` is one of the dirs being moved (you
-  saw the dir out from under the live process; it can recreate an empty dir at
-  the old path → split state). Run it from a fresh shell with the CLI idle.
-  Documented in `docs/usage.md` and `docs/troubleshooting.md`. **Guarded as of
-  v0.4:** `migrate` now refuses (not bypassable by `--force`) when the live
-  `$<ENVVAR>` points at a dir slated to move, with bats coverage in
-  `tests/bats/migrate.bats`.
-  (The macOS Keychain sharp edge and its `--keep-login` fix shipped in v0.3 —
-  see the v0.3 section above.)
-- `bats-core` suite under `tests/bats/` (now 71 tests; isolated
-  `$HOME`/`$CLIKAE_HOME`),
-  wired into CI on `ubuntu-latest` + `macos-latest`. CI installs bats by cloning
-  `bats-core` into `~/.local` (NOT `npm i -g bats` — that hits EACCES on the
-  ubuntu runner's global npm prefix, exit 243). CI is green on both OSes.
-  **Run bats with `-r`** (`bats -r tests/bats`) — without it bats does NOT
-  recurse into `tests/bats/adapters/`, silently skipping the adapter tests. The
-  CI step was fixed to use `-r` (it had been skipping that subdir).
-- All sourced libs carry a `# shellcheck shell=bash` directive; the tree is
-  shellcheck-clean at `warning`.
-- Two helpers added to kill duplication: `adapter_env_prefix` (adapter_loader.sh,
-  used by alias/app/migrate) and `rc_wrap_block` (shell_rc.sh, used by
-  rc_add_block/migrate). Don't re-inline these.
-- **Bug fixed:** `clikae app` never compiled on macOS — the launcher command was
-  substituted via `sed`, but BSD `sed` strips backslashes from the replacement,
-  so escaped quotes collapsed and the AppleScript was invalid. Now substituted
-  via bash parameter expansion (backslash-escape before quote-escape). This is
-  exactly the BSD-sed footgun in §4 — heed it.
-- Published to **github.com/CVERInc/clikae** (public, MIT), tagged **`v0.2.0`**
-  with a matching GitHub Release. `<your-handle>` is resolved to `CVERInc`
-  everywhere. Open question §9.4 (org) → CVERInc; §9.2 (AWS strategy) →
-  `env-var`/`AWS_PROFILE`, with the `env-file` alternative documented in
-  `lib/adapters/aws.sh`.
+### 2.5 Board visual language — LOCKED with the maintainer, do not regress
 
-Homebrew tap (v0.3): **DONE.** The `homebrew-clikae` tap repo now exists at
-`github.com/CVERInc/homebrew-clikae` (public, MIT) with `Formula/clikae.rb`
-(tracks v0.3.0, sha256 verified). `brew install CVERInc/clikae/clikae` installs,
-`brew test`/`brew audit`/`brew style` all pass. The in-repo `homebrew/clikae.rb`
-is now just the source-of-truth copy; on each new tag, bump `url`+`sha256` in
-**both** the in-repo copy and the tap's `Formula/clikae.rb` (the tap repo's
-README documents the refresh steps).
+- **Three sections: Tanks / Solo / Resume** (plus "Also available"). A *section*
+  is the badge — solo tanks live in their own block, never a per-row icon.
+- **No emoji on the board.**
+- **Soul-sharing is not shown inline.** In a fleet, a shared brain is the normal
+  state; it isn't worth shouting.
+- **Aligned columns**: dot · name · engine · account, display-width padded
+  (`_home_lpad`, CJK-safe). Resume rows use the same columns.
+- **No "current shell" marker.** With many tanks open it is noise; `active` is
+  still computed for the launch hint and relay source, just not drawn.
 
-Shipped in v0.1:
+### 2.6 Locked values elsewhere
 
-- Dispatcher: `bin/clikae` (sources `lib/core/*` then `lib/commands/<cmd>.sh`).
-- Commands: `init`, `app`, `alias`, `run`, `list`, `remove`, `info`, `adapters`, `help`, `version`.
-- Core libs: `log.sh`, `profile_store.sh`, `shell_rc.sh`, `adapter_loader.sh`.
-- One built-in adapter: `claude` (CLAUDE_CONFIG_DIR / env-dir strategy).
-- AppleScript launcher template at `lib/templates/launcher.applescript.tmpl`.
-- `install.sh` (curl-bash + local-checkout install to `$PREFIX/share/clikae` with `$PREFIX/bin/clikae` symlink).
-- Homebrew formula template (`homebrew/clikae.rb`) — needs URL + sha256 once first tagged release exists.
-- `.github/workflows/ci.yml` — shellcheck + smoke test matrix (Linux + macOS).
-- README, LICENSE (MIT), CHANGELOG, `.gitignore`.
-- Developer docs at `docs/adding-an-adapter.md`.
+- **Soul / memory** — account isolation is sacred (opt-in, per-tank, never
+  auto-crossed); aggregate-never-mutate-the-source; no phantom continuity (a
+  Soul carries context, not the model's capability). SSOT: `docs/memory.md §4`.
+- **`clikae solo`** walls a tank out of the fleet: skipped by burn/watch/`to`,
+  and `memory share` refuses it. `claude/MFC` is solo and must stay that way.
+- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-6.
 
-Smoke-tested end-to-end in a sandbox HOME: `init --alias` → `list` → `remove --force` cleans dir + alias block + leaves a `.bak`.
+### 2.7 Windows / PowerShell
 
-**Known placeholders** (status):
+`powershell/` is an **unsupported community port**. Its pester CI job is
+`continue-on-error` and never blocks. Do not spend effort syncing it to the
+grammar.
 
-- ~~`<your-handle>`~~ — resolved to `CVERInc` (v0.2).
-- `REPLACE_WITH_RELEASE_SHA256` in `homebrew/clikae.rb` — filled for the v0.2.0
-  tarball (v0.2); re-fill on each new tagged release.
-- The `2026 clikae contributors` line in `LICENSE` is fine as a placeholder; some maintainers prefer `<their name>`.
+**But:** `tests/bats/compat.bats` — a *blocking* gate — asserts that
+`$script:ClikaeAdapters` in `powershell/Clikae.psm1` mirrors `lib/adapters/*.sh`
+on binary/env-var/strategy. So adding a bash adapter still requires adding the
+matching table row, or the bash suite goes red. (These two facts contradicted
+each other in two places of the old handoff; this is the reconciled version.)
 
 ---
 
-## 3. Next milestones (priority order)
+## 3. OPEN
 
-> **Where we are now (2026-05-30):** v0.1–v0.4 all SHIPPED. The next open work,
-> roughly in priority order: (1) the **v0.4 follow-ups** — a PowerShell `migrate`
-> equivalent, PSGallery publish + a `.psd1` manifest, `.lnk` UX polish; (2)
-> **`vercel` adapter**, which first needs `flag`-strategy support in the
-> alias/app generators (it has no clean config env var, only `--global-config`);
-> (3) **`clikae status`** + the **v1.0 SwiftUI menu-bar GUI**. Still needing a
-> maintainer decision (ask, don't decide): fish-shell support, and iTerm2/Warp
-> detection for `clikae app` (§9).
+Ordered by what would hurt most if ignored. Delete an entry when you close it.
 
-### v0.2 — quality + more adapters  ✅ DONE (shipped, see §2)
+### OPEN-1 — `exec … 2>/dev/null` permanently kills stderr in three commands
 
-All five items below were completed in v0.2 and are kept here as a record of what
-"done" covered. The next open milestone is **v0.3**.
+**Found 2026-07-27.** `exec` without a command makes its redirections permanent
+for the shell. Three code paths open a `/dev/tty` fd with `2>/dev/null` attached,
+which silently points that process's stderr at `/dev/null` for the rest of its
+life:
 
-Goals: prove the project is robust, expand CLI coverage. Roughly half-a-day to a day.
+| Site | Scope |
+|---|---|
+| `lib/commands/home.sh:1566` | the whole board process |
+| `lib/commands/resume.sh:360` | the whole `clikae resume` run |
+| `lib/commands/clean.sh:782` | the whole `clikae clean` run |
 
-1. **`bats-core` tests** under `tests/bats/`.
-   - `init.bats`, `alias.bats`, `app.bats` (macOS-only, skip on Linux via `if [[ $OSTYPE != darwin* ]]`), `list.bats`, `remove.bats`, `adapters/claude.bats`.
-   - Test isolation: each test sets `HOME=$(mktemp -d)` and `CLIKAE_HOME="$HOME/.clikae"`.
-   - Use real `bin/clikae`, not a stubbed copy.
+(`lib/commands/relay.sh:43` uses the same idiom but runs inside a command
+substitution, so its damage is contained. Fix it anyway — it's a loaded gun.)
 
-2. **Wire up CI properly.** The existing `.github/workflows/ci.yml` runs shellcheck and a smoke test. Add a `bats` job that runs the test suite on both `ubuntu-latest` and `macos-latest`.
+Verified consequences:
 
-3. **`clikae migrate` command** for users who hand-rolled the old `~/.claude-acct-{a,b}` + `~/.zshrc` alias block pattern (some early users — including the original author — have this). Detect it, propose a rename to `~/.clikae/profiles/claude/{a,b}/`, rewrite the alias block to clikae's sentinel format. Print a clear preview + confirm prompt.
+- **An engine launched from the board loses its entire stderr.** Pressing Enter
+  on a row execs through to `claude`/`codex`/`agy`, which inherits fd 2 =
+  `/dev/null`. Crashes, node warnings, OAuth errors, "command not found" — all
+  discarded. `clikae claude <tank>` run directly from the shell is unaffected.
+  Confirmed with a stub engine writing to both streams.
+- **`clean`'s Trash-fallback disclosure is guaranteed silent.** `_clean_to_trash`
+  falls back to `rm` (permanent) when the Trash is unusable, and
+  `CLEAN_TRASH_FELL_BACK` exists solely so the caller can say so — via
+  `log_warn`, i.e. stderr. In the interactive path that warning can never
+  appear. This breaks LIVE RULE 2.1.8.
+- **Three `read -rp` prompts are invisible** (bash writes `-p` prompts to
+  stderr), which reads as a hang: `home.sh:1211` (`n` new tank — the symptom
+  that surfaced this), `home.sh:1055`/`1058` (`a` rename), `home.sh:1542`
+  (`m` memory group).
+- **Every `log_err`/`log_warn`/`log_fail` in a board-launched subcommand is
+  muted**, including `init`'s "Tank already exists" — a typo'd name fails with
+  no output at all.
 
-4. **More built-in adapters** (each is ~10 lines, see `_template.sh`):
-   - `gh` (GitHub CLI) — env-dir, `GH_CONFIG_DIR`
-   - `gcloud` — env-dir, `CLOUDSDK_CONFIG`
-   - `kubectl` — env-file, `KUBECONFIG` (note the file vs dir difference — see `_template.sh` for the `env-file` pattern)
-   - `docker` — env-dir, `DOCKER_CONFIG`
-   - `helm` — env-dir, `HELM_CONFIG_HOME`
-   - `aws` — env-var, `AWS_PROFILE` (the value is the profile NAME, not a directory — strategy is `env-var`)
+Fix is to split the redirections: open the fd, and handle failure without
+attaching `2>/dev/null` to the `exec`.
 
-5. **Bug-magnet edge cases to add tests for:**
-   - Profile names with `.` (allowed) and with `-` (allowed).
-   - Re-running `clikae alias` for an existing alias should replace, not duplicate (this is already implemented — verify it).
-   - `clikae remove` when only the alias exists, no dir. Or only the .app, no alias. Each piece is removed independently if present.
-   - `clikae app` overwriting an existing .app without `--force` must fail clearly.
-   - macOS bash 3.2 compat (no `mapfile`, no `${var,,}`, no `&> /dev/null`).
+### OPEN-2 — the gate cannot see any of OPEN-1
 
-### v0.3 — publish polish
+`bash scripts/test.sh` passes clean — shellcheck at `warning` and the entire bats
+suite — with all of OPEN-1 shipped. Neither tool can observe interactive TTY
+behaviour, so neither ever will catch this class.
 
-Goals: smooth install path + good first impression. About a day.
+`tests/tools/pty-smoke.py` exists for exactly this — its docstring names "the
+smoke layer bats can't reach … exactly where the board regressed in dogfood more
+than once" — but:
 
-1. ~~**Create a Homebrew tap repo** (separate repo: `homebrew-clikae`). Move `homebrew/clikae.rb` there as `Formula/clikae.rb`. Fill in `url` (tagged release tarball) and `sha256`. Document `brew install <handle>/clikae/clikae` in README.~~ ✅ DONE — live at `github.com/CVERInc/homebrew-clikae`; `brew install CVERInc/clikae/clikae` verified (install + test + audit + style all green).
+1. **Nothing invokes it.** Not `scripts/test.sh`, not `.github/workflows/ci.yml`.
+   It self-describes as "a developer tool, not CI".
+2. **It deliberately only sends navigation/cancel/quit keys**, never Enter on a
+   row and never `n`/`a`/`m`/`d`. Every bug in OPEN-1 lives in the keys it skips.
 
-2. ~~**Polish docs/**: split README into `docs/installation.md`, `docs/usage.md`, `docs/troubleshooting.md`. Keep README short and focused on "what + why".~~ ✅ DONE — README trimmed to what+why / 30-second demo / doc links; install + full usage + troubleshooting moved into `docs/`.
+The harness built to catch this class of regression stops one keystroke short of
+it and isn't run. Wiring it in — and letting it press the mutate keys against a
+sandbox `CLIKAE_HOME` — is the durable fix.
 
-> Out of scope for the assistant: the demo GIF / asciinema recording and any
-> promotion (e.g. a Show HN post) are manual, maintainer-only steps — they need
-> a human at a real terminal and a judgement call on timing. They are
-> deliberately not listed as roadmap tasks; the maintainer handles them when the
-> code and docs are ready.
+### OPEN-3 — FLEET self-logout via OAuth refresh-token stampede
 
-### v0.4 — Windows  ✅ SHIPPED (`v0.4.0`, 2026-05-30)
+**Found 2026-06-29 diagnosing a real incident. Fix decided, not implemented**
+(there is no `flock` anywhere in the tree — verified 2026-07-27).
 
-Implemented as `powershell/Clikae.psm1` (note: named `Clikae`, not the old
-`ClaudeProfiles` sketch, since the tool is generic). Same conceptual API,
-PowerShell mechanics:
+FLEET here means *multiple concurrent sessions burning the same tank* — one
+person, their own account, many parallel sessions.
 
-- ✅ PowerShell aliases can't carry env vars → it writes **sentinel-wrapped
-  functions** into `$PROFILE` (e.g. `claude-work`), idempotently, with a backup.
-- ✅ No `.app` equivalent → `New-ClikaeShortcut` generates `.lnk` shortcuts via
-  `WScript.Shell` (Windows-only; guarded by `Test-ClikaeWindows`).
-- ✅ Verbs: `New-`/`Get-`/`Remove-`/`Invoke-ClikaeProfile`, `Add-ClikaeFunction`,
-  `Get-ClikaeAdapter`, `Get-ClikaeProfileEnv`. The 11-adapter table mirrors
-  `lib/adapters/*.sh` — **keep them in sync when adding a bash adapter.**
-  (env-file entries carry a `File` key for the seeded filename — `config` for
-  kubectl, `npmrc` for npm, `terraformrc` for terraform.)
-- ✅ Pester suite `powershell/Clikae.Tests.ps1`, run in CI on `windows-latest`
-  under both PowerShell 7 (`pwsh`) and Windows PowerShell 5.1 (`powershell`).
-  Watch for 5.1 gotchas: no `$IsWindows` automatic (StrictMode throws on it —
-  use `Test-ClikaeWindows`), and Pester 5 must be installed (5.1 ships v3.4).
+Claude's OAuth uses **rotating** refresh tokens: each refresh issues a new one
+and invalidates the old. When N sessions on one tank refresh near-simultaneously:
 
-Still open for a future PR: a `migrate` equivalent, PowerShell Gallery
-publishing (no manifest/`.psd1` yet), and `.lnk` UX polish. There is no Windows
-machine in the maintainer's loop, so this was authored and verified entirely via
-the windows-latest CI runner — extend that job rather than hand-testing.
+1. Process A refreshes `RT0` → gets `RT1`, writes it to the Keychain. ✅
+2. Process B, a few hundred ms later, refreshes with the now-stale `RT0` →
+   `invalid_grant`.
+3. **B treats `invalid_grant` as "logged out" and clears the Keychain entry**,
+   wiping the good `RT1` A just wrote.
+4. The daemon's next proactive refresh finds nothing → `auth_required`.
 
-### v1.0 — macOS menu bar GUI
+With both tokens cleared there is no silent recovery — only a fresh interactive
+`/login`.
 
-`gui/ClikaeMenuBar/` — SwiftUI menu bar app.
+Evidence from the incident: `profiles/claude/L/daemon.log` shows days of
+`auth: proactive refresh succeeded`, then `proactive refresh failed, signalling
+re-auth required` → `no token found`; **17×** `token still valid (cross-process
+refresh or not yet due)` proves multi-process refresh is the *normal* state on
+that tank, so the race is structural, not exotic. Observed refresh round-trip
+~6.3s.
 
-- Treat the CLI as the source of truth. The GUI just shells out to `clikae list`, `clikae run`, `clikae app`. Don't reimplement profile-storage logic in Swift.
-- Show currently-running profile per CLI (this needs `clikae status` — add it to the CLI in v0.2 or v1.0). For Claude that'd mean inspecting which `CLAUDE_CONFIG_DIR` is set in any running terminal session — tricky; consider scope before designing.
+The decided fix (keep it simple — FLEET is not a frequent state):
+
+1. **Daemon owns refresh, single-flight via `flock`** on a lockfile in the tank's
+   config dir. Sessions only READ the Keychain; on a 401 they ask the daemon and
+   retry. Exactly one actor rotates the single-use token.
+2. **`invalid_grant` must never directly clear credentials.** Take the lock,
+   re-read the Keychain, adopt a fresher token if a sibling already refreshed;
+   escalate to `auth_required` only after confirming none exists. This alone
+   defuses the amplifier.
+3. **Keep proactive refresh, but make it daemon-exclusive — do not switch to
+   lazy.** Lazy would make N cold-starting sessions all 401 at once and each eat
+   the ~6.3s latency. The disease was "proactive done by many", not "proactive".
+   Lock only the critical section; serve-stale-while-revalidate.
+4. **Not doing: daemon-death failover.** Considered and rejected; revisit only if
+   daemon OOM under FLEET proves common.
+
+**Honest limit — don't oversell in copy.** Multiple *machines* on one account
+still evict each other; rotation is server-side. clikae can only make one
+machine's concurrent sessions safe, and word a dropped tank as "may have been
+rotated out by another machine" rather than implying the account broke.
+
+### OPEN-4 — `clikae <typo>` exits 0
+
+An unrecognised first argument logs an error to stderr, prints the full help, and
+**returns 0** (`bin/clikae`, the unknown-command fallback). Scripts cannot detect
+a typo. Inconsistent with the rest of the surface — `clikae mcp status` returns 1.
+Compounded by OPEN-1 when invoked from the board.
+
+### OPEN-5 — new-tank picker: broken preselect, duplicated engine
+
+- **Preselect never matches.** `_home_choose` compares the caller's bare engine
+  name (`codex`) against the annotated option string (`"codex  (AI)"`), so the
+  cursor always lands on the first row regardless of which tank you pressed `n`
+  from. Verified.
+- **`agy` and `antigravity` are listed as two separate engines** in
+  `_home_newtank_choices`, one of them tagged `(tool)`, though `cmd_init` routes
+  both to `_agy_init`.
+
+### OPEN-6 — agy: login isolation proven, quota stacking unresolved
+
+**Login isolation is real and solid.** The `_agy_kc_*` Keychain carry holds two
+distinct Google accounts per tank (service `gemini`, account `antigravity`;
+verified by hash comparison and `cli.log applyAuthResult: email=…`).
+
+**Quota is the open question.** The only hard fact is that agy's `/usage` shows
+*byte-identical* figures for two different accounts. That proves the **display**
+is identical, not that consumption is shared. Two live readings: (a) Google sells
+per-account tiers, so a literal global pool contradicts the paid product; (b) the
+identical display is most likely a preview artifact, which would mean quota does
+stack and the UI simply doesn't show it.
+
+**Only a burn-test settles it** (maintainer, real terminal): record each
+account's weekly %, burn one account's weekly down meaningfully, then re-check
+the other — unchanged ⇒ per-account, drops too ⇒ shared. Until then **docs must
+claim neither direction**. Independent of quota, agy's honest positioning is a
+*breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
+constraint is the 5-hour window regardless.
+
+### OPEN-7 — `clikae auto` is claude-only
+
+Auto-carry on a dry tank is BETA and claude-only. codex and agy cannot carry
+themselves onward. codex dry-detection now exists (`lib/core/limit.sh` parses the
+limit string), so extending `auto` to codex is no longer blocked on detection.
+
+Related, still unbuilt: **auto-relay of a dropped parallel task.** When one tank
+in a parallel burn dries, re-queueing *that specific task* to a live tank needs
+the orchestrator to track a task↔tank map. `to`/`relay` carry a *session*; this
+is a *headless task* — a different shape, a pool/scheduler concern. Encourage
+idempotent, artifact-verified tasks so a dropped one can simply re-fire.
+
+### OPEN-8 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+
+Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
+(a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
+file, vs today's whole-tank share); (b) a per-person default + per-area override
+policy; (c) conduct/burn integration so the orchestrator wakes the
+cheapest-sufficient brain *with* the shared Soul context.
+
+The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
+the `me` group has been used long enough to prove its shape.** This is a park,
+not an unfinished obligation.
+
+### OPEN-9 — smaller known gaps
+
+- **`clikae app`**: Warp is unsupported (no clean command-launch story), and
+  there is no default-terminal auto-detection. `--terminal terminal|iterm2|ghostty`
+  covers the rest. **The iTerm2 template has never been machine-verified** —
+  iTerm2 isn't installed on the maintainer's Mac; it is one template file if it
+  needs tweaking.
+- **agy Keychain coordinates are never verified by CI.** `antigravity.bats` stubs
+  `security`, so the copy mechanics are tested but the service-name assumption
+  (`gemini`/`antigravity`) is only ever confirmed by live dogfood. A read-only
+  `clikae doctor` keychain-coordinate check is the suggested permanent guard.
+- **Engine naming is inconsistent across surfaces.** `clikae list` says `agy`,
+  `clikae doctor` says `antigravity`, and `clikae list --json` emits
+  `"cli":"agy"` alongside `"path": …/profiles/antigravity/…` — so a consumer
+  joining `cli` to `path` breaks.
+- **`docs/DEVLOG.md` stops at v0.6.0** (2026-06-14). It is explicitly a
+  history, so it is not wrong — just silent about everything since, including
+  the Soul layer and the 2026-07-11 repositioning.
 
 ---
 
-## 4. Code conventions
+## 4. The adapter contract
 
-- **bash 3.2 compatible** (macOS ships with bash 3.2; can't assume 4+). No `mapfile`, no `${var,,}` (lowercasing), no `[[ … =~ … ]]` BASH_REMATCH array if avoidable.
-- **No GNU coreutils-isms.** macOS ships BSD sed/awk. Specifically:
-  - `sed -i ''` on macOS, `sed -i` on Linux → prefer `awk` or write-to-tempfile-then-mv (see `lib/core/shell_rc.sh:rc_remove_block`).
-  - No `readlink -f`.
-- **All scripts pass `shellcheck`.** CI already enforces this at warning level. If you need to silence a warning, justify with a comment.
-- **`set -eo pipefail`** at the top of every standalone script (not in sourced libs — those will inherit, but `set -u` causes too many surprises in interactive flows).
-- **Quote everything** — paths can contain spaces (e.g. `Application Support`).
-
----
-
-## 5. The adapter contract (memorise this)
-
-Every adapter file at `lib/adapters/<cli>.sh` must define these functions (all return strings via `echo` unless noted):
+Every `lib/adapters/<cli>.sh` defines (strings via `echo` unless noted):
 
 | Function | Required? | Purpose |
 |---|---|---|
 | `adapter_meta_name` | yes | Human-readable name |
 | `adapter_meta_cli_binary` | yes | Binary to invoke |
 | `adapter_meta_env_var` | yes | Primary env var |
-| `adapter_meta_strategy` | yes | One of `env-dir`, `env-file`, `env-var`, `flag`, `subcommand` |
+| `adapter_meta_strategy` | yes | `env-dir` \| `env-file` \| `env-var` \| `flag` \| `subcommand` |
 | `adapter_meta_description` | yes | One-line description |
-| `adapter_export_env <dir>` | yes | Print `KEY=VALUE` lines (newline-separated) |
+| `adapter_export_env <dir>` | yes | Print `KEY=VALUE` lines |
 | `adapter_run <dir> [args]` | yes | `exec` the CLI with profile env applied |
-| `adapter_init <dir>` | optional | Seed the dir when `clikae init` runs |
+| `adapter_init <dir>` | optional | Seed the dir on `clikae init` |
 
-See `lib/adapters/_template.sh` for boilerplate and `lib/adapters/claude.sh` for a real implementation. The full strategy guide is in `docs/adding-an-adapter.md`.
+Optional hooks that unlock behaviour rather than existence:
+`adapter_start_with_prompt` (this is what marks an engine as *AI* — the new-tank
+picker classifies on the presence of this definition **in the file**, since
+`load_adapter` provides a default stub at runtime), `adapter_relay`,
+`adapter_transcript_path`, `adapter_account_label`, `adapter_migrate_credentials`,
+`adapter_memory_dir` / `adapter_memory_pointer_path`, `adapter_flag_args`.
 
-> **Cross-language mirror:** the Windows PowerShell module keeps a parallel
-> adapter table (the `$script:ClikaeAdapters` hashtable in
-> `powershell/Clikae.psm1`). When you add or change a bash adapter, add/change
-> the matching entry there too, or Windows users silently lose that CLI. The PS
-> Pester suite asserts the table has the same 11 CLIs as the bash side.
+Boilerplate: `lib/adapters/_template.sh`. Reference implementation:
+`lib/adapters/claude.sh`. Full guide: `docs/adding-an-adapter.md`.
+The alias/`.app` command line is assembled centrally in `adapter_command`
+(env prefix + binary + flag suffix) — don't re-inline it.
+
+Adding an adapter also means adding its row to `powershell/Clikae.psm1` — see
+§2.7 for why, despite Windows being unsupported.
+
+---
+
+## 5. Honest limits to preserve in copy
+
+Carry these forward whenever the relevant feature is described. Each was learned
+the expensive way.
+
+- **The in-use guard** (`live_dir_users`, wired into rename/migrate/remove)
+  catches "a session is open right now" — the overwhelming case — but not a
+  check-then-open race, and its daemon-vs-interactive split is a command-string
+  heuristic.
+- **Cross-machine token eviction** is an OAuth fact clikae cannot fix (OPEN-3).
+- **agy cannot be a handoff SOURCE** — its sessions are opaque `.pb`. Alert and
+  re-dispatch; never promise a session carry off agy.
+- **Interactive Claude Code gives no usage-limit signal** — it does not exit,
+  returns no exit code, and fires no hook. Silent mid-session interactive
+  auto-switching is not reliably possible; detect-and-offer is. Don't
+  re-litigate this.
+- **clikae can only prevent the *next* git mis-stamp**, never re-map old commits.
+  Per-tank git identity ships (`clikae git-id`; `clikae env` exports
+  `GIT_AUTHOR_*`/`GIT_COMMITTER_*`), and it is opt-in by design — the safe
+  default is to inherit global config, not to hijack `git config`.
+- **`clikae env` is per-shell.** Automation must set the tank inline in the same
+  command; it does not persist across separate non-interactive shells.
 
 ---
 
 ## 6. How to verify your changes
 
 ```bash
-# Lint
-shellcheck bin/clikae lib/**/*.sh install.sh
+bash scripts/test.sh          # the gate: shellcheck -S warning + bats
+```
 
-# Smoke test (no install needed)
-./bin/clikae version
-./bin/clikae help
-./bin/clikae adapters
+What the gate does **not** cover — check by hand when you touch these:
 
-# Isolated end-to-end (doesn't touch your real ~)
+- Anything interactive: the board, the resume picker, the clean picker. See
+  OPEN-2; `python3 tests/tools/pty-smoke.py home|resume` is the closest tool.
+- stdout-vs-stderr behaviour of any prompt or warning.
+- The real engines. Adapter tests stub the binaries.
+
+Isolated end-to-end without touching your real `~`:
+
+```bash
 TMP=$(mktemp -d)
 HOME="$TMP" CLIKAE_HOME="$TMP/.clikae" ./bin/clikae init claude work --alias
 HOME="$TMP" CLIKAE_HOME="$TMP/.clikae" ./bin/clikae list -p
 HOME="$TMP" CLIKAE_HOME="$TMP/.clikae" ./bin/clikae remove claude work --force
-# Inspect: $TMP/.zshrc (or .bashrc/.profile depending on $SHELL) should be empty,
-# and $TMP/.clikae/profiles/ should be empty.
 rm -rf "$TMP"
-
-# Full local install
-PREFIX="$HOME/.local" ./install.sh
-clikae info
 ```
 
-For v0.2+ once bats is set up:
+Lint workflow edits with `actionlint .github/workflows/ci.yml`.
+Run bats with `-r` so `tests/bats/adapters/` is included — without it bats does
+not recurse into that subdirectory and silently skips the adapter tests.
 
-```bash
-brew install bats-core
-bats tests/bats
-```
-
-For the Windows PowerShell module (v0.4+), if you have PowerShell:
-
-```powershell
-Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser
-Invoke-Pester -Path powershell/Clikae.Tests.ps1
-```
-
-No local PowerShell? The `pester` CI job runs this on `windows-latest` under
-both PS 7 and Windows PowerShell 5.1 on every push — that's the verification
-path. Lint workflow edits locally with `actionlint .github/workflows/ci.yml`.
+CI installs bats by **cloning `bats-core`**, not `npm i -g bats` — the latter
+hits `EACCES` on the ubuntu runner's global npm prefix and exits 243. Don't
+"simplify" that step.
 
 ---
 
-## 7. Things you might be tempted to do — DON'T
+## 7. Release recipe
 
-- **Don't refactor the dispatcher into a single 800-line script.** The modular layout (bin + lib/commands + lib/core + lib/adapters) is intentional — it makes each piece testable in isolation and lowers the barrier to a community-contributed adapter (write one file, drop in `lib/adapters/`).
-- **Don't add a Python or Node dependency** — the whole pitch is "every line is auditable bash".
-- **Don't store secrets or call out over the network.** Profile data stays local. There is no telemetry, no auto-update, no analytics.
-- **Don't change the sentinel format** without a migration path. People will have existing alias blocks in their rc files.
-- **Don't `set -u`** at the top level — it's tripped us once already (the very first version of `install-claude-launcher-apps.sh` errored on `$APPS_DIR` mid-echo for reasons that still aren't fully explained, but moving to `set -eo pipefail` made it go away).
+1. Bump `CLIKAE_VERSION` in `bin/clikae`.
+2. Move CHANGELOG `[Unreleased]` → `[X.Y.Z] — <date>`; add a fresh
+   `[Unreleased]`.
+3. Commit, `git tag -a`, push commit **and** tag, `gh release create`.
+4. `curl -sL` the **GitHub-generated** tarball, `shasum -a 256` it, and bump
+   `url` + `sha256` in **both** `homebrew/clikae.rb` (in-repo) **and** the tap
+   repo's `Formula/clikae.rb` (`CVERInc/homebrew-clikae`). The sha must come from
+   GitHub's tarball, not `git archive`.
+5. Verify: `brew fetch/style/audit CVERInc/clikae/clikae`.
+
+`git pull` the local tap clone first — it has been found a release behind.
+Exact commands: `homebrew/RELEASING.md`.
 
 ---
 
@@ -624,466 +476,14 @@ path. Lint workflow edits locally with `actionlint .github/workflows/ci.yml`.
 | Thing | Where |
 |---|---|
 | Repo root | `~/Developer/clikae/` |
-| Profile store (per user) | `~/.clikae/profiles/<cli>/<profile>/` (override root: `$CLIKAE_HOME`) |
-| Shell rc (auto-detected) | `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` / `~/.profile` |
-| .app launchers | `~/Applications/<cli> (<profile>).app` |
-| Backups | `<rc-file>.clikae.bak.<timestamp>` next to the rc file |
-| Logs | none (this is a sync CLI, errors go to stderr) |
-| Windows module (v0.4) | `powershell/Clikae.psm1` + `Clikae.Tests.ps1`; writes funcs into `$PROFILE`, backups `$PROFILE.clikae.bak.<ts>` |
-| CI | `.github/workflows/ci.yml` — shellcheck, smoke×2, bats×2, pester (windows)×1 |
-
----
-
-## 9. Open questions for the maintainer
-
-Still genuinely open (an assistant should **ask first**, not decide):
-
-1. **`clikae app` for non-Terminal users** — some macOS folks use iTerm2 or Warp. Idea: detect default terminal and pick the right `tell application` target, or accept a `--terminal-app` flag. (Partly addressed: `clikae app --terminal` already supports `terminal`/`iterm2`/`ghostty`; Warp + auto-detect still open.)
-
-Already resolved (kept for the record):
-
-- ~~**fish shell support**~~ → **DONE (2026-05-31).** `clikae alias` detects fish via `detect_shell_kind` and emits fish syntax `alias <name> 'env VAR=val <binary>'` (fish has no inline `VAR=val cmd`; `adapter_command_fish` routes through `env`). rc path + sentinel removal already worked. `rc_add_block` now `mkdir -p`s the rc's parent (fish's `~/.config/fish/`). Tests in `tests/bats/alias.bats`.
-
-- ~~**AWS adapter strategy**~~ → `env-var` / `AWS_PROFILE` (the `env-file` /
-  `AWS_CONFIG_FILE` alternative is documented in `lib/adapters/aws.sh`).
-- ~~**GitHub org/user naming**~~ → **CVERInc**; all `<your-handle>` placeholders resolved.
-
----
-
-## 10. Original goal (for context)
-
-This project started as a personal need: the maintainer has two Anthropic Claude subscriptions (one Max plan's quota wasn't enough, so they added a second) and wanted both usable from the CLI on one Mac without log-in collisions. Manual setup worked. Then it became clear the same pattern solves the problem for many other CLIs, and there's no existing tool that does it generically.
-
-Stay close to that origin story — small, sharp, useful. Resist scope creep.
-
-Good luck.
-
----
-
-## 10.1 Product direction (decided with the maintainer, 2026-05-31 session)
-
-The maintainer reframed clikae's core during this session. Capture for whoever
-continues — these are decisions, not musings:
-
-1. **From "multi-account switcher" to "fuel-tank / model router."** The headline
-   value is **routing work to a cheaper model/vendor** ("let the cheaper one do
-   the dirty work") and **continuing when a tank runs dry** — not just juggling
-   two Claude logins. The maintainer thinks the multi-vendor/model case (Claude ⇄
-   Codex ⇄ Antigravity…) may matter MORE than multi-Claude. Hence `relay`
-   (continue on another tank) is the flagship, and cross-vendor adapters (codex
-   added; antigravity pending real config info) are first-class, not afterthoughts.
-   "油箱" (fuel tank) = a profile/account/model you can burn; clikae supports a
-   pool of them.
-
-2. **UX philosophy: "quietly help, then tell me what you did."** Ambient,
-   hide-and-assist, with transparency after the fact and authorization before
-   anything outward. Build toward that, not a chatty/manual feel.
-
-3. **Auto-switch reality (researched via claude-code-guide — IMPORTANT, don't
-   re-litigate):** an INTERACTIVE Claude Code TUI hitting its usage limit does
-   **not exit**, returns **no exit code**, and **no hook fires** for usage limits
-   (hooks are PreToolUse/Stop/Notification/etc., none for quota). So an external
-   tool **cannot cleanly auto-switch mid-conversation**. What IS feasible:
-   (a) headless/print mode (`claude -p --output-format json`) can be wrapped to
-   detect a limit and auto-relay (JSON schema undocumented → test empirically);
-   (b) transcript-watching to NOTICE you were limited and proactively OFFER to
-   relay; (c) best-effort interactive output/transcript scraping (fragile).
-   **Maintainer chose: "盡量自動" — best-effort auto including interactive**, but
-   it must stay transparent + opt-in. So the design is: detect → offer (interactive)
-   / auto after one-time consent (headless). Don't promise silent mid-session
-   interactive switching; it isn't reliably possible.
-
-4. **Naming (maintainer's stated TOP priority): kill `a`/`b`.** Free naming
-   already works (`a`/`b` were just this user's choice). Decided: **free naming +
-   auto-detected account label** (read the logged-in account, e.g. claude's
-   `.claude.json` email, and show it in `list`/`status`) **+ a new `clikae rename`
-   command**, and **purge a/b from all docs/examples** in favour of meaningful
-   names. NB: `rename` for claude MOVES the profile dir → same macOS-Keychain
-   re-key issue as `migrate`, so it must reuse `adapter_migrate_credentials`
-   (the `--keep-login` carry-over). Treat rename like a mini-migrate.
-
-**Built so far (branch `feat/relay-and-status`):** (a) ✅ **naming refactor** —
-`adapter_account_label` hook (claude reads `.claude.json` `oauthAccount.emailAddress`
-via grep/sed, no jq), surfaced as an ACCOUNT column in `clikae list` and `status`;
-new `clikae rename <cli> <old> <new>` = mini-migrate (move dir + rewrite alias,
-preserving a custom alias name else swapping the default; reuse
-`adapter_migrate_credentials` for claude's Keychain; in-use guard not bypassable
-by `--force`). bats in `tests/bats/rename.bats`. Docs updated; a/b purged from the
-*recommended-naming* surface (legacy a/b examples in `docs/claude-on-macos.md` are
-left — they document the real `~/.claude-acct-{a,b}` migration + keychain hashes).
-
-**Still not built (next, roughly prioritised):** (b) **ambient relay** —
-detect-and-offer on interactive, auto on headless, behind an explicit opt-in (the
-maintainer wants best-effort-auto; remember interactive can't be fully automated —
-no usage-limit signal, see point 3 above); (c) **`antigravity` adapter** once its
-config mechanism is known (only a `~/.gemini` symlink today); (d) ~~fish support~~
-**DONE 2026-05-31** (see §9); (e) the existing v0.5 TODO list in §2 (PS
-`.psd1`/migrate, GUI `.app` packaging, Warp).
-
-**Update 2026-05-31 (later session) — several "still not built" items above are now DONE.**
-Confirmed via real dogfooding and shipped on `feat/relay-and-status`:
-- (b) **ambient relay** — `clikae watch` + `pool` SHIPPED (detect→offer, auto-after-consent).
-- **All three limit markers CONFIRMED** (claude/codex/agy) and encoded; agy's is special —
-  `agy -p` exits 0 with empty output, marker only in `~/.gemini/antigravity-cli/cli.log`.
-- **`watch antigravity`** (log-scan detection of a dry agy tank) SHIPPED — alert-only, since
-  agy can't be a handoff *source* (opaque `.pb`); auto-relay-from-agy remains unbuilt.
-- **Real claude cross-account `relay` DOGFOOD-CONFIRMED** — A→B carried a live session and
-  resumed on B's quota with context intact (was previously only stub-verified).
-- (d) **fish support** SHIPPED.
-Still genuinely open: antigravity full adapter (likely stays launch-only), vercel adapter,
-`status` polish + v1.0 GUI, Windows follow-ups (PS `.psd1`/migrate, mirror watch/pool), Warp.
-
----
-
-## 11. ✅ DONE (shipped v0.5.5) — `rename`/`migrate`/`remove` in-use guard only covered the CURRENT shell (phantom-tank bug)
-
-> **Resolved:** `lib/core/proc.sh::live_dir_users` scans all same-uid procs for the
-> tank's env var and is wired into rename/migrate/remove (interactive holder →
-> hard-fail; daemon/spare → soft warn). Tests in `tests/bats/{rename,migrate,remove}.bats`.
-> Original writeup kept below for context.
-
-
-**Found 2026-06-03 by dogfooding (maintainer hit it live).** Renaming claude
-`b`→`L` and `a`→`C` left **phantom `a`/`b` tanks** that kept reappearing on the
-board. Root cause confirmed on disk + via `ps eww`:
-
-- The in-use guard in `cmd_rename` (`lib/commands/rename.sh`, the `${!envvar}`
-  block) — and the equivalent in `migrate` — **only checks the env var of the
-  shell running `clikae`**. It does NOT see a live interactive session, or the
-  background `claude daemon run` + `--bg-spare`/`--bg-pty-host` workers, that hold
-  `CLAUDE_CONFIG_DIR=<old>` in **another** terminal/process tree.
-- So: maintainer ran `rename` from shell A (var not `=b`) → guard passed → `mv`
-  succeeded → a still-open claude session in shell B (env still `=b`) kept writing
-  to the old path → **recreated an empty/stub tank at the old name.** Same class
-  of bug noted for `migrate` in §2 (v0.2 list) — the guard there has the same hole.
-- Proven nuance: after the **interactive** session closed, the stale **daemon/
-  spares** alone did NOT recreate the dir. So the hard culprit is a live
-  interactive TUI; daemon/spares are a softer signal.
-
-**The fix (tractable, ~50–80 lines incl. bats):**
-
-1. Add a core helper, e.g. `lib/core/proc.sh::live_dir_users <dir> <envvar>` —
-   scan same-uid processes for `<envvar>=<dir>`. macOS: `ps eww -o pid=,command=`
-   then read env per pid; Linux: `/proc/<pid>/environ` (NUL-split). Pure
-   `ps`/grep, bash 3.2, BSD-safe. (We already proved the detection works:
-   `ps eww -p <pid> | tr ' ' '\n' | grep CLAUDE_CONFIG_DIR=…`.)
-2. In `cmd_rename` (and reuse in `migrate`, `remove`): after the existing
-   current-shell check, scan all processes for `<old_dir>`. **Classify by command
-   string:** an interactive TUI holding `=old` → **hard-fail** (data-integrity,
-   `--force` can't bypass, like today's guard); only `daemon run`/`--bg-spare`/
-   `--bg-pty-host` holding `=old` → **soft warn** ("quit Claude Code fully first").
-3. **agy exception:** agy has no per-tank env var (it's the `~/.gemini` symlink);
-   `_agy_rename` should instead refuse if any `antigravity` process is running.
-4. Tests: stub `ps` the way the suite already stubs `pgrep` (per the v0.5.3 note
-   "helpers now stub pgrep so agy tests are host-independent").
-
-**Honest limits (don't oversell in copy):** catches "a session is open right
-now" — the overwhelming case — but not a check-then-open race; daemon-vs-TUI
-classification is a command-string heuristic. Recovery for a user who already hit
-it: the phantom stub tanks are safe to back up + remove once the old terminal is
-closed (the real history lives under the renamed tank).
-
----
-
-## 12. ✅ DONE (shipped v0.5.5) — the board's "Continue" list was claude-ONLY (cross-engine continuity gap)
-
-> **Resolved:** `lib/adapters/codex.sh` got `adapter_transcript_path` (matches a
-> rollout's recorded `cwd`, not a slug) + a recap extractor, so codex sessions now
-> show in the board's Continue list (verified live — `clikae` shows codex/H, codex/M).
-> Original writeup kept below for context.
-
-
-**Found 2026-06-03 by dogfooding.** A codex session run through a clikae codex
-tank (it edited a repo; the rollout records its `cwd`) shows up on the board only
-as a **tank**, never in the **Continue / 續上次** list — even when the board is
-opened from that session's own `cwd`. Claude sessions on the same dir DO appear,
-each with a recap. So clikae's recent-session resume/recap is, today, **claude
-only**.
-
-**Root cause:** `lib/adapters/codex.sh` defines no `adapter_transcript_path` (nor
-a recap hook), so the board's Continue builder never scans codex's rollouts. Only
-the claude adapter exposes the transcript path the board reads.
-
-**Why it matters:** cross-**engine** continuity is clikae's stated differentiator
-(README + positioning). Right now only cross-**tank** switching is engine-wide;
-the *session* continuity that makes the board valuable is claude-deep. The pitch
-slightly outruns the implementation for non-claude engines.
-
-**The fix (tractable):**
-1. Give the codex adapter `adapter_transcript_path <dir>` → resolve the most
-   recent `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` whose recorded `cwd`
-   matches `<dir>`. **Match on the rollout's `cwd` field, not a path slug** —
-   codex does not slug `$PWD` the way claude does.
-2. A recap extractor for codex rollouts (or fall back to "<age> ago" when none) so
-   Continue rows render like claude's.
-3. Then the existing cross-engine board code lists codex sessions for free.
-
-**Out of scope here:** codex over-quota is still un-detectable from disk (see
-`lib/core/limit.sh` notes) — that's the *fuel* axis, independent of *resume*. This
-TODO is only about surfacing codex sessions in Continue.
-
----
-
-## 13. OPEN QUESTION — tanks own the AI account's state, but NOT the git commit identity (mis-attribution leak)
-
-**Found 2026-06-04 by an incident, not by clikae code.** A run authored 9 commits
-across `reef` + `bleedblend` whose git **author/committer email** was the engine's
-own account email (`mr.crazyx2@gmail.com`, the value Claude Code carries as its
-system `userEmail`). GitHub maps a commit to an account by that **email**, so all
-9 commits rendered under the GitHub account `@lersiann` (which owns that email) —
-NOT the maintainer's intended OSS identity `@chodaict` / `x@cver.net`. Fixed
-out-of-band with `git filter-repo` + force-push; the gmail is now scrubbed.
-
-**This was NOT a clikae bug** — clikae never set `user.email`; the engine did
-(a `git -c user.email=<its account email>` style commit, "too faithfully" using
-the email the harness injected). But it exposes a real gap **adjacent to clikae's
-thesis**, so it belongs here.
-
-**The conceptual gap.** clikae's job is "control where the *engine's account state*
-lives" — a tank = one AI account's profile (see the state-mapping work: tank holds
-the engine's MEMORY/login, not just fuel). But a commit has a **second identity
-axis** clikae does not touch: the **git author/committer**. Today these are
-unrelated:
-- the tank says *which AI account* is driving (e.g. a "chodaict" tank), but
-- the commit's `user.name`/`user.email` come from `git config` (global) **or** from
-  whatever the engine injects — which can be its *AI-account* email, a different
-  identity entirely.
-
-So you can be in a tank you think of as "chodaict" and still emit commits stamped
-with the engine account's email → silent mis-attribution on GitHub, and a private
-address leaked into public history.
-
-**Why it matters to clikae specifically.** clikae already positions itself as the
-*control plane* for "which identity/state is active per session". Git authorship is
-the most consequential identity a coding session produces, and it's currently
-*outside* the tank's control — the one place where "which account am I?" has a
-durable, public, hard-to-reverse consequence, and clikae is silent there.
-
-**Possible directions (NOT yet decided — needs maintainer call):**
-1. **Per-tank git identity (opt-in).** Let a tank carry an optional
-   `git.user.name` / `git.user.email`; `clikae env <engine> <tank>` then exports
-   `GIT_AUTHOR_*` / `GIT_COMMITTER_*` (or `-c` overrides) so commits made in that
-   shell are stamped with the tank's intended identity. Safe default = do nothing
-   (inherit global config); enable explicitly — fits the informed-consent opt-in
-   pattern, not a silent default that hijacks `git config`.
-2. **Mismatch warning only (cheaper first brick).** `clikae status --json` /
-   board could surface "this tank's intended identity vs the git identity the
-   shell will actually commit as" and warn when an engine is known to inject its
-   account email. Detection without mutation.
-3. **Do nothing, document the footgun.** Out of scope; just tell users to pin
-   `git config --global user.email` and never let an engine commit with `-c
-   user.email=<harness userEmail>`.
-
-**Guard for whoever ships any of this:** an email can be verified on only ONE
-GitHub account at a time, so "fixing" attribution by re-binding email is an
-account-settings action, not a clikae action — clikae can only influence *new*
-commits, never retroactively re-map old ones (that needs history rewrite, as was
-done here). Don't claim clikae can "fix attribution" — it can only *prevent the
-next* mis-stamp.
-
-**Out of scope here:** this is the *authorship* identity axis. It is independent of
-the *fuel* axis (quota/limit) and the *resume* axis (§12). Three different "which
-account?" questions; clikae owns the first two today, not this one.
-
----
-
-## Dogfood (2026-06-03): headless cross-engine dispatch + codex tank-switch reality check
-
-Verified clikae can drive a *different engine headlessly*, end to end: in a single
-shell, `eval "$(clikae env codex <tank>)"` then
-`codex exec -C <dir> -s workspace-write "<task>"` — codex then created files
-autonomously on the selected tank. This is the "route the grunt work to a cheaper
-tank" thesis working in practice: one engine orchestrates, another executes.
-
-**Gotcha to document:** tank selection via `clikae env` is **per-shell** (`$CODEX_HOME`)
-and does NOT persist across separate non-interactive shells. Automation must set the
-tank inline in the *same* command, not in a prior step.
-
-**Tank-switch reality check for codex:**
-- **Manual / carried switch: works** — `clikae env|to codex <tank>` moves codex
-  between tanks cleanly.
-- **Self-switch on dry: not yet** — `clikae auto` is claude-only (BETA). codex cannot
-  carry itself onward when a tank runs dry. Consistent with the open item above: codex
-  over-quota is un-detectable from disk, so the *fuel* axis is the remaining gap for
-  codex; *resume* already works. → A `clikae auto` covering codex needs codex
-  dry-detection first.
-
-### Grunt-dispatch friction (2026-06-03 follow-up — routing chores to codex/agy)
-
-Tried offloading real grunt work (a vault link-integrity checker) to codex, and a
-text-summary to agy, both via clikae. Four frictions worth fixing/documenting:
-
-1. **codex `exec` (headless) can hang on slow I/O with no clean abort.** The codex
-   grunt read ~350 iCloud-synced files; iCloud read latency stalled it. In headless
-   `exec` stdin is closed, so it couldn't interrupt its own child (`write_stdin failed:
-   stdin is closed … rerun exec_command with tty=true`). It then re-emitted its diff
-   every turn, burning tokens. **Reproduced identically by running the same script in a
-   plain shell → it's iCloud-read latency, not codex.** Lesson: don't hand codex grunt
-   that does slow/iCloud-backed I/O; bound long jobs with an in-script timeout; a
-   dispatcher must not assume a headless codex job is abortable mid-run.
-
-2. **agy needs `--dangerously-skip-permissions` to use its tools headlessly** (e.g. to
-   read a file), which a sandboxed harness correctly refuses. **Clean pattern: feed
-   content via stdin so agy needs no tools** — pure text in/out, no approval gate:
-   `cat file | agy -p "<instruction>"`. Worked first try.
-
-3. **`clikae env agy <tank>` → "No built-in adapter for 'agy'"**, yet `clikae tanks`
-   *lists* agy tanks (8, R). Inconsistent: `tanks` advertises agy tanks but `env`
-   can't put a shell on one (agy is global single-account, so per-shell routing may be
-   intentionally unsupported — but then listing agy in `tanks` is misleading). Fix:
-   either support `env agy`, or mark agy rows in `tanks` as non-switchable. (agy still
-   ran fine on its global default config — just not tank-routed.)
-
-4. (Restated) per-shell `CODEX_HOME` doesn't persist across separate non-interactive
-   shells — set the tank inline in the *same* command.
-
-**What worked:** codex *writing* a correct script is good grunt offload; the *running*
-of a slow-I/O script is better kept by the dispatcher. agy is a fine cheap summarizer
-via stdin. Net: the cheap-tank routing thesis holds, but headless grunt needs
-abort/timeout guards and an agy stdin-only convention.
-
-### Dry-tank DURING a parallel multi-engine burn + manual relay — full writeup (2026-06-03)
-
-> Recorded in detail so the next session fully understands what happened and what
-> clikae still needs. This is the single most on-point clikae event observed: a fuel
-> tank ran dry mid-task during a deliberate "burn every tank at once", and a manual
-> relay kept the work going — exactly clikae's reason to exist, done by hand.
-
-**The setup — a deliberate "全油箱同步燒".** 5 workers fired in parallel, each on one
-independent distillation task (read a big text file → write one markdown note):
-- claude **a** — orchestrator: pre-extracted the inputs, then reviewed + placed outputs.
-- claude **b** — `eval "$(clikae env claude b)"; cat in.txt | claude -p "<prompt>" > out.md`
-- codex **H** — `eval "$(clikae env codex H)"; codex exec -C /tmp -s workspace-write --skip-git-repo-check "<prompt: read /tmp/in.txt, write /tmp/out.md>" </dev/null`
-- codex **M** — same codex pattern, tank M, different task.
-- agy (global) — `cat in.txt | agy -p "<prompt>"` (agy is global single-account; `clikae env agy` is broken, see above).
-
-Inputs were pre-extracted to `/tmp` (NOT read from the iCloud vault): codex `exec` hangs
-on iCloud reads (earlier section), so every non-orchestrator worker got its text via a
-`/tmp` file (codex) or stdin (agy/claude) — no iCloud latency, no tool-permission gate.
-
-**The event — codex tank M ran dry mid-task.** M's background job **exited 0** (looked
-like success) but wrote **NO output file**. Its task log showed, mid-run:
-`ERROR: You've hit your usage limit. ... try again at Jul 3rd, 2026 11:38 AM.`
-i.e. the parallel burn drained tank M's codex/ChatGPT quota partway through.
-
-**⚠️ CRITICAL gotcha for clikae's codex dry-detect:** `codex exec` **exits 0 even when it
-hit the usage limit and produced nothing.** Exit code is NOT a reliable success signal.
-Reliable signals are: (a) the literal `You've hit your usage limit` string in stdout/stderr,
-and (b) the expected output artifact is missing. Any codex dry-detection MUST parse the
-limit string and/or verify the artifact — never trust the exit code. Bonus: the message
-carries the reset time (`try again at <date> <time>`) → usable to mark the tank
-**dry-until-<timestamp>** instead of just "dry".
-
-**The relay (manual — and it worked).** The orchestrator (claude a) noticed M's missing
-artifact + the limit error in its log, re-assigned M's dropped task to itself, and
-finished it. Nothing lost; the other 3 tanks' outputs were untouched. 4/4 tasks landed
-despite one tank drying. That is "swap the dry tank, keep burning" — but done by hand.
-
-**What clikae needs to automate this (the actual product gap):**
-1. **codex dry-detect** (the long-open TODO): match `You've hit your usage limit` in
-   codex output + verify the artifact; do NOT use exit code. Parse the reset time to set
-   a dry-until window so `watch`/pool don't re-pick a tank that won't recover until then.
-2. **Auto-relay of a *dropped parallel task*:** when one tank in a parallel set dries,
-   re-queue *that specific task* to a live tank (same engine M→H, or cross-engine →
-   claude/agy). This needs the orchestrator to track a task↔tank map, not just "switch
-   the shell's tank". Today `clikae to`/`relay` carries a *session*; here we needed to
-   re-route a *headless task*. Different shape — pool/scheduler concern.
-3. **Idempotent, artifact-checked grunt tasks:** this relay was trivial only because each
-   task was re-runnable (fixed `/tmp` input path, fixed output path). clikae's pool/relay
-   should assume/encourage idempotent tasks whose completion is verified by an artifact,
-   so a dropped one just re-fires elsewhere.
-4. **Parallel burn is the fastest dry-tank stress test:** firing all tanks at once
-   intentionally drains them — great for exercising watch/pool/relay. M dried within a
-   single task.
-
-Complements the earlier notes: `clikae auto` is claude-only, and codex over-quota was
-"un-detectable from disk". This run shows it IS detectable *from the codex output* (limit
-string), just not from exit code or disk — and that manual relay closes the gap today.
-
-### agy tank-switch vs. global single-account usage friction (2026-06-28)
-
-**The setup & scenario:**
-Tried switching `antigravity-cli (agy)` tanks (`clikae agy 8` vs `clikae agy c`) to check and compare session token and quota usage limits (running TUI command `/usage`).
-
-**The friction / issue:**
-Switching `agy` tanks cleanly switches the local configuration directory, workspace cache, and conversation databases (stored in `~/.gemini` -> `~/.clikae/profiles/antigravity/<tank>`), but it **does not switch the API usage quota or Google account session under the hood**.
-- **Observation:** Running `/usage` in `agy 8` returned the exact same usage metrics as when leaving `agy c`.
-- **Reason:** `agy`'s OAuth credentials/session tokens are stored globally (machine-wide, e.g., in macOS Keychain or system-global paths) rather than inside the config directory. Thus, even when `clikae` symlinks a new configuration directory, `agy` continues to make API requests and fetch quota info using the active global Google account credential.
-- **Current workaround:** The user must manually run `/logout` inside the `agy` TUI to clear the global credentials, then hit `Enter` to run the interactive OAuth flow and authenticate with the other account.
-
-**Opportunities for clikae (Product Gaps):**
-1. **Promote Token File Isolation (Best Path):** Standardize with the `antigravity` team to support file-based OAuth token storage under the configuration directory (e.g. `~/.gemini/antigravity-cli/auth.json`), similar to `codex` (`auth.json` in the tank directory). This would allow `clikae`'s default symlink-swapping mechanism to naturally isolate accounts.
-2. **Environment Variable / Keychain Isolation:** If `agy` uses the macOS Keychain, push for `agy` to read a service name variable (e.g. `GEMINI_KEYCHAIN_SERVICE`). Then `clikae env` can export a separate service name per tank.
-3. **Automate logout/login flow (Adapter Hook):** Implement a lifecycle hook/adapter in `clikae` for `agy`. When switching tanks, if the target tank has a different cached account email, `clikae` could automatically run `agy /logout` in the background and prompt the user to authorize the new account via browser.
-
-**Additional observations on agy behavior during tank transition:**
-- **Session Resume Gap (Isolated sqlite/brain paths):** Session sqlite databases (`conversations/*.db`) and background task transcripts (`brain/<session-id>/`) are strictly isolated under the tank's configuration directory. Thus, when switching tanks, attempting to resume a session created in another tank (e.g. `agy --conversation <session-id>`) fails with `ListDirectory ... does not exist`. To enable true cross-tank resumption, `clikae`'s carry (`to` / `relay`) mechanism needs to copy or symlink the matching database file and `brain/` folder into the target tank.
-- **Orphaned AI Monitor Timers vs. Persistent OS Processes:** Background system processes spawned by `agy` (such as `caffeinate rclone ...`) run globally as OS-level processes and persist across tank switches. However, the AI-level monitor timers (scheduled via the `schedule` tool in `agy`) are bound to the conversation/profile state and become orphaned/inactive once the tank is switched. This creates a "body-mind split" where the transfer continues, but the guardian AI stops monitoring. A fresh monitor timer must be re-registered in the new tank session.
-- **Non-Interactive Permission Hangs:** When executing background/headless tasks, `agy`'s strict security gate prompts for tool execution approval. In non-interactive contexts, this causes silent hangs. Standardizing on piping inputs via stdin (`cat input | agy -p "<prompt>"`) instead of allowing the model to call read/write tools headlessly avoids these permission bottlenecks.
-
----
-
-## 14. OPEN — FLEET (many concurrent sessions on ONE tank) self-logged-out via OAuth refresh-token stampede
-
-**Found 2026-06-29, diagnosing a real "L tank suddenly logged out" incident.** The L
-tank (a claude Max account) went `auth_required` on its own. Root cause is a
-concurrency bug in token refresh that bites clikae's **FLEET** usage — the maintainer
-confirmed FLEET here means **(a) multiple concurrent sessions burning the SAME tank**
-(one person, own account, many parallel sessions — a first-class supported pattern, NOT
-account-sharing; it's the legitimate multi-open story clikae stands for).
-
-**The mechanism (thundering herd on a single-use, rotating refresh token).** Claude's
-OAuth uses **rotating refresh tokens**: each successful refresh issues a NEW refresh
-token and invalidates the old one. When FLEET spins up N sessions on one tank near token
-expiry, several processes read the same `RT0` and refresh near-simultaneously:
-1. Process A refreshes `RT0` → gets `RT1`, writes it to the Keychain. ✅
-2. Process B (a few hundred ms later) refreshes with the now-stale `RT0` → server returns
-   `invalid_grant`.
-3. **B treats `invalid_grant` as "I'm logged out" and CLEARS the Keychain entry**, wiping
-   the good `RT1` that A just wrote.
-4. The daemon's next proactive refresh finds an empty token → fails → `auth_required`.
-
-One small race gets escalated into a whole-tank logout. With both access AND refresh
-tokens cleared there is **no silent recovery** — only a fresh interactive `/login`.
-
-**Evidence (this incident).** `~/.clikae/profiles/claude/L/daemon.log`: days of
-`auth: proactive refresh succeeded`, then at `2026-06-21T21:14` a `proactive refresh
-failed, signalling re-auth required` → `headless daemon cannot complete OAuth` → `no
-token found`. The log shows **17×** `token still valid (cross-process refresh or not yet
-due)` — i.e. multiple processes refreshing one tank's token is the *normal* state on this
-tank, so the race condition is structurally present, not exotic. The observed refresh
-round-trip took **~6.3s**. Diagnostic: the Keychain entry
-`Claude Code-credentials-<sha256(CONFIG_DIR)[:8]>` (L = `ed272a36`; see the v0.3 keychain
-note in §2) still EXISTS but its `accessToken` AND `refreshToken` are both empty strings =
-genuinely logged out. (When reading that entry to diagnose, print field PRESENCE only,
-never token prefixes — leaking a prefix into a transcript is a credential leak.)
-
-**The fix — DECIDED 2026-06-29 (keep it simple; FLEET is not a frequent state):**
-1. **daemon owns refresh, single-flight via `flock`.** Put a lockfile in the tank's
-   config dir; wrap the read→refresh→write-back critical section in it. Sessions only
-   READ the Keychain; on a 401 they ask the daemon to refresh and retry, they do NOT
-   refresh themselves. This makes "the thing that rotates the single-use token" exactly
-   one actor per tank, killing the herd.
-2. **`invalid_grant` must NEVER directly clear credentials** (cheapest, highest-leverage
-   guard). On `invalid_grant`: take the lock, **re-read the Keychain** — if a fresher
-   token is present (a sibling already refreshed), adopt it; only escalate to
-   `auth_required` after confirming no valid token exists. This alone defuses the
-   "loser wipes the winner's token" amplifier even if some concurrent path slips through.
-3. **Keep proactive refresh, but make it daemon-EXCLUSIVE — do NOT switch to lazy.** Lazy
-   refresh would make N cold-starting sessions all 401 at once and all eat the ~6.3s
-   refresh latency — worse under FLEET. The disease was never "proactive"; it was
-   "proactive done by many." Single-source it in the daemon. Lock only the critical
-   section + serve-stale-while-revalidate (don't hard-block sessions on a still-valid
-   token, or concurrent cold-start queues 6s behind one lock).
-4. **NOT doing: daemon-death failover** (first session to grab the lock refreshes in the
-   daemon's place). Considered and rejected — v1 assumes "daemon is alive"; not worth the
-   second Keychain-writer code path for an edge of an edge. Revisit only if daemon OOM
-   under FLEET proves common.
-
-**Honest limit (don't oversell in copy).** Multiple MACHINES sharing one account still
-mutually evict each other — rotation is server-side, so whichever device refreshes last
-invalidates the others' refresh tokens. That's an OAuth fact a single machine can't fix.
-clikae can only (a) make ONE machine's concurrent sessions safe (the fix above) and (b)
-in the board/fuel-gauge UI, when a tank drops, say "may have been rotated out by another
-machine" rather than implying the account broke. Recovery for a user already hit: just
-re-login the tank (`clikae claude <tank>` → `/login`); there is no token to salvage.
+| Tank store | `~/.clikae/profiles/<engine>/<tank>/` (override: `$CLIKAE_HOME`) |
+| Souls | `$CLIKAE_HOME/souls/<group>/memory` + `PROTOCOL.md` + `members` |
+| Shell rc | auto-detected `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` / `~/.profile` / fish |
+| `.app` launchers | `~/Applications/<engine> (<tank>).app` |
+| Backups | `<rc-file>.clikae.bak.<timestamp>` |
+| Logs | none — errors go to stderr (see OPEN-1) |
+| CI | `.github/workflows/ci.yml` — shellcheck, smoke ×2, bats ×2, pester (windows, non-blocking) |
+| Positioning SSOT | `docs/VISION.md` |
+| Command surface SSOT | `docs/grammar.md` |
+| Soul SSOT | `docs/memory.md` |
+| Headless dispatch | `docs/orchestration.md` · `docs/playbooks.md` · `AGENTS.md` |

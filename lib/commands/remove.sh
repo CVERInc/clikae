@@ -50,7 +50,7 @@ EOF
 
   # In-use guard (data integrity, NOT --force-able): refuse to delete a tank dir a
   # live session is still bound to — this shell OR another terminal / a background
-  # worker (the phantom-tank bug, HANDOFF §11). Only when actually deleting data,
+  # worker (the phantom-tank bug). Only when actually deleting data,
   # and only if the adapter resolves an env var to scan for.
   if [ "$keep_data" -eq 0 ] && [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
     local _rm_ev

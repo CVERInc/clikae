@@ -107,7 +107,7 @@ adapter_account_label() {
 # payload.cwd (the dir it ran in). Unlike claude, codex does NOT slug $PWD into
 # the path — so we match on the recorded cwd. Filenames embed a sortable ISO
 # timestamp, so a lexical reverse sort is newest-first. We read only line 1 per
-# file to decide, keeping the board cheap. (HANDOFF §12.)
+# file to decide, keeping the board cheap.
 
 _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 

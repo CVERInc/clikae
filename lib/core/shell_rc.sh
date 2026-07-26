@@ -53,7 +53,7 @@ rc_has_block() {
 
 # rc_wrap_block <id>  < content_on_stdin   -> sentinel-wrapped block on stdout.
 # Single source of truth for the on-disk block format (used by rc_add_block and
-# `clikae migrate`). Changing this format is a breaking change — see HANDOFF §7.
+# `clikae migrate`). Changing this format is a breaking change (existing user rc files carry it).
 rc_wrap_block() {
   local id="$1"
   printf '\n# >>> clikae:%s >>>\n' "$id"

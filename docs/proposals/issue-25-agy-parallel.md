@@ -2,7 +2,7 @@
 
 > Status: **Design Discussion, Unresolved**. The conclusion leans towards "do not implement multi-account parallel execution (proven unfeasible); same-account multi-worker parallel execution is technically possible but has limited value and low priority."
 > Scope: Only concerns `agy` (Antigravity CLI). Parallel execution for `claude` / `codex` is a separate topic.
-> Relevant code: `lib/commands/antigravity.sh`, `lib/targets/antigravity.sh`, `docs/dogfood-agy-headless.md`, `HANDOFF.md` § "Dry-tank DURING a parallel multi-engine burn".
+> Relevant code: `lib/commands/antigravity.sh`, `lib/targets/antigravity.sh`, `docs/dogfood-agy-headless.md`, `HANDOFF.md` (OPEN — `clikae auto` / dropped-parallel-task relay).
 
 ---
 

@@ -9,7 +9,7 @@
 # backslash FIRST, then double-quote (order matters). Echoes the result.
 # We substitute with bash parameter expansion, NOT sed — BSD/macOS sed strips
 # backslashes from the replacement string and silently corrupts the script
-# (see HANDOFF §4).
+# (the BSD-sed footgun in HANDOFF's code conventions).
 _app_applescript_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
