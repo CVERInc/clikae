@@ -7,6 +7,11 @@
 > for the basic job below, and **Windows contributors are very welcome** to carry
 > it forward — PRs appreciated.
 
+> 💡 **If you can use WSL, use WSL.** clikae is plain bash and runs there
+> unmodified — the full, maintained CLI, current grammar and all. That is the
+> first-class Windows path (see the README). This module exists for native Windows
+> without WSL, and only covers the basic profile-switching job below.
+
 `Clikae.psm1` is the Windows-native port of the bash `clikae` CLI. There's no
 bash on a stock Windows box and no `.app` launcher, so this module keeps the
 same model with PowerShell mechanics:

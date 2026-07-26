@@ -293,6 +293,33 @@ clikae                            # your home board (run `clikae doctor` for a h
   from the fleet, and the home board became an **interactive cockpit** (press `m` for
   the memory dial, `s` to solo) laid out as Tanks / Solo / Resume. See
   [docs/memory.md](docs/memory.md).
+- **v0.10 — agy's login rides along, verified this time.** A tank switch carries the
+  Google login through the macOS Keychain, and **every restore is checked against the
+  stash before agy launches** — it refuses rather than silently landing you on the
+  wrong account. With interactive OAuth out of the switch path, `clikae burn agy
+  <tank>` works (sequentially — agy still has one global login). Windows via **WSL**
+  became a documented, first-class path.
+- **v0.11 — one brain, not one per directory.** Soul sharing is per-**tank** and
+  whole-brain: membership is the single source of truth and the per-directory links
+  are just projections of it, re-linked on every launch. A member tank can no longer
+  quietly grow a second, isolated memory. `clikae mcp share` extends the same
+  fleet-vs-solo logic to MCP servers.
+- **v0.12 — the audit release.** No new features: four independent review lenses
+  (performance, dead code, correctness/portability, structure) over the whole tree.
+  One keyboard decoder now backs every picker, ~220 lines of dead code went, and a
+  real-pty smoke driver joined the test tools.
+- **v0.13 — the repositioning.** The front page started telling the story this
+  README now opens with: your work has two halves, and clikae keeps *your* half
+  portable. Multi-account quota rotation stepped down to an advanced chapter with an
+  honest, dated [terms page](docs/terms-and-your-accounts.md) — and a one-time note
+  before your first cross-account carry.
+- **v0.14 — nine languages, and `clikae clean`.** 简体中文, 한국어, Español, Deutsch,
+  Français and Português (Brasil) join English, 日本語 and 繁體中文 — transcreated
+  against each language's own Apple macOS system strings, and translated *by grade*
+  (the sentences you must understand to consent are fully localized; what you type
+  or copy stays technical). Disk cleanup came out from under `resume` and became
+  **`clikae clean`** — one list, Enter, red confirm — and it moves candidates to the
+  **Trash**, never `rm`, saying so on the row if the Trash is unusable.
 - **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
   build-verified skeleton; it ships when it earns it.
 
@@ -300,7 +327,7 @@ clikae                            # your home board (run `clikae doctor` for a h
 
 Pure bash, no runtime dependencies, held to a deliberate bar:
 
-- **`bats-core` suite (450+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
+- **`bats-core` suite (580+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.

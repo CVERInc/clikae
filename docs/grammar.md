@@ -293,6 +293,18 @@ link everything; always return.
 
 ## 9. Implementation checklist (conform the code to this doc)
 
+> ✅ **Landed in the v0.5 line** — the grammar below IS the shipped command
+> surface; `bin/clikae`'s first-arg resolver, the bare switch, `to`, agy folding,
+> the tank wording, the elided-form help and the back-compat aliases are all in.
+> Verify with `clikae help` and `tests/bats/name-resolve.bats`, not with this list.
+>
+> **One item is deliberately not done and will stay that way:** the PowerShell
+> mirror. `powershell/` is an unsupported community port that never received the
+> fuel-tank grammar, and its CI never blocks — see `powershell/README.md`. Do not
+> treat it as outstanding work.
+>
+> _Kept below as the record of what conforming to this doc required._
+
 - [ ] **Dispatch** (`bin/clikae`): the §4 first-arg resolver — reserved command
       → bare switch (known CLI) → error. Wire `to` and `tanks`; keep `run`,
       `continue`, `relay`, `handoff` as hidden aliases.
@@ -323,11 +335,18 @@ link everything; always return.
 
 ---
 
-## 10. Open design frontier — a tank holds more than fuel
+## 10. A tank holds more than fuel — the design behind the Soul layer
 
-> Contributed by a concurrent session (the over-quota-detection work, profile b,
-> 2026-06-01). Recorded here as an open frontier, **not yet a decision** — the
-> maintainer's call whether to fold it into the model.
+> ✅ **Decided and shipped.** This section was written as an open frontier
+> (contributed by a concurrent session during the over-quota-detection work,
+> 2026-06-01). It stopped being one in **v0.9.0**: the share / isolate /
+> evaporate spectrum below is now `clikae memory share`, `clikae memory
+> isolate`, and `--ephemeral`, and v0.11.0 settled the remaining question by
+> making membership per-**tank** rather than per-directory.
+>
+> **`docs/memory.md` is the SSOT for how it behaves today** — including the
+> locked values in its §4. Read this section for *why* the shape is what it is;
+> read memory.md before changing anything.
 
 **The tension.** §2 says *fuel = quota* and *tank = one account/config*. True,
 but the tank dir holds far more than fuel — it holds the engine's **long-term
@@ -360,10 +379,11 @@ tank — informed-consent style, like §6), and (c) connect `to`'s transcript-ca
 to the same family. i.e. "agy folds into the same grammar" extended one level
 down to "agy folds into the same *state-control model*, no special mechanism."
 
-Full write-up: `~/clikae-handoff-state-mapping.md`.
+Full write-up: originally a scratch note outside the repo (now gone); its
+conclusions live in [memory.md](memory.md) and in the sections below.
 
-> The rest of §10 is a maintainer design session (2026-06-01) building on that
-> gift. Still a frontier, not a shipped decision — but the shape is agreed.
+> The rest of §10 is the maintainer design session (2026-06-01) that built on
+> that gift. It is what v0.9.0 implemented.
 
 ### 10.1 The synthesis: clikae is the control plane for the engine's *brain*
 

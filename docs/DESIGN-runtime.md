@@ -1,12 +1,17 @@
 # clikae runtime redesign — locked design + build plan
 
 > **Status:** direction LOCKED with the maintainer (2026-06-02, grill session on
-> branch `feat/v0.5.3-i18n-tui`). This file is the **single source of truth** for
-> the "clikae as a supervising runtime" redesign. Read it before touching the
-> command surface, the board, or the launch path.
+> branch `feat/v0.5.3-i18n-tui`). ✅ **The build plan below is complete** — M1 and
+> M2 shipped in the v0.5 line, M3 shipped BETA (`clikae auto`, the board's `A` key,
+> claude-only), and M4's version bump happened many releases ago. Read it for the
+> **locked decisions and the reasoning**, not as outstanding work.
 >
-> **Version is intentionally NOT bumped while this is in flight.** Bump only when a
-> milestone is actually implemented AND verified — see "No phantom features".
+> **Scope of its SSOT claim:** this file owns *why* the supervising runtime is
+> shaped the way it is. It does **not** own the command surface —
+> [grammar.md](grammar.md) does — and where the two ever disagree, grammar.md wins
+> and this file is the one that's stale.
+>
+> The "No phantom features" rule below is **not** historical: it still binds.
 
 ## North star
 

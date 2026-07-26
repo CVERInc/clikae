@@ -43,7 +43,12 @@ Rules:
    Sections move; the citation dangles and the next reader can't tell whether the
    claim died or just relocated. Make the comment self-contained, or name the
    thing (`clikae_is_target`, the BSD-sed footgun) instead of a `§`.
-6. **A finished plan is not a document.** `PLAN.md` and
+6. **When a behaviour changes, grep the whole doc tree for the old claim.** The
+   2026-07-27 audit found *four* documents still saying agy couldn't be `burn`ed
+   ten releases after `clikae burn agy <tank>` shipped — including `AGENTS.md`,
+   two lines above a link to the page that corrected it. One doc gets updated at
+   ship time; its siblings quietly become liars. The fix is a grep, not a memory.
+7. **A finished plan is not a document.** `PLAN.md` and
    `docs/HANDOFF-world-class-gaps.md` were both deleted on 2026-07-27: each had
    declared itself shipped/cleared at the top and then sat in the repo for weeks
    where an incoming agent would read it as live work. If a plan is done, `git rm`
@@ -163,11 +168,19 @@ regressions in one sitting. Classification code reads target-ness first.
 `continue-on-error` and never blocks. Do not spend effort syncing it to the
 grammar.
 
-**But:** `tests/bats/compat.bats` — a *blocking* gate — asserts that
-`$script:ClikaeAdapters` in `powershell/Clikae.psm1` mirrors `lib/adapters/*.sh`
-on binary/env-var/strategy. So adding a bash adapter still requires adding the
-matching table row, or the bash suite goes red. (These two facts contradicted
-each other in two places of the old handoff; this is the reconciled version.)
+**But:** `tests/bats/compat.bats` — a *blocking* gate that greps source and never
+runs pwsh — asserts that `$script:ClikaeAdapters` in `powershell/Clikae.psm1`
+mirrors `lib/adapters/*.sh` on binary/env-var/strategy, in both directions.
+
+So adding a **switchable** adapter (`env-dir` / `env-file` / `env-var` / `flag`)
+requires adding the matching PS table row, or the bash suite goes red. A
+**`subcommand`-strategy** adapter does not: that strategy marks a capability shim
+on a launch-only target rather than an env-switchable engine (`antigravity`'s
+resume hook is the only one), and the test skips it deliberately. This is why the
+bash tree has 14 adapter files and the PS table correctly has 13.
+
+(The old handoff asserted "keep them in sync" in one place and "don't spend effort
+syncing" in another; this is the reconciled version.)
 
 ---
 
@@ -354,6 +367,10 @@ not an unfinished obligation.
   `security`, so the copy mechanics are tested but the service-name assumption
   (`gemini`/`antigravity`) is only ever confirmed by live dogfood. A read-only
   `clikae doctor` keychain-coordinate check is the suggested permanent guard.
+- **The board's `?` help overlay omits `R`.** `R` opens the full cross-tank resume
+  picker (`home.sh`, the key loop) but `_home_help_overlay` never lists it, so the
+  one screen whose job is "here are all the keys" is missing one. Every other bound
+  key is there. (Docs list it; the in-app legend doesn't.)
 - **Engine naming is inconsistent across surfaces.** `clikae list` says `agy`,
   `clikae doctor` says `antigravity`, and `clikae list --json` emits
   `"cli":"agy"` alongside `"path": …/profiles/antigravity/…` — so a consumer

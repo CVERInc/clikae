@@ -10,8 +10,13 @@ If something here surprised you, it's working as intended; the *why* is below.
 
 **The coloured dot on the board isn't "which tank I'm on."** It's a fuel gauge:
 🔴 dry · 🟡 weekly-% (BETA) · 🟢 ready · ○ no reading. "Which am I on" is the cursor
-`❯`, the burn-order position, and the `← here` label. (See
+`❯` and the burn-order position. (See
 [DESIGN-board-fuel-dots.md](DESIGN-board-fuel-dots.md).)
+
+**There is no "you are here" marker on a row.** The board deliberately doesn't draw
+one: with many tanks open at once it is noise, and the shell you happen to have run
+`clikae` from is rarely the one you care about. The active tank is still computed —
+it drives the launch hint and the relay source — just not drawn.
 
 **codex shows `○`, never 🟢 green.** codex's usage limit is exec-stdout-only — it's
 never written to a file clikae can scan — so clikae can honestly show 🔴 *only* when
@@ -75,15 +80,20 @@ symlink** (and moving the Google login between Keychain slots). Unlike the per-s
 `clikae claude/codex <tank>`, this is global — `clikae status` and the board both label
 it so. Reversible with `clikae agy --release`.
 
-**agy can't be `burn`ed.** burn spends *a tank's quota* and reroutes among a reserve;
-agy is one global account with no reserve. Use it as a direct worker instead
-(`cat in | agy --sandbox -p "…"`), or `clikae agy R -- -p "…"` to spend a specific
-agy account's quota. (See [usage.md → Headless tasks](usage.md).)
+**`clikae burn agy <tank>` runs one tank at a time, never in parallel.** It does
+work (since v0.10.0 — the Keychain carry made a tank switch non-interactive, so burn
+can hop agy onto the next tank when one runs dry). But agy has ONE global login, so
+the hop *moves* that global tank the way `clikae agy <tank>` always has, and two agy
+tanks can never run at once. That's structural, not a missing feature. For a
+one-shot on the account that's already active, `clikae agy <tank> -- -p "…"` is the
+shorter path. (See [agy-dispatch.md](agy-dispatch.md).)
 
-**agy isn't listed by `clikae adapters`.** It's architecturally a *target*, not an
-*adapter* (it can't be profile-switched per the adapter contract), so it appears in
-`clikae list` / `status` / the board, but not the adapter catalog. `clikae tanks`
-footnotes it.
+**agy appears in `clikae adapters` with a `subcommand` strategy and no env var.**
+That row is a resume-only capability shim, not a switchable engine: agy is
+architecturally a *target*, and `clikae_is_target` — not "an adapter file exists" —
+is what every classification path reads. Which is also why the PowerShell adapter
+table mirrors 13 of the 14 adapter files: `subcommand` ones aren't switchable
+engines. `clikae tanks` footnotes agy's global-login nature.
 
 ## Engines on one board
 

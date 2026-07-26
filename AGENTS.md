@@ -77,13 +77,21 @@ Which shape for which situation — the decision layer above these mechanics —
 
 ## agy (Antigravity) is the trap — read its recipe first
 
-agy is the one engine agents fumble most. It's adapter-less (one global Keychain
-login), so it's **not burnable** (can't be auto-rerouted) but **is usable**: drive it
-headless on the active account with `clikae agy <tank> -- -p`, or add it as a
-read-only `conduct` leg (`--leg agy/<active-tank>`). Its output buffers (collect via a
-written file, not stdout), it wanders without a fenced task + long `--print-timeout`,
-`-i` dies without a TTY, and dry shows in `cli.log` not stdout. **Before sending agy a
-headless job, read [docs/agy-dispatch.md](docs/agy-dispatch.md).**
+agy is the one engine agents fumble most. Its Google login is **one global Keychain
+entry**, not a per-shell env var — so there is no `clikae env agy`, and two agy tanks
+can never run at once.
+
+**It IS burnable, sequentially** (since v0.10.0): `clikae burn agy <tank>` auto-hops
+to the next agy tank on dry, because the Keychain carry made a tank switch
+non-interactive. What it can't do is run in parallel — the hop *moves* the one global
+active tank. Also fine: a one-shot on the already-active account with
+`clikae agy <tank> -- -p`, or a read-only `conduct` leg (`--leg agy/<active-tank>`,
+which reports `NOTACTIVE` rather than silently using the wrong account).
+
+Its output buffers (collect via a written file, not stdout), it wanders without a
+fenced task + long `--print-timeout`, `-i` dies without a TTY, and dry shows in
+`cli.log` not stdout. **Before sending agy a headless job, read
+[docs/agy-dispatch.md](docs/agy-dispatch.md).**
 
 ## Identity
 

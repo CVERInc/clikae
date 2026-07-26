@@ -170,13 +170,24 @@ cp ~/.zshrc.clikae.bak.<timestamp> ~/.zshrc
 
 ## Developing / running the tests
 
-clikae stays Node-free; local checks use `shellcheck` and `bats`:
+clikae stays Node-free; local checks use `shellcheck` and `bats`. Run the gate —
+it is exactly what CI runs, so a green gate means a green CI:
 
 ```bash
 brew install shellcheck bats-core
-shellcheck bin/clikae lib/**/*.sh install.sh
-bats tests/bats
+bash scripts/test.sh
 ```
 
+If you invoke the tools directly instead, **run bats with `-r`**:
+
+```bash
+bats -r tests/bats
+```
+
+Without `-r`, bats does not recurse into `tests/bats/adapters/` and silently skips
+every adapter test — the run still reports success, just with ~50 fewer tests than
+you think. (CI was bitten by this once.)
+
 See [HANDOFF.md](../HANDOFF.md) for the full verification recipe, including an
-isolated end-to-end run that doesn't touch your real `$HOME`.
+isolated end-to-end run that doesn't touch your real `$HOME` — and for what the
+gate cannot see (anything interactive: the board, the resume picker, `clean`).

@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **A documentation audit: every doc reconciled against the code.** `HANDOFF.md`
+  was rewritten from 1089 lines of dated status blocks — its own "READ THIS
+  FIRST" header was five releases stale and two of its claims were false — into
+  a file where every line is either a live rule or an open item, under a
+  maintenance contract that says closing an item means deleting its entry.
+  `PLAN.md` and `docs/HANDOFF-world-class-gaps.md` were removed: both declared
+  themselves shipped/cleared in their own first lines. `AGENTS.md` and
+  `docs/DEVLOG.md` were brought up to the v0.13 repositioning (the devlog had
+  stopped at v0.6.0). Corrections across the rest: **`clikae burn agy <tank>`
+  has worked since v0.10.0**, but four documents still said agy couldn't be
+  burned; the board's `← here` row marker was documented years after it was
+  removed; `clikae adapters` does list `antigravity`; `docs/adding-a-locale.md`
+  still described three languages and an unshipped `zh-Hans`;
+  `docs/troubleshooting.md` told contributors to run `bats tests/bats` without
+  `-r`, which silently skips every adapter test; `docs/grammar.md` carried an
+  unchecked implementation checklist for work that shipped in v0.5 and labelled
+  the Soul design an undecided frontier. `docs/adding-an-adapter.md` gained the
+  ~20 optional adapter hooks it never mentioned. No behaviour changed.
+
 ## [0.14.5] — 2026-07-21
 
 ### Fixed
