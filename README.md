@@ -329,6 +329,9 @@ Pure bash, no runtime dependencies, held to a deliberate bar:
 
 - **`bats-core` suite (580+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
+- **A real-pty smoke leg** that drives the board, the resume picker and the prompt
+  flows on an actual terminal, in a throwaway `$HOME` — because shellcheck reads
+  source and bats never presses a key, so neither can see the TUI. It gates.
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
 

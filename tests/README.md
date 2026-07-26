@@ -8,7 +8,7 @@
 tests/
 ├── helpers.bash              # shared setup/teardown (isolated $HOME + $CLIKAE_HOME)
 ├── tools/
-│   └── pty-smoke.py          # real-pty driver for the interactive pickers (NOT run by CI)
+│   └── pty-smoke.py          # real-pty driver for the interactive screens (GATED)
 └── bats/
     ├── <one .bats per command / core lib>   # init, alias, list, remove, burn, clean, …
     ├── app.bats              # macOS-only, skipped elsewhere
@@ -20,12 +20,27 @@ tests/
 `bats/` is one file per command or core library — roughly forty of them; the names
 above are the ones with a rule attached rather than a full listing.
 
-**`tools/pty-smoke.py` is not part of the gate.** It drives the board and the resume
-picker in a real pty, which is the only way to exercise the interactive key loops,
-but nothing invokes it — not `scripts/test.sh`, not CI — and by design it sends only
-navigation/cancel/quit keys, never Enter on a row and never the mutating keys. So a
-whole class of board behaviour is untested. See HANDOFF's OPEN list before assuming a
-green suite covers an interactive change.
+**`tools/pty-smoke.py` is the third leg of the gate.** shellcheck reads source and
+bats never presses a key, so both are structurally blind to the TUI — which is where
+this project's regressions keep landing. pty-smoke drives the real binary on a real
+pty, in a throwaway `$HOME` it builds itself, with `CLIKAE_LANG=en-US` pinned and a
+stub engine on `PATH`. It never touches your store and never launches a real engine.
+
+```bash
+python3 tests/tools/pty-smoke.py all       # what the gate runs
+python3 tests/tools/pty-smoke.py prompts   # just the prompt / stderr checks
+```
+
+Its `prompts` mode is the regression net for a specific failure: bash writes
+`read -p` prompts to **stderr**, so when the board's stderr was accidentally
+redirected to `/dev/null`, three prompts went blank while the process stayed alive
+and kept accepting input — a hang that no test could see. Every assertion in that
+mode is about something *reaching the terminal*, including the engine's own stderr
+after the board `exec`s into it.
+
+**When you add an assertion here, prove it can fail.** Check out a commit from
+before the fix into a worktree, copy this file in, and confirm the new check goes
+red — an interactive assertion that passes on the broken code is decoration.
 
 Every test runs against a throwaway `$HOME` and `$CLIKAE_HOME` created with
 `mktemp`, so the suite never touches your real config or shell rc. `$SHELL` is

@@ -37,6 +37,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group ends. Verified in a real pty, including forcing the Trash fallback with a
   read-only `~/.Trash` and watching the warning actually print.
 
+### Added
+
+- **The gate grew a third leg: a real-pty smoke run, and it blocks.** shellcheck
+  reads source and bats never presses a key, so both are structurally blind to
+  the TUI — which is where this project's regressions keep landing, most
+  expensively the stderr bug above, which shipped through a fully green gate.
+  `tests/tools/pty-smoke.py` now runs from `scripts/test.sh` and from CI on both
+  macOS and Ubuntu, driving the real binary on a real pty.
+
+  It became hermetic to earn that: each mode builds its own throwaway `$HOME`
+  and `$CLIKAE_HOME` with fixture tanks, pins `CLIKAE_LANG=en-US` so assertions
+  don't depend on the runner's locale, and puts a stub engine on `PATH` — it
+  never reads the developer's store and never launches a real engine. It also
+  stops short of nothing: a new `prompts` mode presses `n`, `a` and `m` and
+  asserts each prompt is **visible**, presses Enter on a row and asserts the
+  launched engine's **stderr** reaches the terminal, and triggers a
+  duplicate-name `init` to assert its error is readable. Pacing is idle-based
+  rather than fixed sleeps (58s → 28s), because a slow gate is a skipped gate.
+
+  Every assertion was validated against a pre-fix worktree first: five of the
+  eight `prompts` checks go red there, and the three that pass on both are the
+  controls that prove the harness isn't simply failing everything.
+
 ### Documentation
 
 - **A documentation audit: every doc reconciled against the code.** `HANDOFF.md`

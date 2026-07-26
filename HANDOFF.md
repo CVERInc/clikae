@@ -96,7 +96,7 @@ any CLI vendor.
    opt-out update check.
 8. **When a destructive path degrades, say so on the row.** `clean` falls back
    to `rm` when the Trash is unusable; that fallback must always announce
-   itself. (This was broken until 2026-07-27 — see OPEN-2.)
+   itself. The per-row warning does; the closing summary still doesn't — OPEN-1.
 
 ### 2.2 Code
 
@@ -188,28 +188,31 @@ syncing" in another; this is the reconciled version.)
 
 Ordered by what would hurt most if ignored. Delete an entry when you close it.
 
-### OPEN-1 — the gate cannot see interactive behaviour
+### OPEN-1 — `clean`'s summary claims the Trash even when it permanently deleted
 
-Neither shellcheck nor bats can observe interactive TTY behaviour. The whole
-`exec … 2>/dev/null` family — which silently discarded stderr for the board, for
-`resume`, for `clean`, and for every engine launched from the board — shipped and
-survived a fully green gate, then was found by hand on 2026-07-27 (fixed; see the
-CHANGELOG). Nothing in the gate would have caught it, and nothing in the gate would
-catch the next one.
+When `~/.Trash` is unusable, `_clean_to_trash` falls back to `rm` and the row
+correctly warns `Trash unavailable — deleted directly instead (not recoverable)`.
+But the closing line is unconditional:
 
-`tests/tools/pty-smoke.py` exists for exactly this — its docstring names "the
-smoke layer bats can't reach … exactly where the board regressed in dogfood more
-than once" — but:
+```
+[ WARN ] Trash unavailable — deleted directly instead (not recoverable): …/x.jsonl
+[ DONE ] Cleanup complete. Moved approximately 496 KB to the Trash — empty the
+         Trash to actually free that space.
+```
 
-1. **Nothing invokes it.** Not `scripts/test.sh`, not `.github/workflows/ci.yml`.
-   It self-describes as "a developer tool, not CI".
-2. **It deliberately only sends navigation/cancel/quit keys**, never Enter on a
-   row and never `n`/`a`/`m`/`d` — which is exactly where the invisible-prompt bugs
-   lived.
+Nothing was moved to any Trash. The per-row disclosure is honest and the summary
+contradicts it — and the summary is the line a person actually remembers, and the
+one they'd act on if they went looking for the file. Reproduced 2026-07-27 in a pty
+with a read-only `~/.Trash`.
 
-The harness built to catch this class of regression stops one keystroke short of
-it and isn't run. Wiring it in — and letting it press the mutate keys against a
-sandbox `CLIKAE_HOME` — is the durable fix.
+The fix needs a second summary string for "some rows fell back", which means
+wording it in all nine locales — consent-grade copy, so it wants the maintainer's
+hand rather than an LLM baseline. Until then the row warning is the only truth.
+
+Related, same screen: the red confirm accepts a bare Enter (`Press Enter to
+proceed, or Ctrl-C to cancel`). That is a deliberate, defensible choice while
+everything lands in the Trash and stays recoverable — but on the fallback path the
+same two keystrokes are irreversible. Worth deciding together with the above.
 
 ### OPEN-2 — FLEET self-logout via OAuth refresh-token stampede
 
@@ -406,15 +409,28 @@ the expensive way.
 ## 6. How to verify your changes
 
 ```bash
-bash scripts/test.sh          # the gate: shellcheck -S warning + bats
+bash scripts/test.sh    # the gate: shellcheck -S warning + bats + pty smoke
 ```
 
-What the gate does **not** cover — check by hand when you touch these:
+Three legs, because the first two are structurally blind to the TUI: shellcheck
+reads source, bats never presses a key. `tests/tools/pty-smoke.py` drives the real
+binary on a real pty in a throwaway `$HOME`, and it gates — locally and in CI.
+Run one leg directly while iterating:
 
-- Anything interactive: the board, the resume picker, the clean picker. See
-  OPEN-1; `python3 tests/tools/pty-smoke.py home|resume` is the closest tool.
-- stdout-vs-stderr behaviour of any prompt or warning.
-- The real engines. Adapter tests stub the binaries.
+```bash
+python3 tests/tools/pty-smoke.py prompts   # prompts + the launched engine's stderr
+```
+
+What the gate still does **not** cover — check by hand when you touch these:
+
+- **The `clean` picker's destructive path.** pty-smoke never confirms a deletion.
+- **The real engines.** Adapter tests and pty-smoke both stub the binaries.
+- **agy.** One global Keychain login; nothing about it is safely automatable.
+
+🔴 **A new interactive assertion must be proven able to fail.** Put a pre-fix
+commit in a `git worktree`, copy the harness in, and watch the check go red. An
+assertion that passes on the broken code is decoration — when this net was added,
+three of its eight checks passed on the buggy build and only five were real.
 
 Isolated end-to-end without touching your real `~`:
 
@@ -464,7 +480,7 @@ Exact commands: `homebrew/RELEASING.md`.
 | `.app` launchers | `~/Applications/<engine> (<tank>).app` |
 | Backups | `<rc-file>.clikae.bak.<timestamp>` |
 | Logs | none — errors go to stderr |
-| CI | `.github/workflows/ci.yml` — shellcheck, smoke ×2, bats ×2, pester (windows, non-blocking) |
+| CI | `.github/workflows/ci.yml` — shellcheck, smoke ×2, bats ×2, pty-smoke ×2, pester (windows, non-blocking) |
 | Positioning SSOT | `docs/VISION.md` |
 | Command surface SSOT | `docs/grammar.md` |
 | Soul SSOT | `docs/memory.md` |

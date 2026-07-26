@@ -58,6 +58,23 @@ jobs:
         # -r so the tests/bats/adapters/ subdirectory is included.
         run: bats -r --print-output-on-failure tests/bats
 
+  pty-smoke:
+    # shellcheck reads source and bats never presses a key, so BOTH are
+    # structurally blind to the TUI — which is where this project's regressions
+    # keep landing. This job drives the real binary on a real pty in a throwaway
+    # $HOME. It gates: a green shellcheck+bats has shipped an invisible-prompt /
+    # dead-stderr bug before, and that must not be possible again.
+    name: pty smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Drive the interactive screens
+        run: python3 tests/tools/pty-smoke.py all
+
   pester:
     # clikae is a macOS/Linux bash tool; the PowerShell module is a
     # community-contributed, UNSUPPORTED port. This job runs Pester for the
