@@ -78,14 +78,14 @@ EOF
 
   log_bold "Next:"
   if [ -n "$installed_no_profile" ]; then
-    log_dim "  • $installed_no_profile is installed with no tank yet:  clikae init $installed_no_profile work --alias"
+    log_dim "  · $installed_no_profile is installed with no tank yet:  clikae init $installed_no_profile work --alias"
   fi
   if [ "$rc_loaded" = "no" ] && [ "$any_profiles" -eq 1 ]; then
-    log_dim "  • aliases aren't loaded in this shell yet:  source $rc"
+    log_dim "  · aliases aren't loaded in this shell yet:  source $rc"
   fi
   if [ "$total_profiles" -ge 2 ]; then
-    log_dim "  • when a tank runs dry, carry on to the next one:  clikae to"
+    log_dim "  · when a tank runs dry, carry on to the next one:  clikae to"
   fi
-  log_dim "  • See your tanks at a glance:  clikae"
-  log_dim "  • Take a risk-free tour:       clikae demo"
+  log_dim "  · See your tanks at a glance:  clikae"
+  log_dim "  · Take a risk-free tour:       clikae demo"
 }

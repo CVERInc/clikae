@@ -9,11 +9,11 @@
 # mis-stamp.)
 #
 # Honest limits (kept in the help so we never oversell):
-#   • git precedence is `-c` flag > GIT_* env > git config. This pins the env-var
+#   · git precedence is `-c` flag > GIT_* env > git config. This pins the env-var
 #     path (the common case) but does NOT beat an engine that commits with an
 #     explicit `git -c user.email=… commit`.
-#   • per-shell only (like `env`); you must eval the env into the shell first.
-#   • it only ever influences FUTURE commits — it cannot fix attribution on
+#   · per-shell only (like `env`); you must eval the env into the shell first.
+#   · it only ever influences FUTURE commits — it cannot fix attribution on
 #     commits already made (that needs a history rewrite + force-push).
 
 cmd_git_id() {
@@ -36,11 +36,11 @@ regardless of what the engine would otherwise inject.
   git commit -m "…"                  # authored as the tank's name/email
 
 Honest limits:
-  • git precedence: `-c` flag > GIT_* env > git config. This wins over the
+  · git precedence: `-c` flag > GIT_* env > git config. This wins over the
     global-config commit path (the usual case), but NOT over an engine that
     commits with an explicit `git -c user.email=… commit`.
-  • per-shell only — it lives in the shell that eval'd `clikae env`.
-  • only future commits — it cannot re-map commits already made.
+  · per-shell only — it lives in the shell that eval'd `clikae env`.
+  · only future commits — it cannot re-map commits already made.
 EOF
         return 0 ;;
       --name)   shift; [ $# -gt 0 ] || log_fail "--name needs a value"; name="$1"; name_set=1; shift ;;

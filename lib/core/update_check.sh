@@ -6,13 +6,13 @@
 # scripts and the test suite never see a prompt or a network call.
 #
 # DNA: help quietly, never nag, stay honest.
-#   • Throttled — the network check runs at most once per CLIKAE_UPDATE_TTL (24h),
+#   · Throttled — the network check runs at most once per CLIKAE_UPDATE_TTL (24h),
 #     stamped in a cache; every other open just reads the cache (instant, offline-OK).
-#   • Opt-out — CLIKAE_NO_UPDATE_CHECK=1 disables the check AND the prompt entirely.
-#   • Honest about the upgrade — "Update now" runs the command for the install method
+#   · Opt-out — CLIKAE_NO_UPDATE_CHECK=1 disables the check AND the prompt entirely.
+#   · Honest about the upgrade — "Update now" runs the command for the install method
 #     we can actually detect (brew / curl); if we CAN'T tell, we only SHOW the command
 #     rather than guess-and-run something wrong.
-#   • Self-limiting — "skip this version" suppresses the nag until a version newer
+#   · Self-limiting — "skip this version" suppresses the nag until a version newer
 #     than the skipped one appears.
 
 : "${CLIKAE_UPDATE_TTL:=86400}"     # 24h, in seconds — how long a SUCCESSFUL check is trusted

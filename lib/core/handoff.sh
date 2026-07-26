@@ -210,9 +210,9 @@ handoff_render() {
 # next_tank emits, tabs already turned to `/`). Mirrors cmd_handoff's own target
 # resolution (handoff.sh §"Parse <engine>[/<tank>]") so a watch pre-check and the
 # eventual handoff agree:
-#   • an ADAPTER engine (claude/codex/…) with a /tank → that tank must exist;
-#   • a single-account TARGET (agy/antigravity) → must NOT carry a /tank;
-#   • anything else → unknown target.
+#   · an ADAPTER engine (claude/codex/…) with a /tank → that tank must exist;
+#   · a single-account TARGET (agy/antigravity) → must NOT carry a /tank;
+#   · anything else → unknown target.
 # log_fail (exit 1) on a bad target; silent on a good one. Used by `clikae watch`.
 validate_handoff_target() {
   local t="$1" to_cli to_profile=""

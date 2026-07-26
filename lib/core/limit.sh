@@ -125,10 +125,10 @@ limit_output_dry() {
 # clears the badge automatically.
 #
 # Only claude transcripts are scanned here. Confirmed reasons the others aren't:
-#   • codex — a real limit is an exec-stdout-only event, NEVER written to the
+#   · codex — a real limit is an exec-stdout-only event, NEVER written to the
 #     rollout transcript (burn-verified 2026-06-01; see limit_line_is_real). There
 #     is nothing in a transcript to scan, so codex is correctly absent.
-#   • agy   — records its limit in a log file, not a transcript. That path is
+#   · agy   — records its limit in a log file, not a transcript. That path is
 #     handled separately by limit_log_dry (below), used for log-only targets.
 # Any other cli returns "not dry" rather than guess.
 limit_profile_dry() {
@@ -202,9 +202,9 @@ EOF
 
 # _limit_tank_dry_self <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase
 # if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
-#   • claude  — limit_profile_dry scans the tank's transcripts (account-level
+#   · claude  — limit_profile_dry scans the tank's transcripts (account-level
 #     WITHIN this config dir: all its recent sessions).
-#   • any engine — a persisted dry marker (dry_store), written by the live catcher
+#   · any engine — a persisted dry marker (dry_store), written by the live catcher
 #     (burn / supervise) for engines whose limit never lands in a scannable file.
 # Self-only: factored out so limit_tank_dry's account contagion can't recurse.
 _limit_tank_dry_self() {

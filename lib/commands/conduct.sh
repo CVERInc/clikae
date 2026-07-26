@@ -52,20 +52,20 @@ exits 0 even when it hit its limit). Outcomes per leg: captured / dry (with the
 vendor's reset phrase) / empty (a real failure — auth/sandbox/no answer).
 
 Honest limits (what conduct does NOT do):
-  • Read-only by design. Every leg runs with its engine's read-only headless
+  · Read-only by design. Every leg runs with its engine's read-only headless
     recipe, so N legs can't clobber a shared working tree. conduct is for
     best-of-N AUDITS/ANALYSES/PROPOSALS — NOT write/impl tournaments (those need
     isolated worktrees and stay an orchestrator's job).
-  • clikae never judges. You get N result files + an honest table; YOU (or the
+  · clikae never judges. You get N result files + an honest table; YOU (or the
     session model acting as conductor) pick the winner. No scoring, no merge.
-  • Adapter-gated. A leg only runs if its engine defines a read-only recipe
+  · Adapter-gated. A leg only runs if its engine defines a read-only recipe
     (adapter_audit_flags) — today claude and codex. Others are flagged, not run.
-  • agy is special (no adapter — global single-account). An agy leg runs ONLY on
+  · agy is special (no adapter — global single-account). An agy leg runs ONLY on
     the currently active agy tank; a leg naming another tank is reported (not run),
     since clikae can't switch agy per-shell or run two agy tanks in parallel. agy's
     dry state is read from its cli.log (its quota event never reaches stdout). Full
     recipe + caveats: docs/agy-dispatch.md.
-  • Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
+  · Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
     rewords it, set $CLIKAE_LIMIT_PATTERN='<regex>' to teach it (same override
     clikae watch honours); otherwise a dry leg may show as "empty (failure)".
 

@@ -31,11 +31,11 @@ wrote nothing), and if the tank ran dry, re-fire the SAME task on the next tank
 in your reserve.
 
 Give the task in one of two ways:
-  • the easy way — --prompt-file <f> / --prompt <str>: clikae fills in each
+  · the easy way — --prompt-file <f> / --prompt <str>: clikae fills in each
     engine's own headless-write flags (claude's -p / codex's exec …) from its
     adapter, so you never hand-assemble them and a cross-engine reroute stays
     sound (the flags are regenerated for the new engine).
-  • the power-user way — -- <engine command...>: pass the raw engine argv yourself.
+  · the power-user way — -- <engine command...>: pass the raw engine argv yourself.
 
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
@@ -92,11 +92,11 @@ EOF
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto, in listing order — but the
 # reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
-#   • P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
+#   · P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
-#   • P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
+#   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.

@@ -110,8 +110,8 @@ EOF
   _demo_agy_acct    "$sb" cver-A "cver@gmail.com"   # agy is global; one tank shows the engine
 
   # A fuel reading per tank so the board's traffic light has something to show:
-  #   • yellow — a weekly-usage notice clikae caught and cached (claude/cver-B)
-  #   • red    — codex/cver-A is out of quota; clikae kept codex's verbatim reset time
+  #   · yellow — a weekly-usage notice clikae caught and cached (claude/cver-B)
+  #   · red    — codex/cver-A is out of quota; clikae kept codex's verbatim reset time
   #   claude/agy stay green (detectable + ready); codex/cver-B has no detector → ○,
   #   which is the honest "no reading" rather than a guessed green.
   mkdir -p "$sb/cache/weekly"

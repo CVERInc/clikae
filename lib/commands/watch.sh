@@ -17,14 +17,14 @@
 # When you learn the real marker, set $CLIKAE_LIMIT_PATTERN (or tell the project).
 
 # Limit markers, CONFIRMED against real live limits (dogfooded 2026-05-31):
-#   • claude — CONFIRMED, and it IS written to the transcript (so the tail catches
+#   · claude — CONFIRMED, and it IS written to the transcript (so the tail catches
 #       it): a real interactive limit appears as a jsonl line with
 #       "isApiErrorMessage":true and text "You've hit your session limit · resets
 #       <time> (<tz>)". (The TUI also shows "/upgrade to increase your usage limit.")
-#   • codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
+#   · codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
 #       + `{"type":"error","message":"You've hit your usage limit. … try again at
 #       <date>."}` and exits non-zero.
-#   • agy/Gemini — CONFIRMED: `agy -p` hitting its limit exits 0 with EMPTY
+#   · agy/Gemini — CONFIRMED: `agy -p` hitting its limit exits 0 with EMPTY
 #       stdout/stderr; the marker lands ONLY in ~/.gemini/antigravity-cli/cli.log
 #       as `agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota
 #       reached. … Resets in <Hh Mm>.` So agy can't be detected via exit code,

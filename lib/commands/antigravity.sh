@@ -220,8 +220,8 @@ _agy_takeover() {
   local link slots; link="$(_agy_link)"; slots="$(_agy_slots)"
   log_warn "Setting up agy multi-account is a POWER mode with real tradeoffs:"
   cat >&2 <<EOF
-  • It turns your real ~/.gemini into a clikae-managed symlink.
-  • On macOS, it carries your Google login PER TANK via your login Keychain:
+  · It turns your real ~/.gemini into a clikae-managed symlink.
+  · On macOS, it carries your Google login PER TANK via your login Keychain:
     agy keeps its OAuth login in one machine-wide Keychain item, so to give each
     tank its own account clikae copies that login between Keychain slots on every
     switch. The token moves Keychain→Keychain and is never written to disk — and
@@ -229,9 +229,9 @@ _agy_takeover() {
     refuses to proceed if it doesn't match, rather than silently landing you on
     the wrong account). A tank with no prior login logs out cleanly instead, so
     agy asks for a fresh OAuth pick.
-  • It is GLOBAL: only one agy tank is active at a time across ALL terminals
+  · It is GLOBAL: only one agy tank is active at a time across ALL terminals
     (the login is one global Keychain entry). Don't run two tanks at once.
-  • Swapping while agy is running can corrupt that session.
+  · Swapping while agy is running can corrupt that session.
   Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks and
   their stashed logins are kept).
 EOF

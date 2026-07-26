@@ -9,11 +9,11 @@
 #   status                      (which tanks share which group)
 #
 # Two ways a tank points at the canonical Soul, by what the engine exposes:
-#   • symlink strategy (claude) — the engine keeps memory in a markdown DIR
+#   · symlink strategy (claude) — the engine keeps memory in a markdown DIR
 #     (adapter_memory_dir); we fan that dir into the store with a symlink. Per-$PWD,
 #     mirroring claude's per-project memory. The persistent sibling of --ephemeral's
 #     fan-OUT (switch.sh §10.4): same stash/restore, pointed at a kept store.
-#   • pointer strategy (codex) — the engine keeps memory opaquely (sqlite) but reads
+#   · pointer strategy (codex) — the engine keeps memory opaquely (sqlite) but reads
 #     a markdown INSTRUCTIONS file (adapter_memory_pointer_path, e.g. $CODEX_HOME/
 #     AGENTS.md). We drop a fenced "your long-term memory is <store>; read it, append
 #     to it" note there. The engine reads+writes the SAME markdown via the memory

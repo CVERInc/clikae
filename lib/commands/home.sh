@@ -248,11 +248,11 @@ EOF
 #   cli ␟ profile ␟ reset-phrase
 # Backed by lib/core/limit.sh, which scans transcripts/logs — so compute this ONCE
 # per board render, never per keypress. Two sources:
-#   • every tank   — limit_tank_dry: claude via transcript, codex via the persisted
+#   · every tank   — limit_tank_dry: claude via transcript, codex via the persisted
 #                    dry_store (burn writes it; its limit is exec-stdout-only), and
 #                    ACCOUNT CONTAGION so a sibling on the same dry account (e.g.
 #                    claude/MFC the moment claude/L hits its limit) reads dry too.
-#   • log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
+#   · log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
 # Rows key on the SAME (cli, profile) pair the renderer uses, so for a target the
 # key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
 # profile=$tname). Anything not scannable is simply never marked dry (no guessing).
@@ -1063,7 +1063,7 @@ EOF
 
 # Enter on a Continue row → a tiny submenu. The options DEPEND on whether
 # the tank still has fuel ($2 = the dry set from _home_dry_set):
-#   • has fuel → by default (resume_ask_tank_get = always), FIRST ask which tank
+#   · has fuel → by default (resume_ask_tank_get = always), FIRST ask which tank
 #     to resume on — same "Resume on which tank?" question and default as
 #     `clikae resume`'s own standalone picker, so the two entry points behave
 #     identically. Keeping the default (this tank) falls through to the original
@@ -1071,7 +1071,7 @@ EOF
 #     carries the session there directly (switching tanks IS the carry — no
 #     separate "are you sure" needed). `clikae resume ask-tank dry-only` skips
 #     this and restores the older behavior below.
-#   • DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
+#   · DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
 #     instead lead with "carry onward" — relay this session to the ring's next
 #     fuelled tank (next_tank) — and keep "force-resume anyway" as an escape hatch.
 # Both choices exec; cancel (q) returns 1 so the caller can re-enter the picker.

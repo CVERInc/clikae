@@ -19,14 +19,14 @@
 # 2026-06-29 came from exactly such a leak).
 #
 # Decode notes, learned the hard way in resume.sh's picker:
-#   • One key per call, no `-t 0` typeahead drain — a drain on bare stdin once
+#   · One key per call, no `-t 0` typeahead drain — a drain on bare stdin once
 #     swallowed the board's own escape-sequence echo as keystrokes.
-#   • CSI params (ESC [ 5 ~) consume their trailing '~' so it can't leak into
+#   · CSI params (ESC [ 5 ~) consume their trailing '~' so it can't leak into
 #     the next read as a literal key.
-#   • ESC O A/B/C/D (application-mode arrows, sent by some terminals) decode
+#   · ESC O A/B/C/D (application-mode arrows, sent by some terminals) decode
 #     like their CSI twins instead of leaving a stray letter in the buffer.
-#   • A lone ESC (1s timeout, no follow-up byte) is the user pressing Escape.
-#   • An unrecognised sequence is TUI_KEY=unknown — a no-op for every caller,
+#   · A lone ESC (1s timeout, no follow-up byte) is the user pressing Escape.
+#   · An unrecognised sequence is TUI_KEY=unknown — a no-op for every caller,
 #     never a misfired action.
 tui_read_key() {
   local fd="${1:-0}" key c1 c2

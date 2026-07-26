@@ -43,8 +43,8 @@ clikae_is_target() {
 # one PER TANK is what made the home board crawl (dogfood 2026-06-29: ~8s on a
 # 1.6 GB tank — `limit_profile_dry` + the recap each `grep`'d the full file).
 # Every signal we actually need sits at a known END of the file:
-#   • ai-title / opening prompt / cwd → near the HEAD (first lines)
-#   • newest usage-limit marker / newest turn / latest recap → near the TAIL
+#   · ai-title / opening prompt / cwd → near the HEAD (first lines)
+#   · newest usage-limit marker / newest turn / latest recap → near the TAIL
 # So readers take a BOUNDED slice, never the whole file. This is the ONE home for
 # that rule — limit detection, the home recap, the resume picker all go through
 # it rather than each re-deriving "read only what you need" and drifting on the
@@ -203,17 +203,17 @@ order_list() {
 # next_tank <engine> <current>  -> the next tank to carry onward to when
 # <engine>/<current> runs dry. The selector is a RING — circular, and both fuel-
 # and account-aware:
-#   • CIRCULAR — walk the burn order from AFTER <current>, then WRAP past the end
+#   · CIRCULAR — walk the burn order from AFTER <current>, then WRAP past the end
 #     back to the top, stopping when we'd return to <current>. A tank earlier in
 #     the order is still a valid reserve once the one you're on is dry (the old
 #     "fall down once, never cycle" rule silently stranded everything above you).
-#   • SAME-ENGINE FIRST — a real `relay` resumes the LIVE conversation, which only
+#   · SAME-ENGINE FIRST — a real `relay` resumes the LIVE conversation, which only
 #     the same engine can do; a cross-engine hop is a cold written brief. So we
 #     prefer the nearest fuelled SAME-engine tank anywhere in the ring, and only
 #     fall to a fuelled cross-engine tank when every same-engine tank is dry.
-#   • ACCOUNT-AWARE — "dry" is limit_tank_dry, so a sibling sharing a dry account's
+#   · ACCOUNT-AWARE — "dry" is limit_tank_dry, so a sibling sharing a dry account's
 #     exhausted quota is skipped (no pointless hop onto the same empty tank).
-#   • HONEST WHEN ALL DRY — echoes NOTHING if the whole ring is dry; the caller
+#   · HONEST WHEN ALL DRY — echoes NOTHING if the whole ring is dry; the caller
 #     says so rather than hopping onto a tank that has no fuel either.
 # Echoes "<engine>\t<tank>" (TAB-separated), or empty.
 next_tank() {
