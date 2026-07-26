@@ -96,7 +96,7 @@ any CLI vendor.
    opt-out update check.
 8. **When a destructive path degrades, say so on the row.** `clean` falls back
    to `rm` when the Trash is unusable; that fallback must always announce
-   itself. (See OPEN-1 — today that announcement is swallowed.)
+   itself. (This was broken until 2026-07-27 — see OPEN-2.)
 
 ### 2.2 Code
 
@@ -188,50 +188,14 @@ syncing" in another; this is the reconciled version.)
 
 Ordered by what would hurt most if ignored. Delete an entry when you close it.
 
-### OPEN-1 — `exec … 2>/dev/null` permanently kills stderr in three commands
+### OPEN-1 — the gate cannot see interactive behaviour
 
-**Found 2026-07-27.** `exec` without a command makes its redirections permanent
-for the shell. Three code paths open a `/dev/tty` fd with `2>/dev/null` attached,
-which silently points that process's stderr at `/dev/null` for the rest of its
-life:
-
-| Site | Scope |
-|---|---|
-| `lib/commands/home.sh:1566` | the whole board process |
-| `lib/commands/resume.sh:360` | the whole `clikae resume` run |
-| `lib/commands/clean.sh:782` | the whole `clikae clean` run |
-
-(`lib/commands/relay.sh:43` uses the same idiom but runs inside a command
-substitution, so its damage is contained. Fix it anyway — it's a loaded gun.)
-
-Verified consequences:
-
-- **An engine launched from the board loses its entire stderr.** Pressing Enter
-  on a row execs through to `claude`/`codex`/`agy`, which inherits fd 2 =
-  `/dev/null`. Crashes, node warnings, OAuth errors, "command not found" — all
-  discarded. `clikae claude <tank>` run directly from the shell is unaffected.
-  Confirmed with a stub engine writing to both streams.
-- **`clean`'s Trash-fallback disclosure is guaranteed silent.** `_clean_to_trash`
-  falls back to `rm` (permanent) when the Trash is unusable, and
-  `CLEAN_TRASH_FELL_BACK` exists solely so the caller can say so — via
-  `log_warn`, i.e. stderr. In the interactive path that warning can never
-  appear. This breaks LIVE RULE 2.1.8.
-- **Three `read -rp` prompts are invisible** (bash writes `-p` prompts to
-  stderr), which reads as a hang: `home.sh:1211` (`n` new tank — the symptom
-  that surfaced this), `home.sh:1055`/`1058` (`a` rename), `home.sh:1542`
-  (`m` memory group).
-- **Every `log_err`/`log_warn`/`log_fail` in a board-launched subcommand is
-  muted**, including `init`'s "Tank already exists" — a typo'd name fails with
-  no output at all.
-
-Fix is to split the redirections: open the fd, and handle failure without
-attaching `2>/dev/null` to the `exec`.
-
-### OPEN-2 — the gate cannot see any of OPEN-1
-
-`bash scripts/test.sh` passes clean — shellcheck at `warning` and the entire bats
-suite — with all of OPEN-1 shipped. Neither tool can observe interactive TTY
-behaviour, so neither ever will catch this class.
+Neither shellcheck nor bats can observe interactive TTY behaviour. The whole
+`exec … 2>/dev/null` family — which silently discarded stderr for the board, for
+`resume`, for `clean`, and for every engine launched from the board — shipped and
+survived a fully green gate, then was found by hand on 2026-07-27 (fixed; see the
+CHANGELOG). Nothing in the gate would have caught it, and nothing in the gate would
+catch the next one.
 
 `tests/tools/pty-smoke.py` exists for exactly this — its docstring names "the
 smoke layer bats can't reach … exactly where the board regressed in dogfood more
@@ -240,13 +204,14 @@ than once" — but:
 1. **Nothing invokes it.** Not `scripts/test.sh`, not `.github/workflows/ci.yml`.
    It self-describes as "a developer tool, not CI".
 2. **It deliberately only sends navigation/cancel/quit keys**, never Enter on a
-   row and never `n`/`a`/`m`/`d`. Every bug in OPEN-1 lives in the keys it skips.
+   row and never `n`/`a`/`m`/`d` — which is exactly where the invisible-prompt bugs
+   lived.
 
 The harness built to catch this class of regression stops one keystroke short of
 it and isn't run. Wiring it in — and letting it press the mutate keys against a
 sandbox `CLIKAE_HOME` — is the durable fix.
 
-### OPEN-3 — FLEET self-logout via OAuth refresh-token stampede
+### OPEN-2 — FLEET self-logout via OAuth refresh-token stampede
 
 **Found 2026-06-29 diagnosing a real incident. Fix decided, not implemented**
 (there is no `flock` anywhere in the tree — verified 2026-07-27).
@@ -295,14 +260,14 @@ still evict each other; rotation is server-side. clikae can only make one
 machine's concurrent sessions safe, and word a dropped tank as "may have been
 rotated out by another machine" rather than implying the account broke.
 
-### OPEN-4 — `clikae <typo>` exits 0
+### OPEN-3 — `clikae <typo>` exits 0
 
 An unrecognised first argument logs an error to stderr, prints the full help, and
 **returns 0** (`bin/clikae`, the unknown-command fallback). Scripts cannot detect
 a typo. Inconsistent with the rest of the surface — `clikae mcp status` returns 1.
-Compounded by OPEN-1 when invoked from the board.
+Was compounded by the stderr bug until that was fixed; the exit code is still 0.
 
-### OPEN-5 — new-tank picker: broken preselect, duplicated engine
+### OPEN-4 — new-tank picker: broken preselect, duplicated engine
 
 - **Preselect never matches.** `_home_choose` compares the caller's bare engine
   name (`codex`) against the annotated option string (`"codex  (AI)"`), so the
@@ -312,7 +277,7 @@ Compounded by OPEN-1 when invoked from the board.
   `_home_newtank_choices`, one of them tagged `(tool)`, though `cmd_init` routes
   both to `_agy_init`.
 
-### OPEN-6 — agy: login isolation proven, quota stacking unresolved
+### OPEN-5 — agy: login isolation proven, quota stacking unresolved
 
 **Login isolation is real and solid.** The `_agy_kc_*` Keychain carry holds two
 distinct Google accounts per tank (service `gemini`, account `antigravity`;
@@ -332,7 +297,7 @@ claim neither direction**. Independent of quota, agy's honest positioning is a
 *breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
 constraint is the 5-hour window regardless.
 
-### OPEN-7 — `clikae auto` is claude-only
+### OPEN-6 — `clikae auto` is claude-only
 
 Auto-carry on a dry tank is BETA and claude-only. codex and agy cannot carry
 themselves onward. codex dry-detection now exists (`lib/core/limit.sh` parses the
@@ -344,7 +309,7 @@ the orchestrator to track a task↔tank map. `to`/`relay` carry a *session*; thi
 is a *headless task* — a different shape, a pool/scheduler concern. Encourage
 idempotent, artifact-verified tasks so a dropped one can simply re-fire.
 
-### OPEN-8 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-7 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 
 Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
 (a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
@@ -356,7 +321,7 @@ The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
 the `me` group has been used long enough to prove its shape.** This is a park,
 not an unfinished obligation.
 
-### OPEN-9 — smaller known gaps
+### OPEN-8 — smaller known gaps
 
 - **`clikae app`**: Warp is unsupported (no clean command-launch story), and
   there is no default-terminal auto-detection. `--terminal terminal|iterm2|ghostty`
@@ -422,7 +387,7 @@ the expensive way.
   catches "a session is open right now" — the overwhelming case — but not a
   check-then-open race, and its daemon-vs-interactive split is a command-string
   heuristic.
-- **Cross-machine token eviction** is an OAuth fact clikae cannot fix (OPEN-3).
+- **Cross-machine token eviction** is an OAuth fact clikae cannot fix (OPEN-2).
 - **agy cannot be a handoff SOURCE** — its sessions are opaque `.pb`. Alert and
   re-dispatch; never promise a session carry off agy.
 - **Interactive Claude Code gives no usage-limit signal** — it does not exit,
@@ -447,7 +412,7 @@ bash scripts/test.sh          # the gate: shellcheck -S warning + bats
 What the gate does **not** cover — check by hand when you touch these:
 
 - Anything interactive: the board, the resume picker, the clean picker. See
-  OPEN-2; `python3 tests/tools/pty-smoke.py home|resume` is the closest tool.
+  OPEN-1; `python3 tests/tools/pty-smoke.py home|resume` is the closest tool.
 - stdout-vs-stderr behaviour of any prompt or warning.
 - The real engines. Adapter tests stub the binaries.
 
@@ -498,7 +463,7 @@ Exact commands: `homebrew/RELEASING.md`.
 | Shell rc | auto-detected `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` / `~/.profile` / fish |
 | `.app` launchers | `~/Applications/<engine> (<tank>).app` |
 | Backups | `<rc-file>.clikae.bak.<timestamp>` |
-| Logs | none — errors go to stderr (see OPEN-1) |
+| Logs | none — errors go to stderr |
 | CI | `.github/workflows/ci.yml` — shellcheck, smoke ×2, bats ×2, pester (windows, non-blocking) |
 | Positioning SSOT | `docs/VISION.md` |
 | Command surface SSOT | `docs/grammar.md` |

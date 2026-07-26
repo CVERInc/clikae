@@ -357,7 +357,7 @@ _resume_pick() {
   # back as stray bytes that a bare read would treat as keystrokes (the old `-t 0`
   # drain did exactly this — it silently swallowed a digit/letter that reset `sel`,
   # so paging "didn't work"). fd 3 isolates input from that feedback.
-  exec 3</dev/tty 2>/dev/null || exec 3<&0
+  { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
 
   # Query terminal size ONCE at startup to avoid TTY driver ioctl overhead during scrolling
   local lsz lines max_visible=15
@@ -459,7 +459,7 @@ _resume_pick() {
       # Clean deletes session files this picker has already cached, so instead
       # of redrawing a stale list we signal _resume_picker to rescan the store
       # and re-enter the picker fresh.
-      exec 3>&- 2>/dev/null || true
+      { exec 3>&-; } 2>/dev/null || true
       _home_tty_leave; trap - EXIT INT TERM
       "$CLIKAE_BIN" clean || true
       unset -f _handle_key
@@ -505,7 +505,7 @@ _resume_pick() {
         _resume_carry_session "$sel_engine" "$sel_tank" "$target_tank" "$sel_sid"
       fi
 
-      exec 3>&- 2>/dev/null || true   # don't leak the tty fd into the resumed engine
+      { exec 3>&-; } 2>/dev/null || true   # don't leak the tty fd into the resumed engine
       if [ "${#passthru[@]}" -gt 0 ]; then
         _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid" -- "${passthru[@]}"
       else
@@ -515,7 +515,7 @@ _resume_pick() {
       return 0
     fi
   done
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   unset -f _handle_key
 }
 

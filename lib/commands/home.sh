@@ -955,14 +955,14 @@ EOF
   [ "$n" -gt 0 ] || return 1
   # Read-write (<>) so we can both draw to and read keys from the terminal; a
   # write-only (3>) fd would EOF on the first read and cancel instantly.
-  exec 3<>/dev/tty 2>/dev/null || return 1
+  { exec 3<>/dev/tty; } 2>/dev/null || return 1
 
   local sel=0 i
   for ((i = 0; i < n; i++)); do [ "${opts[$i]}" = "$pre" ] && sel=$i; done
 
   printf '\033[?1049h\033[?25l' >&3
   # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" EXIT INT TERM
+  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
   while :; do
     {
       printf '\033[H\033[2J'
@@ -1563,7 +1563,20 @@ _home_pick() {
   # Keys come from a DEDICATED /dev/tty fd, never bare stdin — the same isolation
   # _home_choose and the resume picker already had (this board was the straggler;
   # stray stdout feedback bytes read as keystrokes on some terminals).
-  exec 3</dev/tty 2>/dev/null || exec 3<&0
+  #
+  # 🔴 THE BRACES ARE LOAD-BEARING. `exec` with no command makes its redirections
+  # PERMANENT for the shell, so a bare `exec 3</dev/tty 2>/dev/null` points this
+  # process's stderr at /dev/null for the rest of its life — and every fd-3 line
+  # below did it again. What that cost, until it was found on 2026-07-27:
+  #   • bash writes `read -p` prompts to STDERR, so `n`/`a`/`m` dropped to a blank
+  #     screen with an invisible prompt and read as a hang;
+  #   • every log_err/log_warn/log_fail from a board-launched subcommand vanished
+  #     (a duplicate `clikae init` name failed with no output at all);
+  #   • worst, `_home_launch` execs the ENGINE, which inherited fd 2 = /dev/null —
+  #     so Claude Code's crashes, node warnings and OAuth errors were discarded.
+  # The `2>/dev/null` is only meant to hide the *open failure* message. A brace
+  # group scopes it to exactly that. Do not "simplify" the braces away.
+  { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
 
   # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
   # the live `/` query. Everything navigational works on `view`; relay still reads
@@ -1652,25 +1665,25 @@ _home_pick() {
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
           _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          { exec 3<&-; } 2>/dev/null || true
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             stty -echo 2>/dev/null || true
             printf '\033[?1049h\033[?25l'
-            exec 3</dev/tty 2>/dev/null || exec 3<&0
+            { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
             continue
           }
           return 0
         fi
         _home_tty_leave; trap - EXIT INT TERM
-        exec 3<&- 2>/dev/null || true
+        { exec 3<&-; } 2>/dev/null || true
         _home_launch "$sel_row"
         return 0
         ;;
       r)
         if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          { exec 3<&-; } 2>/dev/null || true
           _home_relay "$items" "$sel_row"
           return 0
         fi
@@ -1681,7 +1694,7 @@ _home_pick() {
         # resume.sh, which isn't sourced in the home process — and can't be sourced
         # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
         _home_tty_leave; trap - EXIT INT TERM
-        exec 3<&- 2>/dev/null || true
+        { exec 3<&-; } 2>/dev/null || true
         exec "$CLIKAE_BIN" resume
         ;;
       x)
@@ -1690,7 +1703,7 @@ _home_pick() {
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
           _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          { exec 3<&-; } 2>/dev/null || true
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
         fi
         ;;
@@ -1755,7 +1768,7 @@ EOF
     esac
   done
 
-  exec 3<&- 2>/dev/null || true
+  { exec 3<&-; } 2>/dev/null || true
   _home_tty_leave; trap - EXIT INT TERM
   # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"

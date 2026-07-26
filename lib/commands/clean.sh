@@ -779,7 +779,7 @@ _clean_select_body() {
 # Returns 0 to proceed, 1 on cancel, 2 when no TTY could be opened (the caller
 # falls back to the printed list + all-or-nothing confirm).
 _clean_select() {
-  exec 3<>/dev/tty 2>/dev/null || return 2
+  { exec 3<>/dev/tty; } 2>/dev/null || return 2
   stty -echo 2>/dev/null || true
   printf '\033[?1049h\033[?25l' >&3
   trap '_home_tty_leave' EXIT
@@ -834,7 +834,7 @@ _clean_select() {
   trap - EXIT INT TERM
   printf '\033[?25h\033[?1049l' >&3
   stty echo 2>/dev/null || true
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   return "$rc"
 }
 

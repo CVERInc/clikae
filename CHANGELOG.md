@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The board, `resume` and `clean` threw away their own stderr — and handed a
+  dead stderr to the engine they launched.** `exec` with no command makes its
+  redirections **permanent for the shell**, so `exec 3</dev/tty 2>/dev/null`
+  (meant only to hide the message if opening `/dev/tty` fails) pointed the whole
+  process's stderr at `/dev/null` for the rest of its life. Eighteen fd-3 lines
+  across `home.sh`, `resume.sh`, `clean.sh` and `relay.sh` did it, each one
+  independently, so fixing any single site would not have helped. What it cost:
+
+  - **A tank opened from the board lost the engine's entire stderr.** Pressing
+    Enter on a row `exec`s through to `claude`/`codex`/`agy`, which inherited
+    fd 2 = `/dev/null` — crashes, node warnings, OAuth failures and
+    "command not found" all discarded. `clikae claude <tank>` run straight from
+    the shell was never affected, which is why this hid for so long.
+  - **`clean`'s Trash-fallback warning could never appear.** When `~/.Trash` is
+    unusable, `clean` falls back to `rm` and `log_warn`s that the row was deleted
+    unrecoverably — on stderr. In the interactive path that warning was
+    guaranteed silent, which is precisely the disclosure it exists to make.
+  - **Three prompts were invisible**, since bash writes `read -p` prompts to
+    stderr: `n` (new tank), `a` (rename) and `m` (memory group) each dropped to a
+    blank screen and read as a hang. This is the symptom that surfaced the bug.
+  - **Every `log_err`/`log_warn`/`log_fail` from a board-launched subcommand was
+    muted** — a duplicate `clikae init` name failed with no output at all.
+
+  Each redirection is now scoped to a brace group (`{ exec 3</dev/tty; }
+  2>/dev/null || …`), which still hides an open failure but reverts when the
+  group ends. Verified in a real pty, including forcing the Trash fallback with a
+  read-only `~/.Trash` and watching the warning actually print.
+
 ### Documentation
 
 - **A documentation audit: every doc reconciled against the code.** `HANDOFF.md`
