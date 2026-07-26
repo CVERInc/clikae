@@ -48,7 +48,7 @@ EOF
       tank_is_solo "$cli" "$tname" || continue
       saw=1
       local r; r="$(head -n1 "$(solo_marker_file "$cli" "$tname")" 2>/dev/null || true)"
-      log_ok "  $cli/$tname${r:+   — $r}"
+      log_done "  $cli/$tname${r:+   — $r}"
     done < <(list_all_profiles)
     [ "$saw" -eq 1 ] || log_dim "  (none — every tank is in the fleet)"
     return 0
@@ -62,16 +62,16 @@ EOF
   if [ "$off" -eq 1 ]; then
     if [ -f "$f" ]; then
       rm -f "$f"
-      log_ok "$engine/$tank rejoined the fleet — relay/burn/share apply again."
+      log_done "$engine/$tank rejoined the fleet — relay/burn/share apply again."
     else
-      log_ok "$engine/$tank wasn't solo."
+      log_pass "$engine/$tank wasn't solo."
     fi
     return 0
   fi
 
   mkdir -p "$(dirname "$f")"
   printf '%s\n' "$reason" > "$f"
-  log_ok "$engine/$tank is now solo — out of the fleet."
+  log_done "$engine/$tank is now solo — out of the fleet."
   log_dim "no relay/\`to\` target · skipped by burn/watch · \`memory share\` refuses it."
   [ -n "$reason" ] && log_dim "reason: $reason"
   return 0

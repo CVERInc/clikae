@@ -225,7 +225,7 @@ EOF
 $(transcript_tail "$transcript")
 EOF
     if [ "$found" -eq 0 ]; then
-      log_ok "No genuine limit marker found in the current session's recent tail."
+      log_pass "No genuine limit marker found in the current session's recent tail."
       log_dim "(claude requires isApiErrorMessage + model:<synthetic>; override with --pattern / \$CLIKAE_LIMIT_PATTERN)"
     fi
     return 0
@@ -277,10 +277,10 @@ _watch_do_handoff() {
         confirm "Switch $cli/$profile → $target now?" || return 1
       fi
     fi
-    log_ok "Auto-switching: $cli/$profile → $target"
+    log_done "Auto-switching: $cli/$profile → $target"
   else
     confirm "Switch $cli/$profile → $target now?" || return 1
-    log_ok "Switching: $cli/$profile → $target"
+    log_done "Switching: $cli/$profile → $target"
   fi
 
   exec "$CLIKAE_ROOT/bin/clikae" handoff "$cli" "$profile" --to "$target"
@@ -312,7 +312,7 @@ _watch_target() {
       grep -aoE "$pattern" "$logf" | sort -u | sed 's/^/  matched: /'
       return 0
     fi
-    log_ok "No limit marker found in $name's log."
+    log_pass "No limit marker found in $name's log."
     log_dim "(log: ${logf}${logf:+ — }looked for the confirmed RESOURCE_EXHAUSTED / Individual quota reached marker)"
     return 0
   fi

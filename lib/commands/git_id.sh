@@ -68,7 +68,7 @@ EOF
   if [ "$do_unset" -eq 1 ]; then
     [ "$name_set" -eq 1 ] || [ "$email_set" -eq 1 ] \
       && log_fail "--unset takes no --name/--email."
-    if [ -f "$f" ]; then rm -f "$f" && log_ok "Cleared git identity for $cli/$tank."
+    if [ -f "$f" ]; then rm -f "$f" && log_done "Cleared git identity for $cli/$tank."
     else log_info "No git identity set for $cli/$tank — nothing to clear."; fi
     return 0
   fi
@@ -98,6 +98,6 @@ EOF
   mkdir -p "$(dirname "$f")"
   printf '%s\t%s\n' "$name" "$email" > "$f" \
     || log_fail "Could not write git identity to $f"
-  log_ok "Set git identity for $cli/$tank: $name <$email>"
+  log_done "Set git identity for $cli/$tank: $name <$email>"
   log_dim "Active when you  eval \"\$(clikae env $cli $tank)\"  (then commits in that shell use it)."
 }

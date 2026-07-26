@@ -59,7 +59,7 @@ EOF
 
   local d
   d="$(ensure_profile --create "$cli" "$profile")"
-  log_ok "Created tank: $cli/$profile  ($d)"
+  log_done "Created tank: $cli/$profile  ($d)"
 
   if declare -F adapter_init >/dev/null; then
     adapter_init "$d"

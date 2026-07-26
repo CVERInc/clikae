@@ -310,7 +310,7 @@ _memory_share() {
     if [ "$MEM_STRATEGY" = "symlink" ] && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$store" ]; then
       soul_prelaunch "$MEM_CLI" "$MEM_TANK" "$MEM_CFG"
     fi
-    log_ok "$MEM_CLI/$MEM_TANK already shares '$group'."
+    log_pass "$MEM_CLI/$MEM_TANK already shares '$group'."
     return 0
   fi
   # One brain per tank: moving to another group leaves the old one's roster.
@@ -413,7 +413,7 @@ _memory_share() {
   _memory_drop_member "$members" "$key"
   printf '%s\t%s\t%s\n' "$key" "$account" "$store" >> "$members"
 
-  log_ok "$MEM_CLI/$MEM_TANK now shares memory group '$group'."
+  log_done "$MEM_CLI/$MEM_TANK now shares memory group '$group'."
   log_dim "store: $store"
   if [ "$MEM_STRATEGY" = "symlink" ]; then
     [ -d "$MEM_DIR.clikae-soul-stash" ] && log_dim "its previous own memory is stashed (reversible): clikae memory isolate $MEM_CLI $MEM_TANK"
@@ -440,7 +440,7 @@ _memory_isolate() {
   local group members
   group="$(_memory_current_group)"
   if [ -z "$group" ]; then
-    log_ok "$MEM_CLI/$MEM_TANK already has its own (isolated) memory."
+    log_pass "$MEM_CLI/$MEM_TANK already has its own (isolated) memory."
     return 0
   fi
 
@@ -463,12 +463,12 @@ _memory_isolate() {
       rm -f "$MEM_DIR"
       [ -d "$MEM_DIR.clikae-soul-stash" ] && mv "$MEM_DIR.clikae-soul-stash" "$MEM_DIR"
     fi
-    log_ok "$MEM_CLI/$MEM_TANK is back on its own memory (left group '$group', $unlinked slot(s) unlinked)."
+    log_done "$MEM_CLI/$MEM_TANK is back on its own memory (left group '$group', $unlinked slot(s) unlinked)."
     [ -d "$MEM_DIR" ] || log_dim "(this directory had no stashed memory; the engine will create a fresh one.)"
   else
     # Pointer strategy: remove only our note (the store is untouched).
     _memory_ptr_strip "$MEM_PTR" "$group"
-    log_ok "$MEM_CLI/$MEM_TANK no longer points at group '$group' (its own memory is unchanged)."
+    log_done "$MEM_CLI/$MEM_TANK no longer points at group '$group' (its own memory is unchanged)."
   fi
 
   members="$(_memory_members_file "$group")"
@@ -522,7 +522,7 @@ _memory_status() {
          && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then
         here="  (this dir: links on next launch)"
       fi
-      if [ -n "$g" ]; then log_ok "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk$here"
+      if [ -n "$g" ]; then log_done "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk$here"
       else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}$lk"; fi
     done < <(list_all_profiles)
     [ "$saw" -eq 1 ] || log_dim "  (no $eng tanks)"
@@ -533,7 +533,7 @@ _memory_status() {
   local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
   lk=""; tank_is_solo "$MEM_CLI" "$MEM_TANK" && lk="  🔒 solo"
   if [ -n "$g" ]; then
-    log_ok "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"
+    log_done "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"
     log_dim "store: $(_memory_store_path "$g")"
     if [ "$MEM_STRATEGY" = "symlink" ] \
        && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then

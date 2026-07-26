@@ -710,7 +710,7 @@ _home_render_static() {
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
@@ -727,10 +727,10 @@ _home_render_static() {
         # what relay/`to` are for), so it's not worth shouting. _home_items emits fleet
         # first then solo, so a section change is just a header.
         if tank_is_solo "$cli" "$profile"; then
-          if [ "$cur_sect" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
+          if [ "$cur_sect" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
         elif [ "$cur_sect" != "fleet" ]; then
           [ "$printed_resume" -eq 1 ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
         fi
         local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
         # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
@@ -780,7 +780,7 @@ $items
 EOF
 
   if [ -n "$also" ]; then
-    printf '\n  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+    printf '\n  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
     printf '%s' "$also"
   fi
   echo ""
@@ -1380,7 +1380,7 @@ _home_pick_draw_body() {
         if [ "$printed_resume" -eq 0 ]; then
           printed_resume=1
           if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
         fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
@@ -1407,9 +1407,9 @@ _home_pick_draw_body() {
         # the current-section marker ("fleet"/"solo"); other cases test it for "any
         # tank printed yet".
         if tank_is_solo "$cli" "$profile"; then
-          if [ "$cur_cli" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
+          if [ "$cur_cli" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
         elif [ "$cur_cli" != "fleet" ]; then
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
         local _eng; _eng="$(_home_engine_label "$cli")"
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
@@ -1435,7 +1435,7 @@ _home_pick_draw_body() {
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
@@ -1455,7 +1455,7 @@ _home_pick_draw_body() {
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \

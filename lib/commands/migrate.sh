@@ -236,7 +236,7 @@ EOF
     mkdir -p "$(dirname "${c_new[$i]}")"
     if [ -d "${c_old[$i]}" ]; then
       mv "${c_old[$i]}" "${c_new[$i]}"
-      log_ok "Moved ${c_old[$i]} -> ${c_new[$i]}"
+      log_done "Moved ${c_old[$i]} -> ${c_new[$i]}"
     else
       mkdir -p "${c_new[$i]}"
       log_warn "Source dir ${c_old[$i]} was missing; created empty ${c_new[$i]}."
@@ -251,7 +251,7 @@ EOF
       local mc_rc=0
       adapter_migrate_credentials "${c_old[$i]}" "${c_new[$i]}" || mc_rc=$?
       case "$mc_rc" in
-        0) log_ok "Carried over saved login for $cli/${c_profile[$i]}." ;;
+        0) log_done "Carried over saved login for $cli/${c_profile[$i]}." ;;
         2) log_warn "Couldn't carry over login for $cli/${c_profile[$i]} — open it once to log in." ;;
         *) log_dim "No saved login to carry over for $cli/${c_profile[$i]}." ;;
       esac
@@ -291,7 +291,7 @@ EOF
       | rc_wrap_block "$cli.${c_profile[$i]}" >> "$tmp"
   done
   mv "$tmp" "$rc_file"
-  log_ok "Rewrote $rc_file ($n alias(es) now clikae-managed)."
+  log_done "Rewrote $rc_file ($n alias(es) now clikae-managed)."
 
   echo ""
   log_bold "Done. Next steps:"

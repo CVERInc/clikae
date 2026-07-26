@@ -40,7 +40,7 @@ EOF
   fi
 
   if autonomy_set "$1"; then
-    log_ok "Autonomy: $1 — $(autonomy_label "$1")"
+    log_done "Autonomy: $1 — $(autonomy_label "$1")"
     [ "$1" != "ask" ] && log_dim "clikae will carry your session onward on a dry tank (BETA, claude). Revert: clikae auto ask"
   else
     log_fail "Unknown level: $1  (use: ask | safe | full)"

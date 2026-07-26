@@ -163,7 +163,7 @@ _resume_exec() {
 $(adapter_resume_args "$sid")
 EOF
 
-  log_ok "Resuming $engine/$tank · session ${sid%%-*}…"
+  log_done "Resuming $engine/$tank · session ${sid%%-*}…"
   [ -n "$cwd" ] && log_dim "in $cwd"
   history_log "resume: $engine/$tank ${sid%%-*}"
   soul_prelaunch "$engine" "$tank" "$dir"   # member tank → fan this dir into its Soul
@@ -626,7 +626,7 @@ cmd_resume() {
       return 0
     fi
     if resume_ask_tank_set "$1"; then
-      log_ok "Resume ask-tank: $1 — $(resume_ask_tank_label "$1")"
+      log_done "Resume ask-tank: $1 — $(resume_ask_tank_label "$1")"
     else
       log_fail "Unknown choice: $1  (use: always | dry-only)"
     fi

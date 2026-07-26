@@ -467,7 +467,7 @@ adapter_relay() {
     return 1
   fi
 
-  log_ok "Carried session ${sid%%-*}… into the target profile."
+  log_done "Carried session ${sid%%-*}… into the target profile."
   log_dim "Resuming on the new profile's quota; the original session is untouched."
   CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid" "$@"
 }

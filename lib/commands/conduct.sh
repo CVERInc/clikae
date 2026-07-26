@@ -265,7 +265,7 @@ cmd_conduct() {
     verdict="$(cut -d' ' -f1 < "${stats[$i]}" 2>/dev/null || echo '?')"
     rest="$(cut -s -d' ' -f2- < "${stats[$i]}" 2>/dev/null || true)"
     case "$verdict" in
-      CAPTURED) captured=$((captured+1)); log_ok   "  ✔ ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
+      CAPTURED) captured=$((captured+1)); log_done   "  ✔ ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
       DRY)      dry=$((dry+1));           log_warn "  ⛽ ${tags[$i]} — ran dry${rest:+  ($rest)}" ;;
       EMPTY)    other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no output (auth / sandbox / no answer)" ;;
       NORECIPE) other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;

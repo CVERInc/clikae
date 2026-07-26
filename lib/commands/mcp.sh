@@ -125,7 +125,7 @@ _mcp_share() {
     || log_fail "mcp share: failed to update the fleet store."
   printf '%s\n' "$updated" > "$store.tmp" && mv "$store.tmp" "$store"
 
-  log_ok "Shared '$name' fleet-wide for $engine — every non-solo tank gets it from here on."
+  log_done "Shared '$name' fleet-wide for $engine — every non-solo tank gets it from here on."
 
   # Eager backfill into every EXISTING non-solo tank (mirrors memory share's
   # eager pass over already-existing directories) — no need to wait for each
@@ -166,7 +166,7 @@ _mcp_unshare() {
   local updated
   updated="$(jq --arg n "$name" 'del(.[$n])' "$store")"
   printf '%s\n' "$updated" > "$store.tmp" && mv "$store.tmp" "$store"
-  log_ok "Removed '$name' from $engine's fleet-wide MCP store."
+  log_done "Removed '$name' from $engine's fleet-wide MCP store."
   log_dim "Tanks that already picked it up keep their own copy — remove it per-tank if you need it gone (claude mcp remove $name)."
 }
 

@@ -75,7 +75,7 @@ EOF
 ${alias_line}
 EOF
 
-  log_ok "Added alias '${name}' to $rc_file"
+  log_done "Added alias '${name}' to $rc_file"
   log_dim "  $cmd"
   log_info "Run \`source $rc_file\` or open a new shell to use it."
 }

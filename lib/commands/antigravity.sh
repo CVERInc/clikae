@@ -208,9 +208,9 @@ _agy_rename() {
   soul_rename_member "antigravity" "$old" "$new"   # keep Soul membership in step
   if [ "$active" = "$old" ]; then
     rm -f "$link"; ln -s "$slots/$new" "$link"
-    log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
+    log_done "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
   else
-    log_ok "Renamed agy tank '$old' → '$new'."
+    log_done "Renamed agy tank '$old' → '$new'."
   fi
 }
 
@@ -244,19 +244,19 @@ EOF
   elif [ -d "$link" ]; then
     local ts bak adopt; ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
     bak="$link.clikae.bak.$ts"
-    cp -R "$link" "$bak" && log_ok "Backed up ~/.gemini -> $bak"
+    cp -R "$link" "$bak" && log_done "Backed up ~/.gemini -> $bak"
     # First time -> 'default'. Re-takeover (a 'default' already exists, e.g.
     # after --release) -> a fresh 'restored-<ts>' tank, never clobbering.
     adopt="default"; [ -e "$slots/default" ] && adopt="restored-$ts"
-    mv "$link" "$slots/$adopt" && log_ok "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
+    mv "$link" "$slots/$adopt" && log_done "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
     ln -s "$slots/$adopt" "$link"
   else
     mkdir -p "$slots/default"
     ln -s "$slots/default" "$link"
-    log_ok "Created an empty 'default' tank."
+    log_done "Created an empty 'default' tank."
   fi
   printf 'consented %s\n' "$(date +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo yes)" > "$(_agy_consent)"
-  log_ok "clikae now manages ~/.gemini. Active tank: $(_agy_active)"
+  log_done "clikae now manages ~/.gemini. Active tank: $(_agy_active)"
   return 0
 }
 
@@ -264,7 +264,7 @@ _agy_create_tank() {
   local name="$1" slot; slot="$(_agy_slots)/$name"
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
-  log_ok "Created agy tank: $name"
+  log_done "Created agy tank: $name"
   log_dim "Switch to it:  clikae agy $name   (then run agy and log in)"
 }
 
@@ -304,7 +304,7 @@ _agy_switch() {
     _agy_kc_verify_restore "$name"
     rm -f "$link"
     ln -s "$slots/$name" "$link"
-    log_ok "agy is now on tank: $name"
+    log_done "agy is now on tank: $name"
     log_dim "agy is global — switched all terminals to $name."
   fi
   exec agy "$@"
@@ -318,12 +318,12 @@ _agy_release() {
   local link slots active; link="$(_agy_link)"; slots="$(_agy_slots)"; active="$(_agy_active)"
   rm -f "$link"
   if [ -n "$active" ] && [ -d "$slots/$active" ]; then
-    cp -R "$slots/$active" "$link" && log_ok "Restored ~/.gemini from tank '$active' (single-account again)."
+    cp -R "$slots/$active" "$link" && log_done "Restored ~/.gemini from tank '$active' (single-account again)."
   else
     log_warn "No active tank to restore; ~/.gemini left absent (agy will recreate it)."
   fi
   rm -f "$(_agy_consent)"
-  log_ok "clikae released ~/.gemini. Your tanks are kept under $slots."
+  log_done "clikae released ~/.gemini. Your tanks are kept under $slots."
 }
 
 # `clikae remove agy <tank>` lands here. Removing the LAST tank also ends
@@ -345,7 +345,7 @@ _agy_remove() {
         rm -f "$link"; mv "${slots:?}/$name" "$link"; rm -f "$(_agy_consent)"
         rmdir "$slots" 2>/dev/null || true
         _agy_kc_forget "$name"   # login stays in the canonical Keychain item; drop the stash
-        log_ok "Restored ~/.gemini from '$name' and turned agy multi-account off."
+        log_done "Restored ~/.gemini from '$name' and turned agy multi-account off."
         return 0
       fi
       confirm "Remove it anyway? Your agy login in this tank will be lost." \
@@ -354,7 +354,7 @@ _agy_remove() {
     rm -f "$link"; rm -rf "${slots:?}/$name"; rm -f "$(_agy_consent)"
     rmdir "$slots" 2>/dev/null || true
     _agy_kc_forget "$name"; _agy_kc_logout   # login lost, as warned
-    log_ok "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
+    log_done "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
     return 0
   fi
 
@@ -365,7 +365,7 @@ _agy_remove() {
   fi
   rm -rf "${slots:?}/$name"
   _agy_kc_forget "$name"
-  log_ok "Removed agy tank: $name"
+  log_done "Removed agy tank: $name"
 }
 
 _agy_help() {

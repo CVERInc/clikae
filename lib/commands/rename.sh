@@ -122,7 +122,7 @@ EOF
   # 1) Move the directory.
   mkdir -p "$(dirname "$new_dir")"
   mv "$old_dir" "$new_dir"
-  log_ok "Moved $old_dir -> $new_dir"
+  log_done "Moved $old_dir -> $new_dir"
 
   # 1b) Carry Soul membership: the members files name <engine>/<tank>, so a
   # rename without this leaves a ghost member behind (and the renamed tank
@@ -134,7 +134,7 @@ EOF
     local mc_rc=0
     adapter_migrate_credentials "$old_dir" "$new_dir" || mc_rc=$?
     case "$mc_rc" in
-      0) log_ok "Carried over the saved login." ;;
+      0) log_done "Carried over the saved login." ;;
       2) log_warn "Couldn't carry over the login — open $cli/$new once to log in." ;;
       *) : ;;  # nothing to carry over
     esac
@@ -148,7 +148,7 @@ EOF
     rc_add_block "$rc_file" "$cli.$new" <<EOF
 alias ${new_alias}='${cmd}'
 EOF
-    log_ok "Updated alias '$new_alias' in $rc_file"
+    log_done "Updated alias '$new_alias' in $rc_file"
   fi
 
   # 4) Flag a now-stale .app launcher (we don't touch the user's launchers).

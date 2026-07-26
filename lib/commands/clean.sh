@@ -728,7 +728,7 @@ _clean_select_body() {
     # still says where you are) and whenever the section changes.
     if [ "$i" -gt "$start_idx" ]; then prev_sect="${cand_section[${ord[i-1]}]}"; else prev_sect=""; fi
     if [ "$sect" != "$prev_sect" ]; then
-      printf '  %b%s%b\033[K\n' "$__C_BCYAN" "$(_clean_section_header "$sect")" "$__C_RESET"
+      printf '  %b▸ %s%b\033[K\n' "$__C_BCYAN" "$(_clean_section_header "$sect")" "$__C_RESET"
     fi
     if [ "$i" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="[x]"; else box="[ ]"; fi
@@ -1025,13 +1025,13 @@ EOF
   if [ "${#ord[@]}" -eq 0 ]; then
     if [ -n "$min_size_mb" ] && [ "$apply_age" -eq 0 ]; then
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_MINSIZE" "$min_size_mb")"
+      log_pass "$(printf "$T_CLEAN_NONE_MINSIZE" "$min_size_mb")"
     elif [ -n "$min_size_mb" ]; then
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_AGE_MINSIZE" "$older_than" "$min_size_mb")"
+      log_pass "$(printf "$T_CLEAN_NONE_AGE_MINSIZE" "$older_than" "$min_size_mb")"
     else
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_ALL" "$older_than" "$CLIKAE_CLEAN_BIG_MB")"
+      log_pass "$(printf "$T_CLEAN_NONE_ALL" "$older_than" "$CLIKAE_CLEAN_BIG_MB")"
     fi
     return 0
   fi
@@ -1090,13 +1090,13 @@ EOF
     _clean_print_list
     echo
   elif [ "$sel_rc" -ne 0 ]; then
-    log_ok "$T_CLEAN_CANCELLED"
+    log_done "$T_CLEAN_CANCELLED"
     return 0
   fi
 
   _clean_tally
   if [ "$sel_n" -eq 0 ]; then
-    log_ok "$T_CLEAN_NOTHING_SELECTED"
+    log_pass "$T_CLEAN_NOTHING_SELECTED"
     return 0
   fi
 
@@ -1130,5 +1130,5 @@ EOF
 
   local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"
   # shellcheck disable=SC2059
-  log_ok "$(printf "$T_CLEAN_DONE" "$deleted_sz_str")"
+  log_done "$(printf "$T_CLEAN_DONE" "$deleted_sz_str")"
 }

@@ -223,7 +223,7 @@ _agy_burn() {
     if reset="$(limit_log_dry "$logf")"; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
     elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      log_ok "Done on agy/$cur — artifact present: $artifact"
+      log_done "Done on agy/$cur — artifact present: $artifact"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
     else
@@ -369,7 +369,7 @@ KV
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
     elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
       dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_ok "Done on $cli/$cur — artifact present: $artifact"
+      log_done "Done on $cli/$cur — artifact present: $artifact"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
     else

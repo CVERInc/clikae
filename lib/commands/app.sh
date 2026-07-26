@@ -206,7 +206,7 @@ EOF
         || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
     fi
   fi
-  log_ok "Created $app_path"
+  log_done "Created $app_path"
   log_dim "  terminal: $target"
   log_dim "  title   : $title"
   log_dim "  runs    : $shell_cmd"

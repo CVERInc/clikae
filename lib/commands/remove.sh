@@ -83,7 +83,7 @@ EOF
 
   if [ "$keep_data" -eq 0 ] && [ -d "$d" ]; then
     rm -rf "$d"
-    log_ok "Removed tank dir."
+    log_done "Removed tank dir."
     # If the cli dir under profiles/ is now empty, clean it up.
     local cli_dir
     cli_dir="$(dirname "$d")"
@@ -92,11 +92,11 @@ EOF
 
   if rc_has_block "$rc_file" "$rc_id"; then
     rc_remove_block "$rc_file" "$rc_id"
-    log_ok "Removed alias block from $rc_file"
+    log_done "Removed alias block from $rc_file"
   fi
 
   if [ -d "$app_path" ]; then
     rm -rf "$app_path"
-    log_ok "Removed launcher: $app_path"
+    log_done "Removed launcher: $app_path"
   fi
 }
