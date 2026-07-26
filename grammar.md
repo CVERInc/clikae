@@ -122,7 +122,7 @@ fuel words forced on them.
 | `clikae init <engine> <tank>` | Create a tank. (`--alias` also writes a shell alias.) |
 | `clikae remove <engine> <tank>` | Remove a tank (dir, alias, .app). |
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
-| `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22 / HANDOFF §13). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
+| `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
 | `clikae memory <share\|isolate\|status> [<engine> <tank>]` | The **memory dial** (§10.1, docs/memory.md). `share <group>` points a tank's long-term memory at ONE vendor-neutral markdown store (`souls/<group>/memory`, a "Soul") so several of *your own* tanks — **across engines** — read/write the same brain; `isolate` restores a tank's own memory; `status` shows the share state. Two strategies by what the engine exposes: **claude** fans its memory DIR into the store (symlink, per-`$PWD`); **codex** gets a fenced pointer note in its `AGENTS.md` and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 opt-in and per-tank — clikae never auto-crosses accounts; crossing your own accounts is announced (`--yes` skips the prompt). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of `--ephemeral`'s fan-out. agy points the same way via `~/.gemini/GEMINI.md`. |
 | `clikae solo <engine> <tank> [reason \| --off]` | Mark a tank **standalone** — out of the fleet. A solo tank is never a `to`/relay target, the burn/`watch` rotation skips it, and `clikae memory share` refuses it. For a dedicated tank (a bot/persona tank on your own account, a client-only tank) that must never receive carried work or share a brain. Bare `clikae solo` lists them. The cross-account guard can't protect a same-account, different-purpose tank — solo is how you wall it off. State: a marker file `<tank>/clikae-meta/solo`; the predicate `tank_is_solo` is what the fleet checks. |
 | `clikae clean [--dry-run \| --older-than <days> \| --min-size <MB>]` | Free disk space: ONE sectioned checkbox list of deletable session data across every tank — redundant copies/orphans and long-untouched sessions pre-checked, big-but-recent sessions shown unchecked (opt-in) — then a red confirm; `--dry-run` prints the same list, a non-TTY run refuses to delete. A plain conventional verb (`git clean`, the prune family) — deleting is not switching, so no fuel word; the flags are the power-user vocabulary, zero flags is the whole ordinary-user path. |
@@ -293,6 +293,18 @@ link everything; always return.
 
 ## 9. Implementation checklist (conform the code to this doc)
 
+> ✅ **Landed in the v0.5 line** — the grammar below IS the shipped command
+> surface; `bin/clikae`'s first-arg resolver, the bare switch, `to`, agy folding,
+> the tank wording, the elided-form help and the back-compat aliases are all in.
+> Verify with `clikae help` and `tests/bats/name-resolve.bats`, not with this list.
+>
+> **One item is deliberately not done and will stay that way:** the PowerShell
+> mirror. `powershell/` is an unsupported community port that never received the
+> fuel-tank grammar, and its CI never blocks — see `powershell/README.md`. Do not
+> treat it as outstanding work.
+>
+> _Kept below as the record of what conforming to this doc required._
+
 - [ ] **Dispatch** (`bin/clikae`): the §4 first-arg resolver — reserved command
       → bare switch (known CLI) → error. Wire `to` and `tanks`; keep `run`,
       `continue`, `relay`, `handoff` as hidden aliases.
@@ -323,11 +335,18 @@ link everything; always return.
 
 ---
 
-## 10. Open design frontier — a tank holds more than fuel
+## 10. A tank holds more than fuel — the design behind the Soul layer
 
-> Contributed by a concurrent session (the over-quota-detection work, profile b,
-> 2026-06-01). Recorded here as an open frontier, **not yet a decision** — the
-> maintainer's call whether to fold it into the model.
+> ✅ **Decided and shipped.** This section was written as an open frontier
+> (contributed by a concurrent session during the over-quota-detection work,
+> 2026-06-01). It stopped being one in **v0.9.0**: the share / isolate /
+> evaporate spectrum below is now `clikae memory share`, `clikae memory
+> isolate`, and `--ephemeral`, and v0.11.0 settled the remaining question by
+> making membership per-**tank** rather than per-directory.
+>
+> **`docs/memory.md` is the SSOT for how it behaves today** — including the
+> locked values in its §4. Read this section for *why* the shape is what it is;
+> read memory.md before changing anything.
 
 **The tension.** §2 says *fuel = quota* and *tank = one account/config*. True,
 but the tank dir holds far more than fuel — it holds the engine's **long-term
@@ -360,10 +379,11 @@ tank — informed-consent style, like §6), and (c) connect `to`'s transcript-ca
 to the same family. i.e. "agy folds into the same grammar" extended one level
 down to "agy folds into the same *state-control model*, no special mechanism."
 
-Full write-up: `~/clikae-handoff-state-mapping.md`.
+Full write-up: originally a scratch note outside the repo (now gone); its
+conclusions live in [memory.md](/memory.md) and in the sections below.
 
-> The rest of §10 is a maintainer design session (2026-06-01) building on that
-> gift. Still a frontier, not a shipped decision — but the shape is agreed.
+> The rest of §10 is the maintainer design session (2026-06-01) that built on
+> that gift. It is what v0.9.0 implemented.
 
 ### 10.1 The synthesis: clikae is the control plane for the engine's *brain*
 
