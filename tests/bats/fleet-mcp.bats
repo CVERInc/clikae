@@ -84,8 +84,20 @@ _mcp_of() {
   [[ "$output" == "{}" ]] || false
 }
 
+# Stub `claude`: this is the one test here that actually LAUNCHES the engine, and
+# without a stub it passes only on a machine that happens to have claude
+# installed — which is why it was green locally and red on both CI runners
+# (`clikae run … -- --version` exiting 127). Same idiom as conduct.bats /
+# ephemeral.bats; the prelaunch hook is what's under test, not the engine.
+_stub_claude() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/claude"
+  chmod +x "$bin/claude"; PATH="$bin:$PATH"; export PATH
+}
+
 @test "fleet_mcp_prelaunch (via clikae run): a non-solo tank picks up the shared server at launch" {
   jq_only
+  _stub_claude
   clikae init claude a
   clikae init claude b
   _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
