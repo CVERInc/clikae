@@ -95,7 +95,7 @@ EOF
     fi
     # Display the canonical engine name: the on-disk dir is 'antigravity', the
     # engine you type is 'agy' (docs/grammar.md §6).
-    dcli="$cli"; [ "$cli" = "antigravity" ] && dcli="agy"
+    dcli="$(engine_label "$cli")"
     enriched="$enriched$dcli"$'\037'"$profile"$'\037'"$account"$'\037'"$path"$'\n'
   done <<EOF
 $rows

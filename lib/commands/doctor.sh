@@ -15,8 +15,68 @@ _doctor_render_table() {
   while IFS=$'\037' read -r cli installed binary strategy count label; do
     [ -n "$cli" ] || continue
     if [ "$installed" -eq 1 ]; then inst="yes"; else inst="no"; fi
-    printf '%-12s %-11s %-9s %s\n' "$cli" "$inst" "$count" "${label:--}"
+    printf '%-12s %-11s %-9s %s\n' "$(engine_label "$cli")" "$inst" "$count" "${label:--}"
   done
+}
+
+# --- Keychain coordinates -----------------------------------------------------
+# macOS keeps the LOGIN for both claude and agy in the login Keychain, not in the
+# config dir clikae swaps — so clikae's whole account-isolation story rests on two
+# hard-coded coordinates. Neither is verifiable by the test suite:
+# `antigravity.bats` stubs `security`, so a rename on the vendor's side (a new
+# service name, a different account) would pass CI and only surface to a user as
+# "why am I suddenly on the wrong account".
+#
+# This is that check, on the real machine, read-only: it asks whether the item
+# EXISTS. It deliberately never passes `-w`, because reading the secret is what
+# makes the Keychain prompt for access — `doctor` must never pop a dialog — and
+# because a token value has no business anywhere near a terminal. Presence only.
+_doctor_keychain() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  command -v security >/dev/null 2>&1 || return 0
+
+  # Both helpers live outside doctor's usual reach; pull them in only if needed.
+  if ! declare -F _agy_kc_canon_service >/dev/null 2>&1; then
+    # shellcheck source=./antigravity.sh
+    source "$CLIKAE_LIB/commands/antigravity.sh"
+  fi
+  declare -F _claude_keychain_service >/dev/null 2>&1 || load_adapter claude 2>/dev/null || true
+
+  log_bold "Login Keychain (read-only — presence only, never the secret)"
+
+  # agy: ONE machine-wide slot. This is the reason agy is global/single-account,
+  # so if these coordinates ever stop matching, every agy tank silently shares
+  # whichever account is live.
+  local svc acct
+  svc="$(_agy_kc_canon_service)"; acct="$(_agy_kc_account)"
+  if security find-generic-password -s "$svc" -a "$acct" >/dev/null 2>&1; then
+    printf '  %-16s %s\n' "agy" "found  ($svc / $acct)"
+  else
+    printf '  %-16s %s\n' "agy" "absent ($svc / $acct) — not signed in, or the coordinates moved"
+  fi
+
+  # claude: one slot PER TANK, keyed by a hash of that tank's config dir. A tank
+  # with no slot is simply logged out — `clikae migrate` without --keep-login is
+  # the usual way to orphan one.
+  if declare -F _claude_keychain_service >/dev/null 2>&1; then
+    local cli name path found=0 missing=""
+    while IFS=$'\t' read -r cli name path; do
+      [ "$cli" = "claude" ] || continue
+      svc="$(_claude_keychain_service "$path" 2>/dev/null || true)"
+      [ -n "$svc" ] || continue
+      if security find-generic-password -s "$svc" >/dev/null 2>&1; then
+        found=$((found + 1))
+      else
+        missing="$missing $name"
+      fi
+    done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+    if [ "$found" -gt 0 ] || [ -n "$missing" ]; then
+      printf '  %-16s %s\n' "claude" "$found tank(s) with a saved login${missing:+; no slot for:$missing}"
+    fi
+  fi
+  echo ""
 }
 
 cmd_doctor() {
@@ -59,6 +119,8 @@ EOF
   local rows; rows="$(scan_clis)"
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
+
+  _doctor_keychain
 
   # Targeted next steps, derived from the scan. We only need cli/installed/count;
   # binary/strategy/label are read to reach the right columns.

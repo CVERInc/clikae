@@ -314,14 +314,6 @@ not an unfinished obligation.
   covers the rest. **The iTerm2 template has never been machine-verified** —
   iTerm2 isn't installed on the maintainer's Mac; it is one template file if it
   needs tweaking.
-- **agy Keychain coordinates are never verified by CI.** `antigravity.bats` stubs
-  `security`, so the copy mechanics are tested but the service-name assumption
-  (`gemini`/`antigravity`) is only ever confirmed by live dogfood. A read-only
-  `clikae doctor` keychain-coordinate check is the suggested permanent guard.
-- **Engine naming is inconsistent across surfaces.** `clikae list` says `agy`,
-  `clikae doctor` says `antigravity`, and `clikae list --json` emits
-  `"cli":"agy"` alongside `"path": …/profiles/antigravity/…` — so a consumer
-  joining `cli` to `path` breaks.
 
 ---
 

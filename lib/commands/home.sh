@@ -604,7 +604,7 @@ _home_trunc() {
 
 # _home_engine_label <cli> -> the display name for an engine tag. The antigravity
 # target is shown as its canonical short name "agy" everywhere.
-_home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' "$1" ;; esac; }
+_home_engine_label() { engine_label "$1"; }   # one owner: lib/core/profile_store.sh
 
 # _home_agy_email <tank_dir> -> the Google account this agy tank is signed in as,
 # or empty. agy has no clean account field, but its CLI logs the signed-in account

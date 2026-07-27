@@ -38,6 +38,21 @@ clikae_is_target() {
   [ -f "$CLIKAE_LIB/targets/$cli.sh" ]
 }
 
+# engine_label <cli> -> the name to PRINT for an engine. The on-disk directory is
+# `antigravity`; the engine you type is `agy` (docs/grammar.md §6). Three surfaces
+# had each grown their own copy of this mapping and `doctor` had none, so the same
+# engine read as `agy` in `clikae list` and `antigravity` in `clikae doctor`. One
+# owner, so they cannot disagree again.
+#
+# NB: this is a DISPLAY name. The store path, the targets/ filename and the JSON
+# `path` field all stay `antigravity` — don't "fix" those to match.
+engine_label() {
+  case "$1" in
+    antigravity) printf 'agy' ;;
+    *)           printf '%s' "$1" ;;
+  esac
+}
+
 # ── Bounded transcript reads ────────────────────────────────────────────────
 # Session transcripts get HUGE (100+ MB for a long agent run); scanning a whole
 # one PER TANK is what made the home board crawl (dogfood 2026-06-29: ~8s on a

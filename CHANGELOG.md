@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **The same engine had two names depending on which screen you were on.**
+  `clikae list` and the board said `agy`; `clikae doctor` printed the on-disk
+  directory name, `antigravity`. Three surfaces had each grown a private copy of
+  the mapping and doctor had none. There is now one owner, `engine_label` in
+  `lib/core/profile_store.sh`, next to the predicate that already knew the alias.
+  The store path, the `targets/` filename and the JSON `path` field all stay
+  `antigravity` on purpose — and `docs/usage.md` now warns, where the JSON
+  contract is documented, never to build a path out of `cli` + `profile`.
+
 - **The `?` help overlay never listed `R`** (open the cross-tank resume picker),
   on the one screen whose entire job is to list every key. Added, with its label
   in all nine languages — and a bats test now fails when a key is bound in the
@@ -85,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every assertion was validated against a pre-fix worktree first: five of the
   eight `prompts` checks go red there, and the three that pass on both are the
   controls that prove the harness isn't simply failing everything.
+
+- **`clikae doctor` now verifies the login-Keychain coordinates, read-only.**
+  macOS keeps the login for both claude and agy in the Keychain rather than in
+  the config dir clikae swaps, so account isolation rests on two hard-coded
+  coordinates that the suite cannot check — `antigravity.bats` stubs `security`,
+  so a vendor-side rename would pass CI and surface to a user only as "why am I
+  suddenly on the wrong account". doctor now reports whether agy's slot
+  (`gemini` / `antigravity`) exists and how many claude tanks have a saved
+  login. It never passes `-w`: reading the secret is what makes the Keychain
+  prompt for access, and `doctor` must never pop a dialog — presence only, never
+  the value.
 
 ### Documentation
 
