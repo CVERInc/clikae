@@ -34,7 +34,9 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
 @test "app embeds the --global-config flag for a flag-strategy adapter (vercel)" {
   macos_only
   clikae init vercel prod
-  run clikae app vercel prod --out "$TEST_HOME/Apps"
+  # --terminal is explicit: the DEFAULT is now detected from $TERM_PROGRAM, and
+  # this test is about the Terminal.app template, not about which default won.
+  run clikae app vercel prod --terminal terminal --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/vercel (prod).app" ]
   run osadecompile "$TEST_HOME/Apps/vercel (prod).app"
@@ -79,7 +81,7 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
 
 @test "app --board makes a clikae.app that opens the board (Terminal)" {
   macos_only
-  run clikae app --board --out "$TEST_HOME/Apps"
+  run clikae app --board --terminal terminal --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/clikae.app" ]
   run osadecompile "$TEST_HOME/Apps/clikae.app"
@@ -176,4 +178,42 @@ _src_app() {
   _src_app
   run _app_shell_squote 'clikae; exec zsh -i'
   [ "$output" = "'clikae; exec zsh -i'" ]
+}
+
+# --- default terminal auto-detection ------------------------------------------
+# The default used to be a hardcoded `terminal`, so an iTerm2/Ghostty user got an
+# Apple-Terminal launcher unless they knew --terminal existed. $TERM_PROGRAM is
+# the best available guess, but only when that app is really installed — a guess
+# that names a missing app would turn a default into a hard failure.
+@test "_app_default_terminal falls back to terminal for an unknown TERM_PROGRAM" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  TERM_PROGRAM="something-nobody-supports" run _app_default_terminal
+  [ "$status" -eq 0 ]
+  [ "$output" = "terminal" ]
+}
+
+@test "_app_default_terminal falls back to terminal when TERM_PROGRAM is unset" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  run env -u TERM_PROGRAM bash -c \
+    "source '$CLIKAE_TEST_ROOT/lib/core/log.sh'; source '$CLIKAE_TEST_ROOT/lib/commands/app.sh'; _app_default_terminal"
+  [ "$status" -eq 0 ]
+  [ "$output" = "terminal" ]
+}
+
+@test "_app_default_terminal never names an app that isn't installed" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  # Force the installed-check to say no, then claim to be running in iTerm2.
+  _app_terminal_installed() { return 1; }
+  TERM_PROGRAM="iTerm.app" run _app_default_terminal
+  [ "$output" = "terminal" ]
+}
+
+@test "clikae app --terminal warp explains itself instead of a generic unknown" {
+  run clikae app --terminal warp claude nope
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Warp"* ]] || false
+  [[ "$output" == *"running a command"* ]] || false
 }

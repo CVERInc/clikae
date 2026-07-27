@@ -45,6 +45,28 @@ _app_terminal_installed() {
   return 1
 }
 
+# _app_default_terminal -> the terminal to generate for when nobody said.
+#
+# The old default was a hardcoded `terminal`, so an iTerm2 or Ghostty user got an
+# Apple-Terminal launcher unless they knew about --terminal. $TERM_PROGRAM names
+# the terminal clikae is being RUN in, which is the best available guess at the
+# one you want the .app to open — and it costs nothing to be wrong, because the
+# result is only a default you can override.
+#
+# Two rules keep it honest: a guess is only used if that app is actually
+# installed, and an unsupported terminal falls back to `terminal` rather than
+# failing — `clikae app` should never refuse to make a launcher because of where
+# you happened to type it.
+_app_default_terminal() {
+  case "${TERM_PROGRAM:-}" in
+    iTerm.app)
+      _app_terminal_installed "iTerm" "com.googlecode.iterm2" && { printf 'iterm2\n'; return 0; } ;;
+    ghostty|Ghostty)
+      _app_terminal_installed "Ghostty" "com.mitchellh.ghostty" && { printf 'ghostty\n'; return 0; } ;;
+  esac
+  printf 'terminal\n'
+}
+
 # Render the AppleScript for a target into $1 (a file path).
 # Args: <out_file> <target> <shell_cmd> <title>
 _app_render_script() {
@@ -80,6 +102,8 @@ _app_render_script() {
       tmpl_content="$(cat "$tmpl")"
       ;;
     *)
+      # cmd_app validates the name up front; this is the belt-and-braces arm for
+      # any caller that reaches the renderer directly.
       log_fail "Unknown --terminal '$target'. Choose: terminal, iterm2, ghostty."
       ;;
   esac
@@ -105,7 +129,7 @@ _app_write_ghostty_conf() {
 }
 
 cmd_app() {
-  local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-terminal}"
+  local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-$(_app_default_terminal)}"
   while [ $# -gt 0 ]; do
     case "$1" in
       -f|--force) force=1; shift ;;
@@ -124,8 +148,10 @@ clikae board (your menu of recent sessions + tanks) so you can pick from there.
 Options:
   --board               Make a launcher for the clikae BOARD (no engine/tank) —
                         a single button that opens the menu.
-  -t, --terminal <app>  Which terminal to open: terminal (default), iterm2,
-                        ghostty. Default can also be set via $CLIKAE_TERMINAL.
+  -t, --terminal <app>  Which terminal to open: terminal, iterm2, ghostty.
+                        Defaults to the terminal you're running in when that's
+                        one of them (else Terminal.app); $CLIKAE_TERMINAL wins
+                        over the guess, and this flag wins over both.
   -f, --force           Overwrite an existing .app at the destination.
   -o, --out <dir>       Where to put the .app. Default: ~/Applications
 
@@ -147,6 +173,23 @@ EOF
         ;;
     esac
   done
+
+  # Validate the TARGET NAME before anything else touches the store: a mistyped
+  # --terminal is wrong no matter which tank you named, and hearing "profile not
+  # found" first sends you debugging the wrong half of the command. (Whether the
+  # app is INSTALLED is still checked at render time, where the template lives.)
+  case "$target" in
+    terminal|iterm2|ghostty) : ;;
+    warp)
+      # Not "we haven't got round to it": Warp has no documented way to open a
+      # window running a given command. Its URL scheme opens a tab in a directory
+      # and stops; the only command-running door is a Launch Configuration YAML,
+      # a different shape from every other target here and unverifiable on a
+      # machine without Warp. Say that, rather than ship a launcher nobody has
+      # watched work. If you use Warp and know the door: PRs welcome.
+      log_fail "Warp can't be targeted: it has no supported way to open a window running a command. Use --terminal terminal|iterm2|ghostty (the .app still works when you launch it from Warp)." ;;
+    *) log_fail "Unknown --terminal '$target'. Choose: terminal, iterm2, ghostty." ;;
+  esac
 
   [ "$(uname -s)" = "Darwin" ] || log_fail "clikae app is macOS-only. Use \`clikae alias\` on Linux/Windows."
   command -v osacompile >/dev/null 2>&1 || log_fail "osacompile not found (it's a macOS built-in — this is unexpected)."

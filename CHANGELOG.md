@@ -58,6 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **`clikae app` now defaults to the terminal you're actually using.** The
+  default was hardcoded to Terminal.app, so an iTerm2 or Ghostty user got an
+  Apple-Terminal launcher unless they knew `--terminal` existed. It now reads
+  `$TERM_PROGRAM` — and only uses that guess if the app is really installed, so a
+  guess can never turn a default into a failure. `$CLIKAE_TERMINAL` overrides the
+  guess, `--terminal` overrides both, and the choice is printed on the
+  `terminal:` line so it is never silent.
+
+- **`clikae app --terminal warp` now explains itself.** Warp has no supported way
+  to open a window running a given command — its URL scheme opens a tab in a
+  directory and stops, and the only command-running door is a Launch
+  Configuration YAML, a different shape from every other target and unverifiable
+  without Warp installed. It says that, rather than shipping a launcher nobody
+  has watched work or hiding behind a generic "unknown --terminal". The target
+  name is also validated before the tank lookup now, so a mistyped `--terminal`
+  no longer reports "profile not found" first and sends you debugging the wrong
+  half of the command.
+
 - **codex's usage limit turned out to be readable from disk after all, so the
   fuel gauge and `clikae auto` now cover it.** This project recorded for months
   that codex's limit was "exec-stdout-only — never written to a file clikae can

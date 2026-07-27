@@ -416,11 +416,21 @@ For each tank, `clikae`:
    The sentinels make safe, exact removal possible.
 3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens a terminal,
    runs the env-var-prefixed engine, and sets the window title to `claude (work)`
-   so you can tell windows apart. The terminal is **Terminal.app** by default;
-   `--terminal iterm2` and `--terminal ghostty` target those instead (set
-   `$CLIKAE_TERMINAL` to change the default). Terminal.app and iTerm2 are driven
-   by AppleScript; Ghostty has no window-opening CLI on macOS, so its launcher
-   goes through `open -na Ghostty.app --args … -e …`.
+   so you can tell windows apart. The terminal **defaults to the one you're
+   running in** when that's a supported one (read from `$TERM_PROGRAM`, and only
+   if it's actually installed) — otherwise Terminal.app. `$CLIKAE_TERMINAL`
+   overrides the guess, and `--terminal terminal|iterm2|ghostty` overrides both;
+   the choice is printed on the `terminal:` line so it's never a silent guess.
+   Terminal.app and iTerm2 are driven by AppleScript; Ghostty has no
+   window-opening CLI on macOS, so its launcher goes through
+   `open -na Ghostty.app --args … -e …`.
+
+   **Warp is not a target, and it isn't an oversight**: it has no supported way
+   to open a window running a given command (its URL scheme opens a tab in a
+   directory and stops; the only command-running door is a Launch Configuration
+   YAML, a different shape from every other target here). `clikae app --terminal
+   warp` says exactly that instead of a generic "unknown". A launcher built for
+   any other target still works fine when you double-click it from Warp.
 
 No daemons, no global state, no network calls. You can read every line.
 

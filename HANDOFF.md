@@ -308,11 +308,11 @@ not an unfinished obligation.
 
 ### OPEN-6 — smaller known gaps
 
-- **`clikae app`**: Warp is unsupported (no clean command-launch story), and
-  there is no default-terminal auto-detection. `--terminal terminal|iterm2|ghostty`
-  covers the rest. **The iTerm2 template has never been machine-verified** —
-  iTerm2 isn't installed on the maintainer's Mac; it is one template file if it
-  needs tweaking.
+- **`clikae app`'s iTerm2 template has never been machine-verified** — iTerm2
+  isn't installed on the maintainer's Mac, so the launcher it generates has only
+  ever been asserted against, never watched working. It is one template file if
+  it needs tweaking. (Warp is a decided non-target, not a gap — `--terminal warp`
+  now explains why; default-terminal detection shipped 2026-07-27.)
 
 ---
 
