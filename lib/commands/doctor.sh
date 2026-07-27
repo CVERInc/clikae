@@ -76,7 +76,59 @@ EOF
       printf '  %-16s %s\n' "claude" "$found tank(s) with a saved login${missing:+; no slot for:$missing}"
     fi
   fi
+
   echo ""
+}
+
+# Name the "why is this tank suddenly logged out?" case instead of leaving it a
+# mystery. clikae does not own the OAuth refresh — Claude Code does, in its own
+# daemon — but that daemon writes its log INSIDE the tank clikae manages, so the
+# aftermath is readable even though the mechanism isn't ours to fix.
+#
+# The failure it names: Claude's OAuth uses ROTATING refresh tokens, so when
+# several sessions on one tank refresh at once, the loser gets `invalid_grant`,
+# treats it as "logged out", and clears the Keychain entry the winner just wrote.
+# One race, escalated into a whole-tank logout with no silent recovery. A user
+# sees only that a working account stopped working.
+#
+# Read-only, bounded to the log's tail. We report only when the newest auth event
+# is a FAILURE — a later success means it recovered and there is nothing to say.
+_doctor_auth_dropouts() {
+  local cli name path out bad ok
+  while IFS=$'\t' read -r cli name path; do
+    [ "$cli" = "claude" ] || continue
+    [ -f "$path/daemon.log" ] || continue
+    out="$(tail -c 200000 "$path/daemon.log" 2>/dev/null | awk '
+      function ts(s,   t) {
+        if (match(s, /^\[[0-9TZ:.-]+\]/)) { t = substr(s, RSTART+1, RLENGTH-2); return t }
+        return ""
+      }
+      /auth: (proactive refresh failed|no token found|headless daemon cannot complete)/ {
+        t = ts($0); if (t != "" && (bad == "" || t > bad)) bad = t; next
+      }
+      # "scheduling" counts as HEALTHY on purpose: the daemon only schedules a
+      # refresh when it has a token to refresh — a tank with none says so with
+      # "no token found" instead. Leaving it out produced a false positive on a
+      # tank that had failed once, been re-logged-in, and been quietly fine for
+      # a week (caught by reading the log instead of trusting the first draft).
+      /auth: (proactive refresh succeeded|token still valid|scheduling proactive refresh)/ {
+        t = ts($0); if (t != "" && (ok == "" || t > ok)) ok = t
+      }
+      END { printf "%s\037%s\n", bad, ok }
+    ')"
+    IFS=$'\037' read -r bad ok <<EOF
+$out
+EOF
+    [ -n "$bad" ] || continue
+    if [ -n "$ok" ]; then
+      local newer; newer="$(printf '%s\n%s\n' "$bad" "$ok" | sort | tail -n 1)"
+      [ "$newer" = "$ok" ] && continue      # recovered since
+    fi
+    printf '  %-16s %s\n' "claude/$name" "signed out by a token-refresh failure at ${bad%%.*} — fix: clikae claude $name, then /login"
+    log_dim  "                   (concurrent sessions on one tank can race Claude's rotating refresh token; not something clikae can prevent)"
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
 }
 
 cmd_doctor() {
@@ -121,6 +173,9 @@ EOF
   echo ""
 
   _doctor_keychain
+  # NOT inside _doctor_keychain: that one returns early off macOS, and reading a
+  # log file has nothing to do with the Keychain.
+  _doctor_auth_dropouts
 
   # Targeted next steps, derived from the scan. We only need cli/installed/count;
   # binary/strategy/label are read to reach the right columns.

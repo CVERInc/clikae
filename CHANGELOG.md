@@ -58,6 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **`clikae doctor` names a tank that was signed out by a token-refresh race.**
+  Claude's OAuth uses rotating refresh tokens, so when several sessions on one
+  tank refresh at once the loser gets `invalid_grant`, treats it as "logged out",
+  and clears the Keychain entry the winner just wrote — a working account dies
+  with no explanation. clikae cannot prevent that (the refresh belongs to Claude
+  Code's own daemon), but that daemon writes its log inside the tank clikae
+  manages, so the aftermath is readable: doctor now reports the tank, the
+  timestamp, and the one-line fix, and stays quiet once it has been logged back
+  in. Bounded, read-only tail scan.
+
+  The first draft of this check produced a false positive on the maintainer's own
+  machine — it counted only "refresh succeeded" as healthy, and missed that the
+  daemon's "scheduling proactive refresh" line is itself proof a token exists (a
+  tank with none says "no token found" instead). Caught by reading the log the
+  check had just accused, before believing it.
+
 - **`clikae app` now defaults to the terminal you're actually using.** The
   default was hardcoded to Terminal.app, so an iTerm2 or Ghostty user got an
   Apple-Terminal launcher unless they knew `--terminal` existed. It now reads

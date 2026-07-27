@@ -214,54 +214,49 @@ proceed, or Ctrl-C to cancel`). That is a deliberate, defensible choice while
 everything lands in the Trash and stays recoverable — but on the fallback path the
 same two keystrokes are irreversible. Worth deciding together with the above.
 
-### OPEN-2 — FLEET self-logout via OAuth refresh-token stampede
+### OPEN-2 — FLEET self-logout via a refresh-token race (NOT clikae's to fix)
 
-**Found 2026-06-29 diagnosing a real incident. Fix decided, not implemented**
-(there is no `flock` anywhere in the tree — verified 2026-07-27).
+**The mechanism.** Claude's OAuth uses **rotating** refresh tokens: each refresh
+issues a new one and invalidates the old. When several sessions on one tank
+refresh near-simultaneously, the loser refreshes with a now-stale token, gets
+`invalid_grant`, treats it as "I'm logged out", and **clears the Keychain entry
+the winner just wrote**. One small race becomes a whole-tank logout with no
+silent recovery — only a fresh interactive `/login`.
 
-FLEET here means *multiple concurrent sessions burning the same tank* — one
-person, their own account, many parallel sessions.
+Evidence from the 2026-06-29 incident: `profiles/claude/L/daemon.log` showed days
+of `auth: proactive refresh succeeded`, then `proactive refresh failed,
+signalling re-auth required` → `no token found`; **17×** `token still valid
+(cross-process refresh or not yet due)` proves multi-process refresh is the
+NORMAL state on that tank, so the race is structural, not exotic.
 
-Claude's OAuth uses **rotating** refresh tokens: each refresh issues a new one
-and invalidates the old. When N sessions on one tank refresh near-simultaneously:
+**🔴 Correction, 2026-07-27 — the recorded fix cannot be implemented here.** This
+entry used to carry a four-point plan ("daemon owns refresh, single-flight via
+`flock`"; "`invalid_grant` must never clear credentials"; "keep proactive refresh
+daemon-exclusive") and read as ready-to-build. Every one of those points
+describes **Claude Code's** auth daemon. clikae owns no daemon at all — the word
+appears in this codebase only in `proc.sh`, where it *detects* Claude's
+background workers — and growing one would break a non-negotiable (no daemon, no
+network calls). Anyone picking this up on the old text would have spent a day
+before noticing. Don't.
 
-1. Process A refreshes `RT0` → gets `RT1`, writes it to the Keychain. ✅
-2. Process B, a few hundred ms later, refreshes with the now-stale `RT0` →
-   `invalid_grant`.
-3. **B treats `invalid_grant` as "logged out" and clears the Keychain entry**,
-   wiping the good `RT1` A just wrote.
-4. The daemon's next proactive refresh finds nothing → `auth_required`.
+**What clikae can do, and has.** The daemon's log lives inside the tank clikae
+manages, so the *aftermath* is readable even though the mechanism isn't ours:
+`clikae doctor` now names a tank left signed out by a refresh failure, with the
+timestamp and the one-line fix, instead of leaving a working account's sudden
+death a mystery. It also reports whether each tank has a saved login at all.
 
-With both tokens cleared there is no silent recovery — only a fresh interactive
-`/login`.
-
-Evidence from the incident: `profiles/claude/L/daemon.log` shows days of
-`auth: proactive refresh succeeded`, then `proactive refresh failed, signalling
-re-auth required` → `no token found`; **17×** `token still valid (cross-process
-refresh or not yet due)` proves multi-process refresh is the *normal* state on
-that tank, so the race is structural, not exotic. Observed refresh round-trip
-~6.3s.
-
-The decided fix (keep it simple — FLEET is not a frequent state):
-
-1. **Daemon owns refresh, single-flight via `flock`** on a lockfile in the tank's
-   config dir. Sessions only READ the Keychain; on a 401 they ask the daemon and
-   retry. Exactly one actor rotates the single-use token.
-2. **`invalid_grant` must never directly clear credentials.** Take the lock,
-   re-read the Keychain, adopt a fresher token if a sibling already refreshed;
-   escalate to `auth_required` only after confirming none exists. This alone
-   defuses the amplifier.
-3. **Keep proactive refresh, but make it daemon-exclusive — do not switch to
-   lazy.** Lazy would make N cold-starting sessions all 401 at once and each eat
-   the ~6.3s latency. The disease was "proactive done by many", not "proactive".
-   Lock only the critical section; serve-stale-while-revalidate.
-4. **Not doing: daemon-death failover.** Considered and rejected; revisit only if
-   daemon OOM under FLEET proves common.
+**Still open, and it's a decision, not a task:** whether to take this upstream
+(the amplifier — treating `invalid_grant` as "clear the credentials" rather than
+"re-read, a sibling may have just refreshed" — is a real bug worth reporting),
+and whether clikae should discourage the condition at all, e.g. by noticing you
+are opening an Nth concurrent session on one tank. The latter is unattractive:
+FLEET is a first-class supported pattern here, and warning about it every time
+would nag about the thing the tool is for.
 
 **Honest limit — don't oversell in copy.** Multiple *machines* on one account
-still evict each other; rotation is server-side. clikae can only make one
-machine's concurrent sessions safe, and word a dropped tank as "may have been
-rotated out by another machine" rather than implying the account broke.
+still evict each other; rotation is server-side. A single machine cannot fix
+that, so a dropped tank should be worded "may have been rotated out by another
+machine" rather than implying the account broke.
 
 ### OPEN-3 — agy: login isolation proven, quota stacking unresolved
 
