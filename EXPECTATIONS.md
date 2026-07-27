@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/a7a47d2a1c600a3e90a20509d2981985cb3c0047/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/7c76b84b27a40b54648942fcdd6128ff54da965d/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -132,6 +132,14 @@ and codex's recorded `cwd` no longer equals `$PWD`, so the session goes invisibl
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. Other engines
 report a clean "not supported" rather than pretend.
+
+**An INTERACTIVE `--ephemeral` run still writes a transcript into the tank.** It
+drops your memory, your skills and the fleet's MCP servers — so the session does
+not know you — but Claude Code only honours `--no-session-persistence` together
+with `--print`, so leaving no trace at all is available in the headless shape
+(`clikae claude <tank> --ephemeral -- -p "…"`) and not interactively. The wording
+on screen says which one you got, deliberately: incognito means *it doesn't know
+you*, not *it never happened*.
 
 ## Management verbs
 

@@ -388,12 +388,37 @@ stashed aside and restored, untouched.
 clikae claude work --ephemeral     # incognito: nothing learned this session is kept
 ```
 
-- **Login and transcripts are normal** — only the *memory store* is throwaway
-  (you're still you, the conversation is still logged/resumable).
-- **Honest scope:** clikae guarantees the *memory directory* is a throwaway. It
-  can't promise the engine "remembers nothing anywhere" — caches, shell history,
-  telemetry, the macOS Keychain are outside clikae's reach. So it's *ephemeral
-  memory*, not guaranteed total amnesia.
+**What it drops, per run.** Memory was only one of the channels a session
+inherits, so `--ephemeral` also passes the engine's own isolation flags:
+
+| Channel | Interactive | Headless (`-- -p …`) |
+|---|---|---|
+| Long-term memory | throwaway | throwaway |
+| Your personal **skills** and slash commands | dropped | dropped |
+| The fleet's **MCP servers** | dropped | dropped |
+| **Transcript** written to the tank | still written | not written |
+
+Dropping skills and MCP matters for the main use — a cold reader. A reviewer
+holding your hand-authored skills already knows what you believe, and one holding
+the fleet's connectors can still reach your sites; neither is a cold read.
+
+These are **per-run flags**. clikae never rewires the tank to achieve this, so a
+session already running on the same tank is unaffected — the alternative
+(temporarily repointing the tank's `skills` symlink) is the same mistake
+`memory isolate` used to make.
+
+- **Login is normal** — you're still you, on the same account and quota.
+- **Honest scope, interactive:** incognito here means *it doesn't know you*, not
+  *it never happened*. Claude Code only honours `--no-session-persistence` with
+  `--print`, so an interactive run still writes its transcript into the tank. If
+  you need the run to leave nothing at all, use the headless shape.
+- **Honest scope, generally:** clikae guarantees the memory directory is a
+  throwaway and passes the flags above. It can't promise the engine "remembers
+  nothing anywhere" — caches, shell history, telemetry and the macOS Keychain are
+  outside clikae's reach.
+- 🔴 **Not `--bare`**, however much its name fits. It also disables keychain reads
+  and restricts auth to `ANTHROPIC_API_KEY`, so it cannot log in on a
+  subscription tank at all.
 - Supported only for engines whose memory layout clikae knows (currently
   **claude**); others say so and exit.
 - Unlike a normal switch (which `exec`s the engine), `--ephemeral` runs it as a

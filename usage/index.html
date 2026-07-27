@@ -454,13 +454,59 @@ the tank and runs it, but points the engine's <strong>long-term memory</strong> 
 directory that's discarded when the engine quits. The tank's real memory is
 stashed aside and restored, untouched.</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --ephemeral</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # incognito: nothing learned this session is kept</span></span></code></pre>
+<p><strong>What it drops, per run.</strong> Memory was only one of the channels a session
+inherits, so <code>--ephemeral</code> also passes the engine's own isolation flags:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>Interactive</th>
+<th>Headless (<code>-- -p …</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Long-term memory</td>
+<td>throwaway</td>
+<td>throwaway</td>
+</tr>
+<tr>
+<td>Your personal <strong>skills</strong> and slash commands</td>
+<td>dropped</td>
+<td>dropped</td>
+</tr>
+<tr>
+<td>The fleet's <strong>MCP servers</strong></td>
+<td>dropped</td>
+<td>dropped</td>
+</tr>
+<tr>
+<td><strong>Transcript</strong> written to the tank</td>
+<td>still written</td>
+<td>not written</td>
+</tr>
+</tbody>
+</table>
+<p>Dropping skills and MCP matters for the main use — a cold reader. A reviewer
+holding your hand-authored skills already knows what you believe, and one holding
+the fleet's connectors can still reach your sites; neither is a cold read.</p>
+<p>These are <strong>per-run flags</strong>. clikae never rewires the tank to achieve this, so a
+session already running on the same tank is unaffected — the alternative
+(temporarily repointing the tank's <code>skills</code> symlink) is the same mistake
+<code>memory isolate</code> used to make.</p>
 <ul>
-<li><strong>Login and transcripts are normal</strong> — only the <em>memory store</em> is throwaway
-(you're still you, the conversation is still logged/resumable).</li>
-<li><strong>Honest scope:</strong> clikae guarantees the <em>memory directory</em> is a throwaway. It
-can't promise the engine &quot;remembers nothing anywhere&quot; — caches, shell history,
-telemetry, the macOS Keychain are outside clikae's reach. So it's <em>ephemeral
-memory</em>, not guaranteed total amnesia.</li>
+<li><strong>Login is normal</strong> — you're still you, on the same account and quota.</li>
+<li><strong>Honest scope, interactive:</strong> incognito here means <em>it doesn't know you</em>, not
+<em>it never happened</em>. Claude Code only honours <code>--no-session-persistence</code> with
+<code>--print</code>, so an interactive run still writes its transcript into the tank. If
+you need the run to leave nothing at all, use the headless shape.</li>
+<li><strong>Honest scope, generally:</strong> clikae guarantees the memory directory is a
+throwaway and passes the flags above. It can't promise the engine &quot;remembers
+nothing anywhere&quot; — caches, shell history, telemetry and the macOS Keychain are
+outside clikae's reach.</li>
+<li>🔴 <strong>Not <code>--bare</code></strong>, however much its name fits. It also disables keychain reads
+and restricts auth to <code>ANTHROPIC_API_KEY</code>, so it cannot log in on a
+subscription tank at all.</li>
 <li>Supported only for engines whose memory layout clikae knows (currently
 <strong>claude</strong>); others say so and exit.</li>
 <li>Unlike a normal switch (which <code>exec</code>s the engine), <code>--ephemeral</code> runs it as a
