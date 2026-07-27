@@ -343,9 +343,6 @@ not an unfinished obligation.
   `clikae doctor` says `antigravity`, and `clikae list --json` emits
   `"cli":"agy"` alongside `"path": …/profiles/antigravity/…` — so a consumer
   joining `cli` to `path` breaks.
-- **`docs/DEVLOG.md` stops at v0.6.0** (2026-06-14). It is explicitly a
-  history, so it is not wrong — just silent about everything since, including
-  the Soul layer and the 2026-07-11 repositioning.
 
 ---
 
