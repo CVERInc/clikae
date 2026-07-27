@@ -133,6 +133,14 @@ and codex's recorded `cwd` no longer equals `$PWD`, so the session goes invisibl
 layout clikae knows how to stash to a throwaway; today that's claude. Other engines
 report a clean "not supported" rather than pretend.
 
+**An INTERACTIVE `--ephemeral` run still writes a transcript into the tank.** It
+drops your memory, your skills and the fleet's MCP servers — so the session does
+not know you — but Claude Code only honours `--no-session-persistence` together
+with `--print`, so leaving no trace at all is available in the headless shape
+(`clikae claude <tank> --ephemeral -- -p "…"`) and not interactively. The wording
+on screen says which one you got, deliberately: incognito means *it doesn't know
+you*, not *it never happened*.
+
 ## Management verbs
 
 **`clikae migrate` makes claude ask you to log in again.** claude stores its OAuth

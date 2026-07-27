@@ -62,7 +62,10 @@ Which shape for which situation — the decision layer above these mechanics —
 5. **Want a memory-less session? That's `--ephemeral`, and nothing else.** To
    spawn a cold reader — an unbiased audit, a reviewer who doesn't know what you
    believe — launch it with `clikae claude <tank> --ephemeral`: that run gets a
-   throwaway memory and the tank's Soul is put back afterwards.
+   throwaway memory, no skills, and none of the fleet's MCP servers, and the
+   tank's Soul is put back afterwards. Add `-- -p "…"` and it writes no
+   transcript either; interactively it still does, because Claude Code ties
+   `--no-session-persistence` to `--print`.
 
    Do **not** reach for `clikae solo`. It is the permanent form: it takes the
    tank out of the fleet and off the shared brain **from now on**, for every

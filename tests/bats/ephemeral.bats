@@ -153,3 +153,51 @@ STUB
   [ ! -L "$mem" ]
   [ "$(cat "$mem/real.txt")" = "REAL" ]                   # survived the hard close
 }
+
+# --- what ephemeral ACTUALLY isolates ----------------------------------------
+# Memory was only one of the channels a session inherits. A cold reader that
+# still loads the user's personal skills, still holds the fleet's MCP
+# connectors, and still writes its transcript into the tank is not a cold
+# reader. These pin the per-run flags — per-RUN because the tempting fix,
+# temporarily rewiring the tank's skills symlink, would mutate a tank another
+# session may be live on (the `memory isolate` mistake).
+_stub_claude_records_argv() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$CLAUDE_ARGV_LOG"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+}
+
+@test "--ephemeral: an interactive run drops skills and the fleet's MCP servers" {
+  _stub_claude_records_argv
+  export CLAUDE_ARGV_LOG="$BATS_TEST_TMPDIR/argv.txt"
+  clikae init claude work
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae claude work --ephemeral
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$CLAUDE_ARGV_LOG")" == *"--disable-slash-commands"* ]] || false
+  [[ "$(cat "$CLAUDE_ARGV_LOG")" == *"--strict-mcp-config"* ]] || false
+  # …but NOT the persistence flag: Claude Code only honours it with --print, and
+  # passing it interactively would be a claim we can't keep.
+  [[ "$(cat "$CLAUDE_ARGV_LOG")" != *"--no-session-persistence"* ]] || false
+}
+
+@test "--ephemeral: a headless run also refuses to write a transcript" {
+  _stub_claude_records_argv
+  export CLAUDE_ARGV_LOG="$BATS_TEST_TMPDIR/argv2.txt"
+  clikae init claude work
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae claude work --ephemeral -- -p "read this cold"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$CLAUDE_ARGV_LOG")" == *"--no-session-persistence"* ]] || false
+}
+
+@test "--ephemeral: says out loud that an interactive run still leaves a transcript" {
+  # The honest-positioning half. Incognito here means "it doesn't know you", not
+  # "it never happened", and the name must not be left to imply the stronger one.
+  _stub_claude_records_argv
+  export CLAUDE_ARGV_LOG="$BATS_TEST_TMPDIR/argv3.txt"
+  clikae init claude work
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae claude work --ephemeral
+  [[ "$output" == *"still writes a transcript"* ]] || false
+}

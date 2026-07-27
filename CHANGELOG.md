@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`--ephemeral` now drops your skills and the fleet's MCP servers too, and says
+  what it still can't drop.** Memory was only one of the channels a session
+  inherits. A cold reader that loads your hand-authored skills already knows what
+  you believe; one holding the fleet's MCP connectors can still reach your sites.
+  Neither is a cold read, which is the main thing `--ephemeral` is for.
+
+  The engine already had the primitives — clikae simply wasn't passing them. A
+  new `adapter_ephemeral_flags` hook emits `--disable-slash-commands` and
+  `--strict-mcp-config` on every ephemeral run, plus `--no-session-persistence`
+  when the run is headless.
+
+  **Per-run, never surgery.** The tempting fix — temporarily repointing the tank's
+  `skills` symlink — would mutate a tank another session may be live on, which is
+  exactly what made `memory isolate` dangerous. A concurrent session on the same
+  tank is unaffected by these.
+
+  Two honest limits, both stated on screen rather than left to the name:
+  - Claude Code ties `--no-session-persistence` to `--print`, so an **interactive**
+    ephemeral run still writes its transcript into the tank. Incognito here means
+    *it doesn't know you*, not *it never happened*; the headless shape gives the
+    stronger one.
+  - 🔴 **Not `--bare`**, however much it reads like the answer: it also disables
+    keychain reads and restricts auth to `ANTHROPIC_API_KEY`, so it cannot log in
+    on a subscription tank at all.
+
+  Verified against the real binary (Claude Code 2.1.220), both shapes.
+
+- **zh-TW: `session` stays English; the fleet is 艦隊.** Checked against 4989 of
+  Apple's own zh-Hant string tables on this machine: 會話 appears **zero** times
+  (it is the mainland standard), and Apple avoids the concept entirely — the one
+  English "Invalid Session." renders as 連線錯誤. The file had already decided
+  anyway: twelve of the fourteen zh-TW strings mentioning a session used the
+  English word, exactly as the same table already keeps `burn`, `Soul` and
+  `clikae solo`. Two outliers were pulled back rather than a direction changed.
+  zh-Hans deliberately keeps 会话 — the correct native term there, used by twelve
+  of its keys. `車隊` → `艦隊`: Apple has neither, so it is a brand call, and
+  艦隊 carries the sense of a formation dispatched under command.
+
 ## [0.15.1] — 2026-07-27
 
 Three findings from one real dispatch, none of which a reader of the code would

@@ -303,8 +303,28 @@ _switch_run_ephemeral() {
   trap 'exit 143' TERM
   trap '' INT
 
-  log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
-  log_dim "(login & transcript are normal; the tank's real memory is untouched.)"
+  # Memory was only ever ONE of the channels a session inherits. Ask the adapter
+  # for the per-run flags that close the others (skills, the fleet's MCP servers,
+  # and — headless only — writing a transcript at all). Per-run on purpose: the
+  # alternative, temporarily rewiring the tank's own skills symlink, would mutate
+  # a tank another session may be live on, which is the `memory isolate` mistake.
+  local -a eph=()
+  if declare -F adapter_ephemeral_flags >/dev/null 2>&1; then
+    # Claude Code only honours --no-session-persistence with --print, so tell the
+    # adapter which shape this run is.
+    local headless=0 a
+    for a in "$@"; do case "$a" in -p|--print) headless=1; break ;; esac; done
+    while IFS= read -r -d '' a; do eph+=("$a"); done < <(adapter_ephemeral_flags "$headless")
+    if [ "$headless" -eq 1 ]; then
+      log_dim "ephemeral: throwaway memory · no skills · no shared MCP · no transcript written."
+    else
+      log_dim "ephemeral: throwaway memory · no skills · no shared MCP."
+      log_dim "(login is normal, and an INTERACTIVE run still writes a transcript to the tank — incognito here means it doesn't know you, not that it never happened.)"
+    fi
+  else
+    log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
+    log_dim "(login & transcript are normal; the tank's real memory is untouched.)"
+  fi
   # Run as a CHILD (subshell exec), so the parent resumes and the EXIT trap fires.
-  ( adapter_run "$d" "$@" ) || true
+  ( adapter_run "$d" "${eph[@]}" "$@" ) || true
 }

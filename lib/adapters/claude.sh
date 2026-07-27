@@ -93,6 +93,38 @@ adapter_audit_flags() {
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 
+# Optional hook: the per-run flags that make `--ephemeral` actually incognito.
+# <headless> is 1 when the caller is running a print-mode job, 0 for interactive.
+#
+# Why flags and not surgery: clikae's ephemeral used to isolate ONE channel, the
+# long-term memory, while the session still saw the user's personal skills, the
+# fleet's MCP servers, and wrote its transcript into the tank. The tempting fix —
+# temporarily repointing the tank's skills symlink — is the `memory isolate`
+# mistake again: it mutates a tank that another session may be live on. These are
+# per-RUN flags, so a concurrent session on the same tank is untouched.
+#
+# 🔴 NOT --bare, however much it looks like the answer. It also disables keychain
+# reads and restricts auth to ANTHROPIC_API_KEY, so it cannot log in on a
+# subscription tank at all — the one flag named for this job is the one that
+# breaks it.
+adapter_ephemeral_flags() {
+  local headless="${1:-0}"
+  # "Disable all skills" (its own help text) — the user's hand-authored skills
+  # and slash commands are exactly the beliefs a cold reader must not inherit.
+  printf -- '--disable-slash-commands\0'
+  # Only MCP servers named by --mcp-config, and we name none — so the fleet's
+  # shared connectors (fleet_mcp_prelaunch merges them at every launch) are out.
+  # That withdraws capability as well as context: an incognito reviewer should
+  # not be able to reach the user's sites.
+  printf -- '--strict-mcp-config\0'
+  # Sessions are not written to disk and cannot be resumed. Claude Code only
+  # honours this with --print, so an interactive ephemeral run still leaves a
+  # transcript in the tank. That limit is stated to the user rather than papered
+  # over: incognito means "it does not know you", not "it never happened".
+  [ "$headless" = "1" ] && printf -- '--no-session-persistence\0'
+  return 0
+}
+
 # Optional hook: start a fresh session under this profile, seeded with an initial
 # prompt. Used by `clikae handoff --to` to hand a brief to the next tank. Claude
 # Code takes an initial prompt as a positional argument.
