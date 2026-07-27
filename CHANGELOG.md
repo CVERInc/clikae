@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-27
+
+A day spent reading what this project says about itself and checking it against
+what the code does. Most of what follows was found in that gap.
+
+The headline is a bug that had been shipping for releases: `exec` with no command
+makes its redirections permanent, so eighteen tty lines had quietly pointed the
+board's stderr at `/dev/null` — invisible prompts that read as a hang, muted
+errors, and the engine you launched from the board losing its stderr entirely. It
+survived a fully green gate, because neither shellcheck nor bats can watch a
+terminal. The gate now has a third leg that can.
+
+**Breaking:** `clikae memory isolate` is gone — `clikae solo` leaves the fleet and
+gives the tank its own memory back — and a new tank now joins the shared brain
+automatically once you have opted in once. In the fleet means sharing; solo means
+not; there is no third state. See *Changed* below for why that was worth breaking.
+
 ### Changed
 
 - **In the fleet now means sharing the brain, and `clikae solo` is the only way

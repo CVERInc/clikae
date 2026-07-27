@@ -335,7 +335,7 @@ Pure bash, no runtime dependencies, held to a deliberate bar:
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
 
-Developed and hand-tested on **macOS**; Linux is covered by CI. **Linux / WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
+Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. The one macOS-only piece is `clikae app` (the double-clickable `.app` launcher) — everything else is plain bash. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
 
 ## Contributing
 
