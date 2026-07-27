@@ -465,3 +465,66 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   # the single prompt arg, not a separate arg.)
   [ "$(cat "$BATS_TEST_TMPDIR/argc.log")" = "6" ]
 }
+
+# --- agy: burn's artifact contract vs agy's headless permission model ---------
+# Field report 2026-07-27: `burn agy --artifact` failed in 11s, every time.
+# burn proves a run by the artifact FILE (exit codes lie); agy's headless mode
+# auto-denies the file tools on your paths because it cannot prompt for
+# permission with no terminal. Two contracts that cannot both be satisfied by
+# agy — but only over who holds the pen. agy prints fine, and burn already had
+# the output in hand, so clikae writes the artifact.
+_stub_agy_prints() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"; mkdir -p "$(dirname "$log")"; : > "$log"
+# Exactly the real shape: prints its answer, never touches the caller's paths.
+printf 'REVIEW: looks good\n'
+printf 'ARGV: %s\n' "$*"
+exit 0
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+}
+
+_stub_agy_silent() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"; mkdir -p "$(dirname "$log")"; : > "$log"
+exit 0
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+}
+
+@test "burn agy: clikae captures agy's stdout into the artifact it can't write itself" {
+  _stub_agy_prints
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/review.md"
+  run clikae burn agy default --artifact "$art" --prompt "review this"
+  [ "$status" -eq 0 ]
+  [ -f "$art" ]
+  [[ "$(cat "$art")" == *"REVIEW: looks good"* ]] || false
+  # and it says WHO wrote it — the user must not think agy did
+  [[ "$output" == *"clikae captured agy's output"* ]] || false
+}
+
+@test "burn agy: a silent run is still a failure, and says where to look" {
+  _stub_agy_silent
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/nothing.md"
+  run clikae burn agy default --artifact "$art" --prompt "review this"
+  [ "$status" -ne 0 ]
+  [ ! -f "$art" ]
+  [[ "$output" == *"brain"* ]] || false      # points at agy's own buffer dir
+}
+
+@test "burn agy: --timeout is handed to agy as --print-timeout" {
+  # Without this, agy enforced its OWN 5-minute default and clikae's --timeout
+  # was a fiction for any longer task.
+  _stub_agy_prints
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/t.md"
+  run clikae burn agy default --artifact "$art" --prompt "x" --timeout 900
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$art")" == *"--print-timeout 900s"* ]] || false
+}

@@ -45,6 +45,50 @@ clikae agy <tank> -- \
 That's it. The rules below are the difference between this returning real work and
 returning a blank.
 
+## `clikae burn agy --artifact` — who holds the pen
+
+burn proves a run happened by the **artifact file**, never the exit code. agy's
+headless mode **auto-denies the file tools on your paths** — with no terminal it
+cannot prompt for permission — so asking agy to write that artifact itself fails
+every single time:
+
+```
+[ FAIL ] agy/r produced no fresh artifact and shows no limit — a real task failure…
+    a tool required the "read_file" permission that headless mode cannot prompt
+    for, so it was auto-denied.
+```
+
+Those two contracts cannot both be satisfied *by agy*. They differ only in **who
+holds the pen**: agy prints perfectly well (that is its whole print mode), and
+burn already had the output in hand for its error tail. **So clikae writes the
+artifact from agy's stdout**, and says so on the row — you must never be left
+believing agy wrote a file it is not allowed to write.
+
+Two things deliberately NOT done:
+
+- **Adding an allow-rule to your agy `settings.json`.** That is clikae widening
+  an engine's permissions on your behalf — the same line
+  `--dangerously-skip-permissions` sits on, and it is yours to cross, not ours.
+- **Refusing `--artifact` for agy.** It would remove the only verification burn
+  has, to avoid a problem clikae can simply solve.
+
+⚠️ **The honest limit:** agy buffers a *large* answer into its own brain dir and
+prints only a pointer, so a big deliverable may arrive as a pointer-shaped
+artifact. Check the file. And a silent run is not proof nothing happened —
+look in `~/.gemini/antigravity-cli/brain/` before re-firing.
+
+### `--timeout` now reaches agy
+
+agy enforces its own print budget, **default 5 minutes**, and knows nothing about
+clikae's `--timeout`. Until 2026-07-27 that made `burn agy --timeout 1200` a
+fiction: agy self-terminated at 5m long before clikae's bound applied. When you
+pass `--timeout`, clikae now hands agy the same budget as `--print-timeout`. With
+no `--timeout`, agy's own 5-minute default stands — clikae does not invent one.
+
+**A timeout is not evidence of no work.** A run has been observed to time out
+with the work already committed and the build already green, only the final reply
+unprinted. Check the state before you re-fire.
+
 ## Rules that keep agy from firing a blank (hard-won)
 
 1. **Headless agy is `-p` (print mode), never `-i`.** `agy -i` needs a real TTY

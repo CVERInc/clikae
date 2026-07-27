@@ -99,6 +99,18 @@ tanks can never run at once. That's structural, not a missing feature. For a
 one-shot on the account that's already active, `clikae agy <tank> -- -p "…"` is the
 shorter path. (See [agy-dispatch.md](agy-dispatch.md).)
 
+**`clikae agy <tank>` with no terminal switches and stops.** The interactive UI
+needs a real TTY, so in a script or a piped context clikae completes the switch,
+says so, and returns 0 rather than exec'ing a TUI that can only fail with
+`could not open TTY`. That makes `clikae agy <tank>` usable as "just switch".
+Pass a headless prompt (`-- -p "…"`) and it always runs.
+
+**`clikae burn agy --artifact <path>` produces a file agy never touched.** agy's
+headless mode can't write to your paths, so clikae captures its stdout into the
+artifact and labels the row accordingly. See
+[agy-dispatch.md](agy-dispatch.md) — including the limit: a large answer may
+arrive as the pointer agy printed rather than the content it buffered.
+
 **agy appears in `clikae adapters` with a `subcommand` strategy and no env var.**
 That row is a resume-only capability shim, not a switchable engine: agy is
 architecturally a *target*, and `clikae_is_target` — not "an adapter file exists" —

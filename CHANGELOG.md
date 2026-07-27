@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae burn agy --artifact` failed 100% of the time, and now works.** Two
+  contracts that could not both be satisfied by agy: burn proves a run by the
+  **artifact file** (never the exit code — `codex exec` returns 0 on a limit),
+  while agy's headless mode **auto-denies the file tools on your paths**, because
+  with no terminal it cannot prompt for permission. Asking agy to write the
+  artifact was asking for the one thing it is not allowed to do — an 11-second
+  failure, every time, reported from the field on 2026-07-27.
+
+  They differ only in **who holds the pen**. agy prints fine, and burn already
+  had the output in hand for its error tail, so clikae now writes the artifact
+  from agy's stdout — and labels the row, so nobody believes agy wrote a file it
+  cannot write. Deliberately not done: adding an allow-rule to the user's agy
+  settings (that is clikae widening an engine's permissions on their behalf, the
+  same line `--dangerously-skip-permissions` sits on), or refusing `--artifact`
+  for agy (which would remove the only verification burn has).
+
+  Honest limit, stated on the row and in the docs: agy buffers a *large* answer
+  into its own brain dir and prints a pointer, so a big deliverable can arrive
+  pointer-shaped. And a silent run is not proof nothing happened — the failure
+  message now points at `~/.gemini/antigravity-cli/brain/` before you re-fire.
+
+- **`burn --timeout` never reached agy.** agy enforces its own print budget,
+  default 5 minutes, and knew nothing about clikae's `--timeout`, so
+  `burn agy --timeout 1200` was a fiction — agy self-terminated at 5m first. The
+  budget you ask for is now handed to agy as `--print-timeout`. With no
+  `--timeout`, agy's own default stands; clikae does not invent one.
+
+- **`clikae agy <tank>` in a non-TTY context ended in a confusing error after a
+  SUCCESSFUL switch.** It switched, then unconditionally exec'd the interactive
+  UI, which can only fail with `could not open TTY` — while still exiting 0, so
+  it read like the switch had failed. With no terminal and nothing to pass
+  through, it now completes the switch, says it is switch-only, and stops. A
+  headless prompt (`-- -p "…"`) still always runs.
+
 ## [0.15.0] — 2026-07-27
 
 A day spent reading what this project says about itself and checking it against

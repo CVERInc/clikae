@@ -209,6 +209,12 @@ _agy_burn() {
 
     local -a gen=(-p "$prompt") d
     for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
+    # agy enforces its OWN print budget, default 5 minutes, and it does not know
+    # about clikae's --timeout. Without this, `burn agy --timeout 1200` was a
+    # fiction: agy self-terminated at 5m and clikae's outer bound never applied.
+    # Only passed when the user actually asked for a budget — clikae has no
+    # business inventing one.
+    [ -n "$timeout_s" ] && gen+=(--print-timeout "${timeout_s}s")
     local -a runner=()
     if [ -n "$timeout_s" ]; then
       local tb; tb="$(_burn_timeout_bin)"
@@ -226,8 +232,31 @@ _agy_burn() {
       log_done "Done on agy/$cur — artifact present: $artifact"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
+    elif [ -n "$out" ]; then
+      # burn's contract is "the artifact proves it happened". agy's headless mode
+      # AUTO-DENIES the file tools on your paths — it cannot prompt for
+      # permission with no terminal — so asking agy to write the artifact itself
+      # fails 100% of the time, and did (field report 2026-07-27). The two
+      # contracts are incompatible, but only in who holds the pen: agy prints
+      # perfectly well, and clikae already had the output in hand for its error
+      # tail. So clikae writes it.
+      #
+      # Deliberately NOT the alternatives: adding an allow-rule to the user's agy
+      # settings would have clikae widen an engine's permissions on their behalf
+      # (the same line `--dangerously-skip-permissions` sits on), and refusing
+      # --artifact outright would remove the only verification burn has.
+      if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
+        log_done "Done on agy/$cur — clikae captured agy's output into: $artifact"
+        log_dim  "(agy's headless mode can't write to your paths, so clikae wrote it. If the task was large, agy may have left the real content in its own brain dir and printed only a pointer — check the file.)"
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+        return 0
+      fi
+      log_err "agy/$cur produced output but clikae could not write $artifact"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      return 1
     else
-      log_err "agy/$cur produced no fresh artifact and shows no limit — a real task failure, not a dry tank."
+      log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
+      log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1

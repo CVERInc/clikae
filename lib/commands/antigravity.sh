@@ -307,6 +307,17 @@ _agy_switch() {
     log_done "agy is now on tank: $name"
     log_dim "agy is global — switched all terminals to $name."
   fi
+  # Launching the interactive UI needs a real terminal. With no TTY and nothing
+  # to pass through, `clikae agy <tank>` is being used as "just switch" — which
+  # works and is genuinely useful in a script — so stop here rather than exec a
+  # bubbletea TUI that can only fail with `could not open TTY`. The switch above
+  # already happened; the old behaviour ended in a confusing error AFTER a
+  # successful switch, and still exited 0, which reads like the switch failed.
+  # Passthrough args (e.g. `-- -p "…"`) are headless and always exec.
+  if [ "$#" -eq 0 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+    log_dim "no terminal here — switched only. To run it: clikae agy $name (from a real terminal), or pass a headless prompt: clikae agy $name -- -p \"…\""
+    return 0
+  fi
   exec agy "$@"
 }
 
