@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-07-27
+
+Three findings from one real dispatch, none of which a reader of the code would
+have hit: `clikae burn agy --artifact` could never succeed, because burn proves a
+run by the artifact FILE while agy's headless mode is not allowed to write to
+your paths. They differ only in who holds the pen — so clikae holds it now.
+
 ### Fixed
 
 - **`clikae burn agy --artifact` failed 100% of the time, and now works.** Two
