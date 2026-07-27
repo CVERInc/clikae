@@ -12,7 +12,7 @@
 <p><strong>Status:</strong> direction LOCKED with the maintainer (2026-06-02, grill session on
 branch <code>feat/v0.5.3-i18n-tui</code>). ✅ <strong>The build plan below is complete</strong> — M1 and
 M2 shipped in the v0.5 line, M3 shipped BETA (<code>clikae auto</code>, the board's <code>A</code> key,
-claude-only), and M4's version bump happened many releases ago. Read it for the
+claude only at first), and M4's version bump happened many releases ago. Read it for the
 <strong>locked decisions and the reasoning</strong>, not as outstanding work.</p>
 <p><strong>Scope of its SSOT claim:</strong> this file owns <em>why</em> the supervising runtime is
 shaped the way it is. It does <strong>not</strong> own the command surface —
@@ -32,10 +32,14 @@ requirement from the maintainer: being served a version that <em>looks</em> like
 X but doesn't forces him to re-litigate and dig old records — never do that.</p>
 <p>Concretely, the known honest limits this redesign MUST surface, not hide:</p>
 <ul>
-<li><strong>Interactive codex cannot be auto-managed.</strong> Its limit signal lives only in the
-live <code>codex exec --json</code> stdout (never a file), and an interactive codex TUI owns
-its own tty, so clikae-as-parent can't see it. Only claude (transcript), agy
-(log), and <strong>headless</strong> codex (piped stdout) are auto-detectable.</li>
+<li><del><strong>Interactive codex cannot be auto-managed.</strong></del> <strong>Falsified 2026-07-27.</strong> The
+claim was that codex's limit signal lives only in live <code>codex exec --json</code> stdout
+and never in a file. It does reach a file: the interactive TUI writes
+<code>codex_error_info: usage_limit_exceeded</code> into its own rollout transcript. Kept
+here rather than deleted because it is the sharpest example of what this section
+is FOR — an honest-limit note is only honest while someone keeps checking it, and
+this one was recited for months without anyone opening a rollout after a limit.
+Detectable today: claude (transcript), codex (rollout), agy (log).</li>
 <li><strong>The same-terminal handoff is a kill+resume, not a seamless continuation.</strong>
 There's one screen redraw (&quot;a flicker&quot;). True in-place continuation needs Claude
 Code itself (issue anthropics/claude-code#35744), which is out of our control.</li>
@@ -62,7 +66,7 @@ not a separate switch.</li>
 <li><strong>Background engine = a supervisor, NOT a daemon.</strong> You launch through clikae; it
 runs the engine as a child and watches the live signal. &quot;Must be opened to run&quot;
 is a deliberate privacy feature. Detection sources: claude=transcript file,
-agy=log file, codex=live stdout stream (headless only).</li>
+agy=log file, codex=rollout transcript (and live stdout when headless).</li>
 <li><strong>Handoff experience = same terminal, kill+resume in place</strong> (one flicker
 accepted), with a one-line inline report. Interactive-codex excepted (see
 limits).</li>
@@ -79,12 +83,36 @@ expansion rather than over-minimising.</li>
 </ol>
 <h3 id="consequent-concept-changes">Consequent concept changes</h3>
 <ul>
-<li><strong><code>watch</code> folds into the supervisor</strong> — launching through clikae already watches;
-a separate <code>watch</code> command becomes redundant (keep as a hidden alias at most).</li>
-<li><strong><code>pool</code> is already removed</strong> (v0.5.3 WIP): tanks ARE the reserve; the order is
-the burn order.</li>
-<li><strong><code>to</code> / <code>relay</code> / <code>handoff</code>:</strong> <code>to</code> stays the user verb; bare <code>clikae to</code> walks
-the burn order to the next tank. relay/handoff stay internal.</li>
+<li>
+<p><strong><code>watch</code> folds into the supervisor</strong> — launching through clikae already watches;
+a separate <code>watch</code> command becomes redundant (keep as a hidden alias at most).</p>
+</li>
+<li>
+<p><strong><code>pool</code> is already removed</strong> (v0.5.3 WIP): tanks ARE the reserve; the order is
+the burn order.</p>
+</li>
+<li>
+<p><strong>Re-queueing a DROPPED PARALLEL TASK is a non-goal</strong> (decided 2026-07-27).
+When several tanks burn in parallel and one dries mid-task, nothing re-fires
+<em>that</em> task onto a live tank. That is not an unbuilt feature — it is
+architecturally out of reach here, for the same reason the supervisor advances
+only on exit: clikae runs the engine as a CHILD and can act only when the child
+returns. A relay that has to intervene while the process is still running would
+need the engine's cooperation, which is the same wall as decision 7's
+&quot;interactive-codex excepted&quot;.</p>
+<p>It is also no longer needed. <code>clikae resume</code> reaches back to any past session
+across every tank, so the human decides which tank picks the work up — the
+choice a task↔tank scheduler would have made for them, at the moment they
+actually have the context to make it. The durable version of &quot;a dropped task
+can just re-fire&quot; is the convention already in the playbooks: make the task
+idempotent and verify it by its artifact.</p>
+<p>Building it anyway would mean clikae growing a scheduler that tracks live
+work — a daemon in all but name, against decision 6.</p>
+</li>
+<li>
+<p><strong><code>to</code> / <code>relay</code> / <code>handoff</code>:</strong> <code>to</code> stays the user verb; bare <code>clikae to</code> walks
+the burn order to the next tank. relay/handoff stay internal.</p>
+</li>
 </ul>
 <h2 id="build-plan-milestones-lowest-risk-first-each-shippable--verifiable">Build plan (milestones, lowest-risk first; each shippable + verifiable)</h2>
 <p>Each milestone must land green (bats + shellcheck) and have its claims match
@@ -117,8 +145,9 @@ toggle that says &quot;full-auto&quot; while nothing auto-switches would be a ph
 the autonomy control ships together with its consumer (the supervisor).</li>
 </ul>
 <h3 id="m3--the-supervisor-runtime--autonomy-the-headline--implemented-beta">M3 — The supervisor runtime + autonomy (the headline) — IMPLEMENTED (BETA)</h3>
-<p>Shipped behind a BETA label (claude-only; <code>clikae auto</code>; board <code>A</code>; one hop per
-run). Stub tests cover the decision gate + dry-advance; real interactive
+<p>Shipped behind a BETA label (<code>clikae auto</code>; board <code>A</code>; one hop per run). Covered
+claude only until 2026-07-27, when codex's limit turned out to be readable from its
+rollout after all; agy stays out (one global login, no per-tank signal). Stub tests cover the decision gate + dry-advance; real interactive
 kill+resume still wants real-claude dogfooding (docs say &quot;beta, feedback welcome&quot;).
 Original spec below.</p>
 <ul>

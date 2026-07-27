@@ -93,8 +93,8 @@ plain, conventional verbs.
 > burn order (per `clikae auto`) in the **same terminal** (one redraw), and your
 > conversation continues there. Honest limits: it advances *on exit*, not by killing
 > a live session mid-stream (that needs engine support — see issue
-> anthropics/claude-code#35744); one hop per run; interactive **codex** can't be
-> auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+> anthropics/claude-code#35744); one hop per run; **claude and codex** are
+> supervised — agy has one global login and no per-tank signal. Nothing runs in the
 > background unless you launched it through clikae (no daemon) — deliberate.
 > `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
 
@@ -104,7 +104,7 @@ plain, conventional verbs.
 |---|---|
 | *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, `[`/`]` reorder (the board IS the burn order), ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `R` open the full cross-tank resume picker, `x` incognito, `n` new, `a` rename the tank, `d` delete, `s` toggle solo (in/out of the fleet), `m` the memory (Soul) dial, `c` clean up disk space (opens `clikae clean`, returns to the board), `/` filter, `A` cycle autonomy (ask/safe/full · BETA), `l` pick language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
 | `lang [<locale>]` | Show or set the interface language (dashboard + prompts) — nine of them: `en-US`, `ja-JP`, `zh-TW`, `zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR`, `pt-BR`. Bare `clikae lang` lists them. Persists to `$CLIKAE_HOME/lang`; the board's `l` key opens a language picker. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LC_ALL` > `$LANG` > en-US. Adding a tenth is a self-contained PR — see [Adding a language](/adding-a-locale.md). |
-| `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output `{cli, profile, account, path}` for scripts and the GUI. |
+| `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output `{cli, profile, account, path}` for scripts and the GUI. 🔴 **Do not build a path out of `cli` + `profile`** — `cli` is the name you *invoke* (`agy`) while the store directory keeps the engine's own name (`antigravity`), so the two differ for Antigravity. `path` is authoritative for where the tank lives; use it. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
 | `doctor` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next. |
 | `info [--json]` | Show install paths, platform, adapters, and tank count. |
@@ -115,7 +115,7 @@ plain, conventional verbs.
 
 | Command | What it does |
 |---|---|
-| `clean [--dry-run] [--older-than <days>] [--min-size <MB>]` | Move old session transcripts/databases to the **Trash** to free disk space (never touches tank configs, memory, or settings, and never `rm`s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type `clikae clean`, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. **Redundant (safe)** — pre-checked: *stale copies* (`to`/relay and a cross-tank resume *copy* the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and *orphaned subagent data* (claude's leftover `<sid>/` sibling dirs; moving a transcript to the Trash takes its sibling dir with it). **Untouched for 30+ days** — pre-checked: sessions older than `--older-than` (default 30). **Big but recent — your call** — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled `diverged — has unique content`. A session any process still has open is never offered, in **any** section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). `--min-size` filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big *recent* sessions); combined with `--older-than` a candidate must satisfy both. `--dry-run` prints the same sectioned list with each row's `[x]`/`[ ]` state, without moving anything; a non-TTY run refuses to move anything. If `~/.Trash` itself is unusable, a row falls back to a direct (unrecoverable) delete and says so — never a silent fallback. The board's `c` key and the resume picker's `c` key open the same screen and return. (`clikae resume cleanup`, where this flow first shipped, is a hidden alias that forwards here.) |
+| `clean [--dry-run] [--older-than <days>] [--min-size <MB>]` | Move old session transcripts/databases to the **Trash** to free disk space (never touches tank configs, memory, or settings, and never `rm`s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type `clikae clean`, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. **Redundant (safe)** — pre-checked: *stale copies* (`to`/relay and a cross-tank resume *copy* the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and *orphaned subagent data* (claude's leftover `<sid>/` sibling dirs; moving a transcript to the Trash takes its sibling dir with it). **Untouched for 30+ days** — pre-checked: sessions older than `--older-than` (default 30). **Big but recent — your call** — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled `diverged — has unique content`. A session any process still has open is never offered, in **any** section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). `--min-size` filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big *recent* sessions); combined with `--older-than` a candidate must satisfy both. `--dry-run` prints the same sectioned list with each row's `[x]`/`[ ]` state, without moving anything; a non-TTY run refuses to move anything. If `~/.Trash` isn't usable, clikae says so **before the confirm** and touches nothing — it never deletes as a fallback, because you asked it to move something, not to destroy it. If an individual item can't be moved mid-run it is left exactly where it is and named, and the summary counts only what actually moved. The board's `c` key and the resume picker's `c` key open the same screen and return. (`clikae resume cleanup`, where this flow first shipped, is a hidden alias that forwards here.) |
 
 ### Antigravity (agy) — same verbs, one power mode
 
@@ -416,11 +416,21 @@ For each tank, `clikae`:
    The sentinels make safe, exact removal possible.
 3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens a terminal,
    runs the env-var-prefixed engine, and sets the window title to `claude (work)`
-   so you can tell windows apart. The terminal is **Terminal.app** by default;
-   `--terminal iterm2` and `--terminal ghostty` target those instead (set
-   `$CLIKAE_TERMINAL` to change the default). Terminal.app and iTerm2 are driven
-   by AppleScript; Ghostty has no window-opening CLI on macOS, so its launcher
-   goes through `open -na Ghostty.app --args … -e …`.
+   so you can tell windows apart. The terminal **defaults to the one you're
+   running in** when that's a supported one (read from `$TERM_PROGRAM`, and only
+   if it's actually installed) — otherwise Terminal.app. `$CLIKAE_TERMINAL`
+   overrides the guess, and `--terminal terminal|iterm2|ghostty` overrides both;
+   the choice is printed on the `terminal:` line so it's never a silent guess.
+   Terminal.app and iTerm2 are driven by AppleScript; Ghostty has no
+   window-opening CLI on macOS, so its launcher goes through
+   `open -na Ghostty.app --args … -e …`.
+
+   **Warp is not a target, and it isn't an oversight**: it has no supported way
+   to open a window running a given command (its URL scheme opens a tab in a
+   directory and stops; the only command-running door is a Launch Configuration
+   YAML, a different shape from every other target here). `clikae app --terminal
+   warp` says exactly that instead of a generic "unknown". A launcher built for
+   any other target still works fine when you double-click it from Warp.
 
 No daemons, no global state, no network calls. You can read every line.
 

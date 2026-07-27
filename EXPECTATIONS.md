@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/792d3b3f886c995fa44186bb2418d8e41f1e3c4b/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/eeba1425c20539a596dbdeeaa9bc6c4f5010ab2b/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -18,11 +18,19 @@ one: with many tanks open at once it is noise, and the shell you happen to have 
 `clikae` from is rarely the one you care about. The active tank is still computed —
 it drives the launch hint and the relay source — just not drawn.
 
-**codex shows `○`, never 🟢 green.** codex's usage limit is exec-stdout-only — it's
-never written to a file clikae can scan — so clikae can honestly show 🔴 *only* when
-it caught the limit headless (`clikae burn`, persisted), and `○` ("no reading")
-otherwise. `○` means "can't tell", not "no fuel". claude/agy do get a real green
-because their state is on disk.
+**A codex tank can read `○` even though codex is fine.** `○` means "no reading",
+not "no fuel" — clikae only colours a dot it can actually justify. codex *does*
+record a usage limit to disk (its interactive rollout carries a
+`codex_error_info: usage_limit_exceeded` field, which is what clikae matches — the
+English sentence beside it is vendor copy and will drift), so a limited tank does
+turn 🔴 and clears itself on the next successful reply. But a tank nobody has
+touched inside the scan window has nothing to read, and clikae says so rather than
+guessing green.
+
+> This page said the opposite until 2026-07-27 — "exec-stdout-only, never written
+> to a file clikae can scan". That belief was load-bearing: it is why the fuel dot
+> and `clikae auto` were claude-only for months. Nobody had opened a codex rollout
+> after a real limit.
 
 **A codex reset time can read odd (e.g. `2026-06-05 07:00`) and carries a
 `· seen HH:MM` tag.** codex reports its reset in **UTC**, for whichever limit window
@@ -68,9 +76,12 @@ silently ignore it.
 authorises auto-switching for *every* future `--auto` watch on *any* tank, until you
 delete `$CLIKAE_HOME/auto-relay-consent`. (clikae tells you the file + how to revoke.)
 
-**`clikae auto safe/full` only affects sessions launched *through* `clikae`, and only
-claude (BETA).** A session you opened via an alias / `.app` / another engine isn't
-supervised, so `auto` has no effect on it.
+**`clikae auto safe/full` only affects sessions launched *through* `clikae`
+(BETA).** A session you opened via an alias / `.app` / a bare `claude` isn't
+supervised, so `auto` has no effect on it. Engine coverage is claude and codex —
+both persist their limit where clikae can read it after the session exits. agy is
+out for a structural reason, not a missing feature: one global login, so there is
+no per-tank signal to read.
 
 ## Antigravity (agy)
 

@@ -160,8 +160,8 @@ hitting its limit</strong> — quit the dead session in an interactive run; a he
 burn order (per <code>clikae auto</code>) in the <strong>same terminal</strong> (one redraw), and your
 conversation continues there. Honest limits: it advances <em>on exit</em>, not by killing
 a live session mid-stream (that needs engine support — see issue
-anthropics/claude-code#35744); one hop per run; interactive <strong>codex</strong> can't be
-auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+anthropics/claude-code#35744); one hop per run; <strong>claude and codex</strong> are
+supervised — agy has one global login and no per-tank signal. Nothing runs in the
 background unless you launched it through clikae (no daemon) — deliberate.
 <code>clikae status</code> shows what it carried (recent carries). <strong>Tell us how it feels.</strong></p>
 </blockquote>
@@ -184,7 +184,7 @@ background unless you launched it through clikae (no daemon) — deliberate.
 </tr>
 <tr>
 <td><code>tanks [-p|--paths] [--json]</code></td>
-<td>List all tanks, with the logged-in account where the adapter can tell. (Aliases: <code>list</code>, <code>ls</code>.) <code>--json</code> emits machine-readable output <code>{cli, profile, account, path}</code> for scripts and the GUI.</td>
+<td>List all tanks, with the logged-in account where the adapter can tell. (Aliases: <code>list</code>, <code>ls</code>.) <code>--json</code> emits machine-readable output <code>{cli, profile, account, path}</code> for scripts and the GUI. 🔴 <strong>Do not build a path out of <code>cli</code> + <code>profile</code></strong> — <code>cli</code> is the name you <em>invoke</em> (<code>agy</code>) while the store directory keeps the engine's own name (<code>antigravity</code>), so the two differ for Antigravity. <code>path</code> is authoritative for where the tank lives; use it.</td>
 </tr>
 <tr>
 <td><code>status [&lt;engine&gt;] [--json]</code></td>
@@ -219,7 +219,7 @@ background unless you launched it through clikae (no daemon) — deliberate.
 <tbody>
 <tr>
 <td><code>clean [--dry-run] [--older-than &lt;days&gt;] [--min-size &lt;MB&gt;]</code></td>
-<td>Move old session transcripts/databases to the <strong>Trash</strong> to free disk space (never touches tank configs, memory, or settings, and never <code>rm</code>s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type <code>clikae clean</code>, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. <strong>Redundant (safe)</strong> — pre-checked: <em>stale copies</em> (<code>to</code>/relay and a cross-tank resume <em>copy</em> the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and <em>orphaned subagent data</em> (claude's leftover <code>&lt;sid&gt;/</code> sibling dirs; moving a transcript to the Trash takes its sibling dir with it). <strong>Untouched for 30+ days</strong> — pre-checked: sessions older than <code>--older-than</code> (default 30). <strong>Big but recent — your call</strong> — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled <code>diverged — has unique content</code>. A session any process still has open is never offered, in <strong>any</strong> section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). <code>--min-size</code> filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big <em>recent</em> sessions); combined with <code>--older-than</code> a candidate must satisfy both. <code>--dry-run</code> prints the same sectioned list with each row's <code>[x]</code>/<code>[ ]</code> state, without moving anything; a non-TTY run refuses to move anything. If <code>~/.Trash</code> itself is unusable, a row falls back to a direct (unrecoverable) delete and says so — never a silent fallback. The board's <code>c</code> key and the resume picker's <code>c</code> key open the same screen and return. (<code>clikae resume cleanup</code>, where this flow first shipped, is a hidden alias that forwards here.)</td>
+<td>Move old session transcripts/databases to the <strong>Trash</strong> to free disk space (never touches tank configs, memory, or settings, and never <code>rm</code>s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type <code>clikae clean</code>, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. <strong>Redundant (safe)</strong> — pre-checked: <em>stale copies</em> (<code>to</code>/relay and a cross-tank resume <em>copy</em> the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and <em>orphaned subagent data</em> (claude's leftover <code>&lt;sid&gt;/</code> sibling dirs; moving a transcript to the Trash takes its sibling dir with it). <strong>Untouched for 30+ days</strong> — pre-checked: sessions older than <code>--older-than</code> (default 30). <strong>Big but recent — your call</strong> — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled <code>diverged — has unique content</code>. A session any process still has open is never offered, in <strong>any</strong> section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). <code>--min-size</code> filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big <em>recent</em> sessions); combined with <code>--older-than</code> a candidate must satisfy both. <code>--dry-run</code> prints the same sectioned list with each row's <code>[x]</code>/<code>[ ]</code> state, without moving anything; a non-TTY run refuses to move anything. If <code>~/.Trash</code> isn't usable, clikae says so <strong>before the confirm</strong> and touches nothing — it never deletes as a fallback, because you asked it to move something, not to destroy it. If an individual item can't be moved mid-run it is left exactly where it is and named, and the summary counts only what actually moved. The board's <code>c</code> key and the resume picker's <code>c</code> key open the same screen and return. (<code>clikae resume cleanup</code>, where this flow first shipped, is a hidden alias that forwards here.)</td>
 </tr>
 </tbody>
 </table>
@@ -470,21 +470,35 @@ child so cleanup can run on exit. A crashed run self-heals on the next
 <h2 id="how-it-works">How it works</h2>
 <p>For each tank, <code>clikae</code>:</p>
 <ol>
-<li>Creates <code>~/.clikae/profiles/&lt;engine&gt;/&lt;tank&gt;/</code> — the directory the engine's env
+<li>
+<p>Creates <code>~/.clikae/profiles/&lt;engine&gt;/&lt;tank&gt;/</code> — the directory the engine's env
 var (e.g. <code>CLAUDE_CONFIG_DIR</code>) points at. (The on-disk path keeps the word
-<code>profiles</code> for stability; you only ever type/​see <em>tank</em>.)</li>
-<li>(<code>alias</code>) Appends a sentinel-wrapped block to your shell rc:
+<code>profiles</code> for stability; you only ever type/​see <em>tank</em>.)</p>
+</li>
+<li>
+<p>(<code>alias</code>) Appends a sentinel-wrapped block to your shell rc:</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span># >>> clikae:claude.work >>></span></span>
 <span class="line"><span>alias claude-work='CLAUDE_CONFIG_DIR="/Users/you/.clikae/profiles/claude/work" claude'</span></span>
 <span class="line"><span># &#x3C;&#x3C;&#x3C; clikae:claude.work &#x3C;&#x3C;&#x3C;</span></span></code></pre>
-The sentinels make safe, exact removal possible.</li>
-<li>(<code>app</code>, macOS) Generates an AppleScript-compiled <code>.app</code> that opens a terminal,
+<p>The sentinels make safe, exact removal possible.</p>
+</li>
+<li>
+<p>(<code>app</code>, macOS) Generates an AppleScript-compiled <code>.app</code> that opens a terminal,
 runs the env-var-prefixed engine, and sets the window title to <code>claude (work)</code>
-so you can tell windows apart. The terminal is <strong>Terminal.app</strong> by default;
-<code>--terminal iterm2</code> and <code>--terminal ghostty</code> target those instead (set
-<code>$CLIKAE_TERMINAL</code> to change the default). Terminal.app and iTerm2 are driven
-by AppleScript; Ghostty has no window-opening CLI on macOS, so its launcher
-goes through <code>open -na Ghostty.app --args … -e …</code>.</li>
+so you can tell windows apart. The terminal <strong>defaults to the one you're
+running in</strong> when that's a supported one (read from <code>$TERM_PROGRAM</code>, and only
+if it's actually installed) — otherwise Terminal.app. <code>$CLIKAE_TERMINAL</code>
+overrides the guess, and <code>--terminal terminal|iterm2|ghostty</code> overrides both;
+the choice is printed on the <code>terminal:</code> line so it's never a silent guess.
+Terminal.app and iTerm2 are driven by AppleScript; Ghostty has no
+window-opening CLI on macOS, so its launcher goes through
+<code>open -na Ghostty.app --args … -e …</code>.</p>
+<p><strong>Warp is not a target, and it isn't an oversight</strong>: it has no supported way
+to open a window running a given command (its URL scheme opens a tab in a
+directory and stops; the only command-running door is a Launch Configuration
+YAML, a different shape from every other target here). <code>clikae app --terminal warp</code> says exactly that instead of a generic &quot;unknown&quot;. A launcher built for
+any other target still works fine when you double-click it from Warp.</p>
+</li>
 </ol>
 <p>No daemons, no global state, no network calls. You can read every line.</p>
 <h2 id="supported-engines">Supported engines</h2>

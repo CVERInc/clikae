@@ -231,8 +231,8 @@ fuel words forced on them.</p>
 <td>Give a tank an optional <strong>git commit identity</strong>. When set, <code>clikae env</code> also exports <code>GIT_AUTHOR_*</code>/<code>GIT_COMMITTER_*</code> so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat <code>git config</code> but not an explicit <code>git -c user.email=…</code>; future commits only.</td>
 </tr>
 <tr>
-<td><code>clikae memory &lt;share|isolate|status&gt; [&lt;engine&gt; &lt;tank&gt;]</code></td>
-<td>The <strong>memory dial</strong> (§10.1, docs/memory.md). <code>share &lt;group&gt;</code> points a tank's long-term memory at ONE vendor-neutral markdown store (<code>souls/&lt;group&gt;/memory</code>, a &quot;Soul&quot;) so several of <em>your own</em> tanks — <strong>across engines</strong> — read/write the same brain; <code>isolate</code> restores a tank's own memory; <code>status</code> shows the share state. Two strategies by what the engine exposes: <strong>claude</strong> fans its memory DIR into the store (symlink, per-<code>$PWD</code>); <strong>codex</strong> gets a fenced pointer note in its <code>AGENTS.md</code> and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 opt-in and per-tank — clikae never auto-crosses accounts; crossing your own accounts is announced (<code>--yes</code> skips the prompt). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of <code>--ephemeral</code>'s fan-out. agy points the same way via <code>~/.gemini/GEMINI.md</code>.</td>
+<td><code>clikae memory &lt;share|status&gt; [&lt;engine&gt; &lt;tank&gt;]</code></td>
+<td>The <strong>memory dial</strong> (§10.1, docs/memory.md). <code>share &lt;group&gt;</code> points a tank's long-term memory at ONE vendor-neutral markdown store (<code>souls/&lt;group&gt;/memory</code>, a &quot;Soul&quot;) so several of <em>your own</em> tanks — <strong>across engines</strong> — read/write the same brain; <code>isolate</code> restores a tank's own memory; <code>status</code> shows the share state. To take a tank OUT, use <code>clikae solo</code> — it leaves the group and gives the tank its own memory back (the old <code>isolate</code> verb was retired into it, because a tank inside the fleet with no brain was a state the board could not show). Two strategies by what the engine exposes: <strong>claude</strong> fans its memory DIR into the store (symlink, per-<code>$PWD</code>); <strong>codex</strong> gets a fenced pointer note in its <code>AGENTS.md</code> and reads/writes the shared markdown via the memory protocol (no translator, no drift — it's the same file). 🔴 Consent is once per MACHINE, not per tank: nothing shares until your first <code>share</code>, which also records the machine default so a new tank joins it at <code>init</code> (solo never does). Crossing your own accounts is still announced and never automatic (<code>--yes</code> skips the prompt; <code>init</code> deliberately does not pass it). Seeds by COPY, stashes a joiner's own memory aside (reversible). The persistent fan-in sibling of <code>--ephemeral</code>'s fan-out. agy points the same way via <code>~/.gemini/GEMINI.md</code>.</td>
 </tr>
 <tr>
 <td><code>clikae solo &lt;engine&gt; &lt;tank&gt; [reason | --off]</code></td>
@@ -590,8 +590,8 @@ is just another dial, with a spectrum:</p>
 </tr>
 <tr>
 <td><strong>isolate</strong></td>
-<td>N → <strong>N</strong> (today's default)</td>
-<td>the current behaviour; blast-radius containment</td>
+<td>N → <strong>N</strong></td>
+<td>reached by <code>clikae solo</code>; blast-radius containment</td>
 </tr>
 <tr>
 <td><strong>evaporate</strong></td>

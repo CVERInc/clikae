@@ -31,7 +31,7 @@ behaviour:</p>
 <th>Mode</th>
 <th>Mapping</th>
 <th>Primitive</th>
-<th>For whom</th>
+<th>Reached by</th>
 </tr>
 </thead>
 <tbody>
@@ -39,27 +39,33 @@ behaviour:</p>
 <td><strong>share</strong></td>
 <td>N tanks → <strong>1</strong> store (fan-in)</td>
 <td>symlink fans in</td>
-<td>aggregate your own brain across your own accounts</td>
+<td>being in the fleet (the default once you have opted in once)</td>
 </tr>
 <tr>
 <td><strong>isolate</strong></td>
-<td>N → <strong>N</strong> (today's default)</td>
+<td>N → <strong>N</strong></td>
 <td>none (separate dirs)</td>
-<td>blast-radius containment</td>
+<td><code>clikae solo</code> — out of the fleet, own brain back</td>
 </tr>
 <tr>
 <td><strong>evaporate</strong></td>
 <td>N → <strong>0</strong> (throwaway)</td>
 <td>symlink to <code>mktemp -d</code></td>
-<td>the ephemeral power user (<code>--ephemeral</code>, ✅ shipped)</td>
+<td><code>--ephemeral</code>, for ONE run</td>
 </tr>
 </tbody>
 </table>
+<p><strong>The dial has two positions, not three.</strong> <code>isolate</code> used to be its own verb, and
+that produced a state the board could not express: a tank sitting <em>inside</em> the
+fleet with no brain. The board's only axis is fleet-vs-solo, so such a tank looked
+exactly like one that shared — which is how a person ends up believing every tank
+shares when several quietly do not. Leaving the fleet and leaving the brain are
+now one act: <code>clikae solo</code>. In the fleet means sharing; solo means not.</p>
 <blockquote>
-<p>⚠️ <strong><code>isolate</code> is not &quot;incognito&quot;.</strong> If what you want is a clean, throwaway
+<p>⚠️ <strong><code>solo</code> is not &quot;incognito&quot;.</strong> If what you want is a clean, throwaway
 session — a cold read, an unbiased audit, a reviewer who doesn't know what you
 believe — that is <strong>evaporate</strong> (<code>--ephemeral</code>): it affects <em>this one run</em>, it
-touches no wiring, and it puts the Soul back when the run ends. <code>isolate</code>
+touches no wiring, and it puts the Soul back when the run ends. <code>solo</code>
 <strong>rewires the live tank</strong>: every project directory's memory symlink is removed
 on the spot, and the tank stops sharing until someone dials it back.</p>
 <p>Field incident, 2026-07-12: an agent that wanted a memory-clean workspace ran
@@ -71,9 +77,10 @@ re-projected <strong>at launch</strong> — but a session already <em>running</e
 never gets a relaunch, so it simply went amnesiac mid-flight while
 <code>memory status</code> went on reporting &quot;shared&quot;. Both are fixed as of v0.14.3
 (<code>share</code> now fans into every project directory of the tank, creating the slot),
-but the lesson stands: <strong>don't reach for <code>isolate</code> when you meant
-<code>--ephemeral</code>.</strong></p>
-<p>Mnemonic: <strong>ephemeral changes this once; isolate changes from now on.</strong></p>
+but the lesson stands: <strong>don't reach for the permanent verb when you meant
+<code>--ephemeral</code>.</strong> Retiring <code>isolate</code> into <code>solo</code> moved that footgun's name; it
+did not remove it, which is why this warning now names <code>solo</code>.</p>
+<p>Mnemonic: <strong>ephemeral changes this once; solo changes from now on.</strong></p>
 </blockquote>
 <p>Sharing is <strong>per-tank, whole-brain</strong>: the consent unit is the tank (the members
 file under <code>souls/&lt;group&gt;/</code>), never a single directory. claude keeps one memory
@@ -81,8 +88,16 @@ dir <em>per project directory</em>, so those symlinks are just per-directory
 <strong>projections</strong> of the membership — <code>share</code> fans in every existing directory's
 slot at once, and every clikae launch re-projects the current directory first
 (<code>soul_prelaunch</code>, lib/core/soul.sh). A member tank therefore never quietly
-accumulates isolated side-memory in a new directory; the only way a tank keeps
-its own memory is <code>isolate</code> (or <code>solo</code>, which refuses sharing outright).</p>
+accumulates isolated side-memory in a new directory; the only way a tank keeps its
+own memory is <code>clikae solo</code>.</p>
+<p><strong>Consent is given once, per machine — not per tank.</strong> Nothing is shared until
+your first <code>share</code>; that share also records the group in
+<code>$CLIKAE_HOME/soul-default</code>, and from then on a tank created by <code>clikae init</code>
+joins it automatically (a solo tank never does). Asking per tank was not consent,
+it was a chore, and one the board could not show you had skipped. Crossing your
+own <em>accounts</em> is still announced at the moment it would happen: <code>init</code> does not
+pass <code>--yes</code>, so a tank whose account is already known and different is refused
+rather than merged, and it keeps its own memory until you say otherwise.</p>
 <p>The framing, stated once: <strong>clikae controls where state lives, how long, and how
 widely shared</strong> — for auth (today), for fuel (the reframe), and now for memory.</p>
 <h2 id="1-the-soul--brain-split">1. The Soul / Brain split</h2>
@@ -166,7 +181,9 @@ content was already well-separated; only the index was a flat wall.</p>
 <li>🔴 <strong>Aggregate, never mutate the source.</strong> Any share/translate operates on a
 view/copy going <em>outward</em>; the source tank's memory is never rewritten in
 place. Same DNA as relay's &quot;copy, never move; source untouched.&quot;</li>
-<li>🔴 <strong>Account isolation is sacred.</strong> opt-in, group-scoped, never automatic.</li>
+<li>🔴 <strong>Account isolation is sacred.</strong> Nothing shares until you opt in once; after
+that the fleet shares by default, but crossing to a DIFFERENT account is still
+announced and never silent. A machine that never opted in shares nothing, ever.</li>
 <li>🔴 <strong>No phantom continuity.</strong> Soul carries context, not capability.</li>
 <li><strong>Reviewable + reversible.</strong> Memory is authoritative and accumulative; unlike
 a disposable handoff brief, it must never be silently rewritten by a model. A
