@@ -132,9 +132,18 @@ regressions in one sitting. Classification code reads target-ness first.
 
 - **Never verify bats through a pipe.** `bats | tail; echo $?` reports *tail's*
   exit code, not bats'. See `tests/README.md`.
-- **Judge headless work by the artifact, never the exit code.** `codex exec` and
-  `claude -p` exit `0` even when they hit a usage limit and wrote nothing. The
-  reliable signals are the limit string in the output and a missing artifact.
+- **Judge headless work by the artifact, never the exit code.** `codex exec`,
+  `claude -p` and `agy -p` all exit `0` even when they hit a usage limit, or
+  declined, and wrote nothing. Two refinements learned on 2026-07-27, both of
+  which cost a shipped bug:
+  - **Prefer a structured marker to the vendor's sentence.** codex writes
+    `codex_error_info: usage_limit_exceeded` into its rollout; matching that,
+    not the English around it, is what survives the copy being reworded.
+  - **A PRESENT artifact is not proof either.** When clikae writes the artifact
+    on an engine's behalf (agy, whose headless mode may not write your paths),
+    whatever the engine printed lands in the file — including "I declined". burn
+    now treats agy's own `no output produced` as a failure for exactly this
+    reason, and its success line says CAPTURED, not verified.
 - **Never print token prefixes** when diagnosing credentials. Print field
   *presence* only. The claude OAuth token lives in the login Keychain under
   `Claude Code-credentials-<sha256(CONFIG_DIR)[:8]>`, not in `CLAUDE_CONFIG_DIR`.
@@ -267,7 +276,7 @@ Phases 0–3 are done (structure; claude share; codex/agy pointer). Of Phase 4:
 not an unfinished obligation. The thing that would open the gate is a moment where
 you want one FILE out of the brain, not one tank.
 
-### OPEN-3 — smaller known gaps
+### OPEN-3 — the iTerm2 launcher template is unverified (and self-closing)
 
 - **`clikae app`'s iTerm2 template is unverified, and now says so by skipping.**
   AppleScript resolves an app's terminology from that app's own dictionary, so a
