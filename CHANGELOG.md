@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-07-27
+
+`--ephemeral` finally isolates what it always implied. A cold reader that loads
+your own skills already knows what you believe, and one holding the fleet's MCP
+connectors can still reach your sites — so both are dropped now, per run, without
+touching the tank. What it still cannot do is said on screen rather than left to
+the word "ephemeral".
+
 ### Changed
 
 - **`--ephemeral` now drops your skills and the fleet's MCP servers too, and says
