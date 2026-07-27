@@ -505,7 +505,40 @@ STUB
   [ -f "$art" ]
   [[ "$(cat "$art")" == *"REVIEW: looks good"* ]] || false
   # and it says WHO wrote it — the user must not think agy did
-  [[ "$output" == *"clikae captured agy's output"* ]] || false
+  [[ "$output" == *"clikae captured its output"* ]] || false
+}
+
+@test "burn agy: a REFUSAL is a failure, not an artifact full of the refusal" {
+  # agy exits 0 whether it answered or declined, and the decline arrives on the
+  # same stdout an answer would. Capturing stdout blindly turned "the tool said
+  # no" into a DONE row with the refusal text sitting in the artifact — a false
+  # success, worse than the honest failure it replaced. Caught by dogfooding.
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"; mkdir -p "$(dirname "$log")"; : > "$log"
+printf 'jetski: no output produced — a tool required the "read_file" permission that headless mode cannot prompt for, so it was auto-denied.\n'
+exit 0
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/refused.md"
+  run clikae burn agy default --artifact "$art" --prompt "review this"
+  [ "$status" -ne 0 ]
+  [ ! -f "$art" ]                                  # no artifact full of "I declined"
+  [[ "$output" == *"declined"* ]] || false
+}
+
+@test "burn agy: success says CAPTURED, not verified" {
+  # burn's artifact means "the ENGINE did the work" for claude/codex. For agy
+  # clikae only relocates stdout, which proves nothing — the wording must not
+  # borrow the stronger claim.
+  _stub_agy_prints
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/cap.md"
+  run clikae burn agy default --artifact "$art" --prompt "x"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CAPTURED, NOT VERIFIED"* ]] || false
 }
 
 @test "burn agy: a silent run is still a failure, and says where to look" {

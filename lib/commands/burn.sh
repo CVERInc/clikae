@@ -232,6 +232,20 @@ _agy_burn() {
       log_done "Done on agy/$cur — artifact present: $artifact"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
+    elif printf '%s' "$out" | grep -qi "no output produced"; then
+      # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
+      # its refusal arrives on the same stdout an answer would — so capturing
+      # stdout blindly turned "the tool declined" into a DONE row with the
+      # decline text sitting in the artifact. That is a false success, which is
+      # worse than the honest failure it replaced; caught within the hour by
+      # dogfooding this very path. `no output produced` is agy telling us it
+      # yielded nothing — a status claim, not prose about an answer, and the
+      # closest thing to a structured marker it offers.
+      log_err "agy/$cur declined the task — nothing was produced."
+      printf '%s\n' "$out" | head -n 3 | sed 's/^/    /'
+      log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      return 1
     elif [ -n "$out" ]; then
       # burn's contract is "the artifact proves it happened". agy's headless mode
       # AUTO-DENIES the file tools on your paths — it cannot prompt for
@@ -246,8 +260,8 @@ _agy_burn() {
       # (the same line `--dangerously-skip-permissions` sits on), and refusing
       # --artifact outright would remove the only verification burn has.
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
-        log_done "Done on agy/$cur — clikae captured agy's output into: $artifact"
-        log_dim  "(agy's headless mode can't write to your paths, so clikae wrote it. If the task was large, agy may have left the real content in its own brain dir and printed only a pointer — check the file.)"
+        log_done "agy/$cur finished — clikae captured its output into: $artifact"
+        log_dim  "🔴 CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
         log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
         return 0
       fi
