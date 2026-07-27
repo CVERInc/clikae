@@ -169,7 +169,7 @@ you are and where the work stands. Swap the engine, keep the soul.
   drift, it's literally the same files.
 - 🔴 Sharing is **opt-in and per-tank**; clikae never auto-crosses accounts, and
   crossing your own is announced. The store is seeded by copy and `clikae memory
-  isolate` reverses it.
+  solo` reverses it — it takes the tank out of the fleet and gives its own memory back.
 - `clikae solo` walls a tank off — a bot or persona that lives on your own account —
   so it's out of the fleet: never relayed, burned, watched, or shared.
 
@@ -286,7 +286,7 @@ clikae                            # your home board (run `clikae doctor` for a h
   from the dashboard. `clikae resume cleanup` reclaims disk from old session data. The
   home board also got much faster (several seconds → well under one on multi-GB tanks) by
   reading only the transcript slices it needs and scanning each tank's fuel state once.
-- **v0.9 — the Soul layer.** `clikae memory share|isolate|status` gives several of
+- **v0.9 — the Soul layer.** `clikae memory share|status` gives several of
   your own tanks one shared markdown brain **across engines** — claude symlinks its
   memory dir into the store; codex and agy read a pointer note to the same files, no
   translator, no drift. Swap the engine, keep the soul. `clikae solo` walls a tank off

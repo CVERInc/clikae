@@ -11,6 +11,10 @@
 #   clikae solo <engine> <tank> [why]   make a tank solo (optional reason)
 #   clikae solo <engine> <tank> --off   put it back in the fleet
 #
+# Solo is the ONE way out of the shared brain: `memory isolate` was retired
+# because it created a tank inside the fleet with no brain — invisible on a board
+# whose only axis is fleet-vs-solo.
+#
 # State is one marker file per tank (lib/core/profile_store.sh: solo_marker_file);
 # tank_is_solo is the predicate the fleet (to/watch/burn) and memory share check.
 
@@ -25,7 +29,9 @@ Usage: clikae solo                          list standalone (solo) tanks
        clikae solo <engine> <tank> --off    return it to the fleet
 
 A SOLO tank opts out of the fleet: it's never a `to`/relay target, the burn/`watch`
-rotation skips it, and `clikae memory share` refuses it. Use it for a dedicated,
+rotation skips it, and it keeps its OWN memory instead of the shared brain —
+making a tank solo leaves the shared group and gives its own memory back, and
+`--off` puts it back in both. Use it for a dedicated,
 standalone tank (e.g. a bot/persona tank on the same account as your main one) that
 must never receive carried work or share a brain. The cross-account guard can't see
 this — same account, different purpose — so solo is how you wall it off.
@@ -59,10 +65,19 @@ EOF
   profile_exists "$canon" "$tank" || log_fail "solo: no such tank: $engine/$tank"
 
   local f; f="$(solo_marker_file "$canon" "$tank")"
+  local dgroup; dgroup="$(soul_default_group 2>/dev/null || true)"
+
   if [ "$off" -eq 1 ]; then
     if [ -f "$f" ]; then
       rm -f "$f"
       log_done "$engine/$tank rejoined the fleet — relay/burn/share apply again."
+      # Back in the fleet means back in the shared brain: the whole point of the
+      # model is that those two are the same statement.
+      if [ -n "$dgroup" ] && [ -z "$(soul_group_for_tank "$canon" "$tank")" ]; then
+        "$CLIKAE_BIN" memory share "$dgroup" "$canon" "$tank" >/dev/null 2>&1 \
+          && log_pass "rejoined the shared memory group '$dgroup'." \
+          || log_warn "couldn't rejoin the memory group '$dgroup' — it keeps its own memory for now."
+      fi
     else
       log_pass "$engine/$tank wasn't solo."
     fi
@@ -72,7 +87,19 @@ EOF
   mkdir -p "$(dirname "$f")"
   printf '%s\n' "$reason" > "$f"
   log_done "$engine/$tank is now solo — out of the fleet."
-  log_dim "no relay/\`to\` target · skipped by burn/watch · \`memory share\` refuses it."
+
+  # Leaving the fleet IS leaving the shared brain. This used to be a second verb
+  # (`memory isolate`), which meant a tank could sit inside the fleet with no
+  # brain — a third state the board has no way to show, and a verb that read like
+  # "incognito" and got reached for as one (v0.14.3: run on a LIVE tank, the
+  # session went amnesiac mid-flight). One idea, one verb, visible on the board.
+  if [ -n "$(soul_group_for_tank "$canon" "$tank")" ]; then
+    # shellcheck source=./memory.sh
+    source "$CLIKAE_LIB/commands/memory.sh"
+    _memory_isolate "$canon" "$tank" || log_warn "solo is set, but leaving the memory group failed — check: clikae memory status"
+  fi
+
+  log_dim "no relay/\`to\` target · skipped by burn/watch · keeps its own memory."
   [ -n "$reason" ] && log_dim "reason: $reason"
   return 0
 }

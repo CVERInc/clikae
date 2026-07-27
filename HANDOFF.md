@@ -155,8 +155,9 @@ regressions in one sitting. Classification code reads target-ness first.
 
 ### 2.6 Locked values elsewhere
 
-- **Soul / memory** — account isolation is sacred (opt-in, per-tank, never
-  auto-crossed); aggregate-never-mutate-the-source; no phantom continuity (a
+- **Soul / memory** — a machine that never opted in shares nothing; after the
+  first `share` the fleet shares by default and `solo` is the way out; crossing to
+  a different account is always announced; aggregate-never-mutate-the-source; no phantom continuity (a
   Soul carries context, not the model's capability). SSOT: `docs/memory.md §4`.
 - **`clikae solo`** walls a tank out of the fleet: skipped by burn/watch/`to`,
   and `memory share` refuses it. `claude/MFC` is solo and must stay that way.
@@ -236,17 +237,27 @@ still evict each other; rotation is server-side. A single machine cannot fix
 that, so a dropped tank should be worded "may have been rotated out by another
 machine" rather than implying the account broke.
 
-### OPEN-2 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-2 — Soul Phase 4, the two thirds still parked (not debt)
 
-Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
-(a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
-file, vs today's whole-tank share); (b) a per-person default + per-area override
-policy; (c) conduct/burn integration so the orchestrator wakes the
-cheapest-sufficient brain *with* the shared Soul context.
+Phases 0–3 are done (structure; claude share; codex/agy pointer). Of Phase 4:
 
-The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
-the `me` group has been used long enough to prove its shape.** This is a park,
-not an unfinished obligation.
+- **(b) a per-person default — SHIPPED 2026-07-27.** The gate fired in the most
+  useful way possible: the maintainer described the model back as *"everything in
+  a tank shares `me` unless I solo it"* — which was the board's story and the
+  docs' story, but not the code's, where sharing was opt-in per tank and a new
+  tank silently started with no brain. The mental model had walked ahead of the
+  implementation, which is a stronger signal than any observation. Consent is now
+  once per machine, `solo` is the single way out, and the board names a fleet tank
+  that has no brain.
+- **(a) the per-ENTRY scope dial** and **(c) conduct/burn waking the cheapest
+  sufficient brain with Soul context** are still parked, and the evidence still
+  points that way: a session doing customer work on one site read the whole
+  business brain and the sharing made its answer *better* — it stopped guessing at
+  a platform limit and asked the person who owns the platform.
+
+**Do not build (a) or (c) until something actually wants them.** This is a park,
+not an unfinished obligation. The thing that would open the gate is a moment where
+you want one FILE out of the brain, not one tank.
 
 ### OPEN-3 — smaller known gaps
 

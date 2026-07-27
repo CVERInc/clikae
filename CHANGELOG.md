@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **In the fleet now means sharing the brain, and `clikae solo` is the only way
+  out.** The Soul layer had three states where the board can only show two.
+  Sharing was opt-in *per tank*, so a tank created after you had already opted in
+  silently started with no brain — and the board's only axis is fleet-vs-solo, so
+  it looked exactly like one that shared. That is not a subtle bug: it taught the
+  model's own author the wrong model. He described clikae back as "everything in
+  a tank shares `me` unless I solo it", which is what the board, the docs and the
+  design all say. Only the code disagreed, and it was the part nobody can see.
+
+  - **Consent is once per machine, not once per tank.** Nothing is shared until
+    your first `clikae memory share`; that share records the group in
+    `$CLIKAE_HOME/soul-default`, and from then on a tank created by `clikae init`
+    joins it. A machine that never opts in shares nothing, ever — so a stranger
+    making one tank per client is not handed another client's memory.
+  - **Crossing a different account is still announced.** `init` deliberately does
+    not pass `--yes`: a fresh tank has no account yet so there is nothing to
+    cross, but one whose account is already known and different is refused and
+    keeps its own memory. The 🔴 locked value survives the redesign intact — the
+    test that guards it is what forced this detail.
+  - **`clikae memory isolate` is retired.** `clikae solo` leaves the fleet *and*
+    gives the tank its own memory back; `--off` puts it back in both. One idea,
+    one verb, visible on the board. The old verb now fails with a pointer rather
+    than silently doing something adjacent.
+  - **The board names the anomaly.** A fleet tank with no brain gets one dim
+    line — the single state the board could not otherwise express. Silent before
+    your first share, since nothing sharing is then the deliberate state.
+
+  `memory isolate` was also the wrong verb to have within reach: an agent ran it
+  on a LIVE tank to spawn a cold reader and a running session went amnesiac
+  mid-flight (v0.14.3). Retiring it does not remove that footgun — it renames it,
+  since `solo` is now the permanent form — so `AGENTS.md` and `docs/memory.md`
+  now warn about `solo` in the words they used to spend on `isolate`. The
+  mnemonic still holds: **ephemeral changes this once; solo changes from now on.**
+
 ### Fixed
 
 - **The board, `resume` and `clean` threw away their own stderr — and handed a

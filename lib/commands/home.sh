@@ -606,6 +606,56 @@ _home_trunc() {
 # target is shown as its canonical short name "agy" everywhere.
 _home_engine_label() { engine_label "$1"; }   # one owner: lib/core/profile_store.sh
 
+# _home_engine_has_memory <engine> — does a "brain" even mean anything here?
+# File-based, like _home_newtank_choices' AI check: loading the adapter would be
+# both slower and wrong (load_adapter provides stubs, so `declare -F` says yes to
+# everything). Without this, a docker or kubectl tank would be reported as having
+# no shared memory, which is not a fact about it — it is a category error.
+_home_engine_has_memory() {
+  grep -qE '^(adapter|target)_memory_(dir|pointer_path)\(\)' \
+    "$CLIKAE_LIB/adapters/$1.sh" "$CLIKAE_LIB/targets/$1.sh" 2>/dev/null
+}
+
+# _home_soulless -> "<engine>/<tank>" lines for FLEET tanks with no shared brain.
+#
+# This exists because the board has exactly one axis — fleet vs solo — and the
+# model now says that axis IS the memory axis. A tank sitting in the fleet
+# without a brain is the one state the board cannot otherwise express, so it is
+# the one state worth spending a line on. Everything else stays quiet.
+#
+# Only reported once a default group exists: before your first share NOTHING is
+# shared, so listing every tank would be noise about a deliberate state.
+_home_soulless() {
+  [ -n "$(soul_default_group 2>/dev/null || true)" ] || return 0
+  local members="" f
+  for f in "$(souls_root)"/*/members; do
+    [ -f "$f" ] || continue
+    members="$members$(cut -f1 "$f" 2>/dev/null || true)"$'\n'
+  done
+  local cli tank path
+  while IFS=$'\t' read -r cli tank path; do
+    [ -n "$cli" ] || continue
+    : "$path"
+    tank_is_solo "$cli" "$tank" && continue
+    _home_engine_has_memory "$cli" || continue
+    case "$members" in *"$cli/$tank"$'\n'*) continue ;; esac
+    printf '%s/%s\n' "$(engine_label "$cli")" "$tank"
+  done <<EOF
+$(list_all_profiles)
+EOF
+}
+
+# One dim line, only when there is something wrong to say. `·` is the family's
+# only bullet and the text carries the meaning on its own — stripping the colour
+# must not strip the fact (signet: colour amplifies, never carries).
+_home_soulless_note() {
+  local list; list="$(_home_soulless)"
+  [ -n "$list" ] || return 0
+  # shellcheck disable=SC2059
+  printf '  %b· %s%b\n' "$__C_DIM" \
+    "$(printf "$T_SOUL_NOBRAIN" "$(printf '%s' "$list" | tr '\n' ' ' | sed 's/ *$//')")" "$__C_RESET"
+}
+
 # _home_agy_email <tank_dir> -> the Google account this agy tank is signed in as,
 # or empty. agy has no clean account field, but its CLI logs the signed-in account
 # ("email=<x>") under <tank>/antigravity-cli/log — the same log family clikae
@@ -784,6 +834,7 @@ EOF
     printf '%s' "$also"
   fi
   echo ""
+  _home_soulless_note
 
   if [ -n "$any_dry" ]; then
     printf '  %b! %s%b — %s\n' \

@@ -65,6 +65,30 @@ EOF
     adapter_init "$d"
   fi
 
+  # A new tank joins the machine's default Soul group, if one was ever set.
+  # The board shows FLEET vs SOLO and nothing else, so a tank that quietly has no
+  # brain is indistinguishable from one that does — which is how a person ends up
+  # believing every tank shares, because that is exactly what the board told them.
+  # Consent still exists: it was given once, at the first `memory share`. With no
+  # default set (a fresh install, or someone who never opted in) nothing happens.
+  local _soul_default
+  _soul_default="$(soul_default_group 2>/dev/null || true)"
+  if [ -n "$_soul_default" ]; then
+    # Self-invoke rather than source memory.sh: it is a 500-line command that
+    # brings its own resolution/guard machinery, and `init` only needs the verb.
+    #
+    # Deliberately NOT --yes. The cross-account guard only fires once a tank has a
+    # known account label, and a tank created seconds ago has not logged in yet —
+    # so there is nothing to cross and the join is clean. If the label IS already
+    # known and differs, the guard refuses non-interactively and this falls to the
+    # warning below: the tank keeps its own memory and you decide. That keeps
+    # "crossing your own accounts is announced" true, which --yes would have
+    # quietly broken.
+    "$CLIKAE_BIN" memory share "$_soul_default" "$cli" "$profile" >/dev/null 2>&1 \
+      && log_pass "joined the shared memory group '$_soul_default' (clikae solo $cli $profile to keep it separate)" \
+      || log_warn "could not join the memory group '$_soul_default' — this tank starts with its own memory."
+  fi
+
   if [ "$with_alias" -eq 1 ]; then
     # alias.sh isn't auto-sourced by the dispatcher; load it on demand.
     # shellcheck source=./alias.sh

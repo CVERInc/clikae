@@ -22,7 +22,8 @@ data without a backup.
 
 Vocabulary: **engine** = a CLI it manages (claude, codex, agy…). **tank** = one
 account/config for that engine. **fuel** = that account's quota. **Soul** = a
-vendor-neutral markdown brain several tanks can share. clikae is the verb:
+vendor-neutral markdown brain the fleet shares (in the fleet = sharing; `solo`
+= not — there is no third state). clikae is the verb:
 `clikae <engine> <tank>` switches; `clikae <engine> <tank> -- <args>` passes through.
 
 The human's own entry point is bare `clikae` — a board of their recent sessions
@@ -58,17 +59,22 @@ Which shape for which situation — the decision layer above these mechanics —
    `--dangerously-skip-permissions`), that's for the *human* to run — never trick
    your way around it with `cat`→`head`-style substitutions. User excitement is not
    authorization.
-5. **Want a memory-less session? That's `--ephemeral`, NEVER `clikae memory
-   isolate`.** To spawn a cold reader — an unbiased audit, a reviewer who doesn't
-   know what you believe — launch it with `clikae claude <tank> --ephemeral`: that
-   run gets a throwaway memory and the tank's Soul is put back afterwards.
-   `memory isolate` is not "incognito": it **rewires the live tank**, unplugging
-   its shared brain for every project directory and every *other session already
-   running in them* — including, quite possibly, yours. An agent did exactly this
-   on 2026-07-12 (isolate → re-share 20 minutes later) and the human's session
-   lost its memory mid-flight. **Ephemeral changes this once; isolate changes from
-   now on.** Same rule across engines: for a cold read on another family, use
-   `agy --sandbox` in an empty directory, not a rewire.
+5. **Want a memory-less session? That's `--ephemeral`, and nothing else.** To
+   spawn a cold reader — an unbiased audit, a reviewer who doesn't know what you
+   believe — launch it with `clikae claude <tank> --ephemeral`: that run gets a
+   throwaway memory and the tank's Soul is put back afterwards.
+
+   Do **not** reach for `clikae solo`. It is the permanent form: it takes the
+   tank out of the fleet and off the shared brain **from now on**, for every
+   project directory and every *other session already running in them* —
+   including, quite possibly, yours. `memory isolate` used to be the trap here;
+   an agent ran it on a live tank on 2026-07-12 to get a cold reader and the
+   human's session lost its memory mid-flight. That verb has since been retired
+   into `solo`, which means the footgun changed names rather than disappearing.
+
+   **Ephemeral changes this run; solo changes from now on.** Same rule across
+   engines: for a cold read on another family, use `agy --sandbox` in an empty
+   directory, not a rewire.
 6. **A solo tank is not yours to dispatch.** Existing ≠ available. `clikae solo`
    lists them and `clikae memory status` marks them `🔒 solo`; check before you fan
    work out. A solo tank is walled out of the fleet by design — `burn` never
@@ -105,8 +111,9 @@ account email. clikae can only prevent the *next* mis-stamp, never rewrite histo
 - [docs/playbooks.md](docs/playbooks.md) — which play for which situation (the decision layer above the mechanics).
 - [docs/grammar.md](docs/grammar.md) — the command surface, SSOT.
 - [docs/memory.md](docs/memory.md) — the Soul layer, SSOT. Read before touching
-  anything under `clikae memory`; §4 holds the locked values (account isolation is
-  opt-in and never auto-crossed; seed by copy, never mutate the source).
+  anything under `clikae memory`; §4 holds the locked values (a machine that never
+  opted in shares nothing; crossing to a DIFFERENT account is always announced;
+  seed by copy, never mutate the source).
 - [docs/orchestration.md](docs/orchestration.md) — headless dispatch playbook.
 - [docs/agy-dispatch.md](docs/agy-dispatch.md) — the agy recipe (read before using agy).
 - `clikae <command> --help` — every command self-documents; trust it over guessing.

@@ -83,7 +83,7 @@ _seed_memory() {
   clikae memory share me claude a
   local mem; mem="$(_memdir a)"
   [ -L "$mem" ]                                              # shared
-  run clikae memory isolate claude a
+  run clikae solo claude a
   [ "$status" -eq 0 ]
   [ ! -L "$mem" ]                                            # symlink gone
   [ -d "$mem" ]                                              # own memory back
@@ -101,7 +101,7 @@ _seed_memory() {
 # the membership file, so it kept saying "shared" while the disk had nothing:
 # the tool lied. A session already running in that directory never gets a
 # relaunch, so the lazy link never saves it.
-@test "🔴 memory isolate → share round-trips a project dir whose memory is a PURE symlink" {
+@test "🔴 solo → --off round-trips a project dir whose memory is a PURE symlink" {
   clikae init claude a
   _seed_memory a MEMORY.md "shared brain v1"
   run clikae memory share me claude a
@@ -115,11 +115,13 @@ _seed_memory() {
   ln -s "$store" "$other/memory"
   [ -L "$other/memory" ]
 
-  run clikae memory isolate claude a
+  run clikae solo claude a
   [ "$status" -eq 0 ]
-  [ ! -e "$other/memory" ]                                  # isolate DID unlink it
+  [ ! -e "$other/memory" ]                                  # leaving DID unlink it
 
-  run clikae memory share me claude a
+  # Back into the fleet is back into the brain — one verb, both halves. (`memory
+  # share` would be REFUSED here: a solo tank can't join, which is the point.)
+  run clikae solo claude a --off
   [ "$status" -eq 0 ]
   [ -L "$other/memory" ] || { echo "the pure-symlink slot never came back"; false; }
   [ "$(readlink "$other/memory")" = "$store" ]              # and points at the Soul again
@@ -150,22 +152,49 @@ _seed_memory() {
   run cat "$other/memory.clikae-soul-stash/MEMORY.md"
   [[ "$output" == *"local-only fact"* ]] || false
 
-  run clikae memory isolate claude a                        # …and isolate gives it back
+  run clikae solo claude a                        # …and isolate gives it back
   [ "$status" -eq 0 ]
   [ ! -L "$other/memory" ]
   run cat "$other/memory/MEMORY.md"
   [[ "$output" == *"local-only fact"* ]] || false
 }
 
-@test "🔴 account isolation: a tank that never opted in cannot see the store" {
+@test "🔴 account isolation: nothing is shared until you opt in ONCE" {
+  # Consent moved from per-tank to per-machine, so this pins the half that must
+  # never move: with no default recorded, a new tank gets NO window on any store.
+  clikae init claude a
+  _seed_memory a MEMORY.md "a's brain"
+  clikae init claude c
+  local mc; mc="$(_memdir c)"
+  [ ! -L "$mc" ]
+  [ ! -e "$mc/MEMORY.md" ] || [ "$(cat "$mc/MEMORY.md" 2>/dev/null)" != "a's brain" ]
+  [ ! -f "$CLIKAE_HOME/soul-default" ]
+}
+
+@test "🔴 a tank created AFTER the first share joins the fleet's brain" {
+  # The other half of the same decision: the board's only axis is fleet-vs-solo,
+  # so a tank sitting in the fleet with no brain is invisible. Once you have said
+  # yes, every new tank shares — that is what "in the fleet" now means.
   clikae init claude a
   _seed_memory a MEMORY.md "a's brain"
   clikae memory share me claude a
-  clikae init claude c                                       # never shared
+  [ "$(cat "$CLIKAE_HOME/soul-default")" = "me" ]
+  clikae init claude c
   local mc; mc="$(_memdir c)"
-  [ ! -L "$mc" ]                                             # c is NOT linked into souls/
-  # c has no window into the shared store at all.
-  [ ! -e "$mc/MEMORY.md" ] || [ "$(cat "$mc/MEMORY.md" 2>/dev/null)" != "a's brain" ]
+  [ -L "$mc" ]
+  [ "$(cat "$mc/MEMORY.md")" = "a's brain" ]
+}
+
+@test "🔴 a SOLO tank never joins, however many times it is created or freed" {
+  clikae init claude a
+  _seed_memory a MEMORY.md "a's brain"
+  clikae memory share me claude a
+  clikae init claude bot
+  clikae solo claude bot "persona"
+  local mb; mb="$(_memdir bot)"
+  [ ! -L "$mb" ]
+  run clikae memory share me claude bot
+  [ "$status" -ne 0 ]
 }
 
 @test "🔴 account isolation: crossing accounts non-interactively is refused without --yes" {
@@ -261,7 +290,7 @@ _seed_memory() {
   printf '# my own codex notes\nkeep me\n' > "$agents"        # pre-existing instructions
   clikae memory share me codex H
   run cat "$agents"; [[ "$output" == *"clikae soul:me"* ]] || false
-  run clikae memory isolate codex H
+  run clikae solo codex H
   [ "$status" -eq 0 ]
   run cat "$agents"
   [[ "$output" != *"clikae soul:me"* ]] || false             # our block gone
@@ -319,7 +348,7 @@ _seed_memory() {
   local gemini; gemini="$CLIKAE_HOME/profiles/antigravity/work/GEMINI.md"
   printf '# my own agy rules\nalways be terse\n' > "$gemini"
   clikae memory share me agy work
-  run clikae memory isolate agy work
+  run clikae solo agy work
   [ "$status" -eq 0 ]
   run cat "$gemini"
   [[ "$output" != *"clikae soul:me"* ]] || false             # our block gone
@@ -443,7 +472,7 @@ STUB
   mkdir -p "$other"; echo "old own fact" > "$other/fact.md"
   clikae memory share me claude a
   [ -L "$other" ]
-  run clikae memory isolate claude a
+  run clikae solo claude a
   [ "$status" -eq 0 ]
   [ ! -L "$other" ]                                    # other slot unlinked too
   [ -f "$other/fact.md" ]                              # its stash restored

@@ -14,6 +14,30 @@
 
 souls_root() { printf '%s/souls\n' "$CLIKAE_HOME"; }
 
+# ── The machine's default group ─────────────────────────────────────────────
+# Consent to share a brain is given ONCE, not per tank. The first `memory share`
+# on this machine records the group here; from then on a NEW tank joins it
+# automatically unless it is solo.
+#
+# Why the default is a FILE and not simply "always share": a fresh install must
+# share nothing. Someone who never opts in never gets a shared brain, and a
+# stranger who makes one tank per client is not silently handed another client's
+# memory. But once you HAVE said yes, saying it again for every tank you create
+# is not consent — it is a chore that makes the board lie, because the board
+# shows fleet-vs-solo and nothing else, so a tank that quietly has no brain looks
+# exactly like one that does.
+soul_default_file()  { printf '%s/soul-default\n' "$CLIKAE_HOME"; }
+soul_default_group() {
+  local f; f="$(soul_default_file)"
+  [ -f "$f" ] || return 0
+  tr -d '[:space:]' < "$f" 2>/dev/null
+}
+soul_default_set() {
+  [ -n "$1" ] || return 0
+  mkdir -p "$CLIKAE_HOME"
+  printf '%s\n' "$1" > "$(soul_default_file)"
+}
+
 # The ONE canonical Soul store for a group — flat & vendor-neutral, so claude,
 # codex and agy all point at the same markdown brain (no per-engine forks).
 soul_store_path()   { printf '%s/%s/memory\n'  "$(souls_root)" "$1"; }

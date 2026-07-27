@@ -248,8 +248,12 @@ that memory at ONE shared markdown store, so several of YOUR OWN tanks — acros
 engines — read/write a single "Soul" (continuity & context). See docs/memory.md.
 
   clikae memory share <group> [<engine> <tank>]   point a tank at <group>'s Soul store
-  clikae memory isolate        [<engine> <tank>]   restore the tank's own memory (undo share)
   clikae memory status         [<engine> <tank>]   show share state
+
+To take a tank OUT of the shared brain, make it standalone: `clikae solo <engine>
+<tank>` leaves the group and gives the tank its own memory back. There is no
+separate `isolate` — in the fleet means sharing, solo means not, and the board
+shows which is which.
 
 Defaults: engine = claude; tank = whichever this shell is switched to.
 Engines: claude fans its memory DIR into the store (symlink, per-directory); codex
@@ -259,17 +263,27 @@ markdown via the memory protocol.
 Flags:
   -y, --yes    skip the cross-account confirmation (for scripts/automation)
 
-🔴 Sharing is opt-in and per-tank; clikae never auto-crosses accounts. Crossing your
-own accounts is announced. The store is seeded by COPY; a joiner's own memory is
-stashed aside (reversible via `isolate`), never overwritten. To wall a tank off so it
-can never be shared (a bot/persona tank on your own account), make it standalone with
-`clikae solo` — `share` then refuses it.
+🔴 Consent is given ONCE, not per tank. Nothing is shared until your first `share`;
+that share also records the group as this machine's default, and from then on a NEW
+tank joins it automatically at `clikae init`. A solo tank never joins. Crossing your
+own accounts is still announced at that first share. The store is seeded by COPY; a
+joiner's own memory is stashed aside (given back by `clikae solo`), never overwritten.
+
+Why automatic: the board's only axis is fleet-vs-solo, so a tank sitting in the fleet
+with no brain looks exactly like one that has it. Asking per tank produced that state
+routinely, and nothing on screen could tell you.
 EOF
       return 0 ;;
     share)   _memory_share "$@" ;;
-    isolate) _memory_isolate "$@" ;;
     status)  _memory_status "$@" ;;
-    *) log_fail "memory: unknown subcommand '$sub' (try: share | isolate | status)" ;;
+    isolate)
+      # Retired 2026-07-27. It read like "incognito" and was reached for as such —
+      # an agent ran it on a LIVE tank to spawn a cold reader and the maintainer's
+      # running session went amnesiac mid-flight (v0.14.3). It also created a third,
+      # invisible state: a tank inside the fleet with no brain, which the board has
+      # no way to show. Leaving the fleet is now one visible idea.
+      log_fail "memory isolate is gone. To take a tank out of the shared brain use \`clikae solo $*\` — it leaves the group AND gives the tank its own memory back, and the board shows it. For a memory-less SESSION you want \`--ephemeral\`, which changes this run only." ;;
+    *) log_fail "memory: unknown subcommand '$sub' (try: share | status)" ;;
   esac
 }
 
@@ -413,10 +427,19 @@ _memory_share() {
   _memory_drop_member "$members" "$key"
   printf '%s\t%s\t%s\n' "$key" "$account" "$store" >> "$members"
 
+  # The FIRST share on this machine is the consent moment for the whole fleet:
+  # from here on a new tank joins this group at `clikae init` unless it is solo.
+  # Saying yes once is consent; being asked for every tank you ever create is a
+  # chore, and the board can't show the difference anyway.
+  if [ -z "$(soul_default_group)" ]; then
+    soul_default_set "$group"
+    log_dim "'$group' is now this machine's default: new tanks join it automatically (a solo tank never does)."
+  fi
+
   log_done "$MEM_CLI/$MEM_TANK now shares memory group '$group'."
   log_dim "store: $store"
   if [ "$MEM_STRATEGY" = "symlink" ]; then
-    [ -d "$MEM_DIR.clikae-soul-stash" ] && log_dim "its previous own memory is stashed (reversible): clikae memory isolate $MEM_CLI $MEM_TANK"
+    [ -d "$MEM_DIR.clikae-soul-stash" ] && log_dim "its previous own memory is stashed (reversible): clikae solo $MEM_CLI $MEM_TANK"
   else
     log_dim "pointer written to $MEM_PTR — $MEM_CLI reads the shared Soul from there."
   fi
