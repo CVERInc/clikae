@@ -88,3 +88,73 @@ _src_limit() {
   run limit_output_dry codex "wrote /tmp/out.md, all good."
   [ "$status" -ne 0 ]
 }
+
+# --- codex dry-detection from its own rollout ---------------------------------
+# The project recorded for a long time that codex's usage limit was
+# "exec-stdout-only — never written to a file clikae can scan". It is written:
+# the interactive TUI puts it in the rollout transcript with a MACHINE-READABLE
+# marker, `codex_error_info: usage_limit_exceeded`. We match that field, never
+# the English sentence beside it (vendor copy drifts; the marker is the contract).
+# NB: each remaining arg becomes its OWN LINE. Building the fixture with
+# "$(_codex_limit_line …)$(_codex_reply_line …)" silently glues both JSON objects
+# onto one line — command substitution eats the trailing newline — and a
+# one-line fixture made the self-clearing test fail against correct code.
+_seed_codex_rollout() {
+  local dir="$1" name="$2"; shift 2
+  mkdir -p "$dir/sessions/2026/07/27"
+  local l
+  : > "$dir/sessions/2026/07/27/rollout-$name.jsonl"
+  for l in "$@"; do
+    printf '%s\n' "$l" >> "$dir/sessions/2026/07/27/rollout-$name.jsonl"
+  done
+}
+_codex_limit_line() {
+  printf '{"timestamp": "%s", "type": "event_msg", "payload": {"type": "task_complete", "error": {"message": "You'"'"'ve hit your usage limit. Upgrade to Plus, or try again at Aug 23rd, 2026 8:26 PM.", "codex_error_info": "usage_limit_exceeded"}}}' "$1"
+}
+_codex_reply_line() {
+  printf '{"timestamp": "%s", "type": "event_msg", "payload": {"type": "agent_message", "message": "back"}}' "$1"
+}
+
+@test "limit_profile_dry codex: a limit with no later success reads DRY, with the vendor's reset phrase" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T10:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"try again at Aug 23rd, 2026 8:26 PM"* ]] || false
+}
+
+@test "limit_profile_dry codex: a reply AFTER the limit clears it (self-clearing)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  _seed_codex_rollout "$d" b \
+    "$(_codex_limit_line 2026-07-27T10:00:00.000Z)" \
+    "$(_codex_reply_line 2026-07-27T11:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -ne 0 ]
+}
+
+@test "limit_profile_dry codex: the English sentence alone is NOT a limit" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  # A user pasting the phrase into a prompt must never dry the tank — we key on
+  # the structured marker precisely so this can't happen.
+  _seed_codex_rollout "$d" c \
+    '{"timestamp": "2026-07-27T10:00:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "why do I keep hitting my usage limit?"}}'
+  run limit_profile_dry codex "$d"
+  [ "$status" -ne 0 ]
+}
+
+@test "limit_profile_dry rejects an engine it has no signal for" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  run limit_profile_dry antigravity "$CLIKAE_HOME/profiles/antigravity/g"
+  [ "$status" -ne 0 ]
+}

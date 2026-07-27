@@ -58,6 +58,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **codex's usage limit turned out to be readable from disk after all, so the
+  fuel gauge and `clikae auto` now cover it.** This project recorded for months
+  that codex's limit was "exec-stdout-only — never written to a file clikae can
+  scan"; that belief was load-bearing (it is why a codex tank could only ever
+  show `○`, and why auto-carry was claude-only), and it was wrong. An
+  *interactive* codex TUI writes the limit into its own rollout transcript:
+
+  ```json
+  {"type":"event_msg","payload":{"type":"task_complete","error":{
+     "message":"You've hit your usage limit. … try again at Aug 23rd, 2026 8:26 PM.",
+     "codex_error_info":"usage_limit_exceeded"}}}
+  ```
+
+  clikae matches `codex_error_info`, the machine-readable marker — never the
+  English sentence beside it, which is vendor copy and will drift (a test pins
+  that: a user typing "why do I keep hitting my usage limit?" must not dry the
+  tank). Detection self-clears like claude's: an `agent_message` newer than the
+  limit means the account recovered. The scan window is far wider than claude's
+  5h roll, because a codex limit can run for weeks — but still bounded, since a
+  tank nobody has touched has nothing to read and `○` is the honest answer.
+
+  Confirmed against a real rollout on the maintainer's machine whose
+  `session_meta` says `originator: codex-tui` — i.e. not a headless run — and the
+  reset phrase is surfaced verbatim, never parsed into a countdown.
+
 - **The same engine had two names depending on which screen you were on.**
   `clikae list` and the board said `agy`; `clikae doctor` printed the on-disk
   directory name, `antigravity`. Three surfaces had each grown a private copy of

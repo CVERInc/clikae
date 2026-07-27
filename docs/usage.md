@@ -93,8 +93,8 @@ plain, conventional verbs.
 > burn order (per `clikae auto`) in the **same terminal** (one redraw), and your
 > conversation continues there. Honest limits: it advances *on exit*, not by killing
 > a live session mid-stream (that needs engine support — see issue
-> anthropics/claude-code#35744); one hop per run; interactive **codex** can't be
-> auto-detected (no file signal) so it's claude-only for now. Nothing runs in the
+> anthropics/claude-code#35744); one hop per run; **claude and codex** are
+> supervised — agy has one global login and no per-tank signal. Nothing runs in the
 > background unless you launched it through clikae (no daemon) — deliberate.
 > `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
 

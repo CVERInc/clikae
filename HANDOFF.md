@@ -283,17 +283,16 @@ claim neither direction**. Independent of quota, agy's honest positioning is a
 *breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
 constraint is the 5-hour window regardless.
 
-### OPEN-4 — `clikae auto` is claude-only
+### OPEN-4 — auto-relay of a dropped parallel task
 
-Auto-carry on a dry tank is BETA and claude-only. codex and agy cannot carry
-themselves onward. codex dry-detection now exists (`lib/core/limit.sh` parses the
-limit string), so extending `auto` to codex is no longer blocked on detection.
+When one tank in a parallel burn dries, re-queueing *that specific task* to a
+live tank needs the orchestrator to track a task↔tank map. `to`/`relay` carry a
+*session*; this is a *headless task* — a different shape, a pool/scheduler
+concern. Encourage idempotent, artifact-verified tasks so a dropped one can
+simply re-fire.
 
-Related, still unbuilt: **auto-relay of a dropped parallel task.** When one tank
-in a parallel burn dries, re-queueing *that specific task* to a live tank needs
-the orchestrator to track a task↔tank map. `to`/`relay` carry a *session*; this
-is a *headless task* — a different shape, a pool/scheduler concern. Encourage
-idempotent, artifact-verified tasks so a dropped one can simply re-fire.
+(The engine half of this closed on 2026-07-27: `clikae auto` now supervises codex
+as well as claude. agy stays out — one global login, no per-tank signal.)
 
 ### OPEN-5 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 

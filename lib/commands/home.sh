@@ -1383,7 +1383,7 @@ _home_pick_draw_body() {
     "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
     "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
-  printf '%b%s: %s · [A] change (BETA, claude)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
+  printf '%b%s: %s · [A] change (BETA, claude+codex)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi

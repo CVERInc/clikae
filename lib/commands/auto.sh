@@ -7,7 +7,7 @@
 #   clikae auto full     auto-carry anything next in the burn order (SU mode)
 #   clikae auto ask      back to asking first (the safe default)
 #
-# Consumed by the BETA supervised launch (claude-only for now). The dashboard's
+# Consumed by the BETA supervised launch (claude + codex). The dashboard's
 # autonomy toggle flips the same preference.
 
 cmd_auto() {
@@ -17,7 +17,7 @@ cmd_auto() {
 Usage: clikae auto [ask | safe | full]
 
 Set how much clikae does on its own when the tank you're on runs dry (BETA —
-claude only for now; feedback welcome).
+claude and codex; agy has one global login and no per-tank signal to read).
 
   ask    (default) ask before carrying onward — the consent moment
   safe   auto-carry to the next SAME-engine tank (seamless resume); ask before
@@ -35,7 +35,7 @@ EOF
     local cur; cur="$(autonomy_get)"
     log_info "Autonomy: $cur — $(autonomy_label "$cur")"
     log_dim  "Choices:  ask · safe · full    (set with: clikae auto <level>)"
-    log_dim  "BETA: auto-switch is claude-only for now; feedback welcome."
+    log_dim  "BETA: auto-switch covers claude and codex; feedback welcome."
     return 0
   fi
 

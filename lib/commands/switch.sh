@@ -91,7 +91,7 @@ _supervise_decision() {
   esac
 }
 
-# _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude-only)
+# _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude + codex)
 # Run the engine as a CHILD (so clikae stays the parent), and when it exits, if
 # THIS tank just hit its limit, carry onward to the next tank in the burn order
 # per the autonomy level. Same-engine → seamless resume (relay); cross-engine →
@@ -105,10 +105,10 @@ _switch_supervise() {
   trap - INT
 
   # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
-  # NB: claude's dry state lives in its transcript (scannable + self-clearing on
-  # the next successful turn), so we deliberately do NOT also write dry_store here —
-  # a 6h store marker would mask a real recovery. dry_store is for engines whose
-  # limit is NOT in a transcript (codex, via burn).
+  # NB: both engines' dry state lives in their own transcript (scannable +
+  # self-clearing on the next successful turn), so we deliberately do NOT also
+  # write dry_store here — a store marker would mask a real recovery. dry_store
+  # stays for what a transcript can't cover (a headless codex exec, via burn).
   limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || return 0
 
   local _next ne nt
@@ -222,9 +222,11 @@ cmd_switch() {
   fleet_mcp_prelaunch "$engine" "$tank" "$d"
 
   # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
-  # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is
-  # detectable from the transcript; other engines exec unchanged. (docs/DESIGN-runtime)
-  if [ "$engine" = "claude" ]; then
+  # dry limit, carry onward per `clikae auto`. claude and codex only: both
+  # persist their limit to a transcript, so after the engine exits we can tell
+  # whether THIS tank is genuinely out of fuel rather than guessing. agy has no
+  # per-tank signal to read (one global login), so it is not supervised.
+  if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
     _switch_require_binary "$engine" "$tank"
     _switch_supervise "$engine" "$tank" "$d" "${passthru[@]}"
     return $?

@@ -131,8 +131,80 @@ limit_output_dry() {
 #   · agy   — records its limit in a log file, not a transcript. That path is
 #     handled separately by limit_log_dry (below), used for log-only targets.
 # Any other cli returns "not dry" rather than guess.
+# _limit_codex_dry <dir> -> 0 (dry) + echo the vendor's verbatim reset phrase, 1 otherwise.
+#
+# For a long time this project recorded that codex's usage limit was
+# "exec-stdout-only — never written to a file clikae can scan", so a codex tank
+# could only ever show ○ ("can't tell") and `clikae auto` stayed claude-only.
+# That turned out to be false: the INTERACTIVE TUI writes the limit into its own
+# rollout transcript, as a structured field, and has for a while —
+#
+#   {"type":"event_msg","payload":{"type":"task_complete","error":{
+#      "message":"You've hit your usage limit. … try again at Aug 23rd, 2026 8:26 PM.",
+#      "codex_error_info":"usage_limit_exceeded"}}}
+#
+# (confirmed against a real rollout whose session_meta says originator=codex-tui,
+# i.e. not a headless run). We match `codex_error_info`, the machine-readable
+# marker — NOT the English sentence, which is the vendor's copy and will drift.
+#
+# Self-clearing like claude's: an agent_message NEWER than the newest limit means
+# the account recovered. Codex limits can run for weeks (the reset above is a
+# month out), so the scan window is far wider than claude's 5h rolling one — but
+# still bounded, because a tank nobody has touched in a week showing ○ is the
+# honest answer, not a lie.
+_limit_codex_dry() {
+  local dir="$1"
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+
+  local files
+  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+  [ -n "$files" ] || return 1
+
+  local out maxL maxS reset
+  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
+      [ -n "$f" ] && transcript_tail "$f"
+    done | awk '
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      /"codex_error_info": *"usage_limit_exceeded"/ {
+        t = ts($0)
+        if (t != "" && (maxL == "" || t > maxL)) {
+          maxL = t; reset = ""
+          if (match($0, /try again at [^".]*/)) reset = substr($0, RSTART, RLENGTH)
+        }
+        next
+      }
+      /"type": *"agent_message"/ {
+        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+      }
+      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
+    ')"
+  IFS=$'\037' read -r maxL maxS reset <<EOF
+$out
+EOF
+  [ -n "$maxL" ] || return 1
+
+  if [ -n "$maxS" ]; then
+    local newer
+    newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
+    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+  fi
+
+  printf '%s' "$reset"
+  return 0
+}
+
 limit_profile_dry() {
   local cli="$1" dir="$2"
+  # codex keeps its own shape of transcript in its own place; claude's scan below
+  # would find nothing there. See _limit_codex_dry for why this is possible at all.
+  [ "$cli" = "codex" ] && { _limit_codex_dry "$dir"; return $?; }
   [ "$cli" = "claude" ] || return 1
   local proj_root="$dir/projects"
   [ -d "$proj_root" ] || return 1
@@ -210,13 +282,19 @@ EOF
 _limit_tank_dry_self() {
   local engine="$1" tank="$2" dir reset
   dir="$(profile_dir "$engine" "$tank")"
-  if [ "$engine" = "claude" ]; then
-    # claude's dry state is its transcript ONLY (scannable + self-clearing on the
-    # next successful turn). We NEVER consult dry_store for claude, so a stale 6h
-    # marker can't mask a real recovery — the store is strictly for engines whose
-    # limit isn't persisted to a transcript (codex).
-    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 1
-    printf '%s' "$reset"; return 0
+  # A transcript signal is always preferred: it self-clears the moment the account
+  # succeeds again, so it can never claim a tank is dry after it has recovered.
+  # claude and codex both persist their limit (codex's was long believed
+  # exec-stdout-only — see _limit_codex_dry for the evidence that it isn't).
+  if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
+    if reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; then
+      printf '%s' "$reset"; return 0
+    fi
+    # claude stops here on purpose: NEVER consult dry_store for it, or a stale 6h
+    # marker masks a real recovery. codex falls through — a headless `codex exec`
+    # can hit the limit in a shape the rollout doesn't carry, and burn persists
+    # that; the store has its own TTL.
+    [ "$engine" = "claude" ] && return 1
   fi
   if reset="$(dry_store_read "$engine" "$tank" 2>/dev/null)"; then
     printf '%s' "$reset"; return 0
