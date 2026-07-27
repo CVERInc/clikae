@@ -353,44 +353,58 @@ _clean_session_is_live() {
 #                          <path> was rm'd directly instead — the caller MUST
 #                          say so on that row; a silent fallback would be a lie
 #                          about where the data went.
+# _clean_trash_path -> the Trash directory clikae will use, or empty if it can't
+# have one. Creating it is fine (a fresh account may not have one yet); anything
+# else is a hard no.
+_clean_trash_path() {
+  [ -n "${HOME:-}" ] || return 1
+  local tdir="$HOME/.Trash"
+  # bin/clikae runs under `set -eo pipefail`: a bare mkdir as the last command of
+  # a `||` would abort the whole process. `|| true` keeps this a soft probe.
+  if [ ! -d "$tdir" ]; then mkdir -p "$tdir" 2>/dev/null || true; fi
+  [ -d "$tdir" ] && [ -w "$tdir" ] || return 1
+  printf '%s\n' "$tdir"
+}
+
+# _clean_trash_usable -> 0 if we can move things to the Trash right now.
+# Called BEFORE the red confirm so the question a person answers is the one that
+# will actually happen. It used to be discovered mid-delete, which meant they had
+# already agreed to "move these to the Trash" before clikae found out it couldn't.
+_clean_trash_usable() { [ -n "$(_clean_trash_path 2>/dev/null || true)" ]; }
+
+# _clean_to_trash <path> — move <path> into the Trash. Collision-safe.
+#
+# 🔴 It NEVER deletes. This used to fall back to `rm` when the Trash was
+# unusable, "rather than leaving the row stuck" — but the two outcomes are not
+# symmetric: a stuck row costs you one uncleaned file, a fallback `rm` costs you
+# the file forever, and clean's whole payload is session history that cannot be
+# regenerated. A person who asked to move something to the Trash never asked for
+# that. On any failure the file is LEFT ALONE and the caller is told.
 _clean_to_trash() {
   local item="$1" tdir base dest i
   CLEAN_TRASH_DEST=""
-  CLEAN_TRASH_FELL_BACK=0
+  CLEAN_TRASH_SKIPPED=0
   [ -e "$item" ] || return 0
-  if [ -n "${HOME:-}" ]; then
-    tdir="$HOME/.Trash"
-    # bin/clikae runs the whole tree under `set -eo pipefail`: a bare `mkdir`
-    # as the last command of a `||` statement would abort the ENTIRE clikae
-    # process on failure instead of falling through to the rm fallback below
-    # (mid-deletion-loop, after some rows already moved — worse than the bug
-    # this closes). `|| true` inside the `if` body keeps this graceful.
-    if [ ! -d "$tdir" ]; then mkdir -p "$tdir" 2>/dev/null || true; fi
-    if [ -d "$tdir" ] && [ -w "$tdir" ]; then
-      base="$(basename "$item")"
-      dest="$tdir/$base"
-      if [ -e "$dest" ]; then
-        i=1
-        while [ -e "$tdir/$base ($i)" ]; do i=$((i + 1)); done
-        dest="$tdir/$base ($i)"
-      fi
-      if mv "$item" "$dest" 2>/dev/null; then
-        # shellcheck disable=SC2034  # read by the caller / test harness, not this file
-        CLEAN_TRASH_DEST="$dest"
-        return 0
-      fi
+
+  tdir="$(_clean_trash_path 2>/dev/null || true)"
+  if [ -n "$tdir" ]; then
+    base="$(basename "$item")"
+    dest="$tdir/$base"
+    if [ -e "$dest" ]; then
+      i=1
+      while [ -e "$tdir/$base ($i)" ]; do i=$((i + 1)); done
+      dest="$tdir/$base ($i)"
+    fi
+    if mv "$item" "$dest" 2>/dev/null; then
+      # shellcheck disable=SC2034  # read by the caller / test harness, not this file
+      CLEAN_TRASH_DEST="$dest"
+      return 0
     fi
   fi
-  # Trash unusable, or the mv itself failed (cross-device, permissions, …):
-  # fall back to rm rather than leaving the row stuck — but CLEAN_TRASH_FELL_BACK
-  # tells the caller to say so. `|| true` on both: same set -e note as above —
-  # this fallback must never itself take the whole process down.
-  CLEAN_TRASH_FELL_BACK=1
-  if [ -d "$item" ]; then
-    rm -rf "$item" 2>/dev/null || true
-  elif [ -f "$item" ]; then
-    rm -f "$item" 2>/dev/null || true
-  fi
+
+  # Couldn't move it. Leave it exactly where it is and say so — never destroy
+  # what we were only asked to relocate.
+  CLEAN_TRASH_SKIPPED=1
   return 0
 }
 
@@ -1100,6 +1114,16 @@ EOF
     return 0
   fi
 
+  # Ask BEFORE the red confirm, not during the delete. The question a person
+  # answers has to be the one that will actually happen: this used to be
+  # discovered mid-loop, so they agreed to "move these to the Trash" and only
+  # afterwards did clikae find out it couldn't. Nothing is touched here.
+  if ! _clean_trash_usable; then
+    log_err "$T_CLEAN_TRASH_UNUSABLE"
+    log_dim "$T_CLEAN_TRASH_UNUSABLE_HINT"
+    return 1
+  fi
+
   # shellcheck disable=SC2059
   log_bold "$(printf "$T_CLEAN_SELECTED" "$sel_n")"
   # shellcheck disable=SC2059
@@ -1110,23 +1134,28 @@ EOF
   read -r _ || log_fail "$T_CLEAN_NO_CONFIRM"
 
   log_dim "$T_CLEAN_DELETING"
-  local deleted_kb=0 pth
+  local deleted_kb=0 pth row_skipped skipped=0
   local -a path_list=()
   for ((oi=0; oi<${#ord[@]}; oi++)); do
     idx="${ord[oi]}"
     [ "${cand_checked[idx]}" -eq 1 ] || continue
     IFS=';' read -ra path_list <<< "${cand_files_to_delete[idx]}"
+    row_skipped=0
     for pth in "${path_list[@]}"; do
       _clean_to_trash "$pth"
-      if [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]; then
-        # A silent rm fallback would lie about where the data went — say so on
-        # this row, every time it happens.
+      if [ "$CLEAN_TRASH_SKIPPED" -eq 1 ]; then
+        # Nothing was destroyed — this row is simply still on disk. Say which,
+        # so "the number went down less than I expected" has an answer.
+        row_skipped=1; skipped=$((skipped + 1))
         # shellcheck disable=SC2059
         log_warn "$(printf "$T_CLEAN_TRASH_UNAVAILABLE" "$pth")"
       fi
     done
-    deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))
+    # Only bank the size of a row that actually moved, or the summary overstates
+    # what it did — the exact class of lie this whole change is about.
+    [ "$row_skipped" -eq 0 ] && deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))
   done
+  [ "$skipped" -eq 0 ] || log_warn "$(printf "$T_CLEAN_SKIPPED_N" "$skipped")"
 
   local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"
   # shellcheck disable=SC2059

@@ -96,7 +96,7 @@ any CLI vendor.
    opt-out update check.
 8. **When a destructive path degrades, say so on the row.** `clean` falls back
    to `rm` when the Trash is unusable; that fallback must always announce
-   itself. The per-row warning does; the closing summary still doesn't — OPEN-1.
+   itself — and it must never do something MORE destructive than it announced: `clean` refuses rather than falling back to a delete.
 
 ### 2.2 Code
 
@@ -160,7 +160,7 @@ regressions in one sitting. Classification code reads target-ness first.
   Soul carries context, not the model's capability). SSOT: `docs/memory.md §4`.
 - **`clikae solo`** walls a tank out of the fleet: skipped by burn/watch/`to`,
   and `memory share` refuses it. `claude/MFC` is solo and must stay that way.
-- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-3.
+- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-2.
 
 ### 2.7 Windows / PowerShell
 
@@ -188,33 +188,7 @@ syncing" in another; this is the reconciled version.)
 
 Ordered by what would hurt most if ignored. Delete an entry when you close it.
 
-### OPEN-1 — `clean`'s summary claims the Trash even when it permanently deleted
-
-When `~/.Trash` is unusable, `_clean_to_trash` falls back to `rm` and the row
-correctly warns `Trash unavailable — deleted directly instead (not recoverable)`.
-But the closing line is unconditional:
-
-```
-[ WARN ] Trash unavailable — deleted directly instead (not recoverable): …/x.jsonl
-[ DONE ] Cleanup complete. Moved approximately 496 KB to the Trash — empty the
-         Trash to actually free that space.
-```
-
-Nothing was moved to any Trash. The per-row disclosure is honest and the summary
-contradicts it — and the summary is the line a person actually remembers, and the
-one they'd act on if they went looking for the file. Reproduced 2026-07-27 in a pty
-with a read-only `~/.Trash`.
-
-The fix needs a second summary string for "some rows fell back", which means
-wording it in all nine locales — consent-grade copy, so it wants the maintainer's
-hand rather than an LLM baseline. Until then the row warning is the only truth.
-
-Related, same screen: the red confirm accepts a bare Enter (`Press Enter to
-proceed, or Ctrl-C to cancel`). That is a deliberate, defensible choice while
-everything lands in the Trash and stays recoverable — but on the fallback path the
-same two keystrokes are irreversible. Worth deciding together with the above.
-
-### OPEN-2 — FLEET self-logout via a refresh-token race (NOT clikae's to fix)
+### OPEN-1 — FLEET self-logout via a refresh-token race (NOT clikae's to fix)
 
 **The mechanism.** Claude's OAuth uses **rotating** refresh tokens: each refresh
 issues a new one and invalidates the old. When several sessions on one tank
@@ -258,7 +232,7 @@ still evict each other; rotation is server-side. A single machine cannot fix
 that, so a dropped tank should be worded "may have been rotated out by another
 machine" rather than implying the account broke.
 
-### OPEN-3 — agy: login isolation proven, quota stacking unresolved
+### OPEN-2 — agy: login isolation proven, quota stacking unresolved
 
 **Login isolation is real and solid.** The `_agy_kc_*` Keychain carry holds two
 distinct Google accounts per tank (service `gemini`, account `antigravity`;
@@ -278,7 +252,7 @@ claim neither direction**. Independent of quota, agy's honest positioning is a
 *breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
 constraint is the 5-hour window regardless.
 
-### OPEN-4 — auto-relay of a dropped parallel task
+### OPEN-3 — auto-relay of a dropped parallel task
 
 When one tank in a parallel burn dries, re-queueing *that specific task* to a
 live tank needs the orchestrator to track a task↔tank map. `to`/`relay` carry a
@@ -289,7 +263,7 @@ simply re-fire.
 (The engine half of this closed on 2026-07-27: `clikae auto` now supervises codex
 as well as claude. agy stays out — one global login, no per-tank signal.)
 
-### OPEN-5 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-4 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 
 Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
 (a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
@@ -301,7 +275,7 @@ The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
 the `me` group has been used long enough to prove its shape.** This is a park,
 not an unfinished obligation.
 
-### OPEN-6 — smaller known gaps
+### OPEN-5 — smaller known gaps
 
 - **`clikae app`'s iTerm2 template has never been machine-verified** — iTerm2
   isn't installed on the maintainer's Mac, so the launcher it generates has only
@@ -352,7 +326,7 @@ the expensive way.
   catches "a session is open right now" — the overwhelming case — but not a
   check-then-open race, and its daemon-vs-interactive split is a command-string
   heuristic.
-- **Cross-machine token eviction** is an OAuth fact clikae cannot fix (OPEN-2).
+- **Cross-machine token eviction** is an OAuth fact clikae cannot fix (OPEN-1).
 - **agy cannot be a handoff SOURCE** — its sessions are opaque `.pb`. Alert and
   re-dispatch; never promise a session carry off agy.
 - **Interactive Claude Code gives no usage-limit signal** — it does not exit,

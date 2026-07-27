@@ -58,6 +58,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **`clikae clean` no longer deletes anything as a fallback, and no longer says
+  it moved things it didn't.** When `~/.Trash` was unusable, `_clean_to_trash`
+  fell back to `rm` — "rather than leaving the row stuck" — and the closing line
+  went on claiming everything had been moved to the Trash. The per-row warning
+  was honest; the summary, which is the line a person remembers and would act on
+  when they went looking for the file, was not.
+
+  The two outcomes were never symmetric: a stuck row costs one uncleaned file, a
+  fallback `rm` costs the file forever, and clean's payload is session history
+  that cannot be regenerated — the very thing `clikae resume` exists to keep.
+  Someone who asked to *move* something to the Trash never asked for that.
+
+  - The Trash is now checked **before the red confirm**, so the question you
+    answer is the one that will happen. Unusable → clikae says so and touches
+    nothing.
+  - `_clean_to_trash` never destroys. If an item can't be moved it is left
+    exactly where it is and named.
+  - The summary banks only rows that actually moved, and reports how many were
+    left behind.
+
+  Verified end to end in a real pty against a read-only `~/.Trash`: the confirm
+  never appears, and the session file is still there afterwards.
+
 - **`clikae doctor` names a tank that was signed out by a token-refresh race.**
   Claude's OAuth uses rotating refresh tokens, so when several sessions on one
   tank refresh at once the loser gets `invalid_grant`, treats it as "logged out",

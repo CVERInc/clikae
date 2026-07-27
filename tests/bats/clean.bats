@@ -452,7 +452,7 @@ PSSTUB
   [ "$status" -ne 0 ]
 }
 
-# --- _clean_to_trash (unit): move, never rm — collision-safe, honest fallback ---
+# --- _clean_to_trash (unit): move, NEVER destroy — collision-safe, honest skip ---
 # HOME == TEST_HOME (helpers.bash), so $HOME/.Trash is a throwaway fixture path;
 # never the real ~/.Trash.
 
@@ -461,7 +461,7 @@ PSSTUB
   local f="$TEST_HOME/session-a.jsonl"
   echo "conversation" > "$f"
   _clean_to_trash "$f"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 0 ]
   [ -f "$HOME/.Trash/session-a.jsonl" ]
   [ ! -e "$f" ]
   [ "$CLEAN_TRASH_DEST" = "$HOME/.Trash/session-a.jsonl" ]
@@ -473,7 +473,7 @@ PSSTUB
   mkdir -p "$d/subagents"
   echo x > "$d/subagents/t.jsonl"
   _clean_to_trash "$d"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 0 ]
   [ -d "$HOME/.Trash/sid-dir" ]
   [ -f "$HOME/.Trash/sid-dir/subagents/t.jsonl" ]
   [ ! -e "$d" ]
@@ -486,7 +486,7 @@ PSSTUB
   local f="$TEST_HOME/dupe.jsonl"
   printf 'second tank copy' > "$f"
   _clean_to_trash "$f"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 0 ]
   [ "$CLEAN_TRASH_DEST" = "$HOME/.Trash/dupe.jsonl (1)" ]
   [ "$(cat "$HOME/.Trash/dupe.jsonl")" = "first tank copy" ]      # untouched
   [ "$(cat "$HOME/.Trash/dupe.jsonl (1)")" = "second tank copy" ]
@@ -507,7 +507,7 @@ PSSTUB
   [ "$(cat "$HOME/.Trash/trip.jsonl (2)")" = "c" ]
 }
 
-@test "to_trash falls back to rm AND reports it when the Trash is unusable" {
+@test "to_trash LEAVES THE FILE when the Trash is unusable — never rm" {
   _source_clean
   # A FILE (not a dir) sitting where ~/.Trash should be: mkdir -p fails, and the
   # pre-existing-dir check also fails — the realistic shape of "Trash got
@@ -517,24 +517,27 @@ PSSTUB
   local f="$TEST_HOME/orphan.jsonl"
   echo "data" > "$f"
   _clean_to_trash "$f"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 1 ]
   [ -z "$CLEAN_TRASH_DEST" ]
-  [ ! -e "$f" ]     # gone via the honest rm fallback, not stuck
+  # THE point of this whole path: a session clean could not relocate must still
+  # be on disk. A stuck row costs one uncleaned file; an rm costs it forever.
+  [ -e "$f" ]
+  [ "$(cat "$f")" = "data" ]
 }
 
-@test "to_trash with no \$HOME falls back to rm and reports it" {
+@test "to_trash with no \$HOME leaves the file alone" {
   _source_clean
   local f="$TEST_HOME/nohome.jsonl"
   echo "data" > "$f"
   HOME="" _clean_to_trash "$f"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]
-  [ ! -e "$f" ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 1 ]
+  [ -e "$f" ]
 }
 
 @test "to_trash on a path that doesn't exist is a no-op, not a fallback" {
   _source_clean
   _clean_to_trash "$TEST_HOME/never-existed.jsonl"
-  [ "$CLEAN_TRASH_FELL_BACK" -eq 0 ]
+  [ "$CLEAN_TRASH_SKIPPED" -eq 0 ]
   [ -z "$CLEAN_TRASH_DEST" ]
 }
 
@@ -668,4 +671,26 @@ sys.exit(1 if bad else 0)
   [ "$status" -eq 0 ]
   [[ "$output" == *"copie obsolète (celle de a est gardée)"* ]] || false
   [[ "$output" != *"copie obsolète (celle de a est gard…"* ]] || false   # not cut
+}
+
+@test "trash_usable says no when ~/.Trash isn't a usable directory" {
+  _source_clean
+  rm -rf "$HOME/.Trash"
+  printf 'not a directory' > "$HOME/.Trash"
+  run _clean_trash_usable
+  [ "$status" -ne 0 ]
+}
+
+@test "trash_usable says yes for a writable ~/.Trash, and will create a missing one" {
+  _source_clean
+  rm -rf "$HOME/.Trash"
+  run _clean_trash_usable      # a fresh account may simply not have one yet
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.Trash" ]
+}
+
+@test "trash_usable says no without a \$HOME" {
+  _source_clean
+  HOME="" run _clean_trash_usable
+  [ "$status" -ne 0 ]
 }
