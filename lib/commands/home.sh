@@ -957,8 +957,15 @@ EOF
   # write-only (3>) fd would EOF on the first read and cancel instantly.
   { exec 3<>/dev/tty; } 2>/dev/null || return 1
 
+  # Preselect on an exact match OR on the option's first token. Callers that
+  # pass a bare value ("codex") against ANNOTATED options ("codex  (AI)") would
+  # otherwise never match, and the cursor silently sat on row 0 forever — which
+  # is what the new-tank picker did from every non-claude row. Menus whose
+  # options carry no annotation are unaffected: their first token is the option.
   local sel=0 i
-  for ((i = 0; i < n; i++)); do [ "${opts[$i]}" = "$pre" ] && sel=$i; done
+  for ((i = 0; i < n; i++)); do
+    if [ "${opts[$i]}" = "$pre" ] || [ "${opts[$i]%% *}" = "$pre" ]; then sel=$i; fi
+  done
 
   printf '\033[?1049h\033[?25l' >&3
   # shellcheck disable=SC2064
@@ -1182,6 +1189,11 @@ _home_newtank_choices() {
   # the file is the ground truth.
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    # A TARGET is offered by its own line below (agy), never again from the
+    # adapter scan — antigravity has an adapter FILE (a resume-only shim), so a
+    # name-blind scan listed it a second time, tagged "(tool)", and picking it
+    # landed in the same `_agy_init`. Ask the canonical predicate, not the name.
+    clikae_is_target "$name" && continue
     if grep -qE '^[[:space:]]*adapter_start_with_prompt[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$name.sh" 2>/dev/null; then
       ai="$ai$name"$'\n'
     else
@@ -1277,6 +1289,7 @@ _home_help_overlay() {
   _home_help_row "[ / ]"         "$T_K_REORDER"
   _home_help_row "⏎ Enter"       "$T_K_OPEN"
   _home_help_row "r"             "$T_K_RELAY"
+  _home_help_row "R"             "$T_K_RESUME_ALL"
   _home_help_row "x"             "$T_K_INCOGNITO"
   _home_help_row "n"             "$T_K_NEW"
   _home_help_row "a"             "$T_K_RENAME"

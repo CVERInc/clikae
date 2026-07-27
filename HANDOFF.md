@@ -160,7 +160,7 @@ regressions in one sitting. Classification code reads target-ness first.
   Soul carries context, not the model's capability). SSOT: `docs/memory.md §4`.
 - **`clikae solo`** walls a tank out of the fleet: skipped by burn/watch/`to`,
   and `memory share` refuses it. `claude/MFC` is solo and must stay that way.
-- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-6.
+- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-3.
 
 ### 2.7 Windows / PowerShell
 
@@ -263,24 +263,7 @@ still evict each other; rotation is server-side. clikae can only make one
 machine's concurrent sessions safe, and word a dropped tank as "may have been
 rotated out by another machine" rather than implying the account broke.
 
-### OPEN-3 — `clikae <typo>` exits 0
-
-An unrecognised first argument logs an error to stderr, prints the full help, and
-**returns 0** (`bin/clikae`, the unknown-command fallback). Scripts cannot detect
-a typo. Inconsistent with the rest of the surface — `clikae mcp status` returns 1.
-Was compounded by the stderr bug until that was fixed; the exit code is still 0.
-
-### OPEN-4 — new-tank picker: broken preselect, duplicated engine
-
-- **Preselect never matches.** `_home_choose` compares the caller's bare engine
-  name (`codex`) against the annotated option string (`"codex  (AI)"`), so the
-  cursor always lands on the first row regardless of which tank you pressed `n`
-  from. Verified.
-- **`agy` and `antigravity` are listed as two separate engines** in
-  `_home_newtank_choices`, one of them tagged `(tool)`, though `cmd_init` routes
-  both to `_agy_init`.
-
-### OPEN-5 — agy: login isolation proven, quota stacking unresolved
+### OPEN-3 — agy: login isolation proven, quota stacking unresolved
 
 **Login isolation is real and solid.** The `_agy_kc_*` Keychain carry holds two
 distinct Google accounts per tank (service `gemini`, account `antigravity`;
@@ -300,7 +283,7 @@ claim neither direction**. Independent of quota, agy's honest positioning is a
 *breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
 constraint is the 5-hour window regardless.
 
-### OPEN-6 — `clikae auto` is claude-only
+### OPEN-4 — `clikae auto` is claude-only
 
 Auto-carry on a dry tank is BETA and claude-only. codex and agy cannot carry
 themselves onward. codex dry-detection now exists (`lib/core/limit.sh` parses the
@@ -312,7 +295,7 @@ the orchestrator to track a task↔tank map. `to`/`relay` carry a *session*; thi
 is a *headless task* — a different shape, a pool/scheduler concern. Encourage
 idempotent, artifact-verified tasks so a dropped one can simply re-fire.
 
-### OPEN-7 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-5 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 
 Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
 (a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
@@ -324,7 +307,7 @@ The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
 the `me` group has been used long enough to prove its shape.** This is a park,
 not an unfinished obligation.
 
-### OPEN-8 — smaller known gaps
+### OPEN-6 — smaller known gaps
 
 - **`clikae app`**: Warp is unsupported (no clean command-launch story), and
   there is no default-terminal auto-detection. `--terminal terminal|iterm2|ghostty`
@@ -335,10 +318,6 @@ not an unfinished obligation.
   `security`, so the copy mechanics are tested but the service-name assumption
   (`gemini`/`antigravity`) is only ever confirmed by live dogfood. A read-only
   `clikae doctor` keychain-coordinate check is the suggested permanent guard.
-- **The board's `?` help overlay omits `R`.** `R` opens the full cross-tank resume
-  picker (`home.sh`, the key loop) but `_home_help_overlay` never lists it, so the
-  one screen whose job is "here are all the keys" is missing one. Every other bound
-  key is there. (Docs list it; the in-app legend doesn't.)
 - **Engine naming is inconsistent across surfaces.** `clikae list` says `agy`,
   `clikae doctor` says `antigravity`, and `clikae list --json` emits
   `"cli":"agy"` alongside `"path": …/profiles/antigravity/…` — so a consumer

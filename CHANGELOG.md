@@ -37,6 +37,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group ends. Verified in a real pty, including forcing the Trash fallback with a
   read-only `~/.Trash` and watching the warning actually print.
 
+### Fixed
+
+- **`clikae <typo>` printed help and exited `0`.** An unrecognised first argument
+  is neither a command, an engine, nor a tank — but the dispatcher fell through
+  to `help` and returned success, so no script could tell a typo from a hit
+  (while `clikae mcp status` correctly returned 1, contradicting it two verbs
+  away). Help is still printed as a courtesy; the exit status is now 1.
+
+- **The new-tank picker could never preselect the engine you were standing on.**
+  `_home_choose` compared the caller's bare value (`codex`) against its own
+  ANNOTATED options (`codex  (AI)`), so the match never landed and the cursor sat
+  on row 0 no matter which tank you pressed `n` from. Preselect now also matches
+  an option's first token; menus with unannotated options are unaffected.
+
+- **The new-tank picker offered Antigravity twice** — once as `agy (AI · power)`
+  and again as `antigravity (tool)`, though `cmd_init` routes both to the same
+  `_agy_init`. The scan that built the list keyed on "an adapter file exists",
+  which is exactly the proxy `clikae_is_target` exists to replace: antigravity
+  has an adapter file that is a resume-only shim on a launch-only target. It now
+  asks the predicate.
+
+- **The `?` help overlay never listed `R`** (open the cross-tank resume picker),
+  on the one screen whose entire job is to list every key. Added, with its label
+  in all nine languages — and a bats test now fails when a key is bound in the
+  board's key loop but missing from the legend, so the two cannot drift again.
+
 ### Added
 
 - **The gate grew a third leg: a real-pty smoke run, and it blocks.** shellcheck

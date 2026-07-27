@@ -36,6 +36,7 @@ T_OVER_QUOTA_HINT="transférez la session vers le réservoir suivant :  clikae t
 T_K_MOVE="aller"                             # terser than "déplacer" (common Apple French for arrow-key navigation, e.g. "Aller à") — the compact footer needed the columns
 T_K_OPEN="ouvrir"
 T_K_RELAY="relais"
+T_K_RESUME_ALL="toutes les sessions — chercher dans tous les réservoirs et reprendre"
 T_K_NEW="créer"
 T_K_RENAME="renommer"
 T_K_DELETE="supprimer"

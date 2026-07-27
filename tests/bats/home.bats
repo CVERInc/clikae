@@ -713,3 +713,36 @@ _agy_log() { # <line>
   [[ "$got" == /Users* ]] || false
   [[ "$got" == *resume.sh ]] || false
 }
+
+# --- board key legend parity --------------------------------------------------
+# The `?` overlay is the ONE screen whose whole job is "here is every key", and
+# it silently drifted: `R` (the cross-tank resume picker) was bound for releases
+# without ever being listed. A source scan is enough to keep the two in step —
+# it reads the case labels of the board's key loop and the rows of the overlay,
+# and fails when a key is reachable but undocumented.
+@test "every key the board binds is listed in the ? help overlay" {
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+
+  # Rows of the overlay: _home_help_row "<keys>" "<description>"
+  local legend
+  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
+
+  # Case labels of the board's live key loop, single-character arms only —
+  # named keys (up/down/enter/esc/pgup…) are covered by the arrow/paging rows,
+  # and a range like [1-9] is listed as "1-9".
+  local labels key missing=""
+  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
+            grep -oE "^      '?[A-Za-z/?]'?\)" |
+            tr -d "')" | tr -d ' ')"
+
+  for key in $labels; do
+    # `?` opens the overlay itself — listing it inside would be noise.
+    [ "$key" = "?" ] && continue
+    case "$legend" in
+      *"$key"*) ;;
+      *) missing="$missing $key" ;;
+    esac
+  done
+  [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
+}

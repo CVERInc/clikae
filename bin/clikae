@@ -131,8 +131,16 @@ else
   else
     log_err "Unknown command, engine, or tank: $raw"
     echo ""
-    set --
-    cmd="help"
+    # Help is printed as a COURTESY; the result is still failure. A typo has to be
+    # detectable by whatever called us — `clikae statsu` used to print help and
+    # exit 0, so a script could not tell it from success. Handled here rather than
+    # by routing to cmd_help, because the dispatcher's last line is the command
+    # itself and wrapping that in `||` would suppress `set -e` inside every
+    # command function.
+    # shellcheck source=../lib/commands/help.sh
+    source "$CLIKAE_LIB/commands/help.sh"
+    cmd_help || true
+    exit 1
   fi
 fi
 
