@@ -236,18 +236,7 @@ still evict each other; rotation is server-side. A single machine cannot fix
 that, so a dropped tank should be worded "may have been rotated out by another
 machine" rather than implying the account broke.
 
-### OPEN-2 — auto-relay of a dropped parallel task
-
-When one tank in a parallel burn dries, re-queueing *that specific task* to a
-live tank needs the orchestrator to track a task↔tank map. `to`/`relay` carry a
-*session*; this is a *headless task* — a different shape, a pool/scheduler
-concern. Encourage idempotent, artifact-verified tasks so a dropped one can
-simply re-fire.
-
-(The engine half of this closed on 2026-07-27: `clikae auto` now supervises codex
-as well as claude. agy stays out — one global login, no per-tank signal.)
-
-### OPEN-3 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-2 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 
 Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
 (a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
@@ -259,7 +248,7 @@ The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
 the `me` group has been used long enough to prove its shape.** This is a park,
 not an unfinished obligation.
 
-### OPEN-4 — smaller known gaps
+### OPEN-3 — smaller known gaps
 
 - **`clikae app`'s iTerm2 template has never been machine-verified** — iTerm2
   isn't installed on the maintainer's Mac, so the launcher it generates has only

@@ -82,6 +82,24 @@ Concretely, the known honest limits this redesign MUST surface, not hide:
   a separate `watch` command becomes redundant (keep as a hidden alias at most).
 - **`pool` is already removed** (v0.5.3 WIP): tanks ARE the reserve; the order is
   the burn order.
+- **Re-queueing a DROPPED PARALLEL TASK is a non-goal** (decided 2026-07-27).
+  When several tanks burn in parallel and one dries mid-task, nothing re-fires
+  *that* task onto a live tank. That is not an unbuilt feature — it is
+  architecturally out of reach here, for the same reason the supervisor advances
+  only on exit: clikae runs the engine as a CHILD and can act only when the child
+  returns. A relay that has to intervene while the process is still running would
+  need the engine's cooperation, which is the same wall as decision 7's
+  "interactive-codex excepted".
+
+  It is also no longer needed. `clikae resume` reaches back to any past session
+  across every tank, so the human decides which tank picks the work up — the
+  choice a task↔tank scheduler would have made for them, at the moment they
+  actually have the context to make it. The durable version of "a dropped task
+  can just re-fire" is the convention already in the playbooks: make the task
+  idempotent and verify it by its artifact.
+
+  Building it anyway would mean clikae growing a scheduler that tracks live
+  work — a daemon in all but name, against decision 6.
 - **`to` / `relay` / `handoff`:** `to` stays the user verb; bare `clikae to` walks
   the burn order to the next tank. relay/handoff stay internal.
 
