@@ -138,6 +138,14 @@ regressions in one sitting. Classification code reads target-ness first.
 - **Never print token prefixes** when diagnosing credentials. Print field
   *presence* only. The claude OAuth token lives in the login Keychain under
   `Claude Code-credentials-<sha256(CONFIG_DIR)[:8]>`, not in `CLAUDE_CONFIG_DIR`.
+- **A green local gate is NOT a green build. Go look at CI.** `scripts/test.sh`
+  is one OS, a narrower scan, and no matrix; CI is two runners and scans the whole
+  tree. Three releases shipped on 2026-07-27 with CI red the whole time, because
+  the pre-push hook was green and nobody looked. Check the run — especially any
+  job you added yourself, which by definition you have never watched pass.
+- **The gate lints itself.** It didn't until 2026-07-27, and the one file it never
+  checked was the one that broke: a comment beginning `# shellcheck ` parses as a
+  directive. Anything added to the gate must stay inside the gate's own scope.
 - **`bash scripts/test.sh` is the gate** — shellcheck at `warning` + bats. It is
   what CI runs. See §6 for what the gate does *not* cover.
 
