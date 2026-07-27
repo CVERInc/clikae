@@ -217,3 +217,40 @@ _src_app() {
   [[ "$output" == *"Warp"* ]] || false
   [[ "$output" == *"running a command"* ]] || false
 }
+
+# --- launcher templates must COMPILE -----------------------------------------
+# AppleScript resolves an app's terminology from that app's dictionary, so a
+# template using iTerm2's vocabulary can only be compiled on a machine that has
+# iTerm2. That is why this gap stayed open: nobody could check it here. Rather
+# than leave it permanently unverifiable, this test self-closes — the first
+# person with iTerm2 who runs the suite verifies it for everyone.
+@test "the Terminal.app launcher template compiles" {
+  macos_only
+  local out="$TEST_HOME/t.app" src="$TEST_HOME/t.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}
+
+@test "the Ghostty launcher template compiles (it is dictionary-free by design)" {
+  macos_only
+  # Ghostty can't be driven by AppleScript, so its launcher goes through
+  # `do shell script` — which is also why it compiles anywhere, unlike iTerm2's.
+  local out="$TEST_HOME/g.app" src="$TEST_HOME/g.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.ghostty.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}
+
+@test "the iTerm2 launcher template compiles (only checkable WITH iTerm2)" {
+  macos_only
+  [ -d "/Applications/iTerm.app" ] || [ -d "$HOME/Applications/iTerm.app" ] \
+    || skip "iTerm2 not installed — its AppleScript terminology cannot be resolved here"
+  local out="$TEST_HOME/i.app" src="$TEST_HOME/i.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.iterm2.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}

@@ -105,6 +105,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quota at all: 34.14% / 100% / 100% weekly. A shared pool would have shown one
   number three times.
 
+- **Launcher templates are now compile-tested, and the iTerm2 gap self-closes.**
+  AppleScript resolves an app's terminology from that app's dictionary, so the
+  iTerm2 template can only be compiled on a machine that has iTerm2 — which is
+  why it sat "never machine-verified" for months. Each template now has a compile
+  test; the iTerm2 one SKIPS when iTerm2 is absent, so the first person who has
+  it installed verifies it for everyone. Keeping iTerm2 (rather than dropping it
+  for being unverifiable) is deliberate: the code path is gated on the app being
+  present, so the only machine that runs it is one where the dictionary resolves,
+  and a bad template fails loudly at `osacompile` instead of producing a broken
+  `.app`.
+
+- **Field-verified on ARM64 Linux.** The full bats suite and all three pty-smoke
+  modes were run on a PineNote (aarch64, bash 5.2) over SSH: no failures,
+  including the interactive pty paths and the launched engine keeping its stderr.
+  CI runs x86 ubuntu, so real non-x86 hardware is a signal it cannot provide.
+
 - **`clikae doctor` reports which agy tanks carry a saved login.** agy has one
   live Keychain slot, so switching tanks stashes the current login under
   `clikae-agy-<tank>` and restores the target's. A tank with no stash can't be

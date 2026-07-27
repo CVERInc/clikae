@@ -261,11 +261,17 @@ you want one FILE out of the brain, not one tank.
 
 ### OPEN-3 — smaller known gaps
 
-- **`clikae app`'s iTerm2 template has never been machine-verified** — iTerm2
-  isn't installed on the maintainer's Mac, so the launcher it generates has only
-  ever been asserted against, never watched working. It is one template file if
-  it needs tweaking. (Warp is a decided non-target, not a gap — `--terminal warp`
-  now explains why; default-terminal detection shipped 2026-07-27.)
+- **`clikae app`'s iTerm2 template is unverified, and now says so by skipping.**
+  AppleScript resolves an app's terminology from that app's own dictionary, so a
+  template written in iTerm2's vocabulary can only be COMPILED on a machine that
+  has iTerm2 — which is why this never got checked here. It is not a reason to
+  drop iTerm2: the path is gated on the app being installed, so the only machine
+  that runs it is one where the dictionary resolves, and a bad template would
+  fail loudly at `osacompile` rather than yield a broken `.app`. There is now a
+  test that compiles each launcher template and SKIPS the iTerm2 one when iTerm2
+  is absent, so the first person who has it verifies it for everyone. (Warp is a
+  decided non-target, not a gap — `--terminal warp` explains why; default-terminal
+  detection shipped 2026-07-27.)
 
 ---
 
@@ -340,6 +346,11 @@ Run one leg directly while iterating:
 ```bash
 python3 tests/tools/pty-smoke.py prompts   # prompts + the launched engine's stderr
 ```
+
+Verified on ARM64 Linux (a PineNote over SSH, 2026-07-27): the whole bats suite
+and all three pty-smoke modes pass there, including the launched engine keeping
+its stderr. CI is x86 ubuntu, so that is a signal CI cannot give — if you have
+non-x86 hardware, running the gate on it is a cheap and genuinely useful report.
 
 What the gate still does **not** cover — check by hand when you touch these:
 
