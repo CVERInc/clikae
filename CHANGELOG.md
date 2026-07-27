@@ -58,6 +58,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has an adapter file that is a resume-only shim on a launch-only target. It now
   asks the predicate.
 
+- **Settled: agy quota is per-account and stacks — unless the accounts share a
+  Google family plan.** This sat unresolved for months behind one hard fact: agy's
+  `/usage` showed *byte-identical* figures for two different accounts, and the
+  recorded conclusion was that only an expensive burn-test could tell a shared
+  pool from a display artifact. The missing variable was that those two accounts
+  were in the same Google **family**, which pools usage — so the identical
+  display had been correct all along, not a preview bug. With three non-family
+  accounts signed in, a read-only comparison settled it in minutes and cost no
+  quota at all: 34.14% / 100% / 100% weekly. A shared pool would have shown one
+  number three times.
+
+- **`clikae doctor` reports which agy tanks carry a saved login.** agy has one
+  live Keychain slot, so switching tanks stashes the current login under
+  `clikae-agy-<tank>` and restores the target's. A tank with no stash can't be
+  switched to without an interactive Google sign-in — which means `clikae burn
+  agy` can't auto-hop onto it either: a headless run would sit at a login prompt
+  until `--print-timeout`. Found the hard way here (two of three tanks had lost
+  their stash), and it was invisible until you tried it. It is a line in doctor
+  now.
+
 - **`clikae clean` no longer deletes anything as a fallback, and no longer says
   it moved things it didn't.** When `~/.Trash` was unusable, `_clean_to_trash`
   fell back to `rm` — "rather than leaving the row stuck" — and the closing line

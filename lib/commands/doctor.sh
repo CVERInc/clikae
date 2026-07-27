@@ -55,6 +55,32 @@ _doctor_keychain() {
     printf '  %-16s %s\n' "agy" "absent ($svc / $acct) — not signed in, or the coordinates moved"
   fi
 
+  # Per-tank agy logins. There is only ONE live agy slot, so switching tanks
+  # works by stashing the current login under `clikae-agy-<tank>` and restoring
+  # the target's. A tank with NO stash therefore can't be switched to without an
+  # interactive Google sign-in — which means `clikae burn agy` can't auto-hop to
+  # it either: a headless run would sit at a login prompt until --print-timeout.
+  # That used to be invisible until you tried it at 2am. Now it's a line here.
+  local at_name at_cli at_path stash_ok="" stash_no=""
+  while IFS=$'\t' read -r at_cli at_name at_path; do
+    [ "$at_cli" = "antigravity" ] || continue
+    : "$at_path"
+    if security find-generic-password -s "$(_agy_kc_tank_service "$at_name")" >/dev/null 2>&1; then
+      stash_ok="$stash_ok $at_name"
+    else
+      stash_no="$stash_no $at_name"
+    fi
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+  if [ -n "$stash_ok$stash_no" ]; then
+    printf '  %-16s %s\n' "agy tanks" "carry a saved login:${stash_ok:- (none)}"
+    if [ -n "$stash_no" ]; then
+      printf '  %-16s %s\n' "" "no saved login:$stash_no — burn can't auto-hop onto these"
+      log_dim  "                   (sign in once with: clikae agy <tank>)"
+    fi
+  fi
+
   # claude: one slot PER TANK, keyed by a hash of that tank's config dir. A tank
   # with no slot is simply logged out — `clikae migrate` without --keep-login is
   # the usual way to orphan one.

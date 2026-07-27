@@ -86,3 +86,31 @@ _seed_daemon_log() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"claude/quiet"* ]] || false
 }
+
+# --- per-tank agy login stashes ----------------------------------------------
+# agy has ONE live Keychain slot, so a tank switch stashes the current login
+# under clikae-agy-<tank> and restores the target's. A tank with no stash can't
+# be switched to without an interactive Google sign-in — so `clikae burn agy`
+# can't auto-hop onto it either, and a headless run would sit at a login prompt
+# until --print-timeout. That was invisible until you hit it; doctor says it now.
+@test "doctor separates agy tanks that carry a login from those that don't" {
+  [ "$(uname -s)" = "Darwin" ] || skip "keychain section is macOS-only"
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/haslogin"
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/nologin"
+  # Stub `security` so the test never touches the real login keychain: only the
+  # 'haslogin' tank's stash is reported present.
+  local stub="$TEST_HOME/bin"; mkdir -p "$stub"
+  cat > "$stub/security" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *clikae-agy-haslogin*) exit 0 ;;
+  *clikae-agy-*)         exit 1 ;;
+  *)                     exit 1 ;;
+esac
+STUB
+  chmod +x "$stub/security"
+  PATH="$stub:$PATH" run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"carry a saved login: haslogin"* ]] || false
+  [[ "$output" == *"no saved login: nologin"* ]] || false
+}

@@ -160,7 +160,11 @@ regressions in one sitting. Classification code reads target-ness first.
   Soul carries context, not the model's capability). SSOT: `docs/memory.md §4`.
 - **`clikae solo`** walls a tank out of the fleet: skipped by burn/watch/`to`,
   and `memory share` refuses it. `claude/MFC` is solo and must stay that way.
-- **agy quota: do not claim it stacks, and do not claim it doesn't.** See OPEN-2.
+- **agy quota is PER-ACCOUNT and stacks — unless the accounts share a Google
+  family plan, which pools them.** Measured 2026-07-27, three signed-in tanks
+  read 34.14% / 100% / 100% weekly. State the family caveat whenever the
+  stacking is mentioned; it is the whole reason this looked unresolved for
+  months.
 
 ### 2.7 Windows / PowerShell
 
@@ -232,27 +236,7 @@ still evict each other; rotation is server-side. A single machine cannot fix
 that, so a dropped tank should be worded "may have been rotated out by another
 machine" rather than implying the account broke.
 
-### OPEN-2 — agy: login isolation proven, quota stacking unresolved
-
-**Login isolation is real and solid.** The `_agy_kc_*` Keychain carry holds two
-distinct Google accounts per tank (service `gemini`, account `antigravity`;
-verified by hash comparison and `cli.log applyAuthResult: email=…`).
-
-**Quota is the open question.** The only hard fact is that agy's `/usage` shows
-*byte-identical* figures for two different accounts. That proves the **display**
-is identical, not that consumption is shared. Two live readings: (a) Google sells
-per-account tiers, so a literal global pool contradicts the paid product; (b) the
-identical display is most likely a preview artifact, which would mean quota does
-stack and the UI simply doesn't show it.
-
-**Only a burn-test settles it** (maintainer, real terminal): record each
-account's weekly %, burn one account's weekly down meaningfully, then re-check
-the other — unchanged ⇒ per-account, drops too ⇒ shared. Until then **docs must
-claim neither direction**. Independent of quota, agy's honest positioning is a
-*breadth* leg (one entry → Gemini + Claude + GPT-OSS); the binding burst
-constraint is the 5-hour window regardless.
-
-### OPEN-3 — auto-relay of a dropped parallel task
+### OPEN-2 — auto-relay of a dropped parallel task
 
 When one tank in a parallel burn dries, re-queueing *that specific task* to a
 live tank needs the orchestrator to track a task↔tank map. `to`/`relay` carry a
@@ -263,7 +247,7 @@ simply re-fire.
 (The engine half of this closed on 2026-07-27: `clikae auto` now supervises codex
 as well as claude. agy stays out — one global login, no per-tank signal.)
 
-### OPEN-4 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
+### OPEN-3 — Soul Phase 4 (PARKED, dogfood-gated — not debt)
 
 Phases 0–3 are done (structure; claude share; codex/agy pointer). Phase 4 =
 (a) a per-**entry** scope dial (`share|isolate|evaporate` on a single memory
@@ -275,7 +259,7 @@ The plan gates this behind living in Phase 1 first. **Do not build Phase 4 until
 the `me` group has been used long enough to prove its shape.** This is a park,
 not an unfinished obligation.
 
-### OPEN-5 — smaller known gaps
+### OPEN-4 — smaller known gaps
 
 - **`clikae app`'s iTerm2 template has never been machine-verified** — iTerm2
   isn't installed on the maintainer's Mac, so the launcher it generates has only
