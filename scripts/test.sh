@@ -7,14 +7,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "→ shellcheck (severity=warning)"
-shellcheck -S warning bin/clikae install.sh
-find lib tests -name '*.sh' -print0 | xargs -0 shellcheck -S warning
+# NB: this script lints ITSELF too. It did not until 2026-07-27, and the gap was
+# not theoretical: a prose comment here that happened to begin with the word
+# "shellcheck" was parsed as a directive (SC1072/SC1073) and broke CI for two
+# releases, while every local run stayed green — because the only file the gate
+# never checked was the gate. CI scans the whole tree; make the local run match.
+shellcheck -S warning bin/clikae install.sh "$0"
+find lib tests scripts -name '*.sh' -print0 | xargs -0 shellcheck -S warning
 
 echo "→ bats"
 bats -r --print-output-on-failure tests/bats
 
 # The third leg exists because the first two are structurally blind to the TUI:
-# shellcheck reads source, bats never presses a key. Every board regression of
+# ShellCheck reads source, bats never presses a key. Every board regression of
 # the last year lived in that gap — most expensively the `exec … 2>/dev/null`
 # family, which discarded the board's stderr (invisible prompts, muted errors,
 # and a dead stderr handed to the launched engine) while this gate stayed green.
