@@ -16,11 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It carries the whole AI-engine set — `handoff --to grok/<tank>`, `burn`'s
   headless-write dialect (`--sandbox workspace` + `bypassPermissions`), `conduct`'s
-  read-only leg (`--sandbox read-only` with the mutating tools removed), the ACCOUNT
+  read-only leg (`--sandbox read-only` plus a tools **allowlist**), the ACCOUNT
   column, and Soul membership through a pointer note in `$GROK_HOME/AGENTS.md`
   (grok's own global-rules file — the same shape codex uses).
 
-  Two things worth knowing, both verified by doing rather than assumed:
+  Three things worth knowing, all verified by doing rather than assumed:
+  - **The read-only leg is fenced twice, and the denylist form doesn't work.**
+    Naming the mutating tools in `--disallowed-tools` was tried first; with the
+    sandbox off, a leg still created the file. An allowlist (`--tools`) holds,
+    needs no correct guess at what the write tool is called, and keeps holding
+    when grok ships a new one. Note also what `--sandbox read-only` deliberately
+    allows: writes to `GROK_HOME` and to temp dirs. A leg cannot touch your
+    project; it *can* write to `/tmp`.
   - **Sessions are matched on the cwd grok RECORDS, not the folder it encodes.**
     grok names each session group after the percent-encoded working directory, with
     a slug+hash fallback for long paths. Reading `summary.json`'s own `info.cwd`

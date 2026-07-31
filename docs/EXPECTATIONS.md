@@ -142,10 +142,22 @@ That is the isolation working, not a lost login.
 puts the binary at `~/.grok/bin/grok` and that path on your `PATH`. Tanks live
 elsewhere; keep `~/.grok/bin` on `PATH` or no tank can launch.
 
+**A read-only `conduct` leg on grok can still write to `/tmp`.** `--sandbox
+read-only` is kernel-enforced and refuses to touch your project (grok logs an
+`FsViolation` when it tries), but its documented shape keeps `GROK_HOME` and the
+temp directories writable so the session can persist itself. "Read-only" means
+*your files are safe*, not *nothing anywhere was written*. clikae adds a second,
+in-process fence — a `--tools` allowlist — for the platforms where the kernel
+profile can't be applied.
+
 **`clikae mcp share` doesn't reach grok tanks.** clikae's fleet MCP list is merged
 into a JSON `mcpServers` object; grok keeps its servers in `config.toml` as a TOML
 `[mcp_servers]` table. Rather than write a shape it might corrupt, clikae leaves
 grok out — use `grok mcp` inside the tank.
+
+**A grok session started by `burn` shows `(no preview)` on the board.** grok fills
+`generated_title` when it titles a conversation, which a one-shot headless run
+never gets to. The row is real and resumable — it just has no name yet.
 
 **A grok session's title is whatever `/rename` last set.** grok stores the
 model-written title and a manual rename in the *same* `generated_title` field

@@ -304,12 +304,17 @@ line two" | tr "\0" "\a" | tr "\n" "@"'
   [[ "$output" == *"line one@line two"* ]] || false
 }
 
-@test "grok audit_flags are read-only: read-only sandbox AND the mutating tools removed" {
+# The tool fence must stay an ALLOWLIST. The denylist form was dogfooded and did
+# NOT hold — with the sandbox off, a leg named in --disallowed-tools still wrote
+# the file. Anyone "simplifying" this back to a denylist reopens that hole, so the
+# shape itself is asserted, not just the read-only sandbox beside it.
+@test "grok audit_flags are read-only: read-only sandbox AND a tools ALLOWLIST" {
   _setup_grok
   run bash -c '. "'"$CLIKAE_TEST_ROOT"'/lib/adapters/grok.sh"; adapter_audit_flags "review this" "/tmp/repo" | tr "\0" "\n"'
   [ "$status" -eq 0 ]
   [[ "$output" == *"read-only"* ]] || false
-  [[ "$output" == *"--disallowed-tools"* ]] || false
-  [[ "$output" == *"run_terminal_cmd"* ]] || false
+  [[ "$output" == *"--tools"* ]] || false
+  [[ "$output" == *"read_file"* ]] || false
+  [[ "$output" != *"--disallowed-tools"* ]] || false
   [[ "$output" != *"workspace"* ]] || false
 }
