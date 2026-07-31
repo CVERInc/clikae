@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/dfaeea84776a5121768075298aa62fce6473f6f1/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/8bdb5daa2c6bbc39073da0d0059824ac1ab5d660/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -187,7 +187,8 @@ nothing to stash. Other engines report a clean "not supported" rather than prete
 transcript with a claude-shaped extractor before summarising; neither codex's rollout
 nor grok's `chat_history.jsonl` uses that shape, so the digest falls back to metadata
 plus whatever it can lift. The handoff still happens — it just carries less than the
-same command run on a claude tank.
+same command run on a claude tank. Open for a contributor, with the shapes and the
+constraints written out: [#33](https://github.com/CVERInc/clikae/issues/33).
 
 **An INTERACTIVE `--ephemeral` run still writes a transcript into the tank.** It
 drops your memory, your skills and the fleet's MCP servers — so the session does
