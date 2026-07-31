@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **grok is an engine now.** xAI's Grok Build CLI joins claude and codex as a
+  full AI engine, not just a switchable tank: `clikae init grok <tank>` gives it
+  its own login + config + history under `GROK_HOME`, and its sessions show up on
+  the home board's Resume list, in `clikae resume`, and in `clean`'s scan.
+
+  It carries the whole AI-engine set — `handoff --to grok/<tank>`, `burn`'s
+  headless-write dialect (`--sandbox workspace` + `bypassPermissions`), `conduct`'s
+  read-only leg (`--sandbox read-only` with the mutating tools removed), the ACCOUNT
+  column, and Soul membership through a pointer note in `$GROK_HOME/AGENTS.md`
+  (grok's own global-rules file — the same shape codex uses).
+
+  Two things worth knowing, both verified by doing rather than assumed:
+  - **Sessions are matched on the cwd grok RECORDS, not the folder it encodes.**
+    grok names each session group after the percent-encoded working directory, with
+    a slug+hash fallback for long paths. Reading `summary.json`'s own `info.cwd`
+    instead means a change to that encoding can't silently empty your board.
+  - **`/rename` and the model's title share one field.** A rename overwrites
+    `generated_title` while `session_summary` keeps the original, so preferring
+    `generated_title` is what puts *your* name on the board row.
+
+  Honest limits, all listed in [Expectations](docs/EXPECTATIONS.md#grok): no fuel
+  dot (grok reports a limit only on the exit path — exit status 1 with a stderr
+  sentence — and writes nothing clikae can read afterwards), no `mcp share` (grok's
+  servers live in TOML, clikae's fleet list merges JSON), and no `--ephemeral`
+  (pointer-strategy memory has nothing to stash).
+
+
 ## [0.15.2] — 2026-07-27
 
 `--ephemeral` finally isolates what it always implied. A cold reader that loads

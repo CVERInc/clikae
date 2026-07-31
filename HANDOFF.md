@@ -199,7 +199,7 @@ requires adding the matching PS table row, or the bash suite goes red. A
 **`subcommand`-strategy** adapter does not: that strategy marks a capability shim
 on a launch-only target rather than an env-switchable engine (`antigravity`'s
 resume hook is the only one), and the test skips it deliberately. This is why the
-bash tree has 14 adapter files and the PS table correctly has 13.
+bash tree has 15 adapter files and the PS table correctly has 14.
 
 (The old handoff asserted "keep them in sync" in one place and "don't spend effort
 syncing" in another; this is the reconciled version.)

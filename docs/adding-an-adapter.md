@@ -40,21 +40,21 @@ implementation to read.
 | Function | Unlocks | See |
 | --- | --- | --- |
 | `adapter_init <dir>` | Seed the profile dir once, at `clikae init`. | kubectl, npm |
-| `adapter_install_hint` | A useful "not installed" message instead of a bare failure. | claude, codex |
-| `adapter_account_label <dir>` | The ACCOUNT column in `clikae list` / `status` / the board. | claude, codex |
+| `adapter_install_hint` | A useful "not installed" message instead of a bare failure. | claude, codex, grok |
+| `adapter_account_label <dir>` | The ACCOUNT column in `clikae list` / `status` / the board. | claude, codex, grok |
 | `adapter_flag_args <dir>` | The `flag` strategy — args appended instead of env exported. | vercel |
 | `adapter_migrate_credentials <old> <new>` | `--keep-login` on `migrate`/`rename` (macOS Keychain re-key). | claude |
 | **Sessions — the board, `resume`, `clean`** | | |
-| `adapter_transcript_path <dir>` | Your sessions appear in the board's Resume list. | claude, codex |
-| `adapter_title_for_file <file>` | A session's title, derived from the transcript file alone. **Prefer a user-set rename over a machine-generated title**, and scan the tail — a rename lands wherever it was typed. | claude, codex, antigravity |
+| `adapter_transcript_path <dir>` | Your sessions appear in the board's Resume list. | claude, codex, grok |
+| `adapter_title_for_file <file>` | A session's title, derived from the transcript file alone. **Prefer a user-set rename over a machine-generated title**, and scan the tail — a rename lands wherever it was typed. | claude, codex, grok, antigravity |
 | `adapter_session_title` / `adapter_session_recap` / `adapter_session_meta` | Richer board rows (title, one-line recap, age/size). | claude |
-| `adapter_find_session <id>` / `adapter_session_cwd` / `adapter_resume_args` | `clikae resume <id>` can locate, `cd` to, and reopen a past session. | claude, codex, antigravity |
-| `adapter_list_sessions` / `adapter_recent_sids` | Feed the cross-tank picker and `clean`'s candidate scan. | claude, codex |
+| `adapter_find_session <id>` / `adapter_session_cwd` / `adapter_resume_args` | `clikae resume <id>` can locate, `cd` to, and reopen a past session. | claude, codex, grok, antigravity |
+| `adapter_list_sessions` / `adapter_recent_sids` | Feed the cross-tank picker and `clean`'s candidate scan. | claude, codex, grok |
 | **Headless + fleet** | | |
-| `adapter_start_with_prompt` | Marks the engine as an **AI engine** — it's what the new-tank picker classifies on, and what `burn` needs to start a task. | claude, codex |
-| `adapter_burn_flags` / `adapter_audit_flags` | `burn`'s write dialect and `conduct`'s read-only dialect, so a reroute regenerates the *right* flags for the target engine. | claude, codex |
+| `adapter_start_with_prompt` | Marks the engine as an **AI engine** — it's what the new-tank picker classifies on, and what `burn` needs to start a task. | claude, codex, grok |
+| `adapter_burn_flags` / `adapter_audit_flags` | `burn`'s write dialect and `conduct`'s read-only dialect, so a reroute regenerates the *right* flags for the target engine. | claude, codex, grok |
 | `adapter_relay <from> <to>` | `clikae to` / `relay` can carry a **live** session across tanks. Without it, the carry starts a clean session and says so. | claude |
-| `adapter_memory_dir` / `adapter_memory_pointer_path` | Soul membership. Defining `adapter_memory_dir` (a real memory directory) also enables `--ephemeral`; the pointer variant is for engines whose memory is opaque. | claude / codex |
+| `adapter_memory_dir` / `adapter_memory_pointer_path` | Soul membership. Defining `adapter_memory_dir` (a real memory directory) also enables `--ephemeral`; the pointer variant is for engines whose memory is opaque. | claude / codex, grok |
 | `adapter_mcp_config_file` | `clikae mcp share` can fan a server into this engine's tanks. | claude |
 
 > The classification rule that matters: **never key behaviour on "an adapter file

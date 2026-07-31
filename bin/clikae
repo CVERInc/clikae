@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # clikae — the CLI account switcher you can read.  (kirikae, 切り替え, "switching")
-# Open source · claude · codex · agy · land back on your recent sessions.
+# Open source · claude · codex · grok · agy · land back on your recent sessions.
 # https://oss.cver.net/clikae  ·  MIT © CVER Inc.
 
 set -eo pipefail

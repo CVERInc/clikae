@@ -18,7 +18,7 @@ same model with PowerShell mechanics:
 
 - isolated profile dirs at `%USERPROFILE%\.clikae\profiles\<cli>\<profile>\`
   (override the root with `$env:CLIKAE_HOME`),
-- the same 13 built-in adapters (claude, codex, gh, gcloud, docker, helm,
+- the same 14 built-in adapters (claude, codex, grok, gh, gcloud, docker, helm,
   kubectl, aws, az, npm, terraform, pulumi, vercel), kept in sync with
   `lib/adapters/*.sh`,
 - instead of a shell alias (PowerShell aliases can't carry env vars) it writes a

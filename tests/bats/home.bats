@@ -9,7 +9,7 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"No tanks yet"* ]] || false
   [[ "$output" == *"clikae init"* ]] || false
-  [[ "$output" == *"14 engines"* ]] || false
+  [[ "$output" == *"15 engines"* ]] || false
 }
 
 @test "bare clikae with profiles shows the tank board grouped by CLI" {
@@ -572,7 +572,7 @@ _agy_log() { # <line>
 
   CLIKAE_LANG=en-US run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"14 engines"* ]] || false       # English keeps the space
+  [[ "$output" == *"15 engines"* ]] || false       # English keeps the space
 }
 
 @test "_home_help_row wraps a long es/de/fr/pt description without overflowing 80 cols" {

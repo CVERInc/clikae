@@ -26,10 +26,10 @@ AfterAll {
 }
 
 Describe 'adapter registry' {
-    It 'exposes the same 13 adapters as the bash tool' {
+    It 'exposes the same 14 adapters as the bash tool' {
         $adapters = Get-ClikaeAdapter
-        $adapters.Count | Should -Be 13
-        ($adapters.Cli | Sort-Object) | Should -Be (@('aws','az','claude','codex','docker','gcloud','gh','helm','kubectl','npm','pulumi','terraform','vercel'))
+        $adapters.Count | Should -Be 14
+        ($adapters.Cli | Sort-Object) | Should -Be (@('aws','az','claude','codex','docker','gcloud','gh','grok','helm','kubectl','npm','pulumi','terraform','vercel'))
     }
 
     It 'maps each CLI to the correct env var and strategy' {
@@ -37,6 +37,8 @@ Describe 'adapter registry' {
         (Get-ClikaeAdapter -Cli claude).Strategy | Should -Be 'env-dir'
         (Get-ClikaeAdapter -Cli codex).EnvVar     | Should -Be 'CODEX_HOME'
         (Get-ClikaeAdapter -Cli codex).Strategy   | Should -Be 'env-dir'
+        (Get-ClikaeAdapter -Cli grok).EnvVar      | Should -Be 'GROK_HOME'
+        (Get-ClikaeAdapter -Cli grok).Strategy    | Should -Be 'env-dir'
         (Get-ClikaeAdapter -Cli kubectl).Strategy | Should -Be 'env-file'
         (Get-ClikaeAdapter -Cli aws).Strategy     | Should -Be 'env-var'
         (Get-ClikaeAdapter -Cli aws).EnvVar       | Should -Be 'AWS_PROFILE'

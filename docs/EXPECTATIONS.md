@@ -81,7 +81,10 @@ delete `$CLIKAE_HOME/auto-relay-consent`. (clikae tells you the file + how to re
 supervised, so `auto` has no effect on it. Engine coverage is claude and codex —
 both persist their limit where clikae can read it after the session exits. agy is
 out for a structural reason, not a missing feature: one global login, so there is
-no per-tank signal to read.
+no per-tank signal to read. grok is out for a different reason: it reports a limit
+only on the **exit path** (a stderr sentence plus exit status 1 — unlike codex,
+which exits 0), and nothing lands in the session files clikae scans, so there is no
+after-the-fact reading to take.
 
 ## Antigravity (agy)
 
@@ -115,23 +118,60 @@ arrive as the pointer agy printed rather than the content it buffered.
 That row is a resume-only capability shim, not a switchable engine: agy is
 architecturally a *target*, and `clikae_is_target` — not "an adapter file exists" —
 is what every classification path reads. Which is also why the PowerShell adapter
-table mirrors 13 of the 14 adapter files: `subcommand` ones aren't switchable
+table mirrors 14 of the 15 adapter files: `subcommand` ones aren't switchable
 engines. `clikae tanks` footnotes agy's global-login nature.
+
+## Grok
+
+**A grok tank always reads `○` on the fuel gauge.** Not a missing feature — there
+is nothing on disk to read. grok surfaces a usage limit only as it exits (a
+sentence on stderr and exit status **1**; codex, by contrast, exits 0), and writes
+no limit marker into `summary.json` or the session logs. clikae colours a dot only
+when it can justify one, so grok stays `○` rather than guessing green.
+
+**Each grok tank needs its own `grok login`.** `GROK_HOME` re-homes grok's whole
+state directory, and `auth.json` lives inside it — so a fresh tank is genuinely
+signed out (it says "Not signed in" rather than borrowing `~/.grok`'s session).
+That is the isolation working, not a lost login.
+
+**`GROK_HOME` moves grok's state, not the `grok` binary.** The official installer
+puts the binary at `~/.grok/bin/grok` and that path on your `PATH`. Tanks live
+elsewhere; keep `~/.grok/bin` on `PATH` or no tank can launch.
+
+**`clikae mcp share` doesn't reach grok tanks.** clikae's fleet MCP list is merged
+into a JSON `mcpServers` object; grok keeps its servers in `config.toml` as a TOML
+`[mcp_servers]` table. Rather than write a shape it might corrupt, clikae leaves
+grok out — use `grok mcp` inside the tank.
+
+**A grok session's title is whatever `/rename` last set.** grok stores the
+model-written title and a manual rename in the *same* `generated_title` field
+(`session_summary` keeps the original machine title). So a renamed session shows
+your name on the board — and there is no way to show the machine title again.
 
 ## Engines on one board
 
-**codex "Continue" rows show no recap (just an age), unlike claude.** claude writes
-AI-titles + recap lines into its transcript; codex writes neither, so its rows
-gracefully degrade to title + "N ago". Nothing is missing — there's just less to show.
+**codex and grok "Continue" rows show no recap (just an age), unlike claude.** claude
+writes AI-titles + recap lines into its transcript; codex writes neither, and grok
+writes a title but no recap — so those rows gracefully degrade to title + "N ago".
+Nothing is missing — there's just less to show.
 
-**A moved/renamed working directory can hide a codex session.** codex records the
-session's `cwd` and clikae matches on it (claude slugs `$PWD` instead). Move the dir
-and codex's recorded `cwd` no longer equals `$PWD`, so the session goes invisible to
+**A moved/renamed working directory can hide a codex or grok session.** Both record
+the session's `cwd` and clikae matches on it (claude slugs `$PWD` instead). Move the
+dir and the recorded `cwd` no longer equals `$PWD`, so the session goes invisible to
 `relay`/`handoff`/board even though it exists. Run from the original directory.
+(grok *also* names its session folder after the encoded cwd, but clikae deliberately
+reads the recorded value instead — a folder-name scheme is the vendor's to change.)
 
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
-layout clikae knows how to stash to a throwaway; today that's claude. Other engines
-report a clean "not supported" rather than pretend.
+layout clikae knows how to stash to a throwaway; today that's claude. codex and grok
+join the Soul through a *pointer* note instead of a real memory dir, so there is
+nothing to stash. Other engines report a clean "not supported" rather than pretend.
+
+**A handoff brief out of a codex or grok tank is thin.** `clikae handoff` cleans the
+transcript with a claude-shaped extractor before summarising; neither codex's rollout
+nor grok's `chat_history.jsonl` uses that shape, so the digest falls back to metadata
+plus whatever it can lift. The handoff still happens — it just carries less than the
+same command run on a claude tank.
 
 **An INTERACTIVE `--ephemeral` run still writes a transcript into the tank.** It
 drops your memory, your skills and the fleet's MCP servers — so the session does
