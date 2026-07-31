@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><title>Adding an adapter - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/adding-an-adapter"/><meta property="og:title" content="Adding an adapter"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><title>Adding an adapter - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/adding-an-adapter"/><meta property="og:title" content="Adding an adapter"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
           @view-transition { navigation: auto; }
           ::view-transition-group(root),
           ::view-transition-old(root),
@@ -91,12 +91,12 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_install_hint</code></td>
 <td>A useful &quot;not installed&quot; message instead of a bare failure.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_account_label &lt;dir&gt;</code></td>
 <td>The ACCOUNT column in <code>clikae list</code> / <code>status</code> / the board.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_flag_args &lt;dir&gt;</code></td>
@@ -116,12 +116,12 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_transcript_path &lt;dir&gt;</code></td>
 <td>Your sessions appear in the board's Resume list.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_title_for_file &lt;file&gt;</code></td>
 <td>A session's title, derived from the transcript file alone. <strong>Prefer a user-set rename over a machine-generated title</strong>, and scan the tail — a rename lands wherever it was typed.</td>
-<td>claude, codex, antigravity</td>
+<td>claude, codex, grok, antigravity</td>
 </tr>
 <tr>
 <td><code>adapter_session_title</code> / <code>adapter_session_recap</code> / <code>adapter_session_meta</code></td>
@@ -131,12 +131,12 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_find_session &lt;id&gt;</code> / <code>adapter_session_cwd</code> / <code>adapter_resume_args</code></td>
 <td><code>clikae resume &lt;id&gt;</code> can locate, <code>cd</code> to, and reopen a past session.</td>
-<td>claude, codex, antigravity</td>
+<td>claude, codex, grok, antigravity</td>
 </tr>
 <tr>
 <td><code>adapter_list_sessions</code> / <code>adapter_recent_sids</code></td>
 <td>Feed the cross-tank picker and <code>clean</code>'s candidate scan.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><strong>Headless + fleet</strong></td>
@@ -146,12 +146,12 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_start_with_prompt</code></td>
 <td>Marks the engine as an <strong>AI engine</strong> — it's what the new-tank picker classifies on, and what <code>burn</code> needs to start a task.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_burn_flags</code> / <code>adapter_audit_flags</code></td>
 <td><code>burn</code>'s write dialect and <code>conduct</code>'s read-only dialect, so a reroute regenerates the <em>right</em> flags for the target engine.</td>
-<td>claude, codex</td>
+<td>claude, codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_relay &lt;from&gt; &lt;to&gt;</code></td>
@@ -161,7 +161,7 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_memory_dir</code> / <code>adapter_memory_pointer_path</code></td>
 <td>Soul membership. Defining <code>adapter_memory_dir</code> (a real memory directory) also enables <code>--ephemeral</code>; the pointer variant is for engines whose memory is opaque.</td>
-<td>claude / codex</td>
+<td>claude / codex, grok</td>
 </tr>
 <tr>
 <td><code>adapter_mcp_config_file</code></td>
@@ -274,4 +274,4 @@ launch-only target rather than a switchable engine, and the test skips it.</p>
   sync();
   var outlet=document.querySelector('[data-june-outlet]');
   if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
-})();</script><script type="module" src="/_june/client.dabd37e3.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."},"locale":{"type":"string","description":"Optional locale — scopes results to that locale's view (its translations plus untranslated defaults)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as the authored Markdown source by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."},"locale":{"type":"string","description":"Optional locale — returns that variant when it exists."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>
+})();</script><script type="module" src="/_june/client.707bcb6c.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."},"locale":{"type":"string","description":"Optional locale — scopes results to that locale's view (its translations plus untranslated defaults)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as the authored Markdown source by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."},"locale":{"type":"string","description":"Optional locale — returns that variant when it exists."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>

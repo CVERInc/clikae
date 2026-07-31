@@ -16,7 +16,7 @@ var __copyProps = (to, from, except, desc) => {
 	}
 	return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", {
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
 	value: mod,
 	enumerable: true
 }) : target, mod));
@@ -10389,7 +10389,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-5e178acf.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-8ba8a804.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -11078,9 +11078,7 @@ function mountCtrlk(ctrl, opts = {}) {
 				e.preventDefault();
 				ctrl.close();
 				break;
-			case "Tab":
-				e.preventDefault();
-				break;
+			case "Tab": e.preventDefault();
 		}
 	};
 	dialog.addEventListener("keydown", onDialogKeydown);
