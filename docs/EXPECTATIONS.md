@@ -126,8 +126,12 @@ engines. `clikae tanks` footnotes agy's global-login nature.
 **A grok tank always reads `○` on the fuel gauge.** Not a missing feature — there
 is nothing on disk to read. grok surfaces a usage limit only as it exits (a
 sentence on stderr and exit status **1**; codex, by contrast, exits 0), and writes
-no limit marker into `summary.json` or the session logs. clikae colours a dot only
-when it can justify one, so grok stays `○` rather than guessing green.
+no limit marker into `summary.json`, the session logs, or anywhere else under
+`GROK_HOME` — checked after a real limited run. Its own `/usage` (alias `/cost`)
+answers "how much is left, when does it reset", but as a **live query inside a
+running session**, and clikae's fuel gauge reads state a session left behind
+rather than calling a vendor API. So grok stays `○` rather than guessing green;
+for the reset time, ask grok with `/usage`.
 
 **Each grok tank needs its own `grok login`.** `GROK_HOME` re-homes grok's whole
 state directory, and `auth.json` lives inside it — so a fresh tank is genuinely
