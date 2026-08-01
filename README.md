@@ -254,74 +254,39 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
 - **[Adding a language](docs/adding-a-locale.md)** — give the board and prompts a new locale: one string file + one resolver line, CI enforces the rest.
 
-## Milestones
+## How it got here
 
-- **v0.5 — the fuel-tank grammar.** clikae became the verb (`clikae <engine> <tank>`),
-  `clikae to` carries a session onward (same engine resumes; another engine gets a
-  written brief), and the engine/tank/fuel vocabulary landed throughout. See
-  [docs/grammar.md](docs/grammar.md).
-- **v0.5.4 — the fuel gauge.** The board's dot stopped meaning "you are here": 🟢 ready ·
-  🔴 dry (the vendor's verbatim reset time) · ○ no reading — never a guessed green. See
-  [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
-- **v0.5.5 — real multi-account agy, and `burn`.** Each Antigravity tank carries its own
-  Google login via the macOS Keychain; `clikae burn` runs headless tasks across tanks,
-  verified by the artifact they produce, never the exit code.
-- **v0.5.12 — the quality punch-list hit empty.** State schema versioning landed; since
-  then it's been polish. The full story, version by version: [CHANGELOG.md](CHANGELOG.md).
-- **v0.6 — vertical orchestration.** `clikae conduct` (BETA) fans one prompt across N
-  accounts in parallel, each running headless read-only on its own tank, and hands back
-  every leg's output plus an honest captured/dry table — it doesn't pick the winner, you
-  do. `clikae git-id` gives a tank its own commit identity so commits aren't stamped with
-  the engine's account email; `clikae burn --prompt-file` / `--prompt` / `--add-dir` fill
-  in each engine's headless-write flags for you. Patches since (0.6.1, 0.6.2) are
-  correctness and string fixes — see [CHANGELOG.md](CHANGELOG.md).
-- **v0.7 — agy joins the fan-out.** `clikae conduct --leg agy/<tank>` lets Antigravity
-  run a read-only best-of-N leg alongside claude/codex, so cheap breadth rides your agy
-  quota — on its active tank only (it's a global single-account engine). The recipe for
-  driving agy headless without firing a blank is now baked into `clikae agy --help` and
-  [docs/agy-dispatch.md](docs/agy-dispatch.md).
-- **v0.8 — resume, picked from a board.** `clikae resume` reaches *backward* to a past
-  session by id across every tank (claude/codex/antigravity); run with no id it opens an
-  interactive picker — filter, page, pick by title, no UUID to copy — and `[R]` opens it
-  from the dashboard. `clikae resume cleanup` reclaims disk from old session data. The
-  home board also got much faster (several seconds → well under one on multi-GB tanks) by
-  reading only the transcript slices it needs and scanning each tank's fuel state once.
-- **v0.9 — the Soul layer.** `clikae memory share|status` gives several of
-  your own tanks one shared markdown brain **across engines** — claude symlinks its
-  memory dir into the store; codex and agy read a pointer note to the same files, no
-  translator, no drift. Swap the engine, keep the soul. `clikae solo` walls a tank off
-  from the fleet, and the home board became an **interactive cockpit** (press `m` for
-  the memory dial, `s` to solo) laid out as Tanks / Solo / Resume. See
-  [docs/memory.md](docs/memory.md).
-- **v0.10 — agy's login rides along, verified this time.** A tank switch carries the
-  Google login through the macOS Keychain, and **every restore is checked against the
-  stash before agy launches** — it refuses rather than silently landing you on the
-  wrong account. With interactive OAuth out of the switch path, `clikae burn agy
-  <tank>` works (sequentially — agy still has one global login). Windows via **WSL**
-  became a documented, first-class path.
-- **v0.11 — one brain, not one per directory.** Soul sharing is per-**tank** and
-  whole-brain: membership is the single source of truth and the per-directory links
-  are just projections of it, re-linked on every launch. A member tank can no longer
-  quietly grow a second, isolated memory. `clikae mcp share` extends the same
-  fleet-vs-solo logic to MCP servers.
-- **v0.12 — the audit release.** No new features: four independent review lenses
-  (performance, dead code, correctness/portability, structure) over the whole tree.
-  One keyboard decoder now backs every picker, ~220 lines of dead code went, and a
-  real-pty smoke driver joined the test tools.
-- **v0.13 — the repositioning.** The front page started telling the story this
-  README now opens with: your work has two halves, and clikae keeps *your* half
-  portable. Multi-account quota rotation stepped down to an advanced chapter with an
-  honest, dated [terms page](docs/terms-and-your-accounts.md) — and a one-time note
-  before your first cross-account carry.
-- **v0.14 — nine languages, and `clikae clean`.** 简体中文, 한국어, Español, Deutsch,
-  Français and Português (Brasil) join English, 日本語 and 繁體中文 — transcreated
-  against each language's own Apple macOS system strings, and translated *by grade*
-  (the sentences you must understand to consent are fully localized; what you type
-  or copy stays technical). Disk cleanup came out from under `resume` and became
-  **`clikae clean`** — one list, Enter, red confirm — and it moves candidates to the
-  **Trash**, never `rm`, saying so on the row if the Trash is unusable.
-- **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
-  build-verified skeleton; it ships when it earns it.
+clikae started as a switcher. Several accounts on one machine, a bag of
+environment variables to juggle between them — so the verb came first
+(`clikae <engine> <tank>`), and the engine/tank/fuel vocabulary followed.
+
+Then the board learned not to guess. The dot that meant "you are here" became
+a fuel gauge reading the vendor's own reset time, showing ○ rather than a
+hopeful green; `resume` learned to reach *backward* to any past session by
+title, across every tank; headless runs report what they actually captured,
+verified by the artifact rather than the exit code. One release shipped no
+features at all — four review lenses over the whole tree, ~220 lines of dead
+code out, and a real-pty smoke driver that presses keys, because shellcheck
+reads source and bats never types.
+
+Somewhere in there the point moved. The accounts were never the interesting
+part; the memory was. `clikae memory share` gives several of your tanks one
+vendor-neutral markdown brain — no translator, no drift — and the front page
+was rewritten around it: your work has two halves, and clikae keeps yours
+portable. Quota rotation stepped down from the headline to an advanced
+chapter with an honest, dated
+[terms page](docs/terms-and-your-accounts.md).
+
+Since then, reach. Nine languages, transcreated against each one's own Apple
+system strings and translated *by grade* — the sentences you must understand
+in order to consent are fully localized; what you type stays technical.
+`clikae clean` reclaims disk with one list, one red confirm, and the Trash
+instead of `rm`. New engines keep joining the board. A macOS menu bar app
+(`gui/ClikaeMenuBar`) exists as a build-verified skeleton; it ships when it
+earns it.
+
+Version by version: **[Releases](https://github.com/CVERInc/clikae/releases)**
+· **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## Testing & quality
 
