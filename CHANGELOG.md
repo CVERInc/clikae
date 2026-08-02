@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-08-02
+
+### Fixed
+
+- **A solo tank that is still on the shared brain is now called out, instead of
+  being reported as two flat facts.** `solo` and "in a memory group" are one
+  statement — solo leaves the group — but `memory status` printed
+  `→ shared 'me'  🔒 solo` on the same line and let the badge speak louder than
+  the truth. Anyone scanning the board read that tank as isolated.
+
+  The state is reachable: a tank made solo *before* 0.15.0 wired the two verbs
+  together kept its pointer, and nothing since would have told you. Two of them
+  were found in the field on 2026-08-02, sitting on the shared store for six days
+  under a 🔒 badge.
+
+  The survey now badges the combination `⚠️ solo BUT STILL SHARING`, prints one
+  actionable line naming the affected tanks, and the single-tank view says what
+  to run. Detection only — `clikae solo <engine> <tank>` already repairs it, and
+  a silent auto-repair would hide the very thing worth seeing.
+
 ## [0.16.0] — 2026-07-31
 
 ### Added
