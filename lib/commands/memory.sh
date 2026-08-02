@@ -525,7 +525,7 @@ _memory_status() {
       declare -F adapter_memory_dir >/dev/null 2>&1 || strat="pointer"
       declare -F adapter_memory_pointer_path >/dev/null 2>&1 || [ "$strat" = "symlink" ] || log_fail "memory: '$eng' unsupported."
     fi
-    local saw=0
+    local saw=0 stale=""
     log_info "memory sharing ($eng):"
     while IFS=$'\t' read -r cli tname _; do
       [ "$cli" = "$canon" ] || continue
@@ -537,7 +537,16 @@ _memory_status() {
       elif clikae_is_target "$eng"; then MEM_PTR="$(target_memory_pointer_path "$MEM_CFG")"
       else MEM_PTR="$(adapter_memory_pointer_path "$MEM_CFG")"; fi
       local g acct lk here; g="$(_memory_current_group)"; acct="$(_memory_account)"
-      lk=""; tank_is_solo "$cli" "$tname" && lk="  🔒 solo"
+      # solo means out of the shared brain — the two are one statement. A tank
+      # that is solo AND in a group is a state the model says can't exist: it
+      # was made solo before the verbs were wired together, or its isolate
+      # failed. Badge it as broken rather than printing both facts flatly and
+      # letting the reader take the 🔒 for the answer.
+      lk=""
+      if tank_is_solo "$cli" "$tname"; then
+        if [ -n "$g" ]; then lk="  ⚠️ solo BUT STILL SHARING"; stale="${stale:+$stale }$cli/$tname"
+        else lk="  🔒 solo"; fi
+      fi
       # Sharing is tank-level; note when THIS directory's slot isn't projected
       # yet (it links on the tank's next launch here — soul_prelaunch).
       here=""
@@ -549,14 +558,25 @@ _memory_status() {
       else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}$lk"; fi
     done < <(list_all_profiles)
     [ "$saw" -eq 1 ] || log_dim "  (no $eng tanks)"
+    if [ -n "$stale" ]; then
+      log_warn "solo tanks still on the shared brain: $stale"
+      log_dim "  re-run \`clikae solo <engine> <tank>\` on each — it leaves the group for real."
+    fi
     return 0
   fi
   # One named tank.
   _memory_resolve_tank "$engine" "$tank"
   local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
-  lk=""; tank_is_solo "$MEM_CLI" "$MEM_TANK" && lk="  🔒 solo"
+  lk=""
+  if tank_is_solo "$MEM_CLI" "$MEM_TANK"; then
+    if [ -n "$g" ]; then lk="  ⚠️ solo BUT STILL SHARING"; else lk="  🔒 solo"; fi
+  fi
   if [ -n "$g" ]; then
     log_done "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"
+    if tank_is_solo "$MEM_CLI" "$MEM_TANK"; then
+      log_warn "solo, but still in group '$g' — solo is supposed to leave it."
+      log_dim "  fix: clikae solo $MEM_CLI $MEM_TANK"
+    fi
     log_dim "store: $(_memory_store_path "$g")"
     if [ "$MEM_STRATEGY" = "symlink" ] \
        && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then
