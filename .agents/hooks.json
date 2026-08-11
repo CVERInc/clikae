@@ -1,0 +1,11 @@
+{
+  "clikae-harness": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/Users/chodaict/Developer/clikae-agy-pty/scripts/harness-stop-hook.sh",
+        "timeout": 60
+      }
+    ]
+  }
+}

@@ -852,6 +852,55 @@ _clean_select() {
   return "$rc"
 }
 
+# ── Tmux Ephemeral GC (Rule 6) ──────────────────────────────────────────────
+# Headless tasks and interactive sessions create a lock on /tmp/ck-ephem-<id>.lock.
+# When clikae clean runs, it attempts to grab this lock without blocking.
+# If lockf returns 0 (lock acquired), the parent process is dead, so we can
+# safely kill the orphaned tmux session. If rc==75, the lock is held (alive).
+# We NEVER delete the lock file itself.
+_clean_tmux_gc() {
+  local dry_run="$1"
+  local lock_file sid is_dead rc
+  for lock_file in "${TMPDIR:-/tmp}/"ck-ephem-*.lock; do
+    [ -e "$lock_file" ] || continue
+    is_dead=0
+    if command -v flock >/dev/null 2>&1; then
+      flock -n "$lock_file" true 2>/dev/null
+      rc=$?
+      if [ "$rc" -eq 0 ]; then
+        is_dead=1
+      elif [ "$rc" -eq 1 ]; then
+        : # Lock held
+      fi
+    else
+      lockf -k -t 0 "$lock_file" true 2>/dev/null
+      rc=$?
+      if [ "$rc" -eq 0 ]; then
+        is_dead=1
+      elif [ "$rc" -eq 75 ]; then
+        : # Lock held
+      fi
+    fi
+    if [ "$is_dead" -eq 1 ]; then
+      sid="${lock_file##*-ephem-}"
+      sid="${sid%.lock}"
+      if tmux has-session -t "ck-$sid" 2>/dev/null; then
+        if [ "$dry_run" = "1" ]; then
+          log_info "GC: [Dry Run] Would clean up abandoned tmux session ck-$sid"
+        else
+          tmux kill-session -t "ck-$sid"
+          log_info "GC: Cleaned up abandoned tmux session ck-$sid"
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$HOME/.clikae/state/ck-${sid}.scrollback"
+        fi
+      else
+        if [ "$dry_run" != "1" ]; then
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$HOME/.clikae/state/ck-${sid}.scrollback"
+        fi
+      fi
+    fi
+  done
+}
+
 cmd_clean() {
   local dry_run=0
   local older_than=30 older_given=0
@@ -880,6 +929,9 @@ cmd_clean() {
         ;;
     esac
   done
+
+  # Run the Tmux Ephemeral GC before doing file scans
+  _clean_tmux_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by
