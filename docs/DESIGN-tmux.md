@@ -68,8 +68,22 @@
 
 ### Rule 4: SSH 憑證過期與全域漫遊 (The Stale Socket Symlink)
 - **症狀**：長時間運行的 Session 在 SSH 斷線重連後，失去 Git 權限。
-- **收據**：`tmux set-environment` 無法更新既有 shell 內的變數，只對之後新開的 pane 有效。
+- **收據**：
+  - `tmux set-environment` 無法更新既有 shell 內的變數，只對之後新開的 pane 有效。
+  - 防禦性機制，維護者環境目前未觸發。兩端都沒有轉發 agent，git 走 HTTPS + Keychain，根本不碰 `SSH_AUTH_SOCK`：
+    ```
+    $ ssh-add -l
+    The agent has no identities.
+    
+    $ 41 個 repo 的 remote 協定
+      38 https（credential.helper=osxkeychain）
+       3 git@
+    
+    $ ssh pinenote 'grep -i forwardagent ~/.ssh/config'
+    （無輸出）
+    ```
 - **規範**：
+  這是一個便宜且無害的防禦性機制。只有在有人打開 `ForwardAgent`，或改用 SSH remote 而且靠 agent 認證時，這個機制才會真的發揮作用。
   使用單一全域軟連結（Trade-off: 切換裝置時，所有運行中的 Tanks 會一起轉換認證；若未連線，所有 Tanks 的 Git 都會 hang 或報錯。這是 Zero-Config 的妥協，優點是舊 Session 不需重啟 Agent 即可恢復權限）。
   ```bash
   if [[ -n "$SSH_AUTH_SOCK" && -S "$SSH_AUTH_SOCK" ]]; then
