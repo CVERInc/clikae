@@ -78,6 +78,17 @@ plain, conventional verbs.</p>
 </tr>
 </tbody>
 </table>
+<p><strong>Your session outlives the terminal.</strong> A bare switch runs the engine inside a
+tmux session named <code>ck-&lt;engine&gt;-&lt;tank&gt;</code>, so closing the window — or an ssh
+connection dropping — leaves the work running. Come back with the same command
+and you land back in it (the same conversation, not a new one), at whatever size
+the terminal you are now sitting at happens to be. That is the roaming case:
+start on the desktop, pick it up from a tablet over ssh.</p>
+<p>Two clients can stay attached at once; clikae does not kick anyone off. If you
+want the other one gone, <code>tmux attach -d</code> does that.</p>
+<p>It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
+or a <code>TERM</code> tmux cannot draw on, clikae runs the engine directly instead — same
+command, same result, just no persistence. <code>clikae burn</code> behaves the same way.</p>
 <h3 id="make-amp-manage-tanks">Make &amp; manage tanks</h3>
 <table>
 <thead>
