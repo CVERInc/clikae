@@ -158,3 +158,32 @@ _codex_reply_line() {
   run limit_profile_dry antigravity "$CLIKAE_HOME/profiles/antigravity/g"
   [ "$status" -ne 0 ]
 }
+
+# --- agy: the log carries three different RESOURCE_EXHAUSTED sentences and only
+# two of them are a spent tank. Real lines, pulled from
+# ~/.gemini/antigravity-cli/log/ on 2026-08-11.
+
+@test "agy log_dry: 'Individual quota reached' is dry, and the reset phrase is echoed verbatim" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: E0808 22:20:54 stream_handler.go:101] error encountered while processing planner output: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 47h47m20s.' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Resets in 47h47m20s"* ]] || false
+}
+
+@test "agy log_dry: 'exhausted your capacity on this model' is dry" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: E0803 22:48:49 stream_handler.go:101] error encountered while processing planner output: RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model. Resets in 0s.' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -eq 0 ]
+}
+
+@test "agy log_dry: a userInfo CACHE refresh that says RESOURCE_EXHAUSTED is NOT dry" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: W0810 13:03:09 cache.go:56] Cache(userInfo): Singleflight refresh failed: RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -ne 0 ]
+}

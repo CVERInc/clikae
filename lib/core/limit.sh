@@ -406,10 +406,22 @@ limit_dry_set() {
 # per-run file each invocation — so its content IS the latest run's state. A
 # marker present = the most recent run hit the limit; it self-clears when the next
 # run rotates in a clean log (no timezone math, same spirit as limit_profile_dry).
+# RESOURCE_EXHAUSTED alone is NOT a quota verdict. Three variants were pulled out
+# of real logs on 2026-08-11, and only two of them mean the tank is spent:
+#   E … stream_handler: RESOURCE_EXHAUSTED (429): Individual quota reached. …
+#   E … stream_handler: RESOURCE_EXHAUSTED (429): You have exhausted your capacity
+#                                                 on this model. …
+#   W … Cache(userInfo): Singleflight refresh failed: RESOURCE_EXHAUSTED (429):
+#       Resource has been exhausted (e.g. check quota).      <- a cache refresh
+# The third is a warning from an unrelated background fetch; matching the bare
+# token turned it into "this tank ran dry" and sent burn off to reroute. Match the
+# vendor's quota sentences instead of the error class.
+LIMIT_AGY_DRY_RE='Individual quota reached|exhausted your capacity on this model'
+
 limit_log_dry() {
   local logf="$1"
   [ -n "$logf" ] && [ -e "$logf" ] || return 1
-  grep -qaE 'RESOURCE_EXHAUSTED|Individual quota reached' "$logf" 2>/dev/null || return 1
+  grep -qaE "$LIMIT_AGY_DRY_RE" "$logf" 2>/dev/null || return 1
   # Echo the vendor's own reset phrase verbatim (never a computed countdown); the
   # LAST occurrence is this run's most recent limit line. Guard the no-match so it
   # never aborts the caller under `set -eo pipefail`.
