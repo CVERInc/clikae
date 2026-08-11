@@ -91,6 +91,31 @@ _supervise_decision() {
   esac
 }
 
+# _switch_tmux_usable -> 0 when an interactive tmux session is possible here.
+# tmux is a convenience over `clikae run`, never a dependency.
+_switch_tmux_usable() {
+  command -v tmux >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]
+}
+
+# _switch_tmux_attach <session> <started_here> <scrollback_file>
+# Attach, replay what scrolled past, and say whether tmux would host us at all.
+# Returns 1 when tmux refuses (TERM it cannot draw on, for one) — and then puts
+# back what we started, because `new-session -d` has already launched the engine
+# and a session nobody can see still spends the account's quota.
+_switch_tmux_attach() {
+  local session="$1" started_here="$2" scrollback_file="$3"
+  if tmux attach -t "$session"; then
+    if [ -s "$scrollback_file" ]; then
+      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
+      rm -f "$scrollback_file"
+    fi
+    return 0
+  fi
+  [ "$started_here" -eq 1 ] && tmux kill-session -t "$session" 2>/dev/null
+  rm -f "$scrollback_file"
+  return 1
+}
+
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3
   local tank_id="${engine}-${tank}"
@@ -117,7 +142,7 @@ _switch_run_tmux_wrapped() {
   # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
   # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
   # fail, because the launch went through a tmux that was not there.
-  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ]; then
+  if ! _switch_tmux_usable; then
     while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
@@ -152,18 +177,11 @@ KV
     # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
     # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
     # quietly taken roaming away from the one device this feature exists for.
-    if ! tmux attach -t "ck-$tank_id"; then
-      [ "$started_here" -eq 1 ] && tmux kill-session -t "ck-$tank_id" 2>/dev/null
-      rm -f "$scrollback_file"
+    if ! _switch_tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file"; then
       while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
       exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
-    fi
-
-    if [ -s "$scrollback_file" ]; then
-      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
-      rm -f "$scrollback_file"
     fi
   fi
 }
@@ -228,7 +246,7 @@ EOF
   if [ "$same" = "1" ]; then
     local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
     target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
-    target_cmd="$target_cmd; tmux capture-pane -p -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
+    target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
     
     local -a relay_env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
     if [ -n "$CLIKAE_HOME" ]; then
@@ -238,13 +256,19 @@ EOF
       relay_env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
     fi
     
-    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
-    tmux attach -t "ck-$tank_id"
-    if [ -s "$scrollback_file" ]; then
-      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
-      rm -f "$scrollback_file"
+    # The carry runs unattended by definition — the tank went dry mid-session — so
+    # every guard the plain switch path grew applies here too, and this site had
+    # none of them: no tmux check, a capture without -S - (last screen only), and
+    # an attach with nothing to catch its refusal.
+    if _switch_tmux_usable; then
+      local started_here=0
+      if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
+        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+        started_here=1
+      fi
+      _switch_tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" && return 0
     fi
+    exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
   else
     exec "$CLIKAE_BIN" handoff "$engine" "$tank" --to "$ne/$nt"
   fi

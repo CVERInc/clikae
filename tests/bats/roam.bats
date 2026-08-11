@@ -49,6 +49,11 @@ def tmux(*a):
 def width():
     return tmux("display-message", "-p", "-t", "ck-codex-roam", "#{window_width}")
 
+# Start from nothing. ck-codex-roam lives on the shared default socket, so a
+# session left by an earlier run would be ATTACHED to instead of created — and
+# then the first width is whatever that run used, not ours.
+tmux("kill-session", "-t", "ck-codex-roam")
+
 attach(100, 30); time.sleep(4)
 print("FIRST_WIDTH", width())
 
