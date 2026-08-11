@@ -2,4 +2,14 @@
 # Pre-push guard: run the repo's full check before any push; a failure blocks the push.
 # Tracked in-repo (not .git/hooks). Activate once with:  git config core.hooksPath hooks
 # Bypass in an emergency with:  git push --no-verify   (CI still guards server-side).
+# git exports GIT_DIR (and friends) into hooks, and they leak into every git the
+# suite runs: tests that `git init` a scratch repo and commit into it get their
+# commit redirected at THIS repo instead. Measured — the only variable changed is
+# GIT_DIR:
+#   $ bats -f "exported identity actually stamps" tests/bats/git_id.bats   -> ok
+#   $ GIT_DIR=$(git rev-parse --absolute-git-dir) bats -f ... same test    -> not ok
+# So the gate could never go green from a real push, only from running test.sh by
+# hand. Drop the inherited git context before handing over.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 exec bash "$(dirname "$0")/../scripts/test.sh"
