@@ -26,3 +26,7 @@
 # Internal conversation backups — never publish
 conversations/
 DOGFOOD-*.md
+
+# Headless dispatch working files (per-round task brief + agent report)
+/task.md
+/report.md
