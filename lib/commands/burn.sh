@@ -36,6 +36,10 @@ Give the task in one of two ways:
     adapter, so you never hand-assemble them and a cross-engine reroute stays
     sound (the flags are regenerated for the new engine).
   · the power-user way — -- <engine command...>: pass the raw engine argv yourself.
+    For agy there is no adapter to compose, so `--` means EXTRA AGY FLAGS riding
+    alongside --prompt, not a whole command. Headless dispatch usually wants:
+      -- --dangerously-skip-permissions     let agy write (print mode auto-denies)
+      -- -c                                 continue the previous conversation
 
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
@@ -166,7 +170,16 @@ _burn_compose() {
   BURN_ARGV+=("${post[@]}")
 }
 
-# _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <add_dirs...>
+# _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
+#           <n_extra> <extra-agy-flags...> <add_dirs...>
+# The extras are whatever followed `--` on the command line. agy has no adapter,
+# so clikae cannot compose its flags for you; what it CAN do is stop dropping the
+# ones you asked for. Two that headless dispatch actually needs:
+#   --dangerously-skip-permissions   agy's print mode auto-denies file tools, so
+#                                    without this a burn can read but never write
+#   -c / --conversation <id>         continue a previous run instead of starting cold
+# Counted rather than sentinel-delimited because add_dirs is already a variadic
+# tail and a second `--` inside argv is exactly the ambiguity this is fixing.
 # agy's own burn loop. agy has no adapter (no per-shell env; one global
 # ~/.gemini symlink), so it can't go through cmd_burn's adapter-driven engine
 # loop below — this is a dedicated SEQUENTIAL dry→next-tank loop, reusing the
@@ -179,7 +192,9 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6"; shift 6
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" n_extra="$7"; shift 7
+  local -a extra=()
+  while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
 
   if [ "$fresh" -eq 1 ] && [ -e "$artifact" ]; then
@@ -224,6 +239,8 @@ _agy_burn() {
     # Only passed when the user actually asked for a budget — clikae has no
     # business inventing one.
     [ -n "$timeout_s" ] && gen+=(--print-timeout "${timeout_s}s")
+    # Yours last, so an explicit flag beats clikae's default for the same option.
+    [ "${#extra[@]}" -gt 0 ] && gen+=("${extra[@]}")
     local -a runner=()
     if [ -n "$timeout_s" ]; then
       local tb; tb="$(_burn_timeout_bin)"
@@ -356,7 +373,11 @@ cmd_burn() {
       _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
       [ "$prompt_set" -eq 1 ] || log_fail "agy burn only supports the --prompt / --prompt-file form (agy has no adapter to fill in a raw '-- <cmd...>')."
       [ -z "$to" ] || log_fail "--to isn't supported for agy — it walks its own tanks (clikae init agy <name> to add more)."
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "${add_dirs[@]}"
+      # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
+      # there is no adapter to compose, so `--prompt` still carries the task and
+      # these ride alongside it. They used to be parsed and then silently dropped.
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" \
+                "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
   esac

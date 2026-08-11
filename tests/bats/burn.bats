@@ -120,12 +120,14 @@ _stub_agy_burn() {
 # clikae asks for a per-run log with --log-file so a concurrent interactive agy
 # cannot have its quota event charged to this run; honour it, and fail loudly if
 # the flag ever stops being passed (the shared symlink is the bug, not a default).
+AGY_ARGV="$*"                             # keep the full argv; the loop below eats it
 log=""
 while [ $# -gt 0 ]; do
   [ "$1" = "--log-file" ] && { log="$2"; break; }
   shift
 done
 [ -n "$log" ] || { echo "stub: clikae did not pass --log-file" >&2; exit 64; }
+[ -n "$STUB_ARGV_LOG" ] && printf '%s\n' "$AGY_ARGV" >> "$STUB_ARGV_LOG"
 mkdir -p "$(dirname "$log")"
 if [ -f "$HOME/.gemini/antigravity-cli/.dry" ]; then
   echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "$log"
@@ -557,6 +559,22 @@ STUB
   [ "$status" -ne 0 ]
   [ ! -f "$art" ]
   [[ "$output" == *"brain"* ]] || false      # points at agy's own buffer dir
+}
+
+@test "burn agy passes extra flags after -- through to agy, not dropping them" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  local L="$BATS_TEST_TMPDIR/argv.log"
+  # Headless dispatch needs --dangerously-skip-permissions (agy's print mode
+  # auto-denies file tools) and -c to continue a run. agy has no adapter, so
+  # clikae cannot compose these — it must at least not swallow them.
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" run clikae burn agy default \
+    --artifact "$A" --prompt "do the thing" -- --dangerously-skip-permissions -c
+  [ "$status" -eq 0 ]
+  grep -q -- "--dangerously-skip-permissions" "$L" || { cat "$L"; false; }
+  grep -q -- " -c" "$L" || { cat "$L"; false; }
 }
 
 @test "burn agy: --timeout is handed to agy as --print-timeout" {
