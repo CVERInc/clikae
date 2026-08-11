@@ -117,12 +117,7 @@ _switch_run_tmux_wrapped() {
   # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
   # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
   # fail, because the launch went through a tmux that was not there.
-  # …and a TERM tmux can actually draw on. `tmux new-session -d` succeeds under
-  # TERM=dumb, so the engine would start detached and then `attach` fails with
-  # "terminal does not support clear" — leaving a session burning quota that the
-  # user never sees. tput asks the same question tmux does, before anything runs.
-  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ] \
-     || ! tput -T "${TERM:-dumb}" clear >/dev/null 2>&1; then
+  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ]; then
     while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
@@ -143,11 +138,29 @@ KV
       exec tmux switch-client -t "ck-$tank_id"
     fi
   else
-    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
+    local started_here=0
+    if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
       tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
-      
-    tmux attach -t "ck-$tank_id"
-    
+      started_here=1
+    fi
+
+    # Whether this terminal can host tmux is tmux's call, not ours. `new-session -d`
+    # happily succeeds under a TERM tmux cannot draw on (TERM=dumb: "open terminal
+    # failed: terminal does not support clear") and only the attach fails — by which
+    # point the engine is already running detached, invisible, spending quota. Ask by
+    # attaching, and if that is refused put back exactly what we started.
+    # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
+    # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
+    # quietly taken roaming away from the one device this feature exists for.
+    if ! tmux attach -t "ck-$tank_id"; then
+      [ "$started_here" -eq 1 ] && tmux kill-session -t "ck-$tank_id" 2>/dev/null
+      rm -f "$scrollback_file"
+      while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$d")
+KV
+      exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
+    fi
+
     if [ -s "$scrollback_file" ]; then
       awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
       rm -f "$scrollback_file"

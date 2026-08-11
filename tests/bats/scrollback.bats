@@ -25,8 +25,7 @@ if pid == 0:
     for fd in (0, 1, 2):
         os.dup2(slave, fd)
     os.close(master); os.close(slave)
-    os.environ["TERM"] = "xterm-256color"   # force it: CI runs with TERM unset/dumb, and tmux refuses to
-                                           # attach there — but this test is about the tmux path
+    os.environ["TERM"] = os.environ.get("CK_PTY_TERM") or "xterm-256color"
     os.execvp(sys.argv[1], sys.argv[1:])
 os.close(slave)
 chunks = []
@@ -72,4 +71,23 @@ INNER_EOF
     echo "$output"
     false
   fi
+}
+
+@test "switch still runs the engine when tmux cannot attach, and leaves nothing behind" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude dumbterm
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
+#!/usr/bin/env bash
+echo "ENGINE_RAN_ANYWAY"
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/claude"
+
+  # TERM=dumb is what an ssh session from the PineNote arrives as. tmux can start a
+  # detached session on it but cannot attach — so the engine must still run in the
+  # foreground, its output must reach the user, and no orphan session may survive
+  # spending quota where nobody is looking.
+  CK_PTY_TERM=dumb run _pty_run "$CLIKAE_BIN" claude dumbterm
+  [[ "$output" == *"ENGINE_RAN_ANYWAY"* ]] || { echo "$output"; false; }
+  run tmux has-session -t "ck-claude-dumbterm"
+  [ "$status" -ne 0 ]
 }
