@@ -230,7 +230,7 @@ _agy_burn() {
     # zero markers and two long-lived session logs carried 15 and 2.
     # --log-file leaves the shared symlink untouched (verified: readlink before
     # == after), so this neither reads nor disturbs anyone else's run.
-    local runlog; runlog="$(mktemp -t clikae-agy-log)"
+    local runlog; runlog="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-log.XXXXXX")"
     local -a gen=(-p "$prompt" --log-file "$runlog") d
     for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
     # agy enforces its OWN print budget, default 5 minutes, and it does not know

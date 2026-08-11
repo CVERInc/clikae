@@ -5,6 +5,7 @@ load '../helpers'
 bats_require_minimum_version 1.5.0
 
 @test "switch scrollback capture retains 200 lines" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed (switch falls back to a direct run)"
   clikae init claude scrolltest
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
 #!/usr/bin/env bash
@@ -15,6 +16,10 @@ INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
   
   run script -q /dev/null "$CLIKAE_BIN" claude scrolltest
+  # This test drives the REAL tmux server (switch has no socket override), so it
+  # must put back what it took: a surviving ck-claude-scrolltest changes what the
+  # next run of this file — and any other test that reaches tmux — walks into.
+  tmux kill-session -t "ck-claude-scrolltest" 2>/dev/null || true
   
   # strip all carriage returns and terminal escapes
   cleaned=$(echo "$output" | sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' | tr -d '\r' | sed -E 's/[^a-zA-Z0-9_ -]//g')

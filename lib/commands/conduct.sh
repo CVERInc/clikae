@@ -165,7 +165,7 @@ _conduct_one_agy() {
   # TTY-less permission prompt (docs/agy-dispatch.md).
   # --log-file gives this leg its own log; see the dry check below for why the
   # shared cli.log symlink cannot be trusted to describe THIS run.
-  local runlog; runlog="$(mktemp -t clikae-agy-log)"
+  local runlog; runlog="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-log.XXXXXX")"
   local -a gen=(-p "$prompt" --log-file "$runlog"); local d
   for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
 

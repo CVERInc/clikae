@@ -111,7 +111,13 @@ _switch_run_tmux_wrapped() {
   target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
   target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
 
-  if [ ! -t 0 ] || [ ! -t 1 ]; then
+  # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
+  # convenience layer over `clikae run`, never a dependency: a machine without it
+  # (a CI runner, a stripped container) must still switch tanks. Shipped without
+  # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
+  # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
+  # fail, because the launch went through a tmux that was not there.
+  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ]; then
     while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
