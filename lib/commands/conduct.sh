@@ -163,7 +163,10 @@ _conduct_one_agy() {
   # (the leg is read-only, and an AI-driven safety classifier blocks that flag anyway).
   # --add-dir pre-authorises each read root so a path outside cwd doesn't hang on a
   # TTY-less permission prompt (docs/agy-dispatch.md).
-  local -a gen=(-p "$prompt"); local d
+  # --log-file gives this leg its own log; see the dry check below for why the
+  # shared cli.log symlink cannot be trusted to describe THIS run.
+  local runlog; runlog="$(mktemp -t clikae-agy-log)"
+  local -a gen=(-p "$prompt" --log-file "$runlog"); local d
   for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
 
   local -a runner=()
@@ -179,13 +182,16 @@ _conduct_one_agy() {
   out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
   printf '%s\n' "$out" > "$outfile"
 
-  # agy's quota event lands in cli.log (RESOURCE_EXHAUSTED / "Individual quota
+  # agy's quota event lands in a log (RESOURCE_EXHAUSTED / "Individual quota
   # reached"), NEVER in stdout — `agy -p` exits 0 with empty output when dry. So judge
-  # dry from the log (limit_output_dry can't see agy), not the captured stdout. cli.log
-  # is a per-run symlink, so its content reflects THIS run. (Path == target_limit_log_path.)
-  local logf reset
-  logf="$(_agy_link)/antigravity-cli/cli.log"
-  if reset="$(limit_log_dry "$logf")"; then
+  # dry from the log (limit_output_dry can't see agy), not the captured stdout.
+  # The log is OURS, requested with --log-file above: ~/.gemini/.../cli.log is a
+  # symlink shared by every agy process on the tank, so reading it would let an
+  # interactive session's quota event be charged to this leg.
+  local reset dry=1
+  reset="$(limit_log_dry "$runlog")" && dry=0
+  rm -f "$runlog"
+  if [ "$dry" -eq 0 ]; then
     printf 'DRY %s\n' "$reset" > "$statusfile"
   elif [ -n "$out" ]; then
     printf 'CAPTURED\n' > "$statusfile"

@@ -207,7 +207,16 @@ _agy_burn() {
     fi
     log_info "burn agy/$cur → agy -p ..."
 
-    local -a gen=(-p "$prompt") d
+    # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
+    # symlink shared by every agy process on the tank, repointed by whichever
+    # one started last — so reading it after our run can pick up an INTERACTIVE
+    # session's quota event and blame it on us. Measured 2026-08-11: the same
+    # request came back "ran dry" once and fine twice, while our own log carried
+    # zero markers and two long-lived session logs carried 15 and 2.
+    # --log-file leaves the shared symlink untouched (verified: readlink before
+    # == after), so this neither reads nor disturbs anyone else's run.
+    local runlog; runlog="$(mktemp -t clikae-agy-log)"
+    local -a gen=(-p "$prompt" --log-file "$runlog") d
     for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
     # agy enforces its OWN print budget, default 5 minutes, and it does not know
     # about clikae's --timeout. Without this, `burn agy --timeout 1200` was a
@@ -225,8 +234,12 @@ _agy_burn() {
     fi
     local out; out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
 
-    local logf reset; logf="$(_agy_link)/antigravity-cli/cli.log"
-    if reset="$(limit_log_dry "$logf")"; then
+    # Consume the run log once, then drop it on every path below — not just the
+    # dry one — so a long reroute loop doesn't litter $TMPDIR.
+    local reset dry=1
+    reset="$(limit_log_dry "$runlog")" && dry=0
+    rm -f "$runlog"
+    if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
     elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
       log_done "Done on agy/$cur — artifact present: $artifact"

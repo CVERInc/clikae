@@ -117,7 +117,15 @@ _stub_agy_burn() {
   local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
   cat > "$bin/agy" <<'STUB'
 #!/usr/bin/env bash
-log="$HOME/.gemini/antigravity-cli/cli.log"
+# clikae asks for a per-run log with --log-file so a concurrent interactive agy
+# cannot have its quota event charged to this run; honour it, and fail loudly if
+# the flag ever stops being passed (the shared symlink is the bug, not a default).
+log=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--log-file" ] && { log="$2"; break; }
+  shift
+done
+[ -n "$log" ] || { echo "stub: clikae did not pass --log-file" >&2; exit 64; }
 mkdir -p "$(dirname "$log")"
 if [ -f "$HOME/.gemini/antigravity-cli/.dry" ]; then
   echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "$log"
