@@ -56,12 +56,21 @@
 <span class="line"><span>ok 1 a second client attaches to the running tank instead of starting it again</span></span>
 <span class="line"><span>ok 2 called from inside tmux, switch moves the client instead of nesting</span></span></code></pre>
 <ul>
-<li><strong>規範</strong>：
-三個出口全部收斂到同一組函式，別各寫一份（互動路徑與 dry-tank carry 路徑就是這樣漂開的，carry 那份少了守衛、少了 <code>-S -</code>、attach 失敗也沒人接）：
+<li>
+<p><strong>規範</strong>：
+三個出口全部收斂到同一組函式，別各寫一份（互動路徑與 dry-tank carry 路徑就是這樣漂開的，carry 那份少了守衛、少了 <code>-S -</code>、attach 失敗也沒人接）：</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_switch_tmux_usable</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # command -v tmux &#x26;&#x26; [ -t 0 ] &#x26;&#x26; [ -t 1 ]</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">_switch_tmux_attach</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # attach；被拒就收掉「我們剛建的」session，回 1</span></span></code></pre>
-<strong>能不能用 tmux 由 tmux 決定，不要用 <code>tput</code> 之類的代理去猜</strong>——PineNote 的 ssh session 進來就是 <code>TERM=dumb</code>，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
-attach 被拒時要 <code>kill-session</code>：<code>new-session -d</code> 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。</li>
+<p><strong>能不能用 tmux 由 tmux 決定，不要用 <code>tput</code> 之類的代理去猜</strong>——PineNote 的 ssh session 進來就是 <code>TERM=dumb</code>，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
+attach 被拒時要 <code>kill-session</code>：<code>new-session -d</code> 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。</p>
+<p>🔴 <strong><code>ssh host '指令'</code> 這種一次性形式拿不到 tmux</strong>，而 §2 的 PineNote 進入法（<code>RemoteCommand clikae</code>）正是這一種。從真機量到：</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>$ # PineNote --ssh--> Mac，指令直接交給 ssh</span></span>
+<span class="line"><span>STDIN=yes  STDOUT=no  TTY=/dev/ttys010  TERM=tmux-256color</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span>$ # PineNote --ssh--> 互動 shell，再打指令</span></span>
+<span class="line"><span>session ck-codex-roamtest 建立，90x27（貼合 PineNote 的 90x28），引擎啟動 1 次</span></span></code></pre>
+<p>stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但<strong>也沒有持久化</strong>。要漫遊就得先拿到 shell 再下指令。</p>
+</li>
 </ul>
 <h3 id="rule-3-背景無頭任務-headless-burn-amp-coroner-pattern">Rule 3: 背景無頭任務 (Headless Burn &amp; Coroner Pattern)</h3>
 <ul>

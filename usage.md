@@ -72,6 +72,16 @@ It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI)
 or a `TERM` tmux cannot draw on, clikae runs the engine directly instead — same
 command, same result, just no persistence. `clikae burn` behaves the same way.
 
+One shape to know about, because it looks like it should work and doesn't:
+`ssh yourmac 'clikae claude work'` — a command handed to ssh — gets a terminal on
+stdin but a pipe on stdout, so it takes the direct run and your session does not
+persist. Measured from a real second machine: `[ -t 0 ]` yes, `[ -t 1 ]` no. The
+same applies to `RemoteCommand` in `~/.ssh/config`. Log in first and type the
+command in the shell you land in, and you get the tmux session:
+
+    ssh yourmac            # then, at the prompt
+    clikae claude work     # persists; disconnect and come back to it
+
 ### Make & manage tanks
 
 | Command | What it does |

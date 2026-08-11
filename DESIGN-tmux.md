@@ -60,6 +60,18 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   **能不能用 tmux 由 tmux 決定，不要用 `tput` 之類的代理去猜**——PineNote 的 ssh session 進來就是 `TERM=dumb`，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
   attach 被拒時要 `kill-session`：`new-session -d` 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。
 
+  🔴 **`ssh host '指令'` 這種一次性形式拿不到 tmux**，而 §2 的 PineNote 進入法（`RemoteCommand clikae`）正是這一種。從真機量到：
+
+  ```
+  $ # PineNote --ssh--> Mac，指令直接交給 ssh
+  STDIN=yes  STDOUT=no  TTY=/dev/ttys010  TERM=tmux-256color
+
+  $ # PineNote --ssh--> 互動 shell，再打指令
+  session ck-codex-roamtest 建立，90x27（貼合 PineNote 的 90x28），引擎啟動 1 次
+  ```
+
+  stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但**也沒有持久化**。要漫遊就得先拿到 shell 再下指令。
+
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
 - **收據**：
