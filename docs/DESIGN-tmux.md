@@ -32,6 +32,35 @@
   互動模式時使用 `tmux attach -t "ck-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
 
 
+### Rule 2: tmux 是便利層，不是相依（三個出口）
+
+- **症狀**：沒有 tmux 的機器、`TERM` 畫不了的終端機、或 CI，`clikae <engine> <tank>` 應該照樣把引擎跑起來，而不是壞掉或把 session 丟在背景。
+- **收據**：
+```
+$ # 1) 沒有 tmux（把它從 PATH 拿掉，不是用會失敗的替身——替身 command -v 找得到）
+$ bats tests/bats/scrollback.bats
+ok 1 … # skip tmux not installed (switch falls back to a direct run)
+
+$ # 2) TERM 畫不動：new-session -d 會成功，失敗的是 attach
+$ TERM=dumb tmux attach -t t
+open terminal failed: not a terminal
+$ CK_PTY_TERM=dumb bats -f "cannot attach" tests/bats/scrollback.bats
+ok 2 switch still runs the engine when tmux cannot attach, and leaves nothing behind
+
+$ # 3) 真的能用時，接手不重跑
+$ bats tests/bats/roam.bats
+ok 1 a second client attaches to the running tank instead of starting it again
+ok 2 called from inside tmux, switch moves the client instead of nesting
+```
+- **規範**：
+  三個出口全部收斂到同一組函式，別各寫一份（互動路徑與 dry-tank carry 路徑就是這樣漂開的，carry 那份少了守衛、少了 `-S -`、attach 失敗也沒人接）：
+  ```bash
+  _switch_tmux_usable   # command -v tmux && [ -t 0 ] && [ -t 1 ]
+  _switch_tmux_attach   # attach；被拒就收掉「我們剛建的」session，回 1
+  ```
+  **能不能用 tmux 由 tmux 決定，不要用 `tput` 之類的代理去猜**——PineNote 的 ssh session 進來就是 `TERM=dumb`，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
+  attach 被拒時要 `kill-session`：`new-session -d` 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。
+
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
 - **收據**：

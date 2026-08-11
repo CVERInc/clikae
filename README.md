@@ -90,6 +90,13 @@ tanks share a Soul, so the new engine reads the same markdown brain the old
 one wrote — try it for an afternoon with your context intact, and walk back
 out just as easily. The vendors compete; your memory doesn't care who wins.
 
+**You get up and walk away.** The engine runs inside a tmux session named for
+its tank, so shutting the laptop — or an ssh connection dropping on the train —
+doesn't end the conversation. Type the same `clikae claude work` from wherever
+you land next and you're back in it, at that screen's size, mid-thought. If
+tmux isn't installed, or you're in a pipe, it just runs the engine directly:
+same command, no persistence, nothing to configure either way.
+
 **Some sessions shouldn't be remembered.** Get a cold read on your own plan
 from a session with no memory of you: `clikae claude work --ephemeral`. The
 reviewer doesn't know what you believe, and the tank's long-term memory never

@@ -58,6 +58,20 @@ plain, conventional verbs.
 | `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
 | `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
+**Your session outlives the terminal.** A bare switch runs the engine inside a
+tmux session named `ck-<engine>-<tank>`, so closing the window — or an ssh
+connection dropping — leaves the work running. Come back with the same command
+and you land back in it (the same conversation, not a new one), at whatever size
+the terminal you are now sitting at happens to be. That is the roaming case:
+start on the desktop, pick it up from a tablet over ssh.
+
+Two clients can stay attached at once; clikae does not kick anyone off. If you
+want the other one gone, `tmux attach -d` does that.
+
+It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
+or a `TERM` tmux cannot draw on, clikae runs the engine directly instead — same
+command, same result, just no persistence. `clikae burn` behaves the same way.
+
 ### Make & manage tanks
 
 | Command | What it does |
