@@ -191,7 +191,19 @@ $ # 換成絕對路徑，同樣的呼叫
 2026-08-11T08:27:58Z  ALLOWED  report.md
 ```
 
-而且 hook 的 `command` 不吃變數展開，所以每個 workspace 的 `hooks.json` 都得寫自己的絕對路徑，複製過去要記得改。
+`command` 也不吃變數展開，所以「寫死絕對路徑」是最直覺的結論——**但那是錯的結論，而且會把本機路徑寫進版本控制**（這份 repo 就這樣被我塞進一個 `/Users/<name>/…`）。正解是讓 hook 從 stdin 的 `workspacePaths[0]` 自己解析：
+
+```json
+"command": "bash -c 'p=$(cat); ws=$(printf %s \"$p\" | python3 -c \"import json,sys; print(json.load(sys.stdin)[\\\"workspacePaths\\\"][0])\"); printf %s \"$p\" | exec \"$ws/scripts/harness-stop-hook.sh\"'"
+```
+
+實測在一個全新的空目錄（沒有任何本機路徑）：
+
+```
+$ agy -p "pong" --add-dir <tmpdir>
+2026-08-11T13:15:25Z  BLOCKED  <tmpdir>/report.md
+2026-08-11T13:15:57Z  ALLOWED  <tmpdir>/report.md
+```
 
 **這支閘抓不到的（不要假裝它抓得到）**：
 
