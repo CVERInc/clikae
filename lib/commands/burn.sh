@@ -390,13 +390,75 @@ cmd_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
+    local run_id="${cli}-${cur}-burn-$$"
+    local log_file="$HOME/.clikae/logs/${run_id}.log"
+    local state_file="$HOME/.clikae/state/${run_id}_exit"
+    local lock_file="${TMPDIR:-/tmp}/ck-ephem-$run_id.lock"
+    
+    mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
+    chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
+    
     rc=0
-    out="$(
-      while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+    if command -v tmux >/dev/null 2>&1; then
+      local -a tmux_env_args=()
+      local key
+      for key in $(compgen -e); do
+        # Do not inherit TMUX* from the parent, this prevents nested session pollution
+        if [[ "$key" != TMUX* ]]; then
+          tmux_env_args+=("-e" "$key=${!key}")
+        fi
+      done
+
+      local wrapper_script="$HOME/.clikae/state/${run_id}.sh"
+      cat <<EOF > "$wrapper_script"
+while IFS= read -r kv; do [ -n "\$kv" ] && export "\${kv%%=*}"="\${kv#*=}"; done <<'KV'
 $(adapter_export_env "$dir")
 KV
-      "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
-    )" || rc=$?
+exec 9> "$lock_file"
+if command -v flock >/dev/null 2>&1; then flock -n 9; else lockf -t 0 9; fi
+trap 'echo 129 > "$state_file"; exit 129' HUP
+trap 'echo 130 > "$state_file"; exit 130' INT
+trap 'echo 143 > "$state_file"; exit 143' TERM
+trap 'echo \$? > "$state_file"; exit' EXIT
+( $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null ) 2>&1 | tee "$log_file"
+EOF
+      chmod +x "$wrapper_script"
+
+      if tmux new-session -d "${tmux_env_args[@]}" -e "CLIKAE_RUN_ID=$run_id" -s "ck-$run_id" "bash \"$wrapper_script\""; then
+        # Wait for completion via state file polling (Coroner trap)
+        local poll_int=1
+        while [ ! -f "$state_file" ]; do
+          sleep $poll_int
+          [ "$poll_int" -lt 5 ] && poll_int=$((poll_int + 1))
+          if ! tmux has-session -t "ck-$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
+            # Session vanished without writing state
+            echo 255 > "$state_file"
+            break
+          fi
+        done
+        rc=$(cat "$state_file" 2>/dev/null || echo 1)
+        out="$(cat "$log_file" 2>/dev/null || true)"
+        rm -f "$wrapper_script" "$state_file"
+      else
+        rm -f "$wrapper_script" "$state_file"
+        log_warn "tmux failed to start; falling back to direct execution"
+        out="$(
+          while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$dir")
+KV
+          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+        )" || rc=$?
+      fi
+    else
+      out="$(
+        while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$dir")
+KV
+        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+      )" || rc=$?
+    fi
+    
+    rm -f "$state_file"
 
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out")"; then

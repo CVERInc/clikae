@@ -91,6 +91,59 @@ _supervise_decision() {
   esac
 }
 
+_switch_run_tmux_wrapped() {
+  local engine="$1" tank="$2" d="$3"; shift 3
+  local tank_id="${engine}-${tank}"
+  local -a env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
+  if [ -n "$CLIKAE_HOME" ]; then
+    env_args+=("-e" "CLIKAE_HOME=$CLIKAE_HOME")
+  fi
+
+  mkdir -p "$HOME/.clikae/state"
+  
+  if [[ -n "$SSH_AUTH_SOCK" && -S "$SSH_AUTH_SOCK" ]]; then
+    chmod 0700 "$HOME/.clikae/state"
+    ln -sf "$SSH_AUTH_SOCK" "$HOME/.clikae/state/clikae_ssh_auth.sock"
+    env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
+  fi
+
+  local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
+  target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
+  target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
+
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$d")
+KV
+    exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
+  fi
+
+  if [ -n "$TMUX" ]; then
+    local current_pane_session
+    current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
+    [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
+    
+    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+    
+    local clients
+    clients="$(tmux list-clients -t "$current_pane_session" 2>/dev/null || true)"
+    if [ -n "$clients" ]; then
+      exec tmux switch-client -t "ck-$tank_id"
+    fi
+  else
+    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+      
+    tmux attach -t "ck-$tank_id"
+    
+    if [ -s "$scrollback_file" ]; then
+      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
+      rm -f "$scrollback_file"
+    fi
+  fi
+}
+
 # _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude + codex)
 # Run the engine as a CHILD (so clikae stays the parent), and when it exits, if
 # THIS tank just hit its limit, carry onward to the next tank in the burn order
@@ -101,7 +154,7 @@ _switch_supervise() {
   local engine="$1" tank="$2" dir="$3"; shift 3
   # Parent ignores INT so Ctrl-C reaches the engine; we resume after it exits.
   trap '' INT
-  ( trap - INT; adapter_run "$dir" "$@" ) || true
+  ( trap - INT; _switch_run_tmux_wrapped "$engine" "$tank" "$dir" "$@" ) || true
   trap - INT
 
   # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
@@ -149,7 +202,25 @@ EOF
   history_log "auto: $engine/$tank dry → $ne/$nt"
   printf '%b↻ %s/%s hit its limit — carrying on to %s/%s%b\n' "$__C_GREEN" "$engine" "$tank" "$ne" "$nt" "$__C_RESET"
   if [ "$same" = "1" ]; then
-    exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
+    local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
+    target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
+    target_cmd="$target_cmd; tmux capture-pane -p -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
+    
+    local -a relay_env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
+    if [ -n "$CLIKAE_HOME" ]; then
+      relay_env_args+=("-e" "CLIKAE_HOME=$CLIKAE_HOME")
+    fi
+    if [[ -n "$SSH_AUTH_SOCK" && -S "$SSH_AUTH_SOCK" ]]; then
+      relay_env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
+    fi
+    
+    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+    tmux attach -t "ck-$tank_id"
+    if [ -s "$scrollback_file" ]; then
+      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
+      rm -f "$scrollback_file"
+    fi
   else
     exec "$CLIKAE_BIN" handoff "$engine" "$tank" --to "$ne/$nt"
   fi
@@ -233,7 +304,7 @@ cmd_switch() {
   fi
 
   _switch_require_binary "$engine" "$tank"
-  adapter_run "$d" "${passthru[@]}"   # execs
+  _switch_run_tmux_wrapped "$engine" "$tank" "$d" "${passthru[@]}"   # execs
 }
 
 # clikae switches accounts; it does NOT install the engine. If the binary isn't on

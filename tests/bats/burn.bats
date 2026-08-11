@@ -309,6 +309,36 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
 # clikae fills each engine's headless-write flags from its adapter, so the caller
 # never hand-assembles them (2026-06-06 tugtile burn-writeup friction #1).
 
+@test "burn executes headless tasks inside tmux when available" {
+  if ! command -v tmux >/dev/null 2>&1; then
+    skip "tmux not installed"
+  fi
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  
+  # Inject a payload that dumps the actual tmux session name to the artifact
+  # (Since $TMUX could be inherited from an outer shell, we ask tmux itself)
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat << 'STUB' > "$BATS_TEST_TMPDIR/bin/codex"
+#!/usr/bin/env bash
+if [ -n "$TMUX" ]; then
+  tmux display-message -p '#S' > "$STUB_ARTIFACT" 2>/dev/null || echo "TMUX_ERR" > "$STUB_ARTIFACT"
+else
+  echo "NO_TMUX" > "$STUB_ARTIFACT"
+fi
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+  run clikae burn codex T1 --artifact "$A" --prompt "dump tmux status"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  run cat "$A"
+  [[ "$output" == ck-*-burn-* ]]
+}
+
 @test "burn --prompt-file builds the engine command via the hook and completes" {
   _stub_codex
   clikae init codex T1
