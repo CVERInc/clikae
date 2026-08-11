@@ -117,7 +117,12 @@ _switch_run_tmux_wrapped() {
   # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
   # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
   # fail, because the launch went through a tmux that was not there.
-  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ]; then
+  # …and a TERM tmux can actually draw on. `tmux new-session -d` succeeds under
+  # TERM=dumb, so the engine would start detached and then `attach` fails with
+  # "terminal does not support clear" — leaving a session burning quota that the
+  # user never sees. tput asks the same question tmux does, before anything runs.
+  if ! command -v tmux >/dev/null 2>&1 || [ ! -t 0 ] || [ ! -t 1 ] \
+     || ! tput -T "${TERM:-dumb}" clear >/dev/null 2>&1; then
     while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV

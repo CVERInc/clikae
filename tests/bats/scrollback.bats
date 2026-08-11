@@ -25,6 +25,8 @@ if pid == 0:
     for fd in (0, 1, 2):
         os.dup2(slave, fd)
     os.close(master); os.close(slave)
+    os.environ["TERM"] = "xterm-256color"   # force it: CI runs with TERM unset/dumb, and tmux refuses to
+                                           # attach there — but this test is about the tmux path
     os.execvp(sys.argv[1], sys.argv[1:])
 os.close(slave)
 chunks = []
