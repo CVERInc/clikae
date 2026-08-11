@@ -35,6 +35,10 @@ def attach(cols, rows):
         for fd in (0, 1, 2):
             os.dup2(slave, fd)
         os.close(master); os.close(slave)
+        # A real terminal has a TERM tmux can draw on; CI runs with it unset or
+        # dumb, where switch correctly falls back to a direct run — and then there
+        # is no session to roam onto and this test measures the fallback instead.
+        os.environ["TERM"] = "xterm-256color"
         os.execv(clikae, [clikae, "codex", "roam"])
     os.close(slave)
     return pid
