@@ -71,3 +71,48 @@ PYEOF
   # second bite out of the account's quota.
   [ "$(grep -c ENGINE_STARTED "$STUB_RUNS")" -eq 1 ] || { cat "$STUB_RUNS"; false; }
 }
+
+@test "called from inside tmux, switch moves the client instead of nesting" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init codex roam
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/codex"
+#!/usr/bin/env bash
+echo ENGINE_STARTED >> "$STUB_RUNS"
+sleep 60
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/codex"
+  export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
+
+  run python3 - "$CLIKAE_BIN" <<'PYEOF'
+import os, fcntl, termios, struct, sys, time, subprocess
+
+clikae = sys.argv[1]
+def tmux(*a):
+    return subprocess.run(["tmux", *a], capture_output=True, text=True).stdout.strip()
+
+tmux("kill-server")
+tmux("new-session", "-d", "-x", "100", "-y", "30", "-s", "outer", "bash --noprofile --norc")
+
+# switch-client needs a client to move, so attach a real one.
+master, slave = os.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+if os.fork() == 0:
+    os.setsid(); fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    for fd in (0, 1, 2): os.dup2(slave, fd)
+    os.close(master); os.close(slave)
+    os.environ["TERM"] = "xterm-256color"
+    os.execvp("tmux", ["tmux", "attach", "-t", "outer"])
+os.close(slave); time.sleep(2)
+
+tmux("send-keys", "-t", "outer", "%s codex roam" % clikae, "Enter"); time.sleep(6)
+print("CLIENT_ON", tmux("list-clients", "-F", "#{client_session}"))
+tmux("kill-server")
+PYEOF
+
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Running `tmux attach` inside tmux is refused ("sessions should be nested with
+  # care"); the client has to be MOVED. If this regresses the client stays on
+  # 'outer' and the tank runs where nobody is looking.
+  [[ "$output" == *"CLIENT_ON ck-codex-roam"* ]] || { echo "$output"; false; }
+  [ "$(grep -c ENGINE_STARTED "$STUB_RUNS")" -eq 1 ] || { cat "$STUB_RUNS"; false; }
+}
