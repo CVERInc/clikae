@@ -3,7 +3,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "/Users/chodaict/Developer/clikae-agy-pty/scripts/harness-stop-hook.sh",
+        "command": "bash -c 'p=$(cat); ws=$(printf %s \"$p\" | python3 -c \"import json,sys; print(json.load(sys.stdin)[\\\"workspacePaths\\\"][0])\"); printf %s \"$p\" | exec \"$ws/scripts/harness-stop-hook.sh\"'",
         "timeout": 60
       }
     ]
