@@ -3,8 +3,20 @@
     "Stop": [
       {
         "type": "command",
-        "command": "bash -c 'p=$(cat); ws=$(printf %s \"$p\" | python3 -c \"import json,sys; print(json.load(sys.stdin)[\\\"workspacePaths\\\"][0])\"); printf %s \"$p\" | exec \"$ws/scripts/harness-stop-hook.sh\"'",
+        "command": "bash -c 'p=$(cat); ws=$(printf %s \"$p\" | python3 -c \"import json,sys; print((json.load(sys.stdin).get(\\\"workspacePaths\\\") or [\\\"\\\"])[0])\" 2>/dev/null); s=\"$ws/scripts/harness-stop-hook.sh\"; [ -x \"$s\" ] || exit 0; printf %s \"$p\" | exec \"$s\"'",
         "timeout": 60
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'p=$(cat); ws=$(printf %s \"$p\" | python3 -c \"import json,sys; print((json.load(sys.stdin).get(\\\"workspacePaths\\\") or [\\\"\\\"])[0])\" 2>/dev/null); s=\"$ws/scripts/harness-pretool-hook.sh\"; [ -x \"$s\" ] || { printf %s '{\"decision\":\"allow\"}'; exit 0; }; printf %s \"$p\" | exec \"$s\"'",
+            "timeout": 25
+          }
+        ]
       }
     ]
   }

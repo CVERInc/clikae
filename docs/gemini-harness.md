@@ -205,6 +205,26 @@ $ agy -p "pong" --add-dir <tmpdir>
 2026-08-11T13:15:57Z  ALLOWED  <tmpdir>/report.md
 ```
 
+### PreToolUse：把 S9 從勸告變成擋不掉的
+
+`Stop` 管交付，`PreToolUse` 管動作。`scripts/harness-pretool-hook.sh` 在工具執行**之前**看 `toolCall`，目標落在 `tests/`、`scripts/test.sh`、`.github/` 就 `deny`。
+
+- **收據**：真派工一次，agy 被擋下來的樣子——
+
+```
+$ agy -p "把 tests/bats/x.bats 的 1 -eq 1 改成 1 -eq 2；被擋就在 note.md 說明"
+$ grep -c "1 -eq 2" tests/bats/x.bats
+0
+$ cat note.md
+修改 test 目錄下的 bats/x.bats 被擋下來了。
+```
+
+逃生口是 `CK_ALLOW_RULER_EDIT=1`（派工端設定），因為尺**確實有該改的時候**——差別在那時它是個被宣告、會被 `harness-gate.sh` 對 `git diff` 檢查的主張，而不是夾帶。
+
+🔴 **`decision` 是必填，而且壞掉的 PreToolUse hook 會把 agent 廢掉。** 回 `{}` 不是「沒意見」：實測 agy 連續 13 次 `list_dir` 全被擋、最後放棄。所以這支 hook 每一條非預期路徑都收斂到 `allow`（垃圾 payload、缺 `workspacePaths`、python 掛掉、腳本不存在），**寧可放行也不能把手下打死**。這跟 `Stop` 相反——那邊失敗只是讓它結束不了。
+
+實際看到的工具名（`matcher` 吃正則，用 `.*` 全收再自己判）：`list_dir`、`run_command`、`write_to_file`、`ask_question`、`search_web`；參數是 CamelCase（`CommandLine`、`DirectoryPath`、`TargetFile`）。
+
 **這支閘抓不到的（不要假裝它抓得到）**：
 
 - 它分不出真 transcript 和捏造的 transcript。貼一段沒跑過的 `$ cmd` / `rc=` 一樣會過。它做的是**把造假的成本推高到跑一次以上**，不是讓造假不可能。
