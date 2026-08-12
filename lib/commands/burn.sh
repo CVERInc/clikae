@@ -291,7 +291,7 @@ _agy_burn() {
       # --artifact outright would remove the only verification burn has.
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
-        log_dim  "🔴 CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
+        log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
         log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
         return 0
       fi

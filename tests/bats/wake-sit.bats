@@ -11,6 +11,14 @@
 load '../helpers'
 
 _src_wake() {
+  # log.sh first: wake_sit reports its outcome with the family's badges, and
+  # bin/clikae has them loaded long before it gets here. Sourcing wake.sh alone
+  # is a fixture thinner than the thing it stands for — the same gap that bit
+  # wake.bats, which is why both now load what production loads.
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
   # Compress the production timings. The VALUES are asserted in wake.bats; here

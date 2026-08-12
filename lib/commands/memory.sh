@@ -56,9 +56,9 @@ _memory_seed_protocol() {
   then open only the topic files relevant to the task. Don't load everything.
 - Each topic file holds ONE fact, with YAML frontmatter (`name`, `description`,
   `metadata.type` = user | feedback | project | reference).
-- 🔴 A memory records what was TRUE WHEN WRITTEN, not necessarily now. If a file
+- Remember: a memory records what was TRUE WHEN WRITTEN, not necessarily now. If a file
   names a path/flag/version, verify against the real code before relying on it.
-- 🔴 Some files record a past *incident* or a *correction* (e.g. a mis-attribution
+- Remember: some files record a past *incident* or a *correction* (e.g. a mis-attribution
   that was fixed). Read the file's own framing + its `description`; do not take an
   incident record as a current fact about the user.
 
@@ -77,7 +77,7 @@ _memory_seed_protocol() {
 ## Optional Soul frontmatter (clikae)
 - `metadata.scope` = share | isolate | evaporate — whether this fact may travel.
 - `metadata.project` = an area slug — groups the entry in the index.
-- `metadata.accounts` = a share-group allowlist. 🔴 Account isolation is sacred:
+- `metadata.accounts` = a share-group allowlist. Never break this: account isolation is sacred:
   never copy a fact into a group it isn't allowed in.
 PROTO
 }
@@ -263,7 +263,7 @@ markdown via the memory protocol.
 Flags:
   -y, --yes    skip the cross-account confirmation (for scripts/automation)
 
-🔴 Consent is given ONCE, not per tank. Nothing is shared until your first `share`;
+Note: consent is given ONCE, not per tank. Nothing is shared until your first `share`;
 that share also records the group as this machine's default, and from then on a NEW
 tank joins it automatically at `clikae init`. A solo tank never joins. Crossing your
 own accounts is still announced at that first share. The store is seeded by COPY; a
@@ -544,8 +544,8 @@ _memory_status() {
       # letting the reader take the 🔒 for the answer.
       lk=""
       if tank_is_solo "$cli" "$tname"; then
-        if [ -n "$g" ]; then lk="  ⚠️ solo BUT STILL SHARING"; stale="${stale:+$stale }$cli/$tname"
-        else lk="  🔒 solo"; fi
+        if [ -n "$g" ]; then lk="  solo BUT STILL SHARING"; stale="${stale:+$stale }$cli/$tname"
+        else lk="  solo"; fi
       fi
       # Sharing is tank-level; note when THIS directory's slot isn't projected
       # yet (it links on the tank's next launch here — soul_prelaunch).
@@ -569,7 +569,7 @@ _memory_status() {
   local g acct lk; g="$(_memory_current_group)"; acct="$(_memory_account)"
   lk=""
   if tank_is_solo "$MEM_CLI" "$MEM_TANK"; then
-    if [ -n "$g" ]; then lk="  ⚠️ solo BUT STILL SHARING"; else lk="  🔒 solo"; fi
+    if [ -n "$g" ]; then lk="  solo BUT STILL SHARING"; else lk="  solo"; fi
   fi
   if [ -n "$g" ]; then
     log_done "$MEM_CLI/$MEM_TANK → shared '$g'${acct:+  ($acct)}$lk"

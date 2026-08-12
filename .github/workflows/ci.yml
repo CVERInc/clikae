@@ -19,6 +19,14 @@ jobs:
           scandir: '.'
           additional_files: 'bin/clikae install.sh'
 
+  signet:
+    name: signet (CLI surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Lint the CLI surface against the design system
+        run: bash scripts/signet-lint.sh
+
   smoke:
     name: smoke test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

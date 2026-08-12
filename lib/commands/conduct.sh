@@ -270,15 +270,17 @@ cmd_conduct() {
   for i in "${!tags[@]}"; do
     verdict="$(cut -d' ' -f1 < "${stats[$i]}" 2>/dev/null || echo '?')"
     rest="$(cut -s -d' ' -f2- < "${stats[$i]}" 2>/dev/null || true)"
+    # No glyph in front of these: log_done/log_warn/log_err already print the
+    # badge, and a tick beside `[ DONE ]` is the same state written twice.
     case "$verdict" in
-      CAPTURED) captured=$((captured+1)); log_done   "  ✔ ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
-      DRY)      dry=$((dry+1));           log_warn "  ⛽ ${tags[$i]} — ran dry${rest:+  ($rest)}" ;;
-      EMPTY)    other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no output (auth / sandbox / no answer)" ;;
-      NORECIPE) other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;
-      NOPATH)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine binary not on PATH" ;;
-      NOTANK)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no such tank (clikae tanks to list)" ;;
-      NOTACTIVE) other=$((other+1));      log_err  "  ✖ ${tags[$i]} — not the active agy tank (active: $rest). agy can't switch in parallel; run 'clikae agy ${tags[$i]#*/}' first, or use --leg agy/$rest" ;;
-      *)        other=$((other+1));       log_err  "  ✖ ${tags[$i]} — unknown outcome" ;;
+      CAPTURED) captured=$((captured+1)); log_done   "  ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
+      DRY)      dry=$((dry+1));           log_warn "  ${tags[$i]} — ran dry${rest:+  ($rest)}" ;;
+      EMPTY)    other=$((other+1));       log_err  "  ${tags[$i]} — no output (auth / sandbox / no answer)" ;;
+      NORECIPE) other=$((other+1));       log_err  "  ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;
+      NOPATH)   other=$((other+1));       log_err  "  ${tags[$i]} — engine binary not on PATH" ;;
+      NOTANK)   other=$((other+1));       log_err  "  ${tags[$i]} — no such tank (clikae tanks to list)" ;;
+      NOTACTIVE) other=$((other+1));      log_err  "  ${tags[$i]} — not the active agy tank (active: $rest). agy can't switch in parallel; run 'clikae agy ${tags[$i]#*/}' first, or use --leg agy/$rest" ;;
+      *)        other=$((other+1));       log_err  "  ${tags[$i]} — unknown outcome" ;;
     esac
   done
   log_info "summary: ${captured} captured · ${dry} dry · ${other} other  →  read them in $out_dir, then pick the winner."

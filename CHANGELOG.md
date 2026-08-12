@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI surface is now checked against the family's design system.** signet
+  is CVER's design system for plain-text terminal output; clikae was the one tool
+  that had never been wired to it, so the board could drift and nothing would go
+  red. CI runs its linter on every push.
+
+  The linter is fetched at a **pinned** ref, never `main`. Fetching a
+  neighbour's HEAD would let their commit turn this repo's CI red — a gate whose
+  colour somebody else sets. It stays doc-and-CI only and never becomes a runtime
+  dependency, because clikae sells "one file you run, no dependencies".
+
+  What it found on the first honest run: 25 violations across 12 files. Twenty
+  were fixed here. Seven were a marker inside help text, now words. Thirteen were
+  a status glyph printed **next to a badge that already said the same thing** —
+  `log_done "  ✔ …"` prints `[ DONE ]` and then a tick. One state, two
+  vocabularies, which is the thing a closed badge set exists to stop.
+
+  The remaining five are the selection cursor `❯`, kept deliberately and named in
+  the check rather than hidden: signet decides a `[x]` / `[ ]` *checkbox* but has
+  no *cursor*, and the two answer different questions. Reported upstream. The
+  exception matches the cursor itself, not a file and line, so a second glyph
+  riding along on the same line still fails.
+
 ### Fixed
 
 - **Resuming a second session on the same tank now opens a second screen.**

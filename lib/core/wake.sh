@@ -188,8 +188,11 @@ wake_sit() {
 
     if wake_pane_idle "$session" 2; then
       if wake_send "$session"; then
-        printf '\r\033[K✅ %s — sent "%s" at %s\n' \
-          "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')"
+        # The countdown line is overwritten in place, so clear it first and then
+        # let the badge speak: sending the nudge changed something, which is the
+        # question `[ DONE ]` answers.
+        printf '\r\033[K'
+        log_done "$(printf '%s — sent "%s" at %s' "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')")"
         return 0
       fi
     fi
@@ -198,7 +201,8 @@ wake_sit() {
     if [ "$attempt" -ge "$WAKE_RETRY_MAX" ]; then
       # Stop visibly. A waiter that quietly disappears leaves someone believing
       # their work resumed; the window stays with the reason written in it.
-      printf '\r\033[K✋ %s — gave up after %s attempts.\n' "$session" "$attempt"
+      printf '\r\033[K'
+      log_warn "$(printf '%s — gave up after %s attempt(s).' "$session" "$attempt")"
       printf '   The pane was not ready to type into (busy, or the engine exited).\n'
       printf '   Nothing was sent. Attach and continue by hand.\n'
       return 1

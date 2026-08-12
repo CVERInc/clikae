@@ -25,8 +25,8 @@ _relay_preview_card() {
   printf '    %-9s%s  %b· ≈%s msgs · last active %s%b\n' \
     "session" "${sid%%-*}" "$__C_DIM" "$msgs" "$last" "$__C_RESET"
   printf '    %-9s%b%s%b\n' "carrying" "$__C_DIM" "$title" "$__C_RESET"
-  printf '    %-9snew turns burn %b%s%b · %s untouched %b✓%b\n\n' \
-    "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from" "$__C_GREEN" "$__C_RESET"
+  printf '    %-9snew turns burn %b%s%b · %s untouched\n\n' \
+    "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from"
 }
 
 # Generic arrow-key menu drawn on /dev/tty. Args: <title> then one label per

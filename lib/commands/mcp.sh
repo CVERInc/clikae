@@ -41,9 +41,9 @@ there first with the engine's own CLI:
   clikae run claude work -- mcp add --transport http stripe https://mcp.stripe.com/ -s user
   clikae mcp share stripe
 
-🔴 Requires `jq` (safely merging one JSON key without touching the rest of the
+Requires: `jq` (safely merging one JSON key without touching the rest of the
 tank's config — oauthAccount, projects, caches — needs a real JSON parser).
-🔴 Solo tanks are refused as a share SOURCE and never targeted by the fan-out —
+Never: solo tanks are refused as a share SOURCE and never targeted by the fan-out —
 same fleet exclusion `clikae memory`/`to`/`watch`/`burn` already honor.
 Merge is additive-only: a key the tank's config already has is never
 overwritten. To pick up a changed shared definition, remove that server from
