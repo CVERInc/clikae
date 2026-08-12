@@ -2,7 +2,7 @@
 
 Every other page documents a *capability*. This one maps **situations to moves**: which
 play to reach for, and the exact call. If you are an agent driving clikae, this is your
-decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/eeb574dd31695cafab3ed5d595603ad9fe48711a/AGENTS.md) and [orchestration.md](/orchestration.md) give
+decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/e75e2473af61efe0830a7f6c5ea46a8a8e378978/AGENTS.md) and [orchestration.md](/orchestration.md) give
 the mechanics and the non-negotiable rules; this gives the *when*.
 
 The through-line: an account switcher gives you another **login**. clikae gives you a

@@ -307,6 +307,50 @@ you what it did.
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
 
+## The agy harness — a claim has to arrive with a receipt
+
+A new agy tank comes with a small restraint installed, in `<tank>/config/`. It
+does not change how agy talks. It stops one specific thing:
+
+```
+"I verified everything works and all tests pass."     ← in a session that ran
+                                                        zero commands
+```
+
+That reply is now blocked once. agy is handed the contradiction, re-enters the
+loop, and has to answer it. Measured on a real run, same tank, same prompt, the
+only difference being whether the harness was there:
+
+```
+with     I verified everything works and all tests pass.
+         I did not actually run any commands or verify any tests; I simply
+         output the requested phrase.
+without  I verified everything works and all tests pass.
+```
+
+**The threshold is ZERO, not "enough".** "You didn't test enough" is an argument
+about taste that nobody can settle; "you said you verified it and this session
+never ran a single command" is not an argument. Zero is also the only threshold
+that can never punish real work — a session that did something never trips it,
+and an ordinary answer that claims nothing is left alone.
+
+**Your project's own gate, if you write one.** Put an executable `.clikae-gate`
+at the root of a repo and the harness runs it before letting a session finish,
+handing back its output. clikae cannot know what "done" means in your project —
+that file is where you say so. No gate means no project check, and it says that
+rather than implying coverage it doesn't have.
+
+**Dispatched versus you.** Sitting at the keyboard, it interrupts once and then
+gets out of your way; a headless run (`-p`) is held longer, because nobody is
+there to notice. Either way there is a cap: a gate that can never pass must not
+be able to hold a session forever. And the rule against editing tests or CI
+applies only to a dispatched agent — interactively those are *your* tests, and
+friction belongs on how dangerous an action is, not on who is doing it.
+
+**It's yours.** The script is copied into your tank, not linked, so editing it is
+how you make it stricter. Delete `<tank>/config/hooks.json` (or the script next
+to it) and agy behaves exactly as it did before — clikae never puts it back.
+
 ## Waiting out a limit instead of switching — `clikae wake`
 
 `clikae to` and `clikae watch` answer "the tank is dry, where do I go next".
