@@ -97,6 +97,47 @@ _switch_tmux_usable() {
   command -v tmux >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]
 }
 
+# _switch_tmux_label <session> <engine> <tank> — make the status bar say where you
+# are, in clikae's own words.
+#
+# That bar is the single most persistently visible string in the product: it sits
+# in the corner for the whole session. Until now clikae never set it, so tmux
+# derived it from an INTERNAL identifier and showed `[ck-claude-x:bash]`. Two
+# different mistakes in eight characters:
+#
+#   `ck-`  — the session NAME has to be unique and must not collide with sessions
+#            the user opened themselves, so the prefix earns its keep. But that
+#            name was doing double duty as the human-facing label, and those are
+#            not the same requirement. tmux lets them be separate, so they are:
+#            the session stays `ck-<engine>-<tank>` for `tmux ls`, and the bar
+#            shows `engine/tank` — the vocabulary the user already thinks in.
+#   `bash` — a plain defect. The pane is running claude; the bar said bash,
+#            because the launch command literally is `bash -c …`. Three tanks
+#            open meant three windows called `bash`, which is precisely the one
+#            job a status bar has.
+#
+# Best-effort throughout: a tmux too old for any of these options leaves the
+# default bar, which is what we had yesterday. Cosmetics never fail a launch.
+_switch_tmux_label() {
+  local session="$1" engine="$2" tank="$3"
+  tmux set-option -t "$session" status-left-length 40 2>/dev/null || true
+  tmux set-option -t "$session" status-left "[$engine/$tank] " 2>/dev/null || true
+  # Without this tmux renames the window after whatever is running in it, and
+  # `-n` is undone the moment the engine spawns a child.
+  tmux set-window-option -t "$session" automatic-rename off 2>/dev/null || true
+  # …and `-n` cannot be trusted to have survived to here either: on a machine
+  # whose tmux has automatic-rename ON (which is tmux's own default), the window
+  # is renamed in the gap between `new-session -n` and the line above. A test
+  # found this by setting the option the way a user's config would; with the
+  # maintainer's own config it never reproduced. So state the name again, now
+  # that it will stick.
+  local current
+  current="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null || true)"
+  # Never touch the waiter's window — it carries the countdown in its name.
+  case "$current" in wake*) return 0 ;; esac
+  tmux rename-window -t "$session" "$engine" 2>/dev/null || true
+}
+
 # _switch_tmux_attach <session> <started_here> <scrollback_file>
 # Attach, replay what scrolled past, and say whether tmux would host us at all.
 # Returns 1 when tmux refuses (TERM it cannot draw on, for one) — and then puts
@@ -155,7 +196,8 @@ KV
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
     tmux has-session -t "ck-$tank_id" 2>/dev/null || \
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
+        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
     
     local clients
     clients="$(tmux list-clients -t "$current_pane_session" 2>/dev/null || true)"
@@ -165,7 +207,8 @@ KV
   else
     local started_here=0
     if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
+        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
       started_here=1
     fi
 
@@ -263,7 +306,8 @@ EOF
     if _switch_tmux_usable; then
       local started_here=0
       if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
-        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" "bash -c \"$target_cmd\""
+        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
+        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
         started_here=1
       fi
       _switch_tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" && return 0

@@ -174,6 +174,11 @@ wake_sit() {
       left=$(( target - now ))
       printf '\r\033[K⏳ %s — resuming in %s (sends: %s)' \
         "$session" "$(wake_human_left "$left")" "$WAKE_NUDGE"
+      # Also put it in the window NAME, so the status bar carries the countdown
+      # without anyone switching to this window. An automatic action nobody can
+      # see is the kind most worth showing: from the engine's own window you can
+      # tell it is waiting, and roughly for how long.
+      tmux rename-window -t "$session:wake" "wake $(wake_human_left "$left")" 2>/dev/null || true
       # Wake up often enough that the countdown is not a lie, but not so often
       # that a machine asleep for eight hours spins. 30s is under the resolution
       # anybody reads a countdown at.
