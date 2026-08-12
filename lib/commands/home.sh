@@ -1541,22 +1541,12 @@ EOF
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
 
-  # Logo LAST, pinned top-RIGHT when wide enough — drawn AFTER the \033[J erase so
-  # it's never clipped, and on the alt screen so absolute positioning is safe.
-  # Width read live via `stty size </dev/tty` (works inside $()), recomputed each
-  # draw so a resize reflows it. Skipped on narrow terminals (would crowd tanks).
-  local _llogo="$CLIKAE_ROOT/assets/logo.txt" _lsz _lrows _lcols _lh=14
-  _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
-  _lrows="${_lsz%% *}"; _lcols="${_lsz##* }"
-  # Logo pinned BOTTOM-right with a small margin. RWD: shown only when the window
-  # is wide AND tall enough to hold it clear of the board — otherwise omitted.
-  if [ -f "$_llogo" ] && [ "${_lcols:-0}" -ge 100 ] && [ "${_lrows:-0}" -ge 28 ]; then
-    local _ll _lr=$(( _lrows - _lh )) _lc=$(( _lcols - 41 ))
-    while IFS= read -r _ll || [ -n "$_ll" ]; do
-      printf '\033[%d;%dH%b%s%b' "$_lr" "$_lc" "$__C_BCYAN" "$_ll" "$__C_RESET"
-      _lr=$(( _lr + 1 ))
-    done < "$_llogo"
-  fi
+  # No watermark here. A logo pinned bottom-right by absolute cursor position was
+  # gated on the TERMINAL being big enough (cols>=100, rows>=28) — but the board's
+  # own content has no such limit, so on a busy account the session list ran under
+  # it and the two overwrote each other mid-line. The check could not see the thing
+  # it needed to avoid. The welcome screen still shows the logo, where it is the
+  # only thing on screen and nothing can collide with it.
   printf '\033[H'   # park the cursor home
 }
 
