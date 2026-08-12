@@ -110,19 +110,30 @@ PY
   [ "$got" = "$want" ]
 }
 
-@test "reset: a wall-clock time that DST deletes still yields a real instant" {
-  # 2026-03-08 02:30 does not exist in America/New_York. There is no correct
-  # answer, only a sane one: we require a resolvable instant on that same day,
-  # not a failure and not a silent 1970.
+@test "reset: a wall-clock time that DST deletes resolves the same on every OS" {
+  # 2026-03-08 02:30 does not exist in America/New_York. Left to themselves the
+  # platforms disagree — BSD returns the instant an hour later, GNU refuses — so
+  # this asserted whichever one it was written on and went red on the other in
+  # CI. There is no correct answer here, only a consistent one: the first instant
+  # after the time the vendor named, on the day they named.
   _src_limit
-  local now got day
+  local now want got
   now="$(_at America/New_York '2026-03-08 01:00:00')"
+  want="$(_at America/New_York '2026-03-08 03:30:00')"
   got="$(limit_reset_epoch 'resets 2:30am (America/New_York)' "$now")"
-  [ -n "$got" ]
-  [ "$got" -gt "$now" ]
-  day="$(TZ=America/New_York date -d "@$got" '+%Y-%m-%d' 2>/dev/null \
-        || TZ=America/New_York date -r "$got" '+%Y-%m-%d')"
-  [ "$day" = "2026-03-08" ]
+  [ "$got" = "$want" ]
+}
+
+@test "reset: an ambiguous DST hour is NOT nudged forward" {
+  # The sibling case, and the control for the one above: 2026-11-01 01:30 exists
+  # TWICE in America/New_York. It is not a gap, so the fall-forward must not
+  # fire — a rule that skipped an hour here would be an hour late every autumn.
+  _src_limit
+  local now got
+  now="$(_at America/New_York '2026-11-01 00:30:00')"
+  got="$(limit_reset_epoch 'resets 1:30am (America/New_York)' "$now")"
+  [ "$got" = "$(_at America/New_York '2026-11-01 01:30:00')" ]
+  [ "$(( got - now ))" -eq 3600 ]
 }
 
 @test "reset: 12am and 12pm are midnight and noon, not both noon" {

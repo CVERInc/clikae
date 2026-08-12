@@ -509,12 +509,38 @@ _limit_local() {
 # the function deterministic — which is the whole point of taking `now` as an
 # argument in the first place.
 _limit_at() {
+  local tz="$1" d="$2" hm="$3" ep hh
+  if ep="$(_limit_at_exact "$tz" "$d" "$hm")"; then printf '%s' "$ep"; return 0; fi
+  # The wall-clock time does not exist on that date in that zone — the hour a
+  # spring-forward deletes. There is no right answer, only a consistent one, and
+  # the platforms disagree about it on their own: BSD hands back the same instant
+  # an hour later, GNU refuses. Both are made to agree by asking for that hour
+  # explicitly. (An hour is the size of every DST jump in the tz database.)
+  hh="${hm%%:*}"
+  [ "$((10#$hh))" -lt 23 ] || return 1
+  hm="$(printf '%02d:%s' "$(( 10#$hh + 1 ))" "${hm##*:}")"
+  _limit_at_exact "$tz" "$d" "$hm"
+}
+
+# _limit_at_exact — resolve, then require the calendar to read back EXACTLY what
+# was asked for. Both halves of that read-back earn their keep:
+#   the date  — BSD turns 2027-02-29 into 2027-03-01 and exits 0 where GNU
+#               refuses, so year inference could pick an impossible date and
+#               look confident about it.
+#   the time  — a wall-clock time inside a DST gap comes back as a DIFFERENT
+#               time, which is the only portable way to notice it happened.
+#
+# ⚠️ The TIME half cannot be verified on macOS: BSD's own answer for a gap time is
+# already the instant the fall-forward would produce, so deleting this check
+# leaves the suite green here and only goes red on Linux. CI is the ruler for
+# that one — do not read a local green as coverage of it.
+_limit_at_exact() {
   local tz="$1" d="$2" hm="$3" ep back
   if [ "$(_limit_date_kind)" = gnu ]; then ep="$(TZ="$tz" date -d "$d $hm:00" +%s 2>/dev/null)"
   else ep="$(TZ="$tz" date -j -f '%Y-%m-%d %H:%M:%S' "$d $hm:00" +%s 2>/dev/null)"; fi
   [ -n "$ep" ] || return 1
-  back="$(_limit_local "$tz" "$ep" '%Y-%m-%d')"
-  [ "$back" = "$d" ] || return 1
+  back="$(_limit_local "$tz" "$ep" '%Y-%m-%d %H:%M')"
+  [ "$back" = "$d $hm" ] || return 1
   printf '%s' "$ep"
 }
 
