@@ -108,6 +108,7 @@ command in the shell you land in, and you get the tmux session:
 | `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
 | `auto [ask\|safe\|full]` | **(BETA, claude-launched sessions only)** How much clikae carries on its own when a session **you launched through `clikae`** hits the limit — it has no effect on alias/`.app`/other-engine launches. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` keeps going (same-engine = resume, cross-engine = a cold brief). The board's `A` key cycles it. |
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
+| `wake [on\|off]` · `wake <engine> <tank>` | Stay where you are and let the tank pick itself back up: when the limit lifts, clikae types `go` into that tank's own session and the conversation continues. Asked once, then remembered. |
 | `burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of `to`/`watch`. See "Headless tasks" below. |
 
 > **Supervised launch (BETA · claude · feedback welcome).** When you start claude
@@ -305,6 +306,47 @@ you what it did.
 > clikae watch claude --check          # would the pattern fire on this session?
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
+
+## Waiting out a limit instead of switching — `clikae wake`
+
+`clikae to` and `clikae watch` answer "the tank is dry, where do I go next".
+`clikae wake` answers the other question: **what if I don't want to go anywhere.**
+
+The session you were limited in is not gone. It is sitting at its prompt with the
+whole conversation intact, and typing anything continues it — which is why the
+manual fix is to come back at 3:50am and send `go`. `clikae wake` sends it for
+you:
+
+```sh
+clikae wake                 # what the setting is
+clikae wake on | off        # change it
+clikae wake claude work     # attach a waiter to that tank right now
+```
+
+When `clikae watch` sees a limit and that tank has a live session, it offers this
+once and remembers your answer. A countdown opens as a `wake` window inside the
+session, so you can watch it, or Ctrl-C it, or ignore it.
+
+**It is not a re-run.** Nothing is replayed and no prompt is dispatched a second
+time — it is one keystroke into a conversation that never ended. If your task had
+already written files or made a commit, none of that happens twice.
+
+**What it will not do.** No tmux, no live session, or no time in the vendor's
+sentence, and it schedules nothing — a waiter with a guessed time is worse than
+no waiter, because it fires at the wrong moment into something live. Before
+typing it checks that the session exists, that something is alive in it, and that
+the screen has stopped moving; a busy or dead pane is retried three times and
+then given up on, visibly, without sending anything.
+
+**Why 60 seconds after the stated time.** Measured, not padded: across 116 real
+outages where nothing succeeded during the window, the earliest success after the
+vendor's stated reset was **30 seconds** — six separate times. The time in that
+sentence is accurate to the second, so 60s is that margin doubled rather than a
+hedge against rounding nobody checked.
+
+There is no daemon and no state file. The waiter lives inside the session it is
+waiting for and dies with it, which is correct: if the session is gone, there is
+nothing to resume.
 
 ## Headless tasks across tanks — `clikae burn`
 
