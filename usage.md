@@ -347,6 +347,13 @@ be able to hold a session forever. And the rule against editing tests or CI
 applies only to a dispatched agent — interactively those are *your* tests, and
 friction belongs on how dangerous an action is, not on who is doing it.
 
+**Blocking is not compliance.** Measured on two real tanks with the same prompt:
+one came back and said plainly *"I did not actually run any commands"*; the other
+was blocked just the same, went off and did something else, and the last line
+printed was still the original claim. What the harness guarantees is that the
+claim gets **challenged** — not that the answer is good. After the cap, the final
+sentence on screen can still be the unsupported one. Read the reply.
+
 **It's yours.** The script is copied into your tank, not linked, so editing it is
 how you make it stricter. Delete `<tank>/config/hooks.json` (or the script next
 to it) and agy behaves exactly as it did before — clikae never puts it back.
