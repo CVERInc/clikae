@@ -67,15 +67,22 @@ cmd_wake() {
     return 1
   fi
 
-  session="ck-$engine-$tank"
-  if ! tmux has-session -t "$session" 2>/dev/null; then
+  local sessions; sessions="$(wake_sessions_for "$engine" "$tank")"
+  if [ -z "$sessions" ]; then
     log_err "No live session for $engine/$tank."
     log_dim "  The waiter types into a session that is still open; there is none."
     log_dim "  Start one with: clikae $engine $tank"
     return 1
   fi
 
-  if wake_attach "$session" "$epoch"; then
+  local attached=0
+  while IFS= read -r session; do
+    [ -n "$session" ] || continue
+    wake_attach "$session" "$epoch" && attached=$((attached + 1))
+  done <<EOF
+$sessions
+EOF
+  if [ "$attached" -gt 0 ]; then
     log_done "Waiting on $engine/$tank — $reset"
     log_dim "  It will send \"$WAKE_NUDGE\" $((WAKE_BUFFER_SECONDS))s after that, once the pane is idle."
     log_dim "  Watch or cancel it in the session's 'wake' window."

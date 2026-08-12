@@ -148,3 +148,85 @@ PYEOF
   [[ "$output" == *"CLIENT_ON ck-codex-roam"* ]] || { echo "$output"; false; }
   [ "$(grep -c ENGINE_STARTED "$STUB_RUNS")" -eq 1 ] || { cat "$STUB_RUNS"; false; }
 }
+
+@test "resuming a different session opens a second screen, not the one already up" {
+  # The bug, reported 2026-08-13 and reproduced before this test existed: open a
+  # tank, then from the board resume a DIFFERENT past session on the same tank.
+  # The tmux session was named after the tank alone, so the second launch found
+  # `ck-codex-roam2` running and attached to it — two tabs, one screen — and the
+  # `--resume <sid>` was dropped in silence, because nothing was started to take
+  # it. A session is now keyed on what was asked for, so a different request is a
+  # different session.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init codex roam2
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/codex"
+#!/usr/bin/env bash
+echo "STARTED [$*]" >> "$STUB_RUNS"
+echo "SCREEN [$*]"
+sleep 90
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/codex"
+  export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
+
+  run python3 - "$CLIKAE_BIN" <<'PYEOF'
+import os, fcntl, termios, struct, sys, time, subprocess
+
+clikae = sys.argv[1]
+
+def launch(*args):
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        for fd in (0, 1, 2):
+            os.dup2(slave, fd)
+        os.close(master); os.close(slave)
+        os.environ["TERM"] = "xterm-256color"
+        os.execv(clikae, [clikae] + list(args))
+    os.close(slave)
+    return pid
+
+def tmux(*a):
+    return subprocess.run(["tmux", *a], capture_output=True, text=True).stdout
+
+runs = os.environ["STUB_RUNS"]
+def started(n):
+    try:
+        with open(runs) as fh:
+            return fh.read().count("STARTED") >= n
+    except OSError:
+        return False
+
+def wait_for(cond, secs=20):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.25)
+    return False
+
+launch("codex", "roam2")
+wait_for(lambda: started(1))
+launch("codex", "roam2", "--", "resume", "SESSION-TWO")
+wait_for(lambda: started(2))
+
+names = sorted(n for n in tmux("list-sessions", "-F", "#{session_name}").split()
+               if n.startswith("ck-codex-roam2"))
+print("SESSIONS", len(names))
+for n in names:
+    first = (tmux("capture-pane", "-p", "-t", n).strip().splitlines() or [""])[0]
+    print("PANE", first)
+    tmux("kill-session", "-t", n)
+PYEOF
+
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Two engines, not one: the second launch must not have been answered by the
+  # first session. This is the assertion the old behaviour failed.
+  [ "$(grep -c STARTED "$STUB_RUNS")" -eq 2 ] || { cat "$STUB_RUNS"; false; }
+  [[ "$output" == *"SESSIONS 2"* ]] || { echo "$output"; false; }
+  # And they are showing different things — the point of the whole report.
+  [[ "$output" == *"PANE SCREEN []"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"PANE SCREEN [resume SESSION-TWO]"* ]] || { echo "$output"; false; }
+}

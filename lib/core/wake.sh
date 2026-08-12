@@ -238,6 +238,26 @@ wake_attach() {
   return 0
 }
 
+# wake_sessions_for <engine> <tank> -> the live tmux sessions belonging to this
+# tank, one per line.
+#
+# There can be more than one. Since 2026-08-13 a session's name carries a digest
+# of the argv it was started with, so `clikae claude x` and a resumed
+# conversation on the same tank are separate sessions — which is the point: they
+# are separate conversations. A usage limit hits the ACCOUNT, so every one of
+# them is stuck, and each needs its own waiter typing into its own pane.
+#
+# The digest is always digits, which is what makes this safe for a tank whose
+# name contains a hyphen: `ck-claude-my-tank` matches, `ck-claude-my` does not
+# swallow it, and only a trailing all-digit field is read as a digest.
+wake_sessions_for() {
+  local engine="$1" tank="$2" base
+  command -v tmux >/dev/null 2>&1 || return 0
+  base="ck-$engine-$tank"
+  tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    | grep -E "^${base}(-[0-9]+)?$" || true
+}
+
 # wake_offer <engine> <tank> <reset-phrase> -> attach a waiter, asking once the
 # first time. Shared by the two places a limit is noticed: `clikae watch` tailing
 # a transcript, and the supervised launch noticing on the way out.
@@ -256,10 +276,9 @@ wake_offer() {
   # Two `local`s on purpose: a variable assigned earlier in the SAME `local` is
   # not yet visible, so folding this in would build "ck--" and then quietly find
   # no session — a waiter that never attaches and never says why.
-  local session="ck-$cli-$profile"
-
-  command -v tmux >/dev/null 2>&1 || return 0
-  tmux has-session -t "$session" 2>/dev/null || return 0
+  local sessions
+  sessions="$(wake_sessions_for "$cli" "$profile")"
+  [ -n "$sessions" ] || return 0
 
   [ -n "$reset" ] || return 0
   now="$(date +%s)"
@@ -278,7 +297,14 @@ wake_offer() {
       ;;
   esac
 
-  if wake_attach "$session" "$epoch"; then
+  local session attached=0
+  while IFS= read -r session; do
+    [ -n "$session" ] || continue
+    wake_attach "$session" "$epoch" && attached=$((attached + 1))
+  done <<EOF
+$sessions
+EOF
+  if [ "$attached" -gt 0 ]; then
     log_done "Will resume $cli/$profile — $reset (+$((WAKE_BUFFER_SECONDS))s)"
     log_dim "  Watch or cancel it in that session's 'wake' window."
   fi

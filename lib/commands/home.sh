@@ -1836,10 +1836,14 @@ _home_update_prompt() {
   update_check_refresh
   local latest; latest="$(update_check_pending)" || return 0
   local cmd; cmd="$(update_upgrade_command)"
-  # The ✨ banner doubles as the menu title (_home_choose prints the title above the
+  # The banner doubles as the menu title (_home_choose prints the title above the
   # options, codex-style). Release-notes link on its own line.
+  #
+  # No glyph in front of it: the colour and the sentence already say a new version
+  # exists, and signet's first ruler is that a mark earns its place by doing a job
+  # no other mark does. The ✨ that used to sit here was costume.
   local title opt1 opts choice
-  title="$(printf '%b✨ %s%b  clikae %s → %s\n%b%s %s%b' \
+  title="$(printf '%b%s%b  clikae %s → %s\n%b%s %s%b' \
     "$__C_YELLOW" "$T_UPDATE_AVAIL" "$__C_RESET" "$CLIKAE_VERSION" "$latest" \
     "$__C_DIM" "$T_UPDATE_NOTES" "https://github.com/CVERInc/clikae/releases/latest" "$__C_RESET")"
   if [ -n "$cmd" ]; then opt1="$(printf "$T_UPDATE_NOW" "$cmd")"; else opt1="$T_UPDATE_SHOW"; fi
@@ -1850,7 +1854,11 @@ _home_update_prompt() {
       if [ -n "$cmd" ]; then
         printf '\n  %b$ %s%b\n\n' "$__C_DIM" "$cmd" "$__C_RESET"
         if eval "$cmd"; then
-          printf '\n  %b✓ %s%b\n\n' "$__C_GREEN" "$T_UPDATE_DONE" "$__C_RESET"
+          # `[ DONE ]`, not a tick: the upgrade changed the disk, which is the
+          # exact question that badge answers — and the failure branch below was
+          # already speaking that language. One state, two vocabularies, is the
+          # thing the closed badge set exists to stop.
+          printf '\n'; log_done "$T_UPDATE_DONE"; printf '\n'
         else
           log_warn "$T_UPDATE_FAILED"
         fi

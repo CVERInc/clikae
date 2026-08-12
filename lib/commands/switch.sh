@@ -160,6 +160,33 @@ _switch_tmux_attach() {
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3
   local tank_id="${engine}-${tank}"
+
+  # The tmux session is keyed on WHAT WAS ASKED FOR, not just on the tank.
+  #
+  # Keying it on the tank alone was a real regression, reproduced 2026-08-13: open
+  # `clikae claude x`, then from the board resume a DIFFERENT past session on the
+  # same tank, and the second launch found `ck-claude-x` already running and
+  # attached to it. Two tabs, one screen — and the `--resume <sid>` was dropped in
+  # silence, because nothing was started to receive it.
+  #
+  # A bare `clikae <engine> <tank>` means "take me to my tank" and must keep the
+  # stable name, so leaving and coming back lands in the same place. Passing
+  # anything after `--` means "run the engine with THESE arguments", which a
+  # session started with different ones cannot satisfy. So the argv gets a short
+  # digest appended.
+  #
+  # Identical requests still collide on purpose: resuming the same session id
+  # twice attaches to it, which is exactly the desired answer.
+  #
+  # cksum, not shasum/md5: POSIX, present everywhere, and this is a namespacing
+  # digest — nothing here is a security boundary.
+  local sess_id="$tank_id"
+  if [ "$#" -gt 0 ]; then
+    local _argsum
+    _argsum="$(printf '%s\0' "$@" | cksum 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$_argsum" ] && sess_id="$tank_id-$_argsum"
+  fi
+
   local -a env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
   if [ -n "$CLIKAE_HOME" ]; then
     env_args+=("-e" "CLIKAE_HOME=$CLIKAE_HOME")
@@ -173,9 +200,9 @@ _switch_run_tmux_wrapped() {
     env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
   fi
 
-  local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
+  local target_cmd scrollback_file="$HOME/.clikae/state/ck-$sess_id-$$.scrollback"
   target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
-  target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
+  target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$sess_id\" > \"$scrollback_file\" 2>/dev/null || true"
 
   # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
   # convenience layer over `clikae run`, never a dependency: a machine without it
@@ -195,20 +222,20 @@ KV
     current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
-    tmux has-session -t "ck-$tank_id" 2>/dev/null || \
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
-        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
+    tmux has-session -t "ck-$sess_id" 2>/dev/null || \
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
+        _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
     
     local clients
     clients="$(tmux list-clients -t "$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
-      exec tmux switch-client -t "ck-$tank_id"
+      exec tmux switch-client -t "ck-$sess_id"
     fi
   else
     local started_here=0
-    if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
-        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
+    if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
+        _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
       started_here=1
     fi
 
@@ -220,7 +247,7 @@ KV
     # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
     # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
     # quietly taken roaming away from the one device this feature exists for.
-    if ! _switch_tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file"; then
+    if ! _switch_tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file"; then
       while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV

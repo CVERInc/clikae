@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Resuming a second session on the same tank now opens a second screen.**
+  Reported and reproduced 2026-08-13: open `clikae claude work`, then from the
+  board resume a DIFFERENT past session on that tank, and both tabs showed the
+  same thing. The tmux session was named after the tank alone, so the second
+  launch found one already running and attached to it — and the `--resume <sid>`
+  was dropped in silence, because nothing was started to receive it.
+
+  A session is now keyed on **what was asked for**. A bare `clikae <engine>
+  <tank>` keeps the stable name, so walking away and coming back still lands in
+  the same place; anything after `--` gets a short digest of that argv appended,
+  because a session started with different arguments cannot answer a different
+  request. Identical requests still collide on purpose — resuming the same
+  session id twice returns you to it.
+
+  Measured before and after with the same probe: one engine start and one screen
+  became two engine starts and two screens, showing different things. The
+  regression test asserts both.
+
+- **The update notice speaks the family's vocabulary.** A successful upgrade
+  printed a tick while the failure branch two lines below already used a badge —
+  one state written two ways, which is the thing the closed badge set exists to
+  stop. It is `[ DONE ]` now, and the decorative glyph on the "new version"
+  banner is gone: the colour and the sentence were already saying it.
+
 ## [0.20.0] — 2026-08-12
 
 ### Added
