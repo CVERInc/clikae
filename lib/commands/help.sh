@@ -46,6 +46,8 @@ Keep burning when a tank runs dry:
                                    in your burn order); your tanks ARE the reserve
   auto [ask|safe|full]             how much clikae carries on its own (BETA, claude)
   watch <engine> [tank]            watch for a dry tank and switch onward
+  wake [on|off]                    when a tank runs dry, resume it the moment the
+                                   limit lifts (asks once) · wake <engine> <tank>
   burn <engine> <tank> -- <cmd>    run a headless task on a tank; on a dry tank,
                                    re-fire it on the next (verify by --artifact)
   conduct --leg <e>/<t>... --prompt-file <f>   (BETA) fan ONE prompt across N

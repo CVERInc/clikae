@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-08-12
+
+### Added
+
+- **`clikae wake` — a limited tank picks itself back up.** When you hit a usage
+  limit, the session isn't gone: it's at its prompt with the conversation intact,
+  which is why the manual fix is to come back at 3:50am and type `go`. clikae
+  sends that keystroke for you. A countdown opens as a window inside that tank's
+  own tmux session; when the limit lifts, the conversation continues.
+
+  **It is not a re-run.** No prompt is replayed and nothing is dispatched twice —
+  it is one keystroke into a conversation that never ended, so a task that had
+  already written files or made a commit does not do it again.
+
+  `clikae watch` offers this once when it sees a limit and remembers the answer.
+  On by default, because it automates something you already do by hand; asked the
+  first time, because typing into a live session is a power and clikae asks
+  before taking one.
+
+  Every failure path is silent and harmless: no tmux, no live session, or no time
+  in the vendor's sentence, and nothing is scheduled. A waiter with a guessed
+  time is worse than none — it fires at the wrong moment into something live.
+
+  Before typing it asks three questions no vendor can reword: does the session
+  exist, is anything alive in it, has the screen stopped moving? A busy or dead
+  pane is retried three times and then given up on **visibly** — a waiter that
+  disappears quietly leaves you believing your work resumed.
+
+  The delay after the stated reset is 60 seconds, and that number was measured:
+  across 116 real outages in which nothing succeeded during the window, the
+  earliest success after the vendor's stated time was **30 seconds**, six
+  separate times. The sentence is accurate to the second; 60s is that doubled,
+  not a hedge against rounding nobody checked.
+
+- **The reset sentence can now be read as a time.** Everywhere else clikae relays
+  a vendor's reset phrase verbatim and never parses it; this is a separate pure
+  function for the one caller that needs a number. Two grammars exist and only
+  two — measured against 262 genuine limit events across five accounts, all 262
+  of which carry a phrase. The grammar does **not** follow the limit type (a
+  weekly limit appears in both forms), so branching on that would have been
+  wrong. 175 distinct cases ship as a test fixture whose answer key was computed
+  by a different implementation than the one under test.
+
+### Fixed
+
+- **The bats suite could write into whichever repo invoked it.** git exports an
+  absolute `GIT_DIR` into every hook, so a test that cd's into its own throwaway
+  repo and calls `git config` wrote to the real one. Running the suite from a
+  pre-push hook put a test fixture's deliberately-wrong author into the
+  maintainer's own git config, where it stayed for a month. The hook already
+  scrubbed those variables; the suite does now too, because either layer alone
+  leaves it unsafe to run from the other's context.
+
 ## [0.17.0] — 2026-08-12
 
 ### Added

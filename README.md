@@ -97,6 +97,13 @@ you land next and you're back in it, at that screen's size, mid-thought. If
 tmux isn't installed, or you're in a pipe, it just runs the engine directly:
 same command, no persistence, nothing to configure either way.
 
+**You hit the limit at 2am.** The session isn't gone — it's sitting at its
+prompt with the whole conversation in it, waiting for you to come back at 3:50
+and type something. clikae types it: a countdown opens inside that session and
+sends one keystroke when the limit lifts, so you wake up to work that continued
+instead of work that stopped. Nothing is re-run — no prompt is replayed, so
+nothing that already happened happens twice. It asks you once, the first time.
+
 **Some sessions shouldn't be remembered.** Get a cold read on your own plan
 from a session with no memory of you: `clikae claude work --ephemeral`. The
 reviewer doesn't know what you believe, and the tank's long-term memory never
