@@ -1,0 +1,203 @@
+# limit-reset-phrases.tsv — real Claude usage-limit reset phrases.
+#
+# Harvested from real transcripts on 2026-08-12: every genuine limit event
+# (synthetic + isApiErrorMessage) across five accounts — 262 of them, all
+# 262 carrying a reset phrase, deduped to 175 distinct (now, phrase) pairs.
+#
+# Columns: now_epoch <TAB> phrase (verbatim) <TAB> expected_epoch
+#
+# The phrases and timestamps are MEASUREMENTS and are reproduced exactly;
+# nothing identifying (session ids, paths, message bodies) was carried over.
+# expected_epoch was computed with python's zoneinfo, NOT with the bash
+# function these rows exist to test — an answer key the implementation did
+# not write for itself.
+#
+# Two grammars appear, and which one you get is NOT predictable from the
+# limit type: a weekly limit uses both.
+#   resets 3:50am (Asia/Tokyo)             -> next occurrence, may cross midnight
+#   resets Jul 27 at 5am (Asia/Tokyo)      -> dated, no year
+#
+# What this corpus does and does NOT cover. It is one person's transcripts, so
+# it is a real sample, not a designed one:
+#   covered     157 undated / 18 dated; 84 rows genuinely cross midnight, so the
+#               "next occurrence" rollover is exercised by real data.
+#   NOT covered every row is (Asia/Tokyo). These rows therefore cannot tell a
+#               correct implementation from one that ignores the phrase's zone
+#               and reads $TZ — on this machine the two agree. Nor is any DST
+#               boundary here; Asia/Tokyo has no DST. Those cases are hand-built
+#               in limit-reset.bats and must stay there.
+1784125615	resets 12:10am (Asia/Tokyo)	1784128200
+1784190248	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190326	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190328	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190331	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190332	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190373	resets 5:50pm (Asia/Tokyo)	1784191800
+1784190417	resets 5:50pm (Asia/Tokyo)	1784191800
+1784208369	resets 10:50pm (Asia/Tokyo)	1784209800
+1784401113	resets 5:30am (Asia/Tokyo)	1784406600
+1784401115	resets 5:30am (Asia/Tokyo)	1784406600
+1784401119	resets 5:30am (Asia/Tokyo)	1784406600
+1784401125	resets 5:30am (Asia/Tokyo)	1784406600
+1784401142	resets 5:30am (Asia/Tokyo)	1784406600
+1784401155	resets 5:30am (Asia/Tokyo)	1784406600
+1784401160	resets 5:30am (Asia/Tokyo)	1784406600
+1784401170	resets 5:30am (Asia/Tokyo)	1784406600
+1784401187	resets 5:30am (Asia/Tokyo)	1784406600
+1784401188	resets 5:30am (Asia/Tokyo)	1784406600
+1784401213	resets 5:30am (Asia/Tokyo)	1784406600
+1784401236	resets 5:30am (Asia/Tokyo)	1784406600
+1784442811	resets 4:20pm (Asia/Tokyo)	1784445600
+1784442983	resets 4:20pm (Asia/Tokyo)	1784445600
+1784524830	resets 4pm (Asia/Tokyo)	1784530800
+1784524831	resets 4pm (Asia/Tokyo)	1784530800
+1784524875	resets 4pm (Asia/Tokyo)	1784530800
+1784531791	resets 7:20pm (Asia/Tokyo)	1784542800
+1784538397	resets 9:10pm (Asia/Tokyo)	1784549400
+1784538430	resets 9:10pm (Asia/Tokyo)	1784549400
+1784642372	resets 1am (Asia/Tokyo)	1784649600
+1784793316	resets 5:50pm (Asia/Tokyo)	1784796600
+1784793317	resets 5:50pm (Asia/Tokyo)	1784796600
+1784793326	resets 5:50pm (Asia/Tokyo)	1784796600
+1784793332	resets 5:50pm (Asia/Tokyo)	1784796600
+1784793605	resets 5:50pm (Asia/Tokyo)	1784796600
+1784793891	resets 5:50pm (Asia/Tokyo)	1784796600
+1784823307	resets 4:30am (Asia/Tokyo)	1784835000
+1784823462	resets 4:30am (Asia/Tokyo)	1784835000
+1784823463	resets 4:30am (Asia/Tokyo)	1784835000
+1784823881	resets 4:30am (Asia/Tokyo)	1784835000
+1784824280	resets 4:30am (Asia/Tokyo)	1784835000
+1784825184	resets 4:30am (Asia/Tokyo)	1784835000
+1784826086	resets 4:30am (Asia/Tokyo)	1784835000
+1784826989	resets 4:30am (Asia/Tokyo)	1784835000
+1784827892	resets 4:30am (Asia/Tokyo)	1784835000
+1784828806	resets 4:30am (Asia/Tokyo)	1784835000
+1784829710	resets 4:30am (Asia/Tokyo)	1784835000
+1784830612	resets 4:30am (Asia/Tokyo)	1784835000
+1784831514	resets 4:30am (Asia/Tokyo)	1784835000
+1784832423	resets 4:30am (Asia/Tokyo)	1784835000
+1784833325	resets 4:30am (Asia/Tokyo)	1784835000
+1784834227	resets 4:30am (Asia/Tokyo)	1784835000
+1784862592	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862599	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862601	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862673	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862807	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862810	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862813	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862814	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862817	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862820	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862821	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862823	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862824	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862827	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784862828	resets Jul 27 at 5am (Asia/Tokyo)	1785096000
+1784869010	resets Jul 27 at 5pm (Asia/Tokyo)	1785139200
+1784871099	resets 3:30pm (Asia/Tokyo)	1784874600
+1784871101	resets 3:30pm (Asia/Tokyo)	1784874600
+1784871490	resets 3:30pm (Asia/Tokyo)	1784874600
+1784871513	resets 3:30pm (Asia/Tokyo)	1784874600
+1784871930	resets 3:30pm (Asia/Tokyo)	1784874600
+1784886758	resets 8:30pm (Asia/Tokyo)	1784892600
+1784886765	resets 8:30pm (Asia/Tokyo)	1784892600
+1784896432	resets Jul 26 at 6pm (Asia/Tokyo)	1785056400
+1785161667	resets 3:50am (Asia/Tokyo)	1785178200
+1785161670	resets 3:50am (Asia/Tokyo)	1785178200
+1785161675	resets 3:50am (Asia/Tokyo)	1785178200
+1785161685	resets 3:50am (Asia/Tokyo)	1785178200
+1785161822	resets 3:50am (Asia/Tokyo)	1785178200
+1785161878	resets 3:50am (Asia/Tokyo)	1785178200
+1785161923	resets 3:50am (Asia/Tokyo)	1785178200
+1785162034	resets 3:50am (Asia/Tokyo)	1785178200
+1785162043	resets 3:50am (Asia/Tokyo)	1785178200
+1785162067	resets 3:50am (Asia/Tokyo)	1785178200
+1785162134	resets 3:50am (Asia/Tokyo)	1785178200
+1785162178	resets 3:50am (Asia/Tokyo)	1785178200
+1785162290	resets 3:50am (Asia/Tokyo)	1785178200
+1785162301	resets 3:50am (Asia/Tokyo)	1785178200
+1785162317	resets 3:50am (Asia/Tokyo)	1785178200
+1785162374	resets 3:50am (Asia/Tokyo)	1785178200
+1785162398	resets 3:50am (Asia/Tokyo)	1785178200
+1785162455	resets 3:50am (Asia/Tokyo)	1785178200
+1785162507	resets 3:50am (Asia/Tokyo)	1785178200
+1785162576	resets 3:50am (Asia/Tokyo)	1785178200
+1785162709	resets 3:50am (Asia/Tokyo)	1785178200
+1785162722	resets 3:50am (Asia/Tokyo)	1785178200
+1785162724	resets 3:50am (Asia/Tokyo)	1785178200
+1785162769	resets 3:50am (Asia/Tokyo)	1785178200
+1785162778	resets 3:50am (Asia/Tokyo)	1785178200
+1785162800	resets 3:50am (Asia/Tokyo)	1785178200
+1785162996	resets 3:50am (Asia/Tokyo)	1785178200
+1785163087	resets 3:50am (Asia/Tokyo)	1785178200
+1785163088	resets 3:50am (Asia/Tokyo)	1785178200
+1785163124	resets 3:50am (Asia/Tokyo)	1785178200
+1785163126	resets 3:50am (Asia/Tokyo)	1785178200
+1785163165	resets 3:50am (Asia/Tokyo)	1785178200
+1785163224	resets 3:50am (Asia/Tokyo)	1785178200
+1785163241	resets 3:50am (Asia/Tokyo)	1785178200
+1785163266	resets 3:50am (Asia/Tokyo)	1785178200
+1785163506	resets 3:50am (Asia/Tokyo)	1785178200
+1785163532	resets 3:50am (Asia/Tokyo)	1785178200
+1785163535	resets 3:50am (Asia/Tokyo)	1785178200
+1785163544	resets 3:50am (Asia/Tokyo)	1785178200
+1785163620	resets 3:50am (Asia/Tokyo)	1785178200
+1785163682	resets 3:50am (Asia/Tokyo)	1785178200
+1785163707	resets 3:50am (Asia/Tokyo)	1785178200
+1785163852	resets 3:50am (Asia/Tokyo)	1785178200
+1785164017	resets 3:50am (Asia/Tokyo)	1785178200
+1785164043	resets 3:50am (Asia/Tokyo)	1785178200
+1785164135	resets 3:50am (Asia/Tokyo)	1785178200
+1785164164	resets 3:50am (Asia/Tokyo)	1785178200
+1785164299	resets 3:50am (Asia/Tokyo)	1785178200
+1785164334	resets 3:50am (Asia/Tokyo)	1785178200
+1785164380	resets 3:50am (Asia/Tokyo)	1785178200
+1785164622	resets 3:50am (Asia/Tokyo)	1785178200
+1785166794	resets 3:50am (Asia/Tokyo)	1785178200
+1785215701	resets 3:10pm (Asia/Tokyo)	1785219000
+1785327237	resets 9:20pm (Asia/Tokyo)	1785327600
+1785345612	resets 2:30am (Asia/Tokyo)	1785346200
+1785489660	resets 9:50pm (Asia/Tokyo)	1785502200
+1785489661	resets 9:50pm (Asia/Tokyo)	1785502200
+1785489826	resets 9:50pm (Asia/Tokyo)	1785502200
+1785489827	resets 9:50pm (Asia/Tokyo)	1785502200
+1785501220	resets 11:20pm (Asia/Tokyo)	1785507600
+1785503316	resets 11:20pm (Asia/Tokyo)	1785507600
+1785516841	resets 4:50am (Asia/Tokyo)	1785527400
+1785646536	resets 6pm (Asia/Tokyo)	1785661200
+1785646537	resets 6pm (Asia/Tokyo)	1785661200
+1785674883	resets 11:40pm (Asia/Tokyo)	1785681600
+1785674890	resets 11:40pm (Asia/Tokyo)	1785681600
+1785674893	resets 11:40pm (Asia/Tokyo)	1785681600
+1785674896	resets 11:40pm (Asia/Tokyo)	1785681600
+1785674952	resets 11:40pm (Asia/Tokyo)	1785681600
+1785674966	resets 11:40pm (Asia/Tokyo)	1785681600
+1785683034	resets 4:40am (Asia/Tokyo)	1785699600
+1785683155	resets 4:40am (Asia/Tokyo)	1785699600
+1785691429	resets 4:40am (Asia/Tokyo)	1785699600
+1785756718	resets 10:20pm (Asia/Tokyo)	1785763200
+1786003570	resets 8pm (Asia/Tokyo)	1786014000
+1786003605	resets 8pm (Asia/Tokyo)	1786014000
+1786003690	resets 8pm (Asia/Tokyo)	1786014000
+1786003770	resets 8pm (Asia/Tokyo)	1786014000
+1786007568	resets 8pm (Asia/Tokyo)	1786014000
+1786265018	resets Aug 11 at 2pm (Asia/Tokyo)	1786424400
+1786332558	resets 5pm (Asia/Tokyo)	1786348800
+1786332572	resets 5pm (Asia/Tokyo)	1786348800
+1786332912	resets 5pm (Asia/Tokyo)	1786348800
+1786332959	resets 5pm (Asia/Tokyo)	1786348800
+1786460083	resets 2:10am (Asia/Tokyo)	1786468200
+1786460085	resets 2:10am (Asia/Tokyo)	1786468200
+1786460087	resets 2:10am (Asia/Tokyo)	1786468200
+1786460088	resets 2:10am (Asia/Tokyo)	1786468200
+1786460090	resets 2:10am (Asia/Tokyo)	1786468200
+1786460091	resets 2:10am (Asia/Tokyo)	1786468200
+1786460092	resets 2:10am (Asia/Tokyo)	1786468200
+1786460093	resets 2:10am (Asia/Tokyo)	1786468200
+1786460094	resets 2:10am (Asia/Tokyo)	1786468200
+1786460095	resets 2:10am (Asia/Tokyo)	1786468200
+1786460096	resets 2:10am (Asia/Tokyo)	1786468200
+1786460097	resets 2:10am (Asia/Tokyo)	1786468200
+1786460098	resets 2:10am (Asia/Tokyo)	1786468200
+1786460312	resets 2:10am (Asia/Tokyo)	1786468200
+1786460531	resets 2:10am (Asia/Tokyo)	1786468200

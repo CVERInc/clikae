@@ -458,3 +458,147 @@ limit_weekly_marker() {
     | grep -oiE "[0-9]+% of your (weekly|week)[a-z ]*limit" 2>/dev/null \
     | head -n 1 || true
 }
+
+# ---------------------------------------------------------------------------
+# Turning the vendor's reset phrase into an instant.
+#
+# Everywhere above, a reset phrase is RELAYED verbatim and never parsed — the
+# honest thing to show a human. This section is for the one caller that needs a
+# number instead of a sentence: waking a limited tank up when the limit lifts.
+# It stays separate, and it stays a pure function, so the display path cannot
+# start depending on a computation that might be wrong.
+#
+# Two grammars, and that is all there is — measured against 262 genuine limit
+# events across five accounts on 2026-08-12, of which 262 carried a phrase:
+#     resets 3:50am (Asia/Tokyo)          undated: the NEXT such time
+#     resets Jul 27 at 5am (Asia/Tokyo)   dated, with no year
+# 🔴 The grammar does NOT follow the limit type: a weekly limit was seen in both
+# forms, so branching on "session vs weekly" would be wrong.
+#
+# `now` is a PARAMETER, never read from the clock in here. The thing this feeds
+# fires once every several hours, so a version that consults the real clock is a
+# version nobody can test — and an untested waiter is worse than none.
+
+# _limit_date_kind -> gnu | bsd  (cached; `date -d` is GNU-only)
+_LIMIT_DATE_KIND=""
+_limit_date_kind() {
+  if [ -z "$_LIMIT_DATE_KIND" ]; then
+    if date -d @0 +%s >/dev/null 2>&1; then _LIMIT_DATE_KIND=gnu; else _LIMIT_DATE_KIND=bsd; fi
+  fi
+  printf '%s' "$_LIMIT_DATE_KIND"
+}
+
+# _limit_local <tz> <epoch> <fmt> -> that instant rendered in that zone
+_limit_local() {
+  if [ "$(_limit_date_kind)" = gnu ]; then TZ="$1" date -d "@$2" "+$3" 2>/dev/null
+  else TZ="$1" date -r "$2" "+$3" 2>/dev/null; fi
+}
+
+# _limit_at <tz> <YYYY-MM-DD> <HH:MM> -> epoch, or nothing if that date is not real.
+#
+# The platforms disagree here and only one of them says so: GNU `date -d` rejects
+# 2027-02-29, while BSD `date -j -f` SILENTLY normalises it to 2027-03-01 and
+# exits 0 (probed 2026-08-12). Year inference below tries candidate years, so on
+# macOS a bad candidate would quietly become a real — and wrong — answer. We read
+# the date back out and require it to be the date we asked for; that check costs
+# one fork and makes both platforms behave the same way.
+#
+# Seconds are spelled out for the same family of reason: BSD `date -j -f` fills
+# any field the format does not mention from the CURRENT time, so a '%H:%M'
+# format yields a different epoch every second it is called. Pinning ':00' makes
+# the function deterministic — which is the whole point of taking `now` as an
+# argument in the first place.
+_limit_at() {
+  local tz="$1" d="$2" hm="$3" ep back
+  if [ "$(_limit_date_kind)" = gnu ]; then ep="$(TZ="$tz" date -d "$d $hm:00" +%s 2>/dev/null)"
+  else ep="$(TZ="$tz" date -j -f '%Y-%m-%d %H:%M:%S' "$d $hm:00" +%s 2>/dev/null)"; fi
+  [ -n "$ep" ] || return 1
+  back="$(_limit_local "$tz" "$ep" '%Y-%m-%d')"
+  [ "$back" = "$d" ] || return 1
+  printf '%s' "$ep"
+}
+
+# _limit_shift_day <tz> <YYYY-MM-DD> <+n> -> YYYY-MM-DD
+_limit_shift_day() {
+  if [ "$(_limit_date_kind)" = gnu ]; then TZ="$1" date -d "$2 + $3 day" '+%Y-%m-%d' 2>/dev/null
+  else TZ="$1" date -j -v"+${3}d" -f '%Y-%m-%d' "$2" '+%Y-%m-%d' 2>/dev/null; fi
+}
+
+# _limit_month_num <Jan..Dec> -> 01..12 (empty if not a month)
+_limit_month_num() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    jan) printf '01' ;; feb) printf '02' ;; mar) printf '03' ;; apr) printf '04' ;;
+    may) printf '05' ;; jun) printf '06' ;; jul) printf '07' ;; aug) printf '08' ;;
+    sep) printf '09' ;; oct) printf '10' ;; nov) printf '11' ;; dec) printf '12' ;;
+  esac
+}
+
+# limit_reset_epoch <phrase> <now_epoch> -> 0 + echo the epoch of the reset, or
+# 1 and NOTHING when the phrase carries no reset this function understands.
+#
+# Failing loudly matters: a caller that gets a silent 0 would schedule a wake-up
+# for 1970 and fire immediately. There is no fallback guess here on purpose — an
+# unparsed phrase means "don't schedule anything", which is the safe answer.
+limit_reset_epoch() {
+  local phrase="$1" now="$2"
+  [ -n "$phrase" ] && [ -n "$now" ] || return 1
+
+  # The zone is written in the phrase and is authoritative. Reading $TZ instead
+  # would agree with it on the maintainer's machine and disagree on a traveller's.
+  local tz
+  tz="$(printf '%s' "$phrase" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_+-]+|UTC|GMT)\).*/\1/p')"
+  [ -n "$tz" ] || return 1
+
+  local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})[[:space:]]+at[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
+  local re_plain='[Rr]esets[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
+
+  local mon="" day="" hr="" min="" mer=""
+  if [[ "$phrase" =~ $re_dated ]]; then
+    mon="${BASH_REMATCH[1]}"; day="${BASH_REMATCH[2]}"
+    hr="${BASH_REMATCH[3]}";  min="${BASH_REMATCH[5]}"; mer="${BASH_REMATCH[6]}"
+  elif [[ "$phrase" =~ $re_plain ]]; then
+    hr="${BASH_REMATCH[1]}";  min="${BASH_REMATCH[3]}"; mer="${BASH_REMATCH[4]}"
+  else
+    return 1
+  fi
+  [ -n "$hr" ] || return 1
+  [ -n "$min" ] || min="00"
+
+  # 12-hour -> 24-hour. 12am is 00, 12pm is 12; the modulo does both.
+  local h24=$(( 10#$hr % 12 ))
+  case "$mer" in pm|PM) h24=$(( h24 + 12 )) ;; esac
+  [ "$h24" -ge 0 ] && [ "$h24" -le 23 ] || return 1
+  local hm; hm="$(printf '%02d:%02d' "$h24" "$((10#$min))")"
+
+  local today cand
+  today="$(_limit_local "$tz" "$now" '%Y-%m-%d')"
+  [ -n "$today" ] || return 1
+
+  if [ -n "$mon" ]; then
+    # Dated, no year. Try this year, then next, then last, and take the first
+    # candidate that is not already well in the past — the same rule a human
+    # applies reading "Jul 27" on a December screen.
+    local mnum yr y d0
+    mnum="$(_limit_month_num "$mon")"; [ -n "$mnum" ] || return 1
+    yr="$(_limit_local "$tz" "$now" '%Y')"
+    for y in "$yr" "$((yr + 1))" "$((yr - 1))"; do
+      d0="$(printf '%04d-%s-%02d' "$y" "$mnum" "$((10#$day))")"
+      cand="$(_limit_at "$tz" "$d0" "$hm")" || continue
+      [ "$cand" -ge "$((now - 86400))" ] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+  fi
+
+  # Undated: the next occurrence of that wall-clock time. Adding 86400 would be
+  # wrong across a DST boundary, so we ask the calendar for tomorrow's date and
+  # resolve the wall-clock time on THAT day instead.
+  cand="$(_limit_at "$tz" "$today" "$hm")" || return 1
+  if [ "$cand" -le "$now" ]; then
+    local tmr
+    tmr="$(_limit_shift_day "$tz" "$today" 1)" || return 1
+    [ -n "$tmr" ] || return 1
+    cand="$(_limit_at "$tz" "$tmr" "$hm")" || return 1
+  fi
+  printf '%s' "$cand"
+  return 0
+}

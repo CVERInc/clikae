@@ -71,7 +71,32 @@ git add Formula/clikae.rb && git commit -m "clikae 0.6.1"
 git push origin main                     # PUSH (publishes to the tap)
 
 # 4. Verify the published tap (see "Verify ... end-to-end" block above, with v0.6.1).
+
+# --- back in ~/Developer/clikae ---
+# 5. Publish the GitHub Release (minor versions; see below for when to skip).
+gh release create v0.6.1 --title "clikae v0.6.1 — <the headline>" --notes-file <notes.md>
+gh release view v0.6.1                     # confirm it is marked Latest
+curl -sS https://github.com/CVERInc/clikae/releases/tag/v0.6.1 | grep -c "<a phrase from the notes>"
 ```
+
+## The GitHub Release (step 5)
+
+This step lived only in the published releases, not in this file — so v0.17.0
+shipped without one until someone noticed. The convention, read off the twenty
+releases that already exist rather than invented here:
+
+- **Minor versions get a release; patch versions don't.** v0.16.1 has none and
+  that was deliberate; v0.16.0, v0.15.x, v0.13.0 … all do.
+- **Title**: `clikae vX.Y.Z — <the one thing this release is>`, lowercase after
+  the dash, no marketing. It is the line a stranger reads in the release list.
+- **Body**: what a user will now be able to do, then what would have been wrong
+  if assumed, with the receipts (numbers, not adjectives). `git log vPREV..vNEW`
+  is the raw material; the CHANGELOG entry is a starting draft, not the notes —
+  the CHANGELOG is per-change, the release notes are per-story.
+- **Read an existing one before writing a new one** (`gh release view v0.16.0`).
+  The convention lives in those, not in this paragraph.
+- Verify from the **public** view (`curl` the tag page and grep a phrase), not
+  from `gh`'s success message.
 
 ## Notes / gotchas
 
