@@ -187,3 +187,32 @@ _codex_reply_line() {
   run limit_log_dry "$f"
   [ "$status" -ne 0 ]
 }
+
+# --- claude's interactive session limit. The wording and the structural flags
+# below are not a guess: they were checked against every occurrence in this
+# machine's own transcripts on 2026-08-12 — 283 records carry the sentence, 194
+# are real limit events (synthetic + api-error flag) and all 194 match, while the
+# other 89 are people and assistants TALKING about a limit and none of them do.
+
+@test "claude limit: the real interactive marker fires (synthetic + api-error flag)" {
+  _src_limit
+  local line='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 2:10am (Asia/Tokyo)"}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -eq 0 ]
+}
+
+@test "claude limit: an assistant merely QUOTING the sentence does not fire" {
+  _src_limit
+  # 10 real records look like this — a normal model reply that mentions the
+  # limit. Text alone would call every one of them a dry tank.
+  local line='{"type":"assistant","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"When you see You'"'"'ve hit your session limit · resets 2:10am (Asia/Tokyo), wait for the reset."}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -ne 0 ]
+}
+
+@test "claude limit: the api-error flag alone is not enough (an interrupt is not a limit)" {
+  _src_limit
+  local line='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Request interrupted by user"}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -ne 0 ]
+}

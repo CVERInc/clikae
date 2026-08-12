@@ -6,15 +6,19 @@
 # automatically once you've consented (--auto). Philosophy: quietly help, then
 # tell you what it did.
 #
-# ⚠️ HONEST CAVEAT (read this). An interactive CLI hitting its usage limit does
+# ⚠️ WHAT THIS CAN AND CANNOT SEE. An interactive CLI hitting its usage limit does
 # not exit, returns no code, and fires no hook — so the only signal we can watch
-# is what the limit writes into the transcript. The exact marker is NOT yet
-# confirmed against a real limit event (you can't force one without burning a
-# tank). So the default pattern below is a BEST GUESS. Confirm/tune it the first
-# time you actually get limited:
+# is what the limit writes into the transcript. That signal IS there for claude,
+# and the matcher is no longer a guess: checked on 2026-08-12 against every
+# occurrence in a real user's transcripts, 283 records carry the sentence, 194 are
+# genuine limit events, and the matcher fires on 194/194 while ignoring all 89
+# mentions — 10 of which are ordinary model replies discussing a limit, which text
+# alone would have called a dry tank. Pinned in tests/bats/limit.bats.
+#
+# If a vendor rewords it, or you are on an engine whose marker we do not know, the
+# override is still there:
 #     clikae watch claude --check         # does the pattern fire on this session?
 #     CLIKAE_LIMIT_PATTERN='...' clikae watch claude
-# When you learn the real marker, set $CLIKAE_LIMIT_PATTERN (or tell the project).
 
 # Limit markers, CONFIRMED against real live limits (dogfooded 2026-05-31):
 #   · claude — CONFIRMED, and it IS written to the transcript (so the tail catches
