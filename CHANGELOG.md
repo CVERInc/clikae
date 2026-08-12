@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-08-12
+
+### Fixed
+
+- **A reset time inside a DST gap now resolves the same on Linux and macOS.**
+  A wall-clock time the spring-forward deletes (02:30 on the changeover day) has
+  no correct answer, and the platforms picked different wrong ones on their own —
+  BSD returned the instant an hour later, GNU refused. On Linux that meant no
+  waiter was scheduled at all for such a phrase. Both now agree on the first
+  instant after the time the vendor named, on the day they named. The ambiguous
+  autumn hour, which exists twice, is deliberately left alone — nudging it would
+  resume an hour late every November.
+
 ## [0.18.0] — 2026-08-12
 
 ### Added
