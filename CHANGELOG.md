@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-12
+
+### Added
+
+- **Your session outlives the terminal.** A bare `clikae <engine> <tank>` now runs
+  the engine inside a tmux session named for its tank, so closing the window — or
+  an ssh connection dropping on the way home — leaves the work running. Come back
+  with the same command from anywhere and you land back in the same conversation,
+  at whatever size the screen in front of you happens to be. Verified across two
+  real machines: a tablet attaches at 90x28, the desktop joins at 200x50, both
+  stay live, and the engine is started exactly once.
+
+  It degrades instead of breaking. No tmux installed, no terminal (a pipe, CI), or
+  a `TERM` tmux cannot draw on, and clikae runs the engine directly — same command,
+  same result, no persistence. One shape to know: `ssh yourmac 'clikae claude work'`
+  is a *command* handed to ssh, which gets a terminal on stdin but a pipe on
+  stdout, so it takes the direct path. Log in first, then type the command.
+
+- **`clikae burn agy … -- <flags>` reaches agy instead of being swallowed.** The
+  trailing argv was parsed and then dropped. agy has no adapter for clikae to
+  compose flags from, but it can stop eating the ones you typed —
+  `-- --dangerously-skip-permissions` (agy's print mode auto-denies file tools) and
+  `-- -c` (continue the previous conversation) are the two that turn a single shot
+  into a working headless loop.
+
+### Fixed
+
+- **The board no longer paints its logo over the session list.** The watermark was
+  pinned bottom-right and gated on the terminal being big enough, which stopped
+  being the right question once the resume section made the board's own content
+  reach that corner. The two overwrote each other mid-line. The welcome screen
+  keeps the logo, where nothing can collide with it.
+
+- **An agy tank is no longer reported dry because another agy session hit a limit.**
+  `~/.gemini/antigravity-cli/cli.log` is a symlink every agy process repoints at its
+  own file, so reading it after a run could pick up an interactive session's quota
+  event. Each run now asks for its own log with `--log-file`. Measured on a tank
+  with 74% of its weekly limit left: the same request came back "ran dry" once and
+  completed twice.
+
+- **A `RESOURCE_EXHAUSTED` line from a background cache refresh is not a spent
+  tank.** agy's log carries three different sentences with that error class and
+  only two of them mean the account is out; matching the class alone sent burn off
+  to reroute a tank that had fuel.
+
+- **`watch` stops calling its claude limit marker a guess.** The file told users
+  the marker was unconfirmed and the pattern a best guess to tune, while its own
+  comments twenty lines down said CONFIRMED. Settled against every occurrence in a
+  real user's transcripts: 194 genuine limit events all match, and all 89 mentions
+  — including ordinary model replies discussing a limit — correctly do not.
+
 ## [0.16.1] — 2026-08-02
 
 ### Fixed
