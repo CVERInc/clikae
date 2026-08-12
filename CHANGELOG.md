@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A limit noticed on the way out can also just wait.** `clikae wake` was only
+  offered by `clikae watch`, which meant it never came up unless you happened to
+  be running a watcher. The supervised launch — clikae staying as the parent of a
+  session it started — now offers it too, alongside the carry rather than instead
+  of it.
+
+  In the maintainer's words, which is the right framing: *staying put is staying
+  put, and being asked where to go next belongs to leaving.* They are not
+  alternatives and nobody has to choose between them.
+
+  It stays silent when there is nothing to attach to. Chiefly: that path also
+  runs after the engine has EXITED, and an exited engine took its conversation
+  with it — there is no session left to resume. A detach leaves the session
+  alive, and that is the case this is for.
+
 ## [0.19.0] — 2026-08-12
 
 ### Added

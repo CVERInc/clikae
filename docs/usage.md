@@ -374,8 +374,11 @@ clikae wake on | off        # change it
 clikae wake claude work     # attach a waiter to that tank right now
 ```
 
-When `clikae watch` sees a limit and that tank has a live session, it offers this
-once and remembers your answer. A countdown opens as a `wake` window inside the
+When a limit is noticed and that tank still has a live session, clikae offers this
+once and remembers your answer — both from `clikae watch` and from a supervised
+launch (a session clikae itself started). It is offered *alongside* the carry, not
+instead of it: staying put is staying put, and being asked where to go next
+belongs to leaving. A countdown opens as a `wake` window inside the
 session, so you can watch it, or Ctrl-C it, or ignore it.
 
 **It is not a re-run.** Nothing is replayed and no prompt is dispatched a second

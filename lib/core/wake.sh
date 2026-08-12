@@ -237,3 +237,50 @@ wake_attach() {
     "'$bin' wake --sit '$session' '$reset'" 2>/dev/null || return 1
   return 0
 }
+
+# wake_offer <engine> <tank> <reset-phrase> -> attach a waiter, asking once the
+# first time. Shared by the two places a limit is noticed: `clikae watch` tailing
+# a transcript, and the supervised launch noticing on the way out.
+#
+# The user's own framing, and it is the right one: staying put is staying put,
+# and being asked where to go next belongs to LEAVING. So this is offered
+# alongside the carry rather than instead of it — they are not alternatives, and
+# nobody has to choose.
+#
+# Silent when there is nothing to attach to. Chiefly: the supervised path runs
+# after the engine has exited, and an exited engine took its session with it —
+# there is no conversation left to resume, so there is nothing to wait for. A
+# detach leaves the session alive, and that is the case this is for.
+wake_offer() {
+  local cli="$1" profile="$2" reset="$3" epoch now
+  # Two `local`s on purpose: a variable assigned earlier in the SAME `local` is
+  # not yet visible, so folding this in would build "ck--" and then quietly find
+  # no session — a waiter that never attaches and never says why.
+  local session="ck-$cli-$profile"
+
+  command -v tmux >/dev/null 2>&1 || return 0
+  tmux has-session -t "$session" 2>/dev/null || return 0
+
+  [ -n "$reset" ] || return 0
+  now="$(date +%s)"
+  epoch="$(limit_reset_epoch "$reset" "$now")" || return 0
+
+  case "$(wake_pref_get)" in
+    off) return 0 ;;
+    unset)
+      if confirm "Resume $cli/$profile automatically when the limit lifts ($reset)?"; then
+        wake_pref_set on
+      else
+        wake_pref_set off
+        log_dim "Won't ask again. Turn it on later with: clikae wake on"
+        return 0
+      fi
+      ;;
+  esac
+
+  if wake_attach "$session" "$epoch"; then
+    log_done "Will resume $cli/$profile — $reset (+$((WAKE_BUFFER_SECONDS))s)"
+    log_dim "  Watch or cancel it in that session's 'wake' window."
+  fi
+  return 0
+}

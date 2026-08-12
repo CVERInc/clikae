@@ -11,6 +11,14 @@
 load '../helpers'
 
 _src_wake() {
+  # wake_offer reaches for limit_reset_epoch and the log helpers, exactly as
+  # bin/clikae has them loaded by then. Sourcing wake.sh alone passed the pure
+  # tmux tests and failed the moment a test touched wake_offer — a fixture
+  # thinner than the thing it stands in for.
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
 }
@@ -111,4 +119,57 @@ teardown() {
   [ "$WAKE_BUFFER_SECONDS" -le 300 ]
   [ "$WAKE_RETRY_MAX" -ge 1 ]
   [ "$WAKE_RETRY_MAX" -le 5 ]
+}
+
+@test "offer: with no live session there is nothing to wait for, and it says nothing" {
+  # The supervised path runs after the engine has EXITED, which took its session
+  # with it. A waiter there would be counting down to type into nothing.
+  _src_wake
+  wake_pref_set on
+  run wake_offer claude no-such-tank "resets 3:50am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "offer: a dry tank with no time in the vendor's sentence schedules nothing" {
+  _src_wake
+  wake_pref_set on
+  run wake_offer claude no-such-tank ""
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "offer: preference off means it never attaches, session or not" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_pref_set off
+  tmux new-session -d -s "ck-claude-$(_sess)" 'sleep 20'
+  run wake_offer claude "$(_sess)" "resets 3:50am (Asia/Tokyo)"
+  tmux kill-session -t "ck-claude-$(_sess)" 2>/dev/null || true
+  [ -z "$output" ]
+}
+
+@test "offer: on a live session with a real phrase, the waiter is attached" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_pref_set on
+  local s="ck-claude-$(_sess)"
+  tmux new-session -d -s "$s" 'sleep 20'
+  CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_offer claude "$(_sess)" "resets 3:50am (Asia/Tokyo)" >/dev/null
+  run bash -c "tmux list-windows -t '$s' -F '#{window_name}' | grep -c '^wake'"
+  tmux kill-session -t "$s" 2>/dev/null || true
+  [ "$output" = "1" ]
+}
+
+@test "offer: with nothing to attach to, you are not asked a pointless question" {
+  # The reason the session check comes FIRST. Removing it leaves every outcome
+  # test green — wake_attach refuses anyway — while quietly introducing a prompt
+  # about resuming a session that does not exist. `confirm` is stubbed to fail
+  # loudly if it is ever reached.
+  _src_wake
+  rm -f "$CLIKAE_HOME/wake-on-reset"          # preference unset -> would ask
+  confirm() { echo "ASKED"; return 0; }
+  run wake_offer claude no-such-tank "resets 3:50am (Asia/Tokyo)"
+  [[ "$output" != *ASKED* ]] || false
+  [ "$(wake_pref_get)" = "unset" ]            # and nothing was recorded
 }

@@ -247,7 +247,15 @@ _switch_supervise() {
   # self-clearing on the next successful turn), so we deliberately do NOT also
   # write dry_store here — a store marker would mask a real recovery. dry_store
   # stays for what a transcript can't cover (a headless codex exec, via burn).
-  limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || return 0
+  local reset=""
+  reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 0
+
+  # Offered before the carry, because the two answer different questions and the
+  # user only ever gets asked the second one: staying put is staying put, being
+  # asked where to go next belongs to leaving. Silent unless the session is still
+  # alive — this path also runs after the engine EXITED, and an exited engine
+  # took its conversation with it, so there is nothing left to resume.
+  wake_offer "$engine" "$tank" "$reset"
 
   local _next ne nt
   _next="$(next_tank "$engine" "$tank")"
