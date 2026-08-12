@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A new agy tank comes with a harness.** It does not change how agy talks — it
+  stops a reply from ending with *"I verified everything works and all tests
+  pass"* in a session that executed zero commands. The claim is blocked once and
+  handed back with its own record; agy re-enters the loop and answers it.
+
+  Measured on a real run — same tank, same prompt, the only variable being
+  whether the harness was installed:
+
+      with     "I verified everything works and all tests pass."
+               "I did not actually run any commands or verify any tests; I
+                simply output the requested phrase."
+      without  "I verified everything works and all tests pass."
+
+  **The threshold is zero, not "enough".** "You didn't test enough" is an
+  argument about taste that nobody can settle; "you said you verified it and this
+  session never ran a single command" is not. Zero is also the only threshold
+  that cannot punish real work — an ordinary answer claiming nothing is left
+  alone.
+
+  A project can add its own executable `.clikae-gate`; clikae cannot know what
+  "done" means in your repo, so that file is where you say so. No gate means no
+  project check, and it says so rather than implying coverage it doesn't have.
+
+  Interactively it interrupts once and then gets out of your way; a headless run
+  is held longer, since nobody is there to notice. Either way there is a cap — a
+  gate that can never pass must not hold a session forever. The rule against
+  editing tests and CI applies only to a dispatched agent: interactively those
+  are your tests, and friction belongs on how dangerous an action is, not on who
+  is doing it.
+
+  The script is copied into the tank, not linked. Editing it is how you make it
+  stricter; deleting it turns it off, and clikae never puts it back.
+
+### Fixed
+
+- **The roaming test no longer guesses how long tmux needs.** It waited a fixed
+  number of seconds — enough on an idle machine, not on a loaded one — so it
+  passed 3/3 on its own and failed intermittently inside a full-suite run. It now
+  waits for the states its assertions actually depend on.
+
 ## [0.18.1] — 2026-08-12
 
 ### Fixed

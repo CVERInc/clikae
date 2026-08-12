@@ -71,6 +71,8 @@ Meta:
 
 Antigravity (agy) is global single-account, but folds into the same verbs:
   clikae init agy <tank> · clikae agy <tank> · clikae remove agy <tank>
+  A new agy tank ships with a harness: a claim of verified work needs a command
+  to have run. It lives in the tank's config/ — edit it, or delete it to turn it off.
   clikae agy --release             restore a normal ~/.gemini, keep your tanks
   clikae agy <tank> -- -p "…"      one-shot dispatch: agy can't `burn`, but -p sends a single prompt
 

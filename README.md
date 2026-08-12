@@ -104,6 +104,14 @@ sends one keystroke when the limit lifts, so you wake up to work that continued
 instead of work that stopped. Nothing is re-run — no prompt is replayed, so
 nothing that already happened happens twice. It asks you once, the first time.
 
+**Your subordinate stops grading its own homework.** A new agy tank comes with a
+small restraint: a reply can stay as confident as it likes, but it cannot end
+with *"I verified everything works"* in a session that ran zero commands. The
+claim gets handed back with the contradiction attached, and the next reply says
+what it actually did. The threshold is zero, not "enough" — the second is an
+argument about taste, the first is not. Your project can add its own gate; delete
+one file and it's off.
+
 **Some sessions shouldn't be remembered.** Get a cold read on your own plan
 from a session with no memory of you: `clikae claude work --ephemeral`. The
 reviewer doesn't know what you believe, and the tank's long-term memory never

@@ -54,13 +54,40 @@ def width():
 # then the first width is whatever that run used, not ours.
 tmux("kill-session", "-t", "ck-codex-roam")
 
-attach(100, 30); time.sleep(4)
+def wait_for(cond, secs=20):
+    """Wait for the thing, do not guess how long it takes.
+
+    These used to be fixed sleeps. They were long enough on an idle machine and
+    not on a loaded one, so this test failed intermittently in a full-suite run
+    while passing 3/3 on its own — the classic shape of a timing guess rather
+    than a defect. The conditions below are the states the assertions actually
+    depend on."""
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.25)
+    return False
+
+runs = os.environ.get("STUB_RUNS", "")
+
+def started(n):
+    try:
+        with open(runs) as fh:
+            return fh.read().count("ENGINE_STARTED") >= n
+    except OSError:
+        return False
+
+attach(100, 30)
+wait_for(lambda: "ck-codex-roam" in tmux("ls") and started(1))
 print("FIRST_WIDTH", width())
 
-tmux("detach-client", "-s", "ck-codex-roam"); time.sleep(2)
+tmux("detach-client", "-s", "ck-codex-roam")
+wait_for(lambda: "(attached)" not in tmux("ls"))
 print("SURVIVED_DETACH", "yes" if "ck-codex-roam" in tmux("ls") else "no")
 
-attach(60, 20); time.sleep(4)
+attach(60, 20)
+wait_for(lambda: width() == "60")
 print("SECOND_WIDTH", width())
 
 tmux("kill-session", "-t", "ck-codex-roam")

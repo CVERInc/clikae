@@ -1,0 +1,23 @@
+{
+  "clikae-harness": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "__CK_HARNESS_SH__ Stop",
+        "timeout": 120
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CK_HARNESS_SH__ PreToolUse",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

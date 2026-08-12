@@ -265,6 +265,13 @@ _agy_create_tank() {
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
   log_done "Created agy tank: $name"
+  # The tank comes with the harness on. It does not change how agy talks — it
+  # stops a reply from ending with "verified" in a session that ran nothing.
+  # Yours to edit, and deleting either file turns it off with no side effects.
+  if agy_harness_install "$slot"; then
+    log_dim "Harness on: a claim of verified work needs a command to have run."
+    log_dim "  It lives in $slot/config/ — edit it, or delete it to turn it off."
+  fi
   log_dim "Switch to it:  clikae agy $name   (then run agy and log in)"
 }
 
@@ -318,6 +325,16 @@ _agy_switch() {
     log_dim "no terminal here — switched only. To run it: clikae agy $name (from a real terminal), or pass a headless prompt: clikae agy $name -- -p \"…\""
     return 0
   fi
+  # Tell the harness which of the two situations it is in. Dispatched means
+  # nobody is reading the reply, so a claim gets blocked until it holds up;
+  # interactive means you are, so it interrupts once and then gets out of the
+  # way. agy's print mode IS the headless mode, so that flag is the signal
+  # rather than a guess about intent.
+  local a is_dispatch=0
+  for a in "$@"; do
+    case "$a" in -p|--prompt) is_dispatch=1; break ;; esac
+  done
+  [ "$is_dispatch" = "1" ] && export CLIKAE_DISPATCH=1
   exec agy "$@"
 }
 
