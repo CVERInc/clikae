@@ -260,10 +260,62 @@ EOF
     limit_line_is_real "$cli" "$line" "$pattern" "$pattern_explicit" || continue
     echo
     log_warn "Looks like $cli/$profile hit its limit."
+    # Offered BEFORE the handoff, because the two are not alternatives: carrying
+    # on elsewhere now and having this tank pick itself back up later are both
+    # things you want. Silently does nothing when there is no tmux session to
+    # type into — which is the honest answer, not a failure worth a message.
+    _watch_offer_wake "$cli" "$profile" "$line"
     _watch_do_handoff "$cli" "$profile" "$target" "$auto"
     # _watch_do_handoff execs on success; if it returns, the user declined.
     log_dim "Staying on $cli/$profile. Still watching… (Ctrl-C to stop)"
   done < <(tail -n0 -f "$transcript")
+}
+
+# Attach a waiter that types "go" into this tank's own tmux session when the
+# limit lifts — the thing a human does by hand at 3am, minus the alarm clock.
+#
+# On by default and asked ONCE (decided 2026-08-12). Both halves are load-bearing:
+# typing into a live session is a power, and clikae asks before taking one; but
+# the person this exists for already sends that keystroke manually, so making
+# them opt in would be asking permission for something they are already doing.
+# A prompt on every limit would be answered without reading inside a week.
+#
+# Every path out of here is silent-and-harmless. No session, no tmux, no time in
+# the vendor's sentence -> nothing is scheduled, because a waiter with a guessed
+# time is worse than none: it fires at the wrong moment into a live conversation.
+_watch_offer_wake() {
+  local cli="$1" profile="$2" line="$3" reset epoch now
+  # Two `local`s on purpose: a variable assigned earlier in the SAME `local` is
+  # not yet visible, so folding this in would build "ck--" and then quietly find
+  # no session — a waiter that never attaches and never says why.
+  local session="ck-$cli-$profile"
+
+  command -v tmux >/dev/null 2>&1 || return 0
+  tmux has-session -t "$session" 2>/dev/null || return 0
+
+  reset="$(limit_reset_phrase "$line")" || return 0
+  [ -n "$reset" ] || return 0
+  now="$(date +%s)"
+  epoch="$(limit_reset_epoch "$reset" "$now")" || return 0
+
+  case "$(wake_pref_get)" in
+    off) return 0 ;;
+    unset)
+      if confirm "Resume $cli/$profile automatically when the limit lifts ($reset)?"; then
+        wake_pref_set on
+      else
+        wake_pref_set off
+        log_dim "Won't ask again. Turn it on later with: clikae wake on"
+        return 0
+      fi
+      ;;
+  esac
+
+  if wake_attach "$session" "$epoch"; then
+    log_done "Will resume $cli/$profile — $reset (+$((WAKE_BUFFER_SECONDS))s)"
+    log_dim "  Watch or cancel it in that session's 'wake' window."
+  fi
+  return 0
 }
 
 # Decide + perform the handoff. Execs `clikae handoff` on go; returns if declined.

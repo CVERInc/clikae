@@ -602,3 +602,12 @@ limit_reset_epoch() {
   printf '%s' "$cand"
   return 0
 }
+
+# limit_reset_phrase <line> -> the vendor's "resets …" phrase carried by a
+# transcript line, or nothing. The counterpart to limit_reset_epoch: that one
+# turns a phrase into an instant, this one finds the phrase in the wild. Split
+# so the parser can be tested on phrases without a transcript in sight.
+limit_reset_phrase() {
+  printf '%s' "$1" | grep -oaiE '[Rr]esets [^"\\]*' | head -n 1 \
+    | sed -E 's/[[:space:]]+$//' || true
+}

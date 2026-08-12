@@ -66,6 +66,8 @@ source "$CLIKAE_LIB/core/history.sh"
 source "$CLIKAE_LIB/core/autonomy.sh"
 # shellcheck source=../lib/core/resume_settings.sh
 source "$CLIKAE_LIB/core/resume_settings.sh"
+# shellcheck source=../lib/core/wake.sh
+source "$CLIKAE_LIB/core/wake.sh"
 # shellcheck source=../lib/core/session_carry.sh
 source "$CLIKAE_LIB/core/session_carry.sh"
 # shellcheck source=../lib/core/proc.sh
@@ -87,7 +89,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|conduct|to|continue|resume|clean|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }
