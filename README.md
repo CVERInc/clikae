@@ -292,6 +292,14 @@ instead of `rm`. New engines keep joining the board. A macOS menu bar app
 (`gui/ClikaeMenuBar`) exists as a build-verified skeleton; it ships when it
 earns it.
 
+And then the sessions stopped ending. Tanks run inside tmux now, so the thing
+that used to end a conversation — closing the window, an ssh link dropping —
+doesn't. It turned the switcher into something you can walk away from and come
+back to on a different machine, which is a different product than the one that
+started here. It also moved the honest question: not "does it work on my
+laptop" but "does it work on the tablet on the sofa *and* the desktop upstairs,
+at the same time, on the same session".
+
 Version by version: **[Releases](https://github.com/CVERInc/clikae/releases)**
 · **[CHANGELOG.md](CHANGELOG.md)**.
 
@@ -299,7 +307,7 @@ Version by version: **[Releases](https://github.com/CVERInc/clikae/releases)**
 
 Pure bash, no runtime dependencies, held to a deliberate bar:
 
-- **`bats-core` suite (580+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
+- **`bats-core` suite (640+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
 - **A real-pty smoke leg** that drives the board, the resume picker and the prompt
   flows on an actual terminal, in a throwaway `$HOME` — because shellcheck reads
@@ -307,7 +315,7 @@ Pure bash, no runtime dependencies, held to a deliberate bar:
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
 
-Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. The one macOS-only piece is `clikae app` (the double-clickable `.app` launcher) — everything else is plain bash. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
+Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. Roaming is hand-verified between two physical machines rather than simulated — the same tank attached from an e-ink tablet at 90x28 and a Mac at 200x50, both live at once, engine started exactly once. The one macOS-only piece is `clikae app` (the double-clickable `.app` launcher) — everything else is plain bash. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
 
 ## Contributing
 

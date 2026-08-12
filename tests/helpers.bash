@@ -15,6 +15,16 @@ setup() {
   export CLIKAE_HOME="$TEST_HOME/.clikae"
   export SHELL="/bin/zsh"
   export NO_COLOR=1
+  # Host-safety: git exports these into every hook it runs, and $GIT_DIR is
+  # RELATIVE (".git"). A test that cd's into its own throwaway repo and calls
+  # `git config` would therefore write to whichever repo invoked the hook — the
+  # real one. That is not hypothetical: running this suite from a pre-push hook
+  # wrote `user.name = Wrong Person` into the maintainer's clikae config on
+  # 2026-07-12 (from git_id.bats' deliberately-wrong fixture) and every commit
+  # for the next month carried it. The hook unsets these too; both, because
+  # either one alone leaves the suite unsafe to run from the other's context.
+  unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_QUARANTINE_PATH \
+        GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
   # Host-independence: agy's "is a session running?" guard uses `pgrep -x agy`,
   # which would otherwise see a REAL Antigravity running on the dev machine and
   # make agy tests fail nondeterministically. Stub a no-match pgrep on PATH (no
