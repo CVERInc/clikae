@@ -449,8 +449,11 @@ you:</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-sh"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # what the setting is</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> on</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72"> |</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657"> off</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">        # change it</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # attach a waiter to that tank right now</span></span></code></pre>
-<p>When <code>clikae watch</code> sees a limit and that tank has a live session, it offers this
-once and remembers your answer. A countdown opens as a <code>wake</code> window inside the
+<p>When a limit is noticed and that tank still has a live session, clikae offers this
+once and remembers your answer — both from <code>clikae watch</code> and from a supervised
+launch (a session clikae itself started). It is offered <em>alongside</em> the carry, not
+instead of it: staying put is staying put, and being asked where to go next
+belongs to leaving. A countdown opens as a <code>wake</code> window inside the
 session, so you can watch it, or Ctrl-C it, or ignore it.</p>
 <p><strong>It is not a re-run.</strong> Nothing is replayed and no prompt is dispatched a second
 time — it is one keystroke into a conversation that never ended. If your task had

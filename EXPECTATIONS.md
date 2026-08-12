@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/e2ebe7ee5983eb829eb3b797d0306de8e159b40f/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/21a00329b3b33148e90e60c01ed4bb620422117c/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
