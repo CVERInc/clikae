@@ -196,3 +196,66 @@ _run_stop() {  # stdin: payload
   [ "$status" -eq 1 ]
   grep -q 'their-hook' "$tank/config/hooks.json"
 }
+
+@test "seed: a tank made before the harness existed gets it on first switch" {
+  _src_harness_lib
+  local tank="$BATS_TEST_TMPDIR/old-tank"
+  mkdir -p "$tank/config"                  # exists, but no harness
+  run agy_harness_seed "$tank" old-tank
+  [ "$status" -eq 0 ]
+  [ -x "$tank/config/clikae-harness.sh" ]
+}
+
+@test "seed: deleting the harness means deleting it — clikae never puts it back" {
+  # The whole reason seeding is remembered OUTSIDE the tank. "Every tank has it"
+  # and "removing it means removing it" are both promises, and a plain
+  # install-if-missing would quietly break the second one on the next switch.
+  _src_harness_lib
+  local tank="$BATS_TEST_TMPDIR/stripped"
+  mkdir -p "$tank"
+  agy_harness_seed "$tank" stripped
+  rm -f "$tank/config/clikae-harness.sh" "$tank/config/hooks.json"
+  run agy_harness_seed "$tank" stripped
+  [ "$status" -ne 0 ]
+  [ ! -e "$tank/config/clikae-harness.sh" ]
+}
+
+@test "seed: the mark survives the tank being wiped" {
+  # It lives in CLIKAE_HOME on purpose: a mark stored inside the tank would be
+  # deleted by the very act it exists to remember.
+  _src_harness_lib
+  local tank="$BATS_TEST_TMPDIR/wiped"
+  mkdir -p "$tank"
+  agy_harness_seed "$tank" wiped
+  rm -rf "$tank/config"
+  run agy_harness_seed "$tank" wiped
+  [ "$status" -ne 0 ]
+  [ ! -d "$tank/config" ]
+}
+
+@test "seed: an unseeded tank whose config holds someone else's hooks is not clobbered" {
+  _src_harness_lib
+  local tank="$BATS_TEST_TMPDIR/theirs"
+  mkdir -p "$tank/config"
+  printf '{"their-hook":{}}\n' > "$tank/config/hooks.json"
+  run agy_harness_seed "$tank" theirs
+  [ "$status" -ne 0 ]
+  grep -q 'their-hook' "$tank/config/hooks.json"
+  # …and it does not try again on every switch forever.
+  [ -e "$(agy_harness_seed_mark theirs)" ]
+}
+
+@test "harness: stale counters from abandoned conversations are swept" {
+  # A run that ends while still blocked — a timeout, a kill, an agent that
+  # wandered off instead of answering — leaves its counter behind. Three of them
+  # turned up in a real tank inside an hour.
+  local t="$BATS_TEST_TMPDIR/t.jsonl" st="$BATS_TEST_TMPDIR/state"
+  mkdir -p "$st"
+  : > "$st/old-conversation"
+  touch -t "$(date -v-3d '+%Y%m%d%H%M' 2>/dev/null || date -d '3 days ago' '+%Y%m%d%H%M')" "$st/old-conversation"
+  : > "$st/fresh-conversation"
+  _transcript "$t" "I verified everything works." 0
+  run bash -c "printf %s '$(_payload "$t")' | CK_HARNESS_STATE='$st' bash '$(HARNESS)' Stop"
+  [ ! -e "$st/old-conversation" ]
+  [ -e "$st/fresh-conversation" ]
+}

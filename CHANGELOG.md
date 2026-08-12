@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.0] — 2026-08-12
 
 ### Added
 
@@ -42,7 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The script is copied into the tank, not linked. Editing it is how you make it
   stricter; deleting it turns it off, and clikae never puts it back.
 
+  **Every existing tank gets it too, once.** Tanks made before this release are
+  seeded on the next switch. "Every tank has it" and "deleting it means deleting
+  it" are both promises, and install-if-missing cannot hold both — so clikae
+  records that it has seeded a tank, outside the tank, and never looks again.
+
+  **Blocking is not compliance, and that is measured rather than assumed.** Same
+  prompt, two real tanks: one came back and said plainly *"I did not actually run
+  any commands"*; the other was blocked just the same, went off and did something
+  else, and the last line printed was still the original claim. What is
+  guaranteed is that the claim gets challenged, not that the answer is good.
+
 ### Fixed
+
+- **The harness no longer leaves a counter behind for every abandoned run.** A
+  conversation that ends while still blocked — a timeout, a kill, an agent that
+  wandered off — left its counter in the tank's config. Three turned up in a real
+  tank within an hour, in a directory that would grow forever. Counters older
+  than a day are swept.
 
 - **The roaming test no longer guesses how long tmux needs.** It waited a fixed
   number of seconds — enough on an idle machine, not on a loaded one — so it

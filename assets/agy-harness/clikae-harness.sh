@@ -38,6 +38,14 @@
 #                                  unaccompanied, then get out of your way.
 # Either way there is a cap. A gate that can never pass must not be able to hold
 # a session forever.
+#
+# WHAT THIS CANNOT DO, measured rather than assumed. Blocking is not compliance.
+# The same prompt on two real tanks: one came back and said plainly "I did not
+# actually run any commands"; the other was blocked just the same, went off and
+# did something else, and the text printed at the end was still the original
+# claim. The harness guarantees the claim is CHALLENGED, not that the agent
+# answers well — and after the cap the last thing on screen can still be the
+# unsupported sentence. Read the reply, not the fact that a harness exists.
 set -uo pipefail
 
 MODE_HOOK="${1:-Stop}"
@@ -109,6 +117,12 @@ else
   max="${CK_HARNESS_MAX:-1}"
 fi
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+# One counter per conversation, and a conversation that ends while still blocked
+# (a timeout, a kill, an agent that wandered off) leaves its counter behind. Found
+# three of them in a real tank within an hour, which is a directory that grows
+# forever in someone's config. Sweep anything older than a day: a limit that is
+# still being argued about after that is not the same argument.
+find "$STATE_DIR" -type f -mtime +1 -delete 2>/dev/null || true
 count_file="$STATE_DIR/$convo"
 n=0; [ -f "$count_file" ] && n="$(cat "$count_file" 2>/dev/null || printf 0)"
 

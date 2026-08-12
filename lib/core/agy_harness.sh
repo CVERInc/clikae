@@ -59,3 +59,38 @@ agy_harness_install() {
   sed "s|__CK_HARNESS_SH__|$dst_sh|g" "$src_json" > "$dst_json" 2>/dev/null || return 2
   return 0
 }
+
+# agy_harness_seed_mark <tank_name> — where clikae records that it has ALREADY
+# offered this tank the harness. Deliberately in CLIKAE_HOME, not in the tank:
+# the whole point is that it survives someone deleting the harness files.
+agy_harness_seed_mark() { printf '%s\n' "$CLIKAE_HOME/agy-harness-seeded/$1"; }
+
+# agy_harness_seed <tank_dir> <tank_name> -> 0 if it installed something.
+#
+# "Every tank has it" and "deleting it means deleting it" are both true, and a
+# plain "install if missing" cannot hold both — it would resurrect a guard
+# somebody removed on purpose, which is the same class of bug as removing one
+# they wanted. So clikae remembers that it has SEEDED a tank, once, rather than
+# looking at whether the files are there:
+#
+#   never seeded  -> install (this is how tanks made before the feature get it)
+#   seeded before -> hands off, forever, whatever the tank looks like now
+#
+# Silent by design: it runs on the way to launching agy, and a line of output
+# every time you switch tanks would be noise for something that happens once.
+agy_harness_seed() {
+  local dir="$1" name="$2" mark
+  [ -n "$dir" ] && [ -n "$name" ] || return 1
+  mark="$(agy_harness_seed_mark "$name")"
+  [ -e "$mark" ] && return 1
+  mkdir -p "$(dirname "$mark")" 2>/dev/null || true
+  if agy_harness_install "$dir"; then
+    : > "$mark" 2>/dev/null || true
+    return 0
+  fi
+  # Could not install (someone else's hooks.json, or assets missing). Mark it
+  # anyway: retrying on every switch would be a loop that never ends and never
+  # says why.
+  : > "$mark" 2>/dev/null || true
+  return 1
+}

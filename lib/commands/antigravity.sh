@@ -268,7 +268,7 @@ _agy_create_tank() {
   # The tank comes with the harness on. It does not change how agy talks — it
   # stops a reply from ending with "verified" in a session that ran nothing.
   # Yours to edit, and deleting either file turns it off with no side effects.
-  if agy_harness_install "$slot"; then
+  if agy_harness_seed "$slot" "$name"; then
     log_dim "Harness on: a claim of verified work needs a command to have run."
     log_dim "  It lives in $slot/config/ — edit it, or delete it to turn it off."
   fi
@@ -330,6 +330,11 @@ _agy_switch() {
   # interactive means you are, so it interrupts once and then gets out of the
   # way. agy's print mode IS the headless mode, so that flag is the signal
   # rather than a guess about intent.
+  # Tanks made before the harness existed get it here, once. `seed` is what makes
+  # that safe: it goes by "has clikae ever seeded this tank", not by "are the
+  # files there", so a tank you stripped stays stripped.
+  agy_harness_seed "$slots/$name" "$name" >/dev/null 2>&1 || true
+
   local a is_dispatch=0
   for a in "$@"; do
     case "$a" in -p|--prompt) is_dispatch=1; break ;; esac
