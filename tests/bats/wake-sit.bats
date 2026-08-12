@@ -113,7 +113,11 @@ teardown() {
   local e; e="$(( $(date +%s) + 600 ))"
   CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_attach "$(_sess)" "$e"
   CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_attach "$(_sess)" "$e"
-  run bash -c "tmux list-windows -t '$(_sess)' -F '#{window_name}' | grep -cx wake"
+  # `^wake( |$)`, not an exact `wake`: the waiter renames its own window to carry
+  # the countdown (`wake 9m`), and on a fast machine that happens before this
+  # line runs. An exact match passed on macOS and failed on Linux — a race
+  # between two of this feature's own changes, not a second waiter.
+  run bash -c "tmux list-windows -t '$(_sess)' -F '#{window_name}' | grep -cE '^wake( |\$)'"
   [ "$output" = "1" ]
 }
 
@@ -136,4 +140,20 @@ teardown() {
   run wake_enabled
   [ "$status" -ne 0 ]                # and without it, the stored preference rules
   [ "$(wake_pref_get)" = "off" ]     # the override wrote nothing down
+}
+
+@test "attach: a waiter already counting down still blocks a second one" {
+  # The guard reads window names, and the waiter RENAMES its own window to carry
+  # the countdown. An exact `wake` match therefore stopped matching seconds after
+  # the waiter started — and a second limit would have attached a second waiter,
+  # with two of them typing into one pane. CI on Linux won that race; macOS lost
+  # it and stayed green. This test skips the race entirely by starting from the
+  # renamed state.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  tmux new-session -d -s "$(_sess)" 'sleep 30'
+  tmux new-window -d -t "$(_sess)" -n 'wake 13h38m' 'sleep 30'
+  CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_attach "$(_sess)" "$(( $(date +%s) + 600 ))"
+  run bash -c "tmux list-windows -t '$(_sess)' -F '#{window_name}' | grep -cE '^wake( |\$)'"
+  [ "$output" = "1" ]
 }

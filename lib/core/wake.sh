@@ -234,7 +234,13 @@ wake_attach() {
   tmux has-session -t "$session" 2>/dev/null || return 1
   # One waiter per session. A second limit banner while one is already counting
   # down must not stack up two things typing into the same pane.
-  if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null | grep -qx 'wake'; then
+  # Prefix, not an exact name: the waiter renames its own window to carry the
+  # countdown (`wake 9m`), so an exact `wake` stops matching seconds after it
+  # starts. That guard would then let a SECOND waiter attach, and two of them
+  # type into the same pane. Found by CI on Linux, where the rename won the race
+  # that macOS lost — the test that caught it was watching this exact promise.
+  if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+     | grep -qE '^wake( |$)'; then
     return 0
   fi
   tmux new-window -d -t "$session" -n wake \

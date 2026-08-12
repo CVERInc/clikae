@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A waiter already counting down no longer lets a second one attach.** The
+  "one waiter per session" guard matched the window name exactly, and the waiter
+  renames its own window to carry the countdown — so seconds after it started,
+  the guard stopped recognising it. A second limit would then have attached a
+  second waiter, and two of them would type into the same pane. Found by CI on
+  Linux, which won a race macOS had been losing quietly.
+
 - **Resuming a second session on the same tank now opens a second screen.**
   Reported and reproduced 2026-08-13: open `clikae claude work`, then from the
   board resume a DIFFERENT past session on that tank, and both tabs showed the
