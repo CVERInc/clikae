@@ -66,6 +66,8 @@ source "$CLIKAE_LIB/core/history.sh"
 source "$CLIKAE_LIB/core/autonomy.sh"
 # shellcheck source=../lib/core/resume_settings.sh
 source "$CLIKAE_LIB/core/resume_settings.sh"
+# shellcheck source=../lib/core/live.sh
+source "$CLIKAE_LIB/core/live.sh"
 # shellcheck source=../lib/core/agy_harness.sh
 source "$CLIKAE_LIB/core/agy_harness.sh"
 # shellcheck source=../lib/core/wake.sh

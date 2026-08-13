@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The board shows what is running right now.** `clikae` gained a **Live**
+  section at the top, listing this machine's live sessions in the same columns as
+  the rest of the page — and **Enter attaches to one** rather than starting
+  anything.
+
+  Reported by someone who ssh'd into their Mac, ran `clikae`, and could not see
+  the session they had left running. The board could say which accounts they had
+  and what they did yesterday; "what is alive" was a category tmux created and
+  the board never grew. Keying a session on its argv made it sharper still: the
+  Resume row now opens a *second* conversation, so without this section there was
+  no way back into the first one except remembering the tank's name.
+
+  The third column is the session's title, not a status word — `claude/x` does
+  not say which piece of work that is. Selecting a row adds one line beneath it:
+  for a limited tank, the vendor's own sentence verbatim, and clikae's promise
+  only when a waiter is genuinely attached. `resets` is their fact; `resumes` is
+  ours.
+
+  Only this machine's sessions, because tmux is local — stated rather than
+  papered over, since it is the truth about where a session lives. No tmux means
+  no section, not an empty heading.
+
+### Fixed
+
+- **Two tests waited a fixed number of seconds for tmux.** Both passed alone and
+  failed inside a full suite run, which is the shape of a timing guess rather
+  than a defect. One of them was waiting for "nothing in tmux is attached" — a
+  condition that is never true on a machine with a session open, so it burned its
+  whole timeout every run and, under load, outlived the stub engine it was
+  measuring. They wait for the states their assertions depend on now.
+
 ## [0.21.0] — 2026-08-13
 
 ### Added

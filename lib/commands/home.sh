@@ -147,6 +147,60 @@ EOF
       done
 }
 
+# _home_live_rows -> one row per session running RIGHT NOW on this machine.
+#
+# The board's other sections answer "which account" and "what did I do before".
+# This one answers "what is alive", which had no section until tmux made it
+# possible for the answer to be more than "whatever is in front of me".
+#
+# Same shape as a resume row, deliberately: dot · name · engine · "title". The
+# title is the point — `claude/x` does not tell you WHICH piece of work that is,
+# and the maintainer's own words for why this section exists were "I need to know
+# the name I gave it".
+#
+# The title comes from the tank's newest session, which is an assumption worth
+# naming: a live session is almost always the newest one on its tank, but a tank
+# with two live sessions (a bare one and a resumed one) will show the same title
+# on both rows. The alternative — mapping a tmux session back to a transcript —
+# has nothing to key on, since the engine chooses its own session id after launch.
+#
+# note carries the tmux session NAME, so opening the row attaches to THAT session
+# rather than starting anything.
+_home_live_rows() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local name created attached engine tank dir sid title recap age wake_left
+  while IFS=$'\t' read -r name created attached; do
+    [ -n "$name" ] || continue
+    IFS=$'\t' read -r engine tank <<SPLIT
+$(live_split "$name" 2>/dev/null)
+SPLIT
+    [ -n "$engine" ] && [ -n "$tank" ] || continue
+    dir="$(profile_dir "$engine" "$tank")"
+
+    title=""; recap=""
+    load_adapter "$engine" >/dev/null 2>&1 || true
+    if declare -F adapter_recent_sids >/dev/null 2>&1; then
+      sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
+      if [ -n "$sid" ]; then
+        if declare -F adapter_session_title >/dev/null 2>&1; then
+          title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+        fi
+        recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+      fi
+    fi
+
+    age="$(_human_age "$created" 2>/dev/null || true)"
+    # A waiter's countdown rides in its window name, so this costs one call and
+    # keeps no state. Empty unless one is actually counting.
+    wake_left="$(live_wake_note "$name" 2>/dev/null || true)"
+
+    printf 'live\037%s\037%s\037%s\037%s\037%s %s %s\037%s\n' \
+      "$engine" "$tank" "$title" "$recap" "$attached" "$age" "$wake_left" "$name"
+  done <<EOF
+$(live_session_names)
+EOF
+}
+
 # _home_items  -> one canonical launchable row per "thing you can open", fields
 # separated by ASCII Unit Separator (\037):
 #   kind ␟ cli ␟ profile ␟ label ␟ alias ␟ active(1|0) ␟ note
@@ -154,6 +208,12 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
+  # 0) Live — what is running on this machine right now. First because it is the
+  # most immediate thing on the page: a live session is one keypress from being
+  # back in, where a resume row is a relaunch. Usually 0-3 rows, so it does not
+  # push the rest of the board down.
+  _home_live_rows
+
   # 1) Tanks — every profile.
   # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
   # order. Engine travels in the cli field and the renderer shows it as an inline
@@ -746,7 +806,7 @@ _home_render_static() {
   printf '%b%s%b  %b·  %s%b\n\n' \
     "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
 
-  local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 rdot
+  local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 printed_live=0 rdot
   local launch_cli="" launch_profile=""
   # Title budget, in DISPLAY COLUMNS: cols minus this row's own fixed chrome
   # (4-space lead + dot + space + 7-col name + space + 8-col engine + space + 2
@@ -757,6 +817,14 @@ _home_render_static() {
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
+      live)
+        # Running right now, in the same columns as everything else on the page.
+        if [ "$printed_live" -eq 0 ]; then printed_live=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"; fi
+        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$(_home_lpad "$profile" 7)" \
+          "$__C_DIM" "$(_home_lpad "$(_home_engine_label "$cli")" 8)" "$__C_RESET" \
+          "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+        ;;
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
@@ -779,7 +847,7 @@ _home_render_static() {
         if tank_is_solo "$cli" "$profile"; then
           if [ "$cur_sect" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
         elif [ "$cur_sect" != "fleet" ]; then
-          [ "$printed_resume" -eq 1 ] && printf '\n'
+          { [ "$printed_resume" -eq 1 ] || [ "$printed_live" -eq 1 ]; } && printf '\n'
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
         fi
         local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
@@ -962,6 +1030,20 @@ $1
 EOF
   : "$label" "$alias" "$active" "$note"
   case "$kind" in
+    live)
+      # ATTACH to the session that is already running — never start anything.
+      # This is the whole reason the section exists: `clikae <engine> <tank>` would
+      # land on the tank's stable name, which is a different session from a resumed
+      # one, and a resume row would start a second conversation. note carries the
+      # exact tmux session name, so there is nothing to guess.
+      #
+      # Inside tmux, moving the current client is the right verb; a nested attach
+      # is what `switch-client` exists to prevent.
+      if [ -n "${TMUX:-}" ]; then
+        exec tmux switch-client -t "$note"
+      fi
+      exec tmux attach -t "$note"
+      ;;
     resume)
       # Reopen this dir's most recent session: clikae <engine> <tank> -- <resume-args>.
       # note carries the session id; the engine's adapter_resume_args turns it into
@@ -1405,7 +1487,7 @@ _home_pick_draw_body() {
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line rdot rage
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 printed_live=0 ldot mark dot _reset tdot _line rdot rage
   # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
   # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
   # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
@@ -1439,6 +1521,41 @@ _home_pick_draw_body() {
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
+      live)
+        # Running right now. Same columns as a Resume row on purpose — the eye
+        # should not have to learn a second layout for the same kind of thing.
+        if [ "$printed_live" -eq 0 ]; then
+          printed_live=1
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
+        fi
+        local _lat _lage _lwake
+        IFS=' ' read -r _lat _lage _lwake <<LIVEACT
+$active
+LIVEACT
+        ldot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; ldot="${ldot%%$'\037'*}"
+        local _lnm _len; _lnm="$(_home_lpad "$profile" 7)"; _len="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$__C_DIM" "$_len" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          # The second line is where time lives, in a whole sentence. When the
+          # tank is limited the vendor's own words go here verbatim — they
+          # already use the family's `·` — and clikae's promise, if any, follows
+          # on its own line. `resets` is the vendor's fact; `resumes` is our
+          # commitment, so the second line appears ONLY when a waiter is really
+          # counting. Saying it otherwise would be claiming a feature that is
+          # not attached.
+          local _lphrase; _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          if [ -n "$_lphrase" ]; then
+            printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
+          fi
+          if [ -n "$_lwake" ]; then
+            printf '        %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
+          elif [ -z "$_lphrase" ]; then
+            printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
+          fi
+        else
+          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$__C_DIM" "$_len" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+        fi
+        ;;
       resume)
         # The Resume list — recent resumable sessions
         if [ "$printed_resume" -eq 0 ]; then

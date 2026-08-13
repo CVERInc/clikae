@@ -307,6 +307,54 @@ you what it did.
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
 
+## What is running right now — the board's Live section
+
+Type `clikae` and the top of the board lists the sessions alive on **this
+machine**, in the same columns as everything else:
+
+```
+  ▸ Live
+    ● work    claude   "auth redirect — next: retry the callback test"
+    ● x       codex    "Transcreate the escape guides to 7 locales"
+
+  ▸ Tanks
+    …
+```
+
+**Enter attaches to it.** It does not start anything — that is the difference
+between this section and Resume, which relaunches a past conversation. A live
+session is one keypress from being back in.
+
+The third column is the session's title, not a status word, because `claude/x`
+does not tell you *which* piece of work that is.
+
+Selecting a row shows a second line under it. For a tank that has hit its limit
+that line is the vendor's own sentence, verbatim — and clikae's promise, if a
+waiter is really attached, on the line after:
+
+```
+  ❯ x       claude   "Transcreate the escape guides"
+        You've hit your session limit · resets 3:50am (Asia/Tokyo)
+        -> resuming in 13h38m
+```
+
+`resets` is what the vendor said. `resumes` is what clikae will do, so it only
+appears when something is actually scheduled.
+
+**Only this machine.** tmux is local, so running `clikae` on a tablet lists the
+tablet's sessions, not your desktop's. To reach a session on another machine, log
+in first and then run clikae there:
+
+```sh
+ssh yourmac          # log in, so you get a real terminal
+clikae               # the board, with that machine's Live section
+```
+
+`ssh yourmac 'clikae'` — the one-line form — hands the command a pipe for output,
+so clikae correctly takes its no-tmux path and you will not see the section.
+
+No tmux installed means no section at all, rather than an empty heading.
+
 ## The agy harness — a claim has to arrive with a receipt
 
 A new agy tank comes with a small restraint installed, in `<tank>/config/`. It

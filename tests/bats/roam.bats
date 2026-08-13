@@ -14,7 +14,7 @@ load '../helpers'
 #!/usr/bin/env bash
 echo ENGINE_STARTED >> "$STUB_RUNS"
 echo HELLO_FROM_ENGINE
-sleep 90
+sleep 600
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/codex"
   export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
@@ -83,7 +83,14 @@ wait_for(lambda: "ck-codex-roam" in tmux("ls") and started(1))
 print("FIRST_WIDTH", width())
 
 tmux("detach-client", "-s", "ck-codex-roam")
-wait_for(lambda: "(attached)" not in tmux("ls"))
+# THIS session, not "any session". The first version asked whether anything in
+# tmux was attached, which is never false on a developer's machine — so it burned
+# its whole timeout every run, and under a loaded suite that wasted time pushed
+# the test past the stub engine's lifetime. The session then died, the second
+# attach created a NEW one, and the "engine started exactly once" assertion
+# failed for a reason that had nothing to do with roaming.
+wait_for(lambda: tmux("display-message", "-p", "-t", "ck-codex-roam",
+                      "#{session_attached}").strip() == "0")
 print("SURVIVED_DETACH", "yes" if "ck-codex-roam" in tmux("ls") else "no")
 
 attach(60, 20)

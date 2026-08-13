@@ -49,7 +49,15 @@ PYEOF
 #!/usr/bin/env bash
 echo "SCROLLBACK_MARKER_START"
 for i in {1..200}; do echo "line $i"; done
-sleep 0.2
+# Wait for tmux to have actually rendered the last line instead of guessing at
+# how long that takes. `sleep 0.2` was enough on an idle machine and not on a
+# loaded one, so this test failed only inside a full suite run — the shape of a
+# timing guess, not of a defect. This runs INSIDE the pane, so capture-pane with
+# no target reads the pane we just wrote to.
+for _ in $(seq 1 200); do
+  tmux capture-pane -p -S - 2>/dev/null | grep -q "line 200" && break
+  sleep 0.05
+done
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
   
