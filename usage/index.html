@@ -479,6 +479,13 @@ you:</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-sh"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # what the setting is</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> on</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72"> |</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657"> off</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">        # change it</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> wake</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">     # attach a waiter to that tank right now</span></span></code></pre>
+<p><strong>The session watches itself.</strong> You are asked once, at LAUNCH — not when a limit
+arrives. That was the original design and a real limit proved it could not work:
+the question would have been posed by a watcher in a window nobody was looking
+at, and there was no watcher, because the preference had never been settled. At
+launch a human is demonstrably there; the friction is still paid exactly once.</p>
+<p>Say yes and every session clikae starts carries a <code>wake</code> window that checks the
+tank once a minute. Nothing to remember, nothing running when the session is not.</p>
 <p>When a limit is noticed and that tank still has a live session, clikae offers this
 once and remembers your answer — both from <code>clikae watch</code> and from a supervised
 launch (a session clikae itself started). It is offered <em>alongside</em> the carry, not

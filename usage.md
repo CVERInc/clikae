@@ -422,6 +422,15 @@ clikae wake on | off        # change it
 clikae wake claude work     # attach a waiter to that tank right now
 ```
 
+**The session watches itself.** You are asked once, at LAUNCH — not when a limit
+arrives. That was the original design and a real limit proved it could not work:
+the question would have been posed by a watcher in a window nobody was looking
+at, and there was no watcher, because the preference had never been settled. At
+launch a human is demonstrably there; the friction is still paid exactly once.
+
+Say yes and every session clikae starts carries a `wake` window that checks the
+tank once a minute. Nothing to remember, nothing running when the session is not.
+
 When a limit is noticed and that tank still has a live session, clikae offers this
 once and remembers your answer — both from `clikae watch` and from a supervised
 launch (a session clikae itself started). It is offered *alongside* the carry, not
