@@ -12,12 +12,19 @@ load '../helpers'
   clikae init codex roam
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/codex"
 #!/usr/bin/env bash
-echo ENGINE_STARTED >> "$STUB_RUNS"
+echo ENGINE_STARTED >> "$HOME/runs.log"
 echo HELLO_FROM_ENGINE
 sleep 600
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/codex"
-  export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
+    # $HOME, not an exported variable: tmux passes only its `update-environment`
+  # list into a session, and everything else is inherited from the SERVER's
+  # process environment — which is whoever started the server, not us. So an
+  # exported STUB_RUNS reached the stub only when this test happened to start the
+  # server itself, and vanished whenever one was already running. That is the
+  # whole story of this test's intermittency. clikae passes HOME explicitly with
+  # `-e`, so a path under it is one the engine can always find.
+  export STUB_RUNS="$TEST_HOME/runs.log"
 
   run python3 - "$CLIKAE_BIN" <<'PYEOF'
 import os, fcntl, termios, struct, sys, time, subprocess
@@ -116,11 +123,18 @@ PYEOF
   clikae init codex roam
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/codex"
 #!/usr/bin/env bash
-echo ENGINE_STARTED >> "$STUB_RUNS"
+echo ENGINE_STARTED >> "$HOME/runs.log"
 sleep 60
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/codex"
-  export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
+    # $HOME, not an exported variable: tmux passes only its `update-environment`
+  # list into a session, and everything else is inherited from the SERVER's
+  # process environment — which is whoever started the server, not us. So an
+  # exported STUB_RUNS reached the stub only when this test happened to start the
+  # server itself, and vanished whenever one was already running. That is the
+  # whole story of this test's intermittency. clikae passes HOME explicitly with
+  # `-e`, so a path under it is one the engine can always find.
+  export STUB_RUNS="$TEST_HOME/runs.log"
 
   run python3 - "$CLIKAE_BIN" <<'PYEOF'
 import os, fcntl, termios, struct, sys, time, subprocess
@@ -168,12 +182,19 @@ PYEOF
   clikae init codex roam2
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/codex"
 #!/usr/bin/env bash
-echo "STARTED [$*]" >> "$STUB_RUNS"
+echo "STARTED [$*]" >> "$HOME/runs.log"
 echo "SCREEN [$*]"
 sleep 90
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/codex"
-  export STUB_RUNS="$BATS_TEST_TMPDIR/runs.log"
+    # $HOME, not an exported variable: tmux passes only its `update-environment`
+  # list into a session, and everything else is inherited from the SERVER's
+  # process environment — which is whoever started the server, not us. So an
+  # exported STUB_RUNS reached the stub only when this test happened to start the
+  # server itself, and vanished whenever one was already running. That is the
+  # whole story of this test's intermittency. clikae passes HOME explicitly with
+  # `-e`, so a path under it is one the engine can always find.
+  export STUB_RUNS="$TEST_HOME/runs.log"
 
   run python3 - "$CLIKAE_BIN" <<'PYEOF'
 import os, fcntl, termios, struct, sys, time, subprocess

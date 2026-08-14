@@ -97,6 +97,30 @@ _switch_tmux_usable() {
   command -v tmux >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]
 }
 
+# EXTENDED KEYS. tmux defaults to `extended-keys off`, which flattens a modifier
+# onto the key it modifies before the application ever sees it — so Shift+Enter
+# arrives as a plain Enter, and an engine that treats Enter as "send" submits the
+# message instead of inserting a newline. Reported 2026-08-13 as "shift+return
+# stopped inserting a line break", and it was: the tmux layer put a translator in
+# the middle of the keyboard.
+#
+# Two settings, because they answer different questions. `extended-keys on` is
+# whether tmux FORWARDS the extended encoding to the application — `on`, not
+# `always`, so it only does so for an application that asked, which is the
+# conservative half. `terminal-features …:extkeys` is whether tmux ASKS the outer
+# terminal for them at all; without it tmux never requests the sequences and
+# there is nothing to forward. Measured: with both set, a fresh client reports
+# `extkeys` among its features, and without them it does not.
+#
+# They are SERVER options, so this reaches the whole tmux server rather than one
+# session — the same scope the history-limit and terminal-overrides lines above
+# already take. Benign in the other direction: an application that never requests
+# extended keys is unaffected.
+#
+# 🔴 Only a NEW client picks the feature up. Terminal features are resolved when
+# a client attaches, so a session you are already inside keeps the old behaviour
+# until you detach and come back.
+
 # _switch_tmux_label <session> <engine> <tank> — make the status bar say where you
 # are, in clikae's own words.
 #
@@ -223,7 +247,7 @@ KV
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
     tmux has-session -t "ck-$sess_id" 2>/dev/null || \
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
         _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
     
     local clients
@@ -234,7 +258,7 @@ KV
   else
     local started_here=0
     if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
+      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
         _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
       started_here=1
     fi
@@ -341,7 +365,7 @@ EOF
     if _switch_tmux_usable; then
       local started_here=0
       if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
-        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
+        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
         _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
         started_here=1
       fi

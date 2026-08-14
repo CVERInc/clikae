@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Shift+Enter inserts a newline again inside a clikae session.** tmux defaults
+  to `extended-keys off`, which flattens a modifier onto the key it modifies
+  before the application sees it — so Shift+Enter arrived as a plain Enter and an
+  engine that treats Enter as "send" submitted instead of adding a line. The tmux
+  layer had quietly put a translator in the middle of the keyboard.
+
+  Two settings, because they answer different questions: whether tmux **forwards**
+  the extended encoding to the application (`on`, not `always` — only for an
+  application that asked), and whether it **asks the outer terminal** for those
+  sequences at all. Without the second there is nothing to forward. Measured: a
+  fresh client now reports `extkeys` among its features, and did not before.
+
+  🔴 Only a NEW client picks this up — terminal features are resolved at attach
+  time, so a session you are already inside keeps the old behaviour until you
+  detach and come back.
+
+- **A tmux test depended on an environment variable that never arrived.** tmux
+  passes only its `update-environment` list into a session; everything else comes
+  from the SERVER's process environment, which belongs to whoever started the
+  server. So the stub engine's log path reached it only when that test happened
+  to start the server itself, and vanished whenever one was already running —
+  which is the whole story of that test's intermittency. It writes under `$HOME`
+  now, which clikae passes explicitly.
+
 ## [0.22.0] — 2026-08-13
 
 ### Added
