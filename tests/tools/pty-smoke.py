@@ -41,6 +41,13 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     _SANDBOXES.append(root)
     for engine, tank in tanks:
         os.makedirs(os.path.join(root, '.clikae', 'profiles', engine, tank), exist_ok=True)
+    # Answer the wake question up front. A launch asks once, on a terminal, and
+    # this harness IS a terminal — so without this every launched-engine check
+    # would sit at that prompt and report the engine's output as missing, which
+    # is exactly how it failed the first time.
+    os.makedirs(os.path.join(root, '.clikae'), exist_ok=True)
+    with open(os.path.join(root, '.clikae', 'wake-on-reset'), 'w') as f:
+        f.write('off\n')
     if seed_session:
         d = os.path.join(root, '.clikae', 'profiles', 'claude', 'alpha', 'projects', '-w')
         os.makedirs(d, exist_ok=True)

@@ -10,6 +10,14 @@
 
 cmd_wake() {
   case "${1:-}" in
+    --watch)
+      # Internal, like --sit: the body of the session's `wake` window during its
+      # WATCHING phase. It hands over to the countdown in place when the tank
+      # goes dry, so one window covers both.
+      shift
+      wake_watch "${1:-}" "${2:-}" "${3:-}"
+      return $?
+      ;;
     --sit)
       # Internal. Not in help: it is the body of a tmux window, not something a
       # person types. Kept as a subcommand rather than a private script so the

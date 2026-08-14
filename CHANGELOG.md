@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A session now watches itself for a usage limit.** The waiter worked;
+  nothing ever started it. Detection lived in `clikae watch` — nobody starts a
+  watcher in order to be interrupted later — and in the supervised launch, which
+  only runs once the engine has EXITED. Sitting in a live session that hits its
+  limit, which is the ordinary case and the only one that matters at 3am, reached
+  neither.
+
+  Confirmed against a real limit: the tank went dry at 21:57 with *"resets 12am
+  (Asia/Tokyo)"*, the phrase parsed correctly to midnight — and no waiter was ever
+  attached, because nothing looked. The release notes had promised a session that
+  waits out its limit; on the common path it never could.
+
+  Every session clikae starts now carries a `wake` window that asks the same
+  question the board asks, once a minute, and hands over to the countdown in
+  place. **One window, two phases**: bare `wake` while watching, `wake 13h38m`
+  once counting. It keeps no record of anyone's quota and dies with the session.
+
+- **The one-time question moved to launch.** Asking at limit time could not work:
+  the question would have been posed by a watcher in a window nobody was looking
+  at. At launch a human is demonstrably present — they just typed the command —
+  and the friction is still paid exactly once. Silent where there is nobody to
+  ask, and then nothing is scheduled either, which is the safe direction.
+
 ### Fixed
 
 - **Shift+Enter inserts a newline again inside a clikae session.** tmux defaults
@@ -32,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to start the server itself, and vanished whenever one was already running —
   which is the whole story of that test's intermittency. It writes under `$HOME`
   now, which clikae passes explicitly.
+
 
 ## [0.22.0] — 2026-08-13
 

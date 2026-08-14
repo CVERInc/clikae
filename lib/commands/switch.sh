@@ -241,6 +241,12 @@ KV
     exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
   fi
 
+  # Settle the wake preference here, while a human is demonstrably present — they
+  # just typed the command. Asking at limit time was the original design and it
+  # could not work: the question would be posed by a watcher in another window,
+  # where nobody would ever see it.
+  wake_ask_once "$engine" "$tank"
+
   if [ -n "$TMUX" ]; then
     local current_pane_session
     current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
@@ -249,6 +255,7 @@ KV
     tmux has-session -t "ck-$sess_id" 2>/dev/null || \
       tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
         _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
+    wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
     
     local clients
     clients="$(tmux list-clients -t "$current_pane_session" 2>/dev/null || true)"
@@ -260,6 +267,7 @@ KV
     if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
       tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
         _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
+    wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
       started_here=1
     fi
 

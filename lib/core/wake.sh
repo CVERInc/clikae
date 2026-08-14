@@ -320,3 +320,108 @@ EOF
   fi
   return 0
 }
+
+# --- the watcher: the half that was missing -----------------------------------
+#
+# WHY THIS EXISTS. The waiter worked; nothing ever started it. Detection lived in
+# `clikae watch` (nobody starts a watcher in order to be interrupted later) and in
+# the supervised launch, which only runs once the engine has EXITED. Sitting in a
+# live session that hits its limit — the ordinary case, and the only one that
+# matters at 3am — reached neither. Confirmed against a real limit on 2026-08-13:
+# the tank went dry at 21:57 with "resets 12am (Asia/Tokyo)", the phrase parsed
+# correctly to midnight, and no waiter was ever attached because nothing looked.
+#
+# So the session watches itself. Same shape as everything else here: it lives
+# inside the tmux session, dies with it, and keeps no record of anyone's quota —
+# it asks `limit_tank_dry`, which reads the transcript and self-clears, every time
+# it wakes up.
+#
+# ONE WINDOW, TWO PHASES. The watcher IS the waiter's window, named `wake` from
+# the start: while it is watching the name is bare, and once it is counting down
+# the countdown rides in the name. That keeps a session to one extra window
+# instead of two, and it means the "only one waiter per session" guard — which
+# matches `^wake( |$)` — already covers the watching phase.
+
+# WAKE_WATCH_INTERVAL — how often to ask whether this tank has gone dry.
+#
+# 60s, because the thing being waited for is measured in hours: a limit noticed a
+# minute late costs nothing, while a tighter loop pays limit_tank_dry's transcript
+# scan (the board's old hot spot) for no benefit anybody can perceive.
+WAKE_WATCH_INTERVAL=60
+
+# wake_watch <engine> <tank> <session> -> watch until this tank runs dry, then
+# hand over to the countdown. Returns non-zero only if it cannot start.
+wake_watch() {
+  local engine="$1" tank="$2" session="$3" reset epoch now
+  [ -n "$engine" ] && [ -n "$tank" ] && [ -n "$session" ] || return 1
+
+  while :; do
+    tmux has-session -t "$session" 2>/dev/null || return 0   # session gone: so are we
+
+    if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
+      if [ -n "$reset" ]; then
+        now="$(date +%s)"
+        if epoch="$(limit_reset_epoch "$reset" "$now")"; then
+          printf '\r\033[K'
+          log_info "$engine/$tank — $reset"
+          # Hand over in place. wake_sit renames this same window as it counts.
+          wake_sit "$session" "$epoch"
+          return $?
+        fi
+        # A phrase with no time in it: say so once and keep watching, rather than
+        # scheduling something at a guessed moment.
+        printf '\r\033[K'
+        log_warn "$engine/$tank is dry, but \"$reset\" carries no time to wait for."
+      fi
+    fi
+
+    printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"
+    sleep "$WAKE_WATCH_INTERVAL"
+  done
+}
+
+# wake_attach_watcher <session> <engine> <tank> -> put the watching window in the
+# session. Same one-per-session rule as the waiter, because it is the same window.
+wake_attach_watcher() {
+  local session="$1" engine="$2" tank="$3" bin="${CLIKAE_BIN:-clikae}"
+  [ -n "$session" ] && [ -n "$engine" ] && [ -n "$tank" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux has-session -t "$session" 2>/dev/null || return 1
+  if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+     | grep -qE '^wake( |$)'; then
+    return 0
+  fi
+  tmux new-window -d -t "$session" -n wake \
+    "'$bin' wake --watch '$engine' '$tank' '$session'" 2>/dev/null || return 1
+  return 0
+}
+
+# wake_ask_once <engine> <tank> -> settle the preference, once, AT LAUNCH.
+#
+# The one-time ask used to happen when a limit was hit. That was the wrong
+# moment, and the real limit on 2026-08-13 proved it twice over: the question
+# would have been asked by a watcher in another window, where nobody would see
+# it — and there was no watcher, because the preference had never been settled.
+# A question nobody can answer is not consent, it is a deadlock.
+#
+# Launch is the right moment because a human is demonstrably there: they just
+# typed the command. The friction is still paid exactly once.
+#
+# Silent whenever there is nobody to ask (a pipe, CI, a headless run) — and then
+# nothing is scheduled either, which is the safe direction: this feature types
+# into a live session, so an unanswered question means no.
+wake_ask_once() {
+  local engine="$1" tank="$2"
+  [ "$(wake_pref_get)" = "unset" ] || return 0
+  [ -t 0 ] && [ -t 1 ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+
+  if confirm "When $engine/$tank hits its usage limit, resume it automatically once the limit lifts?"; then
+    wake_pref_set on
+    log_dim "  It will type \"$WAKE_NUDGE\" into the session, ${WAKE_BUFFER_SECONDS}s after the vendor's reset time."
+  else
+    wake_pref_set off
+    log_dim "  Won't ask again. Turn it on later with: clikae wake on"
+  fi
+  return 0
+}

@@ -70,6 +70,14 @@ SECSTUB
   export PATH="$TEST_HOME/.testbin:$PATH"
   # Pin the interface language so assertions are deterministic regardless of the
   # CI/host locale. i18n itself is covered by tests/bats/i18n.bats.
+  # Answer the wake question up front. Since 2026-08-13 a launch asks once, at
+  # the moment a human is present — and a pty-driven test IS a terminal, so every
+  # launch test would sit at that prompt forever. `off` rather than `on`: a test
+  # that means to exercise the waiter says so, and one that does not should never
+  # have a background window typing into its session.
+  mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
+  printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
+
   export CLIKAE_LANG=en-US
   # Keep the suite hermetic: don't let a local-model CLI that happens to be on
   # the dev machine's PATH (apfel/ollama/llm) make `handoff` auto-summarize. Tests
