@@ -87,6 +87,12 @@ def started(n):
 
 attach(100, 30)
 wait_for(lambda: "ck-codex-roam" in tmux("ls") and started(1))
+# …and wait for the RESIZE too, not just for the session to exist. The second
+# measurement below already waits for its width; this one did not, so it raced
+# tmux propagating the client size and read default-size 80 instead of 100 —
+# intermittently on ubuntu CI, never on macOS. The file's own wait_for docstring
+# names this shape: a timing guess, not a defect.
+wait_for(lambda: width() == "100")
 print("FIRST_WIDTH", width())
 
 tmux("detach-client", "-s", "ck-codex-roam")
