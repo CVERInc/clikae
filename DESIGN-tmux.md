@@ -93,6 +93,24 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
 
   stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但**也沒有持久化**。要漫遊就得先拿到 shell 再下指令。
 
+### Rule 2b: scrollback 重播是**有平台前提**的（誠實範圍）
+
+- **症狀**：離開 session 時把畫面倒回終端機 —— 這個功能在 Linux 上**從來沒有作用過**，而測試在 macOS 上每次都綠。
+- **收據**（2026-08-15，ubuntu tmux 3.4 vs macOS tmux 3.7b）：
+  ```
+  # target_cmd 是「跑引擎；然後擷取 pane」。引擎退出的那一刻：
+  引擎自己擷取（還活著時）      capture-bytes=1717      ← 擷取本身沒問題
+  引擎退出後的下一個指令        從未執行
+  引擎背景化、2 秒後醒來的子殼   從未執行
+  bash 自己的 EXIT trap        從未執行
+  scrollback 檔（10ms 追蹤）    從未出現
+  ```
+  **pane 是被硬拆的**，不是收到 SIGHUP。任何「在 pane 內、引擎之後」的做法都不可能成立。
+- **規範**：
+  1. 這是 Rule 2「tmux 是便利層，不是相依」的第四個出口 —— **功能誠實降級，不假裝跨平台**。
+  2. 測試探**能力**不探平台：`_pane_outlives_its_command`（起一個 `sh -c 'true; touch X'` 的 session，看 X 有沒有出現）。版本字串是代理指標，這才是真正的問題。
+  3. 🔴 **不要再試「換一個在 pane 內執行的時機」**。`;`、背景子殼、EXIT trap 三種都量過，全部沒跑。要讓它在 Linux 上動，得換成「由父行程擷取」的設計，而那跟 attach 的阻塞語義衝突（attach 只在 session 結束時返回，那時已經沒東西可擷取）。
+
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
 - **收據**：
