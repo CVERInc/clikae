@@ -229,7 +229,17 @@ tmux_spawn_session() {
   fi
   chain+=(";" new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd")
 
-  tmux "${chain[@]}" || return 1
+  # Say why, when it fails. A constructor that returns 1 in silence sends the
+  # caller off to guess: on 2026-08-15 the same ubuntu-only failure was reasoned
+  # about three times from a marker count, on a machine that could not reproduce
+  # it, before anything printed the invocation that actually failed.
+  local _rc=0
+  tmux "${chain[@]}" || _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    printf 'clikae: tmux refused to create the session (rc=%s)\n  tmux %s\n' \
+      "$_rc" "${chain[*]}" >&2
+    return 1
+  fi
 
   # 🔴 mouse / set-clipboard go AFTER the session exists, not into the chain.
   #
