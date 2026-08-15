@@ -56,8 +56,9 @@ _fleet_mcp_config_file() {
 }
 
 # Optional hook: does every non-solo <engine> launch merge in the fleet-wide MCP
-# store? Called from switch.sh / run.sh / relay.sh / burn.sh, right where
-# soul_prelaunch is called. resume.sh is absent on purpose — it hands off to
+# store? Called from switch.sh / run.sh / relay.sh / burn.sh / mcp.sh, right
+# where soul_prelaunch is called — plus mcp.sh, which fans the store into tanks
+# rather than launching one. resume.sh is absent on purpose: it hands off to
 # cmd_switch, which does both.
 #
 # 🔴 Keep this list true. It named only switch and run until 2026-08-15, by which
