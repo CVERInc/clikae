@@ -219,7 +219,7 @@ attach 被拒時要 <code>kill-session</code>：<code>new-session -d</code> 已�
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">    tmux</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> switch-client</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -t</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "ck-&#x3C;tank>"</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">  fi</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">else</span></span>
-<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">  clikae_spawn_session</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "&#x3C;tank>"</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">  tmux_spawn_session</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --session</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "ck-&#x3C;tank>"</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> …</span></span>
 <span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">fi</span></span></code></pre>
 <p><em>(備註：<code>tmux_spawn_session</code>（<code>lib/core/tmux.sh</code>）是上述 Rule 1、2、4、5、7 的封裝函式，也是全 repo 唯一呼叫 <code>tmux new-session</code> 的地方。舊稿把它叫作 <code>clikae_spawn_session</code>，那個名字從未存在於程式碼。)</em></p>
 <p>FIRES: 模擬含有空白的 tank 名稱</p>
