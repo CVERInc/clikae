@@ -79,6 +79,19 @@ Which shape for which situation — the decision layer above these mechanics —
    engines: for a cold read on another family, use `agy --sandbox` in an empty
    directory, not a rewire.
 
+## Which tanks may you dispatch to
+
+Ask, do not assume — and ask in JSON rather than reading a table:
+
+```sh
+clikae memory status --json | jq -r '.[] | select(.dispatchable) | .tank'
+```
+
+`dispatchable` is false for a **solo** tank — the maintainer's private cockpit,
+never a fleet seat — and also for one in the impossible *solo-and-shared* state,
+where the wiring does not match the label and nothing about it is safe to reason
+about. `clikae tanks` lists what exists; it does not tell you what you may use.
+
 ## Dispatching cold readers (the sub-agent shape)
 
 `--ephemeral` with `-p` is clikae's sub-agent primitive, and it is meant for you,

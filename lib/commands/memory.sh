@@ -249,6 +249,12 @@ engines — read/write a single "Soul" (continuity & context). See docs/memory.m
 
   clikae memory share <group> [<engine> <tank>]   point a tank at <group>'s Soul store
   clikae memory status         [<engine> <tank>]   show share state
+  clikae memory status --json                      the same, machine-readable:
+                               one object per tank {cli, tank, group, account,
+                               solo, inconsistent, dispatchable}. `dispatchable`
+                               is false for a solo tank AND for one in the
+                               impossible solo-and-shared state — read it before
+                               fanning work out.
 
 To take a tank OUT of the shared brain, make it standalone: `clikae solo <engine>
 <tank>` leaves the group and gives the tank its own memory back. There is no
@@ -500,9 +506,14 @@ _memory_isolate() {
 }
 
 _memory_status() {
-  local engine="" tank=""
+  local engine="" tank="" as_json=0
   while [ $# -gt 0 ]; do
     case "$1" in
+      # An agent must read this before dispatching — clikae's own doctrine is
+      # "check `memory status` first; a solo tank is not in the pool". Making
+      # that answer prose-only left the one query the rules mandate as the one a
+      # script had to parse by eye. `list` and `info` already emit --json.
+      --json) as_json=1; shift ;;
       -*) log_fail "memory status: unknown flag: $1" ;;
       *) if [ -z "$engine" ]; then engine="$1"
          elif [ -z "$tank" ]; then tank="$1"
@@ -525,8 +536,8 @@ _memory_status() {
       declare -F adapter_memory_dir >/dev/null 2>&1 || strat="pointer"
       declare -F adapter_memory_pointer_path >/dev/null 2>&1 || [ "$strat" = "symlink" ] || log_fail "memory: '$eng' unsupported."
     fi
-    local saw=0 stale=""
-    log_info "memory sharing ($eng):"
+    local saw=0 stale="" first=1
+    [ "$as_json" -eq 1 ] && printf '[' || log_info "memory sharing ($eng):"
     while IFS=$'\t' read -r cli tname _; do
       [ "$cli" = "$canon" ] || continue
       saw=1
@@ -554,9 +565,23 @@ _memory_status() {
          && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$(_memory_store_path "$g")" ]; then
         here="  (this dir: links on next launch)"
       fi
-      if [ -n "$g" ]; then log_done "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk$here"
+        if [ "$as_json" -eq 1 ]; then
+          # `dispatchable` is the question the doctrine actually asks, answered
+          # once here rather than re-derived by every caller: a solo tank is out
+          # of the pool, and so is one in the impossible solo-and-shared state —
+          # its wiring does not match its label, so it is not safe to reason about.
+          local _solo=false _incon=false _disp=true
+          tank_is_solo "$cli" "$tname" && { _solo=true; _disp=false; }
+          [ "$_solo" = true ] && [ -n "$g" ] && _incon=true
+          [ "$first" -eq 1 ] || printf ','
+          first=0
+          printf '{"cli":%s,"tank":%s,"group":%s,"account":%s,"solo":%s,"inconsistent":%s,"dispatchable":%s}' \
+            "$(json_str "$cli")" "$(json_str "$tname")" "$(json_or_null "$g")" \
+            "$(json_or_null "$acct")" "$_solo" "$_incon" "$_disp"
+        elif [ -n "$g" ]; then log_done "  $cli/$tname  → shared '$g'${acct:+  ($acct)}$lk$here"
       else log_dim "  $cli/$tname  → isolated${acct:+  ($acct)}$lk"; fi
     done < <(list_all_profiles)
+    if [ "$as_json" -eq 1 ]; then printf ']\n'; return 0; fi
     [ "$saw" -eq 1 ] || log_dim "  (no $eng tanks)"
     if [ -n "$stale" ]; then
       log_warn "solo tanks still on the shared brain: $stale"

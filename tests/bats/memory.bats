@@ -534,3 +534,30 @@ STUB
   [ "$(readlink "$mem")" = "$store" ]
   [ -f "$store/burn-fact.md" ]        # the headless run wrote INTO the Soul
 }
+
+@test "memory status --json answers 'which tanks can I dispatch to' without prose" {
+  # clikae's own dispatch doctrine says to read `memory status` before fanning
+  # work out — a solo tank is not in the pool. That answer was prose only, so the
+  # one query the rules mandate was the one a script had to parse by eye, while
+  # `list` and `info` already emitted --json.
+  _stub_claude
+  clikae init claude shared
+  clikae init claude alone
+  clikae memory share me claude shared
+  clikae solo claude alone
+
+  run clikae memory status --json
+  [ "$status" -eq 0 ]
+  # Valid JSON, not a table with brackets around it.
+  echo "$output" | python3 -c 'import sys,json; json.load(sys.stdin)'
+
+  local disp
+  disp="$(echo "$output" | python3 -c 'import sys,json
+print(" ".join(sorted(t["tank"] for t in json.load(sys.stdin) if t["dispatchable"])))')"
+  [ "$disp" = "shared" ] || { echo "dispatchable was '$disp'"; false; }
+
+  local solo
+  solo="$(echo "$output" | python3 -c 'import sys,json
+print(" ".join(sorted(t["tank"] for t in json.load(sys.stdin) if t["solo"])))')"
+  [ "$solo" = "alone" ] || { echo "solo was '$solo'"; false; }
+}
