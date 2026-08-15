@@ -58,6 +58,22 @@ for _ in $(seq 1 200); do
   tmux capture-pane -p -S - 2>/dev/null | grep -q "line 200" && break
   sleep 0.05
 done
+# …and then outlive the attach. What this test measures is the scrollback
+# capture and its replay; the replay only runs after `tmux attach` RETURNS, so
+# the engine must still be alive when the parent attaches and end afterwards.
+# Nothing enforced that ordering, so the test was really racing the parent.
+#
+# It won that race until the suite gained a per-test tmux socket (2026-08-15,
+# the isolation that stops `tmux kill-server` in roam.bats reaching live tanks).
+# Every test now creates a server of its own instead of reusing one, and that
+# startup landed between create and attach. macOS absorbed it; ubuntu did not,
+# and CI went red for eight pushes on this one test while every other job stayed
+# green. Wait for the client instead of hoping — the same lesson as the loop
+# above, one layer out.
+for _ in $(seq 1 200); do
+  [ -n "$(tmux list-clients 2>/dev/null)" ] && break
+  sleep 0.05
+done
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
   
