@@ -422,6 +422,44 @@ _switch_run_ephemeral() {
   stash="$mem.clikae-ephemeral-stash"
 
   mkdir -p "$(dirname "$mem")"
+
+  # 🔴 ONE EPHEMERAL PER MEMORY SLOT, and the slot is keyed on $PWD.
+  #
+  # Two ephemeral runs in the same directory target the same <mem> path, and the
+  # second does not merely fail to link: its self-heal step below reads the FIRST
+  # run's symlink as a crashed leftover, removes it, and moves the stash back —
+  # out from under a live engine. That is the 2026-07-19 incident, and parallel
+  # dispatch reaches it on purpose rather than by accident.
+  #
+  # Measured 2026-08-15: two cold reads launched together in one directory, one
+  # died with a bare `ln:` error and no explanation. Three launched in three
+  # directories all succeeded, left no residue, and wrote no transcript — which
+  # is the shape agents should use, so the failure has to say that rather than
+  # leak the first shell error that happened to surface.
+  #
+  # Same lock mechanism as burn's GC (DESIGN-tmux Rule 6): an fd, held for the
+  # life of the process, never unlinked.
+  local slot_lock
+  slot_lock="${TMPDIR:-/tmp}/ck-ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
+  # 🔴 `lockf -k`. Without -k the lock does not lock: measured 2026-08-15, two
+  # processes both got rc=0 from `lockf -t 0 <fd>` on the same file. -k keeps the
+  # file on release, and the second holder then gets 75 (EX_TEMPFAIL) — which is
+  # what DESIGN-tmux Rule 6 already wrote down after burn's GC hit the same
+  # thing. A lock written without it is a guard that is silent on every input.
+  local _lrc=0
+  exec 8>"$slot_lock"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n 8 2>/dev/null || _lrc=$?
+  else
+    lockf -k -t 0 8 2>/dev/null || _lrc=$?
+  fi
+  if [ "$_lrc" -ne 0 ]; then
+    log_fail "--ephemeral: another ephemeral run already holds this directory's memory slot.
+         Parallel cold reads need ONE WORKING DIRECTORY EACH — the slot is keyed on \$PWD,
+         so runs sharing a directory fight over the same memory link.
+         Give each run its own scratch dir (see AGENTS.md § dispatching cold readers)."
+  fi
+
   # A Soul-shared slot is a symlink INTO $CLIKAE_HOME/souls — remember its target
   # so the exit trap can re-link it. (Without this, an ephemeral run on a shared
   # tank silently un-shared this directory: the link read as a crashed run's

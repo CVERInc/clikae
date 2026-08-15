@@ -257,6 +257,12 @@ tmux_spawn_session() {
   # about stay in the chain; these two — which change how selection and copying
   # behave, not whether the session exists — cannot take a session down with
   # them.
+  # The area of a client's terminal that the window does not cover is filled with
+  # dots by default. With window-size `latest` (DESIGN-tmux Rule 1) a second,
+  # smaller client — the PineNote arriving — shrinks the window, and the larger
+  # screen fills with a field of them. A blank is the same information without
+  # the texture. Cosmetic only, and it changes nothing about either client's size.
+  tmux set-option -g fill-character " " 2>/dev/null || true
   tmux set-option -g mouse on 2>/dev/null || true
   tmux set-option -s set-clipboard on 2>/dev/null || true
 

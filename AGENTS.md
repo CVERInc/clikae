@@ -78,6 +78,37 @@ Which shape for which situation — the decision layer above these mechanics —
    **Ephemeral changes this run; solo changes from now on.** Same rule across
    engines: for a cold read on another family, use `agy --sandbox` in an empty
    directory, not a rewire.
+
+## Dispatching cold readers (the sub-agent shape)
+
+`--ephemeral` with `-p` is clikae's sub-agent primitive, and it is meant for you,
+not only for a human at a keyboard. Measured 2026-08-15 rather than claimed:
+
+```sh
+cd "$(mktemp -d)" && clikae claude h --ephemeral -- -p "<the question>"
+```
+
+| what you get | measured |
+|---|---|
+| runs unattended, answer on stdout | rc=0 |
+| cold — no memory, no skills, no fleet MCP | the run announces all three |
+| spends THAT tank's quota | yes, which is the point of aiming it at a reserve |
+| **leaves nothing in `clikae resume`** | 308 transcripts before, 308 after |
+| leaves the Soul untouched | 436 memory files before, 436 after |
+| **runs in parallel** | three at once, all rc=0, no residue |
+
+🔴 **One working directory per parallel run.** The memory slot is keyed on `$PWD`,
+so two ephemeral runs in the same directory target the same slot — and the second
+does not merely fail: its self-heal step reads the first run's symlink as a
+crashed leftover and moves the real memory back out from under a live engine.
+That is the 2026-07-19 incident, and fanning out cold readers reaches it on
+purpose rather than by accident. clikae now takes a lock per slot and refuses the
+second run with an explanation instead of a bare `ln:` error — but the lock is a
+guard, not a feature. `cd "$(mktemp -d)"` per run is the shape that works.
+
+For ONE prompt across N tanks, prefer `clikae conduct` — it already fans out and
+collects every leg. Reach for hand-rolled parallel ephemerals when the prompts
+differ.
 6. **A solo tank is not yours to dispatch.** Existing ≠ available. `clikae solo`
    lists them and `clikae memory status` marks them `🔒 solo`; check before you fan
    work out. A solo tank is walled out of the fleet by design — `burn` never

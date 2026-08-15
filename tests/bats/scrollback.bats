@@ -84,6 +84,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 _stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
+_stage "capture-bytes=$(tmux capture-pane -p -S - 2>/dev/null | wc -c) capture-t-bytes=$(tmux capture-pane -p -S - -t \"ck-claude-scrolltest\" 2>/dev/null | wc -c)"
 _stage "exiting"
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
