@@ -75,6 +75,17 @@ INNER_EOF
   
   if [ "$count" -lt 2 ]; then
     echo "Expected at least 2 occurrences of SCROLLBACK_MARKER_START, found $count"
+    # What the marker count cannot tell you is WHY. One occurrence means the
+    # replay never happened, and that has several causes which look identical
+    # from here: the session was never created, it died before the attach, the
+    # attach was refused, or the capture wrote nothing. Three wrong guesses were
+    # made from the count alone (2026-08-15) before anyone printed the state.
+    echo "--- tmux version:      $(tmux -V 2>&1)"
+    echo "--- TMUX_TMPDIR:       ${TMUX_TMPDIR:-<unset>}"
+    echo "--- sessions now:      $(tmux list-sessions 2>&1 | tr '\n' '|')"
+    echo "--- scrollback file:   $(ls -l "$TEST_HOME/.clikae/state/"*.scrollback 2>&1 | tr '\n' '|')"
+    echo "--- server options:    history-limit=$(tmux show-options -gv history-limit 2>&1) mouse=$(tmux show-options -gv mouse 2>&1) clip=$(tmux show-options -sv set-clipboard 2>&1)"
+    echo "--- overrides:         $(tmux show-options -g terminal-overrides 2>&1 | tr '\n' '|')"
     echo "Output was:"
     echo "$output"
     false
