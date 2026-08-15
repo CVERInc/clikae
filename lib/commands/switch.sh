@@ -147,7 +147,7 @@ _switch_run_tmux_wrapped() {
   # `[ -s ]` was false, and the replay this whole feature exists for never ran on
   # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
   # session target to its active pane and hid it completely.
-  target_cmd="$target_cmd; tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null || true"
+  target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
 
   # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
   # convenience layer over `clikae run`, never a dependency: a machine without it
@@ -286,7 +286,7 @@ EOF
   # `[ -s ]` was false, and the replay this whole feature exists for never ran on
   # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
   # session target to its active pane and hid it completely.
-    target_cmd="$target_cmd; tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null || true"
+    target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
     
     local -a relay_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
     if [ -n "$CLIKAE_HOME" ]; then
