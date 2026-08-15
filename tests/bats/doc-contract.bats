@@ -63,3 +63,34 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   [ "$status" -ne 0 ] || { echo "the gate stayed silent"; false; }
   [[ "$output" == *"window-size"* ]] || { echo "$output"; false; }
 }
+
+@test "doc gate: fires on a name whose prefix is not in the legacy list" {
+  # 🔴 Until 2026-08-16 check 1 extracted names by a hand-written prefix list —
+  # a guess at what the docs name. Measured: 20 real functions were named in the
+  # docs and invisible to it (tank_is_solo, next_tank, history_log, load_adapter,
+  # five limit_*), and renaming one in the code left the gate green. This probe
+  # is that blind spot: a backticked lowercase identifier with an underscore,
+  # belonging to no listed prefix.
+  _copy_repo
+  printf '\n`frobnicate_widget` is named here.\n' >> "$REPO/docs/DESIGN-tmux.md"
+  run _gate_in_copy
+  [ "$status" -ne 0 ] || { echo "the gate stayed silent"; false; }
+  [[ "$output" == *"frobnicate_widget"* ]] || { echo "$output"; false; }
+}
+
+@test "doc gate: a stray .bak must not answer for the source" {
+  # The gate reads the tracked tree, not the working directory. A `sed -i.bak`
+  # left the OLD definition on disk and rescued a function that no real file
+  # defined any more — green on exactly the drift it exists to catch. (Same
+  # copy leaks the other way too: the .bak counted as a caller, so check 2
+  # demanded the docstring list `burn.sh.bak`.)
+  _copy_repo
+  fn="$(grep -rlE '^tank_is_solo\(\)' "$REPO/lib" | head -1)"
+  [ -n "$fn" ] || skip "tank_is_solo moved; pick another predicate"
+  cp "$fn" "$fn.bak"                              # the backup keeps the old name
+  perl -pi -e 's/\btank_is_solo\b/tank_is_private/g' $(grep -rl 'tank_is_solo' "$REPO/lib" "$REPO/bin" | grep -v '\.bak$')
+  run _gate_in_copy
+  [ "$status" -ne 0 ] || { echo "a .bak file answered for the source"; false; }
+  [[ "$output" == *"tank_is_solo"* ]] || { echo "$output"; false; }
+  [[ "$output" != *".bak"* ]] || { echo "the .bak was treated as a caller: $output"; false; }
+}

@@ -1,3 +1,18 @@
 # Names the docs mention ON PURPOSE although no such function exists.
 # One per line: <name> <reason>. An exemption without a reason is a hiding place.
 clikae_spawn_session  the wrapper DESIGN-tmux specified and nobody wrote; named in Rule 2/5 as the historical record of that gap, implemented since 2026-08-15 as tmux_spawn_session
+
+# --- not functions at all: other systems' tool names, quoted in our docs ---
+ask_question       an MCP/agent tool name quoted in docs/orchestration.md, not ours
+read_url_content   ditto
+run_command        ditto
+search_web         ditto
+write_to_file      ditto
+list_dir           ditto
+# --- our own data, not our own code ---
+away_summary       a JSON field name in the board's live-row payload
+session_summary    a JSON field name
+generated_title    a JSON field name
+dry_store          a state file under $CLIKAE_HOME, not a function
+_exit              shell builtin, quoted while explaining trap semantics
+_                  a literal underscore used as a placeholder in an example
