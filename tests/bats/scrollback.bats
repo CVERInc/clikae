@@ -47,6 +47,12 @@ PYEOF
   clikae init claude scrolltest
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
 #!/usr/bin/env bash
+# Stage log. The marker count says the replay did not happen; it cannot say
+# whether the engine ran, whether tmux rendered, or whether anyone ever
+# attached — and those need different fixes. Four fixes were pushed at this
+# from the count alone (2026-08-15) before the stages were written down.
+_stage() { printf '%s\n' "$1" >> "${HOME:?}/scrollback-stages.log"; }
+_stage "engine-started pwd=$PWD tmux=${TMUX:+yes}"
 echo "SCROLLBACK_MARKER_START"
 for i in {1..200}; do echo "line $i"; done
 # Wait for tmux to have actually rendered the last line instead of guessing at
@@ -54,10 +60,12 @@ for i in {1..200}; do echo "line $i"; done
 # loaded one, so this test failed only inside a full suite run — the shape of a
 # timing guess, not of a defect. This runs INSIDE the pane, so capture-pane with
 # no target reads the pane we just wrote to.
+_rendered=no
 for _ in $(seq 1 200); do
-  tmux capture-pane -p -S - 2>/dev/null | grep -q "line 200" && break
+  tmux capture-pane -p -S - 2>/dev/null | grep -q "line 200" && { _rendered=yes; break; }
   sleep 0.05
 done
+_stage "rendered=$_rendered"
 # …and then outlive the attach. What this test measures is the scrollback
 # capture and its replay; the replay only runs after `tmux attach` RETURNS, so
 # the engine must still be alive when the parent attaches and end afterwards.
@@ -70,10 +78,13 @@ done
 # and CI went red for eight pushes on this one test while every other job stayed
 # green. Wait for the client instead of hoping — the same lesson as the loop
 # above, one layer out.
+_client=no
 for _ in $(seq 1 200); do
-  [ -n "$(tmux list-clients 2>/dev/null)" ] && break
+  [ -n "$(tmux list-clients 2>/dev/null)" ] && { _client=yes; break; }
   sleep 0.05
 done
+_stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
+_stage "exiting"
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
   
@@ -96,6 +107,7 @@ INNER_EOF
     # from here: the session was never created, it died before the attach, the
     # attach was refused, or the capture wrote nothing. Three wrong guesses were
     # made from the count alone (2026-08-15) before anyone printed the state.
+    echo "--- stages:            $(cat "$TEST_HOME/scrollback-stages.log" 2>&1 | tr '\n' '|')"
     echo "--- tmux version:      $(tmux -V 2>&1)"
     echo "--- TMUX_TMPDIR:       ${TMUX_TMPDIR:-<unset>}"
     echo "--- sessions now:      $(tmux list-sessions 2>&1 | tr '\n' '|')"
