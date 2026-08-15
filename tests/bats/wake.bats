@@ -173,3 +173,24 @@ teardown() {
   [[ "$output" != *ASKED* ]] || false
   [ "$(wake_pref_get)" = "unset" ]            # and nothing was recorded
 }
+
+@test "wake: the watcher leaves when the engine's window is gone" {
+  # It used to ask `tmux has-session`. The watcher IS a window in that session,
+  # so it is the reason the session is alive — the condition could never become
+  # true. Reported 2026-08-15: the engine's window closed, this was the only
+  # window left, and the user was stranded on "watching for a limit" with no way
+  # out but closing the terminal. A loop whose exit condition it guarantees to be
+  # false is not a loop with a bug; it is a loop with no exit.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local s="ckwake$$"
+  tmux new-session -d -s "$s" 'sleep 30'
+  tmux new-window -d -t "$s" -n wake 'sleep 30'
+  # Both present: something other than the waiter is running, so it stays.
+  run bash -c "tmux list-windows -t '$s' -F '#{window_name}' | grep -qvE '^wake( |\$)'"
+  [ "$status" -eq 0 ]
+  # Engine window gone: only the waiter is left, so it must leave.
+  tmux kill-window -t "$s:0" 2>/dev/null || true
+  run bash -c "tmux list-windows -t '$s' -F '#{window_name}' | grep -qvE '^wake( |\$)'"
+  tmux kill-session -t "$s" 2>/dev/null || true
+  [ "$status" -ne 0 ] || { echo "the guard would have kept looping"; false; }
+}

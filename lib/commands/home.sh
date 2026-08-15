@@ -194,7 +194,14 @@ SPLIT
     # keeps no state. Empty unless one is actually counting.
     wake_left="$(live_wake_note "$name" 2>/dev/null || true)"
 
-    printf 'live\037%s\037%s\037%s\037%s\037%s %s %s\037%s\n' \
+      # \036 between the three, not a space. `age` is a human string — "2m ago" —
+      # so a space-packed field splits into the WRONG variables: the consumer read
+      # `attached age wake` and got wake="ago" on every live row. Non-empty means
+      # "a waiter is counting", so the board announced "resuming in ago" for any
+      # selected live session — claiming a feature that was not attached, which is
+      # exactly what the comment at the render site forbids. A non-whitespace IFS
+      # also preserves an empty wake_left, which a space separator collapses away.
+    printf 'live\037%s\037%s\037%s\037%s\037%s\036%s\036%s\037%s\n' \
       "$engine" "$tank" "$title" "$recap" "$attached" "$age" "$wake_left" "$name"
   done <<EOF
 $(live_session_names)
@@ -1529,7 +1536,7 @@ _home_pick_draw_body() {
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
         fi
         local _lat _lage _lwake
-        IFS=' ' read -r _lat _lage _lwake <<LIVEACT
+        IFS=$'\036' read -r _lat _lage _lwake <<LIVEACT
 $active
 LIVEACT
         ldot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; ldot="${ldot%%$'\037'*}"

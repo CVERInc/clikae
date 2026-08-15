@@ -141,3 +141,25 @@ PATHDIRS
   run live_wake_note "$(_sess)"
   [ -z "$output" ]
 }
+
+@test "live: a row's packed field survives an age that contains a space" {
+  # The live row packs attached/age/wake into ONE \037 field. It used to join
+  # them with a space — and `age` is a human string with a space in it ("2m
+  # ago"), so the consumer's `read attached age wake` assigned wake="ago" on
+  # every live row. wake non-empty means "a waiter is counting", so the board
+  # announced "resuming in ago" for any selected live session: a countdown that
+  # did not exist, which the render site's own comment forbids.
+  #
+  # live_wake_note was correct and covered by the test above. The wiring around
+  # it was not, so a right answer arrived in the wrong variable.
+  local row
+  row="live"$'\037'"claude"$'\037'"t"$'\037'"title"$'\037'"recap"$'\037'"1"$'\036'"2m ago"$'\036'""$'\037'"ck-claude-t"
+  local kind cli profile label alias active note
+  IFS=$'\037' read -r kind cli profile label alias active note <<<"$row"
+  local at age wake
+  IFS=$'\036' read -r at age wake <<<"$active"
+  [ "$at" = "1" ]
+  [ "$age" = "2m ago" ] || { echo "age was '$age'"; false; }
+  # The one that broke: no waiter counting must read as empty, not as a leftover.
+  [ -z "$wake" ] || { echo "wake leaked '$wake' out of the age"; false; }
+}

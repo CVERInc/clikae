@@ -169,6 +169,12 @@ wake_sit() {
   local attempt=0 now left
 
   while :; do
+    # Same reason as wake_watch: we are a window in this session, so we are what
+    # keeps it alive. If the engine's window is gone there is nothing left to
+    # resume INTO, and counting down in front of a person who cannot leave is
+    # the failure being fixed, not the feature.
+    tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
+      | grep -qvE '"'"'^wake( |$)'"'"' || return 0
     now="$(date +%s)"
     if [ "$now" -lt "$target" ]; then
       left=$(( target - now ))
@@ -356,7 +362,16 @@ wake_watch() {
   [ -n "$engine" ] && [ -n "$tank" ] && [ -n "$session" ] || return 1
 
   while :; do
-    tmux has-session -t "$session" 2>/dev/null || return 0   # session gone: so are we
+    # 🔴 Do NOT ask whether the session is alive. We are a window IN it, so we
+    # are the reason it is alive — the condition can never become true, and the
+    # loop runs forever. Reported 2026-08-15: the engine's window closed, this
+    # window was the only one left, and the user was stranded on "watching for a
+    # limit" with no way out but closing the terminal.
+    #
+    # Ask about the ENGINE instead: when no window other than ours remains, the
+    # work is over and staying is what keeps a dead session on screen.
+    tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
+      | grep -qvE '"'"'^wake( |$)'"'"' || return 0
 
     if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
       if [ -n "$reset" ]; then
