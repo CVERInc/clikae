@@ -140,7 +140,14 @@ _switch_run_tmux_wrapped() {
 
   local target_cmd scrollback_file="$HOME/.clikae/state/ck-$sess_id-$$.scrollback"
   target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
-  target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$sess_id\" > \"$scrollback_file\" 2>/dev/null || true"
+  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
+  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
+  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
+  # command with no target returned 1717. The scrollback file was therefore empty,
+  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
+  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
+  # session target to its active pane and hid it completely.
+  target_cmd="$target_cmd; tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null || true"
 
   # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
   # convenience layer over `clikae run`, never a dependency: a machine without it
@@ -272,7 +279,14 @@ EOF
   if [ "$same" = "1" ]; then
     local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
     target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
-    target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
+  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
+  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
+  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
+  # command with no target returned 1717. The scrollback file was therefore empty,
+  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
+  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
+  # session target to its active pane and hid it completely.
+    target_cmd="$target_cmd; tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null || true"
     
     local -a relay_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
     if [ -n "$CLIKAE_HOME" ]; then
