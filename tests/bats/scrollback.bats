@@ -89,7 +89,18 @@ _stage "exiting"
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
   
+  # Watch for the scrollback file. tmux_attach removes it on BOTH paths — after
+  # replaying it, and after a refused attach — so by assertion time it is always
+  # gone and its absence proves nothing. Record its size while it exists; that is
+  # the one link in the chain nothing has observed.
+  ( for _ in $(seq 1 400); do
+      f=$(ls "$TEST_HOME/.clikae/state/"*.scrollback 2>/dev/null | head -1)
+      [ -n "$f" ] && { wc -c < "$f" | tr -d ' ' > "$TEST_HOME/scrollback-size.txt"; }
+      sleep 0.05
+    done ) & _watcher=$!
+
   run _pty_run "$CLIKAE_BIN" claude scrolltest
+  kill "$_watcher" 2>/dev/null || true
   # This test drives the REAL tmux server (switch has no socket override), so it
   # must put back what it took: a surviving ck-claude-scrolltest changes what the
   # next run of this file — and any other test that reaches tmux — walks into.
@@ -108,6 +119,7 @@ INNER_EOF
     # from here: the session was never created, it died before the attach, the
     # attach was refused, or the capture wrote nothing. Three wrong guesses were
     # made from the count alone (2026-08-15) before anyone printed the state.
+    echo "--- scrollback size seen: $(cat "$TEST_HOME/scrollback-size.txt" 2>/dev/null || echo NEVER-EXISTED)"
     echo "--- stages:            $(cat "$TEST_HOME/scrollback-stages.log" 2>&1 | tr '\n' '|')"
     echo "--- tmux version:      $(tmux -V 2>&1)"
     echo "--- TMUX_TMPDIR:       ${TMUX_TMPDIR:-<unset>}"
