@@ -79,18 +79,20 @@ Which shape for which situation — the decision layer above these mechanics —
    engines: for a cold read on another family, use `agy --sandbox` in an empty
    directory, not a rewire.
 
-## Which tanks may you dispatch to
+6. **A solo tank is not yours to dispatch.** Existing ≠ available. Ask, in a
+   form you do not have to read by eye:
 
-Ask, do not assume — and ask in JSON rather than reading a table:
+   ```sh
+   clikae memory status --json | jq -r '.[] | select(.dispatchable) | .tank'
+   ```
 
-```sh
-clikae memory status --json | jq -r '.[] | select(.dispatchable) | .tank'
-```
+   `dispatchable` is false for a solo tank, and also for one in the impossible
+   *solo-and-shared* state — there the wiring does not match the label, so
+   nothing about it is safe to reason about. `clikae tanks` lists what exists; it
+   does not tell you what you may use. A solo tank is walled out of the fleet by design — `burn` never
+   auto-reroutes onto one, `memory share` refuses it, and the fleet's MCP fan-in
+   skips it. It is the human's private cockpit, not a spare seat.
 
-`dispatchable` is false for a **solo** tank — the maintainer's private cockpit,
-never a fleet seat — and also for one in the impossible *solo-and-shared* state,
-where the wiring does not match the label and nothing about it is safe to reason
-about. `clikae tanks` lists what exists; it does not tell you what you may use.
 
 ## Dispatching cold readers (the sub-agent shape)
 
@@ -122,12 +124,6 @@ guard, not a feature. `cd "$(mktemp -d)"` per run is the shape that works.
 For ONE prompt across N tanks, prefer `clikae conduct` — it already fans out and
 collects every leg. Reach for hand-rolled parallel ephemerals when the prompts
 differ.
-6. **A solo tank is not yours to dispatch.** Existing ≠ available. `clikae solo`
-   lists them and `clikae memory status` marks them `🔒 solo`; check before you fan
-   work out. A solo tank is walled out of the fleet by design — `burn` never
-   auto-reroutes onto one, `memory share` refuses it, and the fleet's MCP fan-in
-   skips it. It is the human's private cockpit, not a spare seat.
-
 ## agy (Antigravity) is the trap — read its recipe first
 
 agy is the one engine agents fumble most. Its Google login is **one global Keychain
