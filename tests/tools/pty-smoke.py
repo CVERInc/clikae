@@ -69,6 +69,18 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
                 'CLIKAE_LANG': 'en-US', 'TERM': 'xterm-256color',
                 'PATH': binp + os.pathsep + env.get('PATH', ''),
                 'CLIKAE_UPDATE_CHECK': '0'})
+    # Host-safety: this harness IS a terminal, so clikae takes the tmux path and
+    # really does create sessions. A throwaway $HOME does not contain those — the
+    # tmux socket is chosen by $TMUX / $TMUX_TMPDIR, neither of which HOME touches
+    # — so without this a smoke run left `ck-*` sessions on the developer's own
+    # server, and anything that later swept them would sweep live tanks with them.
+    # $TMUX must be REMOVED rather than overridden: a tmux client prefers it over
+    # TMUX_TMPDIR, so setting only the latter changes nothing when the suite is
+    # run from inside tmux, which is the normal way to run it here.
+    env.pop('TMUX', None)
+    env.pop('TMUX_PANE', None)
+    env['TMUX_TMPDIR'] = os.path.join(root, 'tmux')
+    os.makedirs(env['TMUX_TMPDIR'], exist_ok=True)
     return env
 
 

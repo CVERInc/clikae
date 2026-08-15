@@ -79,6 +79,34 @@ SECSTUB
   printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
 
   export CLIKAE_LANG=en-US
+  # Host-safety: the tmux tests are not polite guests. roam.bats calls a bare
+  # `tmux kill-server` twice (it needs a known-empty server to prove create-or-
+  # attach), and that command has no notion of "only the ones I made" — on the
+  # default socket it kills every clikae tank the maintainer has open, mid-work,
+  # with no warning and nothing to resume from. Found 2026-08-15 while auditing
+  # this layer: `scripts/test.sh` was unsafe to run on any machine with live
+  # tanks, which is every machine that dogfoods clikae.
+  #
+  # TMUX_TMPDIR moves the socket, so the suite gets a whole server of its own
+  # ($TEST_HOME/tmux/tmux-<uid>/default) and `kill-server` can only reach that.
+  #
+  # 🔴 TMUX_TMPDIR ALONE IS NOT ENOUGH. A tmux client prefers an inherited $TMUX
+  # over TMUX_TMPDIR, and anyone who runs this suite from a tmux pane — the normal
+  # way to run it on a machine that dogfoods clikae — has $TMUX set. Measured:
+  #
+  #   TMUX_TMPDIR=<iso> tmux list-sessions                 -> isolated
+  #   TMUX=<real> TMUX_TMPDIR=<iso> tmux list-sessions      -> the REAL server's
+  #                                                            four live tanks
+  #
+  # So the variable that actually decides has to go. tmux-label.bats already knew
+  # this and passed `env -u TMUX` per call; doing it here covers every test,
+  # including the ones that shell out to python and call tmux from there.
+  #
+  # This is the same root cause the suite is testing for — a tmux server belongs
+  # to whoever started it, and everyone here assumed they owned it.
+  unset TMUX TMUX_PANE
+  export TMUX_TMPDIR="$TEST_HOME/tmux"
+  mkdir -p "$TMUX_TMPDIR"
   # Keep the suite hermetic: don't let a local-model CLI that happens to be on
   # the dev machine's PATH (apfel/ollama/llm) make `handoff` auto-summarize. Tests
   # that exercise auto-detection re-enable this and stub a summarizer on PATH.
