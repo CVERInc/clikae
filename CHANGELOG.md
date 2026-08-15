@@ -93,6 +93,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `ln -sf` that creates it; the interactive path did both. Both now go
   through one function.
 
+### Added
+
+- **`scripts/verify-tmux-birth.sh`** — the manual half of Rule 7, which bats
+  cannot reach: whether the server hosting this session was born with file
+  access, on a real machine, against real macOS TCC. Read-only, safe to repeat.
+  Its first check is whether the *installed* clikae is even the one with the tmux
+  layer, because every later check would otherwise measure the old build and pass
+  for the wrong reason. Reports `skip` where it cannot look — a skip is not a
+  pass.
+
+  Rule 7 also gained the receipt that could only be taken once: the probe run
+  against a genuinely TCC-blind server, before a reboot removed it. It took the
+  TCC branch rather than the permissions branch, which is what makes the
+  "stat succeeds, bits allow, read still fails" discriminator real rather than
+  merely stub-tested.
+
 ### Changed
 
 - **The tmux layer has an owner: `lib/core/tmux.sh`.** `docs/DESIGN-tmux.md` has

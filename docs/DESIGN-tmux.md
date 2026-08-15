@@ -289,6 +289,19 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ok 1 memory probe: a read that fails while the bits allow it names the tmux server
   ```
 
+  🔴 **對真 TCC 的收據**（2026-08-15，在那顆中毒的 server 裡跑，重開機後這個環境就不存在了）。合成的形狀跟真的一不一樣，只有這一次量得到：
+  ```
+  $ source lib/core/{log,tmux,soul}.sh
+  $ memory_access_warn ~/.clikae/souls/me/memory      # → iCloud vault，真的被 TCC 擋著
+  [ WARN ] this tank cannot read its own memory.
+           memory: /Users/chodaict/.clikae/souls/me/memory
+           cause:  the permission bits allow it and the read still failed.
+           …
+  $ memory_access_warn <一個讀得到的目錄>              # 正控
+  （完全無輸出）
+  ```
+  走的是 TCC 分支而不是 EACCES 分支 —— 也就是說「stat 過 + bits 允許 + 讀失敗」這個判別式在真實條件下分得出來，不是只在 stub 下分得出來。
+
 ### Rule 8: 環境走檔案，不走 argv (The Environment Is Not a Command Line)
 
 - **症狀**：`clikae burn` 把呼叫者的整份環境（`compgen -e`）當成 `-e KEY=VAL` 交給 `tmux new-session`。當這個 burn 正好是生出 server 的那一個，那串 argv 就變成 **server 自己的 argv**，活得跟 server 一樣久，而且 `ps` 對全機可見——包含 API key 與 token。
