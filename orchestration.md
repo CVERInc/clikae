@@ -77,8 +77,11 @@ a real paid engine; the recipe is how you stop wasting it.
 2. **Give the task the easy way — don't hand-roll the engine flags.** Use
    `--prompt-file <f>` (or `--prompt`) + `--add-dir <dir>` and clikae fills in each
    engine's headless-write dialect for you (`claude`'s `-p …
-   --dangerously-skip-permissions --add-dir`, `codex`'s `exec -C … -s
-   workspace-write`). Hand-writing `-- -p '…'` is the #1 way to ship a job that
+   --permission-mode acceptEdits --add-dir`, `codex`'s `exec -C … -s
+   workspace-write`) — both **scoped to the roots you name**. claude's recipe
+   used `--dangerously-skip-permissions` until 2026-08-16, which bypasses the
+   permission system entirely: measured, it wrote outside the directories it was
+   given while the docs said "this directory". Hand-writing `-- -p '…'` is the #1 way to ship a job that
    *can't write* (see §4).
 
 3. **The artifact must be the file the task really produces.** `burn` succeeds when

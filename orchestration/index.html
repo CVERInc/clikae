@@ -94,7 +94,10 @@ captured output; the legs by <code>--out</code> content. Never trust <code>$?</c
 <li>
 <p><strong>Give the task the easy way — don't hand-roll the engine flags.</strong> Use
 <code>--prompt-file &lt;f&gt;</code> (or <code>--prompt</code>) + <code>--add-dir &lt;dir&gt;</code> and clikae fills in each
-engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --dangerously-skip-permissions --add-dir</code>, <code>codex</code>'s <code>exec -C … -s workspace-write</code>). Hand-writing <code>-- -p '…'</code> is the #1 way to ship a job that
+engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --permission-mode acceptEdits --add-dir</code>, <code>codex</code>'s <code>exec -C … -s workspace-write</code>) — both <strong>scoped to the roots you name</strong>. claude's recipe
+used <code>--dangerously-skip-permissions</code> until 2026-08-16, which bypasses the
+permission system entirely: measured, it wrote outside the directories it was
+given while the docs said &quot;this directory&quot;. Hand-writing <code>-- -p '…'</code> is the #1 way to ship a job that
 <em>can't write</em> (see §4).</p>
 </li>
 <li>
