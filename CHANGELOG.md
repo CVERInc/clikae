@@ -5,6 +5,143 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] — 2026-08-16
+
+### Added
+
+- **`clikae memory status --json`.** `dispatchable` per tank, so an agent can ask
+  which tanks it may use instead of parsing prose. False for a solo tank, and
+  false for the impossible *solo-and-shared* state — there the wiring does not
+  match the label, so nothing about that tank is safe to reason about.
+
+- **`scripts/mutate.sh` — break a guard on purpose and watch a test notice.** Not
+  wired into `scripts/test.sh` (it copies the repo per mutation and costs
+  minutes). Four rows, one per locked value in `docs/memory.md` §4: share without
+  ever opting in, make a solo tank stop being solo, silence the cross-account
+  note, turn seed-by-copy into a move. All four go red, and each row names the
+  tests that caught it. A green suite says the code behaves on the inputs someone
+  thought to write; only this says a guard is load-bearing.
+
+  Two traps it is built around, both hit on its own first run. A mutation that
+  did not apply looks exactly like a working guard — that run reported three
+  hollow guards, and all three were the ruler (`tank_is_solo` lives in
+  `profile_store.sh`, not the file being mutated; `notice.sh`'s function is
+  `carry_notice_once`, not the name that was guessed). Every row now checksums
+  its target and reports ⛔ rather than a verdict when nothing changed. And the
+  reason those expressions silently did nothing: perl needs balanced braces
+  inside `s{…}{…}`, and a shell function's replacement text almost always has an
+  unmatched `{`.
+
+### Fixed
+
+- **A test that never ran the function it named.** `wake-sit.bats` asserted the
+  "nobody to answer" case with `run bash -c 'wake_ask_once claude work'`. `bash
+  -c` forks, and shell functions do not cross a fork — measured, both
+  `wake_ask_once` and the `confirm()` stub two lines above report NOT-VISIBLE
+  inside it. So the assertion was that a *command not found* message does not
+  contain the word ASKED, which is true however `wake_ask_once` behaves,
+  including asking on every headless launch and then typing into a live session.
+  It passed for two months. Now called in the shell that holds the stub, and
+  proven to fire. The other 25 `bash -c` sites in the suite were swept for the
+  same shape; they are all real subprocesses.
+
+- **The doc gate's scope was a list written from memory.** `doc-names-exist.sh`
+  extracted candidate names with a hand-written prefix list. Measured: 20 real
+  functions are named in the docs and were invisible to it — `tank_is_solo`,
+  `next_tank`, `history_log`, `load_adapter` and five `limit_*` among them — and
+  renaming one in every source file left the gate green. A gate whose scope is an
+  enumeration is silent on exactly the entries its author forgot, and forgetting
+  is the failure it was built for. Now unioned with "any backticked all-lowercase
+  token containing an underscore", which needs no list.
+
+- **The doc gate read the working directory as the source.** A `sed -i.bak` left
+  `lib/commands/*.sh.bak` on disk during that very experiment, and the gate
+  counted them as repo source in both directions at once: a renamed function
+  still "existed" because the backup held its old definition, and the backup
+  counted as a caller, so the docstring was asked to list `burn.sh.bak`. An
+  editor swapfile or a merge `.orig` does the same. It reads `git ls-files` now,
+  with a name-based fallback for a tarball install. `docs/proposals/` is out of
+  scope with a reason: a proposal names the function it is asking for, and that
+  function does not exist yet — that is what a proposal is.
+
+- **`AGENTS.md`'s cold-reader section sat inside the numbered rules.** Rule 6's
+  text ran on into a `##` heading, so the "non-negotiable rules" list visibly
+  ended mid-rule. Moved after the list; the dispatch-pool query it duplicated is
+  merged into rule 6.
+
+- **A dangling half-sentence in 0.25.0's Known section**, left by a rewrite.
+
+### Corrected
+
+- **Four entries in this changelog were filed under `[0.25.0]` and shipped after
+  the `v0.25.0` tag** — the `conduct` read-only enforcement, `burn`'s scoped
+  write grant, `conduct` legs no longer leaving transcripts, and the Rule 8
+  correction. Anyone running 0.25.0, which is what Homebrew serves, would have
+  read that changelog and believed their `conduct` legs cannot write. They can.
+  Moved below — the two sections marked "written before the v0.25.0 tag" —
+  under the release where they actually ship. This is the same
+  defect the last two releases have been auditing out of the docs, committed in
+  the file that describes the audit.
+
+### Fixed (written before the v0.25.0 tag, shipped after it)
+
+- **🔴 `clikae conduct` said READ-ONLY and could write.** Its help says each leg
+  "runs the prompt headless and READ-ONLY on its own tank", and the code comment
+  explains the guarantee as *not passing* `--dangerously-skip-permissions`. That
+  is not a boundary. A tank whose own `settings.json` carries
+  `permissions.defaultMode: "auto"` approves writes without asking.
+
+  Measured 2026-08-16, and not as a synthetic probe: a leg dispatched from this
+  repo edited two tracked files — `lib/adapters/claude.sh` and
+  `tests/bats/conduct.bats` — while conduct was printing "read-only" on screen. A
+  leg then told to create a file created it.
+
+  codex's recipe has always passed `-s read-only`. claude's enforced nothing, so
+  the guarantee held on one engine and was decoration on the other. It now passes
+  `--permission-mode plan`, verified end to end: the same leg, told to write, no
+  longer can, and answers unchanged.
+
+- **`clikae burn claude` granted write access to the whole disk.** Its recipe
+  passed `--dangerously-skip-permissions`, which bypasses the permission system
+  rather than scoping it. Measured 2026-08-16, the same task both ways:
+
+  ```
+  inside  --add-dir    acceptEdits ✅ writes     skip-permissions ✅ writes
+  OUTSIDE --add-dir    acceptEdits ✅ blocked    skip-permissions 🔴 writes
+  ```
+
+  So an unattended run held the whole filesystem while the docs said "this
+  directory". codex's recipe has always been scoped (`-s workspace-write`) —
+  the same documented promise, bounded on one engine and not the other, which
+  has been the tell for every defect in this release.
+
+  Now `--permission-mode acceptEdits`. Capability is unchanged: the same
+  bash-and-write burn finished in 20s against 15s. The honest cost is that a task
+  reaching outside its roots now fails — which is the boundary working, and burn
+  judges by artifact, so it reports "no artifact" rather than a silent wrong
+  success.
+
+- **`conduct` legs left a transcript each**, so a fan-out across five tanks put
+  five rows in `clikae resume` for work already collected into `--out-dir`. A leg
+  is one arm of a fan-out, not a session anybody resumes. `--ephemeral` already
+  got this right; the audit recipe did not — two headless read-only paths, one
+  trace-free and one not, with nothing saying why. Measured: 311 transcripts
+  before a conduct run and 311 after.
+
+### Corrected (written before the v0.25.0 tag, shipped after it)
+
+- **Rule 8 suspected a bug in `switch` that does not exist.** It said the
+  curated `-e` list meant a session inherited the SERVER's environment for
+  everything else — whoever started it, possibly days earlier. Measured on an
+  isolated socket: a server created by a shell WITHOUT a probe variable, then a
+  new session created from a shell WITH it, and the session saw it. tmux
+  inherits the environment of the CLIENT issuing `new-session`, not the server
+  process.
+  What genuinely cannot change is an already-running session's environment —
+  which is Rule 4's whole reason for existing and what roam.bats' comment is
+  about. Conflating the two is how a doc sends someone to fix a non-bug; the
+  rule now carries the measurement instead of the suspicion.
+
 ## [0.25.0] — 2026-08-15
 
 ### Fixed
@@ -112,65 +249,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Selection and copy defaults**: `fill-character` blanks the dot field a
   smaller second client leaves on the larger screen.
 
-### Fixed
-
-- **🔴 `clikae conduct` said READ-ONLY and could write.** Its help says each leg
-  "runs the prompt headless and READ-ONLY on its own tank", and the code comment
-  explains the guarantee as *not passing* `--dangerously-skip-permissions`. That
-  is not a boundary. A tank whose own `settings.json` carries
-  `permissions.defaultMode: "auto"` approves writes without asking.
-
-  Measured 2026-08-16, and not as a synthetic probe: a leg dispatched from this
-  repo edited two tracked files — `lib/adapters/claude.sh` and
-  `tests/bats/conduct.bats` — while conduct was printing "read-only" on screen. A
-  leg then told to create a file created it.
-
-  codex's recipe has always passed `-s read-only`. claude's enforced nothing, so
-  the guarantee held on one engine and was decoration on the other. It now passes
-  `--permission-mode plan`, verified end to end: the same leg, told to write, no
-  longer can, and answers unchanged.
-
-- **`clikae burn claude` granted write access to the whole disk.** Its recipe
-  passed `--dangerously-skip-permissions`, which bypasses the permission system
-  rather than scoping it. Measured 2026-08-16, the same task both ways:
-
-  ```
-  inside  --add-dir    acceptEdits ✅ writes     skip-permissions ✅ writes
-  OUTSIDE --add-dir    acceptEdits ✅ blocked    skip-permissions 🔴 writes
-  ```
-
-  So an unattended run held the whole filesystem while the docs said "this
-  directory". codex's recipe has always been scoped (`-s workspace-write`) —
-  the same documented promise, bounded on one engine and not the other, which
-  has been the tell for every defect in this release.
-
-  Now `--permission-mode acceptEdits`. Capability is unchanged: the same
-  bash-and-write burn finished in 20s against 15s. The honest cost is that a task
-  reaching outside its roots now fails — which is the boundary working, and burn
-  judges by artifact, so it reports "no artifact" rather than a silent wrong
-  success.
-
-- **`conduct` legs left a transcript each**, so a fan-out across five tanks put
-  five rows in `clikae resume` for work already collected into `--out-dir`. A leg
-  is one arm of a fan-out, not a session anybody resumes. `--ephemeral` already
-  got this right; the audit recipe did not — two headless read-only paths, one
-  trace-free and one not, with nothing saying why. Measured: 311 transcripts
-  before a conduct run and 311 after.
-
-### Corrected
-
-- **Rule 8 suspected a bug in `switch` that does not exist.** It said the
-  curated `-e` list meant a session inherited the SERVER's environment for
-  everything else — whoever started it, possibly days earlier. Measured on an
-  isolated socket: a server created by a shell WITHOUT a probe variable, then a
-  new session created from a shell WITH it, and the session saw it. tmux
-  inherits the environment of the CLIENT issuing `new-session`, not the server
-  process.
-  What genuinely cannot change is an already-running session's environment —
-  which is Rule 4's whole reason for existing and what roam.bats' comment is
-  about. Conflating the two is how a doc sends someone to fix a non-bug; the
-  rule now carries the measurement instead of the suspicion.
-
 ### Known
 
 - The board's resume list and `clikae resume` still show different session
@@ -184,7 +262,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stated is the *reason* the list is short: that it is this directory's. (An
   earlier draft of this entry said nothing told the reader at all; that was
   wrong, and is the same overstatement this release keeps auditing out.)
-  so a session started in another directory reads as gone.
 
 ## [0.24.0] — 2026-08-15
 
