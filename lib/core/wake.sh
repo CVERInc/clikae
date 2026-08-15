@@ -169,10 +169,14 @@ wake_sit() {
   local attempt=0 now left
 
   while :; do
-    # Same reason as wake_watch: we are a window in this session, so we are what
-    # keeps it alive. If the engine's window is gone there is nothing left to
-    # resume INTO, and counting down in front of a person who cannot leave is
-    # the failure being fixed, not the feature.
+    # Two different endings, and they are not the same event.
+    #
+    # The session vanishing under us is abnormal — something killed it — and the
+    # caller has always been told so with a non-zero exit. Keep that.
+    tmux has-session -t "$session" 2>/dev/null || return 1
+    # Being the LAST window is normal: the engine finished. We are the reason the
+    # session is still alive, so staying means counting down in front of someone
+    # who cannot leave — the failure being fixed. Leave cleanly.
     tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
       | grep -qvE '"'"'^wake( |$)'"'"' || return 0
     now="$(date +%s)"
@@ -368,8 +372,10 @@ wake_watch() {
     # window was the only one left, and the user was stranded on "watching for a
     # limit" with no way out but closing the terminal.
     #
-    # Ask about the ENGINE instead: when no window other than ours remains, the
-    # work is over and staying is what keeps a dead session on screen.
+    # Session gone entirely: so are we, and that has always been a clean exit.
+    tmux has-session -t "$session" 2>/dev/null || return 0
+    # Ask about the ENGINE too: when no window other than ours remains, the work
+    # is over and staying is what keeps a dead session on screen.
     tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
       | grep -qvE '"'"'^wake( |$)'"'"' || return 0
 
