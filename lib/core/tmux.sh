@@ -41,6 +41,21 @@ tmux_server_running() {
   tmux list-sessions >/dev/null 2>&1
 }
 
+# _tmux_already_has <show-flags> <option> <needle> -> 0 when the option already
+# contains the needle.
+#
+# WHY: `terminal-overrides` and `terminal-features` are APPENDED to, and the
+# option block below runs on every session creation, not only when the server is
+# born — so each spawn added another copy. Measured on a two-day-old server:
+# four identical `*:smcup@:rmcup@` entries and four `xterm*:extkeys` ones.
+#
+# Harmless to tmux and invisible unless you go looking, but it is the same shape
+# as the bug this whole layer exists to stop: an operation written as though it
+# were idempotent when it is really cumulative.
+_tmux_already_has() {
+  tmux show-options "$1" "$2" 2>/dev/null | grep -qF -- "$3"
+}
+
 # tmux_usable -> 0 when an interactive tmux session is possible here.
 # tmux is a convenience over `clikae run`, never a dependency (DESIGN-tmux Rule 2).
 tmux_usable() {
@@ -170,14 +185,41 @@ tmux_spawn_session() {
   # a client attaches, so a session you are already inside keeps the old behaviour
   # until you detach and come back.
   #
-  # Rule 1 — one invocation. Do not split this apart.
-  tmux start-server \
-    \; set-option -g history-limit 50000 \
-    \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \
-    \; set-option -s extended-keys on \
-    \; set-option -as terminal-features ",xterm*:extkeys" \
-    \; new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd" \
-    || return 1
+  # SELECTING AND COPYING. Disabling the outer terminal's alternate screen (the
+  # smcup@/rmcup@ override, needed so the scrollback capture has something to
+  # capture) has a cost nobody costed: the terminal's own scrollback fills with
+  # tmux's full-screen redraws, so scrolling the wheel shows redraw debris while
+  # the clean 50000-line history sits in tmux where the wheel cannot reach it.
+  # Reported 2026-08-15 as "since clikae started using tmux I cannot copy text",
+  # and that is exactly right — the text was never selectable, it was unreachable.
+  #
+  #   mouse on          the wheel scrolls tmux's real history, and a drag selects
+  #                     in it. Cost: a native terminal selection (to paste
+  #                     somewhere tmux is not) now needs ⌥ held.
+  #   set-clipboard on  a copy-mode yank reaches the SYSTEM clipboard over OSC 52.
+  #                     tmux's default here is `external`, which passes an
+  #                     application's own OSC 52 through but never emits one for
+  #                     tmux's own selections — so before this, copying inside
+  #                     copy-mode put the text in a buffer only tmux could paste.
+  #
+  # Rule 1 — ONE invocation. `tmux start-server \; set-option …` on its own
+  # returns 0 and then the server exits (exit-empty), taking the settings with
+  # it, so the options and the session that keeps them alive travel together.
+  local -a chain=(start-server)
+  chain+=(";" set-option -g history-limit 50000)
+  chain+=(";" set-option -s extended-keys on)
+  chain+=(";" set-option -g mouse on)
+  chain+=(";" set-option -s set-clipboard on)
+  # The two append-only options, added only when they are not already in place.
+  if ! _tmux_already_has -g terminal-overrides '*:smcup@:rmcup@'; then
+    chain+=(";" set-option -ag terminal-overrides ",*:smcup@:rmcup@")
+  fi
+  if ! _tmux_already_has -s terminal-features 'xterm*:extkeys'; then
+    chain+=(";" set-option -as terminal-features ",xterm*:extkeys")
+  fi
+  chain+=(";" new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd")
+
+  tmux "${chain[@]}" || return 1
 
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
   return 0

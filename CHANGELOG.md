@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **You can select and copy text in a clikae session again.** Reported as "since
+  clikae started using tmux I cannot copy text", and the diagnosis is that the
+  text was never unselectable — it was unreachable. Disabling the outer
+  terminal's alternate screen (the `smcup@/rmcup@` override, which the scrollback
+  capture needs) fills that terminal's own scrollback with tmux's full-screen
+  redraws, so the wheel scrolls debris while the clean 50000-line history sits in
+  tmux where the wheel cannot reach it. And tmux's default `set-clipboard
+  external` forwards an application's own OSC 52 but never emits one for tmux's
+  own selections, so even a copy-mode yank landed in a buffer only tmux could
+  paste from.
+
+  `mouse on` puts the wheel and the drag onto tmux's real history;
+  `set-clipboard on` puts a copy-mode yank on the system clipboard. The cost,
+  stated plainly: a *native* terminal selection — for pasting somewhere tmux is
+  not — now needs `⌥` held.
+
+- **Global tmux options no longer pile up one copy per session.**
+  `terminal-overrides` and `terminal-features` are appended to, and the option
+  block ran on every session creation rather than only at server birth. Measured
+  on a two-day-old server: four identical `*:smcup@:rmcup@` entries and four
+  `xterm*:extkeys`. Harmless to tmux, and the same shape as the bug this whole
+  layer exists to stop — an operation written as though it were idempotent when
+  it is really cumulative.
+
 - **🔴 Running the test suite no longer kills every tank you have open.**
   `tests/bats/roam.bats` calls a bare `tmux kill-server` twice — it needs a
   known-empty server to prove create-or-attach — and the suite had no tmux

@@ -214,6 +214,36 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   rc=0
   ```
 
+### Rule 9: 選取與複製 (Selection Is Part of the Deal)
+
+- **症狀**：「clikae 支援 tmux 之後，我無法複製文字了。」（2026-08-15 回報）
+- **診斷**：不是選不起來，是**構不到**。Rule 1 的 `*:smcup@:rmcup@` 關掉外層終端機的替代畫面（scrollback 擷取才有東西可擷），代價沒有人算過：
+  ```
+  $ tmux list-panes -a -F '#{session_name}: alternate_on=#{alternate_on}'
+  ck-claude-h: alternate_on=1          # 內層 app 在用替代畫面
+                                       # 但外層 Ghostty 被 smcup@ 擋掉了
+  ```
+  於是外層終端機的 scrollback 裝滿 tmux 的全畫面重繪殘渣，而乾淨的 50000 行歷史在 tmux 那邊、滾輪構不到。再加上：
+  ```
+  $ tmux show-options -s set-clipboard
+  set-clipboard external      # tmux 預設：轉發 app 自己的 OSC 52，
+                              # 但絕不為 tmux 自己的選取發一個
+  ```
+  ——所以就算進 copy-mode 複製，也只進得了 tmux 的 buffer，到不了 macOS 剪貼簿。
+- **規範**：兩個選項跟 Rule 1 的其餘全域設定同一串下：
+  ```bash
+  set-option -g mouse on          # 滾輪捲 tmux 的真歷史；拖曳在裡面選取
+  set-option -s set-clipboard on  # copy-mode 的 yank 走 OSC 52 進系統剪貼簿
+  ```
+  代價要講清楚：要用終端機**原生**選取（貼到 tmux 以外的地方）得按著 `⌥`。這是刻意換的——預設情境是「我要複製剛剛畫面上的東西」，那條路現在直通。
+
+- 🔴 **附帶修掉一個累積型 bug**：`terminal-overrides` / `terminal-features` 是 **append**，而選項區塊每次建立 session 都跑，所以每 spawn 一次就多一份。實測兩天大的 server：
+  ```
+  terminal-overrides[1..4]   *:smcup@:rmcup@     ← 四份一模一樣
+  terminal-features[3,5,6,7] xterm*:extkeys      ← 四份
+  ```
+  現在先查再 append。**這跟整層要防的是同一個形狀：把累積型操作當成冪等的來寫。**
+
 ### Rule 7: Server 出生時繼承的東西，之後補不回來 (Birth Inheritance)
 
 - **症狀**：某個 tank 讀不到自己的 Soul，`Operation not permitted`。同一個目錄，換一顆 server 就讀得到。沒有彈窗、沒有任何錯誤訊息，只有 EPERM。
