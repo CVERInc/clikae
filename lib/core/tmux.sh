@@ -207,6 +207,17 @@ tmux_spawn_session() {
   # it, so the options and the session that keeps them alive travel together.
   local -a chain=(start-server)
   chain+=(";" set-option -g history-limit 50000)
+  # 🔴 SET window-size, do not inherit it. Rule 1 describes clikae's sizing
+  # behaviour as "window-size latest 下最近使用的 client 決定尺寸" — and nothing
+  # ever set it. tmux's own default has moved across releases, so the behaviour
+  # the design doc promises held on 3.7b and not on 3.4: measured on ubuntu CI,
+  # a 100-column client attached and the window stayed at default-size 80
+  # (tests/bats/roam.bats "a second client attaches…", red there since this
+  # layer landed while macOS passed every time).
+  #
+  # Roaming is the reason this layer exists — walk away from one device, pick the
+  # session up on another — and it was resting on a default nobody chose.
+  chain+=(";" set-option -g window-size latest)
   chain+=(";" set-option -s extended-keys on)
   # The two append-only options, added only when they are not already in place.
   #
