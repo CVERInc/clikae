@@ -211,11 +211,23 @@ tmux_spawn_session() {
   chain+=(";" set-option -g mouse on)
   chain+=(";" set-option -s set-clipboard on)
   # The two append-only options, added only when they are not already in place.
-  if ! _tmux_already_has -g terminal-overrides '*:smcup@:rmcup@'; then
+  #
+  # 🔴 Only ASK when a server exists to ask. With no server there is nothing to
+  # duplicate, so the answer is known without a query — and querying anyway means
+  # running a tmux command against a socket that is not there, moments before
+  # creating it. Some tmux builds start a server to answer such a query; ours
+  # does not, which is exactly why this cost a green CI run to find. Whatever the
+  # local build does, not asking is correct and cannot race with the create.
+  if [ "$births_server" -eq 1 ]; then
     chain+=(";" set-option -ag terminal-overrides ",*:smcup@:rmcup@")
-  fi
-  if ! _tmux_already_has -s terminal-features 'xterm*:extkeys'; then
     chain+=(";" set-option -as terminal-features ",xterm*:extkeys")
+  else
+    if ! _tmux_already_has -g terminal-overrides '*:smcup@:rmcup@'; then
+      chain+=(";" set-option -ag terminal-overrides ",*:smcup@:rmcup@")
+    fi
+    if ! _tmux_already_has -s terminal-features 'xterm*:extkeys'; then
+      chain+=(";" set-option -as terminal-features ",xterm*:extkeys")
+    fi
   fi
   chain+=(";" new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd")
 
