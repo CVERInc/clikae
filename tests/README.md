@@ -97,3 +97,38 @@ nothing):
 ```bash
 grep -rnE '^[[:space:]]*\[\[ .* \]\][[:space:]]*$' tests/bats
 ```
+
+## Proving a guard is load-bearing (`scripts/mutate.sh`)
+
+A green suite says the code behaves on the inputs someone thought to write. It
+does not say a guard exists. A test can assert an outcome the code reaches for
+some other reason — or never call the function it names at all:
+
+```bash
+run bash -c 'wake_ask_once claude work < /dev/null'
+```
+
+`bash -c` forks, and shell functions do not cross a fork. That line asserted
+that a "command not found" message lacks the word ASKED, which is true however
+`wake_ask_once` behaves. It passed for two months. (Fixed 2026-08-16; the other
+25 `bash -c` sites in the suite were swept and are all real subprocesses.)
+
+The only evidence that a guard is load-bearing is watching the suite go red when
+you take it away. `scripts/mutate.sh` does that for docs/memory.md §4's locked
+values — the promises clikae makes about the human's data. It is **not** part of
+`scripts/test.sh`: it copies the repo per mutation, so it costs minutes.
+
+```bash
+scripts/mutate.sh      # 4 guard(s) proven, 0 hollow
+```
+
+Add a row when you add a guard worth that. Two traps, both hit on the first run:
+
+- **A mutation that did not apply looks exactly like a working guard.** The
+  first run reported three hollow guards; all three were the ruler (the function
+  lived in another file, or I guessed its name). Every row checksums its target
+  before and after, and a no-op mutation reports ⛔ rather than a verdict.
+- **Use `!` as the `s///` delimiter, never `{}`.** Perl needs balanced braces
+  inside `s{}{}`, and a shell function's replacement almost always has an
+  unmatched `{` — perl dies of a syntax error, the file is untouched, and you
+  land in the trap above.
