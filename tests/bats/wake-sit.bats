@@ -290,7 +290,14 @@ PYEOF
   _src_wake
   rm -f "$CLIKAE_HOME/wake-on-reset"
   confirm() { echo "ASKED"; return 0; }
-  run bash -c 'wake_ask_once claude work < /dev/null'
+  # 🔴 NOT `run bash -c 'wake_ask_once …'`. That spawns a fresh shell, and shell
+  # functions do not cross a fork: measured 2026-08-16, both wake_ask_once and
+  # the confirm() stub above report NOT-VISIBLE inside it. So this test used to
+  # assert that a "command not found" message does not contain the word ASKED —
+  # true no matter what wake_ask_once does, including asking every time and
+  # typing into a live session. It passed for two months without once running
+  # the function it names. Call it here, in the shell that has the stub.
+  run wake_ask_once claude work < /dev/null
   [[ "$output" != *ASKED* ]] || { echo "$output"; false; }
   [ "$(wake_pref_get)" = "unset" ]
 }
