@@ -91,95 +91,10 @@ _supervise_decision() {
   esac
 }
 
-# _switch_tmux_usable -> 0 when an interactive tmux session is possible here.
-# tmux is a convenience over `clikae run`, never a dependency.
-_switch_tmux_usable() {
-  command -v tmux >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]
-}
-
-# EXTENDED KEYS. tmux defaults to `extended-keys off`, which flattens a modifier
-# onto the key it modifies before the application ever sees it — so Shift+Enter
-# arrives as a plain Enter, and an engine that treats Enter as "send" submits the
-# message instead of inserting a newline. Reported 2026-08-13 as "shift+return
-# stopped inserting a line break", and it was: the tmux layer put a translator in
-# the middle of the keyboard.
-#
-# Two settings, because they answer different questions. `extended-keys on` is
-# whether tmux FORWARDS the extended encoding to the application — `on`, not
-# `always`, so it only does so for an application that asked, which is the
-# conservative half. `terminal-features …:extkeys` is whether tmux ASKS the outer
-# terminal for them at all; without it tmux never requests the sequences and
-# there is nothing to forward. Measured: with both set, a fresh client reports
-# `extkeys` among its features, and without them it does not.
-#
-# They are SERVER options, so this reaches the whole tmux server rather than one
-# session — the same scope the history-limit and terminal-overrides lines above
-# already take. Benign in the other direction: an application that never requests
-# extended keys is unaffected.
-#
-# 🔴 Only a NEW client picks the feature up. Terminal features are resolved when
-# a client attaches, so a session you are already inside keeps the old behaviour
-# until you detach and come back.
-
-# _switch_tmux_label <session> <engine> <tank> — make the status bar say where you
-# are, in clikae's own words.
-#
-# That bar is the single most persistently visible string in the product: it sits
-# in the corner for the whole session. Until now clikae never set it, so tmux
-# derived it from an INTERNAL identifier and showed `[ck-claude-x:bash]`. Two
-# different mistakes in eight characters:
-#
-#   `ck-`  — the session NAME has to be unique and must not collide with sessions
-#            the user opened themselves, so the prefix earns its keep. But that
-#            name was doing double duty as the human-facing label, and those are
-#            not the same requirement. tmux lets them be separate, so they are:
-#            the session stays `ck-<engine>-<tank>` for `tmux ls`, and the bar
-#            shows `engine/tank` — the vocabulary the user already thinks in.
-#   `bash` — a plain defect. The pane is running claude; the bar said bash,
-#            because the launch command literally is `bash -c …`. Three tanks
-#            open meant three windows called `bash`, which is precisely the one
-#            job a status bar has.
-#
-# Best-effort throughout: a tmux too old for any of these options leaves the
-# default bar, which is what we had yesterday. Cosmetics never fail a launch.
-_switch_tmux_label() {
-  local session="$1" engine="$2" tank="$3"
-  tmux set-option -t "$session" status-left-length 40 2>/dev/null || true
-  tmux set-option -t "$session" status-left "[$engine/$tank] " 2>/dev/null || true
-  # Without this tmux renames the window after whatever is running in it, and
-  # `-n` is undone the moment the engine spawns a child.
-  tmux set-window-option -t "$session" automatic-rename off 2>/dev/null || true
-  # …and `-n` cannot be trusted to have survived to here either: on a machine
-  # whose tmux has automatic-rename ON (which is tmux's own default), the window
-  # is renamed in the gap between `new-session -n` and the line above. A test
-  # found this by setting the option the way a user's config would; with the
-  # maintainer's own config it never reproduced. So state the name again, now
-  # that it will stick.
-  local current
-  current="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null || true)"
-  # Never touch the waiter's window — it carries the countdown in its name.
-  case "$current" in wake*) return 0 ;; esac
-  tmux rename-window -t "$session" "$engine" 2>/dev/null || true
-}
-
-# _switch_tmux_attach <session> <started_here> <scrollback_file>
-# Attach, replay what scrolled past, and say whether tmux would host us at all.
-# Returns 1 when tmux refuses (TERM it cannot draw on, for one) — and then puts
-# back what we started, because `new-session -d` has already launched the engine
-# and a session nobody can see still spends the account's quota.
-_switch_tmux_attach() {
-  local session="$1" started_here="$2" scrollback_file="$3"
-  if tmux attach -t "$session"; then
-    if [ -s "$scrollback_file" ]; then
-      awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
-      rm -f "$scrollback_file"
-    fi
-    return 0
-  fi
-  [ "$started_here" -eq 1 ] && tmux kill-session -t "$session" 2>/dev/null
-  rm -f "$scrollback_file"
-  return 1
-}
+# The tmux layer — session creation, the status bar, attach-or-fall-back — lives
+# in lib/core/tmux.sh. It used to live here, which is why burn.sh had to write its
+# own and got it wrong. DESIGN-tmux.md Rule 2 asked for one shared set of exits;
+# this file is now one of its callers rather than its owner.
 
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3
@@ -211,18 +126,17 @@ _switch_run_tmux_wrapped() {
     [ -n "$_argsum" ] && sess_id="$tank_id-$_argsum"
   fi
 
-  local -a env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
+  # What crosses into the session. tmux copies only its `update-environment` list
+  # and inherits everything else from the SERVER's process environment — whoever
+  # started it, not us — so anything the engine needs is named here explicitly.
+  # The SSH agent socket is deliberately NOT in this list: tmux_spawn_session
+  # injects clikae's stable symlink for every caller (DESIGN-tmux Rule 4).
+  local -a spawn_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
   if [ -n "$CLIKAE_HOME" ]; then
-    env_args+=("-e" "CLIKAE_HOME=$CLIKAE_HOME")
+    spawn_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
   fi
 
   mkdir -p "$HOME/.clikae/state"
-  
-  if [[ -n "$SSH_AUTH_SOCK" && -S "$SSH_AUTH_SOCK" ]]; then
-    chmod 0700 "$HOME/.clikae/state"
-    ln -sf "$SSH_AUTH_SOCK" "$HOME/.clikae/state/clikae_ssh_auth.sock"
-    env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
-  fi
 
   local target_cmd scrollback_file="$HOME/.clikae/state/ck-$sess_id-$$.scrollback"
   target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
@@ -234,7 +148,7 @@ _switch_run_tmux_wrapped() {
   # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
   # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
   # fail, because the launch went through a tmux that was not there.
-  if ! _switch_tmux_usable; then
+  if ! tmux_usable; then
     while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
@@ -253,8 +167,9 @@ KV
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
     tmux has-session -t "ck-$sess_id" 2>/dev/null || \
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
-        _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
+      tmux_spawn_session "${spawn_env[@]}" \
+        --session "ck-$sess_id" --window "$engine" -- "bash -c \"$target_cmd\""
+    tmux_label "ck-$sess_id" "$engine" "$tank"
     wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
     
     local clients
@@ -265,9 +180,10 @@ KV
   else
     local started_here=0
     if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
-      tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${env_args[@]}" -s "ck-$sess_id" -n "$engine" "bash -c \"$target_cmd\""
-        _switch_tmux_label "ck-$sess_id" "$engine" "$tank"
-    wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
+      tmux_spawn_session "${spawn_env[@]}" \
+        --session "ck-$sess_id" --window "$engine" -- "bash -c \"$target_cmd\""
+      tmux_label "ck-$sess_id" "$engine" "$tank"
+      wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
       started_here=1
     fi
 
@@ -279,7 +195,7 @@ KV
     # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
     # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
     # quietly taken roaming away from the one device this feature exists for.
-    if ! _switch_tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file"; then
+    if ! tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file"; then
       while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
@@ -358,26 +274,32 @@ EOF
     target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
     target_cmd="$target_cmd; tmux capture-pane -p -S - -t \"ck-$tank_id\" > \"$scrollback_file\" 2>/dev/null || true"
     
-    local -a relay_env_args=("-e" "CLIKAE_TANK_NAME=$tank_id" "-e" "HOME=$HOME")
+    local -a relay_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
     if [ -n "$CLIKAE_HOME" ]; then
-      relay_env_args+=("-e" "CLIKAE_HOME=$CLIKAE_HOME")
+      relay_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
     fi
-    if [[ -n "$SSH_AUTH_SOCK" && -S "$SSH_AUTH_SOCK" ]]; then
-      relay_env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
-    fi
-    
+    # No SSH_AUTH_SOCK here any more. This site used to pass the symlink path
+    # WITHOUT the `ln -sf` that creates it — the interactive path did both, the
+    # carry path only the second half, so a carried session could be handed a
+    # socket that was never linked. tmux_spawn_session does both, for everyone.
+
     # The carry runs unattended by definition — the tank went dry mid-session — so
     # every guard the plain switch path grew applies here too, and this site had
     # none of them: no tmux check, a capture without -S - (last screen only), and
     # an attach with nothing to catch its refusal.
-    if _switch_tmux_usable; then
+    #
+    # It is also the path most likely to CREATE the server, precisely because
+    # nobody is watching. That is how a server ends up born from a context holding
+    # no file-access grant, which no later call can repair (DESIGN-tmux Rule 7).
+    if tmux_usable; then
       local started_here=0
       if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
-        tmux start-server \; set-option -g history-limit 50000 \; set-option -ag terminal-overrides ",*:smcup@:rmcup@" \; set-option -s extended-keys on \; set-option -as terminal-features ",xterm*:extkeys" \; new-session -d "${relay_env_args[@]}" -s "ck-$tank_id" -n "$engine" "bash -c \"$target_cmd\""
-        _switch_tmux_label "ck-$tank_id" "$engine" "$tank"
+        tmux_spawn_session "${relay_env[@]}" \
+          --session "ck-$tank_id" --window "$engine" -- "bash -c \"$target_cmd\""
+        tmux_label "ck-$tank_id" "$engine" "$tank"
         started_here=1
       fi
-      _switch_tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" && return 0
+      tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" && return 0
     fi
     exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
   else

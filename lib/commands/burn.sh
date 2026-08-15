@@ -434,17 +434,42 @@ cmd_burn() {
     
     rc=0
     if command -v tmux >/dev/null 2>&1; then
-      local -a tmux_env_args=()
-      local key
-      for key in $(compgen -e); do
-        # Do not inherit TMUX* from the parent, this prevents nested session pollution
-        if [[ "$key" != TMUX* ]]; then
-          tmux_env_args+=("-e" "$key=${!key}")
-        fi
-      done
-
       local wrapper_script="$HOME/.clikae/state/${run_id}.sh"
-      cat <<EOF > "$wrapper_script"
+
+      # THE ENVIRONMENT TRAVELS IN THIS FILE, NOT ON THE COMMAND LINE.
+      #
+      # A burn inherits the caller's whole environment on purpose — an unattended
+      # engine run needs the API keys, proxy settings and PATH the human had. The
+      # old shape handed all of it to `tmux new-session` as `-e KEY=VAL` pairs, and
+      # those pairs stay in the tmux process's argv. When the burn is what CREATES
+      # the server (the common case for an unattended run on a fresh machine) that
+      # argv becomes the SERVER's argv and lives as long as the server does —
+      # readable by every process on the machine. Measured 2026-08-15: a server
+      # born days earlier still listed each `-e` pair it was created with in `ps`.
+      #
+      # The wrapper is mode 0600 and already exists for the coroner trap, so the
+      # environment goes there instead. Create it empty and lock it down BEFORE
+      # writing, so there is no window where it is world-readable with secrets in.
+      : > "$wrapper_script"
+      chmod 0600 "$wrapper_script"
+      {
+        printf '{\n'
+        local key
+        for key in $(compgen -e); do
+          case "$key" in
+            TMUX*) continue ;;   # never inherit: it makes tmux refuse to nest
+            # Only well-formed identifiers; anything else cannot be re-exported.
+            [!A-Za-z_]*) continue ;;
+            *[!A-Za-z0-9_]*) continue ;;
+          esac
+          printf 'export %s=%q\n' "$key" "${!key}"
+        done
+        # Readonly builtins in the child would fail loudly and dirty the pane;
+        # restoring an environment is best-effort by nature.
+        printf '} 2>/dev/null\n'
+      } >> "$wrapper_script"
+
+      cat <<EOF >> "$wrapper_script"
 while IFS= read -r kv; do [ -n "\$kv" ] && export "\${kv%%=*}"="\${kv#*=}"; done <<'KV'
 $(adapter_export_env "$dir")
 KV
@@ -456,9 +481,17 @@ trap 'echo 143 > "$state_file"; exit 143' TERM
 trap 'echo \$? > "$state_file"; exit' EXIT
 ( $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null ) 2>&1 | tee "$log_file"
 EOF
-      chmod +x "$wrapper_script"
+      chmod 0700 "$wrapper_script"
 
-      if tmux new-session -d "${tmux_env_args[@]}" -e "CLIKAE_RUN_ID=$run_id" -s "ck-$run_id" "bash \"$wrapper_script\""; then
+      # One constructor for every path (lib/core/tmux.sh). This site used a bare
+      # `tmux new-session`, so a server it created carried none of clikae's global
+      # options — a burn on a fresh machine got tmux's 2000-line default scrollback
+      # instead of 50000, and the next `switch` silently repaired it, which is why
+      # it went unnoticed. tests/bats/tmux-spawn.bats pins it.
+      if tmux_spawn_session \
+           --env "CLIKAE_RUN_ID=$run_id" --env "HOME=$HOME" \
+           --env "CLIKAE_HOME=$CLIKAE_HOME" \
+           --session "ck-$run_id" -- "bash \"$wrapper_script\""; then
         # Wait for completion via state file polling (Coroner trap)
         local poll_int=1
         while [ ! -f "$state_file" ]; do

@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **🔴 Running the test suite no longer kills every tank you have open.**
+  `tests/bats/roam.bats` calls a bare `tmux kill-server` twice — it needs a
+  known-empty server to prove create-or-attach — and the suite had no tmux
+  isolation at all, so on the default socket that command reached the
+  maintainer's live sessions. `scripts/test.sh` was unsafe to run on any machine
+  that dogfoods clikae, which is every machine that runs it.
+
+  The fix is in `tests/helpers.bash`, and it took two parts, because the obvious
+  one is not enough. `TMUX_TMPDIR` moves the socket; an inherited `$TMUX`
+  overrides `TMUX_TMPDIR` and points straight back at the real server. Anyone
+  running the suite from a tmux pane — the normal way — had the second. Measured:
+
+  ```
+  TMUX_TMPDIR=<iso> tmux list-sessions              -> isolated
+  TMUX=<real> TMUX_TMPDIR=<iso> tmux list-sessions  -> the four live tanks
+  ```
+
+  So the suite now unsets `TMUX`/`TMUX_PANE` as well. `tmux-spawn.bats` keeps a
+  negative control that proves the unset is load-bearing rather than decorative.
+
+- **A tank that cannot read its own memory now says so, loudly, instead of
+  starting with none.** A Soul kept under `~/Library/Mobile Documents` became
+  unreadable to every tank on one tmux server and stayed readable on another;
+  the only symptom was `EPERM`, with no prompt and nothing in any log.
+
+  The cause is structural and is now Rule 7 of `docs/DESIGN-tmux.md`: a tmux
+  server inherits its file-access permission from whoever created it, keeps it
+  for life, and cannot be granted more afterwards. A server born from a context
+  holding no grant makes every tank on it, forever, unable to read a protected
+  directory.
+
+  `soul_prelaunch` now probes the memory it is about to hand over. The test is a
+  two-syscall asymmetry rather than an errno: `stat` succeeds and the read still
+  fails. If the permission bits already deny the read, that is an ordinary
+  `chmod` and is reported as one; if the bits ALLOW it and the read still fails,
+  something above the filesystem refused, and the message names the server and
+  how to replace it. It warns and starts anyway — a session with no memory is
+  bad, a tank that will not start is worse.
+
+- **`clikae burn` no longer creates a tmux server without clikae's global
+  options.** `burn.sh` used a bare `tmux new-session -d`, with none of the
+  option prefix the three `switch` call sites carried. When a burn was the first
+  thing to run on a machine, the server it created took tmux's defaults —
+  measured at `history-limit 2000` against the intended 50000 — and a later
+  `switch` silently repaired it, which is why it was never noticed.
+
+- **`clikae burn` no longer publishes your environment to `ps`.** It passed the
+  caller's whole environment (`compgen -e`) to `tmux new-session` as `-e KEY=VAL`
+  pairs. Those pairs stay in the tmux process's argv, and when the burn is what
+  creates the server, that argv is the *server's* — readable by every process on
+  the machine for as long as it lives. Verified on a server born days earlier:
+  its command line still listed each `-e` pair. The environment now travels in
+  burn's wrapper script, which is created and `chmod 0600`'d before anything is
+  written to it.
+
+- **A carried session is no longer handed an SSH agent socket that was never
+  created.** The dry-tank carry path passed clikae's stable symlink path without
+  the `ln -sf` that creates it; the interactive path did both. Both now go
+  through one function.
+
+### Changed
+
+- **The tmux layer has an owner: `lib/core/tmux.sh`.** `docs/DESIGN-tmux.md` has
+  specified this since v0.4 — Rule 2 asks for one shared set of exits, and Rule 5
+  refers to a wrapper called `clikae_spawn_session`. That function was never
+  written: three mentions in the design doc, zero in the source. Four call sites
+  re-implemented the rules by hand and drifted, which is every defect above.
+
+  `tmux_spawn_session` is now the only `tmux new-session` in the codebase, and it
+  holds Rules 1, 4, 5 and 7 in one place. `tmux_usable`, `tmux_attach` and
+  `tmux_label` moved out of `switch.sh` with it. No user-visible behaviour change
+  beyond the fixes listed above.
+
 ## [0.23.0] — 2026-08-14
 
 ### Added

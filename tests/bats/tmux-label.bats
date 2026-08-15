@@ -11,8 +11,11 @@
 load '../helpers'
 
 _src_switch() {
+  # The status bar moved to lib/core/tmux.sh with the rest of the tmux layer —
+  # switch.sh is a caller now, not the owner. The helper keeps its name so the
+  # tests below read the same; what it sources is the thing that changed.
   # shellcheck source=/dev/null
-  . "$CLIKAE_TEST_ROOT/lib/commands/switch.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
 }
 _src_wake() {
   # shellcheck source=/dev/null
@@ -31,7 +34,7 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_switch
   tmux new-session -d -s "$(_sess)" 'sleep 30'
-  _switch_tmux_label "$(_sess)" claude work
+  tmux_label "$(_sess)" claude work
   run tmux show-options -t "$(_sess)" status-left
   [[ "$output" == *"claude/work"* ]] || false
   # And the internal prefix is gone from what a person reads.
@@ -49,7 +52,7 @@ teardown() {
   # own `automatic-rename off` deleted, i.e. it was measuring the environment's
   # default and not the code. Set the condition the user actually has.
   tmux set-window-option -t "$(_sess)" automatic-rename on
-  _switch_tmux_label "$(_sess)" claude work
+  tmux_label "$(_sess)" claude work
   # `-n` alone does not hold: tmux renames a window after whatever is running in
   # it, so the name only survives because automatic-rename is turned off. Forcing
   # a respawn is what makes that visible in under a second — without it this test
@@ -68,8 +71,8 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_switch
   tmux new-session -d -s "$(_sess)" 'sleep 30'
-  _switch_tmux_label "$(_sess)" claude work
-  _switch_tmux_label "$(_sess)" claude work
+  tmux_label "$(_sess)" claude work
+  tmux_label "$(_sess)" claude work
   run tmux show-options -t "$(_sess)" status-left
   [[ "$output" == *"claude/work"* ]] || false
 }
@@ -78,7 +81,7 @@ teardown() {
   # Cosmetics must never fail a launch — this runs right after the engine starts.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_switch
-  run _switch_tmux_label "cklbl-nope-$$" claude work
+  run tmux_label "cklbl-nope-$$" claude work
   [ "$status" -eq 0 ]
 }
 

@@ -29,6 +29,14 @@
   ```bash
   tmux set-option -g history-limit 50000 \; new-session -d -e "CLIKAE_TANK_NAME=$tank" -s "ck-<run_id>" "..."
   ```
+  🔴 **這條被違反過，而且是靜音的。** `burn.sh` 用的是裸的 `tmux new-session -d`，一個前綴都沒有。因為 `switch` 之後會補上全域選項，所以只有「burn 是第一個跑的東西」那一瞬間看得到；量到的（2026-08-15，隔離 socket）：
+  ```
+  $ # 沒有既存 server，用 burn 生一顆，趁它還活著問
+  $ tmux show-options -gv history-limit
+  2000          # tmux 的預設，不是我們的 50000
+  ```
+  收斂到 `tmux_spawn_session` 之後回到 50000。`tests/bats/tmux-spawn.bats` 釘住它——那個測試在修之前是紅的。
+  ⚠️ **量的時候 server 必須還活著**：`exit-empty` 讓 server 隨最後一個 session 消失，而對死掉的 server 問選項會**默默起一顆新的**、回答 tmux 的預設值——長得跟 bug 一模一樣，不管 bug 在不在。
   互動模式時使用 `tmux attach -t "ck-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
 
 
@@ -55,9 +63,11 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
 - **規範**：
   三個出口全部收斂到同一組函式，別各寫一份（互動路徑與 dry-tank carry 路徑就是這樣漂開的，carry 那份少了守衛、少了 `-S -`、attach 失敗也沒人接）：
   ```bash
-  _switch_tmux_usable   # command -v tmux && [ -t 0 ] && [ -t 1 ]
-  _switch_tmux_attach   # attach；被拒就收掉「我們剛建的」session，回 1
+  tmux_usable   # command -v tmux && [ -t 0 ] && [ -t 1 ]
+  tmux_attach   # attach；被拒就收掉「我們剛建的」session，回 1
   ```
+  ⚠️ **這條規則寫下來之後，兩年內沒有被實作。** 這份文件從 v0.4 就說要收斂到同一組函式，也在 Rule 5 引用了一個叫 `clikae_spawn_session` 的封裝——而那個名字在文件裡出現三次、在原始碼裡出現**零次**。四個呼叫點各自手寫，然後照這條規則預測的方式漂開（見 Rule 1 的 burn 收據）。2026-08-15 補上 `lib/core/tmux.sh`，函式實名為 `tmux_spawn_session`。
+  🔴 **推論：這份文件裡任何「應該收斂到 X」的句子，都要能指著一個真的存在的 X。**
   **能不能用 tmux 由 tmux 決定，不要用 `tput` 之類的代理去猜**——PineNote 的 ssh session 進來就是 `TERM=dumb`，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
   attach 被拒時要 `kill-session`：`new-session -d` 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。
 
@@ -155,7 +165,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   if [ -n "$TMUX" ]; then
     # 若為互動模式，切換畫面；若為無頭腳本，則靜默略過 switch-client 避免打斷自動化
     CURRENT_PANE_SESSION=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
-    tmux has-session -t "ck-<tank>" 2>/dev/null || clikae_spawn_session "<tank>"
+    tmux has-session -t "ck-<tank>" 2>/dev/null || tmux_spawn_session --session "ck-<tank>" …
     CLIENTS=$(tmux list-clients -t "$CURRENT_PANE_SESSION" 2>/dev/null)
     if [ -n "$CLIENTS" ]; then
       tmux switch-client -t "ck-<tank>"
@@ -164,7 +174,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
     clikae_spawn_session "<tank>"
   fi
   ```
-  *(備註：`clikae_spawn_session` 是上述 Rule 1 與 Rule 2 的封裝函式)*
+  *(備註：`tmux_spawn_session`（`lib/core/tmux.sh`）是上述 Rule 1、2、4、5、7 的封裝函式，也是全 repo 唯一呼叫 `tmux new-session` 的地方。舊稿把它叫作 `clikae_spawn_session`，那個名字從未存在於程式碼。)*
   
   FIRES: 模擬含有空白的 tank 名稱
   ```
@@ -203,3 +213,74 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   75
   rc=0
   ```
+
+### Rule 7: Server 出生時繼承的東西，之後補不回來 (Birth Inheritance)
+
+- **症狀**：某個 tank 讀不到自己的 Soul，`Operation not permitted`。同一個目錄，換一顆 server 就讀得到。沒有彈窗、沒有任何錯誤訊息，只有 EPERM。
+- **收據**（2026-08-15，真機）：
+  ```
+  $ # 同一台機器、同一個 uid、同一個目錄。stat 過得去，讀不出來。
+  $ python3 -c "import os;os.stat('…/Vault/Soul/me')"     -> OK
+  $ python3 -c "import os;os.listdir('…/Vault/Soul/me')"  -> errno 1 Operation not permitted
+
+  $ # 四個受 TCC 保護的目錄全滅，非保護目錄正常 —— 這是 TCC 的指紋，不是 chmod 的
+  $ ls ~/Documents ~/Desktop ~/Downloads "~/Library/Mobile Documents"  -> ×4 Operation not permitted
+  $ ls ~/.clikae/souls/me                                              -> OK
+
+  $ # 差別只在進程祖先
+  launchd → tmux(17229) → bash → claude          讀不到
+  Ghostty.app → login → zsh → bash → claude      讀得到
+
+  $ # 而 tmux 從有授權的終端機起就會繼承 —— 所以 tmux 本身不是問題，出身才是
+  $ tmux -L fdatest new-session -d 'ls ~/Documents > /tmp/out 2>&1'   # 在 Ghostty 裡下
+  CELSYS / Documents - GoldenApple / d1-backups
+  ```
+- **規範**：
+  1. Server 的身分——環境**和**檔案存取權限——在建立 server 的那一次 `new-session` 決定，之後任何 `set-option` / `set-environment` 都改不了。環境還能用 `-e` 逐一補；權限**沒有這個對應物**。
+  2. 因此建立 server 只准有一個地方：`tmux_spawn_session`（`lib/core/tmux.sh`）。`tests/bats/roam.bats` 早就記下這件事的另一半——「everything else is inherited from the SERVER's process environment — which is whoever started the server, not us」——當時只把它推廣到環境變數。
+  3. 建立時必須把出身寫下來，否則事後查不到：等你需要問的時候，parent 一定已經是 launchd。
+     ```bash
+     tmux set-environment -g CLIKAE_SERVER_BORN "<when> <tty|no-tty> <ancestry>"
+     ```
+     🔴 這條的代價是量出來的：PID 17229 究竟由互動路徑還是無人在場的 carry 路徑生出，**追不回來**——兩條留下的 tmux 命令列逐字相同。
+  4. 啟動時偵測到 tank 讀不到自己的記憶，**大聲警告但照樣啟動**（與 Rule 2 的降級哲學一致：沒有記憶的 session 很糟，起不來的 tank 更糟）。判別式是兩個 syscall 的不對稱，**不是 errno**：
+
+     | 量到的 | 意思 |
+     |---|---|
+     | `stat` 過 + 讀不過 | 路徑是對的，但讀不出來 —— 開火 |
+     | bits 允許讀，而讀仍然失敗 | 檔案系統之上的東西擋的（macOS = TCC），指向 server |
+     | bits 不允許讀 | 一般權限問題，講 chmod，**不要牽拖 tmux** |
+
+     🔴 `[ -r ]` 走的是 access(2)，只看 bits，在 TCC 情境下會回答「可以」。**只有真的讀一次**才問得出真相。
+
+  FIRES: bits 允許但讀不到（TCC 的形狀，用 stub 注入，因為 TCC 無法在測試裡合成）
+  ```
+  $ bats -f "names the tmux server" tests/bats/tmux-spawn.bats
+  ok 1 memory probe: a read that fails while the bits allow it names the tmux server
+  ```
+
+### Rule 8: 環境走檔案，不走 argv (The Environment Is Not a Command Line)
+
+- **症狀**：`clikae burn` 把呼叫者的整份環境（`compgen -e`）當成 `-e KEY=VAL` 交給 `tmux new-session`。當這個 burn 正好是生出 server 的那一個，那串 argv 就變成 **server 自己的 argv**，活得跟 server 一樣久，而且 `ps` 對全機可見——包含 API key 與 token。
+- **收據**（2026-08-15）：
+  ```
+  $ ps -o args= -p 17229          # 一顆前一天生出來的 server
+  tmux start-server ; set-option -g history-limit 50000 ; … new-session -d \
+    -e CLIKAE_TANK_NAME=claude-x -e HOME=/Users/… -e CLIKAE_HOME=/Users/…
+                                  # 建立時的每一組 -e 都還在
+  ```
+- **規範**：
+  1. `-e` 只放 session 層真正需要、且**不敏感**的少數幾個（`HOME`、`CLIKAE_*`、`CLIKAE_RUN_ID`）。
+  2. 其餘一律寫進 burn 本來就會落地的 wrapper script。該檔**先建立、先 `chmod 0600`、再寫入**——不能有一個「已經有機密、還沒收權限」的視窗。
+  3. 值用 `printf %q` 逸出（含換行的值也要能還原），名字非合法識別字的跳過，整段還原包在 `{ … } 2>/dev/null` 裡：還原環境本質上是 best-effort，readonly 變數在子行程失敗會弄髒 pane。
+
+- **⚠️ 尚未收斂的部分（2026-08-15 有意留下，不是遺漏）**：
+  `burn` 與 `switch` 現在共用**建構子**（`tmux_spawn_session`）與**傳輸規則**（機密走檔案不走 argv），但「要傳什麼」仍然不同：
+
+  | | 傳什麼 | 為什麼 |
+  |---|---|---|
+  | `burn` | 整份環境 | 無人在場的引擎執行需要人類當時的 API key／proxy／PATH |
+  | `switch` | 精選 3 個（`CLIKAE_TANK_NAME`／`HOME`／`CLIKAE_HOME`） | 歷史原因 |
+
+  🔴 **這個不對稱本身可能是個 bug，而且方向跟直覺相反：問題在 `switch` 那一邊。** 精選清單以外的每一個變數，session 拿到的是 **server 的**環境——也就是「當初誰起的 server」的環境，不是使用者此刻的。`tests/bats/roam.bats` 的間歇性失敗就是這個（`STUB_RUNS` 只有在該測試自己起 server 時才傳得到）。
+  把 `switch` 也改成走 wrapper 檔傳整份環境，理論上會讓漫遊 session 免疫於這件事，但那是**行為變更**、風險不對稱（會改變既有 session 看到的環境），所以另案處理，不塞在這次重構裡。

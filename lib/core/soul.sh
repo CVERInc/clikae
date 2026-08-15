@@ -107,7 +107,77 @@ memory_heal_ephemeral() {
   fi
 }
 
+# memory_access_warn <mem> — say something when the tank cannot read its own
+# memory, and say WHY.
+#
+# The signature is a two-syscall asymmetry, and nothing else produces it:
+#
+#   stat <mem>   succeeds     the path resolves — not a typo, not a dangling link
+#   read <mem>   fails        …and still nothing can be read out of it
+#
+# Deliberately NOT keyed on errno. What separates the two causes is whether the
+# filesystem's own permission bits already explain the failure:
+#
+#   bits say no    an ordinary permissions problem, and `ls -ld` shows it.
+#   bits say yes   something ABOVE the filesystem refused. On macOS that is TCC,
+#                  and the reason is structural: the tmux server this tank runs
+#                  in was created by a process holding no file-access grant, and
+#                  a server can never acquire one after birth (DESIGN-tmux Rule
+#                  7). Note that `[ -r ]` calls access(2), which reads only the
+#                  bits and so answers "yes" here — an actual read is the only
+#                  thing that tells the truth.
+#
+# Diagnosed 2026-08-15, after a Soul living under ~/Library/Mobile Documents
+# became unreadable to every tank on one server and readable to every tank on
+# another, with no error anywhere but EPERM.
+#
+# Warn and continue. tmux is a convenience layer rather than a dependency, and
+# the same goes for what it can reach: a tank with no memory is a bad session, a
+# tank that refuses to start is a worse one. Say it loudly; the human decides.
+memory_access_warn() {
+  local mem="$1" born
+  [ -n "$mem" ] || return 0
+  [ -e "$mem" ] || return 0                  # nothing there yet — a different story
+  ls "$mem" >/dev/null 2>&1 && return 0      # readable — nothing to say
+
+  log_warn "this tank cannot read its own memory."
+  printf '         memory: %s\n' "$mem" >&2
+  if [ -r "$mem" ]; then
+    printf '         cause:  the permission bits allow it and the read still failed.\n' >&2
+    printf '                 On macOS that means the tmux server this session runs\n' >&2
+    printf '                 in was created without file access, which it can never\n' >&2
+    printf '                 gain afterwards.\n' >&2
+    born="$(tmux_server_born 2>/dev/null || true)"
+    if [ -n "$born" ]; then
+      printf '                 server born: %s\n' "$born" >&2
+    fi
+    printf '         fix:    from a terminal that HAS the access, run tmux\n' >&2
+    printf '                 kill-server, then start clikae again.\n' >&2
+  else
+    printf '         cause:  the permission bits deny it (%s).\n' \
+      "$(ls -ld "$mem" 2>/dev/null | awk '{print $1}')" >&2
+    printf '         fix:    restore read access to that directory.\n' >&2
+  fi
+  # Neutral wording on purpose: soul_prelaunch is the universal memory hook, so
+  # this also fires from `clikae memory share`, where "starting anyway" would be
+  # a lie about what is happening.
+  printf '         Continuing anyway — anything reading this memory sees it empty.\n' >&2
+  return 0
+}
+
 soul_prelaunch() {
+  local engine="$1" tank="$2" cfg="$3"
+  _soul_prelaunch_link "$engine" "$tank" "$cfg" || true
+  # Asked AFTER the linking, and outside it, so it covers every tank rather than
+  # only the Soul members: each early return below lands on a real directory that
+  # could be unreachable, and a solo tank losing its memory is the same defect.
+  declare -F adapter_memory_dir >/dev/null 2>&1 || return 0
+  local mem; mem="$(adapter_memory_dir "$cfg" 2>/dev/null || true)"
+  memory_access_warn "$mem"
+  return 0
+}
+
+_soul_prelaunch_link() {
   local engine="$1" tank="$2" cfg="$3"
   declare -F adapter_memory_dir >/dev/null 2>&1 || return 0
   local group store mem cur
