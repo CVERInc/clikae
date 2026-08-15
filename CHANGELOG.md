@@ -112,6 +112,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Selection and copy defaults**: `fill-character` blanks the dot field a
   smaller second client leaves on the larger screen.
 
+### Fixed
+
+- **🔴 `clikae conduct` said READ-ONLY and could write.** Its help says each leg
+  "runs the prompt headless and READ-ONLY on its own tank", and the code comment
+  explains the guarantee as *not passing* `--dangerously-skip-permissions`. That
+  is not a boundary. A tank whose own `settings.json` carries
+  `permissions.defaultMode: "auto"` approves writes without asking.
+
+  Measured 2026-08-16, and not as a synthetic probe: a leg dispatched from this
+  repo edited two tracked files — `lib/adapters/claude.sh` and
+  `tests/bats/conduct.bats` — while conduct was printing "read-only" on screen. A
+  leg then told to create a file created it.
+
+  codex's recipe has always passed `-s read-only`. claude's enforced nothing, so
+  the guarantee held on one engine and was decoration on the other. It now passes
+  `--permission-mode plan`, verified end to end: the same leg, told to write, no
+  longer can, and answers unchanged.
+
+- **`conduct` legs left a transcript each**, so a fan-out across five tanks put
+  five rows in `clikae resume` for work already collected into `--out-dir`. A leg
+  is one arm of a fan-out, not a session anybody resumes. `--ephemeral` already
+  got this right; the audit recipe did not — two headless read-only paths, one
+  trace-free and one not, with nothing saying why. Measured: 311 transcripts
+  before a conduct run and 311 after.
+
 ### Corrected
 
 - **Rule 8 suspected a bug in `switch` that does not exist.** It said the

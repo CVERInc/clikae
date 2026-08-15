@@ -218,6 +218,15 @@ _stub_gh() {
   [ "${got[0]}" = "-p" ]
   [ "${got[1]}" = "do it" ]
   printf '%s\n' "${got[@]}" | grep -q "dangerously-skip-permissions" && false   # read-only: NO write grant
+  printf '%s\n' "${got[@]}" | grep -q -- "--no-session-persistence"             # a leg is not a resumable session
+  # 🔴 Read-only must be ENFORCED. Withholding --dangerously-skip-permissions is
+  # not a boundary: a tank whose settings carry permissions.defaultMode "auto"
+  # approves writes without asking. Measured 2026-08-16 — a leg told to create a
+  # file created it, and one editing this repo changed two tracked files while
+  # conduct's own help said READ-ONLY. codex's recipe has always passed
+  # `-s read-only`; this one enforced nothing.
+  printf '%s\n' "${got[@]}" | grep -q -- "--permission-mode"                    # read-only, enforced
+  printf '%s\n' "${got[@]}" | grep -q -- "plan"
   return 0
 }
 

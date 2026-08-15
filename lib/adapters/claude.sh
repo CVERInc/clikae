@@ -90,6 +90,18 @@ adapter_burn_flags() {
 adapter_audit_flags() {
   local prompt="$1"; shift
   printf -- '-p\0%s\0' "$prompt"
+  # A leg is one arm of a fan-out, not a session anybody resumes, and its output
+  # is already collected into --out-dir — so it leaves no transcript, the same as
+  # a headless `--ephemeral` run. Claude Code only honours this with --print,
+  # which this recipe always passes.
+  printf -- '--no-session-persistence\0'
+  # 🔴 READ-ONLY has to be ENFORCED, not merely not-granted. Withholding
+  # --dangerously-skip-permissions is not a boundary: a tank whose own settings
+  # carry permissions.defaultMode "auto" approves writes without asking, and a
+  # leg told to create a file created it (measured 2026-08-16, in this repo —
+  # a conduct leg edited two tracked files while conduct's help says READ-ONLY).
+  # codex's recipe has always passed -s read-only; this one enforced nothing.
+  printf -- '--permission-mode\0plan\0'
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 
