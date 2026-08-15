@@ -431,12 +431,19 @@ STUB
   . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
   local -a got=(); local x
   while IFS= read -r -d '' x; do got+=("$x"); done < <(adapter_burn_flags "do a thing" /tmp/wd)
-  [ "${#got[@]}" -eq 5 ]
+  [ "${#got[@]}" -eq 6 ]
   [ "${got[0]}" = "-p" ]
   [ "${got[1]}" = "do a thing" ]
-  [ "${got[2]}" = "--dangerously-skip-permissions" ]
-  [ "${got[3]}" = "--add-dir" ]
-  [ "${got[4]}" = "/tmp/wd" ]
+  # 🔴 A SCOPED grant, not a blanket one. burn's contract is "write to --add-dir",
+  # and --dangerously-skip-permissions bypasses the permission system entirely:
+  # measured 2026-08-16, it wrote OUTSIDE the roots it was given, while
+  # acceptEdits wrote inside and was blocked outside. codex has always been
+  # scoped (-s workspace-write); this was the engine where the same documented
+  # promise had no boundary.
+  [ "${got[2]}" = "--permission-mode" ]
+  [ "${got[3]}" = "acceptEdits" ]
+  [ "${got[4]}" = "--add-dir" ]
+  [ "${got[5]}" = "/tmp/wd" ]
 }
 
 @test "adapter_burn_flags (codex): exact NUL-per-argv recipe, first add-dir = cwd" {
@@ -488,7 +495,7 @@ STUB
   local ml; ml=$'line one\nline two\nline three'
   local -a got=(); local x
   while IFS= read -r -d '' x; do got+=("$x"); done < <(adapter_burn_flags "$ml" /tmp/wd)
-  [ "${#got[@]}" -eq 5 ]          # NOT 7 — the 3 prompt lines did not split
+  [ "${#got[@]}" -eq 6 ]          # NOT 8 — the 3 prompt lines did not split
   [ "${got[1]}" = "$ml" ]         # the whole multi-line prompt, intact
 }
 

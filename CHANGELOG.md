@@ -130,6 +130,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--permission-mode plan`, verified end to end: the same leg, told to write, no
   longer can, and answers unchanged.
 
+- **`clikae burn claude` granted write access to the whole disk.** Its recipe
+  passed `--dangerously-skip-permissions`, which bypasses the permission system
+  rather than scoping it. Measured 2026-08-16, the same task both ways:
+
+  ```
+  inside  --add-dir    acceptEdits ✅ writes     skip-permissions ✅ writes
+  OUTSIDE --add-dir    acceptEdits ✅ blocked    skip-permissions 🔴 writes
+  ```
+
+  So an unattended run held the whole filesystem while the docs said "this
+  directory". codex's recipe has always been scoped (`-s workspace-write`) —
+  the same documented promise, bounded on one engine and not the other, which
+  has been the tell for every defect in this release.
+
+  Now `--permission-mode acceptEdits`. Capability is unchanged: the same
+  bash-and-write burn finished in 20s against 15s. The honest cost is that a task
+  reaching outside its roots now fails — which is the boundary working, and burn
+  judges by artifact, so it reports "no artifact" rather than a silent wrong
+  success.
+
 - **`conduct` legs left a transcript each**, so a fan-out across five tanks put
   five rows in `clikae resume` for work already collected into `--out-dir`. A leg
   is one arm of a fan-out, not a session anybody resumes. `--ephemeral` already

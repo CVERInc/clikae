@@ -80,7 +80,22 @@ adapter_run() {
 # hand-assemble (the 2026-06-06 tugtile burn-writeup friction #1).
 adapter_burn_flags() {
   local prompt="$1"; shift
-  printf -- '-p\0%s\0--dangerously-skip-permissions\0' "$prompt"
+  # 🔴 acceptEdits, not --dangerously-skip-permissions. burn's contract is
+  # "write to --add-dir", and the two grants differ in blast radius, not in
+  # capability. Measured 2026-08-16, same task both ways:
+  #
+  #   inside  --add-dir   acceptEdits ✅ writes    skip-permissions ✅ writes
+  #   OUTSIDE --add-dir   acceptEdits ✅ blocked   skip-permissions 🔴 writes
+  #
+  # So the old recipe handed an unattended run the whole disk while the docs
+  # said "this directory". codex's has always been scoped (-s workspace-write);
+  # the same documented promise was bounded on one engine and not the other.
+  #
+  # Honest cost: a task that reaches OUTSIDE its roots now fails where it used to
+  # succeed. That is the boundary doing its job — and burn judges by artifact, so
+  # it reports "no artifact" rather than a silent wrong success. Real burns are
+  # unaffected: the same bash-and-write task finished in 20s against 15s.
+  printf -- '-p\0%s\0--permission-mode\0acceptEdits\0' "$prompt"
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 
