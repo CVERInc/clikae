@@ -168,3 +168,5 @@ i18n_summary() {
   printf '%s tank%s across %s engine%s' \
     "$n" "$([ "$n" = 1 ] || echo s)" "$m" "$([ "$m" = 1 ] || echo s)"
 }
+T_K_CLOSE="close"
+T_CLOSE_ASK="Close this running session? The conversation stays resumable. [y/N] "

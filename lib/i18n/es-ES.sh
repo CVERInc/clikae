@@ -155,3 +155,5 @@ i18n_summary() {
   [ "$m" = 1 ] && e="motor"
   printf '%s %s en %s %s' "$n" "$t" "$m" "$e"
 }
+T_K_CLOSE="cerrar"
+T_CLOSE_ASK="¿Cerrar esta sesión en curso? La conversación se puede retomar. [y/N] "

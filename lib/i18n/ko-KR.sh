@@ -155,3 +155,5 @@ T_LANG_UNKNOWN="알 수 없는 언어: %s  (사용 가능: %s)"
 i18n_summary() {
   printf '탱크 %s개 · 엔진 %s개' "$1" "$2"
 }
+T_K_CLOSE="닫기"
+T_CLOSE_ASK="실행 중인 이 세션을 닫을까요? 대화는 다시 이어갈 수 있습니다. [y/N] "

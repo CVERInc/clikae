@@ -154,3 +154,5 @@ T_LANG_UNKNOWN="未知語言：%s （可用：%s）"
 i18n_summary() {
   printf '%s 個油箱、%s 個引擎' "$1" "$2"
 }
+T_K_CLOSE="關閉"
+T_CLOSE_ASK="關閉這個執行中的 session？對話仍然 resume 得回來。[y/N] "

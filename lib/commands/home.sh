@@ -1431,6 +1431,7 @@ _home_help_overlay() {
   _home_help_row "r"             "$T_K_RELAY"
   _home_help_row "R"             "$T_K_RESUME_ALL"
   _home_help_row "x"             "$T_K_INCOGNITO"
+  _home_help_row "K"             "$T_K_CLOSE"
   _home_help_row "n"             "$T_K_NEW"
   _home_help_row "a"             "$T_K_RENAME"
   _home_help_row "d"             "$T_K_DELETE"
@@ -1520,7 +1521,7 @@ _home_pick_draw_body() {
   # the same reason the recap call below passes 2. Without it the keybar wraps 2
   # columns too late and overruns a 60-col terminal by 1.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
     "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
   printf '%b%s: %s · [A] change (BETA, claude+codex)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
@@ -1813,6 +1814,30 @@ _home_pick() {
         IFS= read -r filter <&3 || filter=""
         stty -echo 2>/dev/null || true
         printf '\033[?1049h\033[?25l'; sel=0
+        ;;
+      K)
+        # Close a running session from the board.
+        #
+        # Reported 2026-08-15: the only way out of a session whose engine had
+        # finished was to close the terminal — the board could show you a live
+        # row and offer nothing but "enter it". Destructive, so it asks; and the
+        # question says the thing that makes it safe, which is that the
+        # conversation is a transcript on disk. `clikae resume` brings it back.
+        # What ends is the process, not the work.
+        if [ "$sel_kind" = "live" ]; then
+          local _csess; _csess="$(printf '%s' "$sel_row" | cut -d$'\037' -f7)"
+          if [ -n "$_csess" ]; then
+            _home_tty_leave
+            printf '%b%s%b' "$__C_BOLD" "$T_CLOSE_ASK" "$__C_RESET"
+            local _cans; IFS= read -r _cans <&3 || _cans=""
+            stty -echo 2>/dev/null || true
+            printf '\033[?1049h\033[?25l'
+            case "$_cans" in
+              y|Y) tmux kill-session -t "$_csess" 2>/dev/null || true
+                   items="$(_home_items)"; sel=0 ;;
+            esac
+          fi
+        fi
         ;;
       '?')
         _home_help_overlay   # full key legend; any key dismisses, then redraw

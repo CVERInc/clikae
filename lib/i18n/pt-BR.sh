@@ -153,3 +153,5 @@ i18n_summary() {
   printf '%s tanque%s em %s motor%s' \
     "$n" "$([ "$n" = 1 ] || echo s)" "$m" "$([ "$m" = 1 ] || echo es)"
 }
+T_K_CLOSE="fechar"
+T_CLOSE_ASK="Fechar esta sessão em execução? A conversa continua retomável. [y/N] "

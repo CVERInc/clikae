@@ -161,3 +161,5 @@ i18n_summary() {
   printf '%s réservoir%s pour %s moteur%s' \
     "$n" "$([ "$n" -le 1 ] || echo s)" "$m" "$([ "$m" -le 1 ] || echo s)"
 }
+T_K_CLOSE="fermer"
+T_CLOSE_ASK="Fermer cette session en cours ? La conversation reste reprenable. [y/N] "

@@ -159,3 +159,5 @@ i18n_summary() {
   printf '%s Tank%s für %s Engine%s' \
     "$n" "$([ "$n" = 1 ] || echo s)" "$m" "$([ "$m" = 1 ] || echo s)"
 }
+T_K_CLOSE="schließen"
+T_CLOSE_ASK="Diese laufende Sitzung schließen? Das Gespräch bleibt fortsetzbar. [y/N] "

@@ -151,3 +151,5 @@ T_LANG_UNKNOWN="不明な言語: %s  (%s)"
 i18n_summary() {
   printf '%s タンク・%s エンジン' "$1" "$2"
 }
+T_K_CLOSE="終了"
+T_CLOSE_ASK="この実行中のセッションを終了しますか？会話は再開できます。[y/N] "
