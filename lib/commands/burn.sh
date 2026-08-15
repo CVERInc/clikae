@@ -411,6 +411,23 @@ cmd_burn() {
   while :; do
     validate_name profile "$cur"
     local dir; dir="$(ensure_profile --require "$cli" "$cur")"
+
+    # soul_prelaunch's contract is "called from every non-ephemeral engine-launch
+    # path, AFTER the adapter is loaded", and burn is one — it had no notion of
+    # ephemeral at all, so it could not even be the exempt case. Without this, a
+    # burn in a directory that has never hosted an interactive session ran with
+    # an unlinked memory slot: a memory-less run nobody asked for, when AGENTS.md
+    # says the only way to ask for one is --ephemeral. The fleet's MCP servers
+    # were missing from headless runs for the same reason.
+    #
+    # Inside the loop, not above it: burn reroutes to the next tank when one runs
+    # dry (and re-loads the adapter for a cross-engine hop at the bottom), so the
+    # tank that actually runs is the one that needs its slot linked. Both are
+    # no-ops for solo tanks and for slots already linked, so the reroute path
+    # pays nothing to be correct.
+    soul_prelaunch "$cli" "$cur" "$dir"        # member tank → fan this dir into its Soul
+    fleet_mcp_prelaunch "$cli" "$cur" "$dir"   # non-solo tank → fan in the shared MCP list
+
     log_info "burn $cli/$cur → $binary ${cmd[*]}"
 
     # Run headless with the tank's env, stdin CLOSED (the burn-writeup hang lesson:

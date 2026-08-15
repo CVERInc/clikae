@@ -502,3 +502,35 @@ STUB
   [[ "$output" == *"claude/a  → shared 'me'"* ]] || false
   [[ "$output" == *"links on next launch"* ]] || false # per-dir slot not yet projected
 }
+
+@test "burn links a member tank's slot in a NEW directory too (soul_prelaunch)" {
+  # burn is an engine-launch path, and soul_prelaunch's contract says "called
+  # from every non-ephemeral engine-launch path". burn had neither prelaunch —
+  # and no --ephemeral either, so it could not even be the exempt case. A
+  # headless run in a directory that had never hosted an interactive session
+  # therefore got a memory-less session nobody asked for, while AGENTS.md says
+  # the only way to ask for one is --ephemeral.
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+slug="$(printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$CLAUDE_CONFIG_DIR/projects/$slug/memory" 2>/dev/null || true
+echo "FROM-BURN" > "$CLAUDE_CONFIG_DIR/projects/$slug/memory/burn-fact.md" 2>/dev/null || true
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+
+  clikae init claude a
+  clikae memory share me claude a
+  local store="$CLIKAE_HOME/souls/me/memory"
+  mkdir -p "$BATS_TEST_TMPDIR/projBurn"; cd "$BATS_TEST_TMPDIR/projBurn"
+  local A="$BATS_TEST_TMPDIR/projBurn/out.md"
+  export STUB_ARTIFACT="$A"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae burn claude a --artifact "$A" --prompt "hi"
+
+  local mem; mem="$(_memdir a)"
+  [ -L "$mem" ] || { echo "burn left this directory's slot unlinked: $mem"; echo "$output"; false; }
+  [ "$(readlink "$mem")" = "$store" ]
+  [ -f "$store/burn-fact.md" ]        # the headless run wrote INTO the Soul
+}

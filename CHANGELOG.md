@@ -33,6 +33,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   apart. Verified red on the old code (no tmux server at all) and green on the
   new one.
 
+- **`clikae burn` now links the Soul and the fleet's MCP servers, like every
+  other launch path.** `soul_prelaunch`'s contract is *"called from every
+  non-ephemeral engine-launch path, AFTER the adapter is loaded"*, and burn is
+  one — with no `--ephemeral` of its own, so it could not even be the exempt
+  case. A headless run in a directory that had never hosted an interactive
+  session therefore executed with an unlinked memory slot: a memory-less session
+  nobody asked for, while `AGENTS.md` states the only way to ask for one is
+  `--ephemeral`. Fleet MCP servers were missing from headless runs for the same
+  reason.
+
+  Placed inside the reroute loop rather than above it, so the tank that actually
+  runs is the one whose slot gets linked — including after a cross-engine hop,
+  which re-loads the adapter and comes back round. Both calls are no-ops for
+  solo tanks and already-linked slots, so the reroute path pays nothing.
+
+  Verified red (`burn left this directory's slot unlinked`) and green.
+
+  Found by re-running the v0.24.0 audit with the corrected question. Asking *who
+  calls tmux* had found four sites and missed `resume`; asking *who launches an
+  engine* enumerates five, and answered honestly it reports four already correct
+  — `switch`, `run`, and `relay` (which prelaunches the **target** tank after a
+  dry-tank carry, not the source) — and one that was not.
+
+- **`fleet_mcp_prelaunch`'s docstring named the wrong call sites.** It said
+  "switch.sh / run.sh"; by then `relay.sh` had the call too. A docstring that
+  enumerates call sites is what an audit reads instead of the code, so a stale
+  one hides the gap it exists to expose — which is how burn's absence survived.
+
 ### Known
 
 - The board's resume list and `clikae resume` still show different session

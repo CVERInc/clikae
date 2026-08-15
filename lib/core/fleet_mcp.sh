@@ -56,7 +56,14 @@ _fleet_mcp_config_file() {
 }
 
 # Optional hook: does every non-solo <engine> launch merge in the fleet-wide MCP
-# store? Called from switch.sh / run.sh right where soul_prelaunch is called.
+# store? Called from switch.sh / run.sh / relay.sh / burn.sh, right where
+# soul_prelaunch is called. resume.sh is absent on purpose — it hands off to
+# cmd_switch, which does both.
+#
+# 🔴 Keep this list true. It named only switch and run until 2026-08-15, by which
+# point relay had the call and burn did not — and a docstring that enumerates
+# call sites is the thing an audit reads instead of the code, so a stale one
+# hides exactly the gap it exists to expose.
 # No-op (and never fails the launch) when: the tank is solo, the store is
 # empty/absent, jq isn't installed, or the engine has no adapter_mcp_config_file
 # hook (nothing to merge into).
