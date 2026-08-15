@@ -208,8 +208,6 @@ tmux_spawn_session() {
   local -a chain=(start-server)
   chain+=(";" set-option -g history-limit 50000)
   chain+=(";" set-option -s extended-keys on)
-  chain+=(";" set-option -g mouse on)
-  chain+=(";" set-option -s set-clipboard on)
   # The two append-only options, added only when they are not already in place.
   #
   # 🔴 Only ASK when a server exists to ask. With no server there is nothing to
@@ -232,6 +230,25 @@ tmux_spawn_session() {
   chain+=(";" new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd")
 
   tmux "${chain[@]}" || return 1
+
+  # 🔴 mouse / set-clipboard go AFTER the session exists, not into the chain.
+  #
+  # A tmux command list aborts at the first failure — including the new-session
+  # at the end of it. So any option in that chain that a given tmux build does
+  # not accept does not merely fail to apply: it prevents the session from being
+  # created at all, and the caller then finds nothing to attach to. That is what
+  # red CI looked like from 2026-08-15: on ubuntu the attach printed "no
+  # sessions", switch fell back to a direct run, and the scrollback capture the
+  # test asserts on never happened. macOS was green throughout.
+  #
+  # Rule 1 requires the chain only because a server with no session evaporates
+  # (exit-empty). Once new-session has run, that danger is over and later
+  # set-options are safe as separate calls. So the options Rule 1 is actually
+  # about stay in the chain; these two — which change how selection and copying
+  # behave, not whether the session exists — cannot take a session down with
+  # them.
+  tmux set-option -g mouse on 2>/dev/null || true
+  tmux set-option -s set-clipboard on 2>/dev/null || true
 
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
   return 0
