@@ -221,3 +221,46 @@ _seed_transcript() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude/only"* ]] || false
 }
+
+@test "resume goes through the tmux path, the way the board's resume always has" {
+  # `clikae resume` used to call adapter_run directly, so it was the one
+  # user-facing entry point that started an engine with no tmux — no wake
+  # watcher, no scrollback capture, no roaming — while the board's own resume
+  # (home.sh: exec clikae <engine> <tank> -- <resume-args>) always had them.
+  # Same intention, two different sessions, depending only on how you typed it.
+  # Needs a real pty: without one, switch is entitled to run the engine directly.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude R
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sid="99999999-8888-7777-6666-555555555555"
+  _seed_transcript R "$work" "$sid"
+
+  # Stays alive, so the session is still there when we look.
+  mkdir -p "$TEST_HOME/bin"
+  printf '#!/usr/bin/env bash\nsleep 20\n' > "$TEST_HOME/bin/claude"
+  chmod +x "$TEST_HOME/bin/claude"
+  export PATH="$TEST_HOME/bin:$PATH"
+
+  # Our own socket (helpers.bash), so this can never reach a real tank.
+  tmux kill-server 2>/dev/null || true
+
+  run python3 - "$CLIKAE_BIN" "$sid" <<'PYEOF'
+import os, fcntl, termios, struct, sys, time
+clikae, sid = sys.argv[1], sys.argv[2]
+master, slave = os.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+if os.fork() == 0:
+    os.setsid(); fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    for fd in (0, 1, 2): os.dup2(slave, fd)
+    os.close(master); os.close(slave)
+    os.environ["TERM"] = "xterm-256color"
+    os.execv(clikae, [clikae, "resume", sid])
+os.close(slave); time.sleep(6)
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+
+  run tmux list-sessions -F '#{session_name}'
+  local sessions="$output"
+  tmux kill-server 2>/dev/null || true
+  [[ "$sessions" == *"ck-claude-R"* ]] || { echo "resume started no tmux session: '$sessions'"; false; }
+}

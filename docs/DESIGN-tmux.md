@@ -68,6 +68,17 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ```
   ⚠️ **這條規則寫下來之後，兩年內沒有被實作。** 這份文件從 v0.4 就說要收斂到同一組函式，也在 Rule 5 引用了一個叫 `clikae_spawn_session` 的封裝——而那個名字在文件裡出現三次、在原始碼裡出現**零次**。四個呼叫點各自手寫，然後照這條規則預測的方式漂開（見 Rule 1 的 burn 收據）。2026-08-15 補上 `lib/core/tmux.sh`，函式實名為 `tmux_spawn_session`。
   🔴 **推論：這份文件裡任何「應該收斂到 X」的句子，都要能指著一個真的存在的 X。**
+
+  🔴 **而且要問對問題。** 2026-08-15 收斂完之後，`clikae resume` 仍然沒有 tmux —— 它從 2026-06-26 就直接 `adapter_run`，而加 tmux 層的 `62b33a2` 只動了 `switch.sh` 和 `burn.sh`。它躲過稽核不是因為藏得好，是因為稽核問的是「**誰呼叫 tmux**」：那份清單裡本來就不可能有它。找呼叫者只找得到「已經加入的人之間的漂移」，找不到「從來沒加入的那一個」。
+  會找到它的問題是「**誰啟動引擎**」，而那有一份確定的清單 —— 每一個 `adapter_run` 呼叫點：
+  ```
+  run.sh      switch 在 tmux 不可用時的 fallback 原語   ← 刻意
+  relay.sh    carry 的同一種 fallback 原語               ← 刻意
+  switch.sh:481  --ephemeral                            ← 刻意
+  switch.sh   主路徑                                     ← 有 tmux
+  resume.sh   ← 唯一站錯邊的面向使用者入口
+  ```
+  **缺席對「搜尋存在」的方法是隱形的。** 這跟 `clikae_spawn_session` 文件有三次、程式碼零次是同一種盲點，只是換一層。
   **能不能用 tmux 由 tmux 決定，不要用 `tput` 之類的代理去猜**——PineNote 的 ssh session 進來就是 `TERM=dumb`，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
   attach 被拒時要 `kill-session`：`new-session -d` 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。
 

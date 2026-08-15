@@ -166,9 +166,33 @@ EOF
   log_done "Resuming $engine/$tank · session ${sid%%-*}…"
   [ -n "$cwd" ] && log_dim "in $cwd"
   history_log "resume: $engine/$tank ${sid%%-*}"
-  soul_prelaunch "$engine" "$tank" "$dir"   # member tank → fan this dir into its Soul
-  fleet_mcp_prelaunch "$engine" "$tank" "$dir"   # non-solo tank → fan in the shared MCP list
-  adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
+
+  # Hand off to the switch path rather than running the engine here.
+  #
+  # WHY: this function called adapter_run directly, so `clikae resume` was the
+  # one user-facing entry point that started an engine with no tmux — no wake
+  # watcher, no scrollback capture, no roaming. The board's own resume has
+  # always done it this way (home.sh: `exec "$CLIKAE_BIN" "$cli" "$profile" --
+  # <resume-args>`), so the SAME intention got two different sessions depending
+  # on whether you picked from the board or typed `clikae resume`.
+  #
+  # Not a design decision — drift. `_resume_exec` was written 2026-06-26; the
+  # tmux layer arrived 2026-08-11 in 62b33a2, whose file list is switch.sh and
+  # burn.sh. resume.sh was simply missed, and stayed missed because the audit
+  # that followed enumerated "who calls tmux" — a list this file could never
+  # appear on. The question that finds it is "who launches an engine".
+  #
+  # The three remaining adapter_run sites are deliberate primitives: run.sh and
+  # relay.sh are what switch itself falls back to when tmux is unusable, and
+  # switch.sh's own is the --ephemeral path.
+  #
+  # Prelaunch is deliberately NOT done here: cmd_switch runs soul_prelaunch and
+  # fleet_mcp_prelaunch itself, and the board path leaves them to it for the
+  # same reason. The `cd` above survives the exec, and switch's argv digest
+  # keys the tmux session on `--resume <sid>`, so resuming a different session
+  # opens its own screen instead of attaching to the tank's (the 2026-08-13
+  # regression) — inherited for free by going through it.
+  exec "$CLIKAE_BIN" "$engine" "$tank" -- "${rargs[@]}" "${passthru[@]}"
 }
 
 # Draw the resume menu with row index $1 highlighted, from the inherited

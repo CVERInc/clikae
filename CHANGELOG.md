@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`clikae resume` now starts a session like every other entry point.** It
+  called `adapter_run` directly, so it was the one user-facing command that
+  launched an engine with no tmux — no wake watcher, no scrollback capture, no
+  roaming. The board's own resume has always routed through switch
+  (`home.sh`: `exec clikae <engine> <tank> -- <resume-args>`), so the *same
+  intention* produced two different sessions depending only on how you typed it.
+
+  Not a design decision — drift, and the dates say so. `_resume_exec` was
+  written 2026-06-26; the tmux layer arrived 2026-08-11 in `62b33a2`, whose file
+  list is `switch.sh` and `burn.sh`. `resume.sh` was simply missed.
+
+  It stayed missed through the v0.24.0 audit because that audit enumerated *who
+  calls tmux* — a list this file could never appear on. Searching for callers
+  finds drift among the sites that already opted in; it cannot find the site
+  that never did. The question that finds it is **"who launches an engine"**,
+  which has one answer per `adapter_run` call: `run.sh` and `relay.sh` are the
+  primitives switch itself falls back to, `switch.sh`'s own is `--ephemeral`,
+  and `resume.sh` was the only user-facing entry point on the wrong side.
+
+  Covered by a pty-driven test — without a real terminal switch is entitled to
+  run the engine directly, so a non-pty test could not tell the two routes
+  apart. Verified red on the old code (no tmux server at all) and green on the
+  new one.
+
+### Known
+
+- The board's resume list and `clikae resume` still show different session
+  counts, for two reasons neither of which is written down anywhere: the board
+  is scoped to the **current directory** (`_home_recent_rows`) and capped at 10
+  (`CLIKAE_HOME_RECENT_MAX`), while `clikae resume` is not directory-scoped and
+  caps at 50. Measured on one machine: 528 sessions across five tanks, of which
+  a board opened from `~` surfaces 10. The scoping may well be right — "continue
+  *here*" is a coherent headline — but nothing tells the reader it is happening,
+  so a session started in another directory reads as gone.
+
 ## [0.24.0] — 2026-08-15
 
 ### Fixed
