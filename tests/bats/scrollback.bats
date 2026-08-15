@@ -85,6 +85,14 @@ for _ in $(seq 1 200); do
 done
 _stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
 _stage "capture-bytes=$(tmux capture-pane -p -S - 2>/dev/null | wc -c) capture-t-bytes=$(tmux capture-pane -p -S - -t \"ck-claude-scrolltest\" 2>/dev/null | wc -c)"
+_stage "parent=$(ps -o comm= -p $PPID 2>/dev/null | tr -d ' ')"
+# Outlive the engine. If the pane's shell gets to run the capture that follows
+# `clikae run` in target_cmd, this subshell is alive to see the file appear; if
+# the whole pane is torn down the instant the engine exits, nothing below is ever
+# written and that is the answer.
+( sleep 2
+  _stage "post-exit file=$(ls "$HOME/.clikae/state/"*.scrollback 2>&1 | tail -1)"
+) >/dev/null 2>&1 &
 _stage "exiting"
 INNER_EOF
   chmod +x "$TEST_HOME/.testbin/claude"
