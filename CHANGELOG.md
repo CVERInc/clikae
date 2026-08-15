@@ -112,6 +112,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Selection and copy defaults**: `fill-character` blanks the dot field a
   smaller second client leaves on the larger screen.
 
+### Corrected
+
+- **Rule 8 suspected a bug in `switch` that does not exist.** It said the
+  curated `-e` list meant a session inherited the SERVER's environment for
+  everything else — whoever started it, possibly days earlier. Measured on an
+  isolated socket: a server created by a shell WITHOUT a probe variable, then a
+  new session created from a shell WITH it, and the session saw it. tmux
+  inherits the environment of the CLIENT issuing `new-session`, not the server
+  process.
+  What genuinely cannot change is an already-running session's environment —
+  which is Rule 4's whole reason for existing and what roam.bats' comment is
+  about. Conflating the two is how a doc sends someone to fix a non-bug; the
+  rule now carries the measurement instead of the suspicion.
+
 ### Known
 
 - The board's resume list and `clikae resume` still show different session
@@ -120,7 +134,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`CLIKAE_HOME_RECENT_MAX`), while `clikae resume` is not directory-scoped and
   caps at 50. Measured on one machine: 528 sessions across five tanks, of which
   a board opened from `~` surfaces 10. The scoping may well be right — "continue
-  *here*" is a coherent headline — but nothing tells the reader it is happening,
+  *here*" is a coherent headline — and the footer does say `%d sessions total ·
+  Press [R] to see all / search`, so the escape hatch is stated. What is not
+  stated is the *reason* the list is short: that it is this directory's. (An
+  earlier draft of this entry said nothing told the reader at all; that was
+  wrong, and is the same overstatement this release keeps auditing out.)
   so a session started in another directory reads as gone.
 
 ## [0.24.0] — 2026-08-15

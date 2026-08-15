@@ -361,5 +361,12 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   | `burn` | 整份環境 | 無人在場的引擎執行需要人類當時的 API key／proxy／PATH |
   | `switch` | 精選 3 個（`CLIKAE_TANK_NAME`／`HOME`／`CLIKAE_HOME`） | 歷史原因 |
 
-  🔴 **這個不對稱本身可能是個 bug，而且方向跟直覺相反：問題在 `switch` 那一邊。** 精選清單以外的每一個變數，session 拿到的是 **server 的**環境——也就是「當初誰起的 server」的環境，不是使用者此刻的。`tests/bats/roam.bats` 的間歇性失敗就是這個（`STUB_RUNS` 只有在該測試自己起 server 時才傳得到）。
-  把 `switch` 也改成走 wrapper 檔傳整份環境，理論上會讓漫遊 session 免疫於這件事，但那是**行為變更**、風險不對稱（會改變既有 session 看到的環境），所以另案處理，不塞在這次重構裡。
+  ⚠️ **本節前一版懷疑 `switch` 這一邊是 bug，說「精選清單以外的變數會拿到 server 的環境」。量過之後：不成立，已更正。**（2026-08-16，隔離 socket）
+  ```
+  # 先用「沒有 CK_PROBE_VAR」的 shell 建 server，再從「有」的 shell 開新 session
+  新 session 看到: CK_PROBE_VAR=[from-second-shell-…]   ← 傳到了
+  ```
+  **建立新 session 時，tmux 繼承的是「下這道指令的 client」的環境**，不是 server 行程的。所以 `switch` 只傳 3 個 `-e` 沒有漏掉使用者的環境。
+  真正改不了的是**已經在跑的 session**：那個引擎的環境在它啟動時就固定了，attach 回去不會刷新——那正是 Rule 4（SSH socket 用穩定 symlink）存在的理由，也是 `roam.bats` 那句註解在講的情況。兩者不是同一件事，把它們混為一談就會像我一樣去修一個不存在的 bug。
+
+  所以剩下的差異只是**「傳什麼」**：burn 傳整份（無人值守需要人類當時的 key／proxy），switch 傳 3 個（其餘由 client 環境自然帶過去）。這是刻意的，不是漂移。
