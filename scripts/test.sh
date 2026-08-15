@@ -15,6 +15,9 @@ echo "→ shellcheck (severity=warning)"
 shellcheck -S warning bin/clikae install.sh "$0"
 find lib tests scripts -name '*.sh' -print0 | xargs -0 shellcheck -S warning
 
+echo "→ doc names (every function a doc names must exist)"
+bash "$(dirname "$0")/doc-names-exist.sh"
+
 echo "→ bats"
 bats -r --print-output-on-failure tests/bats
 

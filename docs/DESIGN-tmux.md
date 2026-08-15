@@ -207,7 +207,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
       tmux switch-client -t "ck-<tank>"
     fi
   else
-    clikae_spawn_session "<tank>"
+    tmux_spawn_session --session "ck-<tank>" …
   fi
   ```
   *(備註：`tmux_spawn_session`（`lib/core/tmux.sh`）是上述 Rule 1、2、4、5、7 的封裝函式，也是全 repo 唯一呼叫 `tmux new-session` 的地方。舊稿把它叫作 `clikae_spawn_session`，那個名字從未存在於程式碼。)*

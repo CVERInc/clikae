@@ -1,0 +1,3 @@
+# Names the docs mention ON PURPOSE although no such function exists.
+# One per line: <name> <reason>. An exemption without a reason is a hiding place.
+clikae_spawn_session  the wrapper DESIGN-tmux specified and nobody wrote; named in Rule 2/5 as the historical record of that gap, implemented since 2026-08-15 as tmux_spawn_session
