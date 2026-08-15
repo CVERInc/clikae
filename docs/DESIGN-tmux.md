@@ -94,23 +94,30 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
 
   stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但**也沒有持久化**。要漫遊就得先拿到 shell 再下指令。
 
-### Rule 2b: scrollback 重播是**有平台前提**的（誠實範圍）
+### Rule 2b: scrollback 重播只在 macOS 驗證過（誠實範圍，**原因未解**）
 
-- **症狀**：離開 session 時把畫面倒回終端機 —— 這個功能在 Linux 上**從來沒有作用過**，而測試在 macOS 上每次都綠。
-- **收據**（2026-08-15，ubuntu tmux 3.4 vs macOS tmux 3.7b）：
+- **症狀**：離開 session 時把畫面倒回終端機。這個功能在 ubuntu tmux 3.4 上**從來沒有作用過**，而測試在 macOS 上每次都綠 —— 直到 2026-08-15 才有人去看 Linux 的 CI。
+- **量到的**（2026-08-15，ubuntu tmux 3.4 / macOS tmux 3.7b）：
   ```
-  # target_cmd 是「跑引擎；然後擷取 pane」。引擎退出的那一刻：
-  引擎自己擷取（還活著時）      capture-bytes=1717      ← 擷取本身沒問題
-  引擎退出後的下一個指令        從未執行
-  引擎背景化、2 秒後醒來的子殼   從未執行
-  bash 自己的 EXIT trap        從未執行
-  scrollback 檔（10ms 追蹤）    從未出現
+  引擎在 pane 內自己擷取（還活著時）   capture-bytes=1717   ← 擷取本身沒問題
+  帶 -t <session名> 擷取              0 bytes              ← 已修：拿掉 -t
+  scrollback 檔（10ms 全程追蹤）       從未出現
+  state 目錄事後                      空的
   ```
-  **pane 是被硬拆的**，不是收到 SIGHUP。任何「在 pane 內、引擎之後」的做法都不可能成立。
+  重導向就算指令失敗也會建檔，所以「檔案不存在」＝**那個指令從未執行**。
+- 🔴 **已經排除的解釋**（別再試一次）：
+  ```
+  「pane 被硬拆」          ✗ 探針證明 pane 存活：sh -c 'true; touch X'      → SURVIVES
+                             連 exec 形狀也存活：sh -c '<exec 腳本>; touch X' → SURVIVES
+  「順序執行來不及」       ✗ 換成 bash EXIT trap，同樣沒跑
+  「時序競速」             ✗ 引擎已改成等到 client attach 才退出，仍然沒跑
+  「-t 目標解析差異」       ✗ 已拿掉 -t（那是另一個真 bug，已修），沒有改變結果
+  ```
 - **規範**：
-  1. 這是 Rule 2「tmux 是便利層，不是相依」的第四個出口 —— **功能誠實降級，不假裝跨平台**。
-  2. 測試探**能力**不探平台：`_pane_outlives_its_command`（起一個 `sh -c 'true; touch X'` 的 session，看 X 有沒有出現）。版本字串是代理指標，這才是真正的問題。
-  3. 🔴 **不要再試「換一個在 pane 內執行的時機」**。`;`、背景子殼、EXIT trap 三種都量過，全部沒跑。要讓它在 Linux 上動，得換成「由父行程擷取」的設計，而那跟 attach 的阻塞語義衝突（attach 只在 session 結束時返回，那時已經沒東西可擷取）。
+  1. **原因未知。** 這條規則記錄的是一個開放問題，不是一個解釋。任何要補上的人，先讀上面那份「已排除」清單。
+  2. 測試在非 Darwin 平台 `skip` 並指回這裡 —— **不是刪掉**。功能在 macOS 上是好的，缺口是真的、寫下來了，而一個帶理由的 skip 是邀請修復，不是掩蓋。
+  3. 這是 Rule 2「tmux 是便利層」的延伸：**功能誠實降級，不假裝跨平台**。
+  4. ⚠️ 本節前一版曾宣稱原因是「pane 被硬拆」。那是在探針量出 SURVIVES 之前寫的，**是錯的**，已更正。寫進 SSOT 的推論若沒有收據，下一個人會拿它當前提。
 
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
