@@ -34,12 +34,29 @@ CK="$(command -v clikae 2>/dev/null || true)"
 if [ -z "$CK" ]; then
   no "clikae is not on PATH"
 else
-  root="$(clikae env 2>/dev/null | sed -n 's/^export CLIKAE_ROOT=//p' | tr -d '"' || true)"
-  [ -n "$root" ] || root="${CLIKAE_ROOT:-}"
+  # Derive the install root from the binary that is ACTUALLY on PATH.
+  #
+  # 🔴 Do NOT read $CLIKAE_ROOT. It is set when a session starts and keeps
+  # pointing at whatever was installed then — this check reported a correct
+  # 0.24.0 install as broken because the inherited value still named the 0.23.0
+  # Cellar that `brew cleanup` had just deleted. A stale pointer measured
+  # instead of the disk is the same defect the rest of this file hunts.
+  root=""
+  # Homebrew installs a shim whose body execs the real path.
+  shim_target="$(sed -n 's|.*exec "\(/.*\)/bin/clikae".*|\1|p' "$CK" 2>/dev/null | head -1)"
+  if [ -n "$shim_target" ] && [ -d "$shim_target" ]; then
+    root="$shim_target"
+  else
+    # install.sh puts bin/clikae one level under <prefix>/share/clikae.
+    real="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$CK" 2>/dev/null || printf '%s' "$CK")"
+    root="$(dirname "$(dirname "$real")")"
+  fi
   if [ -n "$root" ] && [ -f "$root/lib/core/tmux.sh" ]; then
-    ok "installed clikae has lib/core/tmux.sh  ($CK)"
+    ok "installed clikae has lib/core/tmux.sh  ($(clikae version 2>/dev/null | head -1))"
+    printf '            root: %s\n' "$root"
   else
     no "installed clikae has NO lib/core/tmux.sh — it predates this work. Nothing below will mean what it says."
+    printf '            looked in: %s\n' "${root:-<unresolved>}"
   fi
 fi
 
