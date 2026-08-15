@@ -321,6 +321,16 @@ FIRES: 模擬搶鎖失敗
 <p>FIRES: bits 允許但讀不到（TCC 的形狀，用 stub 注入，因為 TCC 無法在測試裡合成）</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>$ bats -f "names the tmux server" tests/bats/tmux-spawn.bats</span></span>
 <span class="line"><span>ok 1 memory probe: a read that fails while the bits allow it names the tmux server</span></span></code></pre>
+<p>🔴 <strong>對真 TCC 的收據</strong>（2026-08-15，在那顆中毒的 server 裡跑，重開機後這個環境就不存在了）。合成的形狀跟真的一不一樣，只有這一次量得到：</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>$ source lib/core/{log,tmux,soul}.sh</span></span>
+<span class="line"><span>$ memory_access_warn ~/.clikae/souls/me/memory      # → iCloud vault，真的被 TCC 擋著</span></span>
+<span class="line"><span>[ WARN ] this tank cannot read its own memory.</span></span>
+<span class="line"><span>         memory: /Users/chodaict/.clikae/souls/me/memory</span></span>
+<span class="line"><span>         cause:  the permission bits allow it and the read still failed.</span></span>
+<span class="line"><span>         …</span></span>
+<span class="line"><span>$ memory_access_warn &#x3C;一個讀得到的目錄>              # 正控</span></span>
+<span class="line"><span>（完全無輸出）</span></span></code></pre>
+<p>走的是 TCC 分支而不是 EACCES 分支 —— 也就是說「stat 過 + bits 允許 + 讀失敗」這個判別式在真實條件下分得出來，不是只在 stub 下分得出來。</p>
 </li>
 </ul>
 <h3 id="rule-8-環境走檔案不走-argv-the-environment-is-not-a-command-line">Rule 8: 環境走檔案，不走 argv (The Environment Is Not a Command Line)</h3>
