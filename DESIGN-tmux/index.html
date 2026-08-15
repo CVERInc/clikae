@@ -68,7 +68,15 @@
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">tmux_usable</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # command -v tmux &#x26;&#x26; [ -t 0 ] &#x26;&#x26; [ -t 1 ]</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">tmux_attach</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # attach；被拒就收掉「我們剛建的」session，回 1</span></span></code></pre>
 <p>⚠️ <strong>這條規則寫下來之後，兩年內沒有被實作。</strong> 這份文件從 v0.4 就說要收斂到同一組函式，也在 Rule 5 引用了一個叫 <code>clikae_spawn_session</code> 的封裝——而那個名字在文件裡出現三次、在原始碼裡出現<strong>零次</strong>。四個呼叫點各自手寫，然後照這條規則預測的方式漂開（見 Rule 1 的 burn 收據）。2026-08-15 補上 <code>lib/core/tmux.sh</code>，函式實名為 <code>tmux_spawn_session</code>。
-🔴 <strong>推論：這份文件裡任何「應該收斂到 X」的句子，都要能指著一個真的存在的 X。</strong>
+🔴 <strong>推論：這份文件裡任何「應該收斂到 X」的句子，都要能指著一個真的存在的 X。</strong></p>
+<p>🔴 <strong>而且要問對問題。</strong> 2026-08-15 收斂完之後，<code>clikae resume</code> 仍然沒有 tmux —— 它從 2026-06-26 就直接 <code>adapter_run</code>，而加 tmux 層的 <code>62b33a2</code> 只動了 <code>switch.sh</code> 和 <code>burn.sh</code>。它躲過稽核不是因為藏得好，是因為稽核問的是「<strong>誰呼叫 tmux</strong>」：那份清單裡本來就不可能有它。找呼叫者只找得到「已經加入的人之間的漂移」，找不到「從來沒加入的那一個」。
+會找到它的問題是「<strong>誰啟動引擎</strong>」，而那有一份確定的清單 —— 每一個 <code>adapter_run</code> 呼叫點：</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>run.sh      switch 在 tmux 不可用時的 fallback 原語   ← 刻意</span></span>
+<span class="line"><span>relay.sh    carry 的同一種 fallback 原語               ← 刻意</span></span>
+<span class="line"><span>switch.sh:481  --ephemeral                            ← 刻意</span></span>
+<span class="line"><span>switch.sh   主路徑                                     ← 有 tmux</span></span>
+<span class="line"><span>resume.sh   ← 唯一站錯邊的面向使用者入口</span></span></code></pre>
+<p><strong>缺席對「搜尋存在」的方法是隱形的。</strong> 這跟 <code>clikae_spawn_session</code> 文件有三次、程式碼零次是同一種盲點，只是換一層。
 <strong>能不能用 tmux 由 tmux 決定，不要用 <code>tput</code> 之類的代理去猜</strong>——PineNote 的 ssh session 進來就是 <code>TERM=dumb</code>，拿 TERM 當前置判斷會把漫遊從唯一需要它的裝置上關掉。
 attach 被拒時要 <code>kill-session</code>：<code>new-session -d</code> 已經把引擎啟動了，留著就是一個沒人看得見、卻在燒額度的 session。</p>
 <p>🔴 <strong><code>ssh host '指令'</code> 這種一次性形式拿不到 tmux</strong>，而 §2 的 PineNote 進入法（<code>RemoteCommand clikae</code>）正是這一種。從真機量到：</p>
