@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.25.0] — 2026-08-15
 
 ### Fixed
 
@@ -60,6 +60,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "switch.sh / run.sh"; by then `relay.sh` had the call too. A docstring that
   enumerates call sites is what an audit reads instead of the code, so a stale
   one hides the gap it exists to expose — which is how burn's absence survived.
+
+- **The waiter could never exit.** `wake_watch`'s only exit condition was
+  `tmux has-session` — and the watcher is a window IN that session, so it is the
+  reason the session is alive. The condition could never become true. When the
+  engine's window closed and the waiter was the only one left, the loop ran
+  forever and there was no way out but closing the terminal. `wake_sit`'s
+  countdown had no liveness check at all. Both now ask about the ENGINE, which
+  is what they were actually waiting on. A loop whose exit condition it
+  guarantees to be false is not a loop with a bug; it is a loop with no exit.
+
+- **The board announced a countdown that did not exist.** The live row packed
+  attached/age/wake into one field joined by spaces, and `age` is a human string
+  with a space in it ("2m ago") — so `read attached age wake` put "ago" into
+  wake, and non-empty wake means "a waiter is counting". Every selected live row
+  claimed one. The render site's own comment forbids exactly that. `live_wake_note`
+  was right and had a test; the wiring downstream of it did not.
+
+- **`--ephemeral` runs in the same directory could corrupt each other.** The
+  memory slot is keyed on `$PWD`, so the second run's self-heal read the first
+  run's symlink as a crashed leftover and moved the real memory back out from
+  under a live engine — the 2026-07-19 incident, reachable on purpose by fanning
+  out cold readers. Now one lock per slot, and the refusal says to give each run
+  its own directory. (`lockf -k`, not `lockf`: measured, two processes both got
+  rc=0 on the same file without it.)
+
+- **`window-size` was never set.** Rule 1 describes clikae's sizing as
+  "window-size latest" and nothing set the option, so it held on tmux 3.7b and
+  not on 3.4 — a 100-column client attached and the window stayed at 80. Roaming
+  is the reason this layer exists, and it was resting on a default nobody chose.
+
+- **The scrollback capture named a session as its `-t` target**, which returns
+  nothing on tmux 3.4 (measured: 1717 bytes with no target, 0 with it). The
+  command runs inside the pane it captures, so the target was never needed.
+
+### Added
+
+- **`K` on the board closes a running session.** A session whose engine had
+  finished left no way out but closing the terminal, while the board could see it
+  and name it and offered only "enter it". Destructive, so it asks — and the
+  question carries the fact that makes it safe: the conversation is a transcript,
+  so `clikae resume` brings it back. What ends is the process.
+
+- **`scripts/doc-names-exist.sh`, in the gate.** Every function a doc names must
+  exist in the code. Three defects this release were that one shape, including
+  one that survived two years and an audit looking for exactly it — because a doc
+  that names a function is what an auditor reads *instead of* the code, so a
+  stale one hides the gap it would otherwise expose. Exemptions need a written
+  reason.
+
+- **Selection and copy defaults**: `fill-character` blanks the dot field a
+  smaller second client leaves on the larger screen.
 
 ### Known
 
