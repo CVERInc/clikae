@@ -93,10 +93,12 @@ INNER_EOF
   # replaying it, and after a refused attach — so by assertion time it is always
   # gone and its absence proves nothing. Record its size while it exists; that is
   # the one link in the chain nothing has observed.
-  ( for _ in $(seq 1 400); do
-      f=$(ls "$TEST_HOME/.clikae/state/"*.scrollback 2>/dev/null | head -1)
-      [ -n "$f" ] && { wc -c < "$f" | tr -d ' ' > "$TEST_HOME/scrollback-size.txt"; }
-      sleep 0.05
+  ( for _ in $(seq 1 3000); do
+      for f in "$TEST_HOME/.clikae/state/"*.scrollback; do
+        [ -e "$f" ] || continue
+        printf '%s=%s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')" >> "$TEST_HOME/scrollback-trace.txt"
+      done
+      sleep 0.01
     done ) & _watcher=$!
 
   run _pty_run "$CLIKAE_BIN" claude scrolltest
@@ -119,7 +121,8 @@ INNER_EOF
     # from here: the session was never created, it died before the attach, the
     # attach was refused, or the capture wrote nothing. Three wrong guesses were
     # made from the count alone (2026-08-15) before anyone printed the state.
-    echo "--- scrollback size seen: $(cat "$TEST_HOME/scrollback-size.txt" 2>/dev/null || echo NEVER-EXISTED)"
+    echo "--- scrollback trace:  $(sort -u "$TEST_HOME/scrollback-trace.txt" 2>/dev/null | tr '\n' '|' || echo NEVER-EXISTED)"
+    echo "--- state dir:         $(ls -la "$TEST_HOME/.clikae/state/" 2>&1 | tail -4 | tr '\n' '|')"
     echo "--- stages:            $(cat "$TEST_HOME/scrollback-stages.log" 2>&1 | tr '\n' '|')"
     echo "--- tmux version:      $(tmux -V 2>&1)"
     echo "--- TMUX_TMPDIR:       ${TMUX_TMPDIR:-<unset>}"
