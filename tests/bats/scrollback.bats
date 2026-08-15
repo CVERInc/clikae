@@ -42,8 +42,31 @@ sys.stdout.write(b"".join(chunks).decode(errors="replace"))
 PYEOF
 }
 
+# Does a pane's shell get a turn after the command it ran exits?
+#
+# The whole capture-and-replay depends on it: target_cmd runs the engine and then
+# captures the pane. Measured on ubuntu tmux 3.4 (2026-08-15) the answer is no —
+# the pane is torn down at that instant, hard enough that neither a following
+# command, nor a backgrounded subshell, nor bash's own EXIT trap ever ran. macOS
+# tmux 3.7b keeps the shell alive and the feature works there.
+#
+# Probe the capability rather than the platform: a version string is a proxy, and
+# this is the actual question. A capability the runner does not have is a skip
+# with a reason, not a red test — DESIGN-tmux Rule 2's whole position is that the
+# tmux layer degrades honestly.
+_pane_outlives_its_command() {
+  local d; d="$(mktemp -d)"
+  tmux new-session -d -s "ckprobe$$" "sh -c 'true; touch $d/after'" 2>/dev/null || { rm -rf "$d"; return 1; }
+  local i
+  for i in $(seq 1 60); do [ -e "$d/after" ] && break; sleep 0.05; done
+  tmux kill-session -t "ckprobe$$" 2>/dev/null || true
+  local ok=1; [ -e "$d/after" ] && ok=0
+  rm -rf "$d"; return "$ok"
+}
+
 @test "switch scrollback capture retains 200 lines" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed (switch falls back to a direct run)"
+  _pane_outlives_its_command || skip "this tmux tears the pane down when its command exits, so nothing can capture the scrollback from inside it (measured: ubuntu tmux 3.4)"
   clikae init claude scrolltest
   cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
 #!/usr/bin/env bash
