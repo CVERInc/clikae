@@ -56,7 +56,11 @@ PYEOF
 # tmux layer degrades honestly.
 _pane_outlives_its_command() {
   local d; d="$(mktemp -d)"
-  tmux new-session -d -s "ckprobe$$" "sh -c 'true; touch $d/after'" 2>/dev/null || { rm -rf "$d"; return 1; }
+  # Match the real shape: the first command is a script that EXECs something,
+  # which is what `clikae run` does (adapter_run ends in exec). A probe running
+  # `true` answers a different question than the one that fails.
+  printf '#!/usr/bin/env bash\nexec /usr/bin/true\n' > "$d/inner"; chmod +x "$d/inner"
+  tmux new-session -d -s "ckprobe$$" "sh -c '$d/inner; touch $d/after'" 2>/dev/null || { rm -rf "$d"; return 1; }
   local i
   for i in $(seq 1 60); do [ -e "$d/after" ] && break; sleep 0.05; done
   tmux kill-session -t "ckprobe$$" 2>/dev/null || true
@@ -152,6 +156,8 @@ INNER_EOF
     # from here: the session was never created, it died before the attach, the
     # attach was refused, or the capture wrote nothing. Three wrong guesses were
     # made from the count alone (2026-08-15) before anyone printed the state.
+    echo "--- probe simple:      $(d=$(mktemp -d); tmux new-session -d -s "cksimple$$" "sh -c 'true; touch $d/after'" 2>/dev/null; for _ in $(seq 1 40); do [ -e "$d/after" ] && break; sleep 0.05; done; [ -e "$d/after" ] && echo SURVIVES || echo TORN; tmux kill-session -t "cksimple$$" 2>/dev/null; rm -rf "$d")"
+    echo "--- probe exec:        $(_pane_outlives_its_command && echo SURVIVES || echo TORN)"
     echo "--- scrollback trace:  $(sort -u "$TEST_HOME/scrollback-trace.txt" 2>/dev/null | tr '\n' '|' || echo NEVER-EXISTED)"
     echo "--- state dir:         $(ls -la "$TEST_HOME/.clikae/state/" 2>&1 | tail -4 | tr '\n' '|')"
     echo "--- stages:            $(cat "$TEST_HOME/scrollback-stages.log" 2>&1 | tr '\n' '|')"
