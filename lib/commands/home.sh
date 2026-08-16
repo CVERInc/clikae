@@ -456,7 +456,21 @@ _home_wrap_prefixed() {
   cols="$(_home_cols)"
   pad="$(printf '%*s' "$hang" '')"
   avail=$(( cols - hang - extra - 1 ))
-  [ "$avail" -ge 12 ] || avail=$(( cols - extra - 1 ))
+  # 🔴 When the hanging indent leaves too little room to wrap into, the old
+  # escape hatch widened the budget to the WHOLE terminal — and still printed the
+  # prefix. So every line came out exactly <hang> columns too wide: at 30 columns
+  # with a 19-column prefix it wrapped the text to 29 and printed 48. The escape
+  # hatch produced the overflow it existed to prevent.
+  #
+  # Dropping the indent is the honest degradation: put the prefix on its own line
+  # and wrap the text under a small one. You lose the column alignment, which is
+  # what a terminal this narrow cannot afford anyway.
+  if [ "$avail" -lt 12 ]; then
+    printf '%b%s%b\n' "$color" "$prefix" "$reset"
+    hang=2; pad='  '; first=0
+    avail=$(( cols - hang - extra - 1 ))
+    [ "$avail" -ge 1 ] || avail=1
+  fi
   # Don't let a `*` in a recap glob against the cwd while we word-split.
   case $- in *f*) ;; *) glob=1; set -f ;; esac
   # CJK has NO INTERWORD SPACES, so a Japanese/Chinese sentence is ONE "word" to
@@ -739,6 +753,37 @@ _home_lpad() {
   printf '%s%*s' "$s" "$pad" ''
 }
 
+# _home_tank_fields <profile> <engine-label> <account-label> <has-tail>
+#   -> "<name>\037<engine>\037<account>", each padded to its column.
+#
+# 🔴 The three widths were literals (7 / 8 / 22) written out at BOTH tank-row
+# sites — the static board and the interactive one — and neither asked how wide
+# the terminal is. 4 lead + dot + 3 spaces + 7 + 8 + 22 = 45 columns, always.
+# Reported 2026-08-16 over ssh from a PineNote: the board did not fit, and this
+# was one of the rows that could not.
+#
+# Two changes. The account column is now what is LEFT after the fixed chrome
+# (capped at the old 22, so a wide terminal renders exactly as before), and the
+# value is truncated to it rather than only padded to it. And it is padded only
+# when something follows it: otherwise the padding is trailing whitespace that
+# still counts as width, which is how a row whose account was the single
+# character "-" measured 45 columns wide.
+#
+# One function because there were two copies. Copies drift, and these two had
+# to be found by measuring the output rather than by reading either one.
+_home_tank_fields() {
+  local prof="$1" eng="$2" acct="$3" has_tail="$4" acw
+  acw=$(( $(_home_cols) - 8 - 7 - 8 ))    # 8 = 4 lead + dot + 3 single spaces
+  [ "$acw" -gt 22 ] && acw=22
+  [ "$acw" -lt 3 ]  && acw=3
+  local ac; ac="$(_home_trunc "${acct:--}" "$acw")"
+  [ -n "$has_tail" ] && ac="$(_home_lpad "$ac" "$acw")"
+  printf '%s\037%s\037%s' \
+    "$(_home_lpad "$(_home_trunc "$prof" 7)" 7)" \
+    "$(_home_lpad "$(_home_trunc "$eng" 8)" 8)" \
+    "$ac"
+}
+
 # _home_cols -> the live terminal COLUMN width, via `stty size </dev/tty`
 # (works inside $(), unlike `tput cols` which reads its piped stdout — see the
 # NB in _home_welcome). Falls back to 80 when not a real terminal, unreadable,
@@ -810,8 +855,21 @@ _home_render_static() {
   # only tool-CLI tanks, which the board filters out), so guard with `|| true`.
   n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c . || true)"
   n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c . || true)"
-  printf '%b%s%b  %b·  %s%b\n\n' \
-    "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
+  # Wordmark and summary share a line only when both fit. The joined form is
+  # `clikae  ·  N tanks across M engines` — 34 columns in en-US with two tanks,
+  # and wider in de-DE/pt-BR — printed with no budget at all until 2026-08-16,
+  # so it was the first thing to run off a narrow terminal.
+  local _sum _hw
+  _sum="$(i18n_summary "$n_tanks" "$n_clis")"
+  _hw=$(( $(_dwidth "$T_WORDMARK") + 5 + $(_dwidth "$_sum") ))   # 5 = "  ·  "
+  if [ "$_hw" -le "$(_home_cols)" ]; then
+    printf '%b%s%b  %b·  %s%b\n\n' \
+      "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$_sum" "$__C_RESET"
+  else
+    printf '%b%s%b\n' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"
+    _home_wrap_prefixed "$_sum" "" 0 "$__C_DIM" "$__C_RESET"
+    printf '\n'
+  fi
 
   local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 printed_live=0 rdot
   local launch_cli="" launch_profile=""
@@ -869,10 +927,11 @@ _home_render_static() {
         # then a right gutter that holds the reset time when the tank is dry. (We don't
         # mark "this shell's tank": with many tanks open at once across terminals, the
         # current-shell tank is an artifact of where you typed clikae, not useful info.)
-        local _nm _en _ac _tail="" _sep=""
-        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
-        [ -n "$_tail" ] && _sep="  "
+        local _nm _en _ac _tail="" _sep="" _flds
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        _flds="$(_home_tank_fields "$profile" "$_eng" "${label:--}" "$_tail")"
+        _nm="${_flds%%$'\037'*}"; _flds="${_flds#*$'\037'}"
+        _en="${_flds%%$'\037'*}"; _ac="${_flds#*$'\037'}"
         printf '    %b %s %b%s%b %b%s%b%s%s\n' \
           "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         ;;
@@ -920,9 +979,18 @@ EOF
     # The tank's NAME is the way to launch it (alias retired from the board). agy
     # shown by its short name. Colour via %b only (codes are literal \033).
     local _leng; _leng="$(_home_engine_label "$launch_cli")"
-    printf '  %s clikae %s %s\n' "$(_home_lpad "$T_LAUNCH" 9)" "$_leng" "$launch_profile"
+    # Wrapped, like every other prose row. Prefix is 2 lead + a 9-column label +
+    # 1 space = 12 display columns; _home_wrap_prefixed takes that width as a
+    # number because _dwidth cannot see through the label's own padding.
+    _home_wrap_prefixed "clikae $_leng $launch_profile" \
+      "  $(_home_lpad "$T_LAUNCH" 9) " 12 "" ""
   fi
-  printf '  %s %s\n' "$(_home_lpad "$T_MORE" 9)" "clikae status · clikae doctor · clikae demo · clikae help"
+  # 🔴 This row was a bare printf with a hardcoded 69-column string and no width
+  # budget at all — it did not even call _home_cols. Reported 2026-08-16 from a
+  # PineNote over ssh: it is the row that overflows first, at anything under 69
+  # columns, and it was the last line of the board so it was the one you saw.
+  _home_wrap_prefixed "clikae status · clikae doctor · clikae demo · clikae help" \
+    "  $(_home_lpad "$T_MORE" 9) " 12 "" ""
 }
 
 # The welcome screen, shown when there are no tanks yet. RESPONSIVE (like a web
@@ -1524,7 +1592,12 @@ _home_pick_draw_body() {
     "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
     "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
-  printf '%b%s: %s · [A] change (BETA, claude+codex)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
+  # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
+  # it was the one row of the INTERACTIVE frame that still ran off a narrow
+  # terminal after the 2026-08-16 sweep.
+  _home_wrap_prefixed "$T_K_AUTO: $(autonomy_get) · [A] change (BETA, claude+codex)" \
+    "  " 2 "$__C_DIM" "$__C_RESET"
+  printf '\n'
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -1606,10 +1679,11 @@ LIVEACT
         # Aligned columns (display-width padded): name · engine · account, then a
         # right gutter holding the reset time when the tank is dry. (No "this shell"
         # marker — see _home_render_static: with many tanks open at once it's noise.)
-        local _nm _en _ac _tail="" _sep=""
-        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
-        [ -n "$_tail" ] && _sep="  "
+        local _nm _en _ac _tail="" _sep="" _flds
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        _flds="$(_home_tank_fields "$profile" "$_eng" "${label:--}" "$_tail")"
+        _nm="${_flds%%$'\037'*}"; _flds="${_flds#*$'\037'}"
+        _en="${_flds%%$'\037'*}"; _ac="${_flds#*$'\037'}"
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
             "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
