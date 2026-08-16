@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.2] — 2026-08-16
+
+### Fixed
+
+- **`pty-smoke size` failed instead of skipping where tmux is not installed.**
+  GitHub's `macos-latest` runner has no tmux, so the check added in 0.26.1
+  turned CI red for a missing tool rather than a defect — and a red that means
+  "a tool is absent" is how a red that means "something is broken" stops being
+  read. v0.26.1 was tagged while the board was already this colour.
+
+  Three states, not two: a check a run could not perform is `skip`, never a pass
+  and never a failure. `verify-tmux-birth.sh` and `verify-agy-shapes.sh` both
+  carry that rule in their own headers; this file was the one that did not have
+  it, and it is the one that broke. Proven both ways — with tmux on `PATH` the
+  two size checks run, with `PATH=/usr/bin:/bin` they skip and the suite exits 0.
+
+  No product code changed between 0.26.1 and 0.26.2. This exists so the released
+  tag is one whose own suite passes on a clean machine.
+
 ## [0.26.1] — 2026-08-16
 
 ### Fixed
