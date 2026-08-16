@@ -132,3 +132,30 @@ Add a row when you add a guard worth that. Two traps, both hit on the first run:
   inside `s{}{}`, and a shell function's replacement almost always has an
   unmatched `{` — perl dies of a syntax error, the file is untouched, and you
   land in the trap above.
+
+## Checks the suite cannot make (`scripts/verify-*.sh`)
+
+Some claims are about the real machine, and bats cannot reach them. These are
+run by hand, and each reports **three** states — a check it could not perform is
+`skip`, never a pass, because the bug being guarded against is a green light
+that means "I did not look".
+
+| script | the claim it checks | why not a bats test |
+|---|---|---|
+| `verify-tmux-birth.sh` | DESIGN-tmux Rule 7: what the tmux **server** inherited at birth | a property of a real server against real macOS TCC; the suite covers the logic with an injected stub |
+| `verify-agy-shapes.sh` | the agy adapter's model of agy still matches agy | it parses a self-updating vendor binary's undocumented files; fixtures only prove the parser matches *our* model of the format |
+
+`verify-agy-shapes.sh` is the answer to a specific hole. `antigravity.bats` is
+green against fixtures we wrote, so if agy renames a key tomorrow, every one of
+those tests still passes. This runs the same extraction against the real files
+agy wrote on this machine — including the *rate* (`"workspace"` on 646/646
+history lines across 3 tanks, verified 2026-08-16 against agy 1.1.13), because a
+single surviving line satisfies `grep -q` while the feature is broken for
+everything else.
+
+Its own first draft is worth knowing about. `grep -c` **prints `0` and exits
+`1`** when nothing matches, so a `|| echo 0` fallback fired *as well* and the
+arithmetic got `"0\n0"` — a syntax error that killed the script mid-run while it
+still exited 0. Every individual check was correct; the only thing that could
+have caught it was the total. So the script now fails with a distinct code when
+it performed no checks at all.
