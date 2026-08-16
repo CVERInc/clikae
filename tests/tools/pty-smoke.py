@@ -151,6 +151,17 @@ def drive(cmd, keys, env, timeout=25, settle=None, per_key=None):
 _failed = []
 
 
+def skip(name, why):
+    """A check this run could not perform. NOT a pass and NOT a failure.
+
+    🔴 mode_size needs tmux, and GitHub's macos-latest runner does not have it.
+    Without this the gate turned CI red for a missing tool rather than a defect
+    — which is how a real red gets ignored. Two other scripts written the same
+    day carry this rule in their headers; this file was the one that did not.
+    """
+    print('skip ' + name + '  (' + why + ')')
+
+
 def check(name, ok, detail=''):
     print(('ok   ' if ok else 'FAIL ') + name)
     if not ok:
@@ -255,6 +266,9 @@ def mode_size():
     no controlling terminal — there, the check would pass by not looking.
     """
     import tempfile as _tf, shutil as _sh, select as _sel, time as _t
+    if not shutil.which('tmux'):
+        skip('session born at the terminal size', 'tmux is not installed here')
+        return
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     for cols, rows in ((60, 30), (140, 40)):
         tmpdir = _tf.mkdtemp(); chome = _tf.mkdtemp()
