@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.1] — 2026-08-16
+
+### Fixed
+
+- **The board did not fit a narrow terminal.** Reported from a PineNote over
+  ssh; measured on the repo, it overflowed at **every width below 72 columns**.
+  There is a fluid layer (`_home_cols`, `_home_row_budget`,
+  `_home_wrap_prefixed`, `_home_trunc`) and there were rows that bypassed it:
+
+  | | |
+  |---|---|
+  | 69 cols | `more   clikae status · clikae doctor · clikae demo · clikae help` |
+  | 45 cols | the tank rows — `4 lead + dot + 3 spaces + 7 + 8 + 22`, all literals |
+  | 38 cols | the interactive frame's autonomy legend |
+  | 34 cols | the wordmark + summary header |
+
+  The `more` row is the one you saw first: a bare `printf` of a hardcoded
+  string, not even a call to `_home_cols`, and the last line of the board.
+
+  The tank row's widths were written out at **both** tank-row sites — the static
+  board and the interactive one — and neither asked the terminal's width. They
+  now share one `_home_tank_fields`: the account column is what is left after
+  the fixed chrome (capped at the old 22, so a wide terminal is unchanged), the
+  value is truncated to it rather than only padded to it, and it is padded only
+  when something follows — otherwise the padding is trailing whitespace that
+  still counts as width, which is how a row whose account was the single
+  character `-` measured 45 columns.
+
+- **`_home_wrap_prefixed`'s escape hatch produced the overflow it prevented.**
+  When the hanging indent left under 12 columns to wrap into, it widened the
+  budget to the *whole* terminal and still printed the prefix — so every line
+  came out exactly `hang` columns too wide. At 30 columns with a 19-column
+  prefix it wrapped text to 29 and printed 48. It drops the indent now.
+
+- **Every tmux session was born 80x24, whatever terminal you were on.**
+  `tmux new-session -d` is detached, and a detached session has no client to
+  take its size from, so tmux used `default-size`. Measured on a pty at 60, 100
+  and 140 columns: 80x24 every time. The engine paints its first frame for 80
+  columns and only then do we attach and tmux resizes — so the first screen was
+  laid out for a terminal you are not using, and that applied to the **engine's
+  own TUI** as much as to the board. `tmux_spawn_session` now passes `-x`/`-y`
+  when there is a controlling terminal to ask; a headless `burn` has none and
+  keeps tmux's default.
+
+- **The board never repainted on resize.** `tui_read_key` blocks — its argument
+  is a file descriptor, not a timeout — so the loop sat there until a key
+  arrived, while every layout figure was already read per draw. It polls once a
+  second now and repaints only when the size actually changed.
+
+  A `trap … WINCH` does not fix this: bash installs handlers with `SA_RESTART`,
+  so the blocked read resumes and the flag is never looked at (measured —
+  SIGWINCH produced zero bytes of repaint). And the loop cannot branch on the
+  read's exit code, because macOS's stock **bash 3.2 returns 1 for a `read -t`
+  timeout** where bash 4+ returns >128 — indistinguishable from EOF. It asks
+  something independent instead: a terminal that is gone has no size.
+
+### Added
+
+- **`tests/bats/board-width.bats`** — renders the whole board at ten widths and
+  measures every line, on **both** paths: `clikae` with no tty draws the STATIC
+  board, so a gate that only ran the binary would have missed the interactive
+  frame. The existing width test called `_home_wrap_prefixed` directly and
+  proved the *helper* wraps, which says nothing about the 35 `printf` sites that
+  never call it. It caught four defects while the fix was being written.
+
+- **`pty-smoke.py size` / `pty-smoke.py resize`** — both depend on a controlling
+  terminal, so in bats they would pass by not looking. Before the fix: 80x24 at
+  every width, and nothing drawn after a resize.
+
 ## [0.26.0] — 2026-08-16
 
 ### Added
