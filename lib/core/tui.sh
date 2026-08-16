@@ -28,10 +28,31 @@
 #   · A lone ESC (1s timeout, no follow-up byte) is the user pressing Escape.
 #   · An unrecognised sequence is TUI_KEY=unknown — a no-op for every caller,
 #     never a misfired action.
+# tui_read_key <fd> [timeout-seconds]
+#
+# 🔴 With a timeout, a caller can wake up without a keypress — which is the only
+# way a bash TUI notices a terminal resize. A `trap ... WINCH` does NOT rescue a
+# blocked `read`: bash installs its handlers with SA_RESTART, so the read simply
+# resumes and the flag the trap set is never looked at until a key arrives.
+# Measured 2026-08-16 on a pty: SIGWINCH after the first frame produced zero
+# bytes of repaint.
+#
+# Return codes: 0 = a key (in TUI_KEY), 2 = the timeout elapsed (bash 4+),
+# 1 = anything else. Callers that pass no timeout are unchanged.
+#
+# 🔴 macOS's stock bash 3.2 — the shell clikae actually runs on — returns 1 for
+# a `read -t` TIMEOUT, not the >128 that bash 4+ gives. Measured on a pty: two
+# consecutive one-second timeouts both came back 1. So a caller CANNOT tell a
+# timeout from EOF by exit code here, and must decide with an independent
+# signal; _home_pick asks whether the terminal still has a size.
 tui_read_key() {
-  local fd="${1:-0}" key c1 c2
+  local fd="${1:-0}" to="${2:-}" key c1 c2 _rc
   TUI_KEY=""
-  IFS= read -rsn1 -u "$fd" key || return 1
+  if [ -n "$to" ]; then
+    IFS= read -rsn1 -t "$to" -u "$fd" key || { _rc=$?; [ "$_rc" -gt 128 ] && return 2; return 1; }
+  else
+    IFS= read -rsn1 -u "$fd" key || return 1
+  fi
   case "$key" in
     $'\e')
       if ! IFS= read -rsn1 -t 1 -u "$fd" c1; then TUI_KEY="esc"; return 0; fi

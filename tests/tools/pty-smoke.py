@@ -22,7 +22,7 @@ The child gets the pty as its CONTROLLING terminal (setsid + TIOCSCTTY) —
 without it, /dev/tty opens fail inside the app and every sub-menu is invisible,
 which reads as a false regression.
 """
-import os, pty, sys, time, select, subprocess, fcntl, termios, struct, shutil, tempfile
+import os, pty, sys, time, select, subprocess, fcntl, termios, struct, shutil, tempfile, signal
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CLIKAE = os.path.join(REPO, 'bin', 'clikae')
@@ -238,14 +238,143 @@ def mode_resume():
     check('no-match notice shown', 'no matches' in out.lower(), out[-600:])
 
 
-MODES = {'home': mode_home, 'prompts': mode_prompts, 'resume': mode_resume}
+
+def mode_size():
+    """A tmux session must be born at the TERMINAL's size, not tmux's default.
+
+    `tmux new-session -d` is detached, and a detached session has no client to
+    take its size from, so tmux uses `default-size` — 80x24. The engine paints
+    its first frame for 80 columns; only afterwards do we attach and tmux
+    resizes the window. Nothing repaints (there is no SIGWINCH handling in
+    clikae), so the first screen you see was laid out for a terminal you are
+    not using.
+
+    Reported 2026-08-16 from a PineNote over ssh. Measured against the code
+    before the fix: 80x24 at every pty width tried. This is a pty test and not
+    a bats one because the size comes from `stty size </dev/tty`, and bats has
+    no controlling terminal — there, the check would pass by not looking.
+    """
+    import tempfile as _tf, shutil as _sh, select as _sel, time as _t
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for cols, rows in ((60, 30), (140, 40)):
+        tmpdir = _tf.mkdtemp(); chome = _tf.mkdtemp()
+        script = (
+            'export TMUX_TMPDIR="%s"; unset TMUX TMUX_PANE\n'
+            'export CLIKAE_HOME="%s"\n'
+            'cd %s || exit 1\n'
+            '. lib/core/log.sh 2>/dev/null\n'
+            '. lib/core/tmux.sh\n'
+            "tmux_spawn_session --session cksize -- 'sleep 30' >/dev/null 2>&1; echo RC=$?\n"
+            'sleep 1\n'
+            'echo "OUT=$(tmux display-message -p -t cksize \'#{window_width}x#{window_height}\' 2>&1)"\n'
+            'tmux kill-server 2>/dev/null\n'
+        ) % (tmpdir, chome, root)
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execvp('bash', ['bash', '-c', script])
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        out = b''; t0 = _t.time()
+        while _t.time() - t0 < 30:
+            r, _, _ = _sel.select([fd], [], [], 0.5)
+            if r:
+                try:
+                    c = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not c:
+                    break
+                out += c
+            if b'OUT=' in out:
+                break
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except Exception:
+            pass
+        _sh.rmtree(tmpdir, ignore_errors=True); _sh.rmtree(chome, ignore_errors=True)
+        txt = out.decode(errors='replace').replace('\r', '')
+        want = '%dx%d' % (cols, rows)
+        check('session born at the terminal size (%s)' % want,
+              ('OUT=' + want) in txt,
+              'wanted OUT=%s, got:\n%s' % (want, txt))
+
+
+
+def mode_resize():
+    """The board must reflow when the terminal is resized, without a keypress.
+
+    tui_read_key blocks on `read -rsn1 -u 3` — the argument is a file
+    descriptor, not a timeout — so the loop sits there until a key arrives.
+    Every layout figure is read per draw, so the board could always reflow;
+    nothing asked it to. A trap on WINCH makes the blocking read return, and
+    the loop repaints instead of quitting.
+
+    Assertion: start wide, shrink, and require that the LAST frame drawn has no
+    line wider than the new width. Measured against the code before the fix,
+    the frame stayed at its wide layout until a key was pressed.
+    """
+    import time as _t, select as _sel, re as _re
+    env = sandbox()
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
+
+    def make_ctty():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    p = subprocess.Popen([CLIKAE, 'home'], stdin=slave, stdout=slave, stderr=slave,
+                         preexec_fn=make_ctty, env=env, close_fds=True)
+    os.close(slave)
+
+    def pump(seconds):
+        buf = b''
+        t0 = _t.time()
+        while _t.time() - t0 < seconds:
+            r, _, _ = _sel.select([master], [], [], 0.2)
+            if r:
+                try:
+                    c = os.read(master, 8192)
+                except OSError:
+                    break
+                if not c:
+                    break
+                buf += c
+        return buf
+
+    _first = pump(2.0)                          # first frame, at 120 columns
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 52, 0, 0))
+    os.kill(p.pid, signal.SIGWINCH)
+    after = pump(2.5)                           # whatever it repaints, at 52
+    try:
+        os.write(master, b'q')
+        p.wait(timeout=8)
+    except Exception:
+        p.kill()
+    os.close(master)
+
+    if os.environ.get('PTY_DEBUG'):
+        import re as _dre
+        _strip = lambda b: _dre.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', b.decode(errors='replace')).replace('\r', '')
+        sys.stderr.write('--- before (%d bytes) ---\n%s\n' % (len(_first), _strip(_first)[:500]))
+        sys.stderr.write('--- after  (%d bytes) ---\n%s\n' % (len(after), _strip(after)[:500]))
+    txt = after.decode(errors='replace').replace('\r', '')
+    txt = _re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07', '', txt)
+    lines = [l for l in txt.split('\n') if l.strip()]
+    check('the board repainted after the resize', bool(lines),
+          'nothing was drawn after SIGWINCH')
+    over = [l for l in lines if len(l) > 52]
+    check('no line wider than the new width after resize', not over,
+          'widest: %r' % (max(over, key=len)[:120] if over else ''))
+
+
+MODES = {'home': mode_home, 'prompts': mode_prompts, 'resume': mode_resume,
+         'size': mode_size, 'resize': mode_resize}
 
 
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else 'all'
     try:
         if which == 'all':
-            for name in ('home', 'prompts', 'resume'):
+            for name in ('home', 'prompts', 'resume', 'size', 'resize'):
                 print('--- ' + name)
                 MODES[name]()
         elif which in MODES:

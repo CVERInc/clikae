@@ -238,6 +238,32 @@ tmux_spawn_session() {
       chain+=(";" set-option -as terminal-features ",xterm*:extkeys")
     fi
   fi
+  # 🔴 BORN AT THE TERMINAL'S SIZE, NOT tmux's DEFAULT.
+  # `new-session -d` is detached, and a detached session has no client to take
+  # its size from — so tmux uses `default-size`, which is 80x24. The engine then
+  # paints its first frame for 80 columns, and only afterwards do we attach and
+  # tmux resize the window to the real terminal. Nothing repaints: there is no
+  # SIGWINCH handling anywhere in clikae, and the board reads the width per
+  # render, not per resize. So the first screen you see was laid out for a
+  # terminal you are not using.
+  #
+  # Reported 2026-08-16 from a PineNote over ssh — a terminal narrower than 80 —
+  # where the board "does not fit". Passing -x/-y makes the session born the
+  # right size, so the first paint is already correct.
+  #
+  # Only when we have a controlling terminal to ask. A headless `burn` has none,
+  # and inventing a size for it would be worse than tmux's default.
+  local _sz _sw _sh
+  _sz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  _sh="${_sz%% *}"; _sw="${_sz##* }"
+  # Each field checked on its own. A combined `case "$w:$h"` cannot express
+  # "empty", because the string always contains the colon — shellcheck SC2195
+  # caught exactly that in the first draft.
+  case "$_sw" in ''|*[!0-9]*) _sw="" ;; esac
+  case "$_sh" in ''|*[!0-9]*) _sh="" ;; esac
+  if [ -n "$_sw" ] && [ -n "$_sh" ] && [ "$_sw" -ge 20 ] && [ "$_sh" -ge 5 ]; then
+    win_args+=(-x "$_sw" -y "$_sh")
+  fi
   chain+=(";" new-session -d "${env_args[@]}" -s "$session" "${win_args[@]}" "$cmd")
 
   # Say why, when it fails. A constructor that returns 1 in silence sends the

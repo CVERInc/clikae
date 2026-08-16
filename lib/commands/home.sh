@@ -802,6 +802,19 @@ _home_cols() {
   printf '%s' "$cols"
 }
 
+# _home_size -> "<cols>x<rows>" from ONE stty call. Used by the picker's wait to
+# notice a resize; two calls to _home_cols/_home_rows would fork twice a second
+# for the life of an idle board. Empty when there is no controlling terminal —
+# which then never changes, so an idle non-tty board never repaints either.
+_home_size() {
+  local sz
+  sz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  case "$sz" in
+    *[!0-9\ ]*|'') printf '' ;;
+    *) printf '%sx%s' "${sz##* }" "${sz%% *}" ;;
+  esac
+}
+
 # _home_row_budget <cols> <overhead> [min] -> how many DISPLAY columns are left
 # for a row's variable text (a title, a label…) after subtracting <overhead> —
 # the DISPLAY width of everything else on the row: fixed chrome (dots, padded
@@ -1834,8 +1847,22 @@ _home_pick() {
   # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
   # the live `/` query. Everything navigational works on `view`; relay still reads
   # the FULL `items` so it can find the active source tank even when filtered out.
-  local sel=0 n sel_row sel_kind sel_cli filter="" view
+  local sel=0 n sel_row sel_kind sel_cli filter="" view _cursize
   view="$items"
+
+  # 🔴 REDRAW ON RESIZE. tui_read_key blocks — its argument is a file descriptor,
+  # not a timeout — so the loop sat there until a key arrived. Every layout
+  # figure is read per draw (_home_cols), so the board was always capable of
+  # reflowing; nothing ever asked it to. Resize the window and the frame stayed
+  # laid out for the old size until you happened to press something.
+  #
+  # A `trap ... WINCH` does NOT fix this on its own: bash installs handlers with
+  # SA_RESTART, so the blocked `read` resumes and the flag is never looked at.
+  # Measured on a pty — SIGWINCH after the first frame produced zero bytes of
+  # repaint. So the wait polls instead, and only repaints when the width or the
+  # height actually changed; an idle board with a still terminal draws nothing.
+  # Reported alongside the ssh-from-PineNote report, 2026-08-16.
+  local _lastsize=""
   while :; do
     view="$(_home_filter "$items" "$filter")"
     n="$(printf '%s\n' "$view" | grep -c .)"
@@ -1844,7 +1871,22 @@ _home_pick() {
       # user clear the filter or quit. Never get stuck on an empty board.
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
-      tui_read_key 3 || TUI_KEY="q"
+      # Wait for a key, waking every second so a resize repaints without one.
+    TUI_KEY=""
+    while :; do
+      tui_read_key 3 1 && break
+      # 🔴 Do NOT branch on the exit code: bash 3.2 returns 1 for a `read -t`
+      # timeout, same as EOF (bash 4+ gives >128). Ask something independent —
+      # a terminal that is gone has no size, and that is the only case that
+      # should quit. Everything else was just a quiet second.
+      _cursize="$(_home_size)"
+      if [ -z "$_cursize" ]; then TUI_KEY="q"; break; fi
+      if [ -n "$_lastsize" ] && [ "$_cursize" != "$_lastsize" ]; then
+        _lastsize="$_cursize"; TUI_KEY="__resized"; break
+      fi
+      _lastsize="$_cursize"
+    done
+    [ "$TUI_KEY" = "__resized" ] && continue
       case "$TUI_KEY" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
@@ -1859,7 +1901,22 @@ _home_pick() {
     # One decoded key per frame from the tty fd (tui_read_key, lib/core/tui.sh);
     # a lone ESC quits, PgUp/Home jump top, PgDn/End jump bottom (the board has
     # no viewport, so page = jump).
-    tui_read_key 3 || TUI_KEY="q"
+    # Wait for a key, waking every second so a resize repaints without one.
+    TUI_KEY=""
+    while :; do
+      tui_read_key 3 1 && break
+      # 🔴 Do NOT branch on the exit code: bash 3.2 returns 1 for a `read -t`
+      # timeout, same as EOF (bash 4+ gives >128). Ask something independent —
+      # a terminal that is gone has no size, and that is the only case that
+      # should quit. Everything else was just a quiet second.
+      _cursize="$(_home_size)"
+      if [ -z "$_cursize" ]; then TUI_KEY="q"; break; fi
+      if [ -n "$_lastsize" ] && [ "$_cursize" != "$_lastsize" ]; then
+        _lastsize="$_cursize"; TUI_KEY="__resized"; break
+      fi
+      _lastsize="$_cursize"
+    done
+    [ "$TUI_KEY" = "__resized" ] && continue
     sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
     sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
