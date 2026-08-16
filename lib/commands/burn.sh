@@ -56,6 +56,15 @@ Give the task in one of two ways:
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.
+  --json              print ONE result object on stdout and every word of
+                      progress on stderr — so a script never parses prose to
+                      learn what happened. Rule 1 is "judge by the artifact,
+                      never the exit code", and with rerouting the tank that did
+                      the work is often not the one you named:
+                        {ok, engine, tank, artifact, artifact_bytes, reason,
+                         reset, rerouted_from[], elapsed_s, run_id}
+                      `artifact_bytes` is the artifact's own measurement, so the
+                      evidence travels with the verdict.
   --no-reroute        run once; on a dry tank, stop instead of falling through.
   --allow-active      let auto-reroute use a tank an interactive session is on.
                       By default the reserve SKIPS such tanks (rerouting a headless
@@ -260,6 +269,7 @@ _agy_burn() {
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
     elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
       log_done "Done on agy/$cur — artifact present: $artifact"
+      _burn_result true agy "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
     elif printf '%s' "$out" | grep -qi "no output produced"; then
@@ -291,6 +301,7 @@ _agy_burn() {
       # --artifact outright would remove the only verification burn has.
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
+        _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
         log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
         return 0
@@ -300,13 +311,18 @@ _agy_burn() {
       return 1
     else
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
+      _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
 
-    [ "$reroute" -eq 1 ] || { log_info "Dry, and --no-reroute is set. Stopping."; return 1; }
+    [ "$reroute" -eq 1 ] || {
+      log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      return 1
+    }
     # `|| true`: under `set -e -o pipefail`, grep exiting 1 (every tank already
     # tried — nothing left to select) would otherwise abort the script here
     # instead of falling through to the "all dry" log_fail below.
@@ -318,8 +334,45 @@ _agy_burn() {
   done
 }
 
+# _burn_result <ok> <engine> <tank> <artifact> <reason> [reset-phrase]
+#
+# 🔴 AGENTS.md's first non-negotiable rule is "judge by the artifact/output,
+# never the exit code" — and until 2026-08-16 clikae made an agent read that
+# judgement out of PROSE. `burn` is the dispatch shape an agent uses most, and
+# the one whose outcome is least guessable: with rerouting, the tank that
+# actually did the work is often not the one you named, and the only record of
+# which was a sentence on stdout.
+#
+# The data was already there (the `summary:` line has tank, reroutes, elapsed
+# and artifact size). This just says it in a form nothing has to parse by eye.
+#
+# `artifact_bytes` is the point: rule 1 says judge by the artifact, so the
+# artifact's own measurement travels with the verdict rather than being a second
+# call the caller has to remember to make.
+_burn_result() {
+  [ "${as_json:-0}" -eq 1 ] || return 0
+  local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
+  local bytes=null
+  [ -n "$art" ] && [ -e "$art" ] && bytes="$(_burn_size "$art")"
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s}\n' \
+    "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
+    "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
+    "$(_burn_tried_json "${tried:-}")" "$((SECONDS - ${t0:-SECONDS}))" \
+    "$(json_or_null "${run_id:-}")" >&4
+}
+
+# `tried` accumulates "engine/tank" words as the reroute walks the reserve.
+_burn_tried_json() {
+  local w first=1 out=""
+  for w in $1; do
+    [ "$first" -eq 1 ] || out="$out,"
+    out="$out$(json_str "$w")"; first=0
+  done
+  printf '%s' "$out"
+}
+
 cmd_burn() {
-  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0
+  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
@@ -331,6 +384,7 @@ cmd_burn() {
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
+      --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
       --fresh)      fresh=1; shift ;;
@@ -346,6 +400,16 @@ cmd_burn() {
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
   [ -n "$artifact" ] || log_fail "Missing --artifact <path> — burn verifies completion by the artifact, never the exit code."
+
+  # --json: ONE object on stdout, every word of progress on stderr. log_done and
+  # log_info write to stdout, so without this the result would arrive mixed into
+  # the prose it exists to replace. fd 4 is the real stdout, held for the result.
+  if [ "$as_json" -eq 1 ]; then
+    exec 4>&1
+    exec 1>&2
+  else
+    exec 4>/dev/null
+  fi
 
   # Convenience surface (--prompt / --prompt-file): clikae fills each engine's
   # headless-write flags from its adapter, so the task is just "a prompt + the
@@ -559,17 +623,23 @@ KV
     elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
       dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       log_done "Done on $cli/$cur — artifact present: $artifact"
+      _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
       return 0
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
+      _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
       printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
 
     # Dry → fall through to the next tank in the reserve.
-    [ "$reroute" -eq 1 ] || { log_info "Dry, and --no-reroute is set. Stopping."; return 1; }
+    [ "$reroute" -eq 1 ] || {
+      log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      return 1
+    }
     tried="$tried $cli/$cur"
     local nxt=""
     if [ -n "$to" ]; then
@@ -577,7 +647,13 @@ KV
     else
       nxt="$(_burn_next_same_engine "$cli" "$tried" "$dried_accts" "$envvar" "$allow_active")"
     fi
-    [ -n "$nxt" ] || log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+    if [ -z "$nxt" ]; then
+      # The reserve is exhausted. log_fail exits, so the machine-readable answer
+      # has to be said first — this is the outcome an agent most needs to tell
+      # apart from a task failure, and prose is the only place it lived.
+      _burn_result false "$cli" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
+      log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+    fi
 
     # Resolve the next hop. A bare name = a tank of the same engine; engine/tank =
     # possibly cross-engine (the same command then runs under that engine — warned).

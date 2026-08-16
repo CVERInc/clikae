@@ -16,3 +16,6 @@ generated_title    a JSON field name
 dry_store          a state file under $CLIKAE_HOME, not a function
 _exit              shell builtin, quoted while explaining trap semantics
 _                  a literal underscore used as a placeholder in an example
+rerouted_from      a field in `clikae burn --json`'s result object, not a function
+artifact_bytes     ditto
+elapsed_s          ditto

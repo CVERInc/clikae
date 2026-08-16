@@ -40,6 +40,20 @@ Three dispatch shapes — full field guide in
   — one unattended task, verified by the **artifact** it produces, auto-rerouted to
   the next reserve tank if one runs dry. Don't hand-roll engine flags; the
   convenience surface fills in each engine's headless-write dialect.
+
+  **Add `--json`.** One object on stdout, every word of progress on stderr, so
+  you never parse prose to learn what happened:
+
+  ```sh
+  clikae burn codex work --prompt-file t.md --artifact out.md --json \
+    | jq -r 'select(.ok) | "\(.engine)/\(.tank) wrote \(.artifact_bytes)B"'
+  ```
+
+  `{ok, engine, tank, artifact, artifact_bytes, reason, reset, rerouted_from[],
+  elapsed_s, run_id}`. Read `tank`, not the one you asked for — with rerouting
+  they are often different, and `rerouted_from` is the trail. `reason`
+  distinguishes the two failures that matter: `every reachable tank is dry` (wait
+  or add fuel) from `no fresh artifact and no limit` (the task itself failed).
 - **`clikae conduct --leg <e>/<t> … --prompt-file <f>`** — fan ONE read-only prompt
   across N accounts in parallel (best-of-N audits/analyses); collect every leg's
   output. clikae never judges — you pick the winner.

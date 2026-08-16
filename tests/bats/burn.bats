@@ -624,3 +624,57 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$(cat "$art")" == *"--print-timeout 900s"* ]] || false
 }
+
+# --json — the machine-readable result. AGENTS.md's rule 1 is "judge by the
+# artifact/output, never the exit code", and until 2026-08-16 an agent had to
+# read that judgement out of prose. With rerouting, the tank that actually did
+# the work is often not the one you named, and nothing said which in a form a
+# script could use.
+
+@test "burn --json: success is one object on stdout, prose on stderr" {
+  _stub_codex
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # stdout must be parseable on its own — the whole point.
+  clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/o2.md" --json -- run "$BATS_TEST_TMPDIR/o2.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/e.txt"
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['engine'], d['tank'], d['artifact_bytes'] is not None)" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { echo "stdout was not valid JSON:"; cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True codex T1 True" ] || { echo "got: $output"; false; }
+  # and the prose still happened, just not on stdout
+  grep -q 'Done on codex/T1' "$BATS_TEST_TMPDIR/e.txt" || { cat "$BATS_TEST_TMPDIR/e.txt"; false; }
+}
+
+@test "burn --json: a reroute names the tank that ACTUALLY ran it" {
+  # The case prose is worst at: you asked for T1, T2 did the work.
+  _stub_codex
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], ','.join(d['rerouted_from']))" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True T2 codex/T1" ] || { echo "got: $output"; false; }
+}
+
+@test "burn --json: every tank dry is a distinct, readable outcome" {
+  _stub_codex
+  clikae init codex T1
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null || true
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['reason'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [[ "$output" == "False every reachable tank is dry" ]] || { echo "got: $output"; false; }
+}
+
+@test "burn without --json prints no JSON at all" {
+  # The result object must not leak into the human surface.
+  _stub_codex
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *'"artifact_bytes"'* ]] || { echo "$output"; false; }
+}
