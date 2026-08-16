@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] — 2026-08-16
+
+### Added
+
+- **`clikae burn --json`** and **`clikae conduct --json`** — the two dispatch
+  shapes an agent actually uses now say what happened in a form nothing has to
+  parse by eye. One object on stdout, every word of progress on stderr.
+
+  AGENTS.md's first non-negotiable rule is *judge by the artifact/output, never
+  the exit code* — and clikae made an agent read that judgement out of
+  sentences. `burn` is the worst case: with rerouting, **the tank that did the
+  work is often not the one you named**, and the only record of which was a line
+  of prose.
+
+  ```
+  burn:    {ok, engine, tank, artifact, artifact_bytes, reason, reset,
+            rerouted_from[], elapsed_s, run_id}
+  conduct: {out_dir, captured, dry, other,
+            legs:[{engine, tank, status, detail, output, output_bytes}]}
+  ```
+
+  `artifact_bytes` is the artifact's own measurement, so the evidence rule 1
+  asks for travels with the verdict instead of being a second call the caller
+  has to remember. `reason` separates the two failures that read alike in prose
+  and are not the same thing: `every reachable tank is dry` (wait, or add fuel)
+  from `no fresh artifact and no limit` (the task itself failed). conduct's
+  `status` separates `EMPTY` from `DRY` for the same reason — clikae never
+  judges, so the caller is the one who has to rank the legs.
+
+  Audited the whole surface for this: 33 commands, 5 had `--json` (`info`,
+  `list`, `watch`, `memory`, `status`). These two were the gap on the axis
+  AGENTS.md cares about.
+
+### Fixed
+
+- **The test suite was not safe to run beside a copy of itself — and the hooks
+  guarantee that it is.** `clean`'s live guard runs `ps -axo command=` so it can
+  never offer a session a process still has open. Correct for the command; fatal
+  for concurrency. Suite A's `clikae` processes appear in suite B's snapshot, the
+  fixtures use fixed session ids, and B decides those sessions are live and skips
+  the rows it is asserting on. pre-commit runs the suite and so does pre-push, so
+  `git commit && git push` overlaps them by construction.
+
+  Reproduced by starting a second run 25 s into the first — three of four rounds
+  turned red, every failure `[ "$status" -eq 0 ]` on a `clikae clean`. This is
+  the explanation for a pre-push red that ~218 isolated runs could not
+  reproduce: 10 full suites, 5 sequential and 3 concurrent copies of the file,
+  and 200 runs of the exact file at the exact commit in a worktree, all green.
+  The condition they were all missing was another suite running beside them.
+
+  `scripts/test.sh` now takes `$TMPDIR/clikae-test-suite.lock` and **waits**,
+  saying what it is waiting for. A suite that is red for a reason outside the
+  code teaches you to ignore red, which is the one thing a gate cannot afford.
+
 ## [0.26.2] — 2026-08-16
 
 ### Fixed
