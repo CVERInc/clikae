@@ -6,6 +6,48 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 🔴 ONE SUITE AT A TIME ON THIS MACHINE.
+#
+# Some tests read the REAL process table: clean's live guard runs
+# `ps -axo command=` so it can never offer a session a process still has open.
+# Two copies of this suite therefore share a ruler that the other one moves —
+# suite A's `clikae` processes appear in suite B's snapshot, the fixtures use
+# fixed session ids, and B decides those sessions are live and skips the rows
+# the test is asserting on.
+#
+# That is not hypothetical, and it is not rare. The pre-commit hook runs this
+# suite and so does pre-push, so `git commit && git push` overlaps them by
+# construction. Reproduced 2026-08-16 by starting a second run 25s into the
+# first: round 2 of 6 turned BOTH runs red, four clean.bats failures in one and
+# two in the other, every one of them `[ "$status" -eq 0 ]` on a `clikae clean`.
+# It is also the best explanation for a single unexplained pre-push red four
+# days of investigation could not otherwise reproduce in ~218 isolated runs.
+#
+# So: wait for the other run rather than racing it, and say what is happening.
+# A test suite that is red for a reason outside the code teaches you to ignore
+# red, which is the one thing a gate cannot afford.
+# 🔴 The re-exec below re-enters this script, so it MUST be told not to lock
+# again — the first draft had no such marker and would have recursed until the
+# process table said no.
+if [ "${1:-}" = "--locked" ]; then
+  shift
+else
+_TEST_LOCK="${TMPDIR:-/tmp}/clikae-test-suite.lock"
+if command -v lockf >/dev/null 2>&1; then
+  # -k: hold the lock for the whole command. Without it two processes both get 0.
+  if ! lockf -k -t 0 "$_TEST_LOCK" true 2>/dev/null; then
+    echo "→ another clikae test suite is running on this machine; waiting for it"
+    echo "  (they share the real process table — see the note in scripts/test.sh)"
+  fi
+  exec lockf -k -t 900 "$_TEST_LOCK" "$0" --locked "$@"
+elif command -v flock >/dev/null 2>&1; then
+  if ! flock -n "$_TEST_LOCK" true 2>/dev/null; then
+    echo "→ another clikae test suite is running on this machine; waiting for it"
+  fi
+  exec flock -w 900 "$_TEST_LOCK" "$0" --locked "$@"
+fi
+fi
+
 echo "→ shellcheck (severity=warning)"
 # NB: this script lints ITSELF too. It did not until 2026-07-27, and the gap was
 # not theoretical: a prose comment here that happened to begin with the word

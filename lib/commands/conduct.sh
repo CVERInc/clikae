@@ -45,6 +45,15 @@ winner; clikae never judges. (BETA — the vertical-orchestration primitive.)
   --add-dir <dir>     extra read root for every leg (default: $PWD). Repeatable.
   --out-dir <dir>     where to collect <engine>-<tank>.txt results
                       (default: a fresh mktemp dir, printed at the end).
+  --json              print ONE result object on stdout and every word of
+                      progress on stderr. clikae never judges — you pick the
+                      winner — so the caller needs the legs in a form it can
+                      rank without knowing conduct's on-disk layout:
+                        {out_dir, captured, dry, other,
+                         legs:[{engine, tank, status, detail, output,
+                                output_bytes}]}
+                      `status` is CAPTURED / DRY / EMPTY / NORECIPE / NOPATH /
+                      NOTANK / NOTACTIVE; `output` is the file to read.
   --timeout <secs>    bound each leg (coreutils timeout/gtimeout, else a perl alarm).
 
 Each leg's outcome is judged by its OUTPUT, never the exit code (a headless agent
@@ -201,6 +210,7 @@ _conduct_one_agy() {
 }
 
 cmd_conduct() {
+  local as_json=0
   local prompt="" prompt_file="" prompt_set=0 out_dir="" timeout_s=""
   local -a legs=() add_dirs=()
   while [ $# -gt 0 ]; do
@@ -208,6 +218,7 @@ cmd_conduct() {
       -h|--help)     _conduct_help; return 0 ;;
       --prompt)      shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
+      --json)      as_json=1; shift ;;
       --leg)         shift; [ $# -gt 0 ] || log_fail "--leg needs <engine>/<tank>"; legs+=("$1"); shift ;;
       --add-dir)     shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
       --out-dir)     shift; [ $# -gt 0 ] || log_fail "--out-dir needs a path"; out_dir="$1"; shift ;;
@@ -232,6 +243,11 @@ cmd_conduct() {
   else
     mkdir -p "$out_dir" || log_fail "Could not create --out-dir: $out_dir"
   fi
+
+  # --json: the result object on stdout, every word of progress on stderr. Same
+  # contract as `burn --json`; log_done/log_info write to stdout, so without this
+  # the object would arrive mixed into the prose it replaces.
+  if [ "$as_json" -eq 1 ]; then exec 4>&1; exec 1>&2; else exec 4>/dev/null; fi
 
   log_info "conduct: fanning 1 prompt across ${#legs[@]} legs (read-only, parallel) → $out_dir"
 
@@ -284,5 +300,24 @@ cmd_conduct() {
     esac
   done
   log_info "summary: ${captured} captured · ${dry} dry · ${other} other  →  read them in $out_dir, then pick the winner."
+  # 🔴 The per-leg outcome already exists on disk — a status file and an output
+  # file per leg — but reaching it meant knowing conduct's internal layout and
+  # parsing status words out of prose. clikae never judges; you pick the winner.
+  # That is exactly why the caller needs the legs in a form it can rank.
+  if [ "$as_json" -eq 1 ]; then
+    local j="" first=1 v r ob
+    for i in "${!tags[@]}"; do
+      v="$(cut -d' ' -f1 < "${stats[$i]}" 2>/dev/null || echo '?')"
+      r="$(cut -s -d' ' -f2- < "${stats[$i]}" 2>/dev/null || true)"
+      ob=null; [ -e "${outs[$i]}" ] && ob="$(_burn_size "${outs[$i]}")"
+      [ "$first" -eq 1 ] || j="$j,"
+      first=0
+      j="$j{\"engine\":$(json_str "${tags[$i]%%/*}"),\"tank\":$(json_str "${tags[$i]#*/}")"
+      j="$j,\"status\":$(json_str "$v"),\"detail\":$(json_or_null "$r")"
+      j="$j,\"output\":$(json_str "${outs[$i]}"),\"output_bytes\":${ob:-null}}"
+    done
+    printf '{"out_dir":%s,"captured":%s,"dry":%s,"other":%s,"legs":[%s]}\n' \
+      "$(json_str "$out_dir")" "$captured" "$dry" "$other" "$j" >&4
+  fi
   [ "$captured" -ge 1 ]
 }

@@ -159,3 +159,38 @@ arithmetic got `"0\n0"` — a syntax error that killed the script mid-run while 
 still exited 0. Every individual check was correct; the only thing that could
 have caught it was the total. So the script now fails with a distinct code when
 it performed no checks at all.
+
+## One suite at a time (`scripts/test.sh` takes a lock)
+
+Some tests read the **real process table**. `clean`'s live guard runs
+`ps -axo command=` so it can never offer a session a process still has open —
+that is the right thing for the command and it makes the suite unsafe to run
+beside a copy of itself. Suite A's `clikae` processes appear in suite B's
+snapshot, the fixtures use fixed session ids, and B decides those sessions are
+live and skips the rows it is asserting on.
+
+That is not hypothetical and it is not rare, because **the pre-commit hook runs
+this suite and so does pre-push** — `git commit && git push` overlaps them by
+construction.
+
+Reproduced 2026-08-16 by starting a second run 25 s into the first:
+
+```
+round 1  A=0 B=0  notok_A=0 notok_B=0
+round 2  A=1 B=1  notok_A=4 notok_B=2     <- both red
+round 3  A=1 B=1  notok_A=2 notok_B=1
+round 4  A=1      notok_B=1
+```
+
+Every failure was `[ "$status" -eq 0 ]` on a `clikae clean` invocation. It is
+also the best explanation for a single unexplained pre-push red that ~218
+isolated runs could not reproduce — including 200 of the exact file, at the
+exact commit, in a worktree.
+
+`scripts/test.sh` now takes `$TMPDIR/clikae-test-suite.lock` and **waits** for
+the other run rather than racing it, saying so. A suite that is red for a reason
+outside the code teaches you to ignore red, which is the one thing a gate cannot
+afford.
+
+(`lockf -k`, not `lockf`. Without `-k` two processes both get rc=0 — the same
+trap the ephemeral slot lock hit in 0.25.0.)

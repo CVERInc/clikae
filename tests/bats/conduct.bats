@@ -325,3 +325,54 @@ _agy_setup_active() {
   grep -q "AUDIT from agy" "$D/agy-default.txt"
   grep -q "AUDIT from codex" "$D/codex-H.txt"
 }
+
+# --json — clikae never judges, so the caller has to rank the legs. Until
+# 2026-08-16 that meant knowing conduct's on-disk layout and parsing status
+# words out of prose.
+
+@test "conduct --json: one object on stdout, every leg rankable" {
+  _stub_codex
+  clikae init codex A
+  clikae init codex B
+  local D="$BATS_TEST_TMPDIR/out"
+  clikae conduct --prompt "audit this" --leg codex/A --leg codex/B --out-dir "$D" --json \
+    > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/e.txt"
+  run python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+legs=sorted(d['legs'], key=lambda l: l['tank'])
+print(d['captured'], d['dry'], len(legs),
+      ','.join(l['tank']+':'+l['status'] for l in legs),
+      all(l['output_bytes'] and l['output_bytes']>0 for l in legs))
+" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { echo "stdout was not valid JSON:"; cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "2 0 2 A:CAPTURED,B:CAPTURED True" ] || { echo "got: $output"; false; }
+  # the table still happened, just not on stdout
+  grep -q '2 captured' "$BATS_TEST_TMPDIR/e.txt" || { cat "$BATS_TEST_TMPDIR/e.txt"; false; }
+}
+
+@test "conduct --json: a dry leg is distinguishable from a captured one" {
+  _stub_codex
+  clikae init codex A
+  clikae init codex B
+  : > "$CLIKAE_HOME/profiles/codex/A/.dry"
+  local D="$BATS_TEST_TMPDIR/out"
+  clikae conduct --prompt "audit this" --leg codex/A --leg codex/B --out-dir "$D" --json \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null || true
+  run python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+s={l['tank']: l['status'] for l in d['legs']}
+print(d['captured'], d['dry'], s['A'], s['B'])
+" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "1 1 DRY CAPTURED" ] || { echo "got: $output"; false; }
+}
+
+@test "conduct without --json prints no JSON at all" {
+  _stub_codex
+  clikae init codex A
+  run clikae conduct --prompt "audit this" --leg codex/A --out-dir "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *'"out_dir"'* ]] || { echo "$output"; false; }
+}

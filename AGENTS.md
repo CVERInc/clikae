@@ -56,7 +56,18 @@ Three dispatch shapes — full field guide in
   or add fuel) from `no fresh artifact and no limit` (the task itself failed).
 - **`clikae conduct --leg <e>/<t> … --prompt-file <f>`** — fan ONE read-only prompt
   across N accounts in parallel (best-of-N audits/analyses); collect every leg's
-  output. clikae never judges — you pick the winner.
+  output. clikae never judges — you pick the winner, which is exactly why
+  `--json` matters here: it hands you the legs in a form you can rank.
+
+  ```sh
+  clikae conduct --leg claude/h --leg codex/m --prompt-file q.md --json \
+    | jq -r '.legs[] | select(.status=="CAPTURED") | .output'
+  ```
+
+  `{out_dir, captured, dry, other, legs:[{engine, tank, status, detail, output,
+  output_bytes}]}`. `status` is `CAPTURED` / `DRY` / `EMPTY` / `NORECIPE` /
+  `NOPATH` / `NOTANK` / `NOTACTIVE` — read it instead of inferring from an empty
+  file, because "no answer" and "out of fuel" are not the same result.
 - **`clikae to <target>`** — carry a live session onward when a tank runs dry.
 
 Which shape for which situation — the decision layer above these mechanics — is
