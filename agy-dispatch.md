@@ -174,3 +174,7 @@ first. See `agy-gemini-shared-quota` for the running ground-truth.
 - `docs/orchestration.md` — the general headless dispatch playbook (burn/conduct/legs).
 - `docs/dogfood-agy-headless.md` — the raw dogfooding diaries this recipe distills.
 - `clikae agy --help` — the command surface for switching/managing agy tanks.
+- `scripts/verify-agy-shapes.sh` — run this after `agy update`. The adapter reads
+  agy's own `history.jsonl` and transcripts with grep, and agy updates itself, so
+  the format can change with nothing in this repo changing. The bats suite is
+  green against fixtures either way; this checks the real files.
