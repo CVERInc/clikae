@@ -213,6 +213,10 @@ _memory_ptr_strip() {
   # Write THROUGH the instructions file (AGENTS.md / GEMINI.md), don't `mv` onto it:
   # a user may symlink it into a dotfiles repo, and `mv` would detach the link.
   [ -f "$file.tmp" ] && { cat "$file.tmp" > "$file" 2>/dev/null || true; rm -f "$file.tmp"; }
+  # Always 0: this strip is best-effort (the old `mv … || true` never failed the
+  # caller), and callers run under `set -eo pipefail` — a missing tmp on the `&&`
+  # above must not abort a share/solo mid-flight.
+  return 0
 }
 
 # Write/refresh the Soul pointer for <group> into <file>, pointing at <store>.
