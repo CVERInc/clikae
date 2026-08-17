@@ -223,17 +223,26 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   - macOS 內建 `lockf`。不帶指令時必須使用 FD 形式。
   - `exec 9> lock; lockf -k -t 0 9` 回傳 0。持有中他人搶鎖回傳 `75` (EX_TEMPFAIL)。用法錯誤回傳 `64`。
   - 若在 `rc=0` 後執行 `rm -f lock`，可能剛好刪除到同名新任務的鎖檔 (TOCTOU)。
+- **🔴 鎖檔必須放在私有目錄 `$HOME/.clikae/state`（0700），不可放世界可寫的 `/tmp`。**
+  鎖名是可預測的（`ck-ephem-<run_id>` / `ck-ephem-slot-<cksum>`），放在 `/tmp` 時**別的本機使用者**可以：
+  - 預先把它建成 symlink，讓我方的 `exec 9>` / `exec 8>` 沿著連結截斷受害檔（symlink-follow write）；
+  - 投放一個 `ck-ephem-<name>.lock`：它沒人持鎖，GC 判定為「dead」，於是把檔名當成 session id，
+    **殺掉你的 tmux session `ck-<name>`**、並 `rm -f` 你的 `$HOME/.clikae/state/<name>.*`——同機使用者
+    對你活著的 session 與 state 的 DoS。
+  私有目錄讓對方根本無從投放，同時避開 macOS 定期清 `/tmp` 造成的鎖檔消失。
+  GC 另加 `case "$sid" in ''|.*) continue` 作縱深防禦。
 - **規範**：
   無痕模式必須利用 shell redirect 與 FD，保持鎖的生命週期綁定在 client attach 期間（正常 detach 也會觸發 GC 刪除）：
   ```bash
-  exec 9> "${TMPDIR:-/tmp}/ck-ephem-<run_id>.lock"
+  mkdir -p "$HOME/.clikae/state"; chmod 0700 "$HOME/.clikae/state"
+  exec 9> "$HOME/.clikae/state/ck-ephem-<run_id>.lock"
   lockf -k -t 0 9
   exec tmux attach -t "ck-<run_id>"
   # 警告：exec 9> 與 exec tmux 之間，嚴禁任何 subshell 或關閉 FD 的操作
   ```
-  清理巡邏程式 `clikae clean` 檢查鎖時，必須精確判斷 `rc==75`，且絕對禁止刪除鎖檔（交由 OS 定期清理 TMPDIR）：
+  清理巡邏程式 `clikae clean` 檢查鎖時，必須精確判斷 `rc==75`：
   ```bash
-  lockf -k -t 0 "${TMPDIR:-/tmp}/ck-ephem-<run_id>.lock" true 2>/dev/null
+  lockf -k -t 0 "$HOME/.clikae/state/ck-ephem-<run_id>.lock" true 2>/dev/null
   rc=$?
   if [ $rc -eq 0 ]; then
     # 搶鎖成功代表 FD 已釋放 (client 已斷開)
@@ -244,7 +253,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ```
   FIRES: 模擬搶鎖失敗
   ```
-  $ bash -c 'exec 9> /tmp/ck-ephem-test.lock; lockf -k -t 0 9; lockf -k -t 0 /tmp/ck-ephem-test.lock true 2>/dev/null; echo $?'
+  $ bash -c 'exec 9> "$HOME/.clikae/state/ck-ephem-test.lock"; lockf -k -t 0 9; lockf -k -t 0 "$HOME/.clikae/state/ck-ephem-test.lock" true 2>/dev/null; echo $?'
   75
   rc=0
   ```
