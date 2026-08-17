@@ -128,6 +128,10 @@ EOF
   # rename without this leaves a ghost member behind (and the renamed tank
   # would read as isolated even though its slots still link into the store).
   soul_rename_member "$cli" "$old" "$new"
+  # …and the two out-of-dir records keyed by the tank NAME (burn order + dry
+  # marker), which a rename would otherwise orphan (the tank silently drops to the
+  # bottom of the board order).
+  rename_tank_state "$cli" "$old" "$new"
 
   # 2) Carry over the saved login (best-effort, adapter-specific).
   if declare -f adapter_migrate_credentials >/dev/null 2>&1; then

@@ -96,6 +96,16 @@ _supervise_decision() {
 # own and got it wrong. DESIGN-tmux.md Rule 2 asked for one shared set of exits;
 # this file is now one of its callers rather than its owner.
 
+# _switch_shquote <string> -> the string as ONE POSIX-sh single-quoted word.
+# The tmux session command is ultimately run by `sh -c`, and inside it we spawn
+# `bash -c <target>`. Wrapping <target> in `"..."` (the old shape) let sh EXPAND
+# it first: a passthrough arg carrying a double-quote, $, backslash, or backtick
+# was mangled — and a backtick / $(...) was executed. Single-quoting with the
+# canonical '\'' escape passes the built command through untouched.
+_switch_shquote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3
   local tank_id="${engine}-${tank}"
@@ -175,7 +185,7 @@ KV
     
     tmux has-session -t "ck-$sess_id" 2>/dev/null || \
       tmux_spawn_session "${spawn_env[@]}" \
-        --session "ck-$sess_id" --window "$engine" -- "bash -c \"$target_cmd\""
+        --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
     tmux_label "ck-$sess_id" "$engine" "$tank"
     wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
     
@@ -188,7 +198,7 @@ KV
     local started_here=0
     if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
       tmux_spawn_session "${spawn_env[@]}" \
-        --session "ck-$sess_id" --window "$engine" -- "bash -c \"$target_cmd\""
+        --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
       tmux_label "ck-$sess_id" "$engine" "$tank"
       wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
       started_here=1
@@ -277,6 +287,11 @@ EOF
   history_log "auto: $engine/$tank dry → $ne/$nt"
   printf '%b↻ %s/%s hit its limit — carrying on to %s/%s%b\n' "$__C_GREEN" "$engine" "$tank" "$ne" "$nt" "$__C_RESET"
   if [ "$same" = "1" ]; then
+    # tank_id is local to _switch_run_tmux_wrapped (which ran in a subshell), so it
+    # is NOT in scope here. Rebuild it from engine/tank — otherwise the carry made a
+    # session literally named "ck-", a scrollback file "ck--$$", and an empty
+    # CLIKAE_TANK_NAME below.
+    local tank_id="${engine}-${tank}"
     local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
     target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
   # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
@@ -309,7 +324,7 @@ EOF
       local started_here=0
       if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
         tmux_spawn_session "${relay_env[@]}" \
-          --session "ck-$tank_id" --window "$engine" -- "bash -c \"$target_cmd\""
+          --session "ck-$tank_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
         tmux_label "ck-$tank_id" "$engine" "$tank"
         started_here=1
       fi
@@ -453,8 +468,17 @@ _switch_run_ephemeral() {
   #
   # Same lock mechanism as burn's GC (DESIGN-tmux Rule 6): an fd, held for the
   # life of the process, never unlinked.
+  #
+  # 🔴 The lock lives under $HOME/.clikae/state (0700), NOT world-writable /tmp.
+  # The name is predictable, so in /tmp another local user could plant it as a
+  # symlink (our `exec 8>` would then truncate the target) or as a plain file the
+  # clean GC reads as a dead lock — killing your tmux session and deleting your
+  # state files. A private dir removes both, and sidesteps macOS's /tmp purge.
+  local lock_dir="$HOME/.clikae/state"
+  mkdir -p "$lock_dir" 2>/dev/null || true
+  chmod 0700 "$lock_dir" 2>/dev/null || true
   local slot_lock
-  slot_lock="${TMPDIR:-/tmp}/ck-ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
+  slot_lock="$lock_dir/ck-ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
   # 🔴 `lockf -k`. Without -k the lock does not lock: measured 2026-08-15, two
   # processes both got rc=0 from `lockf -t 0 <fd>` on the same file. -k keeps the
   # file on release, and the second holder then gets 75 (EX_TEMPFAIL) — which is

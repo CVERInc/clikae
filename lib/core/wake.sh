@@ -81,12 +81,32 @@ wake_pane_idle() {
   [ "$a" = "$b" ]
 }
 
-# wake_send <session> [text] -> type the nudge and press Enter.
+# wake_engine_target <session> -> a tmux target for the session's ENGINE pane:
+# its first non-`wake` window, as `<session>:<index>`.
+#
+# 🔴 The nudge must not land in the waiter's OWN pane. The waiter lives in a
+# `wake` window, and the user is explicitly told to "watch or cancel it in that
+# session's wake window" — so at reset time that window may well be the session's
+# ACTIVE one. A bare `-t <session>` resolves to the CURRENT window, so the nudge
+# would be typed into the countdown pane and the engine would never resume.
+# Targeting the engine window by index removes the dependency on what is focused.
+# Falls back to the bare session when it can't tell (older tmux, or the only
+# window is the engine's) — which is the previous behaviour, now the exception.
+wake_engine_target() {
+  local session="$1" idx
+  command -v tmux >/dev/null 2>&1 || { printf '%s' "$session"; return 0; }
+  idx="$(tmux list-windows -t "$session" -F '#{window_index} #{window_name}' 2>/dev/null \
+    | awk '{ i=$1; $1=""; n=substr($0,2); if (n!="wake" && n !~ /^wake /) { print i; exit } }')"
+  if [ -n "$idx" ]; then printf '%s:%s' "$session" "$idx"; else printf '%s' "$session"; fi
+}
+
+# wake_send <session-or-target> [text] -> type the nudge and press Enter.
 #
 # Split from the gate on purpose: the gate is what has judgement, and a caller
 # that wants to send without asking (a test, a human) should have to say so.
 # `-l` sends the text literally, so a nudge is never interpreted as a tmux key
-# name.
+# name. The target may be a bare session (current window) or `<session>:<win>`;
+# wake_sit passes the engine window so the nudge never hits the waiter's own pane.
 wake_send() {
   local session="$1" text="${2:-$WAKE_NUDGE}"
   [ -n "$session" ] || return 1
@@ -196,8 +216,11 @@ wake_sit() {
       continue
     fi
 
-    if wake_pane_idle "$session" 2; then
-      if wake_send "$session"; then
+    # Target the ENGINE window, not whatever window is focused — the waiter's own
+    # `wake` window may be the active one (the user was told to watch it here).
+    local _etgt; _etgt="$(wake_engine_target "$session")"
+    if wake_pane_idle "$_etgt" 2; then
+      if wake_send "$_etgt"; then
         # The countdown line is overwritten in place, so clear it first and then
         # let the badge speak: sending the nudge changed something, which is the
         # question `[ DONE ]` answers.

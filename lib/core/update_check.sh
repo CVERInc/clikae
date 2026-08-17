@@ -78,6 +78,12 @@ update_check_refresh() {
   tag="$(curl -fsSL --max-time 5 "https://api.github.com/repos/CVERInc/clikae/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name"' \
         | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/')"
+  # The tag comes off the network, and this value is later PRINTED to the terminal
+  # (the update banner) and written to the cache. Keep only version characters so a
+  # tampered/garbage release name can't smuggle an escape sequence onto the screen
+  # or a control byte into the cache. A legitimate tag (0.27.0, v1.2.3-beta.1) is
+  # unaffected; anything else is treated as "no usable tag" → the failure branch.
+  tag="$(printf '%s' "$tag" | LC_ALL=C tr -cd '0-9A-Za-z._-')"
   if [ -n "$tag" ]; then
     printf '%s\t%s\n' "$now" "$tag" > "$f" 2>/dev/null || true   # success → trust for a full TTL
   else

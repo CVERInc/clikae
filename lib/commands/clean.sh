@@ -853,15 +853,23 @@ _clean_select() {
 }
 
 # ── Tmux Ephemeral GC (Rule 6) ──────────────────────────────────────────────
-# Headless tasks and interactive sessions create a lock on /tmp/ck-ephem-<id>.lock.
-# When clikae clean runs, it attempts to grab this lock without blocking.
-# If lockf returns 0 (lock acquired), the parent process is dead, so we can
-# safely kill the orphaned tmux session. If rc==75, the lock is held (alive).
-# We NEVER delete the lock file itself.
+# Headless tasks and interactive sessions create a lock at
+# $HOME/.clikae/state/ck-ephem-<id>.lock. When clikae clean runs, it attempts to
+# grab this lock without blocking. If lockf returns 0 (lock acquired), the parent
+# process is dead, so we can safely kill the orphaned tmux session. If rc==75, the
+# lock is held (alive). We NEVER delete the lock file itself.
+#
+# 🔴 The lock dir is PRIVATE ($HOME/.clikae/state, 0700), not world-writable /tmp.
+# When it lived in /tmp another local user could plant a `ck-ephem-<name>.lock`
+# that this glob picks up: its lock is unheld, so the GC reads it as "dead", turns
+# the filename into a session id, and both KILLS your tmux session `ck-<name>` and
+# `rm -f`s your `$HOME/.clikae/state/<name>.*` — a co-tenant DoS on your live
+# sessions and state. A private 0700 dir removes the ability to plant at all; the
+# sid guard below is cheap defence in depth.
 _clean_tmux_gc() {
   local dry_run="$1"
   local lock_file sid is_dead rc
-  for lock_file in "${TMPDIR:-/tmp}/"ck-ephem-*.lock; do
+  for lock_file in "$HOME/.clikae/state/"ck-ephem-*.lock; do
     [ -e "$lock_file" ] || continue
     is_dead=0
     if command -v flock >/dev/null 2>&1; then
@@ -884,6 +892,9 @@ _clean_tmux_gc() {
     if [ "$is_dead" -eq 1 ]; then
       sid="${lock_file##*-ephem-}"
       sid="${sid%.lock}"
+      # Defence in depth: a real sid is validated engine/tank names + a digest, so
+      # an empty or dot-leading value is a malformed file — never act on it.
+      case "$sid" in ''|.*) continue ;; esac
       if tmux has-session -t "ck-$sid" 2>/dev/null; then
         if [ "$dry_run" = "1" ]; then
           log_info "GC: [Dry Run] Would clean up abandoned tmux session ck-$sid"

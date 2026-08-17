@@ -16,6 +16,25 @@ load '../helpers'
   [[ "$output" == *"client-only"* ]] || false
 }
 
+@test "board's solo toggle leaves/rejoins the group like the CLI (no 'solo but still sharing')" {
+  # The board's `s` key delegates to `clikae solo`, so toggling solo on a SHARED
+  # tank must also leave the Soul group — not just flip the marker, which produced
+  # the impossible "solo BUT STILL SHARING" state. Then toggling back rejoins it.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/soul.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  clikae memory share brain claude work
+  [ -n "$(soul_group_for_tank claude work)" ]        # shared to start
+  _home_toggle_solo claude work                      # → solo
+  [ -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/solo" ]
+  [ -z "$(soul_group_for_tank claude work)" ]        # left the group, not left dangling
+  _home_toggle_solo claude work                      # → un-solo
+  [ ! -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/solo" ]
+  [ -n "$(soul_group_for_tank claude work)" ]        # rejoined the machine default group
+}
+
 @test "solo --off: returns a tank to the fleet" {
   clikae init claude work
   clikae solo claude work

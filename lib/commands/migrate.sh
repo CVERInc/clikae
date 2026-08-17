@@ -290,7 +290,11 @@ EOF
     printf "alias %s='%s %s'\n" "${c_name[$i]}" "$env_prefix" "$binary" \
       | rc_wrap_block "$cli.${c_profile[$i]}" >> "$tmp"
   done
-  mv "$tmp" "$rc_file"
+  # Write THROUGH the rc file (keep its inode/mode), never `mv` onto it: a dotfile is
+  # often a symlink into a dotfiles repo, and `mv` would detach it into a 0600 regular
+  # file. The backup written just above covers a partial write.
+  cat "$tmp" > "$rc_file"
+  rm -f "$tmp"
   log_done "Rewrote $rc_file ($n alias(es) now clikae-managed)."
 
   echo ""

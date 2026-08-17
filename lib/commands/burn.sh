@@ -508,7 +508,11 @@ cmd_burn() {
     local run_id="${cli}-${cur}-burn-$$"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local state_file="$HOME/.clikae/state/${run_id}_exit"
-    local lock_file="${TMPDIR:-/tmp}/ck-ephem-$run_id.lock"
+    # Lock under $HOME/.clikae/state (0700, created just below), NOT world-writable
+    # /tmp: a predictable name there let another local user plant it — as a symlink
+    # (truncation) or a plain file the clean GC reads as dead, killing your session
+    # and deleting your state files. Private dir closes it (see clean.sh).
+    local lock_file="$HOME/.clikae/state/ck-ephem-$run_id.lock"
     
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
@@ -560,6 +564,10 @@ trap 'echo 129 > "$state_file"; exit 129' HUP
 trap 'echo 130 > "$state_file"; exit 130' INT
 trap 'echo 143 > "$state_file"; exit 143' TERM
 trap 'echo \$? > "$state_file"; exit' EXIT
+# pipefail so the EXIT trap's \$? is the ENGINE's exit, not tee's (which is always
+# 0). Without it the "real task failure (rc=…)" line always printed rc=0 — the
+# outcome was still judged by the artifact, but the diagnostic rc was a lie.
+set -o pipefail
 ( $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null ) 2>&1 | tee "$log_file"
 EOF
       chmod 0700 "$wrapper_script"

@@ -28,6 +28,29 @@ load '../helpers'
   [ -d "$CLIKAE_HOME/profiles/claude/cver" ]
 }
 
+@test "rename carries the burn-order entry across (tank keeps its board position)" {
+  clikae init claude a
+  clikae init claude b
+  clikae init claude c
+  # Materialise an explicit order with 'a' pinned at the TOP.
+  printf 'claude/a\nclaude/c\nclaude/b\n' > "$CLIKAE_HOME/order"
+  clikae rename claude a cver --force
+  # The order file now names the new tank, in the SAME position (first line).
+  run head -n 1 "$CLIKAE_HOME/order"
+  [ "$output" = "claude/cver" ] || false
+  ! grep -qxF "claude/a" "$CLIKAE_HOME/order"
+}
+
+@test "rename carries the dry marker across (red badge follows the new name)" {
+  clikae init claude a
+  mkdir -p "$CLIKAE_HOME/dry/claude"
+  printf '%s\tresets 11pm\n' "$(date +%s)" > "$CLIKAE_HOME/dry/claude/a"
+  clikae rename claude a cver --force
+  [ ! -f "$CLIKAE_HOME/dry/claude/a" ]
+  [ -f "$CLIKAE_HOME/dry/claude/cver" ]
+  grep -qF "resets 11pm" "$CLIKAE_HOME/dry/claude/cver"
+}
+
 @test "rename refuses when the target already exists" {
   clikae init claude a
   clikae init claude cver

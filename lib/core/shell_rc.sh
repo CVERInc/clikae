@@ -96,5 +96,10 @@ rc_remove_block() {
     $0 == "# <<< clikae:" id " <<<" { skip=0; next }
     skip == 0 { print }
   ' "$rc_file" > "$tmp"
-  mv "$tmp" "$rc_file"
+  # Write THROUGH the rc file, don't `mv` onto it: a dotfile is often a symlink into
+  # a dotfiles repo, and `mv` would replace the symlink with a detached regular file
+  # (mode 0600 from mktemp). `cat >` follows the link and keeps its inode + mode. The
+  # backup above covers a partial write.
+  cat "$tmp" > "$rc_file"
+  rm -f "$tmp"
 }

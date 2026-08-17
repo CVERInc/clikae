@@ -1775,12 +1775,23 @@ _home_stay() {
   printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
 }
 
-# Toggle the solo marker on a tank — instant + silent (the picker redraws the badge
-# itself). solo = out of the fleet: no relay/`to`, skipped by burn/watch, `memory
-# share` refuses it. The CLI face is `clikae solo`; this is the board's one-key form.
+# Toggle solo on a tank — silent (the picker redraws the badge itself). solo = out
+# of the fleet: no relay/`to`, skipped by burn/watch, `memory share` refuses it.
+#
+# 🔴 DELEGATE to `clikae solo`, don't just flip the marker file. Solo and the shared
+# brain are ONE statement (docs/grammar.md §127): `clikae solo` also LEAVES the
+# memory group, and `--off` rejoins it. When the board only touched the marker, a
+# tank could end up solo-in-the-marker but still in a Soul group — the "solo BUT
+# STILL SHARING" state `clikae memory status` reports as impossible/broken. Running
+# the real verb (in a subprocess, output suppressed) keeps board == CLI by
+# construction and can't drift. `solo` accepts both `agy` and `antigravity`.
 _home_toggle_solo() {
-  local f; f="$(solo_marker_file "$1" "$2")"
-  if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$(dirname "$f")"; : > "$f"; fi
+  local engine="$1" tank="$2"
+  if [ -f "$(solo_marker_file "$engine" "$tank")" ]; then
+    "$CLIKAE_BIN" solo "$engine" "$tank" --off >/dev/null 2>&1 || true
+  else
+    "$CLIKAE_BIN" solo "$engine" "$tank" >/dev/null 2>&1 || true
+  fi
 }
 
 # The memory dial on the selected TANK (the `m` key): point its long-term memory at
@@ -1810,7 +1821,11 @@ EOF
       "$CLIKAE_BIN" memory share "$group" "$cli" "$profile" || true
       ;;
     "$T_MEM_OPT_ISOLATE")
-      "$CLIKAE_BIN" memory isolate "$cli" "$profile" || true
+      # `memory isolate` was RETIRED into `clikae solo` (it created a tank in the
+      # fleet with no brain — a state the board can't show). The board must call the
+      # surviving verb; `memory isolate` now hard-fails. solo gives the tank its own
+      # memory back AND takes it out of the fleet, which is the one supported way out.
+      "$CLIKAE_BIN" solo "$cli" "$profile" || true
       ;;
     "$T_MEM_OPT_STATUS")
       "$CLIKAE_BIN" memory status "$cli" "$profile" || true

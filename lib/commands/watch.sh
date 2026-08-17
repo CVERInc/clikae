@@ -252,8 +252,16 @@ EOF
   log_dim "Pattern is a best guess; if it never fires, see \`clikae watch --help\`. Ctrl-C to stop."
 
   # Tail only NEW lines; stop at the first GENUINE limit line (structured match).
+  #
+  # 🔴 The tail is read on fd 3, NOT stdin. This loop's body asks the user
+  # questions — wake_offer's one-time "resume automatically?", _watch_do_handoff's
+  # "switch now?" / auto-consent — via confirm(), which reads STDIN. If the tail
+  # fed stdin (the naive `done < <(tail …)`), every one of those prompts would read
+  # its answer off the NEXT TRANSCRIPT LINE instead of the keyboard, and the
+  # `exec clikae handoff` would hand the tail pipe to the started engine as its
+  # stdin. Keeping the tail on fd 3 leaves stdin as the terminal for all of them.
   local line=""
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     # BETA: relay the vendor's verbatim weekly-usage % to the board's yellow dot,
     # independent of the dry trigger below (a weekly warning is caution, not dry).
     _watch_weekly_capture "$cli" "$profile" "$line"
@@ -268,7 +276,7 @@ EOF
     _watch_do_handoff "$cli" "$profile" "$target" "$auto"
     # _watch_do_handoff execs on success; if it returns, the user declined.
     log_dim "Staying on $cli/$profile. Still watching… (Ctrl-C to stop)"
-  done < <(tail -n0 -f "$transcript")
+  done 3< <(tail -n0 -f "$transcript")
 }
 
 # Decide + perform the handoff. Execs `clikae handoff` on go; returns if declined.
@@ -292,6 +300,9 @@ _watch_do_handoff() {
     log_done "Switching: $cli/$profile → $target"
   fi
 
+  # Close the watcher's tail-pipe fd (open in the caller's loop) so the engine we
+  # exec into doesn't inherit it as an extra open descriptor.
+  { exec 3<&-; } 2>/dev/null || true
   exec "$CLIKAE_ROOT/bin/clikae" handoff "$cli" "$profile" --to "$target"
 }
 

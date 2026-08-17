@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A strict correctness/security audit pass. Every fix ships with a regression test
+proven to go red on the pre-fix code (except the two paths the suite tests
+manually — the `watch` tail loop and `--ephemeral` stash race — verified by a
+standalone harness instead).
+
+### Security
+
+- **Ephemeral/burn lock files moved out of world-writable `/tmp` into the private
+  `$HOME/.clikae/state` (0700).** Their names are predictable
+  (`ck-ephem-<run_id>` / `ck-ephem-slot-<cksum>`), so in `/tmp` another local user
+  could plant one as a symlink (our `exec 8>`/`9>` would truncate the target) or
+  as a plain file that `clikae clean`'s GC reads as a *dead* lock — killing your
+  tmux session `ck-<name>` and `rm -f`-ing your `$HOME/.clikae/state/<name>.*`. A
+  private dir removes the ability to plant, and sidesteps macOS's `/tmp` purge.
+  The GC now scans only the private dir and skips any malformed session id.
+  (DESIGN-tmux Rule 6 updated.)
+
+- **The tmux launch command no longer double-expands engine passthrough args.**
+  The pane command was built as `bash -c "$target_cmd"`, and since tmux runs it
+  via `sh -c`, the outer quotes let the shell re-expand a passthrough arg carrying
+  `$`, a backtick, or a quote — and a backtick / `$(…)` was *executed*. It is now
+  single-quoted through a helper, so `clikae claude x -- --foo '$(cmd)'` reaches
+  the engine verbatim.
+
+### Fixed
+
+- **Auto-carry after a mid-session limit created a session literally named
+  `ck-`.** `_switch_supervise`'s same-engine relay used `$tank_id`, which was
+  local to a different function (run in a subshell) and thus empty — so the
+  carried session, its scrollback file, and `CLIKAE_TANK_NAME` were all wrong.
+
+- **`clikae burn`'s reported exit code was always 0.** The tmux wrapper's EXIT
+  trap read `$?` off a `… | tee` pipeline with no `pipefail`, so the `rc=…` in the
+  "real task failure" line reported tee's status, not the engine's.
+
+- **`fleet_mcp_prelaunch` rewrote a tank's `.claude.json` on every single
+  launch.** Its no-op check byte-compared jq's reformatted output against the
+  on-disk file (jq reindents and drops the trailing newline), so it never matched
+  and the file's inode was replaced each time — racing any live session on the
+  same tank. The no-op is now decided semantically in jq.
+
+- **`clikae rename` orphaned a tank's burn-order entry and dry marker.** Both key
+  the tank by name from *outside* its directory, so a rename silently dropped the
+  tank to the bottom of the board order and stranded its red-badge record. Now
+  carried across (both the env-adapter and agy rename paths).
+
+- **`clikae rename` / `migrate` / `memory` no longer detach a symlinked dotfile.**
+  Rewrites used `mv "$tmp" "$file"`, replacing a `~/.zshrc` (or `AGENTS.md`)
+  symlinked into a dotfiles repo with a detached 0600 regular file. They now write
+  *through* the file, preserving its inode, mode, and symlink.
+
+- **The home board's solo toggle now matches `clikae solo`.** The `s` key only
+  flipped the marker file, leaving a shared tank in the "solo BUT STILL SHARING"
+  state `clikae memory status` calls impossible; the `m` → *isolate* menu item
+  still called the **retired** `memory isolate` (a hard error). Both now delegate
+  to the real `clikae solo` verb, which also leaves/rejoins the Soul group.
+
+- **`clikae to` / `relay` refuse a solo tank as an explicit target.** grammar
+  §127 says a solo tank is never a `to`/relay target; auto-carry and `memory
+  share` already honored it, but a named target slipped through. Solo tanks are
+  also dropped from relay's target picker.
+
+- **`memory share` no longer `rm -rf`s a prior own-memory stash.** The `$PWD`-slot
+  path destroyed an existing `.clikae-soul-stash` before stashing, against the
+  "reversible, never lost" contract; it now uses a unique suffix like its siblings.
+
+- **The auto-resume nudge reaches the engine window, not the waiter's own pane.**
+  `wake_sit` typed "go" into `-t <session>` (the *current* window) — which is the
+  `wake` countdown window whenever the user was watching it, so the engine never
+  resumed. It now targets the first non-`wake` window explicitly.
+
+- **`clikae watch`'s prompts no longer read their answer off the transcript.** The
+  dry-detection loop piped `tail -f` into the loop's stdin, so every `confirm()`
+  inside it (the wake opt-in, the "switch now?" / auto-consent) read the next
+  transcript line instead of the keyboard, and the `exec clikae handoff` handed
+  the tail pipe to the started engine. The tail now reads on fd 3.
+
+- **The update-check tag from GitHub is sanitized** to version characters before
+  it is printed or cached, so a tampered release name can't smuggle an escape
+  sequence to the terminal or a control byte into the cache.
+
 ## [0.27.0] — 2026-08-16
 
 ### Added

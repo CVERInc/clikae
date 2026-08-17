@@ -210,7 +210,9 @@ _memory_ptr_strip() {
     !skip{print}
     index($0,c){skip=0}
   ' "$file" > "$file.tmp" 2>/dev/null || true
-  mv "$file.tmp" "$file" 2>/dev/null || true
+  # Write THROUGH the instructions file (AGENTS.md / GEMINI.md), don't `mv` onto it:
+  # a user may symlink it into a dotfiles repo, and `mv` would detach the link.
+  [ -f "$file.tmp" ] && { cat "$file.tmp" > "$file" 2>/dev/null || true; rm -f "$file.tmp"; }
 }
 
 # Write/refresh the Soul pointer for <group> into <file>, pointing at <store>.
@@ -374,7 +376,11 @@ _memory_share() {
     local stash="$MEM_DIR.clikae-soul-stash"
     [ -L "$MEM_DIR" ] && rm -f "$MEM_DIR"
     if [ -e "$MEM_DIR" ] && [ ! -L "$MEM_DIR" ]; then
-      rm -rf "$stash"; mv "$MEM_DIR" "$stash"
+      # A pre-existing stash is a prior share's own-memory — NEVER `rm -rf` it (the
+      # "reversible, never lost" contract). Give the new one a unique suffix, the
+      # same as the per-project loop below and soul_prelaunch's stash.
+      [ -e "$stash" ] && stash="$stash.$$"
+      mv "$MEM_DIR" "$stash"
     fi
     mkdir -p "$(dirname "$MEM_DIR")"
     ln -s "$store" "$MEM_DIR"

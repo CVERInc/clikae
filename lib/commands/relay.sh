@@ -114,6 +114,7 @@ _relay_pick_target() {
     [ -d "$d" ] || continue
     name="$(basename "$d")"
     [ "$name" = "$from" ] && continue
+    tank_is_solo "$cli" "$name" && continue   # solo tanks are out of the fleet — never a relay target
     lbl=""
     if declare -F adapter_account_label >/dev/null; then
       lbl="$(adapter_account_label "${d%/}" 2>/dev/null || true)"
@@ -237,6 +238,15 @@ EOF
   validate_name profile "$from"
   validate_name profile "$to"
   [ "$from" != "$to" ] || log_fail "Source and target are the same tank ('$from'). Nothing to relay."
+
+  # A SOLO tank is deliberately out of the fleet: docs/grammar.md §127 says it is
+  # never a `to`/relay target. next_tank already skips it for AUTO carries and
+  # `memory share` refuses it — but an EXPLICIT `clikae to <solo>` / `relay … <solo>`
+  # slipped straight through and carried the session onto it anyway. Refuse, loudly.
+  if tank_is_solo "$cli" "$to"; then
+    log_err "$cli/$to is SOLO (standalone, out of the fleet) — refusing to carry a session onto it."
+    log_fail "If you really mean it, return it to the fleet first:  clikae solo $cli $to --off"
+  fi
 
   local from_dir to_dir
   from_dir="$(ensure_profile --require "$cli" "$from")"

@@ -11,6 +11,23 @@ load '../helpers'
   [ "$(rc_block_count claude.work)" -eq 0 ]
 }
 
+@test "remove keeps a symlinked rc file a symlink (dotfiles repo), not a detached copy" {
+  # Model a dotfiles setup: ~/.zshrc is a symlink into a repo. Removing a tank
+  # rewrites the rc to drop the alias block — it must edit THROUGH the link, not
+  # replace it with a 0600 regular file (which would sever the dotfiles repo).
+  local real="$TEST_HOME/dotfiles/zshrc"
+  mkdir -p "$TEST_HOME/dotfiles"
+  mv "$RC_FILE" "$real" 2>/dev/null || true
+  [ -f "$real" ] || : > "$real"
+  ln -sf "$real" "$RC_FILE"
+  clikae init claude work --alias
+  [ "$(rc_block_count claude.work)" -eq 1 ]
+  clikae remove claude work --force
+  [ "$(rc_block_count claude.work)" -eq 0 ]
+  [ -L "$RC_FILE" ]                                   # still a symlink
+  [ "$(readlink "$RC_FILE")" = "$real" ]             # still pointing at the repo copy
+}
+
 @test "remove cleans up the now-empty cli directory" {
   clikae init claude work
   clikae remove claude work --force

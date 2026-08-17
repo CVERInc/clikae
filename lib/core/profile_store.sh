@@ -215,6 +215,41 @@ order_list() {
   done
 }
 
+# rename_tank_state <engine> <old> <new> — carry a tank's OUT-OF-DIR state across a
+# rename. The tank directory itself moves (with its clikae-meta/{solo,git-identity}),
+# and Soul membership is handled by soul_rename_member — but two records key the tank
+# by NAME from OUTSIDE the dir and would be orphaned:
+#   · the burn-order file ($CLIKAE_HOME/order) — a stale "engine/old" entry no longer
+#     matches an existing tank, so order_list drops it and the renamed tank silently
+#     falls to the BOTTOM of the board order.
+#   · the dry marker ($CLIKAE_HOME/dry/<engine>/<old>) — a red-badge record left
+#     pointing at a name that no longer exists.
+# <engine> is the on-disk cli dir name (agy → antigravity). Best-effort throughout.
+rename_tank_state() {
+  local engine="$1" old="$2" new="$3"
+  local of; of="$(order_file)"
+  if [ -f "$of" ]; then
+    local tmp; tmp="$(mktemp)"
+    # Match the token the way order_list reads it (strip a trailing #comment and all
+    # whitespace); rewrite only an exact "engine/old" line, leave everything else.
+    if awk -v o="$engine/$old" -v n="$engine/$new" '
+         { line=$0; sub(/#.*/,"",line); gsub(/[[:space:]]/,"",line)
+           if (line==o) print n; else print $0 }
+       ' "$of" > "$tmp" 2>/dev/null; then
+      cat "$tmp" > "$of"   # write THROUGH the file (keep its inode/perms), don't mv
+    fi
+    rm -f "$tmp"
+  fi
+  if declare -F dry_store_path >/dev/null 2>&1; then
+    local od nd; od="$(dry_store_path "$engine" "$old")"; nd="$(dry_store_path "$engine" "$new")"
+    if [ -f "$od" ]; then
+      mkdir -p "$(dirname "$nd")" 2>/dev/null || true
+      mv "$od" "$nd" 2>/dev/null || true
+    fi
+  fi
+  return 0
+}
+
 # next_tank <engine> <current>  -> the next tank to carry onward to when
 # <engine>/<current> runs dry. The selector is a RING — circular, and both fuel-
 # and account-aware:

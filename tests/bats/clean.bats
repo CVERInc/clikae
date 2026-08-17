@@ -31,6 +31,34 @@ _source_clean() {
   source "$CLIKAE_LIB/commands/clean.sh"
 }
 
+# The ephemeral-GC reads its locks from the PRIVATE state dir, never world-writable
+# /tmp (a co-tenant there could plant a lock the GC reads as dead, killing your
+# session + deleting your state). This pins the location AND that a dead lock's
+# companion state files get reaped from that dir.
+@test "GC reaps a dead lock's state files from the private \$HOME/.clikae/state dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"
+  mkdir -p "$sdir"
+  # A lock nobody holds → the GC's non-blocking grab succeeds → treated as dead.
+  : > "$sdir/ck-ephem-claude-x-burn-1234.lock"
+  : > "$sdir/claude-x-burn-1234.sh"
+  : > "$sdir/claude-x-burn-1234_exit"
+  # No tmux session ck-claude-x-burn-1234 exists → the else branch removes state.
+  _clean_tmux_gc 0
+  [ ! -f "$sdir/claude-x-burn-1234.sh" ]
+  [ ! -f "$sdir/claude-x-burn-1234_exit" ]
+  [ ! -f "$sdir/ck-ephem-claude-x-burn-1234.lock" ]
+}
+
+@test "GC ignores a lock in /tmp (only the private state dir is scanned)" {
+  _source_clean
+  local planted="${TMPDIR:-/tmp}/ck-ephem-claude-decoy-$$-99.lock"
+  : > "$planted"
+  _clean_tmux_gc 0
+  [ -f "$planted" ]   # untouched: the GC no longer looks in /tmp
+  rm -f "$planted"
+}
+
 # Seed a claude transcript for tank $1 with $3 conversation lines under a fixed
 # project dir; echoes the transcript path.
 _seed_lines() {

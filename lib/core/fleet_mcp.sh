@@ -77,17 +77,21 @@ fleet_mcp_prelaunch() {
   local target; target="$(_fleet_mcp_config_file "$cfg" 2>/dev/null || true)"
   [ -n "$target" ] && [ -f "$target" ] || return 0
 
+  # Decide the no-op INSIDE jq: emit nothing when there is nothing new to fan in.
+  # The old byte-`cmp` never matched — jq reindents the object and drops the
+  # trailing newline the file is written with — so a tank's .claude.json was
+  # rewritten (its inode replaced by `mv`) on EVERY launch, racing any live
+  # session on the same tank. Keys the tank already has are never touched, so the
+  # only reason to write is a genuinely new server: `$new` non-empty.
   local merged
   merged="$(jq -n --slurpfile shared "$store" --slurpfile target "$target" '
     ($shared[0]) as $s | ($target[0]) as $t |
     ($t.mcpServers // {}) as $existing |
     ($s | to_entries | map(select(.key as $k | ($existing | has($k)) | not)) | from_entries) as $new |
-    $t + {mcpServers: ($existing + $new)}
+    if ($new | length) == 0 then empty
+    else $t + {mcpServers: ($existing + $new)} end
   ' 2>/dev/null)" || return 0
-  [ -n "$merged" ] || return 0
+  [ -n "$merged" ] || return 0   # nothing new to add (or jq failed) → leave the file
 
-  # Skip the write if nothing would actually change (avoid needless mtime churn
-  # on a file every launch touches).
-  printf '%s' "$merged" | cmp -s - "$target" 2>/dev/null && return 0
   printf '%s\n' "$merged" > "$target.tmp" && mv "$target.tmp" "$target"
 }

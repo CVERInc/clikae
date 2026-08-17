@@ -27,3 +27,23 @@ bats_require_minimum_version 1.5.0   # for `run -<expected-code>`
   [[ "$output" == *"isn't installed"* ]] || false
   [[ "$output" == *"install 'vercel' and retry"* ]] || false
 }
+
+# The tmux pane command is `bash -c <target>`, ultimately run by tmux via `sh -c`.
+# The old shape wrapped <target> in `"..."`, so sh EXPANDED a passthrough arg that
+# carried a $, backtick, or double-quote — and a backtick / $(…) was EXECUTED.
+# _switch_shquote single-quotes it so the built command survives byte-for-byte.
+# Proven-fails-on-broken: the pre-fix `bash -c "$target_cmd"` mangles all three
+# of these args (and runs the backtick), where this passes them through intact.
+@test "_switch_shquote: a passthrough arg with \$, backtick, and quotes survives sh -c" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/switch.sh"
+  local prog="$BATS_TEST_TMPDIR/echoargs"
+  printf '#!/usr/bin/env bash\nprintf "[%%s]" "$@"\n' > "$prog"
+  chmod +x "$prog"
+  # Exactly how switch.sh builds it: %q-quote the argv, then hand the whole thing
+  # to `bash -c` as ONE shquoted word, then let `sh -c` run that (tmux's shell).
+  local target_cmd
+  target_cmd="$(printf '%q ' "$prog" 'say "hi"' '$HOME' 'a`b`c')"
+  run sh -c "bash -c $(_switch_shquote "$target_cmd")"
+  [ "$status" -eq 0 ]
+  [ "$output" = '[say "hi"][$HOME][a`b`c]' ] || false
+}

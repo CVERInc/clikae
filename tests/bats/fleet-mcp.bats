@@ -109,6 +109,27 @@ _stub_claude() {
   [[ "$output" == *'"stripe"'* ]] || false
 }
 
+@test "fleet_mcp_prelaunch: a second launch with nothing new to merge doesn't rewrite the tank's config" {
+  jq_only
+  _stub_claude
+  clikae init claude a
+  _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
+  clikae mcp share stripe claude a
+  clikae init claude c
+  _stamp_mcp c '{}'
+  clikae run claude c -- --version                       # first launch: fans stripe in
+  run _mcp_of c
+  [[ "$output" == *'"stripe"'* ]] || false
+  # The file already has every shared server, so a second launch has nothing to
+  # do. It must NOT rewrite the file — the old byte-cmp always "changed", so the
+  # inode was replaced on every launch (racing a live session on the same tank).
+  local target="$CLIKAE_HOME/profiles/claude/c/.claude.json"
+  local ino_before; ino_before="$(ls -i "$target" | awk '{print $1}')"
+  clikae run claude c -- --version                       # second launch: no-op
+  local ino_after; ino_after="$(ls -i "$target" | awk '{print $1}')"
+  [ "$ino_before" = "$ino_after" ] || false
+}
+
 @test "mcp unshare: removes from the fleet store but leaves tanks that already got it alone" {
   jq_only
   clikae init claude a

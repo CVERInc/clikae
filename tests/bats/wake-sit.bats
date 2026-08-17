@@ -68,6 +68,27 @@ teardown() {
   [ "$(cat "$out")" = "go" ]
 }
 
+@test "sit: nudges the ENGINE window even when the wake window is the active one" {
+  # The waiter lives in a `wake` window and the user is told to watch it there, so
+  # at reset time that window can be the session's ACTIVE one. A bare `-t <session>`
+  # resolves to the CURRENT window — so the nudge would land in the waiter's own
+  # pane and the engine would never resume. This pins that it reaches the engine.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local out="$BATS_TEST_TMPDIR/typed"
+  # Window 0 is the engine (blocked on read); rename it off the `wake` namespace.
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux rename-window -t "$(_sess):0" claude
+  # A second window IS the waiter, and we make it the ACTIVE one — the failing case.
+  tmux new-window -d -t "$(_sess)" -n wake 'sleep 30'
+  tmux select-window -t "$(_sess):wake"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)"
+  [ "$status" -eq 0 ]
+  sleep 1
+  [ "$(cat "$out")" = "go" ]   # the nudge reached the engine's read, not the wake pane
+}
+
 @test "sit: a busy pane is retried and then given up on, without typing" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
