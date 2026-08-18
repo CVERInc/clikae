@@ -243,7 +243,7 @@ _resume_pick_draw_body() {
   # localized key labels are correct and de/es/fr legitimately need the room
   # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
   printf '\n'
 
@@ -392,7 +392,7 @@ _resume_pick() {
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
-  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0
+  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0
 
   # Keys arrive pre-decoded by tui_read_key (lib/core/tui.sh) as symbolic names
   # — the byte-level ESC state machine that used to live here (and regressed
@@ -409,6 +409,11 @@ _resume_pick() {
       q|esc)            exit_loop=1 ;;
       /)                trigger_filter=1 ;;
       c)                trigger_clean=1 ;;
+      # `?` opens help on the board, so a user arrives here having just been
+      # taught it — and it was dead: not bound, no feedback, byte-identical to an
+      # unbound key. This picker also implements g/G, 1-9 and PgUp/PgDn without
+      # advertising any of them, so the overlay is where they finally get said.
+      '?')              trigger_help=1 ;;
       enter)            trigger_select=1 ;;
     esac
     # MUST end with success: a branch whose last command is `[ cond ] && assign`
@@ -467,6 +472,7 @@ _resume_pick() {
     trigger_filter=0
     trigger_select=0
     trigger_clean=0
+    trigger_help=0
 
     _handle_key "$TUI_KEY"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
@@ -489,6 +495,29 @@ _resume_pick() {
       unset -f _handle_key
       _RESUME_PICK_AGAIN=1
       return 0
+    fi
+
+    if [ "$trigger_help" -eq 1 ]; then
+      # Every key this picker actually implements, including the four it has
+      # never advertised (g/G, 1-9, PgUp/PgDn). Drawn with the board's own
+      # _home_help_row so the two overlays line up identically, and dismissed
+      # through the shared decoder on fd 3 — a bare one-byte read here would
+      # leak an arrow key's tail back into the picker as real keystrokes, which
+      # is the defect just fixed on the board.
+      printf '\033[H\033[2J'
+      printf '  %b%s%b\n\n' "$__C_BOLD" "$T_HELP_TITLE" "$__C_RESET"
+      _home_help_row "↑ ↓  j k  Tab" "$T_K_MOVE"
+      _home_help_row "PgUp PgDn"     "$T_K_MOVE"
+      _home_help_row "g / G"         "$T_K_TOPBOTTOM"
+      _home_help_row "1-9"           "$T_K_JUMP"
+      _home_help_row "⏎ Enter"       "$T_RESUME"
+      _home_help_row "/"             "$T_K_FILTER"
+      _home_help_row "c"             "$T_K_CLEAN"
+      _home_help_row "q / Esc"       "$T_K_QUIT"
+      printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
+      tui_read_key 3 || true
+      last_filter="--initial--"   # force a redraw of the list
+      continue
     fi
 
     if [ "$trigger_filter" -eq 1 ]; then
@@ -580,9 +609,17 @@ _resume_picker() {
     files="$(_resume_all_sessions)"
 
     if [ -z "$files" ]; then
-      log_err "No resumable sessions found in any tank."
-      log_dim "Resume-capable engines: $(_resume_engines | paste -sd , - | sed 's/,/, /g')"
-      exit 1
+      # Having no sessions yet is a STATE, not a failure — it is where every new
+      # user starts. `[ FAIL ]` told them clikae had broken, and gave no next
+      # step. The exit code splits by audience, which is the honest reading of
+      # both: to a human at a terminal the command succeeded and reported, so 0;
+      # to a script (no tty) "found nothing" is still worth a non-zero so
+      # `clikae resume || fallback` keeps working. Nobody's shell script is
+      # driving an interactive full-screen picker.
+      log_info "No sessions to resume yet — nothing has run in a tank on this machine."
+      log_dim  "Start one:  clikae <engine> <tank>      (then this list fills itself)"
+      log_dim  "Resume-capable engines: $(_resume_engines | paste -sd , - | sed 's/,/, /g')"
+      if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
     # 2. Build indexed array in Bash (zero process spawn)
@@ -601,8 +638,11 @@ $files
 EOF
 
     if [ "${#sessions[@]}" -eq 0 ]; then
-      log_err "No resumable sessions found in any tank."
-      exit 1
+      # Same state, reached when every candidate file failed to decode. Same
+      # split: a human gets an answer and a next step, a script gets non-zero.
+      log_info "No sessions to resume yet — nothing has run in a tank on this machine."
+      log_dim  "Start one:  clikae <engine> <tank>      (then this list fills itself)"
+      if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
     if [ ! -t 0 ] || [ ! -t 1 ] || [ -n "${CLIKAE_NO_INTERACTIVE:-}" ]; then

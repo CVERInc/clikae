@@ -1153,7 +1153,13 @@ _home_welcome_beside() {
 # Interactive launcher (only on a real TTY; pipes/scripts/tests get the static
 # board). Uses the alternate screen buffer so the user's scrollback is intact.
 
-_home_tty_leave() { stty echo 2>/dev/null || true; tui_screen_leave; }   # show cursor, leave alt screen
+# Show cursor, leave alt screen, restore echo — but ONLY onto a real terminal.
+# 🔴 Guarded on `[ -t 1 ]`: resume.sh calls this on its non-interactive listing
+# path too, so `clikae resume > file` began with the raw bytes
+# `ESC[?2004l ESC[?25h ESC[?1049l` before its first character — terminal control
+# codes written into a pipe, where they are noise at best and corrupt whatever
+# parses the output at worst. Nothing to restore when nobody is watching.
+_home_tty_leave() { stty echo 2>/dev/null || true; [ -t 1 ] && tui_screen_leave; return 0; }
 
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)

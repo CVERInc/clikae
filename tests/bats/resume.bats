@@ -72,6 +72,31 @@ _seed_transcript() {
   grep -q "PWD=$work" "$CLAUDE_STUB_LOG"
 }
 
+@test "resume writes no terminal escapes into a pipe" {
+  # `clikae resume > file` began with the raw bytes ESC[?25h ESC[?1049l — the
+  # alt-screen teardown, emitted unconditionally by _home_tty_leave, which the
+  # non-interactive listing path also calls. Terminal control codes in a pipe are
+  # noise at best and corrupt whatever parses the output at worst.
+  clikae init claude work
+  run clikae resume
+  # The output must be plain text: no ESC anywhere in it.
+  [[ "$output" != *$'\033'* ]] || false
+}
+
+@test "resume: an empty store is a state, not a failure (human 0, script 1)" {
+  # Having no sessions yet is where every new user starts; it was reported with
+  # [ FAIL ] and exit 1, which reads as "clikae is broken" and offers no next
+  # step. The exit code now splits by audience — and under bats there is no tty,
+  # so this asserts the SCRIPT side: still non-zero, so `clikae resume ||
+  # fallback` keeps working.
+  clikae init claude work
+  run clikae resume
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"No sessions to resume yet"* ]] || false
+  [[ "$output" == *"clikae <engine> <tank>"* ]] || false
+  [[ "$output" != *"FAIL"* ]] || false
+}
+
 @test "resume errors when the session is in no tank" {
   _install_claude_stub
   clikae init claude a
