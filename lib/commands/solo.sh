@@ -73,10 +73,28 @@ EOF
       log_done "$engine/$tank rejoined the fleet — relay/burn/share apply again."
       # Back in the fleet means back in the shared brain: the whole point of the
       # model is that those two are the same statement.
-      if [ -n "$dgroup" ] && [ -z "$(soul_group_for_tank "$canon" "$tank")" ]; then
-        "$CLIKAE_BIN" memory share "$dgroup" "$canon" "$tank" >/dev/null 2>&1 \
-          && log_pass "rejoined the shared memory group '$dgroup'." \
-          || log_warn "couldn't rejoin the memory group '$dgroup' — it keeps its own memory for now."
+      #
+      # 🔴 The group this tank ACTUALLY left wins over the machine default. The
+      # default is written only by the first `memory share` ever run here, so it
+      # is empty on plenty of installs — and when it was empty this branch did
+      # nothing at all: the marker came off, the board said "in the fleet", and
+      # the memory slot stayed the empty directory `_memory_isolate` left. A tank
+      # that was in a group seconds ago must not need a global default to get home.
+      local _back; _back="$(soul_left_read "$canon" "$tank")"
+      [ -n "$_back" ] || _back="$dgroup"
+      if [ -n "$_back" ] && [ -z "$(soul_group_for_tank "$canon" "$tank")" ]; then
+        if "$CLIKAE_BIN" memory share "$_back" "$canon" "$tank" >/dev/null 2>&1; then
+          soul_left_clear "$canon" "$tank"
+          log_pass "rejoined the shared memory group '$_back'."
+        else
+          # The commonest reason is the cross-account guard refusing to commingle
+          # two accounts without a human — which is correct. Say the command, so
+          # the tank is one deliberate step from its brain instead of stranded.
+          log_warn "couldn't rejoin the memory group '$_back' automatically — it keeps its own memory for now."
+          log_dim  "If you meant to: clikae memory share $_back $canon $tank   (it will ask, if this crosses accounts)"
+        fi
+      elif [ -z "$_back" ] && [ -z "$(soul_group_for_tank "$canon" "$tank")" ]; then
+        log_dim "(it has its own memory; no shared group on record to rejoin.)"
       fi
     else
       log_pass "$engine/$tank wasn't solo."
@@ -93,10 +111,15 @@ EOF
   # brain — a third state the board has no way to show, and a verb that read like
   # "incognito" and got reached for as one (v0.14.3: run on a LIVE tank, the
   # session went amnesiac mid-flight). One idea, one verb, visible on the board.
-  if [ -n "$(soul_group_for_tank "$canon" "$tank")" ]; then
+  local _grp; _grp="$(soul_group_for_tank "$canon" "$tank")"
+  if [ -n "$_grp" ]; then
+    # Write down WHICH group, before leaving it — this is the only moment the
+    # answer is knowable, and `--off` needs it to put the tank back (see there).
+    soul_left_set "$canon" "$tank" "$_grp"
     # shellcheck source=./memory.sh
     source "$CLIKAE_LIB/commands/memory.sh"
     _memory_isolate "$canon" "$tank" || log_warn "solo is set, but leaving the memory group failed — check: clikae memory status"
+    log_dim "left the shared memory group '$_grp' — 'clikae solo $engine $tank --off' puts it back."
   fi
 
   log_dim "no relay/\`to\` target · skipped by burn/watch · keeps its own memory."

@@ -35,6 +35,33 @@ load '../helpers'
   [ -n "$(soul_group_for_tank claude work)" ]        # rejoined the machine default group
 }
 
+@test "solo --off rejoins the group it left, even with no machine default set" {
+  # 🔴 The round trip that cost a real tank its brain (2026-08-19). `solo` leaves
+  # the shared group; `--off` used to decide where to rejoin by reading the
+  # MACHINE DEFAULT, which is written only by the first `memory share` ever run
+  # and is empty on plenty of installs. With it empty, `--off` rejoined nothing:
+  # the marker came off, the board said "in the fleet", and the memory slot
+  # stayed the empty directory the isolate left behind. `soul-default` is
+  # deliberately blanked here to reproduce exactly that machine.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/soul.sh"
+  clikae init claude work
+  clikae memory share brain claude work
+  : > "$CLIKAE_HOME/soul-default"        # the machine default is EMPTY
+  [ "$(soul_group_for_tank claude work)" = "brain" ]
+
+  clikae solo claude work
+  [ -z "$(soul_group_for_tank claude work)" ]                 # left the group
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/work/clikae-meta/soul-left")" = "brain" ]
+
+  run clikae solo claude work --off
+  [ "$status" -eq 0 ]
+  [ "$(soul_group_for_tank claude work)" = "brain" ]          # …and got back in
+  # The breadcrumb is consumed, so a later solo/--off can't rejoin a stale group.
+  [ ! -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/soul-left" ]
+}
+
 @test "solo --off: returns a tank to the fleet" {
   clikae init claude work
   clikae solo claude work

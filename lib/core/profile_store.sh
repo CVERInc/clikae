@@ -165,6 +165,33 @@ solo_marker_file() {
 }
 tank_is_solo() { [ -f "$(solo_marker_file "$1" "$2")" ]; }
 
+# ── The group a tank left when it went solo ─────────────────────────────────
+# `clikae solo` leaves the shared brain; `--off` is supposed to put it back. It
+# used to decide WHERE to put it back by reading the machine default
+# (soul_default_group) — which is set only by the FIRST `memory share` ever run
+# on the machine and is empty on plenty of installs. When it is empty, `--off`
+# silently rejoined nothing: the marker came off, the board showed the tank back
+# in the fleet, and its memory slot stayed an empty directory. A tank that was
+# demonstrably in a group seconds ago must not need a global default to find its
+# way home, so solo writes the group name down and --off reads it back.
+# One line, in the tank's own meta dir, so it travels with a rename.
+soul_left_file() {
+  local cli="$1"; [ "$cli" = "agy" ] && cli="antigravity"
+  printf '%s/clikae-meta/soul-left\n' "$(profile_dir "$cli" "$2")"
+}
+soul_left_read() {
+  local f; f="$(soul_left_file "$1" "$2")"
+  [ -f "$f" ] || return 0
+  head -n 1 "$f" 2>/dev/null | tr -d '[:space:]'
+}
+soul_left_set() {
+  local f; f="$(soul_left_file "$1" "$2")"
+  [ -n "$3" ] || return 0
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+  printf '%s\n' "$3" > "$f" 2>/dev/null || true
+}
+soul_left_clear() { rm -f "$(soul_left_file "$1" "$2")" 2>/dev/null || true; }
+
 # List every profile as "<cli> <profile> <path>" lines, sorted.
 list_all_profiles() {
   local root
