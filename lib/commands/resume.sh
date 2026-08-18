@@ -375,7 +375,7 @@ _resume_pick() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true # Permanent no-echo for TUI
-  printf '\033[?1049h\033[?25l'
+  tui_screen_enter
   # Read keys from a DEDICATED /dev/tty fd (like _home_pick/_home_choose), never
   # bare stdin. The board draws escape sequences to stdout; on stdin those can come
   # back as stray bytes that a bare read would treat as keystrokes (the old `-t 0`
@@ -448,7 +448,7 @@ _resume_pick() {
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
-           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+           tui_screen_enter; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
       esac
     fi
@@ -496,7 +496,7 @@ _resume_pick() {
       printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
       IFS= read -r filter <&3 || filter=""
       stty -echo 2>/dev/null || true
-      printf '\033[?1049h\033[?25l'; sel=0
+      tui_screen_enter; sel=0
       # Reset filter cache to re-trigger scan
       last_filter="--initial--"
       continue
@@ -518,7 +518,7 @@ _resume_pick() {
         target_tank="$(_home_choose "$T_RESUME_WHICH_TANK" "$cands" "$sel_tank")" || {
           trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
           stty -echo 2>/dev/null || true
-          printf '\033[?1049h\033[?25l'; continue
+          tui_screen_enter; continue
         }
       else
         target_tank="$sel_tank"

@@ -10,6 +10,25 @@
 # file owns the byte-level decode so every picker speaks the same keys; what a
 # key MEANS stays with each caller.
 #
+# tui_screen_enter / tui_screen_leave — the ONE way in and out of a full-screen
+# picker. Write to stdout; a caller drawing on a dedicated tty fd uses
+# `tui_screen_enter >&3`.
+#
+# 🔴 The alt-screen switch and BRACKETED PASTE (mode 2004) travel together, and
+# that is the whole point of these existing. The repo had fourteen literal
+# `\033[?1049h\033[?25l` sites across four files and eight exits; a fix applied
+# to some of them is not a fix, because every `_home_tty_leave` turns the mode
+# back off and any un-converted re-entry point leaves it off. Measured: with
+# only three of the eight home.sh entries converted, one ordinary `/` + Enter
+# re-opened the hole and a pasted `dy\r` destroyed a tank again.
+#
+# Pairing them in one function is what makes "you cannot forget it" true.
+# Terminals that do not know mode 2004 ignore the sequence and behave as before,
+# so this is a mitigation, not a guarantee — the other half is that a
+# destructive confirm must not be satisfiable by bytes already queued.
+tui_screen_enter() { printf '\033[?1049h\033[?25l\033[?2004h'; }
+tui_screen_leave() { printf '\033[?2004l\033[?25h\033[?1049l'; }
+
 # tui_read_key [fd] — block-read ONE logical key from <fd> (default 0) and set
 # TUI_KEY to a symbolic name:
 #     up down left right pgup pgdn home end tab shift-tab enter esc unknown
@@ -94,6 +113,29 @@ tui_read_key() {
                     4|8) TUI_KEY="end" ;;
                     5)   TUI_KEY="pgup" ;;
                     6)   TUI_KEY="pgdn" ;;
+                    # 🔴 BRACKETED PASTE. With mode 2004 on (tui_screen_enter), a
+                    # paste arrives fenced as  ESC[200~ <text> ESC[201~ . Without
+                    # this arm every pasted BYTE is a keystroke: measured on a real
+                    # pty, one paste of `dy\r` on the board ran d (delete tank) then
+                    # answered its [y/N] — the tank was rm -rf'd, not trashed. The
+                    # `d` is read off fd 3 here while the `y` still sitting in the
+                    # tty queue is read by the child's `confirm` on fd 0, so no
+                    # single-reader guard can catch it; the fence is what closes it.
+                    # Swallow the payload and report ONE unknown key, i.e. a paste
+                    # is a documented no-op. Bounded reads (-t 1) so a truncated
+                    # paste cannot wedge the picker.
+                    200)
+                      local _pb="" _pp="" _pn=0
+                      while IFS= read -rsn1 -t 1 -u "$fd" _pb; do
+                        _pn=$((_pn + 1))
+                        [ "$_pn" -gt 65536 ] && break     # never spin on a huge paste
+                        if [ "$_pb" = $'\e' ]; then _pp=""; continue; fi
+                        _pp="$_pp$_pb"
+                        case "$_pp" in '[201~') break ;; esac
+                        case "$_pp" in '['*) ;; *) _pp="" ;; esac
+                      done
+                      TUI_KEY="unknown" ;;
+                    201) TUI_KEY="unknown" ;;   # a stray end-fence: ignore it too
                     *)   TUI_KEY="unknown" ;;
                   esac ;;
                 *) TUI_KEY="unknown" ;;

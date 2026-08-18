@@ -795,7 +795,7 @@ _clean_select_body() {
 _clean_select() {
   { exec 3<>/dev/tty; } 2>/dev/null || return 2
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
 
@@ -846,7 +846,7 @@ _clean_select() {
     esac
   done
   trap - EXIT INT TERM
-  printf '\033[?25h\033[?1049l' >&3
+  tui_screen_leave >&3
   stty echo 2>/dev/null || true
   { exec 3>&-; } 2>/dev/null || true
   return "$rc"

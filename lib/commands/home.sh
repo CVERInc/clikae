@@ -1105,7 +1105,7 @@ _home_welcome_beside() {
 # Interactive launcher (only on a real TTY; pipes/scripts/tests get the static
 # board). Uses the alternate screen buffer so the user's scrollback is intact.
 
-_home_tty_leave() { stty echo 2>/dev/null || true; printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
+_home_tty_leave() { stty echo 2>/dev/null || true; tui_screen_leave; }   # show cursor, leave alt screen
 
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
@@ -1188,9 +1188,9 @@ EOF
     if [ "${opts[$i]}" = "$pre" ] || [ "${opts[$i]%% *}" = "$pre" ]; then sel=$i; fi
   done
 
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
   # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
+  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
   while :; do
     {
       printf '\033[H\033[2J'
@@ -1208,12 +1208,12 @@ EOF
       end|pgdn)       sel=$((n - 1)) ;;
       q|esc) break ;;
       enter)
-        printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+        tui_screen_leave >&3; trap - EXIT INT TERM; exec 3>&-
         printf '%s\n' "${opts[$sel]}"
         return 0 ;;
     esac
   done
-  printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+  tui_screen_leave >&3; trap - EXIT INT TERM; exec 3>&-
   return 1
 }
 
@@ -1545,7 +1545,18 @@ _home_help_overlay() {
   printf '\n'
   _home_wrap_prefixed "$T_HELP_AGY" "  " 2 "$__C_DIM" "$__C_RESET"
   printf '  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
-  local _k; IFS= read -rsn1 _k || true
+  # 🔴 Dismiss through the SHARED decoder on fd 3, not a bare one-byte read on
+  # stdin. "Any key dismisses" still holds — but an arrow key is three bytes, and
+  # a one-byte read ate only the ESC. The board then read the tail back as real
+  # keystrokes: `[` moved the selected tank in the burn order and MATERIALISED
+  # $CLIKAE_HOME/order, and `A` cycled autonomy ask→safe→full. Both were
+  # reproduced on a pty with the files absent beforehand and written after — two
+  # persistent state changes, no prompt, from the one screen whose entire job is
+  # to teach the keymap. tui_read_key consumes a whole logical key and returns
+  # `unknown` for anything it does not recognise, which also covers PgUp/Home/End
+  # /F-keys/modifier'd arrows — none of which could be dismissed cleanly before.
+  # `|| true`: it returns 1 on EOF and the board runs under `set -eo pipefail`.
+  tui_read_key 3 || true
 }
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
@@ -1772,7 +1783,7 @@ _home_stay() {
   printf '\n  %b↵ back to clikae%b ' "$__C_DIM" "$__C_RESET"
   local _discard; IFS= read -r _discard || true
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
+  tui_screen_enter   # re-enter alt screen, hide cursor
 }
 
 # Toggle solo on a tank — silent (the picker redraws the badge itself). solo = out
@@ -1840,7 +1851,7 @@ _home_pick() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
+  tui_screen_enter   # enter alt screen, hide cursor
   # Keys come from a DEDICATED /dev/tty fd, never bare stdin — the same isolation
   # _home_choose and the resume picker already had (this board was the straggler;
   # stray stdout feedback bytes read as keystrokes on some terminals).
@@ -1906,7 +1917,7 @@ _home_pick() {
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
-           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+           tui_screen_enter; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
       esac
     fi
@@ -1959,7 +1970,7 @@ _home_pick() {
         printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
         IFS= read -r filter <&3 || filter=""
         stty -echo 2>/dev/null || true
-        printf '\033[?1049h\033[?25l'; sel=0
+        tui_screen_enter; sel=0
         ;;
       K)
         # Close a running session from the board.
@@ -1977,7 +1988,7 @@ _home_pick() {
             printf '%b%s%b' "$__C_BOLD" "$T_CLOSE_ASK" "$__C_RESET"
             local _cans; IFS= read -r _cans <&3 || _cans=""
             stty -echo 2>/dev/null || true
-            printf '\033[?1049h\033[?25l'
+            tui_screen_enter
             case "$_cans" in
               y|Y) tmux kill-session -t "$_csess" 2>/dev/null || true
                    items="$(_home_items)"; sel=0 ;;
@@ -1995,17 +2006,34 @@ _home_pick() {
         [ -n "$_lang" ] && i18n_set "$_lang"
         trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
-        printf '\033[?1049h\033[?25l'
+        tui_screen_enter
         items="$(_home_items)"; dry="$(_home_dry_set)"
         ;;
       A)
-        # Cycle autonomy ask → safe → full → ask (consumed by the BETA supervised
-        # launch). Shown live on the board's autonomy line.
-        case "$(autonomy_get)" in
-          ask)  autonomy_set safe ;;
-          safe) autonomy_set full ;;
-          *)    autonomy_set ask ;;
-        esac
+        # PICK the autonomy level; do not blind-cycle it.
+        #
+        # 🔴 `A` is Shift of `a` (rename), and it was the board's only completely
+        # unguarded Shift-slip: no prompt, no confirm, written straight to disk,
+        # and bound on EVERY row kind — including the rows where `a` itself is
+        # inert, which are exactly the rows where a user presses it again harder.
+        # Two slipped Shifts took `ask` to `full`, and `full` means a dry tank
+        # carries your session onto the next tank in the burn order — a different
+        # account, possibly a different engine — without asking. That is the one
+        # setting on this board whose whole purpose is to be a consent moment, so
+        # it must not be reachable by accident. (It was also settable by the help
+        # overlay's escape leak, fixed above; found set to `full` on the
+        # maintainer's own machine with no memory of choosing it.)
+        #
+        # A picker, like the `l` language key: same one keystroke to open, the
+        # current value preselected, Esc/q cancels, and the level you land on is
+        # the one you looked at.
+        _home_tty_leave; trap - EXIT INT TERM
+        local _lvl _cur; _cur="$(autonomy_get)"
+        _lvl="$(_home_choose "$T_AUTONOMY_PICK" "$(printf 'ask\nsafe\nfull')" "$_cur")" || _lvl=""
+        [ -n "$_lvl" ] && [ "$_lvl" != "$_cur" ] && autonomy_set "$_lvl"
+        trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        stty -echo 2>/dev/null || true
+        tui_screen_enter
         ;;
 
       # --- leave actions: these launch a CLI, so exiting the picker is expected
@@ -2018,7 +2046,7 @@ _home_pick() {
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             stty -echo 2>/dev/null || true
-            printf '\033[?1049h\033[?25l'
+            tui_screen_enter
             { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
             continue
           }

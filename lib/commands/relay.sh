@@ -42,9 +42,9 @@ _relay_menu() {
   # Read-write fd so we can both draw to and read keys from the terminal.
   { exec 3<>/dev/tty; } 2>/dev/null || return 1
   local sel=0 i key rest
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
   # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" RETURN
+  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" RETURN
   while :; do
     {
       printf '\033[H\033[2J'
@@ -64,12 +64,12 @@ _relay_menu() {
       j) sel=$(((sel + 1) % n)) ;;
       q) break ;;
       ''|$'\n'|$'\r')
-        printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+        tui_screen_leave >&3; exec 3>&-; trap - RETURN
         printf '%s\n' "$sel"
         return 0 ;;
     esac
   done
-  printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+  tui_screen_leave >&3; exec 3>&-; trap - RETURN
   return 1
 }
 
