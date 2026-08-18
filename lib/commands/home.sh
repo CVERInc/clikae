@@ -420,6 +420,21 @@ _home_fuel_dot() {
   printf '%b·%b\037' "$__C_DIM" "$__C_RESET"
 }
 
+# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, fork-free, into $_FDOT.
+#
+# The redraw path wants just the mark, and every row was paying a `$( )` to get
+# it — and this one is the priciest on the board, because _home_is_dry forks awk
+# inside it. Measured on the maintainer's store: 4.3 ms per call, ~39 ms of a
+# 248 ms frame, for a value that cannot change between two keypresses.
+# The echoing form above stays for the non-hot callers that want the phrase too.
+_home_fuel_dotv() {
+  local dry="$1" cli="$2" profile="$3"
+  if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then _FDOT="${__C_RED}○$__C_RESET"; return 0; fi
+  if _home_weekly_read "$cli" "$profile" >/dev/null; then _FDOT="${__C_YELLOW}◐$__C_RESET"; return 0; fi
+  if limit_engine_detectable "$cli"; then _FDOT="${__C_GREEN}●$__C_RESET"; return 0; fi
+  _FDOT="${__C_DIM}·$__C_RESET"
+}
+
 # _home_chunk <word> <width> -> the word cut into space-separated chunks, each at
 # most <width> DISPLAY columns. The escape hatch for text a word-wrapper cannot
 # break: CJK (no interword spaces — a whole sentence is one "word") and long
@@ -490,7 +505,7 @@ _home_wrap_prefixed() {
   # the same treatment, which is also what you want.
   local _rebuilt="" _w
   for _w in $text; do
-    if [ "$(_dwidth "$_w")" -gt "$avail" ]; then
+    _dwv "$_w"; if [ "$_DW_W" -gt "$avail" ]; then
       _rebuilt="$_rebuilt $(_home_chunk "$_w" "$avail")"
     else
       _rebuilt="$_rebuilt $_w"
@@ -500,7 +515,15 @@ _home_wrap_prefixed() {
   for word in $text; do
     if [ -z "$line" ]; then
       line="$word"
-    elif [ "$(_dwidth "$line $word")" -le "$avail" ]; then
+      continue
+    fi
+    # 🔴 _dwv, not $(_dwidth …). This loop runs once PER WORD, twice over (the
+    # hard-break pass above and the fill pass here), so a keybar of fifteen words
+    # was ~30 subshells in a single call — measured 62 _dwidth forks in ONE
+    # frame, which is where the redraw's time actually went. The fork-free form
+    # computes the identical number into $_DW_W.
+    _dwv "$line $word"
+    if [ "$_DW_W" -le "$avail" ]; then
       line="$line $word"
     else
       if [ "$first" -eq 1 ]; then printf '%b%s%s%b\n' "$color" "$prefix" "$line" "$reset"; first=0
@@ -779,23 +802,43 @@ _home_lpad() {
 # One function because there were two copies. Copies drift, and these two had
 # to be found by measuring the output rather than by reading either one.
 _home_tank_fields() {
+  _home_tank_fieldsv "$@"
+  printf '%s\037%s\037%s' "$_TF_NM" "$_TF_EN" "$_TF_AC"
+}
+
+# _home_tank_fieldsv — the same, fork-free, into $_TF_NM / $_TF_EN / $_TF_AC.
+#
+# The echoing form above cost SEVEN subshells per tank row (itself, three
+# _home_trunc, three _home_lpad — and each _home_lpad forks _dwidth again). With
+# nine tanks that is the bulk of a redraw. Same arithmetic, no forks.
+_home_tank_fieldsv() {
   local prof="$1" eng="$2" acct="$3" has_tail="$4" acw
   acw=$(( $(_home_cols) - 8 - 7 - 8 ))    # 8 = 4 lead + dot + 3 single spaces
   [ "$acw" -gt 22 ] && acw=22
   [ "$acw" -lt 3 ]  && acw=3
-  local ac; ac="$(_home_trunc "${acct:--}" "$acw")"
-  [ -n "$has_tail" ] && ac="$(_home_lpad "$ac" "$acw")"
-  printf '%s\037%s\037%s' \
-    "$(_home_lpad "$(_home_trunc "$prof" 7)" 7)" \
-    "$(_home_lpad "$(_home_trunc "$eng" 8)" 8)" \
-    "$ac"
+  _home_truncv "${acct:--}" "$acw"; _TF_AC="$_TRUNC"
+  if [ -n "$has_tail" ]; then _home_lpadv "$_TF_AC" "$acw"; _TF_AC="$_LPAD"; fi
+  _home_truncv "$prof" 7; _home_lpadv "$_TRUNC" 7; _TF_NM="$_LPAD"
+  _home_truncv "$eng" 8;  _home_lpadv "$_TRUNC" 8; _TF_EN="$_LPAD"
 }
 
 # _home_cols -> the live terminal COLUMN width, via `stty size </dev/tty`
 # (works inside $(), unlike `tput cols` which reads its piped stdout — see the
 # NB in _home_welcome). Falls back to 80 when not a real terminal, unreadable,
 # or implausibly narrow (<30) — same floor _home_wrap_prefixed already uses.
+# 🔴 Cached FOR THE DURATION OF ONE FRAME. Asking costs `stty size </dev/tty`
+# piped into awk — two forks and a tty ioctl — and the answer cannot change
+# while a single frame is being composed. It was being asked 12 times per
+# redraw, once per tank row from inside _home_tank_fields, and that was the
+# single largest cost in the frame (measured: 3.4 ms a call).
+#
+# The cache is a plain variable that each renderer CLEARS then primes at the top
+# of its own frame, so a resize is picked up on the very next one. Priming in the
+# renderer's own shell also means the `$( )` subshells further down inherit the
+# value instead of each re-asking — which is exactly where the 12 came from.
+_home_cols_prime() { _HOME_COLS_CACHE=""; _HOME_COLS_CACHE="$(_home_cols)"; }
 _home_cols() {
+  [ -n "${_HOME_COLS_CACHE:-}" ] && { printf '%s' "$_HOME_COLS_CACHE"; return 0; }
   local cols
   cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
   # No /dev/tty (piped, redirected, CI) — the terminal is still THERE, we just
@@ -879,8 +922,16 @@ _home_row_geom() {
 # _home_row_eng <cli> -> the coloured, padded engine field for a row, or "" when
 # _home_row_geom decided this terminal cannot afford it.
 _home_row_eng() {
-  [ -n "$_RG_ENG" ] || { printf ''; return 0; }
-  printf '%s%s%s ' "$__C_DIM" "$(_home_lpad "$(_home_engine_label "$1")" 8)" "$__C_RESET"
+  _home_row_engv "$1"; printf '%s' "$_RENG"
+}
+
+# _home_row_engv <cli> — the same, fork-free, into $_RENG. Every `$( )` in the
+# redraw path costs ~0.5 ms and this runs once per row, per keypress.
+_home_row_engv() {
+  if [ -z "$_RG_ENG" ]; then _RENG=""; return 0; fi
+  local _el; _el="$1"; [ "$_el" = "antigravity" ] && _el="agy"   # engine_label, inline
+  _home_lpadv "$_el" 8
+  _RENG="$__C_DIM$_LPAD$__C_RESET "
 }
 
 # _home_trunc_mid <str> <maxcols> -> <str> unchanged if it already fits within
@@ -909,6 +960,7 @@ _home_trunc_mid() {
 # Render the launchable items (passed as $1) as the static tank board. The dry
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
+  _home_cols_prime          # one width question per render, not one per row
   local items="$1" dry="$2" any_dry=""
   local n_tanks n_clis
   # `grep -c .` exits 1 when the count is 0 — under `set -eo pipefail` that would
@@ -946,20 +998,22 @@ _home_render_static() {
       live)
         # Running right now, in the same columns as everything else on the page.
         if [ "$printed_live" -eq 0 ]; then printed_live=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"; fi
-        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         printf '    %b %s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" \
           "$(_home_row_eng "$cli")" \
-          "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          "$__C_DIM" "$_ttl" "$__C_RESET"
         ;;
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
         if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
-        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
-        local _rnm _ren; _rnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _ren="$(_home_row_eng "$cli")"
-        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        _home_row_engv "$cli"; _ren="$_RENG"
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -990,9 +1044,8 @@ _home_render_static() {
         # current-shell tank is an artifact of where you typed clikae, not useful info.)
         local _nm _en _ac _tail="" _sep="" _flds
         if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
-        _flds="$(_home_tank_fields "$profile" "$_eng" "${label:--}" "$_tail")"
-        _nm="${_flds%%$'\037'*}"; _flds="${_flds#*$'\037'}"
-        _en="${_flds%%$'\037'*}"; _ac="${_flds#*$'\037'}"
+        _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
+        _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
         printf '    %b %s %b%s%b %b%s%b%s%s\n' \
           "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         ;;
@@ -1655,6 +1708,7 @@ _home_total_sessions() {
 
 _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
+  _home_cols_prime
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with
@@ -1730,10 +1784,12 @@ _home_pick_draw_body() {
         IFS=$'\036' read -r _lat _lage _lwake <<LIVEACT
 $active
 LIVEACT
-        ldot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; ldot="${ldot%%$'\037'*}"
-        local _lnm _len; _lnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _len="$(_home_row_eng "$cli")"
+        _home_fuel_dotv "$dry" "$cli" "$profile"; ldot="$_FDOT"
+        local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD"
+        _home_row_engv "$cli"; _len="$_RENG"
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
           # The second line is where time lives, in a whole sentence. When the
           # tank is limited the vendor's own words go here verbatim — they
           # already use the family's `·` — and clikae's promise, if any, follows
@@ -1751,7 +1807,7 @@ LIVEACT
             printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
         fi
         ;;
       resume)
@@ -1763,12 +1819,14 @@ LIVEACT
         fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
-        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         rage="${active#* }"
         # Same columns as a Tank row — dot · name · engine — then the session title.
-        local _rnm _ren; _rnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _ren="$(_home_row_eng "$cli")"
+        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        _home_row_engv "$cli"; _ren="$_RENG"
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -1776,7 +1834,7 @@ LIVEACT
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         fi
         ;;
       tank)
@@ -1790,7 +1848,7 @@ LIVEACT
         elif [ "$cur_cli" != "fleet" ]; then
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
-        local _eng; _eng="$(_home_engine_label "$cli")"
+        local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
         local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
         dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
         # Aligned columns (display-width padded): name · engine · account, then a
@@ -1798,9 +1856,8 @@ LIVEACT
         # marker — see _home_render_static: with many tanks open at once it's noise.)
         local _nm _en _ac _tail="" _sep="" _flds
         if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
-        _flds="$(_home_tank_fields "$profile" "$_eng" "${label:--}" "$_tail")"
-        _nm="${_flds%%$'\037'*}"; _flds="${_flds#*$'\037'}"
-        _en="${_flds%%$'\037'*}"; _ac="${_flds#*$'\037'}"
+        _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
+        _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
             "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
