@@ -111,6 +111,14 @@ SECSTUB
   # the dev machine's PATH (apfel/ollama/llm) make `handoff` auto-summarize. Tests
   # that exercise auto-detection re-enable this and stub a summarizer on PATH.
   export CLIKAE_HANDOFF_AUTOLOCAL=0
+  # 🔴 No network from the suite. The home board's pre-frame path runs
+  # update_check_refresh, which `curl`s the GitHub releases API with a 5s
+  # timeout. Nothing here set the opt-out, so any test that renders the board
+  # could reach the internet — making the gate slower offline and, worse,
+  # dependent on a third party being up. (board-width.bats set it per
+  # invocation; pty-smoke set a variable name that does not exist.) One export,
+  # once, for every test.
+  export CLIKAE_NO_UPDATE_CHECK=1
   RC_FILE="$TEST_HOME/.zshrc"
   # Make EVERY assertion count. bats only enforces a test's LAST command, so an
   # intermediate `[ … ]` (or command) that fails is otherwise silently ignored.

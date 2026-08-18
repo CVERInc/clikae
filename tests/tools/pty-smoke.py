@@ -68,7 +68,12 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     env.update({'HOME': root, 'CLIKAE_HOME': os.path.join(root, '.clikae'),
                 'CLIKAE_LANG': 'en-US', 'TERM': 'xterm-256color',
                 'PATH': binp + os.pathsep + env.get('PATH', ''),
-                'CLIKAE_UPDATE_CHECK': '0'})
+                # 🔴 The opt-out is CLIKAE_NO_UPDATE_CHECK (lib/core/update_check.sh
+                # :67, :104). This said CLIKAE_UPDATE_CHECK=0, which NOTHING reads —
+                # so every pty-smoke run has been making a live `curl` to the GitHub
+                # releases API, on the pre-board path, with a 5s timeout. A gate that
+                # depends on the network is not a gate; it is a flake generator.
+                'CLIKAE_NO_UPDATE_CHECK': '1'})
     # Host-safety: this harness IS a terminal, so clikae takes the tmux path and
     # really does create sessions. A throwaway $HOME does not contain those — the
     # tmux socket is chosen by $TMUX / $TMUX_TMPDIR, neither of which HOME touches
@@ -185,6 +190,31 @@ def mode_home():
           rc == 0 and 'en-US' in out and 'ja-JP' in out, out[-600:])
     rc, out = drive([CLIKAE, 'home'], ['?', ' ', 'q'], env)
     check('help overlay opens and dismisses', rc == 0, out[-600:])
+
+    # A filter matching NOTHING must show the notice and leave the board alive.
+    # `grep -c .` exits 1 on zero matches, and under the board's `set -eo
+    # pipefail` that killed the process: rc=1, blank screen, no message — so
+    # T_FILTER_NONE had never rendered once, in any of the nine locales.
+    # TWO `q`s: in the no-match state any non-`/` key CLEARS the filter and
+    # returns to the board; the second one quits. With one `q` this times out.
+    rc, out = drive([CLIKAE, 'home'], ['/', 'zzzznomatch\r', 'q', 'q'],
+                    env, per_key=2.0)
+    check('no-match filter shows the notice', 'no matches' in out.lower(), out[-600:])
+    check('no-match filter does not kill the board', rc == 0, out[-600:])
+
+    # …and the state is escapable by re-filtering, not only by quitting.
+    rc, out = drive([CLIKAE, 'home'], ['/', 'zzzznomatch\r', '/', 'alpha\r', 'q'],
+                    env, per_key=2.0)
+    check('re-filtering out of the empty state works',
+          rc == 0 and 'no matches' in out.lower(), out[-600:])
+
+    # NB the Resume-footer defect (_home_total_sessions returning "N\n0", so
+    # printf died with `invalid number` and the board printed "0 sessions total"
+    # above the sessions it had just listed) is NOT asserted here on purpose:
+    # this sandbox seeds no sessions, so the footer never renders and the check
+    # would pass on the broken code — decoration, not a gate. It is pinned in
+    # tests/bats/home.bats instead, where the fixture can seed transcripts and
+    # the test sets `set -o pipefail` itself (the bug does not exist without it).
 
 
 def mode_prompts():

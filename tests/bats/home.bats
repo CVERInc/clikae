@@ -339,6 +339,29 @@ _agy_log() { # <line>
   [[ "$output" == *"codex"* ]] || false
 }
 
+@test "_home_total_sessions emits exactly ONE line (and it is the count)" {
+  # 🔴 `set -o pipefail` is load-bearing HERE, not decoration: bin/clikae runs
+  # under it and the bug does not exist without it. A test that forgets it passes
+  # on the broken code. With a claude-only store the codex/antigravity globs go
+  # unmatched, ls exits non-zero, pipefail promotes it, and the trailing
+  # `|| echo 0` appended a SECOND line after the true count — so the footer got
+  # "2\n0", printf died with `invalid number`, and the board printed
+  # "0 sessions total" above the sessions it had just listed.
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"; : > "$p/bbb.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || false
+  [ "$output" = "2" ] || false
+}
+
 @test "the burn order is the FLEET: a solo tank holds no position in it" {
   # solo means out of the fleet (grammar §127) — not a relay target, skipped by
   # the burn/watch rotation. It was still occupying a slot in the order, which

@@ -1573,11 +1573,28 @@ _home_pick_draw() {
   # Synchronized Output: BSU → frame → park cursor → ESU
   printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$_lrows"
 }
+# _home_total_sessions -> ONE line: how many session files the whole store holds.
+#
+# 🔴 It used to emit TWO. A single-engine store leaves the codex/antigravity
+# globs unmatched, `ls` exits non-zero, the script-global `pipefail` promotes
+# that past `wc|tr`, and the trailing `|| echo 0` then appended a second line
+# AFTER the real count — so the function returned "4\n0". The footer's
+# `printf "$T_RESUME_FOOTER"` was handed that and died with
+# `printf: 4\n0: invalid number` (captured in a live frame), rendering
+# "0 sessions total" directly beneath four listed sessions. The board was
+# stating a falsehood and leaking a bash diagnostic into its own output.
+#
+# Swallow the failure INSIDE the subshell, where it belongs, and pin the result
+# to digits. NB a test for this must `set -o pipefail` itself or it passes
+# vacuously — the bug does not exist without it.
 _home_total_sessions() {
-  local chome="${CLIKAE_HOME:-$HOME/.clikae}"
-  ( ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
-          "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-          "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | wc -l | tr -d ' ' ) 2>/dev/null || echo 0
+  local chome="${CLIKAE_HOME:-$HOME/.clikae}" n
+  n="$( { ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
+                "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl \
+           2>/dev/null || true; } | wc -l | tr -d ' ' )"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
 }
 
 _home_pick_draw_body() {
@@ -1891,7 +1908,16 @@ _home_pick() {
   local _lastsize=""
   while :; do
     view="$(_home_filter "$items" "$filter")"
-    n="$(printf '%s\n' "$view" | grep -c .)"
+    # 🔴 `|| true`. `grep -c .` exits 1 on ZERO matches and the board runs under
+    # `set -eo pipefail`, so typing a filter that matched nothing KILLED the
+    # board: rc=1, blank screen, no message. The "no matches" notice three lines
+    # below — translated into all nine locales — had therefore never rendered
+    # once, in any language. The two siblings at :869-870 already carry this
+    # guard with a comment explaining exactly this hazard; this was the one that
+    # got missed. (resume.sh's equivalent counts with ${#filtered[@]} and cannot
+    # fail, which is why only the board broke.)
+    n="$(printf '%s\n' "$view" | grep -c . || true)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
     if [ "$n" -le 0 ]; then
       # Filter matched nothing (or everything's gone): show a tiny notice, let the
       # user clear the filter or quit. Never get stuck on an empty board.
