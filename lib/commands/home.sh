@@ -400,17 +400,24 @@ _home_weekly_read() {
 # note carries the dry reset phrase / weekly-% string (may be empty). Priority is
 # mutually exclusive: dry → weekly(BETA) → detectable-ready → no-reading.
 _home_fuel_dot() {
+  # 🔴 THE GLYPH CARRIES THE MEANING; COLOUR ONLY REINFORCES IT. Dry, weekly-warn
+  # and ready all printed the SAME `●` and differed by colour alone — so the one
+  # signal the board exists to give was invisible to anyone with a colour-vision
+  # deficiency (~8% of men), invisible under NO_COLOR, and invisible in a piped
+  # or screenshotted board. The overlay's own legend read
+  # `● ready · ● dry · ● weekly % · ○ no reading`: four labels, two glyphs.
+  # Now each state has its own shape, and colour says the same thing twice.
   local dry="$1" cli="$2" profile="$3" reset wk
   if reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-    printf '%b●%b\037%s' "$__C_RED" "$__C_RESET" "${reset:-over quota}"; return 0
+    printf '%b○%b\037%s' "$__C_RED" "$__C_RESET" "${reset:-over quota}"; return 0
   fi
   if wk="$(_home_weekly_read "$cli" "$profile")"; then
-    printf '%b●%b\037%s' "$__C_YELLOW" "$__C_RESET" "$wk"; return 0
+    printf '%b◐%b\037%s' "$__C_YELLOW" "$__C_RESET" "$wk"; return 0
   fi
   if limit_engine_detectable "$cli"; then
     printf '%b●%b\037' "$__C_GREEN" "$__C_RESET"; return 0
   fi
-  printf '%b○%b\037' "$__C_DIM" "$__C_RESET"
+  printf '%b·%b\037' "$__C_DIM" "$__C_RESET"
 }
 
 # _home_chunk <word> <width> -> the word cut into space-separated chunks, each at
@@ -1018,7 +1025,7 @@ $items
 EOF
 
   if [ -n "$also" ]; then
-    printf '\n  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+    printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
     printf '%s' "$also"
   fi
   echo ""
@@ -1574,7 +1581,9 @@ _home_help_overlay() {
   local _dots_prefix _dots_hang _dots_legend
   _dots_prefix="$(printf '  %b%s:%b  ' "$__C_BOLD" "$T_DOTS_TITLE" "$__C_RESET")"
   _dots_hang=$(( 5 + $(_dwidth "$T_DOTS_TITLE") ))
-  _dots_legend="$(printf '%b●%b %s · %b●%b %s · %b●%b %s · %b○%b %s' \
+  # Glyphs must match _home_fuel_dot exactly — this legend is the only place the
+  # mapping is stated, so a drift here teaches the wrong thing forever.
+  _dots_legend="$(printf '%b●%b %s · %b○%b %s · %b◐%b %s · %b·%b %s' \
     "$__C_GREEN"  "$__C_RESET" "$T_DOT_READY" \
     "$__C_RED"    "$__C_RESET" "$T_DOT_DRY" \
     "$__C_YELLOW" "$__C_RESET" "$T_DOT_WEEK" \
@@ -1639,7 +1648,7 @@ _home_total_sessions() {
 }
 
 _home_pick_draw_body() {
-  local items="$1" sel="$2" dry="$3"
+  local items="$1" sel="$2" dry="$3" filter="${4:-}"
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with
@@ -1676,15 +1685,29 @@ _home_pick_draw_body() {
   # was composed. The wrapper cannot see that outer indent, so it must be TOLD —
   # the same reason the recap call below passes 2. Without it the keybar wraps 2
   # columns too late and overruns a 60-col terminal by 1.
+  # 🔴 SAY WHEN A FILTER IS ON. With one active the board silently showed a
+  # SUBSET — same wordmark, same keybar, fewer rows — so "where did my tank go"
+  # had no answer on screen. The state is now named in the bar that is always
+  # there, using T_FILTER_PROMPT, which every locale already has (a dedicated
+  # new string would have cost 9 translations to say what this already says).
+  local _keybar="· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT"
+  [ -n "$filter" ] && _keybar="· $T_FILTER_PROMPT$(_home_trunc "$filter" 20) · esc $T_K_FILTER · q $T_K_QUIT"
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
+    "$_keybar" \
     "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
     "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
   # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
   # it was the one row of the INTERACTIVE frame that still ran off a narrow
   # terminal after the 2026-08-16 sweep.
-  _home_wrap_prefixed "$T_K_AUTO: $(autonomy_get) · [A] change (BETA, claude+codex)" \
-    "  " 2 "$__C_DIM" "$__C_RESET"
+  # Only when it is NOT the default. `ask` is the safe, expected state and saying
+  # so on every frame spends two of the board's scarcest rows (it wraps to two at
+  # 40 columns) telling you that nothing unusual is set. When autonomy IS raised,
+  # that is exactly when it must be visible — clikae may then carry your session
+  # onto another account on its own.
+  if [ "$(autonomy_get)" != "ask" ]; then
+    _home_wrap_prefixed "$T_K_AUTO: $(autonomy_get) · [A] change (BETA, claude+codex)" \
+      "  " 2 "$__C_DIM" "$__C_RESET"
+  fi
   printf '\n'
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -1786,7 +1809,7 @@ LIVEACT
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
@@ -1806,7 +1829,7 @@ LIVEACT
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b▸ %s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \
@@ -2005,7 +2028,7 @@ _home_pick() {
     fi
     [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete/filter
     [ "$sel" -lt 0 ] && sel=0
-    _home_pick_draw "$view" "$sel" "$dry"
+    _home_pick_draw "$view" "$sel" "$dry" "$filter"
     # One decoded key per frame from the tty fd (tui_read_key, lib/core/tui.sh);
     # a lone ESC quits, PgUp/Home jump top, PgDn/End jump bottom (the board has
     # no viewport, so page = jump).
@@ -2046,7 +2069,13 @@ _home_pick() {
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" 1; then
           items="$(_home_items)"; sel=$(( sel + 1 ))
         fi ;;
-      q|esc) break ;;
+      # Esc CLEARS an active filter before it leaves. Escape is the universal
+      # "undo this mode" reflex, and while filtered the mode IS the filter — so
+      # reaching for it to get the full board back used to quit the launcher
+      # instead. With no filter on, Esc still exits exactly as before, and `q`
+      # exits unconditionally either way, so there is always a one-key way out.
+      esc) if [ -n "$filter" ]; then filter=""; sel=0; continue; fi; break ;;
+      q) break ;;
       /)
         _home_tty_leave
         printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"

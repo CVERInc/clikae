@@ -503,36 +503,49 @@ _agy_log() { # <line>
   ! limit_engine_detectable gh
 }
 
-@test "_home_fuel_dot: detectable+clean = ●, un-detectable (codex) = ○ no-reading" {
+@test "_home_fuel_dot: every state has its OWN glyph, not just its own colour" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  # claude, empty dry set → green ● (a real reading: ready)
+  # 🔴 The glyph carries the meaning; colour only reinforces it. Dry, weekly and
+  # ready all used to print the SAME ● and differ by colour alone — unreadable
+  # with a colour-vision deficiency, under NO_COLOR, or in a piped board.
+  # ready = ● · dry = ○ · weekly = ◐ · no reading = ·
   run _home_fuel_dot "" claude work
   [[ "$output" == *"●"* ]] || false
-  # codex can't be read from disk → honest ○, never a guessed ●
+  # codex can't be read from disk → the faintest mark, never a guessed ●
   run _home_fuel_dot "" codex cheap
-  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"·"* ]] || false
   [[ "$output" != *"●"* ]] || false
+  # …and no two states may share a glyph. Strip SGR and compare what the eye sees.
+  local _ready _dry _week
+  _ready="$(_home_fuel_dot "" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  _dry="$(_home_fuel_dot "$(printf 'claude\037work\037x')" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  mkdir -p "$CLIKAE_HOME/cache/weekly"
+  printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
+  _week="$(_home_fuel_dot "" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  [ "$_ready" != "$_dry" ]  || false
+  [ "$_ready" != "$_week" ] || false
+  [ "$_dry"   != "$_week" ] || false
 }
 
-@test "_home_fuel_dot: a dry tank is ● with its verbatim reset phrase" {
+@test "_home_fuel_dot: a dry tank is ○ with its verbatim reset phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   run _home_fuel_dot "$(printf 'claude\037work\037Resets in 2h')" claude work
-  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"○"* ]] || false
   [[ "$output" == *"Resets in 2h"* ]] || false
 }
 
-@test "_home_fuel_dot: a cached weekly-% (BETA) lights ● with the verbatim phrase" {
+@test "_home_fuel_dot: a cached weekly-% (BETA) lights ◐ with the verbatim phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   mkdir -p "$CLIKAE_HOME/cache/weekly"
   printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
   run _home_fuel_dot "" claude work
-  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"◐"* ]] || false
   [[ "$output" == *"85% of your weekly limit"* ]] || false
 }
 
