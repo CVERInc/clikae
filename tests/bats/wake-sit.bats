@@ -256,6 +256,49 @@ teardown() {
   [ "$rc" -eq 0 ]                        # returned cleanly, not still looping
 }
 
+@test "watch: the watcher leaves when the ENGINE window closes, not only when the session dies" {
+  # The test above kills the whole SESSION, which trips wake_watch's has-session
+  # exit. The OTHER exit — "I am the last window left, the engine is gone" — was
+  # never exercised, and it had been dead since it shipped: written with the
+  # inside-single-quotes idiom at top level, tmux got -F "'#{window_name}'" and
+  # grep got the pattern "'^wake( |\$)'" (a `^` mid-string that matches nothing),
+  # so `grep -qv` succeeded on every input and the condition was constant-true.
+  # The watcher then looped forever, keeping a dead session alive — and the next
+  # launch onto that session name found has-session true, started no engine, and
+  # dropped the user into the countdown window with nothing to type into.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  WAKE_WATCH_INTERVAL=1
+  limit_tank_dry() { return 1; }              # never dry: only the window guard can end this
+  # An engine window plus the waiter's own `wake` window — the real shape.
+  #
+  # 🔴 The `wake` window sleeps far LONGER than this test runs, on purpose. With a
+  # short sleep the session dies on its own and wake_watch's OTHER exit
+  # (has-session) ends the loop anyway — so the test would pass on the broken
+  # guard too, just slower. It has to be impossible to leave except through the
+  # window guard, and the verdict has to be time-bounded.
+  tmux new-session -d -s "$(_sess)" -n claude 'sleep 300'
+  tmux new-window -d -t "$(_sess)" -n wake 'sleep 300'
+  wake_watch claude "$(_tankname)" "$(_sess)" >/dev/null &
+  local w=$!
+  sleep 2
+  tmux kill-window -t "$(_sess):claude"       # the engine exits; only `wake` remains
+  # It must notice within a few poll intervals. Broken guard => still looping here.
+  local i left=1
+  for ((i = 0; i < 10; i++)); do
+    if ! kill -0 "$w" 2>/dev/null; then left=0; break; fi
+    sleep 1
+  done
+  if [ "$left" -ne 0 ]; then
+    kill "$w" 2>/dev/null || true
+    tmux kill-session -t "$(_sess)" 2>/dev/null || true
+    false                                     # still watching a session with no engine
+  fi
+  local rc=0; wait "$w" || rc=$?              # see the note above: never `run wait`
+  [ "$rc" -eq 0 ]                             # left cleanly instead of looping forever
+  tmux kill-session -t "$(_sess)" 2>/dev/null || true
+}
+
 @test "ask: a launch asks once, on a real terminal, and remembers the answer" {
   # Driven through a pty rather than as a unit call: wake_ask_once deliberately
   # stays silent unless both ends are a terminal, and bats captures stdout — so a

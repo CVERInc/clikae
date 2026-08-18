@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A resumed session could open onto a dead tank: the countdown window with no
+  engine to type into.** Reported as "`clikae resume` → pick a session → switch
+  tank → sometimes it just hangs."
+
+  The cause is a guard that has never once fired. `wake_watch` (and `wake_sit`)
+  ask "am I the last window left — did the engine exit?", and both wrote the test
+  with the inside-single-quotes escape idiom at the TOP level of the line:
+
+  ```
+  -F '"'"'#{window_name}'"'"'       →  tmux received   "'#{window_name}'"
+  grep -qvE '"'"'^wake( |$)'"'"'    →  grep received   "'^wake( |$)'"
+  ```
+
+  So tmux emitted `'wake'` with the quotes included, and grep was handed a
+  pattern whose `^` sits mid-string and therefore matches nothing — making
+  `grep -qv` succeed on every input. The condition was constant-true, so the
+  watcher kept looping after the engine window closed, **the tmux session it
+  lives in never died**, and the next launch onto that same session name found
+  `tmux has-session` true, started no engine, and dropped you into the `wake`
+  window showing "watching for a limit" with nothing to type into.
+
+  That is precisely the failure this guard was added for on 2026-08-15 ("the user
+  was stranded on 'watching for a limit' with no way out but closing the
+  terminal") — the fix shipped mis-quoted and was never exercised, because the
+  only test covering the watcher's exit killed the whole *session*, which trips a
+  different branch. Verified against real tmux; the new regression test is
+  time-bounded on purpose (a naive one passes on the broken code too, since the
+  session eventually dies on its own and the other exit covers for it).
+
+- **The bare switch could start an engine and say nothing.** Inside tmux with no
+  client on the current pane's session (a detached pane — a burn wrapper, an
+  agent run), `switch-client` was skipped and the function simply returned: the
+  engine was already running in `ck-<id>`, spending the account's quota, while
+  the command looked like it had done nothing. It now names the session and how
+  to reach it.
+
 ## [0.27.1] — 2026-08-18
 
 A strict correctness/security audit pass. Every fix ships with a regression test

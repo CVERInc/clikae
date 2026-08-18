@@ -197,8 +197,8 @@ wake_sit() {
     # Being the LAST window is normal: the engine finished. We are the reason the
     # session is still alive, so staying means counting down in front of someone
     # who cannot leave — the failure being fixed. Leave cleanly.
-    tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
-      | grep -qvE '"'"'^wake( |$)'"'"' || return 0
+    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+      | grep -qvE '^wake( |$)' || return 0
     now="$(date +%s)"
     if [ "$now" -lt "$target" ]; then
       left=$(( target - now ))
@@ -399,8 +399,23 @@ wake_watch() {
     tmux has-session -t "$session" 2>/dev/null || return 0
     # Ask about the ENGINE too: when no window other than ours remains, the work
     # is over and staying is what keeps a dead session on screen.
-    tmux list-windows -t "$session" -F '"'"'#{window_name}'"'"' 2>/dev/null \
-      | grep -qvE '"'"'^wake( |$)'"'"' || return 0
+    #
+    # 🔴 This guard shipped 2026-08-15 for exactly the symptom above and NEVER
+    # FIRED ONCE, because it was written with the inside-single-quotes escape
+    # idiom at the TOP level of the line:
+    #     -F '"'"'#{window_name}'"'"'   →  tmux got  "'#{window_name}'"
+    #     grep -qvE '"'"'^wake( |$)'"'"' →  grep got  "'^wake( |$)'"
+    # So tmux emitted `'wake'` (quotes included) and grep was handed a pattern
+    # whose `^` sits mid-string and can therefore never match anything — making
+    # `grep -qv` succeed on EVERY input. The guard's condition was constant-true,
+    # so the watcher kept looping after the engine window closed, the session it
+    # lives in never died, and the NEXT launch onto that same session name found
+    # `tmux has-session` true, started no engine, and dropped the user into a
+    # window showing "watching for a limit" with nothing to type into. That is
+    # the "sometimes it just hangs" report — the very failure this guard was
+    # added to stop. Verified against real tmux; pinned by wake-sit.bats.
+    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+      | grep -qvE '^wake( |$)' || return 0
 
     if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
       if [ -n "$reset" ]; then

@@ -194,6 +194,14 @@ KV
     if [ -n "$clients" ]; then
       exec tmux switch-client -t "ck-$sess_id"
     fi
+    # No client on this pane's session to move — we are inside a DETACHED one (a
+    # burn wrapper, an agent run, a pane whose client went away). The engine has
+    # already been started in ck-$sess_id by this point, so returning here in
+    # silence reads as "the command did nothing" while a session quietly holds it
+    # (and spends the account's quota). Say where it went instead. Not an attach:
+    # attaching from inside tmux is what `switch-client` exists to avoid.
+    log_info "Started $engine/$tank in tmux session ck-$sess_id (no client here to switch)."
+    log_dim  "Reach it with:  tmux switch-client -t ck-$sess_id   (or: tmux attach -t ck-$sess_id)"
   else
     local started_here=0
     if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
