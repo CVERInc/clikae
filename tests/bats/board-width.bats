@@ -53,11 +53,52 @@ _over_rows_interactive() {  # <cols> -> one "<width>\t<line>" per offending row
   return 0
 }
 
+# 🔴 THE FIXTURE IS THE GATE. This test was green for its whole life while the
+# board overflowed, because its specimen could not overflow: two 4-5 column
+# ASCII tank names and ZERO sessions, so it never measured a single Resume row —
+# and Resume rows are the widest thing the board draws (name + engine + quoted
+# title). Measured after fixing this: 83 columns at COLUMNS=80.
+#
+# A real specimen needs all three:
+#   · a tank name長 enough to matter. `payments-production` is 19 columns and
+#     perfectly legal — validate_name allows [A-Za-z0-9._-]+, so a CJK name is
+#     NOT a possible specimen here (clikae init rejects it) however tempting.
+#   · at least one SESSION, so the Resume section renders at all.
+#   · a title with the shape real titles have (spaces, punctuation), because the
+#     truncation budget is what is being tested.
+_seed_wide_specimen() {
+  clikae init claude payments-production
+  clikae init claude other
+  local work="$TEST_HOME/w"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/payments-production/projects/$slug"
+  mkdir -p "$d"
+  {
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"first"}]}}\n'
+    printf '{"type":"ai-title","aiTitle":"Refactor the payment reconciliation pipeline","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
+  } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
+  cd "$work" || return 1
+}
+
 @test "board: no row overflows the terminal, at any width a real terminal has" {
+  # The interactive arm calls _home_items, which needs the core libs — sourcing
+  # home.sh alone leaves order_list/list_adapters/profiles_root undefined, and
+  # the frame it measured then contained exactly ONE row (the agy target line)
+  # with empty section headers. A gate measuring a one-row board is not a gate.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  clikae init claude work
-  clikae init claude other
+  _seed_wide_specimen
   local cols rows bad=""
   # 30 is _home_cols' own floor; below that it substitutes 80 by design.
   for cols in 30 36 40 48 56 64 72 80 100 120; do

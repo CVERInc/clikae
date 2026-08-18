@@ -835,6 +835,47 @@ _home_row_budget() {
   printf '%s' "$b"
 }
 
+# _home_row_geom <overhead> <min-title> — decide a session/live row's geometry for
+# the CURRENT terminal, once per frame. Sets:
+#   _RG_ENG    the engine field, coloured and space-suffixed, or "" when dropped
+#   _RG_TITLE  the title budget in display columns
+#
+# 🔴 THE FLOOR HAS TO YIELD. _home_row_budget floors the title at <min> so a
+# narrow terminal cannot drive it to nothing — but a floor that cannot be met is
+# just a guaranteed overflow: at 30 columns the row's own chrome is 25, so
+# 25 + a 20-column floor is a 45-column row on a 30-column screen. Measured
+# exactly that, at 30/36/40.
+#
+# So when the floor cannot be honoured, the row sheds a COLUMN instead of
+# spilling: the engine tag goes first. It is the least load-bearing thing there —
+# the tank name identifies the row, the engine is context, and it is 9 columns
+# (8 padded + separator) recovered in one move. Same sacrifice-ladder principle
+# clean.sh's _clean_row_fit already applies to age/size.
+_home_row_geom() {
+  local overhead="$1" min="$2" cols
+  cols="$(_home_cols)"
+  if [ $(( cols - overhead )) -lt "$min" ]; then
+    _RG_ENG=""
+    overhead=$(( overhead - 9 ))
+    # …and the floor yields with it. Dropping the column is not always enough on
+    # its own: at 30 columns the remaining chrome is 16, so a 20-column floor is
+    # still a 36-column row. Once we are in shed-mode the title takes what is
+    # actually there, down to _home_row_budget's own 12-column default — below
+    # which a title stops being recognisable and the terminal is past helping.
+    [ "$min" -gt 12 ] && min=12
+  else
+    _RG_ENG="KEEP"
+  fi
+  _RG_TITLE="$(_home_row_budget "$cols" "$overhead" "$min")"
+}
+
+# _home_row_eng <cli> -> the coloured, padded engine field for a row, or "" when
+# _home_row_geom decided this terminal cannot afford it.
+_home_row_eng() {
+  [ -n "$_RG_ENG" ] || { printf ''; return 0; }
+  printf '%s%s%s ' "$__C_DIM" "$(_home_lpad "$(_home_engine_label "$1")" 8)" "$__C_RESET"
+}
+
 # _home_trunc_mid <str> <maxcols> -> <str> unchanged if it already fits within
 # <maxcols> DISPLAY COLUMNS; otherwise middle-ellipsised — head kept short, TAIL
 # kept long (a path's meaningful part, the leaf dir, sits at the end) — so the
@@ -891,7 +932,7 @@ _home_render_static() {
   # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
   # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
   # every resume row) rather than per row.
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
+  _home_row_geom 25 20; local _resume_title_budget="$_RG_TITLE"
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
@@ -899,8 +940,8 @@ _home_render_static() {
         # Running right now, in the same columns as everything else on the page.
         if [ "$printed_live" -eq 0 ]; then printed_live=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"; fi
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
-        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$(_home_lpad "$profile" 7)" \
-          "$__C_DIM" "$(_home_lpad "$(_home_engine_label "$cli")" 8)" "$__C_RESET" \
+        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" \
+          "$(_home_row_eng "$cli")" \
           "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         ;;
       resume)
@@ -910,8 +951,8 @@ _home_render_static() {
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
-        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
-        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+        local _rnm _ren; _rnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _ren="$(_home_row_eng "$cli")"
+        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -1609,7 +1650,13 @@ _home_pick_draw_body() {
   # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
   # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
   # no extra column here. Computed ONCE, not per row.
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
+  #
+  # 🔴 27, not 25, in the INTERACTIVE frame. The static renderer's chrome really
+  # is 25 and keeps its own number; here every row additionally passes through
+  # the `| while … printf '  %s'` indenter, and the selected row carries the `❯ `
+  # mark — 2 columns each. Measured: with 25 the interactive rows came out
+  # exactly 2 columns wider than the static ones at every width.
+  _home_row_geom 27 20; local _resume_title_budget="$_RG_TITLE"
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -1655,9 +1702,9 @@ _home_pick_draw_body() {
 $active
 LIVEACT
         ldot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; ldot="${ldot%%$'\037'*}"
-        local _lnm _len; _lnm="$(_home_lpad "$profile" 7)"; _len="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
+        local _lnm _len; _lnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _len="$(_home_row_eng "$cli")"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$__C_DIM" "$_len" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
           # The second line is where time lives, in a whole sentence. When the
           # tank is limited the vendor's own words go here verbatim — they
           # already use the family's `·` — and clikae's promise, if any, follows
@@ -1675,7 +1722,7 @@ LIVEACT
             printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$__C_DIM" "$_len" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         fi
         ;;
       resume)
@@ -1690,9 +1737,9 @@ LIVEACT
         rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
         rage="${active#* }"
         # Same columns as a Tank row — dot · name · engine — then the session title.
-        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
+        local _rnm _ren; _rnm="$(_home_lpad "$(_home_trunc "$profile" 7)" 7)"; _ren="$(_home_row_eng "$cli")"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -1700,7 +1747,7 @@ LIVEACT
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
         fi
         ;;
       tank)
@@ -1775,8 +1822,17 @@ LIVEACT
 $items
 EOF
   if [ "$printed_resume" -eq 1 ]; then
-    local total_s; total_s="$(_home_total_sessions)"
-    printf '    %b%s%b\n' "$__C_DIM" "$(printf "$T_RESUME_FOOTER" "$total_s")" "$__C_RESET"
+    # The footer is a full localized sentence (54 columns in en-US, longer in
+    # de/fr/pt) and was printed with no width budget at all — so on a narrow
+    # terminal it was one of the widest lines on the board and simply wrapped.
+    # Truncate it to what is left after the 4-column indent plus the 2 the outer
+    # indenter adds, so it obeys the same rule as every row above it.
+    local total_s _foot _fw
+    total_s="$(_home_total_sessions)"
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _foot="$(printf "$T_RESUME_FOOTER" "$total_s")"
+    _fw="$(_home_row_budget "$(_home_cols)" 6 12)"
+    printf '    %b%s%b\n' "$__C_DIM" "$(_home_trunc "$_foot" "$_fw")" "$__C_RESET"
   fi
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
