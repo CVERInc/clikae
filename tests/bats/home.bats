@@ -339,6 +339,57 @@ _agy_log() { # <line>
   [[ "$output" == *"codex"* ]] || false
 }
 
+@test "the burn order is the FLEET: a solo tank holds no position in it" {
+  # solo means out of the fleet (grammar §127) — not a relay target, skipped by
+  # the burn/watch rotation. It was still occupying a slot in the order, which
+  # made the order file disagree with the board: _home_items draws solo tanks in
+  # their own section at the bottom, so what you saw was never what the file
+  # said, and [ / ] wrote the interleaved file order back instead of the screen
+  # order. Measured on a real store: 4 of 9 order entries were solo, at
+  # positions 2, 4, 7 and 8.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  clikae init claude gamma
+  clikae solo claude beta                      # beta leaves the fleet
+  run order_list
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *"claude/beta"* ]] || false  # …so it is not in the burn order
+  [[ "$output" == *"claude/alpha"* ]] || false
+  [[ "$output" == *"claude/gamma"* ]] || false
+  # solo_list is the exact complement: together they cover every tank once.
+  run solo_list
+  [ "$output" = "claude/beta" ] || false
+  # And it comes back the moment it rejoins the fleet.
+  clikae solo claude beta --off
+  run order_list
+  [[ "$output" == *"claude/beta"* ]] || false
+}
+
+@test "reordering never writes a solo tank into the order file" {
+  # _home_reorder materialises the WHOLE order when you press [ or ]. If solo
+  # tanks were still in order_list, one keypress re-wrote them back into the file
+  # even though the board had drawn them in a separate section.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  clikae init claude gamma
+  clikae solo claude beta
+  _home_reorder claude gamma -1                # any reorder rewrites the file
+  # 🔴 Every assertion carries `|| false` (tests/README.md): bats only fails on
+  # the LAST command's status, so a bare `! grep` in the middle is decoration.
+  # Without it this test passed on the very code it was written to catch.
+  [ -f "$CLIKAE_HOME/order" ] || false
+  ! grep -qxF 'claude/beta' "$CLIKAE_HOME/order" || false
+  grep -qxF 'claude/alpha' "$CLIKAE_HOME/order" || false
+  grep -qxF 'claude/gamma' "$CLIKAE_HOME/order" || false
+}
+
 @test "_home_reorder moves a tank within the order file" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"

@@ -261,7 +261,7 @@ _home_items() {
     local _row; _row="$(printf 'tank\037%s\037%s\037%s\037%s\037%d\037' "$cli" "$profile" "$label" "$alias" "$a")"
     if tank_is_solo "$cli" "$profile"; then _solo="$_solo$_row"$'\n'; else _fleet="$_fleet$_row"$'\n'; fi
   done <<EOF
-$(order_list)
+$(order_list; solo_list)
 EOF
   [ -n "$_fleet" ] && printf '%s' "$_fleet"
   [ -n "$_solo" ] && printf '%s' "$_solo"

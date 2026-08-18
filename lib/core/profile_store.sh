@@ -214,13 +214,27 @@ list_all_profiles() {
 # partial, order_list fills in the rest deterministically.
 order_file() { printf '%s\n' "$CLIKAE_HOME/order"; }
 
-# order_list -> every EXISTING tank as "<engine>/<tank>", in BURN ORDER: first the
+# order_list -> every FLEET tank as "<engine>/<tank>", in BURN ORDER: first the
 # order-file entries that still exist (in file order), then any remaining tanks in
 # default (list_all_profiles) order. Always complete + deterministic, so callers
 # never need to special-case "not configured".
+# 🔴 SOLO TANKS ARE NOT IN THE BURN ORDER. Solo means "out of the fleet"
+# (docs/grammar.md §127) — it is not a relay/`to` target and the burn/watch
+# rotation skips it — so a solo tank holding a POSITION in the order was a
+# contradiction the order file stated out loud. It also made the board lie:
+# `_home_items` renders solo tanks in their own section at the bottom, so what
+# you saw was never what the file said, and `[`/`]` wrote the interleaved file
+# order back rather than the order on screen. Measured on a real store: 4 of 9
+# order entries were solo, two of them at positions 2 and 4.
+#
+# The board is the burn order, and the burn order is the fleet. Callers wanting
+# EVERY tank (the board, so it can draw the Solo section) add solo_list.
 order_list() {
   local f all listed line
-  all="$(list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}')"
+  all="$(list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}' | while IFS= read -r _e; do
+    [ -n "$_e" ] || continue
+    tank_is_solo "${_e%%/*}" "${_e#*/}" || printf '%s\n' "$_e"
+  done)"
   [ -n "$all" ] || return 0
   f="$(order_file)"
   listed=""
@@ -240,6 +254,19 @@ order_list() {
     printf '%s\n' "$listed" | grep -qxF "$line" && continue
     printf '%s\n' "$line"
   done
+}
+
+# solo_list -> every SOLO tank as "<engine>/<tank>", in default listing order.
+# The complement of order_list: together they cover every tank exactly once. The
+# board draws order_list as the fleet and this as the Solo section beneath it, so
+# the rows on screen and the burn-order file finally describe the same thing.
+solo_list() {
+  local entry
+  list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}' | while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    tank_is_solo "${entry%%/*}" "${entry#*/}" && printf '%s\n' "$entry"
+  done
+  return 0
 }
 
 # rename_tank_state <engine> <old> <new> — carry a tank's OUT-OF-DIR state across a
