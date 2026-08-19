@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A pre-push guard refuses a push that changes `lib/` or `bin/` without
+  touching `CHANGELOG.md`.** At 0.28.0, nineteen commits shipped and exactly one
+  had updated the changelog; the release notes were reconstructed afterwards from
+  commit messages, which worked only because someone sat down and did it. Narrow
+  on purpose — `tests/`, `docs/`, `hooks/` and `scripts/` do not trip it, and the
+  granularity is the push rather than the commit, so writing the notes just before
+  pushing is fine. `CLIKAE_SKIP_CHANGELOG=1 git push` is the escape for a genuinely
+  invisible change, and it says so out loud rather than passing silently.
+
 ## [0.28.0] — 2026-08-20
 
 The board got roughly three times faster to open and five times faster to move

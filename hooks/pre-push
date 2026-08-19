@@ -12,4 +12,11 @@
 # hand. Drop the inherited git context before handing over.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
+# The changelog guard reads the pre-push PAYLOAD, so it has to run before the
+# `exec` below — exec replaces this process, and stdin goes with it. It is a
+# separate file rather than inline so it can be unit-tested against synthetic
+# payloads without running the suite (tests/bats/changelog-guard.bats); a guard
+# nobody has watched fail is a guard nobody knows works.
+bash "$(dirname "$0")/changelog-guard" || exit 1
+
 exec bash "$(dirname "$0")/../scripts/test.sh"
