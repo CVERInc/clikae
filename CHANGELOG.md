@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-08-20
+
+The board got roughly three times faster to open and five times faster to move
+around in, and stopped telling four different lies while it did. Measured on the
+maintainer's real store (9 tanks, 5.2 GB, 1,384 transcripts), 0.27.1 and this
+release run back to back on the same machine, median of nine interleaved runs:
+
+    board opens          1329 ms  ->  403 ms   (-70%)
+    redraw per keypress   256 ms  ->   51 ms   (-80%)
+
+Minor, not patch: the burn order changed meaning (solo tanks no longer hold a
+position in it), the fuel dots changed shape, and an agy tank's ACCOUNT column
+can now report a different — correct — account than it did before.
+
+Every fix below ships with a regression test proven to go red on the pre-fix
+code. The two rewrites with the widest blast radius were checked by differential
+instead: the title extractor against all 1,384 transcripts in the store (titles
+byte-identical), and the whole board against four terminal widths (output
+byte-identical). The three background scans added here were checked for races by
+rendering 60 times and requiring every run to be byte-identical.
+
 ### Fixed
 
 - **A resumed session could open onto a dead tank: the countdown window with no
@@ -44,6 +65,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine was already running in `ck-<id>`, spending the account's quota, while
   the command looked like it had done nothing. It now names the session and how
   to reach it.
+
+
+- **`clikae solo --off` could leave a tank with no brain.** It decided which
+  memory group to rejoin by reading the machine default, which is written only by
+  the first `memory share` ever run and is empty on plenty of installs — the
+  maintainer's included. With it empty the rejoin did nothing: the marker came
+  off, the board showed the tank back in the fleet, and its memory slot stayed an
+  empty directory. `solo` now writes the group name down at the only moment the
+  answer is knowable, and `--off` reads it back.
+
+- **Pasting into the board ran commands.** The pickers entered the alt screen
+  without bracketed paste and the decoder reads a byte at a time, so every pasted
+  character was a keystroke. Reproduced on a real pty: one paste of `dy⏎` deleted
+  a tank and answered its own confirmation. The paste mode and the alt screen now
+  travel together, across all 14 entry and 8 exit sites — a partial conversion is
+  not a partial fix but no fix, because any un-converted exit turns the mode off.
+
+- **The help overlay could mutate state.** It dismissed on a one-byte read, so an
+  arrow key's tail was read back as real keystrokes: `[` moved a tank in the burn
+  order and materialised the order file, `A` cycled autonomy. Two persistent
+  changes, no prompt, from the one screen whose whole job is to teach the keymap.
+
+- **The board's footer printed a bash error and a wrong number.** A single-engine
+  store leaves two globs unmatched, `ls` exits non-zero, pipefail promotes it, and
+  a trailing `|| echo 0` appended a second line — so the count printf was handed
+  `4\n0`, died in frame, and rendered "0 sessions total" under four listed
+  sessions.
+
+- **A filter that matched nothing killed the board.** `grep -c .` exits 1 on zero
+  matches under `set -eo pipefail`: blank screen, no message. The "no matches"
+  notice three lines below had therefore never rendered once, in any of the nine
+  locales.
+
+- **Rows ran off the terminal, and the gate that swore they did not had never
+  measured one.** Its fixture held two short ASCII tank names and zero sessions,
+  and resume rows — the widest thing the board draws — were never in it. Given a
+  real specimen the gate fails at 30/36/40/48/56/64/72/80 columns, up to 83
+  columns on an 80-column terminal. All three causes fixed.
+
+- **The board could simply stop, with no error, on ordinary content.** The claude
+  title extractor ran a nested-star regex through bash's backtracking matcher; on
+  a real 229 KB transcript line one match attempt did not finish in 30 seconds,
+  and trimming the input did not rescue it. The board asks for a title on every
+  recent session. Across the store: 526 s with 25 files over a 10-second timeout,
+  down to 123 s with none.
+
+- **`clikae resume`'s `?` was dead**, one keystroke after the board teaches it,
+  and the picker also implements g/G, 1-9 and PgUp/PgDn while advertising none.
+  It now has an overlay listing what it really has. **`clikae resume > file` began
+  with raw alt-screen escape bytes**, and **"no sessions found" exited non-zero**,
+  so an empty store looked like a crash.
+
+- **An agy tank showed the wrong account after signing in as someone else.** The
+  scrape's own description said "most recent", but it took whichever file the
+  filesystem happened to hand back last — which agrees with recency only because
+  the names sort chronologically and the directory happens to come back sorted,
+  neither of which is promised. Newest by mtime now wins.
+
+- **An agy tank's account column went blank when its log contained a NUL byte.**
+  `grep` without `-a` calls such a file binary and prints nothing at all, so a
+  signed-in tank read as signed-out. This column had no tests at all; it has nine
+  now.
+
+### Changed
+
+- **The burn order is the fleet.** A tank marked solo — explicitly out of the
+  fleet — used to hold a slot in the carry order. Nothing ever carried onto one,
+  but the file said they were there while the board drew them in a separate
+  section, so the rows on screen were never the order on disk, and pressing `[`
+  or `]` wrote the interleaved file order back. Measured on a real store: 4 of 9
+  order entries were solo. `order_list` is now the fleet and `solo_list` its exact
+  complement.
+
+- **Each fuel state has its own shape**: ready `●`, dry `○`, weekly `◐`, no
+  reading `·`. Dry, weekly-warning and ready all printed the same `●` and differed
+  by colour alone — invisible to anyone with a colour-vision deficiency, under
+  `NO_COLOR`, and in a piped or screenshotted board. The overlay's own legend read
+  four labels against two glyphs.
+
+- **Autonomy is an explicit choice, not a cycle.** `A` opens a picker instead of
+  stepping ask → safe → full, and the board says so on every frame when it is
+  raised above `ask` — that being exactly when clikae may carry a live session to
+  another account on its own.
+
+### Performance
+
+- **The board no longer asks the terminal how wide it is once per row**, reads the
+  shell rc once per frame instead of once per tank, and answers "which tank is
+  active" once per engine instead of once per row.
+
+- **"Is this tank out of fuel?" no longer forks `awk`.** Every tank row asked it
+  twice — once for its dot, once for the over-quota footer — to look up one key in
+  a string that is empty on a healthy fleet: 2.28 ms a call, 8.5 ms a row, on
+  every keypress. It is 0.11 ms now, and the whole render dropped from 106 ms to
+  34 ms.
+
+- **An agy tank's account no longer costs a scan of every log it ever wrote.** agy
+  writes one per launch and never prunes; on the maintainer's machine that had
+  reached 362 files and 17 MB, re-read on every frame — so the board got slower
+  the more agy was used. Newest log, bounded read, first hit wins: 200 ms to 15 ms.
+
+- **The board stops re-counting the whole store on every keypress.** Listing every
+  session file to draw one footer line cost 15 ms per arrow key; it now rides with
+  the fuel scan and is exactly as fresh as everything else on the page.
+
+- **Scans that share nothing now run at the same time** rather than adding up:
+  the fuel scan against the item build, the resume list against the tank list, and
+  the tanks' transcripts against the vendors' limit logs.
+
+- **The claude title extractor reads each transcript once**, matching both title
+  keys in a single pass instead of pushing a 512 KiB slice back through a pipe per
+  key. Across the store: 113 s to 84 s, titles byte-identical.
+
+- `order_list`, `solo_list` and `tank_is_solo` stopped forking per tank —
+  82.9 ms to 6.2 ms for the first, which the board pays on every frame because the
+  burn order is the row order.
+
+### Fixed (tests)
+
+- **Three functions the board depends on had no tests at all** and have them now:
+  the agy account column, `_home_dry_set` (which decides whether a tank is drawn
+  as out of fuel — and whose output is EMPTY on a healthy fleet, so a silent break
+  shows up as a green dot on an exhausted tank and nothing else), and
+  `autonomy_get` (which decides whether clikae may carry a live session onto
+  another account without asking). Each new test file keeps the implementation it
+  replaced, verbatim, as the reference to compare against.
 
 ## [0.27.1] — 2026-08-18
 
