@@ -2035,6 +2035,21 @@ _home_total_sessions() {
 # leaves out, and it is drawn as its own line rather than left implicit — a board
 # silently showing a subset is the same defect the filter indicator exists for
 # ("where did my tank go" with no answer on screen).
+# _home_row_kind_at <items> <idx> -> the kind of the row at that index, or empty.
+# The keybar needs it before the row loop reaches that row, so it is its own tiny
+# scan rather than a flag threaded through the loop.
+_home_row_kind_at() {
+  local i=0 line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ "$i" -eq "$2" ]; then printf '%s' "${line%%$'\037'*}"; return 0; fi
+    i=$(( i + 1 ))
+  done <<EOF
+$1
+EOF
+  return 0
+}
+
 _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
   local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
@@ -2080,7 +2095,23 @@ _home_pick_draw_body() {
   # had no answer on screen. The state is now named in the bar that is always
   # there, using T_FILTER_PROMPT, which every locale already has (a dedicated
   # new string would have cost 9 translations to say what this already says).
-  local _keybar="· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT"
+  # 🔴 THE BAR ADVERTISED KEYS THAT COULD NOT FIRE. `K` is gated on the selected
+  # row being LIVE and `[ ]` on it being a TANK, but both were printed on every
+  # row — so on a tank row (the common case) `K` did nothing, on a live row `[ ]`
+  # did nothing, and on a resume row neither worked. Pressing an advertised key
+  # and getting silence is the same defect as the resume picker's dead `?`
+  # (0f51f48): byte-identical to an unbound key, with a legend insisting
+  # otherwise.
+  #
+  # ONE contextual slot, in a fixed position, so the bar does not reflow as the
+  # selection moves — only what sits in that slot changes. The `?` overlay still
+  # lists every key the board has; this line is what applies RIGHT NOW.
+  local _kctx=""
+  case "$(_home_row_kind_at "$items" "$sel")" in
+    live) _kctx=" · K $T_K_CLOSE" ;;
+    tank) _kctx=" · [ ] $T_K_REORDER" ;;
+  esac
+  local _keybar="· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN$_kctx · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT"
   [ -n "$filter" ] && _keybar="· $T_FILTER_PROMPT$(_home_trunc "$filter" 20) · esc $T_K_FILTER · q $T_K_QUIT"
   local _kbpfx _kbind
   printf -v _kbpfx '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"

@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently showing a subset is the defect the filter indicator already exists for.
   It reuses the keybar's own wording, so it costs no new translations.
 
+- **The keybar advertised keys that could not fire.** `K` is gated on the selected
+  row being LIVE and `[ ]` on it being a TANK, but both were printed on every row
+  — so on a tank row (the common case) `K` did nothing, on a live row `[ ]` did
+  nothing, and on a resume row neither worked. Pressing an advertised key and
+  getting silence is byte-identical to pressing an unbound one, with a legend
+  insisting otherwise; the same defect as the resume picker's dead `?`.
+
+  The bar now carries one contextual slot in a fixed position, so it does not
+  reflow as the selection moves — only what sits in that slot changes. The `?`
+  overlay still lists every key the board has; the bar is what applies right now.
+  No new strings, so no new translations.
+
 ### Added
 
 - **A pre-push guard refuses a push that changes `lib/` or `bin/` without

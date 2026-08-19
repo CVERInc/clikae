@@ -924,3 +924,83 @@ _agy_log() { # <line>
   [ "$items" = "FELL-BACK" ] || false
   [ "$dry" = "dry-row" ] || false
 }
+
+@test "the keybar only offers keys that work on the selected row" {
+  # `K` is gated on the selected row being LIVE and `[ ]` on it being a TANK, but
+  # the bar printed both on every row: on a tank row `K` did nothing, on a live
+  # row `[ ]` did nothing, on a resume row neither did. An advertised key that is
+  # byte-identical to an unbound one is the resume picker's dead `?` again.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/autonomy.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  # Three rows, one of each kind, in a known order.
+  # printf -v, not $( ): command substitution strips the trailing newline, so
+  # concatenating three of them glues the rows into ONE line — and then rows 1
+  # and 2 do not exist, their assertions pass vacuously, and the test reports
+  # green for a bar it never looked at. That is how this was first written.
+  local items
+  printf -v items '%s\n%s\n%s\n' \
+    "$(printf 'live\037claude\037alive\037\037\0370\037')" \
+    "$(printf 'resume\037claude\037rtank\037a title\037\0370 5m\037sid1')" \
+    "$(printf 'tank\037claude\037ttank\037acct\037\0370\037')"
+
+  local bar
+  bar() { _home_pick_draw_body "$items" "$1" "" | sed $'s/\033\\[[0-9;?]*[A-Za-z]//g'; }
+
+  # row 0 = live: close, no reorder
+  bar_out="$(bar 0)"
+  [[ "$bar_out" == *"$T_K_CLOSE"* ]]   || { echo "live row lost 'close'"; false; }
+  [[ "$bar_out" != *"$T_K_REORDER"* ]] || { echo "live row still offers reorder"; false; }
+
+  # row 1 = resume: neither
+  bar_out="$(bar 1)"
+  [[ "$bar_out" != *"$T_K_CLOSE"* ]]   || { echo "resume row still offers close"; false; }
+  [[ "$bar_out" != *"$T_K_REORDER"* ]] || { echo "resume row still offers reorder"; false; }
+
+  # row 2 = tank: reorder, no close
+  bar_out="$(bar 2)"
+  [[ "$bar_out" == *"$T_K_REORDER"* ]] || { echo "tank row lost 'reorder'"; false; }
+  [[ "$bar_out" != *"$T_K_CLOSE"* ]]   || { echo "tank row still offers close"; false; }
+
+  # And the keys that work everywhere are always there, on every row.
+  local i
+  for i in 0 1 2; do
+    bar_out="$(bar $i)"
+    [[ "$bar_out" == *"$T_K_MOVE"* ]]   || { echo "row $i lost 'move'"; false; }
+    [[ "$bar_out" == *"$T_K_OPEN"* ]]   || { echo "row $i lost 'open'"; false; }
+    [[ "$bar_out" == *"$T_K_FILTER"* ]] || { echo "row $i lost 'filter'"; false; }
+    [[ "$bar_out" == *"$T_K_QUIT"* ]]   || { echo "row $i lost 'quit'"; false; }
+  done
+}
+
+@test "_home_row_kind_at reads the same row the picker acts on" {
+  # The bar's slot and the key handler must agree about what row you are on. They
+  # find it two different ways — this walks the item list, the handler slices the
+  # sel'th line — so pin them against each other rather than trusting both.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items
+  items="$(printf 'live\037c\037a\037\037\0370\037\nresume\037c\037b\037t\037\0370\037s\ntank\037c\037d\037x\037\0370\037\n')"
+  local i want got
+  i=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    want="$(printf '%s' "$line" | cut -d$'\037' -f1)"     # how the picker does it
+    got="$(_home_row_kind_at "$items" "$i")"
+    [ "$want" = "$got" ] || { echo "row $i: picker sees '$want', keybar sees '$got'"; false; }
+    i=$(( i + 1 ))
+  done <<EOF
+$items
+EOF
+  [ "$i" -eq 3 ] || { echo "expected 3 rows, walked $i"; false; }
+  # Past the end is empty, not the last row — otherwise an out-of-range selection
+  # would silently offer the previous row's keys.
+  [ -z "$(_home_row_kind_at "$items" 99)" ] || false
+}
