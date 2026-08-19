@@ -379,11 +379,6 @@ adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 
-  local re_custom='"customTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_title='"aiTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_text='"text"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_content='"content"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-
   # TAIL-FIRST (bounded): a /rename can land ANYWHERE in the transcript — deep in
   # a long session, far past the head window below. Claude re-emits the
   # custom-title line near the end, so scan the last slice FIRST for the NEWEST
@@ -394,14 +389,23 @@ adapter_title_for_file() {
   # `clikae resume`/home/clean for any session renamed after its first 100 lines
   # — the two views silently drifted from the board (2026-07-21 incident: a
   # session renamed "voxel@cvertex" at transcript line 13845 listed as "cvertex").
-  local tail_custom="" tail_ai="" line
-  while IFS= read -r line; do
-    if [[ "$line" == *'"customTitle"'* ]] && [[ $line =~ $re_custom ]]; then
-      tail_custom="${BASH_REMATCH[1]}"
-    elif [[ "$line" == *'"aiTitle"'* ]] && [[ $line =~ $re_title ]]; then
-      tail_ai="${BASH_REMATCH[1]}"
-    fi
-  done < <(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null)
+  # 🔴 ONE grep over the slice, not a bash loop over every line in it. This used
+  # to `while read` the whole 512 KiB tail and run two `[[ =~ ]]` per line — in
+  # bash 3.2, against lines that can each be megabytes (an inlined tool result).
+  # Measured on the maintainer's largest real transcript (370 MB): 262.7 ms for
+  # ONE title, and the board asks for several before it can draw. The grep form
+  # is exactly what the sibling extractor _claude_meta_for_file (90 lines above,
+  # same file, same precedence rules) has always used; this one simply never
+  # adopted it. `tail -n 1` keeps the LAST match, which is the semantics the
+  # loop had. Every grep guarded: a no-match must not abort under pipefail.
+  local tail_custom="" tail_ai="" _slice
+  _slice="$(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null || true)"
+  tail_custom="$(printf '%s' "$_slice" \
+    | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  tail_ai="$(printf '%s' "$_slice" \
+    | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
 
   # HEAD window (bounded): an EARLY customTitle, else the latest aiTitle, else the
   # opening user message. A USER-set title (/rename →
@@ -409,23 +413,37 @@ adapter_title_for_file() {
   # aiTitle — see the twin comment on _claude_meta_for_file above for why
   # (2026-07-11 incident). Scan the full bounded window (no early break) so a
   # rename that lands AFTER an earlier ai-title within these 100 lines still wins.
-  local line_in idx_in=0 max_lines_in=100 custom_in="" ai_in="" user_msg_in=""
-  while IFS= read -r line_in; do
-    idx_in=$((idx_in + 1))
-    [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"customTitle"'* ]] && [[ $line_in =~ $re_custom ]]; then
-      custom_in="${BASH_REMATCH[1]}"
-    elif [[ "$line_in" == *'"aiTitle"'* ]] && [[ $line_in =~ $re_title ]]; then
-      ai_in="${BASH_REMATCH[1]}"
-    fi
-    if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
-      if [[ $line_in =~ $re_text ]]; then
-        user_msg_in="${BASH_REMATCH[1]}"
-      elif [[ $line_in =~ $re_content ]]; then
-        user_msg_in="${BASH_REMATCH[1]}"
-      fi
-    fi
-  done < "$f" 2>/dev/null
+  # 🔴 grep here too, and this half is a HANG not a slowdown. bash's `[[ =~ ]]`
+  # runs the nested-star `(([^"\]|\\.)*)` with an exponential backtracker:
+  # measured on a real transcript line of 229,385 bytes, one match attempt did
+  # not finish in 30 SECONDS — and neither did the same regex against just the
+  # first 4 KB of that line, so trimming the input does not rescue it. The same
+  # extraction with grep over the whole 512 KiB tail takes 22 ms.
+  #
+  # A transcript earns such a line the moment a tool result or a pasted file is
+  # inlined into one of its first hundred, and the board asks for a title on
+  # every recent session — so this was a board that could simply stop, with no
+  # error, on ordinary content. Found because a whole-store differential run sat
+  # on one 0.3 MB file for 35 minutes.
+  local custom_in="" ai_in="" user_msg_in="" _head _uline
+  _head="$(head -n 100 "$f" 2>/dev/null || true)"
+  custom_in="$(printf '%s' "$_head" \
+    | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  ai_in="$(printf '%s' "$_head" \
+    | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  # The opening user message: the FIRST user line, then its "text" (the array
+  # shape) or, failing that, its "content" (the plain-string shape).
+  _uline="$(printf '%s' "$_head" | LC_ALL=C grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' 2>/dev/null || true)"
+  if [ -n "$_uline" ]; then
+    user_msg_in="$(printf '%s' "$_uline" \
+      | LC_ALL=C grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+      | head -n 1 | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+    [ -n "$user_msg_in" ] || user_msg_in="$(printf '%s' "$_uline" \
+      | LC_ALL=C grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+      | head -n 1 | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  fi
 
   # Precedence mirrors _claude_meta_for_file (the board's extractor) so the two
   # views can't drift again: newest customTitle (tail → head) outranks aiTitle
@@ -435,6 +453,19 @@ adapter_title_for_file() {
   [ -n "$stitle" ] || stitle="$tail_ai"
   [ -n "$stitle" ] || stitle="$ai_in"
   [ -n "$stitle" ] || stitle="$user_msg_in"
+  # 🔴 CAP BEFORE CLEANING. The three `${//}` substitutions below are global and
+  # bash runs them in roughly O(n²): on a title taken from a 229 KB user line —
+  # which is what the opening-message fallback yields when a tool result or a
+  # pasted file is inlined — they did not finish in 60 SECONDS. That is the
+  # second half of the same hang the grep rewrite above fixed, and it survived
+  # the first fix because the extraction was no longer slow, only the cleaning.
+  #
+  # A caller renders this in a handful of columns, so nothing past a couple of
+  # hundred characters is ever seen. _claude_meta_for_file already caps at 200
+  # for exactly this reason; this function never did. Cut generously (the cap is
+  # on BYTES here and the display truncation is on COLUMNS, so leave room for a
+  # multibyte title to still have enough to show).
+  [ "${#stitle}" -gt 400 ] && stitle="${stitle:0:400}"
   stitle="${stitle//\\n/ }"
   stitle="${stitle//\\t/ }"
   stitle="${stitle//\\\"/\"}"
