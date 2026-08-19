@@ -43,8 +43,54 @@ EOF
 # empty. agy keeps no account email on disk except in that log (the login itself
 # lives in the Keychain), so this is the one honest read. Shared by `clikae list`
 # and the home board so the two agree on agy's ACCOUNT column.
+# It used to `grep -r` the WHOLE log directory and take the last match. agy writes
+# one log per launch and never prunes, so on a tank in daily use that became 362
+# files / 17 MB re-read on every single board frame — 198 ms of a 708 ms board,
+# for one account label, growing with every launch. The board got slower the more
+# you used it.
+#
+# Two things that read as bugs against the description above fall out of the fix:
+#   · "most recent" was readdir order, not time. Whichever file the filesystem
+#     happened to hand back last won. It agrees with recency only because the
+#     names sort chronologically AND the directory happens to come back sorted —
+#     neither is promised. Re-log a tank into a different Google account and the
+#     column could keep showing the old one. Newest mtime first, first hit wins.
+#   · agy sometimes writes a NUL byte into a log, and `grep` without -a treats
+#     that whole file as binary and prints NOTHING for it. The account in such a
+#     log was invisible: a tank whose only logs are binary showed a blank column.
+#
+# The read is bounded from the HEAD, not the tail: the login line is written at
+# launch, and across all 372 logs on the dogfood machine the last email= sat at
+# byte 23,200 at the very furthest. 256 KiB is an order of magnitude of headroom;
+# a tail read would have missed it completely on the 841 KB logs.
+CLIKAE_AGY_LOG_HEAD_BYTES="${CLIKAE_AGY_LOG_HEAD_BYTES:-262144}"   # 256 KiB
+
+# _agy_email_scan <file> -> the last account named in this ONE log, or nothing.
+# -a because agy writes NUL bytes into these; without it grep calls the file
+# binary and prints nothing at all.
+_agy_email_scan() {
+  local hit
+  hit="$(head -c "$CLIKAE_AGY_LOG_HEAD_BYTES" "$1" 2>/dev/null \
+           | grep -aohE 'email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+           | tail -n 1)" || true
+  [ -n "$hit" ] && printf '%s\n' "${hit#email=}"
+  return 0
+}
+
 agy_email() {
-  local dir="$1"
-  grep -rhoE 'email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
-    "$dir/antigravity-cli/log" 2>/dev/null | tail -n 1 | sed 's/^email=//'
+  local d="$1/antigravity-cli/log" f hit
+  # On a real install `log` is a DIRECTORY of one file per launch. Accept a plain
+  # file too — the old `grep -r` took either without noticing the difference, and
+  # a layout that stops working silently is exactly the kind of thing that shows
+  # up as a blank account column rather than as an error.
+  [ -f "$d" ] && { _agy_email_scan "$d"; return 0; }
+  [ -d "$d" ] || return 0
+  while IFS= read -r f <&3; do
+    [ -f "$f" ] || continue
+    hit="$(_agy_email_scan "$f")"
+    [ -n "$hit" ] && { printf '%s\n' "$hit"; return 0; }
+    # Process substitution, not a heredoc: a heredoc would fork a subshell just to
+    # hold the list. Read on fd 3 so the loop body keeps its own stdin.
+  done 3< <(sessions_by_mtime "$d"/* | cut -d' ' -f2-)
+  return 0
 }

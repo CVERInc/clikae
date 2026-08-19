@@ -111,8 +111,20 @@ transcript_tail() {
 # SILENT for anyone whose store lacks even one engine's directory (a
 # single-engine new user, i.e. most of them). Missing paths are this function's
 # normal case — the contract is "print what exists", so status is always 0.
+# Which `stat` this machine has cannot change while we run, but the probe for it
+# (`stat --version | grep`) is two forks and was paying them on EVERY call — and
+# the resume picker, every adapter's recent-session list and the board's agy
+# account column all call this repeatedly. Ask the once.
+_CLIKAE_STAT_FMT=""
 sessions_by_mtime() {
-  if stat --version 2>/dev/null | grep -q GNU; then
+  if [ -z "$_CLIKAE_STAT_FMT" ]; then
+    if stat --version 2>/dev/null | grep -q GNU; then
+      _CLIKAE_STAT_FMT='%Y %n'          # GNU
+    else
+      _CLIKAE_STAT_FMT='%m %N'          # BSD
+    fi
+  fi
+  if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
     stat -c '%Y %n' "$@" 2>/dev/null | sort -rn || true
   else
     stat -f '%m %N' "$@" 2>/dev/null | sort -rn || true
