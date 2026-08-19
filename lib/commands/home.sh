@@ -278,6 +278,18 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
+  # The resume list is section 4 — the LAST thing emitted — and it shares nothing
+  # with the sections above it: one walks this directory's recent transcripts, the
+  # others walk the tank store. It is also almost exactly as expensive as all of
+  # them together, so start it now, in the background, and collect it at the end.
+  # The output order is unchanged; only the waiting is.
+  local _rf="" _rpid=""
+  _rf="$(mktemp "${TMPDIR:-/tmp}/ck-recent.XXXXXX" 2>/dev/null)" || _rf=""
+  if [ -n "$_rf" ]; then
+    _home_recent_rows >"$_rf" 2>/dev/null &
+    _rpid=$!
+  fi
+
   # Frame-scoped caches: the shell rc read once instead of per tank row, and the
   # per-ENGINE "which tank is active" answer computed once per engine instead of
   # once per row. Both are rebuilt on every call, so nothing goes stale between
@@ -377,8 +389,15 @@ EOF
     )
   done
 
-  # 4) Resume list — this dir's most recent resumable sessions, if any.
-  _home_recent_rows
+  # 4) Resume list — this dir's most recent resumable sessions, if any. Started at
+  # the top of this function; here is where we finally wait for it.
+  if [ -n "$_rf" ]; then
+    _home_reap "$_rpid"
+    cat "$_rf" 2>/dev/null || true
+    rm -f "$_rf"
+  else
+    _home_recent_rows          # no writable temp dir — do it the plain way
+  fi
 }
 
 # Which tanks/targets are currently over quota? Emit one row per DRY thing:
