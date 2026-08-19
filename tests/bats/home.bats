@@ -390,6 +390,36 @@ _agy_log() { # <line>
   [[ "$output" == *"claude/beta"* ]] || false
 }
 
+@test "_home_alias_forv finds the same alias the per-row reader did" {
+  # The board now reads the shell rc ONCE per frame and looks each tank up in a
+  # memo, instead of forking detect_shell_rc + awk per row. A memo that silently
+  # returned nothing would look exactly like "this tank has no alias" — which is
+  # a legitimate state — so nothing else on the board would go red. Pin it
+  # against the original per-row reader, which is still there.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/shell_rc.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae alias claude alpha
+  clikae init claude beta
+  clikae alias claude beta --name my-custom-name
+  clikae init claude gamma          # deliberately NO alias
+
+  local _ALIAS_MEMO=$'\n' _ALIASN=""
+  _home_alias_prime
+  _home_alias_forv claude alpha
+  [ "$_ALIASN" = "$(_home_alias_for claude alpha)" ] || false
+  [ "$_ALIASN" = "claude-alpha" ] || false
+  _home_alias_forv claude beta
+  [ "$_ALIASN" = "$(_home_alias_for claude beta)" ] || false
+  [ "$_ALIASN" = "my-custom-name" ] || false      # a custom name is carried
+  _home_alias_forv claude gamma
+  [ -z "$_ALIASN" ] || false                       # no alias stays no alias
+}
+
 @test "reordering never writes a solo tank into the order file" {
   # _home_reorder materialises the WHOLE order when you press [ or ]. If solo
   # tanks were still in order_list, one keypress re-wrote them back into the file

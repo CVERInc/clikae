@@ -33,6 +33,27 @@ _human_age() {
 
 # _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.
+# _home_active_forv <cli> — _home_active_for, memoized per ENGINE, into $_ACTIVE.
+#
+# 🔴 The answer depends only on the ENGINE, never on the tank — it reads one env
+# var (or one symlink for a target) — yet the board asked it once per ROW. On a
+# nine-tank store spanning three engines that is nine subshells, each sourcing a
+# target file or loading an adapter, to compute three answers. Memo is a
+# newline-fenced string because bash 3.2 has no associative arrays; it is
+# frame-local (each _home_items call starts with an empty one), so a tank
+# switched in another terminal is still picked up on the next render.
+_home_active_forv() {
+  local cli="$1" rest
+  case "$_ACTIVE_MEMO" in
+    *$'\n'"$cli"$'\037'*)
+      rest="${_ACTIVE_MEMO#*$'\n'"$cli"$'\037'}"
+      _ACTIVE="${rest%%$'\n'*}"
+      return 0 ;;
+  esac
+  _ACTIVE="$(_home_active_for "$cli")"
+  _ACTIVE_MEMO="$_ACTIVE_MEMO$cli"$'\037'"$_ACTIVE"$'\n'
+}
+
 _home_active_for() {
   local cli="$1"
   (
@@ -61,6 +82,42 @@ _home_active_for() {
 # _home_alias_for <engine> <tank>  -> the managed alias NAME from the shell rc,
 # or empty. The block opens with `# >>> clikae:<engine>.<tank> >>>` and the alias
 # line is `alias <name>=...` (zsh/bash) or `alias <name> ...` (fish).
+# _home_alias_prime — read the shell rc ONCE and extract every clikae-managed
+# alias into $_ALIAS_MEMO as "<engine>.<tank>\037<alias-name>\n" lines.
+#
+# 🔴 _home_alias_for forks `detect_shell_rc` AND an `awk` over the whole rc file
+# for EVERY tank row. The rc file does not change while a frame is being built,
+# and one pass can find all of them — nine tanks meant eighteen forks to read
+# one file nine times. Same frame-scoped-cache shape as _home_cols_prime.
+_home_alias_prime() {
+  _ALIAS_MEMO=$'\n'
+  local rc; rc="$(detect_shell_rc)"
+  [ -f "$rc" ] || return 0
+  _ALIAS_MEMO=$'\n'"$(awk '
+    /^# >>> clikae:/ { id = $0; sub(/^# >>> clikae:/, "", id); sub(/ >>>$/, "", id); inb = 1; next }
+    /^# <<< clikae:/ { inb = 0; next }
+    inb && /^alias / {
+      line = $0
+      sub(/^alias /, "", line)
+      sub(/[ =].*$/, "", line)
+      if (id != "" && line != "") printf "%s\037%s\n", id, line
+      id = ""
+    }
+  ' "$rc" 2>/dev/null)"$'\n'
+  return 0
+}
+
+# _home_alias_forv <engine> <tank> — the memoized lookup, into $_ALIASN.
+_home_alias_forv() {
+  local id="$1.$2" rest
+  case "$_ALIAS_MEMO" in
+    *$'\n'"$id"$'\037'*)
+      rest="${_ALIAS_MEMO#*$'\n'"$id"$'\037'}"
+      _ALIASN="${rest%%$'\n'*}" ;;
+    *) _ALIASN="" ;;
+  esac
+}
+
 _home_alias_for() {
   local cli="$1" profile="$2" rc id
   rc="$(detect_shell_rc)"
@@ -215,6 +272,13 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
+  # Frame-scoped caches: the shell rc read once instead of per tank row, and the
+  # per-ENGINE "which tank is active" answer computed once per engine instead of
+  # once per row. Both are rebuilt on every call, so nothing goes stale between
+  # renders — a tank switched in another terminal shows up on the next one.
+  local _ALIAS_MEMO=$'\n' _ACTIVE_MEMO=$'\n' _ALIASN="" _ACTIVE=""
+  _home_alias_prime
+
   # 0) Live — what is running on this machine right now. First because it is the
   # most immediate thing on the page: a live session is one keypress from being
   # back in, where a resume row is a relaunch. Usually 0-3 rows, so it does not
@@ -255,8 +319,8 @@ _home_items() {
     else
       label=""
     fi
-    alias="$(_home_alias_for "$cli" "$profile")"
-    active="$(_home_active_for "$cli")"
+    _home_alias_forv "$cli" "$profile"; alias="$_ALIASN"
+    _home_active_forv "$cli"; active="$_ACTIVE"
     if [ -n "$active" ] && [ "$profile" = "$active" ]; then a=1; else a=0; fi
     local _row; _row="$(printf 'tank\037%s\037%s\037%s\037%s\037%d\037' "$cli" "$profile" "$label" "$alias" "$a")"
     if tank_is_solo "$cli" "$profile"; then _solo="$_solo$_row"$'\n'; else _fleet="$_fleet$_row"$'\n'; fi
