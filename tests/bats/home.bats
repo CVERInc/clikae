@@ -863,3 +863,64 @@ _agy_log() { # <line>
   done
   [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
 }
+
+@test "_home_refresh returns the fuel scan intact, however big it gets" {
+  # The board now overlaps the fuel scan with the item build instead of running
+  # them back to back. Both halves have to survive that. The dry set is the
+  # fragile one: on a healthy fleet it is EMPTY, so a refresh that silently
+  # dropped it would look perfectly correct on any machine where nothing is dry
+  # — including this one. So feed it a specimen that is large and uneven.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  # ~100 KB, well past a pipe buffer: an implementation that handed the scan
+  # over a pipe instead of a file would block its writer and deadlock on `wait`.
+  # Distinct first/last/count so truncation at EITHER end is visible.
+  _home_items()   { printf 'ITEM-ONE\nITEM-TWO\n'; }
+  _home_dry_set() { local i; for ((i = 1; i <= 4000; i++)); do
+                      printf 'engine-%04d\037tank-%04d\037resets at %02d:00\n' "$i" "$i" $(( i % 24 ))
+                    done; }
+
+  local items dry
+  _home_refresh
+
+  [ "$items" = "$(printf 'ITEM-ONE\nITEM-TWO')" ] || false
+  [ "$(printf '%s\n' "$dry" | wc -l | tr -d ' ')" = "4000" ] || false
+  [[ "$dry" == "engine-0001"$'\037'"tank-0001"$'\037'"resets at 01:00"* ]] || false
+  [[ "$dry" == *"engine-4000"$'\037'"tank-4000"$'\037'"resets at 16:00" ]] || false
+}
+
+@test "_home_refresh survives a fuel scan that fails" {
+  # The scan runs as a background job now, so its exit status reaches the board
+  # through `wait`. Under `set -e` an unguarded non-zero there kills the board
+  # outright — you'd lose the whole dashboard because one tank's log was
+  # unreadable. The items must still arrive.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  set -eo pipefail                      # the shell the board actually runs under
+
+  _home_items()   { printf 'STILL-HERE\n'; }
+  _home_dry_set() { printf 'partial\n'; return 3; }
+
+  local items dry
+  _home_refresh
+  [ "$items" = "STILL-HERE" ] || false
+  [ "$dry" = "partial" ] || false       # whatever it managed to emit is kept
+}
+
+@test "_home_refresh falls back to serial when there is no writable temp dir" {
+  # A full or read-only TMPDIR is exactly when you least want to lose the board.
+  # The fallback here is also the one line a careless batch-edit can turn into a
+  # self-call — which does not fail loudly, it recurses until the shell dies.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  mktemp() { return 1; }                # the only way in is the fallback
+  _home_items()   { printf 'FELL-BACK\n'; }
+  _home_dry_set() { printf 'dry-row\n'; }
+
+  local items dry
+  _home_refresh
+  [ "$items" = "FELL-BACK" ] || false
+  [ "$dry" = "dry-row" ] || false
+}

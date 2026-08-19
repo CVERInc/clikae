@@ -434,6 +434,36 @@ EOF
   done
 }
 
+# _home_refresh -> recompute BOTH board inputs into the caller's $items/$dry.
+#
+# Every refresh site used to run these back to back, but the two share nothing:
+# _home_items walks the order and the live sessions, _home_dry_set scans fuel.
+# Running them in series just adds the two I/O bills together. So start the fuel
+# scan in the background and let it overlap the (longer) item build — the board
+# then waits for the SLOWER of the two, not for their sum. Callers must already
+# have `items` and `dry` in scope; bash scoping is dynamic, so a plain assignment
+# here lands in the caller's locals.
+#
+# The handoff is a mktemp file, not a pipe: _home_dry_set's output can outgrow a
+# pipe buffer once many tanks are dry, and a blocked writer would deadlock the
+# board against its own `wait`. If mktemp fails we simply fall back to serial.
+_home_refresh() {
+  local _df _dpid
+  _df="$(mktemp "${TMPDIR:-/tmp}/ck-dry.XXXXXX" 2>/dev/null)" || _df=""
+  if [ -z "$_df" ]; then
+    # No writable temp dir — do it the old serial way rather than recursing.
+    items="$(_home_items)"; dry="$(_home_dry_set)"; return 0
+  fi
+  _home_dry_set >"$_df" 2>/dev/null &
+  _dpid=$!
+  items="$(_home_items)"
+  # A non-zero status from the background scan must not abort the board under
+  # `set -e`, and a job that already exited still needs reaping — hence the guard.
+  wait "$_dpid" 2>/dev/null || true
+  dry="$(cat "$_df" 2>/dev/null || true)"
+  rm -f "$_df"
+}
+
 # Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
 # and returns 0 when dry, 1 when not — so:  if r="$(_home_is_dry "$dry" c p)"; then
 _home_is_dry() {
@@ -2245,7 +2275,7 @@ _home_pick() {
         trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
         tui_screen_enter
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        _home_refresh
         ;;
       A)
         # PICK the autonomy level; do not blind-cycle it.
@@ -2326,20 +2356,20 @@ _home_pick() {
       # --- stay actions: mutate, then return to the live menu ---
       n)
         _home_stay _home_new_tank "$sel_cli"
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        _home_refresh
         ;;
       a)
         # v0.5.3: `a` renames the TANK (carries alias + login); alias-only edits
         # are at `clikae alias` on the CLI.
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_rename_tank "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       d)
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_remove_tank "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       s)
@@ -2369,7 +2399,7 @@ EOF
         # normal screen via _home_stay, then the board refreshes.
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_memory "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       c)
@@ -2378,7 +2408,7 @@ EOF
         # first-class key from the hub, and an adjacent screen returns where
         # you came from (grammar §8.1). Row-independent, like `n`.
         _home_stay "$CLIKAE_BIN" clean
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        _home_refresh
         ;;
     esac
   done
@@ -2479,7 +2509,7 @@ EOF
     return 0
   fi
 
-  local items dry; items="$(_home_items)"; dry="$(_home_dry_set)"
+  local items dry; _home_refresh
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
     # A newer clikae out? Offer it first (codex-style), before the board. If an
