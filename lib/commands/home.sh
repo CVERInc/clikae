@@ -1910,14 +1910,86 @@ _home_pick_draw() {
   # Single-write flicker fix: _home_pick_draw_body composes the whole frame via
   # printf to a captured string; we then write it to the terminal in ONE printf.
   # Repainting line-by-line (a write per row) is what still flickered.
-  local _frame
-  _frame="$(_home_pick_draw_body "$@")"
   local _lsz _lrows
   _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
   _lrows="${_lsz%% *}"
-  [ -n "$_lrows" ] || _lrows=24
+  case "$_lrows" in ''|*[!0-9]*) _lrows=24 ;; esac
+
+  local _frame
+  _frame="$(_home_pick_draw_body "$@")"
+
+  # 🔴 THE BOARD HAD NO HEIGHT. 0.28.0 made every row fit the terminal's WIDTH;
+  # nothing ever made the frame fit its HEIGHT, and the frame is a constant size
+  # for a given fleet — measured on a real store, 21 lines at every terminal
+  # height from 12 to 40. On anything shorter the top scrolled away: the
+  # wordmark, the keybar that teaches the keys, and the first rows, with the
+  # selection cursor able to sit off-screen entirely.
+  #
+  # Measure and only then trim, rather than predicting how many rows fit: rows
+  # are NOT a fixed height (a tank row is one line, a resume row with a recap is
+  # three, each section header is another) and the chrome itself grows from 3
+  # lines to 5 as the keybar wraps. A frame that already fits — every board that
+  # fits today — is emitted unchanged and pays nothing for this.
+  # The budget is rows-1, not rows: the frame homes the cursor and then advances
+  # one line per newline, so a frame with exactly <rows> newlines leaves the
+  # cursor one line past the bottom and the terminal scrolls. What it loses first
+  # is only the blank top margin, which is why this is easy to not notice — and
+  # one row further would take the wordmark. The invariant worth having is the
+  # simple one: the frame never scrolls the screen.
+  local _h _budget=$(( _lrows - 1 ))
+  [ "$_budget" -lt 1 ] && _budget=1
+  _h="$(_home_frame_height "$_frame")"
+  if [ "$_h" -gt "$_budget" ]; then
+    _frame="$(_home_pick_draw_windowed "$_budget" "$@")"
+  fi
+
   # Synchronized Output: BSU → frame → park cursor → ESU
   printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$_lrows"
+}
+
+# _home_frame_height <frame> -> how many terminal lines it occupies.
+# Counts newlines with a pure substitution — no fork, and this runs on the redraw
+# path. The frame carries ANSI escapes, none of which contain a newline.
+_home_frame_height() {
+  local nl="${1//[!$'\n']/}"
+  printf '%s' "${#nl}"
+}
+
+# _home_pick_draw_windowed <rows> <items> <sel> <dry> [filter]
+#
+# Shrink the drawn row window until the frame fits <rows>, keeping the selection
+# inside it. Centred on the selection like the resume picker's viewport, which is
+# the convention this follows rather than inventing a second one.
+#
+# The loop re-measures instead of computing a target, because dropping a row does
+# not free a predictable number of lines — dropping the last row of a section
+# takes its header with it, and a resume row is worth three tank rows. It shrinks
+# monotonically, so it terminates; in practice it settles in one or two passes.
+_home_pick_draw_windowed() {
+  local rows="$1" items="$2" sel="$3" dry="$4" filter="${5:-}"
+  local n vis start end hidden frame h guard=0
+  n="$(_home_frame_height "$items")"
+  [ -n "$items" ] && n=$(( n + 1 ))          # last row carries no trailing newline
+  [ "$n" -gt 0 ] || { _home_pick_draw_body "$items" "$sel" "$dry" "$filter"; return 0; }
+
+  vis="$n"
+  while :; do
+    vis=$(( vis - 1 ))
+    [ "$vis" -lt 1 ] && vis=1
+    start=$(( sel - vis / 2 ))
+    [ "$start" -lt 0 ] && start=0
+    end=$(( start + vis - 1 ))
+    if [ "$end" -ge "$n" ]; then end=$(( n - 1 )); start=$(( end - vis + 1 )); fi
+    [ "$start" -lt 0 ] && start=0
+    hidden=$(( n - (end - start + 1) ))
+    frame="$(_home_pick_draw_body "$items" "$sel" "$dry" "$filter" "$start" "$end" "$hidden")"
+    h="$(_home_frame_height "$frame")"
+    [ "$h" -le "$rows" ] && break
+    [ "$vis" -le 1 ] && break                # nothing left to give
+    guard=$(( guard + 1 ))
+    [ "$guard" -gt "$n" ] && break           # cannot loop longer than the list
+  done
+  printf '%s' "$frame"
 }
 # _home_total_sessions -> ONE line: how many session files the whole store holds.
 #
@@ -1958,8 +2030,14 @@ _home_total_sessions() {
   _home_total_sessions_scan
 }
 
+# <start> and <end> bound which ROW INDICES are drawn; empty means all of them,
+# which is what every frame that fits does. <hidden> is how many rows the window
+# leaves out, and it is drawn as its own line rather than left implicit — a board
+# silently showing a subset is the same defect the filter indicator exists for
+# ("where did my tank go" with no answer on screen).
 _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
+  local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
   _home_cols_prime
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
@@ -2024,6 +2102,12 @@ _home_pick_draw_body() {
   printf '\n'
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
+    # Outside the window: still counted, not drawn. The section headers below
+    # fire on the first row of their kind that is actually DRAWN, so a window
+    # that starts mid-section still gets its header.
+    if [ -n "$_vps" ] && { [ "$idx" -lt "$_vps" ] || [ "$idx" -gt "$_vpe" ]; }; then
+      idx=$((idx + 1)); continue
+    fi
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
       live)
@@ -2160,6 +2244,12 @@ LIVEACT
   done <<EOF
 $items
 EOF
+  # Say how many rows the window is holding back. Reuses T_K_MOVE rather than
+  # adding a string: a new one would cost nine translations to say what the
+  # keybar already says in all nine.
+  if [ "${_vphid:-0}" -gt 0 ]; then
+    printf '    %b⋯ %d · ↑↓ %s%b\n' "$__C_DIM" "$_vphid" "$T_K_MOVE" "$__C_RESET"
+  fi
   if [ "$printed_resume" -eq 1 ]; then
     # The footer is a full localized sentence (54 columns in en-US, longer in
     # de/fr/pt) and was printed with no width budget at all — so on a narrow

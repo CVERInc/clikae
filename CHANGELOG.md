@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The board did not fit the terminal's HEIGHT.** 0.28.0 made every row fit its
+  WIDTH; nothing ever made the frame fit the screen it is drawn on. Measured on a
+  real store, the board emitted the same 21 lines at every terminal height from 12
+  to 40 — so on anything shorter the top simply scrolled away: the wordmark, the
+  keybar that teaches the keys, and the first rows, with the selection cursor able
+  to sit off-screen entirely, moving a highlight nobody could see.
+
+  The frame is now measured and, only if it overflows, redrawn through a window
+  centred on the selection — the same viewport the resume picker has always had,
+  rather than a second mechanism. Measure-then-trim instead of predicting how many
+  rows fit, because rows are not a fixed height (a tank row is one line, a resume
+  row with a recap is three, each section header another) and the chrome itself
+  grows from three lines to five as the keybar wraps. A board that already fits is
+  emitted unchanged and pays nothing for this.
+
+  The hidden count is drawn as its own line rather than left implicit: a board
+  silently showing a subset is the defect the filter indicator already exists for.
+  It reuses the keybar's own wording, so it costs no new translations.
+
 ### Added
 
 - **A pre-push guard refuses a push that changes `lib/` or `bin/` without

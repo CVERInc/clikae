@@ -410,15 +410,117 @@ def mode_resize():
           'widest: %r' % (max(over, key=len)[:120] if over else ''))
 
 
+
+
+def mode_height():
+    """The board must fit the terminal's HEIGHT, and keep the selection on screen.
+
+    0.28.0 made every row fit the terminal's WIDTH. Nothing ever made the frame
+    fit its HEIGHT: measured on a real store, the board emitted the same 21 lines
+    at every terminal height from 12 to 40. On anything shorter the top scrolled
+    away — the wordmark, the keybar that teaches the keys, and the first rows —
+    and the selection cursor could sit off-screen entirely, so `↑` moved a
+    highlight nobody could see.
+
+    Three assertions, and the third is the one that keeps the fix honest:
+      1. on a SHORT terminal the frame never exceeds it,
+      2. jumping to the last row keeps the cursor visible,
+      3. on a TALL terminal the board is drawn WHOLE, with no window indicator —
+         a viewport that engages when it is not needed would be a regression
+         dressed as a feature, and every existing board fits.
+    """
+    import time as _t, select as _sel, re as _re
+    tanks = tuple(('claude', 'tank%02d' % i) for i in range(1, 15))
+    env = sandbox(tanks=tanks)
+
+    def frame_at(rows, cols, keys=b''):
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+
+        def make_ctty():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        p = subprocess.Popen([CLIKAE, 'home'], stdin=slave, stdout=slave, stderr=slave,
+                             preexec_fn=make_ctty, env=env, close_fds=True)
+        os.close(slave)
+
+        def pump(seconds):
+            buf = b''
+            t0 = _t.time()
+            while _t.time() - t0 < seconds:
+                r, _, _ = _sel.select([master], [], [], 0.2)
+                if r:
+                    try:
+                        c = os.read(master, 8192)
+                    except OSError:
+                        break
+                    if not c:
+                        break
+                    buf += c
+            return buf
+
+        first = pump(2.5)
+        after = b''
+        if keys:
+            os.write(master, keys)
+            after = pump(2.0)
+        try:
+            os.write(master, b'q')
+            p.wait(timeout=8)
+        except Exception:
+            p.kill()
+        os.close(master)
+        return first, after
+
+    def strip(b):
+        t = b.decode(errors='replace').replace('\r', '')
+        return _re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07', '', t)
+
+    # --- 1. a short terminal ------------------------------------------------
+    ROWS = 14
+    first, _ = frame_at(ROWS, 100)
+    txt = strip(first)
+    # The frame homes the cursor and advances one line per newline, so it must
+    # carry at most rows-1 of them or the screen scrolls.
+    nl = txt.count('\n')
+    check('the board fits a %d-row terminal' % ROWS, nl <= ROWS - 1,
+          'frame carries %d newlines, budget %d' % (nl, ROWS - 1))
+    check('a windowed board says how many rows it is holding back', '⋯' in txt,
+          'no ⋯ indicator in a frame that cannot show every row')
+
+    # --- 2. the selection stays inside the window ---------------------------
+    _f, after = frame_at(ROWS, 100, keys=b'G')
+    gtxt = strip(after) or strip(_f)
+    check('jumping to the last row keeps the cursor on screen', '❯' in gtxt,
+          'no cursor mark after G')
+    check('jumping to the last row scrolls the last tank into view',
+          'tank14' in gtxt, 'tank14 not drawn after G')
+
+    # --- 3. control: a TALL terminal is untouched ---------------------------
+    tall, _ = frame_at(60, 100)
+    ttxt = strip(tall)
+    check('a board that fits is drawn whole, with no window indicator',
+          '⋯' not in ttxt, 'the viewport engaged on a 60-row terminal')
+    missing = [t for _e, t in tanks if t not in ttxt]
+    check('a board that fits shows every tank', not missing,
+          'missing from a 60-row frame: %s' % (', '.join(missing[:5])))
+
+
 MODES = {'home': mode_home, 'prompts': mode_prompts, 'resume': mode_resume,
-         'size': mode_size, 'resize': mode_resize}
+         'size': mode_size, 'resize': mode_resize, 'height': mode_height}
 
 
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else 'all'
     try:
         if which == 'all':
-            for name in ('home', 'prompts', 'resume', 'size', 'resize'):
+            # Derived from MODES, not a second hand-kept list. The literal that
+            # used to live here silently excluded any mode added after it, which
+            # is a test that exists and never runs — the same shape as a guard
+            # that cannot fire, and just as invisible. MODES preserves insertion
+            # order, so the run order is still the declared one.
+            for name in MODES:
                 print('--- ' + name)
                 MODES[name]()
         elif which in MODES:
