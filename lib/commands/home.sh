@@ -414,6 +414,24 @@ EOF
 # profile=$tname). Anything not scannable is simply never marked dry (no guessing).
 _home_dry_set() {
   local cli profile reset ep
+  # The two halves below read entirely different things — the tanks' transcripts,
+  # and the vendors' own limit logs — so the second one starts here and is
+  # collected after the first. On the maintainer's machine the target half is a
+  # 53 ms full-file grep of a 3.2 MB agy cli.log that grows with every launch, and
+  # it was simply added to the tank scan's bill. Emission order is unchanged:
+  # tanks first, then targets.
+  #
+  # 🔴 The scan itself is NOT bounded or narrowed to make it cheaper. It decides
+  # which tanks are drawn as out of fuel, this machine's log happens to contain no
+  # quota line at all, and a change with no specimen to test it against is a guess
+  # about the one thing the board must not get wrong.
+  local _gf="" _gpid=""
+  _gf="$(mktemp "${TMPDIR:-/tmp}/ck-tgt.XXXXXX" 2>/dev/null)" || _gf=""
+  if [ -n "$_gf" ]; then
+    _home_dry_targets >"$_gf" 2>/dev/null &
+    _gpid=$!
+  fi
+
   # limit_dry_set scans every tank's fuel ONCE (vs limit_tank_dry per tank, which
   # re-scanned same-account siblings) and emits cli␟profile␟reset for the dry ones.
   while IFS=$'\037' read -r cli profile reset; do
@@ -430,10 +448,21 @@ _home_dry_set() {
 $(list_all_profiles | limit_dry_set)
 EOF
 
-  # Log-only targets (single-account vendors like agy): scan the limit log the
-  # same once-per-render way. Gate on the binary being installed, mirroring
-  # _home_items, so an uninstalled vendor's stale log can't badge a row that
-  # isn't even shown.
+  # Started at the top of this function; here is where we wait for it.
+  if [ -n "$_gf" ]; then
+    _home_reap "$_gpid"
+    cat "$_gf" 2>/dev/null || true
+    rm -f "$_gf"
+  else
+    _home_dry_targets            # no writable temp dir — do it the plain way
+  fi
+}
+
+# Log-only targets (single-account vendors like agy): scan the limit log the
+# same once-per-render way. Gate on the binary being installed, mirroring
+# _home_items, so an uninstalled vendor's stale log can't badge a row that
+# isn't even shown.
+_home_dry_targets() {
   local tfile tname
   for tfile in "$CLIKAE_LIB"/targets/*.sh; do
     [ -f "$tfile" ] || continue
