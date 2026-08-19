@@ -453,33 +453,43 @@ EOF
 # The handoff is a mktemp file, not a pipe: _home_dry_set's output can outgrow a
 # pipe buffer once many tanks are dry, and a blocked writer would deadlock the
 # board against its own `wait`. If mktemp fails we simply fall back to serial.
-_home_refresh() {
-  local _df _dpid
-  _df="$(mktemp "${TMPDIR:-/tmp}/ck-dry.XXXXXX" 2>/dev/null)" || _df=""
-  if [ -z "$_df" ]; then
-    # No writable temp dir — do it the old serial way rather than recursing.
-    items="$(_home_items)"; dry="$(_home_dry_set)"; return 0
-  fi
-  _home_dry_set >"$_df" 2>/dev/null &
-  _dpid=$!
-  items="$(_home_items)"
-  # A non-zero status from the background scan must not abort the board under
-  # `set -e`, and a job that already exited still needs reaping — hence the guard.
-  #
-  # Loop, because a `wait` interrupted by a trapped signal RETURNS (128+n) with the
-  # scan still writing, and we would then read a half-written dry set — a tank that
-  # is out of fuel drawn as fuelled, silently. The board's traps all exit today, so
-  # this cannot currently happen; it is here because the one trap that would break
-  # it is the WINCH handler the resize comment further down keeps circling, and the
-  # failure it would cause is invisible.
+# _home_reap <pid> — wait for one background scan, properly.
+#
+# A non-zero status must not abort the board under `set -e`, and a job that has
+# already exited still needs reaping. The LOOP is the part that matters: a `wait`
+# interrupted by a trapped signal RETURNS (128+n) while the scan is still writing,
+# and the caller would then read a half-written file — a tank that is out of fuel
+# drawn as fuelled, silently. The board's traps all exit today, so this cannot
+# currently fire; it is here because the one trap that would break it is the WINCH
+# handler the resize comment further down keeps circling, and the failure it would
+# cause is invisible.
+_home_reap() {
   local _st
   while :; do
-    _st=0; wait "$_dpid" 2>/dev/null || _st=$?   # `|| ` so set -e cannot abort here
-    [ "$_st" -gt 128 ] && kill -0 "$_dpid" 2>/dev/null && continue
+    _st=0; wait "$1" 2>/dev/null || _st=$?     # `|| ` so set -e cannot abort here
+    [ "$_st" -gt 128 ] && kill -0 "$1" 2>/dev/null && continue
     break
   done
+}
+
+_home_refresh() {
+  local _df _tf _dpid _tpid
+  _df="$(mktemp "${TMPDIR:-/tmp}/ck-dry.XXXXXX" 2>/dev/null)"   || _df=""
+  _tf="$(mktemp "${TMPDIR:-/tmp}/ck-tot.XXXXXX" 2>/dev/null)"   || _tf=""
+  if [ -z "$_df" ] || [ -z "$_tf" ]; then
+    # No writable temp dir — do it the old serial way rather than recursing.
+    [ -n "$_df" ] && rm -f "$_df"
+    [ -n "$_tf" ] && rm -f "$_tf"
+    items="$(_home_items)"; dry="$(_home_dry_set)"; _HOME_TOTAL_SESSIONS=""
+    return 0
+  fi
+  _home_dry_set        >"$_df" 2>/dev/null &  _dpid=$!
+  _home_total_sessions_scan >"$_tf" 2>/dev/null &  _tpid=$!
+  items="$(_home_items)"
+  _home_reap "$_dpid"; _home_reap "$_tpid"
   dry="$(cat "$_df" 2>/dev/null || true)"
-  rm -f "$_df"
+  _HOME_TOTAL_SESSIONS="$(cat "$_tf" 2>/dev/null || true)"
+  rm -f "$_df" "$_tf"
 }
 
 # Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
@@ -1875,7 +1885,7 @@ _home_pick_draw() {
 # Swallow the failure INSIDE the subshell, where it belongs, and pin the result
 # to digits. NB a test for this must `set -o pipefail` itself or it passes
 # vacuously — the bug does not exist without it.
-_home_total_sessions() {
+_home_total_sessions_scan() {
   local chome="${CLIKAE_HOME:-$HOME/.clikae}" n
   n="$( { ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
                 "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
@@ -1883,6 +1893,21 @@ _home_total_sessions() {
            2>/dev/null || true; } | wc -l | tr -d ' ' )"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
+}
+
+# 🔴 ONCE PER REFRESH, NOT ONCE PER KEYPRESS. The scan above lists every session
+# file in the store — 15 ms on the maintainer's — and it was running inside the
+# frame, so every arrow key re-counted 1,400 files to redraw a footer. It now
+# rides along with the fuel scan in _home_refresh, which makes it exactly as
+# fresh as everything else the board is showing rather than more so.
+#
+# The cache has to be filled by _home_refresh and NOT here: the frame is composed
+# inside `$( … ) | while`, two nested subshells, so anything this assigns during
+# a draw is discarded when the frame ends. The lazy scan below is the fallback
+# for callers that never went through a refresh (the unit tests).
+_home_total_sessions() {
+  [ -n "${_HOME_TOTAL_SESSIONS:-}" ] && { printf '%s' "$_HOME_TOTAL_SESSIONS"; return 0; }
+  _home_total_sessions_scan
 }
 
 _home_pick_draw_body() {
@@ -1931,10 +1956,10 @@ _home_pick_draw_body() {
   # new string would have cost 9 translations to say what this already says).
   local _keybar="· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · K $T_K_CLOSE · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT"
   [ -n "$filter" ] && _keybar="· $T_FILTER_PROMPT$(_home_trunc "$filter" 20) · esc $T_K_FILTER · q $T_K_QUIT"
-  _home_wrap_prefixed \
-    "$_keybar" \
-    "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
-    "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
+  local _kbpfx _kbind
+  printf -v _kbpfx '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"
+  _dwidthv "$T_WORDMARK"; _kbind=$(( _DW_W + 2 ))
+  _home_wrap_prefixed "$_keybar" "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2
   # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
   # it was the one row of the INTERACTIVE frame that still ran off a narrow
   # terminal after the 2026-08-16 sweep.
@@ -1943,8 +1968,9 @@ _home_pick_draw_body() {
   # 40 columns) telling you that nothing unusual is set. When autonomy IS raised,
   # that is exactly when it must be visible — clikae may then carry your session
   # onto another account on its own.
-  if [ "$(autonomy_get)" != "ask" ]; then
-    _home_wrap_prefixed "$T_K_AUTO: $(autonomy_get) · [A] change (BETA, claude+codex)" \
+  autonomy_getv                              # asked once, not once per mention
+  if [ "$_AUTONOMY" != "ask" ]; then
+    _home_wrap_prefixed "$T_K_AUTO: $_AUTONOMY · [A] change (BETA, claude+codex)" \
       "  " 2 "$__C_DIM" "$__C_RESET"
   fi
   printf '\n'
