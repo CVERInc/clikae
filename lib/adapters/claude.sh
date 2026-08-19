@@ -398,13 +398,19 @@ adapter_title_for_file() {
   # same file, same precedence rules) has always used; this one simply never
   # adopted it. `tail -n 1` keeps the LAST match, which is the semantics the
   # loop had. Every grep guarded: a no-match must not abort under pipefail.
-  local tail_custom="" tail_ai="" _slice
-  _slice="$(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null || true)"
-  tail_custom="$(printf '%s' "$_slice" \
-    | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+  # ONE pass for BOTH keys. This used to hold the 512 KiB slice in a variable and
+  # push the whole thing back through a pipe twice, once per key — bash reads the
+  # slice out of a subshell, stores it, then writes half a megabyte out again for
+  # each grep. Matching both keys in a single scan leaves only the handful of
+  # matched fragments to sort out, and grep -o preserves file order, so "the last
+  # customTitle" is still the last line that starts with that key.
+  local tail_custom="" tail_ai="" _hits
+  _hits="$(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null \
+    | LC_ALL=C grep -oE '"(customTitle|aiTitle)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        2>/dev/null || true)"
+  tail_custom="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"customTitle"' 2>/dev/null \
     | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-  tail_ai="$(printf '%s' "$_slice" \
-    | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+  tail_ai="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"aiTitle"' 2>/dev/null \
     | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
 
   # HEAD window (bounded): an EARLY customTitle, else the latest aiTitle, else the
@@ -425,13 +431,16 @@ adapter_title_for_file() {
   # every recent session — so this was a board that could simply stop, with no
   # error, on ordinary content. Found because a whole-store differential run sat
   # on one 0.3 MB file for 35 minutes.
+  # Same single-pass treatment as the tail. The head window is only 100 LINES, but
+  # a line can be 229 KB (see above), so it is not automatically small either.
   local custom_in="" ai_in="" user_msg_in="" _head _uline
   _head="$(head -n 100 "$f" 2>/dev/null || true)"
-  custom_in="$(printf '%s' "$_head" \
-    | LC_ALL=C grep -oE '"customTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+  _hits="$(printf '%s\n' "$_head" \
+    | LC_ALL=C grep -oE '"(customTitle|aiTitle)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        2>/dev/null || true)"
+  custom_in="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"customTitle"' 2>/dev/null \
     | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-  ai_in="$(printf '%s' "$_head" \
-    | LC_ALL=C grep -oE '"aiTitle"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+  ai_in="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"aiTitle"' 2>/dev/null \
     | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
   # The opening user message: the FIRST user line, then its "text" (the array
   # shape) or, failing that, its "content" (the plain-string shape).

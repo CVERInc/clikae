@@ -148,9 +148,17 @@ _home_alias_for() {
 CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
 
 _home_recent_rows() {
-  local name proot tdir tank rows sid mt acc=""
+  local name proot tdir tank rows sid mt acc="" _proots
+  _proots="$(profiles_root)"      # constant; asked once, not once per adapter
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    # NO TANKS, NO ROWS — check that first, because it is free. This engine's rows
+    # can only come from a tank directory below, so an engine with none contributes
+    # nothing no matter what its adapter says. The capability gate underneath costs
+    # a subshell AND a full source of the adapter file, and it was being paid for
+    # all 15 installed adapters on every frame when only three have tanks here.
+    proot="$_proots/$name"
+    [ -d "$proot" ] || continue
     ( load_adapter "$name" >/dev/null 2>&1 \
         && declare -F adapter_resume_args >/dev/null 2>&1 \
         && declare -F adapter_recent_sids >/dev/null 2>&1 ) || continue
@@ -160,8 +168,6 @@ _home_recent_rows() {
     # $( … ) fork below, so the per-tank loads become instant instead of each
     # re-sourcing the adapter file (measured: 47 loads per board render before).
     load_adapter "$name" >/dev/null 2>&1
-    proot="$(profiles_root)/$name"
-    [ -d "$proot" ] || continue
     for tdir in "$proot"/*/; do
       [ -d "$tdir" ] || continue
       tank="${tdir%/}"; tank="${tank##*/}"
@@ -459,7 +465,19 @@ _home_refresh() {
   items="$(_home_items)"
   # A non-zero status from the background scan must not abort the board under
   # `set -e`, and a job that already exited still needs reaping — hence the guard.
-  wait "$_dpid" 2>/dev/null || true
+  #
+  # Loop, because a `wait` interrupted by a trapped signal RETURNS (128+n) with the
+  # scan still writing, and we would then read a half-written dry set — a tank that
+  # is out of fuel drawn as fuelled, silently. The board's traps all exit today, so
+  # this cannot currently happen; it is here because the one trap that would break
+  # it is the WINCH handler the resize comment further down keeps circling, and the
+  # failure it would cause is invisible.
+  local _st
+  while :; do
+    _st=0; wait "$_dpid" 2>/dev/null || _st=$?   # `|| ` so set -e cannot abort here
+    [ "$_st" -gt 128 ] && kill -0 "$_dpid" 2>/dev/null && continue
+    break
+  done
   dry="$(cat "$_df" 2>/dev/null || true)"
   rm -f "$_df"
 }

@@ -136,3 +136,29 @@ load '../../helpers'
 # rewrite returns the same titles. If this ever needs re-proving, the method
 # that worked is a differential run over a real store — dump every title with
 # both implementations under a per-file `timeout`, and diff.
+
+@test "claude title_for_file: both title keys on ONE line still resolve by rank" {
+  # The extractor now finds customTitle and aiTitle in a SINGLE scan and sorts the
+  # matches out afterwards, instead of scanning the transcript once per key. That
+  # is only equivalent while the two stay distinguishable, and the tightest case
+  # is a line carrying both — which no fixture had.
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/t-both.jsonl"
+  printf '{"type":"summary","aiTitle":"Machine guess","customTitle":"What I called it"}\n' > "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "What I called it" ]
+}
+
+@test "claude title_for_file: the LAST customTitle wins when a line has two" {
+  # grep -o emits matches in file order, which is what makes "take the last one"
+  # mean "the newest rename". Pin that ordering survives inside a single line.
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/t-two.jsonl"
+  printf '{"customTitle":"First name","x":1,"customTitle":"Second name"}\n' > "$f"
+  run adapter_title_for_file "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Second name" ]
+}
