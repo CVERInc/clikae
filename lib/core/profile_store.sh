@@ -11,9 +11,16 @@ profiles_root() {
   printf '%s/profiles\n' "$CLIKAE_HOME"
 }
 
+# profile_dirv <cli> <profile> -> sets $_PROFILE_DIR. The same path as
+# profile_dir, without the subshell: `$(profile_dir …)` costs a fork every time,
+# which is invisible once and expensive in a loop over every tank. Callers on a
+# hot path use this; everyone else keeps the printf form below. The path shape
+# is written down ONCE, here, so the two can never drift apart.
+profile_dirv() { _PROFILE_DIR="$CLIKAE_HOME/profiles/$1/$2"; }
+
 # profile_dir <cli> <profile>
 profile_dir() {
-  printf '%s/profiles/%s/%s\n' "$CLIKAE_HOME" "$1" "$2"
+  profile_dirv "$1" "$2"; printf '%s\n' "$_PROFILE_DIR"
 }
 
 # profile_exists <cli> <profile>
@@ -159,11 +166,17 @@ git_identity_read() {
 # that must never receive carried work or share a brain. The marker is a file in
 # the tank dir; this is the one predicate everything checks. `agy` resolves to
 # `antigravity`. See `clikae solo` and docs/grammar.md §2.
-solo_marker_file() {
+solo_marker_filev() {
   local cli="$1"; [ "$cli" = "agy" ] && cli="antigravity"
-  printf '%s/clikae-meta/solo\n' "$(profile_dir "$cli" "$2")"
+  profile_dirv "$cli" "$2"; _SOLO_MARKER="$_PROFILE_DIR/clikae-meta/solo"
 }
-tank_is_solo() { [ -f "$(solo_marker_file "$1" "$2")" ]; }
+solo_marker_file() {
+  solo_marker_filev "$1" "$2"; printf '%s\n' "$_SOLO_MARKER"
+}
+# The board asks this for every tank, twice (fleet, then solo section). Going
+# through the printf form cost TWO forks a call — one for solo_marker_file, one
+# for the profile_dir nested inside it — so it goes straight to the v-form.
+tank_is_solo() { solo_marker_filev "$1" "$2"; [ -f "$_SOLO_MARKER" ]; }
 
 # ── The group a tank left when it went solo ─────────────────────────────────
 # `clikae solo` leaves the shared brain; `--off` is supposed to put it back. It
@@ -229,31 +242,43 @@ order_file() { printf '%s\n' "$CLIKAE_HOME/order"; }
 #
 # The board is the burn order, and the burn order is the fleet. Callers wanting
 # EVERY tank (the board, so it can draw the Solo section) add solo_list.
+# Every membership test here used to be `printf | grep -qxF` — six forks per
+# order-file line, on a list that is at most a few dozen entries. $all and $listed
+# are instead kept as newline-FENCED strings (a leading and trailing \n), so a
+# bash glob can anchor both ends of an entry: without the fence, "ude/work" would
+# match inside "claude/work" and a renamed tank could shadow another one.
 order_list() {
-  local f all listed line
-  all="$(list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}' | while IFS= read -r _e; do
-    [ -n "$_e" ] || continue
-    tank_is_solo "${_e%%/*}" "${_e#*/}" || printf '%s\n' "$_e"
-  done)"
-  [ -n "$all" ] || return 0
+  local f all listed line e t rest
+  all=$'\n'
+  while IFS=$'\t' read -r e t rest; do
+    : "$rest"
+    [ -n "$e" ] && [ -n "$t" ] || continue
+    tank_is_solo "$e" "$t" && continue
+    all="$all$e/$t"$'\n'
+  done <<EOF
+$(list_all_profiles)
+EOF
+  [ "$all" = $'\n' ] && return 0
   f="$(order_file)"
-  listed=""
+  listed=$'\n'
   if [ -f "$f" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
       line="${line%%#*}"
-      line="$(printf '%s' "$line" | tr -d '[:space:]')"
+      line="${line//[[:space:]]/}"                       # was: tr -d '[:space:]'
       [ -n "$line" ] || continue
-      printf '%s\n' "$all" | grep -qxF "$line" || continue       # still exists?
-      printf '%s\n' "$listed" | grep -qxF "$line" && continue    # de-dupe
+      [[ "$all"    == *$'\n'"$line"$'\n'* ]] || continue  # still exists?
+      [[ "$listed" == *$'\n'"$line"$'\n'* ]] && continue  # de-dupe
       printf '%s\n' "$line"
       listed="$listed$line"$'\n'
     done < "$f"
   fi
-  printf '%s\n' "$all" | while IFS= read -r line; do
+  while IFS= read -r line; do
     [ -n "$line" ] || continue
-    printf '%s\n' "$listed" | grep -qxF "$line" && continue
+    [[ "$listed" == *$'\n'"$line"$'\n'* ]] && continue
     printf '%s\n' "$line"
-  done
+  done <<EOF
+$all
+EOF
 }
 
 # solo_list -> every SOLO tank as "<engine>/<tank>", in default listing order.
@@ -261,11 +286,14 @@ order_list() {
 # board draws order_list as the fleet and this as the Solo section beneath it, so
 # the rows on screen and the burn-order file finally describe the same thing.
 solo_list() {
-  local entry
-  list_all_profiles | awk -F'\t' 'NF>=2{print $1"/"$2}' | while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    tank_is_solo "${entry%%/*}" "${entry#*/}" && printf '%s\n' "$entry"
-  done
+  local e t rest
+  while IFS=$'\t' read -r e t rest; do
+    : "$rest"
+    [ -n "$e" ] && [ -n "$t" ] || continue
+    tank_is_solo "$e" "$t" && printf '%s\n' "$e/$t"
+  done <<EOF
+$(list_all_profiles)
+EOF
   return 0
 }
 
