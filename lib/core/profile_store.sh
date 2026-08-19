@@ -53,12 +53,13 @@ clikae_is_target() {
 #
 # NB: this is a DISPLAY name. The store path, the targets/ filename and the JSON
 # `path` field all stay `antigravity` — don't "fix" those to match.
-engine_label() {
+engine_labelv() {
   case "$1" in
-    antigravity) printf 'agy' ;;
-    *)           printf '%s' "$1" ;;
+    antigravity) _ENGINE_LABEL='agy' ;;
+    *)           _ENGINE_LABEL="$1" ;;
   esac
 }
+engine_label() { engine_labelv "$1"; printf '%s' "$_ENGINE_LABEL"; }
 
 # ── Bounded transcript reads ────────────────────────────────────────────────
 # Session transcripts get HUGE (100+ MB for a long agent run); scanning a whole

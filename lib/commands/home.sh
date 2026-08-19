@@ -484,9 +484,36 @@ _home_refresh() {
 
 # Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
 # and returns 0 when dry, 1 when not — so:  if r="$(_home_is_dry "$dry" c p)"; then
+# _home_is_dryv <dry-set> <cli> <tank> — sets $_DRY_RESET, returns 0 when dry.
+#
+# 🔴 THIS IS THE HOTTEST FUNCTION ON THE BOARD. Every tank row asks it twice (once
+# through the fuel dot, once for the over-quota footer), and it forked `printf |
+# awk` each time — two processes to look up one key in a string that is usually
+# EMPTY, because a healthy fleet has no dry tanks at all. 2.3 ms a call, 8.5 ms a
+# row, and it repeats on every keypress in the redraw path.
+#
+# Fenced with newlines for the same reason order_list is: the key "claude␟h␟" must
+# match a whole entry, never the tail of a longer engine or tank name.
+#
+# Where awk printed EVERY matching row, this takes the first. limit_dry_set emits
+# one entry per tank, so there is nothing to lose — and a caller reading a reset
+# phrase wants one phrase, not two concatenated.
+_home_is_dryv() {
+  local set key rest
+  _DRY_RESET=""
+  [ -n "$1" ] || return 1
+  set=$'\n'"$1"$'\n'; key=$'\n'"$2"$'\037'"$3"$'\037'
+  case "$set" in *"$key"*) ;; *) return 1 ;; esac
+  rest="${set#*"$key"}"
+  _DRY_RESET="${rest%%$'\n'*}"
+  return 0
+}
+
+# The echoing form, for callers that want the phrase in a $( ). Kept so the
+# lookup itself has one implementation.
 _home_is_dry() {
-  printf '%s\n' "$1" | awk -F'\037' -v c="$2" -v p="$3" \
-    '$1==c && $2==p{print $3; found=1} END{exit !found}'
+  _home_is_dryv "$1" "$2" "$3" || return 1
+  printf '%s\n' "$_DRY_RESET"
 }
 
 # --- The status dot is a FUEL GAUGE, not a "you are here". ----------------------
@@ -499,13 +526,23 @@ _home_is_dry() {
 # _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
 # usage phrase, cached (first line) by watch/auto when it streams past. Read-only
 # here; we never compute a %. Absent/empty cache = no yellow reading.
-_home_weekly_path() { printf '%s/cache/weekly/%s-%s' "$CLIKAE_HOME" "$1" "$2"; }
+_home_weekly_pathv() { _WEEKLY_PATH="$CLIKAE_HOME/cache/weekly/$1-$2"; }
+_home_weekly_path()  { _home_weekly_pathv "$1" "$2"; printf '%s' "$_WEEKLY_PATH"; }
+# _home_weekly_readv <cli> <tank> — sets $_WEEKLY, returns 0 when there is one.
+# `read < file` is a redirect, not a pipeline: the old form forked twice (the
+# path builder and `head`) to get the first line of a one-line cache file, once
+# per row, on a file that usually does not exist.
+_home_weekly_readv() {
+  _home_weekly_pathv "$1" "$2"
+  _WEEKLY=""
+  [ -f "$_WEEKLY_PATH" ] || return 1
+  IFS= read -r _WEEKLY < "$_WEEKLY_PATH" 2>/dev/null || true
+  [ -n "$_WEEKLY" ] || return 1
+  return 0
+}
 _home_weekly_read() {
-  local f s; f="$(_home_weekly_path "$1" "$2")"
-  [ -f "$f" ] || return 1
-  s="$(head -n 1 "$f" 2>/dev/null)"
-  [ -n "$s" ] || return 1
-  printf '%s' "$s"
+  _home_weekly_readv "$1" "$2" || return 1
+  printf '%s' "$_WEEKLY"
 }
 
 # _home_fuel_dot <dry_set> <cli> <profile>  ->  echoes  "<colored-glyph>\037<note>"
@@ -519,17 +556,8 @@ _home_fuel_dot() {
   # or screenshotted board. The overlay's own legend read
   # `● ready · ● dry · ● weekly % · ○ no reading`: four labels, two glyphs.
   # Now each state has its own shape, and colour says the same thing twice.
-  local dry="$1" cli="$2" profile="$3" reset wk
-  if reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-    printf '%b○%b\037%s' "$__C_RED" "$__C_RESET" "${reset:-over quota}"; return 0
-  fi
-  if wk="$(_home_weekly_read "$cli" "$profile")"; then
-    printf '%b◐%b\037%s' "$__C_YELLOW" "$__C_RESET" "$wk"; return 0
-  fi
-  if limit_engine_detectable "$cli"; then
-    printf '%b●%b\037' "$__C_GREEN" "$__C_RESET"; return 0
-  fi
-  printf '%b·%b\037' "$__C_DIM" "$__C_RESET"
+  _home_fuel_dotv "$1" "$2" "$3"
+  printf '%s\037%s' "$_FDOT" "$_FNOTE"
 }
 
 # _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, fork-free, into $_FDOT.
@@ -541,8 +569,13 @@ _home_fuel_dot() {
 # The echoing form above stays for the non-hot callers that want the phrase too.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
-  if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then _FDOT="${__C_RED}○$__C_RESET"; return 0; fi
-  if _home_weekly_read "$cli" "$profile" >/dev/null; then _FDOT="${__C_YELLOW}◐$__C_RESET"; return 0; fi
+  _FNOTE=""
+  if _home_is_dryv "$dry" "$cli" "$profile"; then
+    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
+  fi
+  if _home_weekly_readv "$cli" "$profile"; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
+  fi
   if limit_engine_detectable "$cli"; then _FDOT="${__C_GREEN}●$__C_RESET"; return 0; fi
   _FDOT="${__C_DIM}·$__C_RESET"
 }
@@ -684,6 +717,20 @@ _dw_walk() {
   local s="$1" max="$2"
   local i=0 n=${#s} v b2 b3 cp len cw w=0
   _DW_CUT=-1
+  # FAST PATH — no byte has the high bit set, so every character is one ASCII byte
+  # worth exactly one column and the walk below would just count to $n the slow
+  # way. That is most of what this board draws: tank names, engine names, emails,
+  # session ids, English titles. The loop costs ~15 shell operations PER BYTE, and
+  # it runs several times per row, per keypress, in the redraw path — 112 ms to
+  # draw ten rows, nearly all of it here. Control bytes are included on purpose:
+  # the walk below gives everything under 128 a width of 1, so ${#s} agrees with
+  # it byte for byte, and the two must not disagree for ANY input (there is a
+  # differential test over both paths).
+  if [[ "$s" != *[$'\200'-$'\377']* ]]; then
+    if [ "$max" -ge 0 ] && [ "$n" -gt "$max" ]; then _DW_CUT=$max; _DW_W=$max
+    else _DW_W=$n; fi
+    return 0
+  fi
   while [ "$i" -lt "$n" ]; do
     printf -v v '%d' "'${s:i:1}"
     [ "$v" -lt 0 ] && v=$(( v + 256 ))
@@ -759,7 +806,12 @@ _dw_skip() {
 }
 
 # _dwidth <str> -> the string's DISPLAY width in terminal columns (CJK = 2).
-_dwidth() { local LC_ALL=C; _dw_walk "$1" -1; printf '%s' "$_DW_W"; }
+# _dwidthv leaves the answer in $_DW_W instead of printing it, so a caller on the
+# redraw path does not pay a `$( )` for a number. The C locale stays scoped to
+# this function either way — the walker's contract requires it, and leaking it
+# into the caller would change how the rest of the render sorts and prints.
+_dwidthv() { local LC_ALL=C; _dw_walk "$1" -1; }
+_dwidth()  { _dwidthv "$1"; printf '%s' "$_DW_W"; }
 
 # _dw_atleast <str> <n> — "is <str> at least <n> columns wide?" without scanning
 # the whole string: stops at <n>. Sets _DW_W to the width consumed and returns 0
@@ -1074,19 +1126,32 @@ _home_trunc_mid() {
 _home_render_static() {
   _home_cols_prime          # one width question per render, not one per row
   local items="$1" dry="$2" any_dry=""
-  local n_tanks n_clis
-  # `grep -c .` exits 1 when the count is 0 — under `set -eo pipefail` that would
-  # abort the whole render. The board can legitimately have 0 fuel tanks now (e.g.
-  # only tool-CLI tanks, which the board filters out), so guard with `|| true`.
-  n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c . || true)"
-  n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c . || true)"
+  # Two numbers for one headline used to cost nine processes — two awks, a sort, a
+  # uniq-by-grep and the pipes to feed them — over a string the loop below is
+  # about to walk anyway. Count them here instead; the engines are de-duplicated
+  # through a newline-fenced memo, the same trick the dry lookup uses. (The old
+  # form needed `|| true` because `grep -c` exits 1 on a count of zero and would
+  # have aborted the render under `set -eo pipefail`; nothing here can fail.)
+  local n_tanks=0 n_clis=0 _seen_cli=$'\n' _k _c
+  while IFS=$'\037' read -r _k _c _; do
+    [ "$_k" = "tank" ] || continue
+    n_tanks=$(( n_tanks + 1 ))
+    case "$_seen_cli" in
+      *$'\n'"$_c"$'\n'*) ;;
+      *) n_clis=$(( n_clis + 1 )); _seen_cli="$_seen_cli$_c"$'\n' ;;
+    esac
+  done <<EOF
+$items
+EOF
   # Wordmark and summary share a line only when both fit. The joined form is
   # `clikae  ·  N tanks across M engines` — 34 columns in en-US with two tanks,
   # and wider in de-DE/pt-BR — printed with no budget at all until 2026-08-16,
   # so it was the first thing to run off a narrow terminal.
-  local _sum _hw
+  local _sum _hw _w1 _w2
   _sum="$(i18n_summary "$n_tanks" "$n_clis")"
-  _hw=$(( $(_dwidth "$T_WORDMARK") + 5 + $(_dwidth "$_sum") ))   # 5 = "  ·  "
+  _dwidthv "$T_WORDMARK"; _w1="$_DW_W"
+  _dwidthv "$_sum";       _w2="$_DW_W"
+  _hw=$(( _w1 + 5 + _w2 ))                                       # 5 = "  ·  "
   if [ "$_hw" -le "$(_home_cols)" ]; then
     printf '%b%s%b  %b·  %s%b\n\n' \
       "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$_sum" "$__C_RESET"
@@ -1142,12 +1207,14 @@ _home_render_static() {
           { [ "$printed_resume" -eq 1 ] || [ "$printed_live" -eq 1 ]; } && printf '\n'
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
         fi
-        local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
+        local _reset _eng _fd _dot; engine_labelv "$cli"; _eng="$_ENGINE_LABEL"
         # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
         # decoupled from `active`. `active` still picks the launch target (the
         # on-row "← here" label it also used to drive was dropped, see above).
-        _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"; _dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
-        if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
+        # One lookup per row, not three: the dot, its note, and the over-quota
+        # footer flag all come out of the same fork-free call.
+        _home_fuel_dotv "$dry" "$cli" "$profile"; _dot="$_FDOT"; _reset="$_FNOTE"
+        if _home_is_dryv "$dry" "$cli" "$profile"; then any_dry=1; fi
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
         elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
         # Aligned columns (display-width padded, CJK-safe): name · engine · account,
