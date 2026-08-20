@@ -22,28 +22,35 @@
 # commit, an old stamp — falls through to the full suite.
 set -uo pipefail
 
-[ -n "${CLIKAE_FORCE_GATE:-}" ] && exit 1        # always re-run when asked
+# 🔴 SAY WHY. A refusal here costs 520 seconds, and the first time this ran the
+# suite when the stamp looked like it matched, there was nothing in the output to
+# reconstruct the decision from — the same "silent state, no answer on screen"
+# shape the board's filter indicator exists for. One line, every path.
+why() { printf '  · gate: %s — running the full suite\n' "$1" >&2; exit 1; }
+
+[ -n "${CLIKAE_FORCE_GATE:-}" ] && why "CLIKAE_FORCE_GATE is set"
 
 gd="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
-[ -n "$gd" ] || exit 1
+[ -n "$gd" ] || why "not in a git work tree"
 stamp="$gd/clikae-gate-pass"
-[ -f "$stamp" ] || exit 1
+[ -f "$stamp" ] || why "no stamp yet for this clone"
 
 # A dirty tree was never covered by any stamp: the suite would have run against
 # content that is not what git is about to send.
-[ -z "$(git status --porcelain 2>/dev/null)" ] || exit 1
+[ -z "$(git status --porcelain 2>/dev/null)" ] || why "working tree is dirty"
 
 head_tree="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
-[ -n "$head_tree" ] || exit 1
+[ -n "$head_tree" ] || why "cannot resolve HEAD"
 
-read -r stamped_tree stamped_at < "$stamp" 2>/dev/null || exit 1
-[ "$stamped_tree" = "$head_tree" ] || exit 1
-case "${stamped_at:-}" in ''|*[!0-9]*) exit 1 ;; esac
+read -r stamped_tree stamped_at < "$stamp" 2>/dev/null || why "stamp is unreadable"
+[ "$stamped_tree" = "$head_tree" ] || why "stamp is for a different tree (${stamped_tree:0:12})"
+case "${stamped_at:-}" in ''|*[!0-9]*) why "stamp has no usable timestamp" ;; esac
 
 ttl="${CLIKAE_GATE_TTL:-7200}"
 now="$(date +%s)"
 age=$(( now - stamped_at ))
-[ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ] || exit 1
+[ "$age" -ge 0 ]      || why "stamp is dated in the future"
+[ "$age" -lt "$ttl" ] || why "stamp is $(( age / 60 ))m old, past the ${ttl}s TTL"
 
 printf '  ✓ gate already green for this exact tree (%dm ago) — not re-running it\n' \
   "$(( age / 60 ))" >&2

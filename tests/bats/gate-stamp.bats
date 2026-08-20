@@ -167,3 +167,49 @@ _stamp() {
   [[ "$output" != *"SUITE-RAN"* ]] || { echo "the stamp did not stop the suite: $output"; false; }
   [[ "$output" == *"already green"* ]] || false
 }
+
+@test "gate stamp: every refusal says WHY, and each reason is distinct" {
+  _repo
+  # A refusal costs 520 seconds. The first time this shortcut ran the suite on a
+  # tree whose stamp looked like it matched, there was nothing in the output to
+  # reconstruct the decision from — and a silent decision is one nobody can
+  # debug. Each path must name itself, and name itself DIFFERENTLY, or the line
+  # is decoration rather than diagnosis.
+  local out reasons=""
+
+  run bash "$STAMPER"                                   # no stamp
+  [ "$status" -ne 0 ]; [[ "$output" == *"gate:"* ]] || false
+  reasons="$reasons$output"$'\n'
+
+  _stamp; printf 'dirty\n' > f.txt                      # dirty tree
+  run bash "$STAMPER"
+  [ "$status" -ne 0 ]; [[ "$output" == *"dirty"* ]] || false
+  reasons="$reasons$output"$'\n'
+  git checkout -- f.txt
+
+  _stamp 0000000000000000000000000000000000000000       # wrong tree
+  run bash "$STAMPER"
+  [ "$status" -ne 0 ]; [[ "$output" == *"different tree"* ]] || false
+  reasons="$reasons$output"$'\n'
+
+  _stamp "$(git rev-parse 'HEAD^{tree}')" "$(( $(date +%s) - 7201 ))"   # stale
+  run bash "$STAMPER"
+  [ "$status" -ne 0 ]; [[ "$output" == *"TTL"* ]] || false
+  reasons="$reasons$output"$'\n'
+
+  _stamp "$(git rev-parse 'HEAD^{tree}')" "$(( $(date +%s) + 99999 ))"  # future
+  run bash "$STAMPER"
+  [ "$status" -ne 0 ]; [[ "$output" == *"future"* ]] || false
+  reasons="$reasons$output"$'\n'
+
+  _stamp                                                 # forced
+  run env CLIKAE_FORCE_GATE=1 bash "$STAMPER"
+  [ "$status" -ne 0 ]; [[ "$output" == *"FORCE"* ]] || false
+  reasons="$reasons$output"$'\n'
+
+  # Six refusals, six distinct sentences — otherwise two paths are
+  # indistinguishable in a push log, which is the situation this exists to fix.
+  local uniq_n
+  uniq_n="$(printf '%s' "$reasons" | grep 'gate:' | sort -u | grep -c .)"
+  [ "$uniq_n" -eq 6 ] || { echo "expected 6 distinct reasons, got $uniq_n:"; printf '%s' "$reasons"; false; }
+}

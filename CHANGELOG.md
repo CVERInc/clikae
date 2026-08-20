@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The pre-push gate's skip now says why it declined.** A refusal costs 520
+  seconds, and the first time it ran the suite on a tree whose stamp appeared to
+  match, there was nothing in the output to reconstruct the decision from — the
+  same "silent state, no answer on screen" the board's filter indicator exists
+  for. Each of the six refusal paths now prints its own sentence (dirty tree,
+  different tree, past the TTL, dated in the future, unreadable stamp, forced),
+  and the test asserts the six are DISTINCT — otherwise the line is decoration
+  rather than diagnosis.
+
+
 ## [0.28.1] — 2026-08-20
 
 Two board defects and two pieces of push hygiene.
