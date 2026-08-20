@@ -19,4 +19,11 @@ unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_QUARANTINE_PATH GIT_OB
 # nobody has watched fail is a guard nobody knows works.
 bash "$(dirname "$0")/changelog-guard" || exit 1
 
+# Re-verification, skipped — never verification. If a green run already stamped
+# THIS exact tree, recently, running the same 520 seconds again cannot produce a
+# different answer. Anything else falls through to the full suite below.
+if bash "$(dirname "$0")/gate-stamp"; then
+  exit 0
+fi
+
 exec bash "$(dirname "$0")/../scripts/test.sh"

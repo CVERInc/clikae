@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# hooks/gate-stamp — "has this exact content already passed the gate, recently?"
+#
+# Exits 0 (skip the suite) only when ALL of:
+#   · the working tree is clean, so what was tested is what is being pushed;
+#   · the stamp names the SAME tree as HEAD;
+#   · the stamp is younger than $CLIKAE_GATE_TTL seconds (default 2h), because a
+#     stamp is a claim about a machine as well as about content — bats, tmux and
+#     python can all change underneath it.
+# Exits 1 otherwise, and pre-push then runs the whole thing.
+#
+# Why this exists: the gate is 520 s, and 84% of that is bats. Pushing three
+# commits on 2026-08-20 ran it SEVEN times on ONE unchanged tree — DNS failed,
+# HTTP/2 framing failed, two attempts hit tool timeouts, and a workaround for the
+# timeouts broke two tmux tests. Every retry paid full price for an answer already
+# known. A gate that expensive is not just slow: it is the reason `--no-verify`
+# starts to look reasonable, and on this machine that flag would ALSO skip the
+# global identity, content and transport guards.
+#
+# 🔴 This must never turn a red tree green. It skips only re-verification of a
+# tree that a green run already stamped; anything else — a dirty tree, a new
+# commit, an old stamp — falls through to the full suite.
+set -uo pipefail
+
+[ -n "${CLIKAE_FORCE_GATE:-}" ] && exit 1        # always re-run when asked
+
+gd="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+[ -n "$gd" ] || exit 1
+stamp="$gd/clikae-gate-pass"
+[ -f "$stamp" ] || exit 1
+
+# A dirty tree was never covered by any stamp: the suite would have run against
+# content that is not what git is about to send.
+[ -z "$(git status --porcelain 2>/dev/null)" ] || exit 1
+
+head_tree="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+[ -n "$head_tree" ] || exit 1
+
+read -r stamped_tree stamped_at < "$stamp" 2>/dev/null || exit 1
+[ "$stamped_tree" = "$head_tree" ] || exit 1
+case "${stamped_at:-}" in ''|*[!0-9]*) exit 1 ;; esac
+
+ttl="${CLIKAE_GATE_TTL:-7200}"
+now="$(date +%s)"
+age=$(( now - stamped_at ))
+[ "$age" -ge 0 ] && [ "$age" -lt "$ttl" ] || exit 1
+
+printf '  ✓ gate already green for this exact tree (%dm ago) — not re-running it\n' \
+  "$(( age / 60 ))" >&2
+printf '    force a full run with:  CLIKAE_FORCE_GATE=1 git push\n' >&2
+exit 0

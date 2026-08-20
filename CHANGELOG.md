@@ -42,6 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The pre-push gate no longer re-runs itself for a tree it already passed.**
+  It is 520 seconds, 84% of that bats, and pushing three commits on 2026-08-20 ran
+  it SEVEN times against ONE unchanged tree — DNS failed, HTTP/2 framing failed,
+  two attempts hit tool timeouts, and a workaround for those broke two tmux tests.
+  Every retry paid full price for an answer already known. A green run now stamps
+  the tree it verified, and a push of that same tree skips re-verification, saying
+  so out loud.
+
+  It skips RE-verification, never verification: a dirty working tree, a new
+  commit, a stamp older than two hours, a stamp dated in the future, or a corrupt
+  one all fall through to the full suite, and `CLIKAE_FORCE_GATE=1` always does.
+  The dirty-tree case matters most — the suite would have run against content that
+  is not what git is about to send.
+
+  Measured first, and the measurement changed the plan: the obvious cut was to
+  move the slow, environment-sensitive pty layer to CI, but that is only 79 s of
+  520 s and would give up the one layer bats cannot reach.
+
 - **A pre-push guard refuses a push that changes `lib/` or `bin/` without
   touching `CHANGELOG.md`.** At 0.28.0, nineteen commits shipped and exactly one
   had updated the changelog; the release notes were reconstructed afterwards from

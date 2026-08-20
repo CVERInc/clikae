@@ -79,3 +79,18 @@ else
 fi
 
 echo "✅ ALL GREEN"
+
+# Stamp what just passed, so a push of the SAME content does not re-run 7 minutes
+# of suite to reach the same answer. hooks/pre-push reads this.
+#
+# Only when the working tree is CLEAN. A dirty tree means the suite exercised
+# content that is not what a push would send, so the stamp would be a claim about
+# something nobody tested — the one way this could weaken the gate rather than
+# just speed it up.
+if git rev-parse --git-dir >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  _gd="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+  _tree="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  if [ -n "$_gd" ] && [ -n "$_tree" ]; then
+    printf '%s %s\n' "$_tree" "$(date +%s)" > "$_gd/clikae-gate-pass" 2>/dev/null || true
+  fi
+fi
