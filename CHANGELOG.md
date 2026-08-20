@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.1] — 2026-08-20
+
+Two board defects and two pieces of push hygiene.
+
+The board had never been made to fit the terminal's HEIGHT — 0.28.0 did widths —
+so on a short window the top scrolled away and the selection could sit off-screen.
+And the keybar advertised keys the selected row cannot use, which is the same
+thing as an unbound key with a legend insisting otherwise.
+
+The other two are about the gate rather than the product. One refuses a push that
+changes `lib/` or `bin/` without touching this file, because at 0.28.0 nineteen
+commits shipped and exactly one had. The other stops the 520-second gate
+re-running for a tree it already passed — that release took SEVEN full runs of one
+unchanged tree, and a gate that expensive is the reason `--no-verify` starts to
+look reasonable.
+
+
 ### Fixed
 
 - **The board did not fit the terminal's HEIGHT.** 0.28.0 made every row fit its
