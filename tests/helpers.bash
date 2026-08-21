@@ -40,32 +40,9 @@ setup() {
   # migrate.bats) prepend their own stub later in PATH and win.
   export CLIKAE_TEST_KEYCHAIN="$TEST_HOME/.testkeychain"
   mkdir -p "$CLIKAE_TEST_KEYCHAIN"
-  cat > "$TEST_HOME/.testbin/security" <<'SECSTUB'
-#!/usr/bin/env bash
-state="${CLIKAE_TEST_KEYCHAIN:?}"
-sub="$1"; shift
-svc=""; want_w=0; secret=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -s) svc="$2"; shift 2 ;;
-    -w) shift
-        if [ "$sub" = "add-generic-password" ]; then secret="$1"; shift; else want_w=1; fi ;;
-    -a|-l) shift 2 ;;
-    -U|-g) shift ;;
-    *) shift ;;
-  esac
-done
-file="$state/$svc"
-case "$sub" in
-  find-generic-password)
-    [ -f "$file" ] || exit 1
-    if [ "$want_w" -eq 1 ]; then cat "$file"; else echo '    "acct"<blob>="antigravity"'; fi
-    exit 0 ;;
-  add-generic-password)  printf '%s' "$secret" > "$file"; exit 0 ;;
-  delete-generic-password) rm -f "$file"; exit 0 ;;
-esac
-exit 1
-SECSTUB
+  # ONE stub, shared with the pty harness — see tests/stubs/security for why
+  # this is host safety rather than convenience.
+  cp "$CLIKAE_TEST_ROOT/tests/stubs/security" "$TEST_HOME/.testbin/security"
   chmod +x "$TEST_HOME/.testbin/security"
   export PATH="$TEST_HOME/.testbin:$PATH"
   # Pin the interface language so assertions are deterministic regardless of the

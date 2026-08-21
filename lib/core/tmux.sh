@@ -366,3 +366,19 @@ tmux_attach() {
   rm -f "$scrollback_file"
   return 1
 }
+
+
+# Kept under its original `_switch_` name on purpose: it has three call sites on
+# the engine LAUNCH path, and a rename that misses one fails at runtime where
+# neither `bash -n` nor shellcheck can see it. Core owns it now — that is the
+# part that mattered (DESIGN-tmux Rule 2; burn.sh once wrote its own copy of
+# this and got it wrong). A rename is a separate, isolated change.
+# _switch_shquote <string> -> the string as ONE POSIX-sh single-quoted word.
+# The tmux session command is ultimately run by `sh -c`, and inside it we spawn
+# `bash -c <target>`. Wrapping <target> in `"..."` (the old shape) let sh EXPAND
+# it first: a passthrough arg carrying a double-quote, $, backslash, or backtick
+# was mangled — and a backtick / $(...) was executed. Single-quoting with the
+# canonical '\'' escape passes the built command through untouched.
+_switch_shquote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}

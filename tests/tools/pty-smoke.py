@@ -59,7 +59,28 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
                         '{"role":"user","content":"line %d"}}\n' % i)
     binp = os.path.join(root, 'bin')
     os.makedirs(binp, exist_ok=True)
-    for name in ('claude', 'codex'):
+    # 🔴 HOST SAFETY. agy's per-tank login carry shells out to `security`, so a
+    # pty run without this stub reads, WRITES and DELETES the maintainer's real
+    # `gemini` Keychain item. bats has had this guard since the day it cost
+    # somebody a live login; this harness did not, and any agy test added here
+    # without it would corrupt a real credential to make itself pass.
+    # Same file bats uses — one stub, no drifting second copy.
+    # Same host-independence problem, different tool: agy's "is a session
+    # running?" guard is `pgrep -x agy`, so on a machine with a real Antigravity
+    # open the guard fires against the DEVELOPER's session and the test skips —
+    # which is how this one first reported "could not init an agy tank" while
+    # the code was working exactly as designed.
+    with open(os.path.join(binp, 'pgrep'), 'w') as f:
+        f.write('#!/usr/bin/env bash\nexit 1\n')
+    os.chmod(os.path.join(binp, 'pgrep'), 0o755)
+
+    kc = os.path.join(root, '.testkeychain')
+    os.makedirs(kc, exist_ok=True)
+    shutil.copy(os.path.join(REPO, 'tests', 'stubs', 'security'),
+                os.path.join(binp, 'security'))
+    os.chmod(os.path.join(binp, 'security'), 0o755)
+
+    for name in ('claude', 'codex', 'agy'):
         p = os.path.join(binp, name)
         with open(p, 'w') as f:
             f.write(STUB)
@@ -73,6 +94,7 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
                 # so every pty-smoke run has been making a live `curl` to the GitHub
                 # releases API, on the pre-board path, with a 5s timeout. A gate that
                 # depends on the network is not a gate; it is a flake generator.
+                'CLIKAE_TEST_KEYCHAIN': kc,
                 'CLIKAE_NO_UPDATE_CHECK': '1'})
     # Host-safety: this harness IS a terminal, so clikae takes the tmux path and
     # really does create sessions. A throwaway $HOME does not contain those — the
@@ -507,8 +529,104 @@ def mode_height():
           'missing from a 60-row frame: %s' % (', '.join(missing[:5])))
 
 
+def mode_agy():
+    """`clikae agy <tank>` must land in a ck-* tmux session, like every engine does.
+
+    agy is a launch-only TARGET, and tmux is spawned in switch.sh's ENGINE path —
+    targets never got it. `_agy_switch` ends in a bare `exec agy "$@"`, so an agy
+    session is bound to the terminal tab that started it: invisible to the board's
+    Live section, unreachable from another machine, and dead when the tab closes.
+    Measured on the maintainer's Mac — four terminal tabs, two in tmux (both
+    claude, launched through clikae), two outside it (one agy, one hand-launched).
+
+    🔴 This is NOT about policing concurrency. agy is a single global login and
+    several sessions can share it; that limit is the vendor's and clikae does not
+    get a vote. The defect is only that the session never enters tmux at all.
+
+    Assertion: after `clikae agy <tank>` on a real pty, a session named
+    ck-antigravity-<tank> exists on the sandbox's own tmux server.
+    """
+    import time as _t, subprocess as _sp
+    if not shutil.which('tmux'):
+        skip('agy lands in a tmux session', 'tmux is not installed here')
+        return
+
+    # NO pre-made tank dir. `clikae init agy` performs a takeover — it creates the
+    # slots and the ~/.gemini link — and handing it an existing bare directory
+    # leaves that half-done, so the pane dies on launch and the tmux session is
+    # gone before the assertion looks. Let init build the whole thing.
+    env = sandbox(tanks=())
+    # The tank dir alone is not a set-up agy takeover; `clikae init agy` is what
+    # creates the slots and the ~/.gemini link, and it asks before managing it.
+    # 🔴 The shared STUB prints two lines and EXITS. A pane whose command exits
+    # takes its tmux session with it, so the session this test is looking for was
+    # created and gone before the assertion ran — the probe was killing its own
+    # subject. agy must stay alive here, exactly as tmux-spawn.bats keeps a slow
+    # codex around for the same reason.
+    with open(os.path.join(os.path.dirname(env['PATH'].split(os.pathsep)[0]), 'bin', 'agy'), 'w') as f:
+        f.write('#!/bin/sh\nsleep 30\n')
+    os.chmod(os.path.join(os.path.dirname(env['PATH'].split(os.pathsep)[0]), 'bin', 'agy'), 0o755)
+
+    init = _sp.run([CLIKAE, 'init', 'agy', 'g'], input='y\n', text=True,
+                   capture_output=True, env=env)
+    if init.returncode != 0:
+        skip('agy lands in a tmux session',
+             'could not init an agy tank in the sandbox: ' + (init.stderr or '')[:120])
+        return
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 110, 0, 0))
+
+    def make_ctty():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    p = subprocess.Popen([CLIKAE, 'agy', 'g'], stdin=slave, stdout=slave, stderr=slave,
+                         preexec_fn=make_ctty, env=env, close_fds=True)
+    os.close(slave)
+    # Drain whatever the launch prints so the pty buffer never blocks the child;
+    # what is asserted below is the tmux session's existence, not this output.
+    _drain_end = _t.time() + 6
+    while _t.time() < _drain_end:
+        r, _, _ = select.select([master], [], [], 0.3)
+        if not r:
+            continue
+        try:
+            if not os.read(master, 65536):
+                break
+        except OSError:
+            break
+
+    def sessions():
+        r = _sp.run(['tmux', 'ls'], capture_output=True, text=True, env=env)
+        return (r.stdout or '') + (r.stderr or '')
+
+    # Give the spawn a moment; the assertion is the session's existence, not its speed.
+    found = ''
+    for _ in range(10):
+        found = sessions()
+        if 'ck-antigravity-g' in found:
+            break
+        _t.sleep(0.5)
+
+    try:
+        os.write(master, b'q')
+        p.wait(timeout=5)
+    except Exception:
+        p.kill()
+    try:
+        _sp.run(['tmux', 'kill-server'], capture_output=True, env=env)
+        os.close(master)
+    except Exception:
+        pass
+
+    check('clikae agy lands in a ck-* tmux session', 'ck-antigravity-g' in found,
+          'tmux sessions were: %r' % found.strip()[:200])
+
+
 MODES = {'home': mode_home, 'prompts': mode_prompts, 'resume': mode_resume,
-         'size': mode_size, 'resize': mode_resize, 'height': mode_height}
+         'size': mode_size, 'resize': mode_resize, 'height': mode_height,
+         'agy': mode_agy}
 
 
 def main():

@@ -35,7 +35,9 @@ bats_require_minimum_version 1.5.0   # for `run -<expected-code>`
 # Proven-fails-on-broken: the pre-fix `bash -c "$target_cmd"` mangles all three
 # of these args (and runs the backtick), where this passes them through intact.
 @test "_switch_shquote: a passthrough arg with \$, backtick, and quotes survives sh -c" {
-  source "$CLIKAE_TEST_ROOT/lib/commands/switch.sh"
+  # _switch_shquote lives in core/tmux.sh now — three commands need it, and
+  # sourcing the whole switch command just to reach one quoting helper hid that.
+  source "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
   local prog="$BATS_TEST_TMPDIR/echoargs"
   printf '#!/usr/bin/env bash\nprintf "[%%s]" "$@"\n' > "$prog"
   chmod +x "$prog"

@@ -96,15 +96,6 @@ _supervise_decision() {
 # own and got it wrong. DESIGN-tmux.md Rule 2 asked for one shared set of exits;
 # this file is now one of its callers rather than its owner.
 
-# _switch_shquote <string> -> the string as ONE POSIX-sh single-quoted word.
-# The tmux session command is ultimately run by `sh -c`, and inside it we spawn
-# `bash -c <target>`. Wrapping <target> in `"..."` (the old shape) let sh EXPAND
-# it first: a passthrough arg carrying a double-quote, $, backslash, or backtick
-# was mangled — and a backtick / $(...) was executed. Single-quoting with the
-# canonical '\'' escape passes the built command through untouched.
-_switch_shquote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
 
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3

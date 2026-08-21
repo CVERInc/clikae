@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **agy sessions never entered tmux, so they were invisible to the board and
+  unreachable from anywhere else** (#34). tmux is spawned in switch.sh's ENGINE
+  path; agy is a launch-only TARGET and never got it, so `_agy_switch` ended in a
+  bare `exec agy` and the session lived and died inside whichever terminal tab
+  started it. Measured on a real machine: four tabs open, only the two launched
+  through clikae were in tmux — the agy one could not be listed, attached to, or
+  reached from another device, and closing the tab killed it.
+
+  `clikae agy <tank>` now spawns `ck-antigravity-<tank>` and runs
+  `clikae run antigravity <tank>` inside it, exactly as engines do, so the
+  Keychain carry and the ~/.gemini repoint still happen once, in the pane,
+  immediately before the exec. Without a tty or without tmux it falls through to
+  the direct path unchanged.
+
+  🔴 This does not police concurrency. agy has ONE global login and several
+  sessions may share it; that limit is the vendor's, not clikae's, and the switch
+  already refuses the one destructive case (moving ~/.gemini out from under a live
+  session on a different tank).
+
+
+### Fixed
+
 - **The pre-push gate's skip now says why it declined.** A refusal costs 520
   seconds, and the first time it ran the suite on a tree whose stamp appeared to
   match, there was nothing in the output to reconstruct the decision from — the

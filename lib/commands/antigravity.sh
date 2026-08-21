@@ -477,5 +477,57 @@ cmd_antigravity() {
     fi
   fi
 
+  # 🔴 A TARGET GETS A tmux SESSION TOO. tmux is spawned in switch.sh's ENGINE
+  # path; agy is a launch-only target and never got it, so `_agy_switch` ended in
+  # a bare `exec agy` and the session lived and died inside whichever terminal tab
+  # started it — invisible to the board's Live section, unreachable from another
+  # machine, gone when the tab closed. Measured on the maintainer's Mac: four
+  # tabs open, only the two launched through clikae were in tmux.
+  #
+  # This does NOT police concurrency. agy has ONE global login and several
+  # sessions may share it; that limit belongs to the vendor, not to clikae, and
+  # the switch below already refuses the only genuinely destructive case (moving
+  # ~/.gemini out from under a live session on a DIFFERENT tank).
+  #
+  # The inner command is `clikae run antigravity <tank>`, exactly as the engine
+  # path does it: cmd_run loads the adapter and calls adapter_run, which lands
+  # back in _agy_switch — so the Keychain carry and the symlink repoint happen
+  # once, inside the pane, immediately before the exec.
+  local _agy_sess="antigravity-$tank"
+  if [ "${#passthru[@]}" -gt 0 ]; then
+    local _agy_sum
+    _agy_sum="$(printf '%s\0' "${passthru[@]}" | cksum 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$_agy_sum" ] && _agy_sess="$_agy_sess-$_agy_sum"
+  fi
+
+  # No tty, or no tmux, means there is nothing to attach to and nobody watching:
+  # fall through to the direct path rather than stranding the launch in a
+  # detached session. Same reasoning switch.sh applies for engines.
+  if [ -t 1 ] && command -v tmux >/dev/null 2>&1; then
+    local _agy_cmd
+    _agy_cmd="$(printf '%q ' "$CLIKAE_BIN" run antigravity "$tank" -- "${passthru[@]}")"
+    local -a _agy_env=(--env "CLIKAE_TANK_NAME=$tank" --env "HOME=$HOME")
+    [ -n "${CLIKAE_HOME:-}" ] && _agy_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
+
+    if ! tmux has-session -t "ck-$_agy_sess" 2>/dev/null; then
+      tmux_spawn_session "${_agy_env[@]}" \
+        --session "ck-$_agy_sess" --window "agy" -- "bash -c $(_switch_shquote "$_agy_cmd")"
+      tmux_label "ck-$_agy_sess" "agy" "$tank"
+    fi
+
+    if [ -n "${TMUX:-}" ]; then
+      local _agy_here
+      _agy_here="$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null || true)"
+      [ -z "$_agy_here" ] && _agy_here="$(tmux display-message -p '#S' 2>/dev/null || true)"
+      if [ -n "$(tmux list-clients -t "$_agy_here" 2>/dev/null || true)" ]; then
+        exec tmux switch-client -t "ck-$_agy_sess"
+      fi
+      log_info "Started agy/$tank in tmux session ck-$_agy_sess (no client here to switch)."
+      log_dim  "Reach it with:  tmux switch-client -t ck-$_agy_sess"
+      return 0
+    fi
+    exec tmux attach -t "ck-$_agy_sess"
+  fi
+
   _agy_switch "$tank" "${passthru[@]}"
 }
