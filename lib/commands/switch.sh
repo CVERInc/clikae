@@ -211,7 +211,23 @@ KV
     # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
     # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
     # quietly taken roaming away from the one device this feature exists for.
-    if ! tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file"; then
+    local attach_rc=0
+    tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file" || attach_rc=$?
+    # 2 means the tmux SERVER went away while we were in it — not that this
+    # terminal cannot host tmux. Falling through to `run` here is what left three
+    # live sessions permanently outside tmux on 2026-08-21: reachable only from
+    # the tab they happened to be in, absent from the board, unreachable from
+    # another machine. Re-enter the tmux path instead, once — a fresh session is
+    # the thing the human was asking for, and CLIKAE_TMUX_REHOSTED stops a broken
+    # tmux from turning this into a loop.
+    if [ "$attach_rc" -eq 2 ] && [ -z "${CLIKAE_TMUX_REHOSTED:-}" ]; then
+      log_warn "The tmux server went away. Starting a fresh session rather than leaving this outside tmux."
+      export CLIKAE_TMUX_REHOSTED=1
+      exec "$CLIKAE_BIN" "$engine" "$tank" -- "$@"
+    fi
+    if [ "$attach_rc" -ne 0 ]; then
+      [ "$attach_rc" -eq 2 ] && \
+        log_warn "The tmux server went away again; running outside tmux. This session will not appear in \`tmux ls\`."
       while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$d")
 KV
@@ -327,7 +343,17 @@ EOF
         tmux_label "ck-$tank_id" "$engine" "$tank"
         started_here=1
       fi
-      tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" && return 0
+      local roam_rc=0
+      tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" || roam_rc=$?
+      [ "$roam_rc" -eq 0 ] && return 0
+      # Same two-failures-one-code problem as the launch path above. The relay
+      # below is the right answer for a terminal tmux cannot draw on; it is not
+      # the right answer for a server that died, but re-entering mid-roam is a
+      # different question than re-entering a launch. Say so rather than
+      # dropping out of tmux in silence — being silent is what made this cost a
+      # whole afternoon to find.
+      [ "$roam_rc" -eq 2 ] && \
+        log_warn "The tmux server went away mid-roam; continuing outside tmux. Reattach with: clikae $engine $nt"
     fi
     exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
   else

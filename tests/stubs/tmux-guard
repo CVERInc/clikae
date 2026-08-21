@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# tests/stubs/tmux-guard — installed onto the test PATH as `tmux`.
+# tests/stubs/tmux-guard — installed onto the pty harness's sandbox PATH as
+# `tmux`. 🔴 DELIBERATELY NOT ON THE bats PATH, and this is not a tuning
+# problem: a NULL shim — zero checks, just `exec <real tmux> "$@"` — fails the
+# suite's timing-sensitive `scrollback` test too. Across two sessions measuring
+# independently, a shell wrapper on that PATH passed 0 times in 8; the same
+# suite with nothing installed passed in both. So the cost is the bash PROCESS,
+# not what this file does with it, and making the checks cheaper cannot buy it a
+# place there. Don't "optimise it and put it back".
+# See tests/bats/tmux-guard.bats for the numbers and what bats gets instead.
 #
 # 🔴 WHY THIS EXISTS. The suite isolates tmux by pointing $TMUX_TMPDIR at a
 # throwaway directory. Measured 2026-08-21, on the maintainer's machine, twice,

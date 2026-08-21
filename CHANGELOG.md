@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dying tmux server pushed live sessions permanently OUT of tmux.** When the
+  server went away under three of the maintainer's sessions, each `tmux attach`
+  returned 1 — the same code tmux uses for "this terminal is one I cannot draw
+  on" — so `switch` did what it does for that case and relaunched the engine
+  outside tmux. The conversations survived (`exec` keeps the pid) but the
+  sessions were gone from `tmux ls`: unreachable by attach, absent from the
+  board, invisible from his phone. He found out by looking for them.
+
+  `tmux_attach` now returns 2 for a lost server, and `switch` re-enters the tmux
+  path once instead of dropping out of it (`CLIKAE_TMUX_REHOSTED` bounds the
+  retry). The two failures are told apart by asking whether tmux is still there
+  afterwards — not by how long the attach lasted, which is a clock rather than a
+  cause. A session that merely ENDED is neither case: measured rc=0, with and
+  without other sessions on the server, so a human quitting an engine can never
+  be mistaken for a lost host and have it relaunched under them.
+
+  The fallback itself is deliberately untouched: PineNote's ssh sessions arrive
+  as `TERM=dumb`, and running the engine directly is the only way they ever
+  start one. A test asserts it is still there.
+
 - **`scripts/test.sh` could kill every tmux session on the machine it ran on.**
   Twice in one afternoon the maintainer's four live tanks died mid-work while
   the gate was running. The suite's isolation was not missing — every
@@ -26,12 +46,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   why it looked intermittent and why it only ever happened during the gate.
 
   Fixed at the source (the parent now waits, and kills after 10s), and backstopped
-  for the whole class: `tests/stubs/tmux-guard` installs as `tmux` on the test
-  PATH and refuses any call whose `$TMUX_TMPDIR` is unset or gone, naming the
-  command it stopped. It sits on PATH rather than in the test bodies because
-  clikae resolves tmux through PATH too — the engine's own internal calls are the
-  half that auditing the test sources cannot see. Verified by running the whole
-  gate with three decoy sessions on the default socket: all three survive.
+  for the harness it came from: `tests/stubs/tmux-guard` installs as `tmux` on
+  the pty sandbox's PATH and refuses any call whose `$TMUX_TMPDIR` is unset or
+  gone, naming the command it stopped. It sits on PATH rather than in the test
+  bodies because clikae resolves tmux through PATH too — the engine's own
+  internal calls are the half that auditing the test sources cannot see.
+  Verified by running the whole gate with three decoy sessions on the default
+  socket: all three survive.
+
+  It is deliberately NOT on the bats PATH, and that is not a tuning problem: a
+  NULL shim — zero checks, just `exec <real tmux> "$@"` — fails the suite's
+  timing-sensitive `scrollback` test too. Two sessions measured this
+  independently; between them a shell wrapper on that PATH passed 0 times in 8,
+  while the same suite with nothing installed passed in both. The cost is the
+  bash PROCESS, one fork per tmux call, not what the guard does with it — the
+  first version was optimised from ~21.5ms to ~4ms and still failed. bats gets a
+  check costing one stat per test instead: its isolation directory must still
+  exist when the test ends, which is exactly the mechanism that cost the tanks.
+
+  🔴 `scrollback` itself is flaky at baseline and very environment-sensitive —
+  the no-shim arm ranged from 8/8 to 1/3 across machines, load, leftover tmux
+  sessions and worktrees. That flake is older than this change and is NOT fixed
+  here; it is recorded so the next person does not read a green run as proof.
 
 - **`pty-smoke.py`'s board-height checks could pass by seeing nothing.** They
   waited a fixed 2.5s; on a cold machine the first board returns 0 bytes in that

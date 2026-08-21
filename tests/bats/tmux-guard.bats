@@ -94,11 +94,52 @@ _real_tmux() {
   [[ "$output" == tmux* ]] || { echo "$output"; false; }
 }
 
-@test "tmux-guard: the suite installs it as \`tmux\`, ahead of the real one" {
-  # Wiring, executed rather than grepped. helpers.bash has already run.
+@test "tmux-guard: bats deliberately does NOT run through it" {
+  # 🔴 This asserts an ABSENCE, so it has to say why or someone will "fix" it.
+  #
+  # The guard was on the bats PATH for about an hour. What it costs was measured
+  # twice, by two sessions working this defect from opposite ends, on
+  # scrollback.bats — the suite's most timing-sensitive test:
+  #
+  #                            session A     session B
+  #   nothing installed          8/8 green     1/3 – 2/3 green
+  #   the guard                  0/8 green     0/3 green
+  #   a NULL shim                0/5 green     0/3 green
+  #     (zero checks: exec <real tmux> "$@")
+  #
+  # 🔴 THE NULL SHIM IS THE WHOLE FINDING. A wrapper that checks nothing fails
+  # too, so the cost is the bash PROCESS — one fork per tmux call, and clikae
+  # calls tmux several times per launch — not anything this guard does with it.
+  # Making the checks cheaper cannot buy it a place here; the first version was
+  # optimised from ~21.5ms to ~4ms and still failed. Across both sessions a shell
+  # wrapper on this PATH passed 0 times out of 8.
+  #
+  # 🔴 And note the disagreement in the top row rather than averaging it away:
+  # the BASELINE ranges from 8/8 to 1/3 depending on machine load, leftover tmux
+  # sessions, and whether it runs in a worktree (worse — session A first read
+  # this effect as "no difference" from two degraded arms at 2/5 each). A test
+  # this environment-sensitive cannot be A/B'd casually: what survives all of it
+  # is that the shim arm never once passed and the empty arm sometimes did.
+  #
+  # bats does not need it. The measured killer lived in the pty harness (a
+  # parent deleting $TMUX_TMPDIR while its child still had a `tmux kill-server`
+  # to run), it is fixed at the source, and the guard still covers that harness
+  # — where it has run green, though nobody has A/B'd it there, so treat that as
+  # "no failure seen" and not as "measured free". What bats gets instead is the
+  # free check below: the isolation directory must still exist when a test ends.
   local w; w="$(command -v tmux)"
-  [ "$w" = "$TEST_HOME/.testbin/tmux" ] || {
-    echo "the suite is not running through the guard; \`tmux\` resolves to $w"; false; }
+  [ "$w" != "$TEST_HOME/.testbin/tmux" ] || {
+    echo "the guard is back on the bats hot path; see the A/B above"; false; }
+}
+
+@test "tmux-guard: the bats isolation directory survives its own test" {
+  # The free half of the protection. The mechanism that cost the maintainer his
+  # tanks is "$TMUX_TMPDIR stopped existing while something still wanted it", and
+  # here that directory lives INSIDE $TEST_HOME, which teardown removes. This
+  # costs one stat per test instead of 4ms per tmux call.
+  [ -n "${TMUX_TMPDIR:-}" ] || { echo "the suite set no TMUX_TMPDIR at all"; false; }
+  [ -d "$TMUX_TMPDIR" ] || {
+    echo "TMUX_TMPDIR ($TMUX_TMPDIR) is gone; any tmux call now silently means /tmp"; false; }
 }
 
 @test "tmux-guard: pty-smoke installs it in its sandbox too" {

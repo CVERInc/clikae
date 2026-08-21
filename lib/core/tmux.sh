@@ -362,6 +362,27 @@ tmux_attach() {
     fi
     return 0
   fi
+  # 🔴 TWO DIFFERENT FAILURES WEAR THE SAME EXIT CODE, and treating them alike
+  # is how three of the maintainer's sessions left tmux for good on 2026-08-21:
+  # the server died under them, all three attaches returned 1, and the caller
+  # did what it does for a terminal tmux cannot draw on — relaunched the engine
+  # OUTSIDE tmux. The conversations survived (`exec` keeps the pid) but they
+  # were no longer in `tmux ls`, so they could not be reattached, listed by the
+  # board, or reached from his phone.
+  #
+  # The two are told apart by asking whether tmux is still there afterwards —
+  # not by how long the attach lasted, which is a clock, not a cause:
+  #
+  #   TERM tmux cannot draw on : rc=1 in 0.05s, server still up   -> 1
+  #   the server went away     : rc=1 after 3.66s, nothing to ask -> 2
+  #
+  # A session that simply ENDED is not either of these: measured rc=0, with and
+  # without other sessions on the server, so it never reaches this line. That
+  # matters — a wrong 2 here would relaunch an engine the human just quit.
+  if ! tmux has-session -t "$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
+    rm -f "$scrollback_file"
+    return 2
+  fi
   [ "$started_here" -eq 1 ] && tmux kill-session -t "$session" 2>/dev/null
   rm -f "$scrollback_file"
   return 1
