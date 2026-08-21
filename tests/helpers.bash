@@ -44,6 +44,14 @@ setup() {
   # this is host safety rather than convenience.
   cp "$CLIKAE_TEST_ROOT/tests/stubs/security" "$TEST_HOME/.testbin/security"
   chmod +x "$TEST_HOME/.testbin/security"
+  # 🔴 Backstop for the TMUX_TMPDIR isolation set up below. That isolation is a
+  # PATH into a throwaway directory, and tmux answers a directory that has been
+  # deleted by silently using /tmp — the developer's own socket — instead. The
+  # guard refuses exactly that case and execs the real tmux otherwise, so a
+  # sandbox that gets cleaned up early becomes a loud failure rather than a
+  # `kill-server` on the machine's live tanks. See tests/stubs/tmux-guard.
+  cp "$CLIKAE_TEST_ROOT/tests/stubs/tmux-guard" "$TEST_HOME/.testbin/tmux"
+  chmod +x "$TEST_HOME/.testbin/tmux"
   export PATH="$TEST_HOME/.testbin:$PATH"
   # Pin the interface language so assertions are deterministic regardless of the
   # CI/host locale. i18n itself is covered by tests/bats/i18n.bats.

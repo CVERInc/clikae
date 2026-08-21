@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# tests/stubs/tmux-guard — installed onto the test PATH as `tmux`.
+#
+# 🔴 WHY THIS EXISTS. The suite isolates tmux by pointing $TMUX_TMPDIR at a
+# throwaway directory. Measured 2026-08-21, on the maintainer's machine, twice,
+# after his live tmux server died mid-work:
+#
+#   TMUX_TMPDIR=<a directory that exists>      -> isolated, and `kill-server`
+#                                                 on an empty one errors cleanly
+#   TMUX_TMPDIR=<a directory that is GONE>     -> tmux SILENTLY falls back to
+#                                                 /tmp, i.e. the DEFAULT socket
+#
+# There is no error, no warning, no exit code. The variable is still set and
+# still points somewhere; it just does not exist any more. So an isolation that
+# reads correctly in the source can be entirely absent at runtime, and the first
+# `tmux kill-server` after that takes down every real session on the machine.
+#
+# The fallback is NOT limited to kill-server: `new-session` under a missing
+# TMUX_TMPDIR was measured creating its session on the developer's own server.
+# So a test can both destroy his work and litter it.
+#
+# 🔴 A GUARD, NOT A MOCK. This execs the real tmux; behaviour is unchanged when
+# the isolation holds. It only refuses the one case that cannot be distinguished
+# from working correctly by looking at the output. clikae resolves tmux through
+# PATH, so this covers the engine's own internal calls too — not just the ones
+# written in test files, which is the half an audit of the test sources misses.
+set -uo pipefail
+
+_refuse() {
+  printf 'tmux-guard: REFUSING `tmux %s`\n' "$*" >&2
+  printf '  TMUX_TMPDIR=%s\n' "${TMUX_TMPDIR-<unset>}" >&2
+  printf '  That directory does not exist, so tmux would silently fall back to\n' >&2
+  printf '  /tmp — the DEVELOPER'"'"'S OWN SOCKET — and this command would hit his\n' >&2
+  printf '  live sessions. Refusing instead. Something deleted the sandbox while\n' >&2
+  printf '  a process was still using it; fix the lifetime, not this guard.\n' >&2
+  exit 78
+}
+
+[ -n "${TMUX_TMPDIR:-}" ] || _refuse "$@"
+[ -d "$TMUX_TMPDIR" ]     || _refuse "$@"
+
+# Find the real tmux: everything on PATH except this file itself, so installing
+# the guard as `tmux` cannot make it call itself.
+#
+# 🔴 NOT ONE FORK. The first version resolved each candidate with
+# `$(cd "$_d" && pwd -P)` — two subshells per PATH entry, and PATH here has 20.
+# Measured: 21.5 ms added to EVERY tmux call, which is enough to break a
+# timing-sensitive test (scrollback's second capture stopped happening) while
+# the guard itself refused nothing. A safety device on the hot path has to be
+# free, or it buys tmux safety with red tests nobody can explain.
+# `-ef` is a bash builtin and compares the actual files, so it also survives
+# symlinks and relative paths, which is what the subshells were bought for.
+_IFS_SAVE="$IFS"; IFS=:
+for _d in $PATH; do
+  IFS="$_IFS_SAVE"
+  [ -n "$_d" ] || continue
+  [ -x "$_d/tmux" ] || continue
+  [ "$_d/tmux" -ef "$0" ] && continue
+  exec "$_d/tmux" "$@"
+done
+IFS="$_IFS_SAVE"
+
+printf 'tmux-guard: no real tmux found on PATH\n' >&2
+exit 127

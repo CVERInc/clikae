@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`scripts/test.sh` could kill every tmux session on the machine it ran on.**
+  Twice in one afternoon the maintainer's four live tanks died mid-work while
+  the gate was running. The suite's isolation was not missing — every
+  `kill-server` in it ran with `$TMUX_TMPDIR` correctly set, and reading the
+  sources said so. What was missing was the *directory*: tmux answers a
+  `$TMUX_TMPDIR` that no longer exists by silently using `/tmp` — the developer's
+  own socket — with no error, no warning and no exit code. (Measured: the same
+  fallback puts `new-session` on his server too, so a test could both destroy his
+  work and litter it.)
+
+  The race was one flag. `mode_size` in the pty harness waited for its child with
+  `os.waitpid(pid, os.WNOHANG)` — "look, don't wait" — so the parent deleted the
+  sandbox the moment it had read its answer, while the child had not yet reached
+  its own `tmux kill-server`. Under load the child lags further behind, which is
+  why it looked intermittent and why it only ever happened during the gate.
+
+  Fixed at the source (the parent now waits, and kills after 10s), and backstopped
+  for the whole class: `tests/stubs/tmux-guard` installs as `tmux` on the test
+  PATH and refuses any call whose `$TMUX_TMPDIR` is unset or gone, naming the
+  command it stopped. It sits on PATH rather than in the test bodies because
+  clikae resolves tmux through PATH too — the engine's own internal calls are the
+  half that auditing the test sources cannot see. Verified by running the whole
+  gate with three decoy sessions on the default socket: all three survive.
+
+- **`pty-smoke.py`'s board-height checks could pass by seeing nothing.** They
+  waited a fixed 2.5s; on a cold machine the first board returns 0 bytes in that
+  window and a complete frame in 8. Both `newlines <= rows-1` and "no window
+  indicator" are satisfied by an empty capture, so a timeout did not merely lose
+  two checks — it turned three others green for having looked at nothing. The
+  wait is now a cap rather than a duration, it settles on *visible* output (the
+  board emits escape codes, then computes silently for ~2.2s, then paints), and
+  every frame is asserted non-empty before anything is concluded from it.
+
 - **agy sessions never entered tmux, so they were invisible to the board and
   unreachable from anywhere else** (#34). tmux is spawned in switch.sh's ENGINE
   path; agy is a launch-only TARGET and never got it, so `_agy_switch` ended in a

@@ -79,6 +79,16 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     shutil.copy(os.path.join(REPO, 'tests', 'stubs', 'security'),
                 os.path.join(binp, 'security'))
     os.chmod(os.path.join(binp, 'security'), 0o755)
+    # 🔴 The tmux isolation below is only as good as the DIRECTORY it points at.
+    # A deleted $TMUX_TMPDIR makes tmux fall back to /tmp — the developer's own
+    # socket — with no error at all, so an isolation that reads correctly can be
+    # absent at runtime. This guard refuses that one case and execs the real tmux
+    # otherwise. It is on PATH rather than in the test bodies because clikae
+    # resolves tmux through PATH too, and the engine's own internal calls are the
+    # half that auditing the test sources cannot see.
+    shutil.copy(os.path.join(REPO, 'tests', 'stubs', 'tmux-guard'),
+                os.path.join(binp, 'tmux'))
+    os.chmod(os.path.join(binp, 'tmux'), 0o755)
 
     for name in ('claude', 'codex', 'agy'):
         p = os.path.join(binp, name)
@@ -324,7 +334,16 @@ def mode_size():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     for cols, rows in ((60, 30), (140, 40)):
         tmpdir = _tf.mkdtemp(); chome = _tf.mkdtemp()
+        # This mode builds its own environment rather than going through
+        # sandbox(), so it needs the guard installed explicitly — and it is the
+        # mode that was MEASURED killing the developer's server, so leaving it
+        # as the one uncovered path would defeat the point.
+        gbin = _tf.mkdtemp()
+        _sh.copy(os.path.join(root, 'tests', 'stubs', 'tmux-guard'),
+                 os.path.join(gbin, 'tmux'))
+        os.chmod(os.path.join(gbin, 'tmux'), 0o755)
         script = (
+            'export PATH="%s:$PATH"\n'
             'export TMUX_TMPDIR="%s"; unset TMUX TMUX_PANE\n'
             'export CLIKAE_HOME="%s"\n'
             'cd %s || exit 1\n'
@@ -334,7 +353,7 @@ def mode_size():
             'sleep 1\n'
             'echo "OUT=$(tmux display-message -p -t cksize \'#{window_width}x#{window_height}\' 2>&1)"\n'
             'tmux kill-server 2>/dev/null\n'
-        ) % (tmpdir, chome, root)
+        ) % (gbin, tmpdir, chome, root)
         pid, fd = pty.fork()
         if pid == 0:
             os.execvp('bash', ['bash', '-c', script])
@@ -352,11 +371,30 @@ def mode_size():
                 out += c
             if b'OUT=' in out:
                 break
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except Exception:
-            pass
+        # 🔴 WAIT FOR THE CHILD BEFORE DELETING ITS SANDBOX. This was WNOHANG —
+        # "look, don't wait" — so the parent returned the instant it had read
+        # OUT= and deleted $TMUX_TMPDIR while the child had NOT yet reached its
+        # own `tmux kill-server` line. tmux answers a missing TMUX_TMPDIR by
+        # silently falling back to /tmp (see tests/stubs/tmux-guard), so that
+        # kill landed on the maintainer's real server: four live tanks, twice in
+        # one afternoon. The race is also why it looked intermittent — under
+        # load the child lags further behind the parent, which is exactly when
+        # the gate is running.
+        deadline = _t.time() + 10
+        while _t.time() < deadline:
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                    break
+            except Exception:
+                break
+            _t.sleep(0.05)
+        else:
+            try:
+                os.kill(pid, 9); os.waitpid(pid, 0)
+            except Exception:
+                pass
         _sh.rmtree(tmpdir, ignore_errors=True); _sh.rmtree(chome, ignore_errors=True)
+        _sh.rmtree(gbin, ignore_errors=True)
         txt = out.decode(errors='replace').replace('\r', '')
         want = '%dx%d' % (cols, rows)
         check('session born at the terminal size (%s)' % want,
@@ -467,9 +505,34 @@ def mode_height():
                              preexec_fn=make_ctty, env=env, close_fds=True)
         os.close(slave)
 
-        def pump(seconds):
+        # 🔴 WAIT FOR THE FRAME, DON'T WAIT A FIXED 2.5 SECONDS. Measured
+        # 2026-08-21, on a machine that had just rebooted: the FIRST board in a
+        # fresh sandbox returned 0 bytes inside 2.5s and a complete 13-line
+        # frame inside 8s. Cold, this mode reported two failures; warm, the same
+        # commit was green — the code never changed, only the clock.
+        #
+        # Worse than flaky: `nl <= ROWS - 1` and `'⋯' not in ttxt` are both
+        # SATISFIED BY AN EMPTY CAPTURE, so a timeout did not just lose the two
+        # loud checks, it turned three quiet ones green for having seen nothing.
+        # Hence a deadline that is a cap rather than a wait, plus the emptiness
+        # assertions below.
+        #
+        # 🔴 AND SETTLING ON SILENCE IS NOT ENOUGH — settling on VISIBLE output
+        # is. Measured timeline for one cold board:
+        #
+        #   1.02s  +22 bytes   0 printable   <- cursor/mode escapes
+        #          ~2.2s of SILENCE while the board computes
+        #   3.23s  +698 bytes  335 printable <- the actual frame
+        #
+        # A plain idle-settle returns inside that gap with nothing but escape
+        # codes, which `strip()` reduces to '' — indistinguishable from a board
+        # that drew nothing. This is the second time that gap has broken a pty
+        # helper here, so the condition is written against what we came to read
+        # rather than against a silence long enough to hope it is over.
+        def pump(seconds, settle=0.4):
             buf = b''
             t0 = _t.time()
+            last = None
             while _t.time() - t0 < seconds:
                 r, _, _ = _sel.select([master], [], [], 0.2)
                 if r:
@@ -480,13 +543,17 @@ def mode_height():
                     if not c:
                         break
                     buf += c
+                    last = _t.time()
+                elif last is not None and (_t.time() - last) >= settle \
+                        and strip(buf).strip():
+                    break                      # drew something, then went quiet
             return buf
 
-        first = pump(2.5)
+        first = pump(20)
         after = b''
         if keys:
             os.write(master, keys)
-            after = pump(2.0)
+            after = pump(10)
         try:
             os.write(master, b'q')
             p.wait(timeout=8)
@@ -503,6 +570,12 @@ def mode_height():
     ROWS = 14
     first, _ = frame_at(ROWS, 100)
     txt = strip(first)
+    # 🔴 NON-VACUITY, and it belongs before everything else. Both checks below
+    # pass on an empty string, so a capture that timed out used to be reported
+    # as a board that fits. A check that cannot tell "correct" from "absent" is
+    # not a check.
+    check('the short-terminal board drew a frame at all', txt.strip() != '',
+          'captured nothing from `clikae home` on a %d-row pty' % ROWS)
     # The frame homes the cursor and advances one line per newline, so it must
     # carry at most rows-1 of them or the screen scrolls.
     nl = txt.count('\n')
@@ -522,6 +595,8 @@ def mode_height():
     # --- 3. control: a TALL terminal is untouched ---------------------------
     tall, _ = frame_at(60, 100)
     ttxt = strip(tall)
+    check('the tall-terminal board drew a frame at all', ttxt.strip() != '',
+          'captured nothing from `clikae home` on a 60-row pty')
     check('a board that fits is drawn whole, with no window indicator',
           '⋯' not in ttxt, 'the viewport engaged on a 60-row terminal')
     missing = [t for _e, t in tanks if t not in ttxt]
