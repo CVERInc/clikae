@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tap-lag` was reading a cached copy of the tap, and falsely refused pushes.**
+  `raw.githubusercontent.com` is served from a CDN that kept answering the old
+  version for minutes after the tap had been pushed; a cache-busting query string
+  and `Cache-Control: no-cache` both made no difference, while the API returned
+  the new content at once. It reads the API now.
+
+  🔴 Stale here does not fail safe. Everywhere else this hook errs toward letting
+  a push through; a stale read makes it refuse a push whose release is already
+  finished, which is the one thing it must never do. Found within minutes of the
+  hook shipping, by it blocking the release it had just been written for.
+
+
 ## [0.28.6] — 2026-08-22
 
 ### Added

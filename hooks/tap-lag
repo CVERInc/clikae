@@ -39,12 +39,23 @@ if [ -z "$newest" ]; then
   exit 0
 fi
 
-# What the tap serves. `--max-time` rather than a bare curl: a hung DNS lookup
-# must not become a hung push.
-raw="https://raw.githubusercontent.com/CVERInc/homebrew-clikae/main/Formula/clikae.rb"
-body="$(curl -fsSL --max-time 8 "$raw" 2>/dev/null || true)"
+# What the tap serves.
+#
+# 🔴 THE API, NOT raw.githubusercontent — and this cost a false block within
+# minutes of the hook shipping. raw is served from a CDN that kept answering
+# 0.28.5 for minutes after the tap had been pushed at 0.28.6; a cache-busting
+# query string and `Cache-Control: no-cache` both made no difference, while the
+# API returned the new content immediately. A stale read here does not fail
+# safe: it refuses a push whose release is already finished, which is the one
+# thing this hook must never do.
+#
+# `--max-time` rather than a bare curl: a hung DNS lookup must not become a hung
+# push. Any failure at all — network, rate limit, no python3 — falls through to
+# not blocking, and says which.
+api="https://api.github.com/repos/CVERInc/homebrew-clikae/contents/Formula/clikae.rb?ref=main"
+body="$(curl -fsSL --max-time 8 -H 'Accept: application/vnd.github.raw' "$api" 2>/dev/null || true)"
 if [ -z "$body" ]; then
-  _note "could not read the tap (offline?) — not blocking the push"
+  _note "could not read the tap (offline? rate-limited?) — not blocking the push"
   exit 0
 fi
 

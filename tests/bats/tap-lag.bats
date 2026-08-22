@@ -161,3 +161,31 @@ _tap_garbage() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"remote"* ]] || { echo "failed open without saying why: $output"; false; }
 }
+
+@test "tap-lag: reads the fresh source, not the cached one" {
+  # 🔴 A FALSE BLOCK, MINUTES AFTER THIS HOOK SHIPPED. raw.githubusercontent is
+  # served from a CDN that kept answering the OLD version for minutes after the
+  # tap had been pushed — a cache-busting query string and Cache-Control:
+  # no-cache both made no difference, while the API returned the new content at
+  # once. Stale here does not fail safe: it refuses a push whose release is
+  # already finished, which is the one thing this hook must never do.
+  #
+  # Behavioural, not a grep for the URL: the stub answers the two endpoints
+  # DIFFERENTLY, so the hook's verdict says which one it actually asked.
+  _repo; _released 1.2.3
+  cat > "$STUB/curl" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    *api.github.com*) echo '  url ".../archive/refs/tags/v1.2.3.tar.gz"'; exit 0 ;;
+    *raw.githubusercontent*) echo '  url ".../archive/refs/tags/v1.2.2.tar.gz"'; exit 0 ;;
+  esac
+done
+exit 1
+EOF
+  chmod +x "$STUB/curl"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ] || {
+    echo "blocked on a tap that is already up to date — it read the cached copy:"
+    echo "$output"; false; }
+}
