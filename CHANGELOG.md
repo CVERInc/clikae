@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.4] — 2026-08-22
+
 ### Fixed
 
 - **`clikae resume` could start a second engine on a conversation you were
