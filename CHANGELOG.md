@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.3] — 2026-08-22
+
 ### Changed
 
 - **The old prefix is gone from every read path.** `live.sh`, `wake_sessions_for`
