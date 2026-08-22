@@ -48,6 +48,21 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     os.makedirs(os.path.join(root, '.clikae'), exist_ok=True)
     with open(os.path.join(root, '.clikae', 'wake-on-reset'), 'w') as f:
         f.write('off\n')
+    # 🔴 Stamp the CURRENT schema, the way tests/helpers.bash does for bats. A
+    # fresh sandbox has no version file, so the first clikae runs the forward
+    # migration and prints one line BEFORE the board — and this harness settles
+    # on "visible output, then quiet", so that line satisfied the settle and the
+    # pump returned inside the board's compute gap. The board never painted, and
+    # the emptiness check passed because the migration message is visible text.
+    # Read from the source so the next bump does not repeat this.
+    _sv = os.path.join(REPO, 'lib', 'core', 'state_version.sh')
+    _ver = '1'
+    with open(_sv) as f:
+        for line in f:
+            if line.startswith('CLIKAE_STATE_VERSION='):
+                _ver = line.split('=', 1)[1].strip(); break
+    with open(os.path.join(root, '.clikae', 'version'), 'w') as f:
+        f.write(_ver + '\n')
     if seed_session:
         d = os.path.join(root, '.clikae', 'profiles', 'claude', 'alpha', 'projects', '-w')
         os.makedirs(d, exist_ok=True)
@@ -529,7 +544,16 @@ def mode_height():
         # that drew nothing. This is the second time that gap has broken a pty
         # helper here, so the condition is written against what we came to read
         # rather than against a silence long enough to hope it is over.
-        def pump(seconds, settle=0.4):
+        # `need` is a marker the BOARD draws and a log line cannot: the section
+        # bullet. "Any visible text" was the earlier bar and it was too low — a
+        # single line printed before the board (a one-time schema-migration
+        # notice) satisfied it, the pump returned inside the compute gap, and the
+        # frame was never painted. The emptiness assertions below passed on that
+        # line, which is how a check meant to catch exactly this missed it.
+        #
+        # The cost of naming a glyph here is that redesigning the board makes
+        # this wait out its cap instead of settling — slower, still correct.
+        def pump(seconds, settle=0.4, need='\u25b8'):
             buf = b''
             t0 = _t.time()
             last = None
@@ -545,8 +569,8 @@ def mode_height():
                     buf += c
                     last = _t.time()
                 elif last is not None and (_t.time() - last) >= settle \
-                        and strip(buf).strip():
-                    break                      # drew something, then went quiet
+                        and need in strip(buf):
+                    break                      # drew a BOARD, then went quiet
             return buf
 
         first = pump(20)
