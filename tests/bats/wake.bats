@@ -19,6 +19,13 @@ _src_wake() {
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  # …and the session-name prefixes, which wake_sessions_for builds its match
+  # from. The SAME lesson as the paragraph above, a second time: bin/clikae
+  # loads tmux.sh before any of this, the fixture did not, and the symptom was
+  # a waiter that silently attached to nothing. A fixture is only as honest as
+  # the load order it copies.
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
 }
@@ -150,6 +157,13 @@ teardown() {
 }
 
 @test "offer: on a live session with a real phrase, the waiter is attached" {
+  # 🔴 THE `ck-` NAME HERE IS LOAD-BEARING — do not "tidy" it to `clikae-`.
+  # A usage limit hits the ACCOUNT, so a session still carrying the pre-0.28.3
+  # name is exactly as stuck as a new one, and it needs a waiter just the same.
+  # This test is the only place that covers that, and it found the gap the day
+  # the prefix changed: wake_sessions_for built its match from the new prefix
+  # alone and the offer attached nothing, silently. Normalising the name here
+  # deletes the coverage without failing anything.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   wake_pref_set on
