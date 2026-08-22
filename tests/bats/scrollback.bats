@@ -4,6 +4,28 @@ load '../helpers'
 
 bats_require_minimum_version 1.5.0
 
+# 🔴 STILL FLAKY, AND HERE IS WHAT THE FIFTH INVESTIGATION ADDED (2026-08-22).
+# Measured pass rates on one machine in one evening: 8/8, 5/5, 4/5, and once
+# 2/10 — and the 2/10 run went `pass pass fail fail fail fail fail fail fail
+# fail`, which is not the shape of a coin. Something degrades and stays degraded;
+# it was not leaked tmux servers or leftover test dirs (checked, none) and it
+# could not be reproduced afterwards.
+#
+# The stage trace in the failures is IDENTICAL every time, and every stage looks
+# healthy:
+#
+#   engine-started tmux=yes | rendered=yes | client=yes
+#   capture-bytes=1717      <- the capture worked, the file was written
+#   exiting
+#
+# So the capture is not the problem: the REPLAY is. tmux_attach replays only when
+# `tmux attach` returns 0 and the scrollback file is non-empty, and `tmux attach`
+# was measured returning 0 when a session ends normally (both with and without
+# other sessions on the server). Whoever picks this up next: start at the replay,
+# not at the capture, and do not trust a pass rate measured at a different hour
+# than the one you are comparing it to — an earlier round of this investigation
+# "found" a regression that way and it did not exist.
+
 # _pty_run lives in tests/helpers.bash: session-usable.bats needs the same
 # thing, and a second copy of a pty runner is a second thing to keep in step.
 
