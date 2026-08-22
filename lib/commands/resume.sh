@@ -204,6 +204,14 @@ _resume_exec() {
     log_warn "This conversation has been written to since '$_holder' started — it is probably open there."
     log_dim  "  Attach to that screen instead:  clikae $tank"
     log_dim  "  Resuming starts a SECOND engine on the same transcript."
+    # 🔴 The repo's own `confirm`, not a second reader written here. A first
+    # attempt read /dev/tty directly with a drain in front of it, to keep the
+    # Enter that chose a picker row from answering this — and it HUNG on the
+    # drain, printing the warning and then nothing at all. A prompt nobody can
+    # answer is worse than the duplicate engine it exists to prevent.
+    #
+    # The terminal is handed back before this is reached (the picker's `stty
+    # -echo` is undone at its call site), so a human can see what they type.
     if [ -t 0 ]; then
       confirm "Resume anyway?" || { log_dim "Left it alone."; return 0; }
     else
@@ -622,6 +630,14 @@ _resume_pick() {
       fi
 
       { exec 3>&-; } 2>/dev/null || true   # don't leak the tty fd into the resumed engine
+      # 🔴 GIVE THE TERMINAL BACK BEFORE ANYTHING CAN ASK A QUESTION. The picker
+      # set `stty -echo` on the way in ("permanent no-echo for TUI") and nothing
+      # put it back, so a prompt after this point is answered blind: the human
+      # types and sees nothing. Worse, the Enter that CHOSE this row is still in
+      # the buffer, so a `read` here consumes it as an empty answer and takes the
+      # default — which is how the live-conversation guard below could warn and
+      # then decline on the user's behalf, and look like "resume did nothing".
+      stty echo 2>/dev/null || true
       if [ "${#passthru[@]}" -gt 0 ]; then
         _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid" -- "${passthru[@]}"
       else

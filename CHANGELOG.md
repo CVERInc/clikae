@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The resume picker never gave the terminal back.** It sets `stty -echo` on the
+  way in ("permanent no-echo for TUI") and nothing put it back, so anything that
+  asked a question after a row was chosen was answered blind — you type and see
+  nothing — and the Enter that CHOSE the row was still in the buffer, ready to be
+  read as an empty answer and take the default. That is why the live-conversation
+  guard added in 0.28.4 warned and then declined on the user's behalf, looking
+  like "resume did nothing".
+
+- **The wake watcher took up to a minute to notice it was alone.** It asked two
+  questions on one clock: "has this tank hit a limit?" (expensive — scans a
+  transcript; 60s is right) and "am I the only window left?" (one
+  `tmux list-windows`). The second now has its own tick inside the long sleep.
+  Measured: the watcher leaves 1s after the engine's window closes, not 60s —
+  and that minute was exactly how long a human could sit looking at a countdown
+  in a session whose engine had already gone.
+
+
 ## [0.28.5] — 2026-08-22
 
 ### Fixed

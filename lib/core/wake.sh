@@ -408,6 +408,19 @@ EOF
 # scan (the board's old hot spot) for no benefit anybody can perceive.
 WAKE_WATCH_INTERVAL=60
 
+# WAKE_ALONE_INTERVAL — how often the CHEAP question gets asked.
+#
+# 🔴 TWO QUESTIONS, TWO COSTS, AND THEY WERE SHARING A CLOCK. "Has this tank hit
+# a limit?" is expensive (limit_tank_dry scans a transcript), and 60s is right for
+# it — a limit noticed a minute late costs nothing. "Am I the only window left?"
+# is one `tmux list-windows`, and 60s is badly wrong for it: that is exactly how
+# long a human can sit looking at a countdown in a session whose engine has
+# already gone, wondering where their work went. Reported that way.
+#
+# So the cheap one gets its own tick inside the long sleep. Not a shorter poll —
+# the same two questions, each asked at the rate its answer decays.
+WAKE_ALONE_INTERVAL=2
+
 # wake_watch <engine> <tank> <session> -> watch until this tank runs dry, then
 # hand over to the countdown. Returns non-zero only if it cannot start.
 wake_watch() {
@@ -461,7 +474,16 @@ wake_watch() {
     fi
 
     printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"
-    sleep "$WAKE_WATCH_INTERVAL"
+    # Sleep in slices, asking the cheap question between them: if the engine's
+    # window closes while we wait, leave NOW rather than at the end of the minute.
+    local _slept=0
+    while [ "$_slept" -lt "$WAKE_WATCH_INTERVAL" ]; do
+      sleep "$WAKE_ALONE_INTERVAL"
+      _slept=$((_slept + WAKE_ALONE_INTERVAL))
+      tmux has-session -t "=$session" 2>/dev/null || return 0
+      tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
+        | grep -qvE '^wake( |$)' || return 0
+    done
   done
 }
 
