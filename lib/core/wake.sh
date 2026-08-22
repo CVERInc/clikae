@@ -62,21 +62,38 @@ WAKE_RETRY_BACKOFF=120
 # PROOF that the prompt is waiting — a genuinely hung process also sits still —
 # but it is the strongest claim available without guessing at anyone's UI, and it
 # is conservative in the right direction: when in doubt we do not type.
+
+# 🔴 SESSION-OR-TARGET, RESOLVED ONCE. Both public functions below take either a
+# bare session (`ck-claude-x`) or one with a window (`ck-claude-x:2`, which is
+# what wake_engine_target returns so the nudge misses the waiter's own pane).
+# tmux needs the two spelled differently — `=sess` for a session target, `=sess:2`
+# or `=sess:` for a pane one — and reading the parameter's NAME rather than its
+# contract is what broke four wake tests the day every target was made exact.
+# Sets two variables instead of forking a subshell for each call.
+_wake_targetsv() {
+  _WT_SESS="=${1%%:*}"
+  case "$1" in
+    *:*) _WT_PANE="=$1"  ;;
+    *)   _WT_PANE="=$1:" ;;
+  esac
+}
+
 wake_pane_idle() {
   local session="$1" settle="${2:-2}" a b dead
   [ -n "$session" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  tmux has-session -t "$session" 2>/dev/null || return 1
+  local _WT_SESS _WT_PANE; _wake_targetsv "$session"
+  tmux has-session -t "$_WT_SESS" 2>/dev/null || return 1
 
-  dead="$(tmux display-message -p -t "$session" '#{pane_dead}' 2>/dev/null || printf '1')"
+  dead="$(tmux display-message -p -t "$_WT_PANE" '#{pane_dead}' 2>/dev/null || printf '1')"
   [ "$dead" = "0" ] || return 1
 
-  a="$(tmux capture-pane -p -t "$session" 2>/dev/null)" || return 1
+  a="$(tmux capture-pane -p -t "$_WT_PANE" 2>/dev/null)" || return 1
   sleep "$settle"
   # The session can end during the settle; re-ask rather than compare against a
   # capture of something that is no longer there.
-  tmux has-session -t "$session" 2>/dev/null || return 1
-  b="$(tmux capture-pane -p -t "$session" 2>/dev/null)" || return 1
+  tmux has-session -t "$_WT_SESS" 2>/dev/null || return 1
+  b="$(tmux capture-pane -p -t "$_WT_PANE" 2>/dev/null)" || return 1
 
   [ "$a" = "$b" ]
 }
@@ -95,7 +112,7 @@ wake_pane_idle() {
 wake_engine_target() {
   local session="$1" idx
   command -v tmux >/dev/null 2>&1 || { printf '%s' "$session"; return 0; }
-  idx="$(tmux list-windows -t "$session" -F '#{window_index} #{window_name}' 2>/dev/null \
+  idx="$(tmux list-windows -t "=$session:" -F '#{window_index} #{window_name}' 2>/dev/null \
     | awk '{ i=$1; $1=""; n=substr($0,2); if (n!="wake" && n !~ /^wake /) { print i; exit } }')"
   if [ -n "$idx" ]; then printf '%s:%s' "$session" "$idx"; else printf '%s' "$session"; fi
 }
@@ -108,12 +125,13 @@ wake_engine_target() {
 # name. The target may be a bare session (current window) or `<session>:<win>`;
 # wake_sit passes the engine window so the nudge never hits the waiter's own pane.
 wake_send() {
-  local session="$1" text="${2:-$WAKE_NUDGE}"
-  [ -n "$session" ] || return 1
+  local target="$1" text="${2:-$WAKE_NUDGE}"
+  [ -n "$target" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  tmux has-session -t "$session" 2>/dev/null || return 1
-  tmux send-keys -t "$session" -l "$text" 2>/dev/null || return 1
-  tmux send-keys -t "$session" Enter 2>/dev/null || return 1
+  local _WT_SESS _WT_PANE; _wake_targetsv "$target"
+  tmux has-session -t "$_WT_SESS" 2>/dev/null || return 1
+  tmux send-keys -t "$_WT_PANE" -l "$text" 2>/dev/null || return 1
+  tmux send-keys -t "$_WT_PANE" Enter 2>/dev/null || return 1
   return 0
 }
 
@@ -193,11 +211,11 @@ wake_sit() {
     #
     # The session vanishing under us is abnormal — something killed it — and the
     # caller has always been told so with a non-zero exit. Keep that.
-    tmux has-session -t "$session" 2>/dev/null || return 1
+    tmux has-session -t "=$session" 2>/dev/null || return 1
     # Being the LAST window is normal: the engine finished. We are the reason the
     # session is still alive, so staying means counting down in front of someone
     # who cannot leave — the failure being fixed. Leave cleanly.
-    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+    tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
       | grep -qvE '^wake( |$)' || return 0
     now="$(date +%s)"
     if [ "$now" -lt "$target" ]; then
@@ -208,7 +226,7 @@ wake_sit() {
       # without anyone switching to this window. An automatic action nobody can
       # see is the kind most worth showing: from the engine's own window you can
       # tell it is waiting, and roughly for how long.
-      tmux rename-window -t "$session:wake" "wake $(wake_human_left "$left")" 2>/dev/null || true
+      tmux rename-window -t "=$session:wake" "wake $(wake_human_left "$left")" 2>/dev/null || true
       # Wake up often enough that the countdown is not a lie, but not so often
       # that a machine asleep for eight hours spins. 30s is under the resolution
       # anybody reads a countdown at.
@@ -264,7 +282,7 @@ wake_attach() {
   local session="$1" reset="$2" bin="${CLIKAE_BIN:-clikae}"
   [ -n "$session" ] && [ -n "$reset" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  tmux has-session -t "$session" 2>/dev/null || return 1
+  tmux has-session -t "=$session" 2>/dev/null || return 1
   # One waiter per session. A second limit banner while one is already counting
   # down must not stack up two things typing into the same pane.
   # Prefix, not an exact name: the waiter renames its own window to carry the
@@ -272,11 +290,11 @@ wake_attach() {
   # starts. That guard would then let a SECOND waiter attach, and two of them
   # type into the same pane. Found by CI on Linux, where the rename won the race
   # that macOS lost — the test that caught it was watching this exact promise.
-  if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+  if tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
      | grep -qE '^wake( |$)'; then
     return 0
   fi
-  tmux new-window -d -t "$session" -n wake \
+  tmux new-window -d -t "=$session:" -n wake \
     "'$bin' wake --sit '$session' '$reset'" 2>/dev/null || return 1
   return 0
 }
@@ -396,7 +414,7 @@ wake_watch() {
     # limit" with no way out but closing the terminal.
     #
     # Session gone entirely: so are we, and that has always been a clean exit.
-    tmux has-session -t "$session" 2>/dev/null || return 0
+    tmux has-session -t "=$session" 2>/dev/null || return 0
     # Ask about the ENGINE too: when no window other than ours remains, the work
     # is over and staying is what keeps a dead session on screen.
     #
@@ -414,7 +432,7 @@ wake_watch() {
     # window showing "watching for a limit" with nothing to type into. That is
     # the "sometimes it just hangs" report — the very failure this guard was
     # added to stop. Verified against real tmux; pinned by wake-sit.bats.
-    tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+    tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
       | grep -qvE '^wake( |$)' || return 0
 
     if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
@@ -445,12 +463,12 @@ wake_attach_watcher() {
   local session="$1" engine="$2" tank="$3" bin="${CLIKAE_BIN:-clikae}"
   [ -n "$session" ] && [ -n "$engine" ] && [ -n "$tank" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  tmux has-session -t "$session" 2>/dev/null || return 1
-  if tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null \
+  tmux has-session -t "=$session" 2>/dev/null || return 1
+  if tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
      | grep -qE '^wake( |$)'; then
     return 0
   fi
-  tmux new-window -d -t "$session" -n wake \
+  tmux new-window -d -t "=$session:" -n wake \
     "'$bin' wake --watch '$engine' '$tank' '$session'" 2>/dev/null || return 1
   return 0
 }

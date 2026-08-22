@@ -330,11 +330,11 @@ tmux_spawn_session() {
 # default bar, which is what we had yesterday. Cosmetics never fail a launch.
 tmux_label() {
   local session="$1" engine="$2" tank="$3"
-  tmux set-option -t "$session" status-left-length 40 2>/dev/null || true
-  tmux set-option -t "$session" status-left "[$engine/$tank] " 2>/dev/null || true
+  tmux set-option -t "=$session:" status-left-length 40 2>/dev/null || true
+  tmux set-option -t "=$session:" status-left "[$engine/$tank] " 2>/dev/null || true
   # Without this tmux renames the window after whatever is running in it, and
   # `-n` is undone the moment the engine spawns a child.
-  tmux set-window-option -t "$session" automatic-rename off 2>/dev/null || true
+  tmux set-window-option -t "=$session:" automatic-rename off 2>/dev/null || true
   # …and `-n` cannot be trusted to have survived to here either: on a machine
   # whose tmux has automatic-rename ON (which is tmux's own default), the window
   # is renamed in the gap between `new-session -n` and the line above. A test
@@ -342,10 +342,10 @@ tmux_label() {
   # maintainer's own config it never reproduced. So state the name again, now
   # that it will stick.
   local current
-  current="$(tmux display-message -p -t "$session" '#{window_name}' 2>/dev/null || true)"
+  current="$(tmux display-message -p -t "=$session:" '#{window_name}' 2>/dev/null || true)"
   # Never touch the waiter's window — it carries the countdown in its name.
   case "$current" in wake*) return 0 ;; esac
-  tmux rename-window -t "$session" "$engine" 2>/dev/null || true
+  tmux rename-window -t "=$session:" "$engine" 2>/dev/null || true
 }
 
 # tmux_attach <session> <started_here> <scrollback_file>
@@ -355,7 +355,7 @@ tmux_label() {
 # and a session nobody can see still spends the account's quota.
 tmux_attach() {
   local session="$1" started_here="$2" scrollback_file="$3"
-  if tmux attach -t "$session"; then
+  if tmux attach -t "=$session"; then
     if [ -s "$scrollback_file" ]; then
       awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
       rm -f "$scrollback_file"
@@ -379,11 +379,11 @@ tmux_attach() {
   # A session that simply ENDED is not either of these: measured rc=0, with and
   # without other sessions on the server, so it never reaches this line. That
   # matters — a wrong 2 here would relaunch an engine the human just quit.
-  if ! tmux has-session -t "$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
+  if ! tmux has-session -t "=$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
     rm -f "$scrollback_file"
     return 2
   fi
-  [ "$started_here" -eq 1 ] && tmux kill-session -t "$session" 2>/dev/null
+  [ "$started_here" -eq 1 ] && tmux kill-session -t "=$session" 2>/dev/null
   rm -f "$scrollback_file"
   return 1
 }

@@ -1472,9 +1472,9 @@ EOF
       # Inside tmux, moving the current client is the right verb; a nested attach
       # is what `switch-client` exists to prevent.
       if [ -n "${TMUX:-}" ]; then
-        exec tmux switch-client -t "$note"
+        exec tmux switch-client -t "=$note"
       fi
-      exec tmux attach -t "$note"
+      exec tmux attach -t "=$note"
       ;;
     resume)
       # Reopen this dir's most recent session: clikae <engine> <tank> -- <resume-args>.
@@ -2538,7 +2538,7 @@ _home_pick() {
             stty -echo 2>/dev/null || true
             tui_screen_enter
             case "$_cans" in
-              y|Y) tmux kill-session -t "$_csess" 2>/dev/null || true
+              y|Y) tmux kill-session -t "=$_csess" 2>/dev/null || true
                    items="$(_home_items)"; sel=0 ;;
             esac
           fi

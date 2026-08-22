@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every tmux target could name the wrong session.** `tmux -t` is not an exact
+  match: given only `ck-claude-x-1492` on the server, `tmux has-session -t
+  ck-claude-x` answers YES, because tmux falls back to prefix matching. Session
+  names here carry a digest suffix so a resumed conversation gets its own
+  session — which is precisely what makes one clikae name a prefix of another,
+  and the maintainer has five such sessions in his state directory.
+
+  So `clikae claude x`, with a resumed session open, found `ck-claude-x` (it had
+  matched the digest one), skipped the spawn, and attached you to that
+  conversation instead of your tank. Silently. The same mismatch reached
+  `kill-session` in `clean.sh` — a destroyed session rather than a wrong window —
+  and `send-keys` in `wake.sh`, which types into whatever it landed on.
+
+  All 44 targets now use tmux's own exact syntax (`=name` for a session,
+  `=name:` for a window or pane), and a lint keeps them that way — a convention
+  nothing enforces drifts back, and this one is invisible until the day two
+  names share a prefix. `$TMUX_PANE` stays bare: a pane ID is already exact.
+
+  🔴 The first sweep broke `wake`, and it is worth why: `wake_send` and
+  `wake_pane_idle` take a session OR a `session:window` target — stated in a
+  comment, nowhere in the code — so rewriting on the variable's NAME produced
+  `=sess:2:`. The two readings now go through one resolver instead of a
+  paragraph of prose.
+
+
 ## [0.28.2] — 2026-08-21
 
 ### Fixed

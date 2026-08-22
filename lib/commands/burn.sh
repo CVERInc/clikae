@@ -586,7 +586,7 @@ EOF
         while [ ! -f "$state_file" ]; do
           sleep $poll_int
           [ "$poll_int" -lt 5 ] && poll_int=$((poll_int + 1))
-          if ! tmux has-session -t "ck-$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
+          if ! tmux has-session -t "=ck-$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
             # Session vanished without writing state
             echo 255 > "$state_file"
             break

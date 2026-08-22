@@ -174,16 +174,16 @@ KV
     current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
-    tmux has-session -t "ck-$sess_id" 2>/dev/null || \
+    tmux has-session -t "=ck-$sess_id" 2>/dev/null || \
       tmux_spawn_session "${spawn_env[@]}" \
         --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
     tmux_label "ck-$sess_id" "$engine" "$tank"
     wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
     
     local clients
-    clients="$(tmux list-clients -t "$current_pane_session" 2>/dev/null || true)"
+    clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
-      exec tmux switch-client -t "ck-$sess_id"
+      exec tmux switch-client -t "=ck-$sess_id"
     fi
     # No client on this pane's session to move — we are inside a DETACHED one (a
     # burn wrapper, an agent run, a pane whose client went away). The engine has
@@ -195,7 +195,7 @@ KV
     log_dim  "Reach it with:  tmux switch-client -t ck-$sess_id   (or: tmux attach -t ck-$sess_id)"
   else
     local started_here=0
-    if ! tmux has-session -t "ck-$sess_id" 2>/dev/null; then
+    if ! tmux has-session -t "=ck-$sess_id" 2>/dev/null; then
       tmux_spawn_session "${spawn_env[@]}" \
         --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
       tmux_label "ck-$sess_id" "$engine" "$tank"
@@ -337,7 +337,7 @@ EOF
     # no file-access grant, which no later call can repair (DESIGN-tmux Rule 7).
     if tmux_usable; then
       local started_here=0
-      if ! tmux has-session -t "ck-$tank_id" 2>/dev/null; then
+      if ! tmux has-session -t "=ck-$tank_id" 2>/dev/null; then
         tmux_spawn_session "${relay_env[@]}" \
           --session "ck-$tank_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
         tmux_label "ck-$tank_id" "$engine" "$tank"

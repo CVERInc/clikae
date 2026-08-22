@@ -895,11 +895,11 @@ _clean_tmux_gc() {
       # Defence in depth: a real sid is validated engine/tank names + a digest, so
       # an empty or dot-leading value is a malformed file — never act on it.
       case "$sid" in ''|.*) continue ;; esac
-      if tmux has-session -t "ck-$sid" 2>/dev/null; then
+      if tmux has-session -t "=ck-$sid" 2>/dev/null; then
         if [ "$dry_run" = "1" ]; then
           log_info "GC: [Dry Run] Would clean up abandoned tmux session ck-$sid"
         else
-          tmux kill-session -t "ck-$sid"
+          tmux kill-session -t "=ck-$sid"
           log_info "GC: Cleaned up abandoned tmux session ck-$sid"
           rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$HOME/.clikae/state/ck-${sid}.scrollback"
         fi

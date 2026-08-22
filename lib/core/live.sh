@@ -70,7 +70,7 @@ live_split() {
 live_wake_note() {
   local name="$1" w
   command -v tmux >/dev/null 2>&1 || return 0
-  w="$(tmux list-windows -t "$name" -F '#{window_name}' 2>/dev/null | grep -E '^wake( |$)' | head -n 1)"
+  w="$(tmux list-windows -t "=$name:" -F '#{window_name}' 2>/dev/null | grep -E '^wake( |$)' | head -n 1)"
   [ -n "$w" ] || return 0
   # `wake 13h38m` -> `13h38m`; a bare `wake` has not started counting yet.
   case "$w" in wake\ *) printf '%s' "${w#wake }" ;; esac
