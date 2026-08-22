@@ -55,6 +55,24 @@ setup() {
   mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
   printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
 
+  # 🔴 PIN THE LIBRARY PATH, or a test inherits the developer's INSTALLED clikae.
+  # Eleven test files source library code through $CLIKAE_LIB, and helpers did not
+  # set it — so each one set it itself, and any that forgot picked up whatever the
+  # surrounding shell had. On this machine that is
+  # /opt/homebrew/Cellar/clikae/0.27.0/libexec/lib: a test could source clean.sh
+  # from the working tree and have it pull resume.sh from a release five versions
+  # old, and pass. It failed on CI, where nothing is installed and the variable is
+  # empty — which is the honest environment, arriving late.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  export CLIKAE_ROOT="$CLIKAE_TEST_ROOT"
+  # A test is not running inside a tank, whatever launched the suite thinks. This
+  # arrives set whenever the developer runs the gate from a clikae session, and
+  # never on CI — so leaving it is a difference between the two environments for
+  # no reason.
+  unset CLIKAE_TANK_NAME
+  # …and the VERSION must come from the tree under test, not from whatever is
+  # installed. Inherited, it reads 0.27.0 here while bin/clikae says 0.28.2.
+  unset CLIKAE_VERSION
   export CLIKAE_LANG=en-US
   # Host-safety: the tmux tests are not polite guests. roam.bats calls a bare
   # `tmux kill-server` twice (it needs a known-empty server to prove create-or-

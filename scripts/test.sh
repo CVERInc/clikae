@@ -61,7 +61,16 @@ echo "→ doc names (every function a doc names must exist)"
 bash "$(dirname "$0")/doc-names-exist.sh"
 
 echo "→ bats"
-bats -r --print-output-on-failure tests/bats
+# 🔴 STRIP THE LAUNCHING clikae's ENVIRONMENT. The gate is usually run from
+# inside a clikae session, which exports CLIKAE_LIB / CLIKAE_ROOT / CLIKAE_BIN /
+# CLIKAE_VERSION / CLIKAE_TANK_NAME pointing at the INSTALLED clikae — 0.27.0 on
+# the maintainer's machine while the tree said 0.28.2. A test that forgot to pin
+# one of those sourced library code from a five-version-old release and passed,
+# and CI (where nothing is installed) went red for three commits before anyone
+# looked. helpers.bash pins them now; this makes the gate match CI by
+# construction rather than by remembering to.
+env -u CLIKAE_LIB -u CLIKAE_ROOT -u CLIKAE_BIN -u CLIKAE_VERSION -u CLIKAE_TANK_NAME \
+  bats -r --print-output-on-failure tests/bats
 
 # The third leg exists because the first two are structurally blind to the TUI:
 # ShellCheck reads source, bats never presses a key. Every board regression of
