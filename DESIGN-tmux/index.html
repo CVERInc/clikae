@@ -15,11 +15,20 @@
 <p><code>clikae-&lt;engine&gt;-&lt;tank&gt;[-&lt;argv 摘要&gt;]</code>。舊前綴是 <code>ck-</code>，從 v0.4 用到 0.28.2 ——
 那個縮寫<strong>從來沒有被決定過</strong>：README、formula、alias、文件裡都沒有它，它只活在
 使用者唯一會讀到它的地方（<code>tmux ls</code>）。</p>
-<p>🔴 <strong>舊前綴仍然被讀，而且必須繼續被讀。</strong> 改名是<strong>搬遷</strong>不是字串替換：升級的那一刻
-有 session 正跑在舊名字底下、有狀態檔是用舊名字寫的。丟掉舊前綴的後果是那些 session
-從看板消失、attach 不到、而且會被開出一個重複的 session 把 tank 一分為二。
-<code>tmux_sessv</code> 兩個都找（新的優先），<code>live.sh</code> 兩個都列，<code>clean.sh</code> 的 GC 兩種鎖都掃
-——<strong>GC 漏掉舊名字是永久的</strong>：那個鎖從此不會被釋放也不會被刪。</p>
+<p>🔴 <strong>舊前綴不再被讀，因為它不再存在。</strong> 改名是<strong>搬遷</strong>不是字串替換，而搬遷分兩層：</p>
+<ul>
+<li><strong>一次性全機掃描</strong>（<code>_state_migrate_1</code>，state schema v1 → v2）：第一次跑新版時，把機器上
+<strong>每一個</strong> <code>ck-*</code> 都改名。這一步不能省成「遇到才改」——<code>tmux_sessv</code> 只在有人啟動那個 tank
+時才被呼叫，所以一個你今天不會進去的 tank 會被留下，而看板只讀一個前綴時它就是
+<strong>活著但看不見</strong>，<code>clikae &lt;tank&gt;</code> 還會在旁邊再開一個。逐 id 的改名搆不到它，逐機器的掃描可以。</li>
+<li><strong>遇到就改名</strong>（<code>tmux_sessv</code>，約 6 行）：接住漏網。同一台機器上可能還裝著舊版 clikae
+（維護者的機器上就有 brew 的 0.27.0），它會在遷移跑完之後繼續造出舊名字——一次性的掃法
+留不住這些。</li>
+</ul>
+<p>⚠️ <strong>殘留的一種情況</strong>：舊 binary 造出來的 session，在還沒有人啟動進去之前撞到用量上限，
+不會拿到守望者（<code>wake_sessions_for</code> 只比對一個前綴）。啟動一次就會被收回來。</p>
+<p>被改名的 session 裡的守望者會自己乾淨退出（它的指令裡烤著舊名字），<code>switch</code> 在兩條路上
+都會重新掛一個，而 <code>wake_attach_watcher</code> 是冪等的。</p>
 <p>前綴只有一個定義（<code>lib/core/tmux.sh</code> 的 <code>CLIKAE_SESS_PREFIX</code>）。它先前以字面字串
 散在 64 個地方，那正是本文件開頭那個「規則說要收斂、函式從沒被寫出來、四個呼叫端
 各自漂移」的形狀在等著重演。</p>
