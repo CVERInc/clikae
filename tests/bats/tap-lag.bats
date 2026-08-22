@@ -116,9 +116,11 @@ _tap_garbage() {
   # whose first wiring test passed on the comment that named it.
   _repo
   mkdir -p "$TEST_HOME/h/hooks" "$TEST_HOME/h/scripts"
-  for f in pre-push changelog-guard gate-stamp tap-lag; do
-    cp "$CLIKAE_TEST_ROOT/hooks/$f" "$TEST_HOME/h/hooks/"
-  done
+  # 🔴 EVERY hook, not a hand-kept list. pre-push chains them, so a fixture that
+  # names three of them stops standing for pre-push the moment a fourth is added
+  # — which is exactly what happened when hooks/tap-lag arrived: this test went
+  # red for a hook it had never heard of, in a run that had nothing to do with it.
+  cp "$CLIKAE_TEST_ROOT/hooks/"* "$TEST_HOME/h/hooks/"
   printf '#!/usr/bin/env bash\necho SUITE-RAN\nexit 0\n' > "$TEST_HOME/h/scripts/test.sh"
   chmod +x "$TEST_HOME/h/scripts/test.sh" "$TEST_HOME/h/hooks/"*
 

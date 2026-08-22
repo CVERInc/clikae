@@ -140,8 +140,11 @@ _commit() { git add -A; git commit -qm "$1"; git rev-parse HEAD; }
   # A copy of the tree the hook needs: the hook, the guard, and a test suite
   # stubbed to succeed instantly — so the ONLY thing that can refuse is the guard.
   mkdir -p "$TEST_HOME/h/hooks" "$TEST_HOME/h/scripts"
-  cp "$CLIKAE_TEST_ROOT/hooks/pre-push"        "$TEST_HOME/h/hooks/"
-  cp "$CLIKAE_TEST_ROOT/hooks/changelog-guard" "$TEST_HOME/h/hooks/"
+  # 🔴 EVERY hook, not a hand-kept list. pre-push chains them, so a fixture that
+  # names three of them stops standing for pre-push the moment a fourth is added
+  # — which is exactly what happened when hooks/tap-lag arrived: this test went
+  # red for a hook it had never heard of, in a run that had nothing to do with it.
+  cp "$CLIKAE_TEST_ROOT/hooks/"* "$TEST_HOME/h/hooks/"
   printf '#!/usr/bin/env bash\necho SUITE-RAN\nexit 0\n' > "$TEST_HOME/h/scripts/test.sh"
   chmod +x "$TEST_HOME/h/scripts/test.sh" "$TEST_HOME/h/hooks/changelog-guard"
 
@@ -162,8 +165,11 @@ _commit() { git add -A; git commit -qm "$1"; git rev-parse HEAD; }
   # above also passed only because the hook always fails, both would be lies.
   _repo
   mkdir -p "$TEST_HOME/h/hooks" "$TEST_HOME/h/scripts"
-  cp "$CLIKAE_TEST_ROOT/hooks/pre-push"        "$TEST_HOME/h/hooks/"
-  cp "$CLIKAE_TEST_ROOT/hooks/changelog-guard" "$TEST_HOME/h/hooks/"
+  # 🔴 EVERY hook, not a hand-kept list. pre-push chains them, so a fixture that
+  # names three of them stops standing for pre-push the moment a fourth is added
+  # — which is exactly what happened when hooks/tap-lag arrived: this test went
+  # red for a hook it had never heard of, in a run that had nothing to do with it.
+  cp "$CLIKAE_TEST_ROOT/hooks/"* "$TEST_HOME/h/hooks/"
   printf '#!/usr/bin/env bash\necho SUITE-RAN\nexit 0\n' > "$TEST_HOME/h/scripts/test.sh"
   chmod +x "$TEST_HOME/h/scripts/test.sh" "$TEST_HOME/h/hooks/changelog-guard"
 
