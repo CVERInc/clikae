@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.28.6] — 2026-08-22
 
+### Added
+
+- **A push is refused while a released tag has not reached the tap.** `brew` does
+  not install from this repository — it reads
+  `CVERInc/homebrew-clikae/Formula/clikae.rb`, a different one. Updating the copy
+  here feels like releasing and is not, and that step was skipped for 0.28.0,
+  0.28.1 and 0.28.2: three tagged, changelogged versions that reached nobody,
+  found only when the maintainer noticed his own clikae was five releases behind
+  while running code that fixed bugs he had reported. A comment in the formula
+  did not stop it; `hooks/tap-lag` does, by making every push after a release
+  refuse until the tap catches up.
+
+  🔴 It fails OPEN on any network trouble — unreachable, timed out, or a response
+  it cannot parse — and says so. It is the only check here that touches the
+  internet, and a missed reminder costs one more push while an unpushable repo
+  costs an afternoon. Both directions are pinned by tests, because "blocks
+  correctly" and "does not block wrongly" are different claims.
+
 ### Fixed
 
 - **The resume picker never gave the terminal back.** It sets `stty -echo` on the

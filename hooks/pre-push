@@ -19,6 +19,13 @@ unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_QUARANTINE_PATH GIT_OB
 # nobody has watched fail is a guard nobody knows works.
 bash "$(dirname "$0")/changelog-guard" || exit 1
 
+# 🔴 A release is not over when the tag lands; it is over when a stranger can
+# install it. brew reads a DIFFERENT repository, and three versions were tagged
+# and never shipped because the step that copies into it was skipped. This
+# refuses every push until the tap catches up (hooks/tap-lag). It fails OPEN on
+# a network error — no network must never mean no work.
+bash "$(dirname "$0")/tap-lag" || exit 1
+
 # Re-verification, skipped — never verification. If a green run already stamped
 # THIS exact tree, recently, running the same 520 seconds again cannot produce a
 # different answer. Anything else falls through to the full suite below.

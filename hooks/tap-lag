@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# hooks/tap-lag — refuse a push while a released tag has not reached the tap.
+#
+# 🔴 WHY THIS EXISTS. `brew` does not install from this repository. It reads
+# CVERInc/homebrew-clikae/Formula/clikae.rb — a DIFFERENT one. Updating the copy
+# in homebrew/clikae.rb here feels like releasing and is not; the step that ships
+# is pushing the tap. That step was skipped for 0.28.0, 0.28.1 and 0.28.2, so
+# three tagged, released, changelogged versions reached nobody, and the
+# maintainer only found out by noticing his own clikae was five releases behind
+# while running code that fixed bugs he had reported.
+#
+# A comment in the formula did not stop it. This does: after a release, every
+# push is refused until the tap catches up. The release is not over when the tag
+# lands; it is over when a stranger can install it.
+#
+# 🔴 FAIL OPEN ON THE NETWORK. This is the one check here that has to reach the
+# internet, and no network must never mean no work. A lookup that times out, 404s
+# or returns something unparseable lets the push through and says so — the cost
+# of a missed reminder is one more push; the cost of an unpushable repo on a
+# train is the whole afternoon.
+set -uo pipefail
+
+[ -n "${CLIKAE_SKIP_TAP_CHECK:-}" ] && exit 0
+
+_note() { printf '  · tap: %s\n' "$1" >&2; }
+
+# Newest release tag in this repo, by version order.
+newest="$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1)"
+[ -n "$newest" ] || exit 0                     # no releases yet: nothing to lag behind
+
+# What the tap serves. `--max-time` rather than a bare curl: a hung DNS lookup
+# must not become a hung push.
+raw="https://raw.githubusercontent.com/CVERInc/homebrew-clikae/main/Formula/clikae.rb"
+body="$(curl -fsSL --max-time 8 "$raw" 2>/dev/null || true)"
+if [ -z "$body" ]; then
+  _note "could not read the tap (offline?) — not blocking the push"
+  exit 0
+fi
+
+tapver="$(printf '%s\n' "$body" \
+  | sed -n 's#.*/archive/refs/tags/v\([0-9][0-9.]*\)\.tar\.gz.*#\1#p' | head -1)"
+if [ -z "$tapver" ]; then
+  _note "the tap's formula has no recognisable version — not blocking the push"
+  exit 0
+fi
+
+localver="${newest#v}"
+[ "$tapver" = "$localver" ] && exit 0
+
+# Only complain when the tap is BEHIND. A tap ahead of this clone means someone
+# released from elsewhere and this checkout simply has not fetched the tag.
+newer="$(printf '%s\n%s\n' "$tapver" "$localver" | sort -V | tail -1)"
+[ "$newer" = "$localver" ] || exit 0
+
+cat >&2 <<EOF
+
+  🔴 v$localver is tagged but the tap still serves $tapver.
+
+  Nobody can install $localver. brew reads
+  CVERInc/homebrew-clikae/Formula/clikae.rb, not this repository — updating
+  homebrew/clikae.rb here is step 3 of 4, and step 4 is what ships.
+
+  To finish the release:
+    1. verify the tarball GitHub serves for v$localver (size, sha256, extract, RUN it)
+    2. put that url + sha256 in the TAP's Formula/clikae.rb
+    3. commit and push the tap
+
+  If v$localver is deliberately not being shipped:
+    CLIKAE_SKIP_TAP_CHECK=1 git push
+
+EOF
+exit 1
