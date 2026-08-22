@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.2] — 2026-08-21
+
 ### Fixed
 
 - **A dying tmux server pushed live sessions permanently OUT of tmux.** When the
@@ -55,19 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   socket: all three survive.
 
   It is deliberately NOT on the bats PATH, and that is not a tuning problem: a
-  NULL shim — zero checks, just `exec <real tmux> "$@"` — fails the suite's
-  timing-sensitive `scrollback` test too. Two sessions measured this
-  independently; between them a shell wrapper on that PATH passed 0 times in 8,
-  while the same suite with nothing installed passed in both. The cost is the
-  bash PROCESS, one fork per tmux call, not what the guard does with it — the
-  first version was optimised from ~21.5ms to ~4ms and still failed. bats gets a
-  check costing one stat per test instead: its isolation directory must still
-  exist when the test ends, which is exactly the mechanism that cost the tanks.
+  NULL shim — zero checks, just `exec <real tmux> "$@"` — costs the suite's
+  timing-sensitive `scrollback` test just as much. On a quiet machine, with the
+  baseline taken before and after to prove it did not drift: 10/10 green with
+  nothing installed, 2/5 with the guard, 3/5 with the null shim. The price is
+  the bash PROCESS, one fork per tmux call, not what the guard does with it —
+  the first version went from ~21.5ms to ~4ms and the pass rate did not come
+  back. bats gets a check costing one stat per test instead: its isolation
+  directory must still exist when the test ends, which is exactly the mechanism
+  that cost the tanks.
 
-  🔴 `scrollback` itself is flaky at baseline and very environment-sensitive —
-  the no-shim arm ranged from 8/8 to 1/3 across machines, load, leftover tmux
-  sessions and worktrees. That flake is older than this change and is NOT fixed
-  here; it is recorded so the next person does not read a green run as proof.
+  🔴 `scrollback` is load-sensitive, and that matters more than it sounds: on a
+  machine accidentally saturated to load 82 during this work, EVERY arm
+  collapsed — including the empty one — and an earlier draft of this entry read
+  that as "deterministic, 0 out of 8". It was not; the experiment simply had no
+  resolution. The effect is real and the decision stands, but take the baseline
+  in the same sitting as the arms, and fix the machine first if it is not
+  near-perfect.
 
 - **`pty-smoke.py`'s board-height checks could pass by seeing nothing.** They
   waited a fixed 2.5s; on a cold machine the first board returns 0 bytes in that

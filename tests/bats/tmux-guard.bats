@@ -97,29 +97,29 @@ _real_tmux() {
 @test "tmux-guard: bats deliberately does NOT run through it" {
   # 🔴 This asserts an ABSENCE, so it has to say why or someone will "fix" it.
   #
-  # The guard was on the bats PATH for about an hour. What it costs was measured
-  # twice, by two sessions working this defect from opposite ends, on
-  # scrollback.bats — the suite's most timing-sensitive test:
+  # The guard was on the bats PATH for about an hour. What it costs, measured on
+  # a QUIET machine against scrollback.bats — the suite's most timing-sensitive
+  # test — with the baseline taken twice, before and after, to prove the machine
+  # did not drift mid-experiment:
   #
-  #                            session A     session B
-  #   nothing installed          8/8 green     1/3 – 2/3 green
-  #   the guard                  0/8 green     0/3 green
-  #   a NULL shim                0/5 green     0/3 green
-  #     (zero checks: exec <real tmux> "$@")
+  #   nothing installed                          10/10 green
+  #   this guard                                   2/5  green
+  #   a NULL shim (exec <real tmux> "$@")          3/5  green
   #
-  # 🔴 THE NULL SHIM IS THE WHOLE FINDING. A wrapper that checks nothing fails
-  # too, so the cost is the bash PROCESS — one fork per tmux call, and clikae
-  # calls tmux several times per launch — not anything this guard does with it.
-  # Making the checks cheaper cannot buy it a place here; the first version was
-  # optimised from ~21.5ms to ~4ms and still failed. Across both sessions a shell
-  # wrapper on this PATH passed 0 times out of 8.
+  # 🔴 THE NULL SHIM IS THE WHOLE FINDING. A wrapper that checks NOTHING costs
+  # the same as this one, so the price is the bash PROCESS — one fork per tmux
+  # call, and clikae calls tmux several times per launch — not anything the
+  # guard does with it. Optimising cannot buy it a place here: the first version
+  # went from ~21.5ms to ~4ms and the pass rate did not come back.
   #
-  # 🔴 And note the disagreement in the top row rather than averaging it away:
-  # the BASELINE ranges from 8/8 to 1/3 depending on machine load, leftover tmux
-  # sessions, and whether it runs in a worktree (worse — session A first read
-  # this effect as "no difference" from two degraded arms at 2/5 each). A test
-  # this environment-sensitive cannot be A/B'd casually: what survives all of it
-  # is that the shim arm never once passed and the empty arm sometimes did.
+  # 🔴 An earlier version of this comment said "0 out of 8, deterministic". That
+  # was measured on a machine at load 82 — which the person measuring had
+  # saturated himself with runaway processes and not noticed. Everything
+  # collapses at load 82, including the empty arm (1/3), so the experiment had no
+  # resolution and the strong claim was not earned. The effect is real and the
+  # decision stands; the magnitude was not what was written. Take the baseline in
+  # the same sitting as the arms, and if the baseline is not near-perfect, fix
+  # the machine before believing anything else.
   #
   # bats does not need it. The measured killer lived in the pty harness (a
   # parent deleting $TMUX_TMPDIR while its child still had a `tmux kill-server`
