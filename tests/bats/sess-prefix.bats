@@ -101,21 +101,68 @@ teardown() {
     echo "matched the digest session; tmux_sessv is not using exact targets"; false; }
 }
 
-@test "prefix: the board lists sessions under BOTH names" {
+@test "prefix: the board lists ONE prefix, and leaves the human's sessions alone" {
+  # 🔴 An old name is deliberately NOT listed here, and that is only safe because
+  # the v1->v2 migration renames every one of them on first run — see the sweep
+  # test below. Reading both here was the earlier design; it was dropped because
+  # carrying two names forever is what the rename was meant to end.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _iso
-  _t new-session -d -s 'ck-codex-old' 'sleep 30'
   _t new-session -d -s 'clikae-codex-new' 'sleep 30'
   _t new-session -d -s 'someone-elses-work' 'sleep 30'
 
   run live_session_names
-  [[ "$output" == *"ck-codex-old"* ]]     || { echo "lost the legacy session: $output"; false; }
   [[ "$output" == *"clikae-codex-new"* ]] || { echo "lost the new session: $output"; false; }
-  # …and still leaves the human's own session alone, which is the prefix's job.
   [[ "$output" != *"someone-elses-work"* ]] || { echo "claimed a session it did not start"; false; }
 }
 
-@test "prefix: live_split reads engine and tank from either name" {
+@test "prefix: the v1->v2 migration renames EVERY legacy session on the machine" {
+  # 🔴 THE REASON A PER-ID RENAME IS NOT ENOUGH. tmux_sessv renames a session when
+  # something launches into that tank — which never happens for a tank you are not
+  # using today. That session would stay under the old name, and with the board
+  # reading one prefix it would be alive but invisible, with `clikae <tank>`
+  # starting a second one beside it. A per-machine sweep reaches it; it only has
+  # to run once.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _iso
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/state_version.sh"
+  _t new-session -d -s 'ck-claude-untouched' 'sleep 30'
+  _t new-session -d -s 'ck-codex-alsoold' 'sleep 30'
+  _t new-session -d -s 'not-ours' 'sleep 30'
+
+  _state_migrate_1
+
+  run _t has-session -t '=clikae-claude-untouched'
+  [ "$status" -eq 0 ] || { echo "a tank nobody launched into was left behind"; false; }
+  run _t has-session -t '=clikae-codex-alsoold'
+  [ "$status" -eq 0 ] || { echo "the sweep stopped after one"; false; }
+  run _t has-session -t '=ck-claude-untouched'
+  [ "$status" -ne 0 ] || { echo "the old name is still there"; false; }
+  # …and it is a sweep of CLIKAE's sessions, not of the server.
+  run _t has-session -t '=not-ours'
+  [ "$status" -eq 0 ] || { echo "renamed a session clikae does not own"; false; }
+}
+
+@test "prefix: the migration leaves a legacy session alone when the new name is taken" {
+  # Losing one of two sessions is worse than carrying an old name for another
+  # hour. tmux_sessv prefers the new one; this stays visible until it ends.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _iso
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/state_version.sh"
+  _t new-session -d -s 'ck-claude-both' 'sleep 30'
+  _t new-session -d -s 'clikae-claude-both' 'sleep 30'
+
+  _state_migrate_1
+
+  run _t has-session -t '=ck-claude-both'
+  [ "$status" -eq 0 ] || { echo "the collision was resolved by destroying one"; false; }
+  run _t has-session -t '=clikae-claude-both'
+  [ "$status" -eq 0 ] || { echo "the new one is gone"; false; }
+}
+
+@test "prefix: live_split reads engine and tank from the current name" {
   # live_split resolves the tank against the DISK, so it needs the profile store
   # as well as the prefixes.
   # shellcheck source=/dev/null
@@ -131,12 +178,13 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude"* && "$output" == *"pfxtank"* ]] || { echo "$output"; false; }
 
+  # An old name is not this function's business any more: by the time anything
+  # asks, the migration has renamed it.
   run live_split "ck-claude-pfxtank"
-  [ "$status" -eq 0 ] || { echo "a legacy name no longer splits"; false; }
-  [[ "$output" == *"claude"* && "$output" == *"pfxtank"* ]] || { echo "$output"; false; }
+  [ "$status" -ne 0 ] || { echo "still splitting a name nothing should produce"; false; }
 }
 
-@test "prefix: GC reaps a lock written under the OLD name" {
+@test "prefix: an orphan under the OLD name is still swept — the sweep ignores prefixes" {
   # State files outlive sessions. A lock this loop never visits is never released
   # and never deleted — it would sit in the state dir forever.
   # shellcheck source=/dev/null
@@ -149,13 +197,12 @@ teardown() {
   . "$CLIKAE_TEST_ROOT/lib/commands/clean.sh"
 
   local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
-  : > "$sdir/ck-ephem-claude-old-777.lock"
-  : > "$sdir/claude-old-777.sh"
-  : > "$sdir/ck-claude-old-777.scrollback"
-  _clean_tmux_gc 0
-  [ ! -f "$sdir/ck-ephem-claude-old-777.lock" ] || { echo "the legacy lock survived GC"; false; }
-  [ ! -f "$sdir/claude-old-777.sh" ]            || { echo "its state file survived GC"; false; }
-  [ ! -f "$sdir/ck-claude-old-777.scrollback" ] || { echo "its legacy scrollback survived GC"; false; }
+  local dead=999996
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  : > "$sdir/ck-claude-old-$dead.scrollback"
+  _clean_scrollback_gc 0
+  [ ! -f "$sdir/ck-claude-old-$dead.scrollback" ] || {
+    echo "the legacy orphan survived — the sweep is keying on the prefix"; false; }
 }
 
 @test "prefix: an UNSET prefix refuses loudly instead of doing nothing" {

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The old prefix is gone from every read path.** `live.sh`, `wake_sessions_for`
+  and the ephemeral GC each read one prefix now. What makes that safe is a
+  one-time machine-wide sweep (state schema v1 → v2): the first run of this
+  version renames EVERY `ck-*` session on the machine, not just the tank you
+  happen to launch.
+
+  🔴 Rename-on-encounter alone would not have been enough, and the gap is quiet:
+  `tmux_sessv` only fires for a tank something launches into, so a session for a
+  tank you are not using today would keep the old name — alive, but absent from
+  the board, with `clikae <tank>` starting a second one beside it. Per-id
+  renaming cannot reach it; a per-machine sweep can, and it runs once.
+
+  ⚠️ One residual, stated rather than hidden: a session created by an OLDER
+  clikae after the sweep (this machine still has 0.27.0 installed by brew) that
+  hits a usage limit before anything launches into it gets no waiter. Launching
+  into it once renames it and restores one.
+
+  The legacy name now survives in exactly three places, each with a job: the
+  constant and the rename in `tmux.sh`, the sweep in `state_version.sh`, and the
+  reading in `doctor` that says when those can go.
+
 - **Sessions still under the old name are RENAMED on sight.** `tmux_sessv` no
   longer just answers to `ck-…`; when it finds one it renames it to the new name,
   so the old prefix stops existing instead of becoming something everything has

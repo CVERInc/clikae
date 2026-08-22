@@ -312,18 +312,19 @@ wake_attach() {
 # name contains a hyphen: `clikae-claude-my-tank` matches, `clikae-claude-my`
 # does not swallow it, and only a trailing all-digit field is read as a digest.
 #
-# 🔴 BOTH PREFIXES, and this one is not cosmetic. A usage limit hits the ACCOUNT,
-# so a session still carrying the old name is just as stuck as a new one — and
-# missing it means no waiter, no 3:50am nudge, and nothing said about it. Caught
-# by wake.bats the day the prefix changed: the offer silently attached nothing.
+# 🔴 ONE PREFIX, because by the time anything calls this there is only one. The
+# v1→v2 state migration renames every session off the old name on first run, and
+# tmux_sessv renames any straggler an older binary makes. This briefly matched
+# both, and the reason is worth keeping: a usage limit hits the ACCOUNT, so a
+# session under any name clikae owns is just as stuck, and missing one means no
+# waiter, no 3:50am nudge, and nothing said about it.
 wake_sessions_for() {
-  local engine="$1" tank="$2" base legacy
+  local engine="$1" tank="$2" base
   command -v tmux >/dev/null 2>&1 || return 0
-  [ -n "${CLIKAE_SESS_PREFIX:-}" ] && [ -n "${CLIKAE_SESS_PREFIX_LEGACY:-}" ] || return 0
+  [ -n "${CLIKAE_SESS_PREFIX:-}" ] || return 0
   base="${CLIKAE_SESS_PREFIX}$engine-$tank"
-  legacy="${CLIKAE_SESS_PREFIX_LEGACY}$engine-$tank"
   tmux list-sessions -F '#{session_name}' 2>/dev/null \
-    | grep -E "^(${base}|${legacy})(-[0-9]+)?$" || true
+    | grep -E "^${base}(-[0-9]+)?$" || true
 }
 
 # wake_offer <engine> <tank> <reset-phrase> -> attach a waiter, asking once the

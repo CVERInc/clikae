@@ -15,7 +15,7 @@ load '../helpers'
 # A tank name unique to this test, so real sessions on the developer's machine
 # and parallel runs cannot be mistaken for the fixture.
 _tank() { printf 'lv%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
-_sess() { printf 'ck-codex-%s' "$(_tank)"; }
+_sess() { printf 'clikae-codex-%s' "$(_tank)"; }
 
 teardown() {
   tmux kill-session -t "$(_sess)" 2>/dev/null || true
@@ -153,7 +153,7 @@ PATHDIRS
   # live_wake_note was correct and covered by the test above. The wiring around
   # it was not, so a right answer arrived in the wrong variable.
   local row
-  row="live"$'\037'"claude"$'\037'"t"$'\037'"title"$'\037'"recap"$'\037'"1"$'\036'"2m ago"$'\036'""$'\037'"ck-claude-t"
+  row="live"$'\037'"claude"$'\037'"t"$'\037'"title"$'\037'"recap"$'\037'"1"$'\036'"2m ago"$'\036'""$'\037'"clikae-claude-t"
   local kind cli profile label alias active note
   IFS=$'\037' read -r kind cli profile label alias active note <<<"$row"
   local at age wake

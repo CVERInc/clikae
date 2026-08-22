@@ -910,16 +910,11 @@ _clean_tmux_gc() {
   # reports success — the same silent-absence shape as a $TMUX_TMPDIR pointing at
   # a deleted directory. bin/clikae sources lib/core/tmux.sh before any command
   # runs; if something sourced this file alone, say so instead of doing nothing.
-  if [ -z "${CLIKAE_SESS_PREFIX:-}" ] || [ -z "${CLIKAE_SESS_PREFIX_LEGACY:-}" ]; then
+  if [ -z "${CLIKAE_SESS_PREFIX:-}" ]; then
     log_warn "GC skipped: session-name prefix unset (lib/core/tmux.sh was not loaded)."
     return 1
   fi
-  # 🔴 BOTH PREFIXES. GC is the one place where missing the old name is permanent:
-  # a lock this loop never visits is never released and never deleted, so a
-  # `ck-ephem-*` file written before 0.28.3 would sit in the state dir forever
-  # while the session it names is long gone.
-  for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock \
-                   "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX_LEGACY}ephem-"*.lock; do
+  for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock; do
     [ -e "$lock_file" ] || continue
     is_dead=0
     if command -v flock >/dev/null 2>&1; then
@@ -945,10 +940,10 @@ _clean_tmux_gc() {
       # Defence in depth: a real sid is validated engine/tank names + a digest, so
       # an empty or dot-leading value is a malformed file — never act on it.
       case "$sid" in ''|.*) continue ;; esac
-      # The scrollback carries whichever prefix was current when it was written,
-      # and this sid may be reached from either lock, so clear both names.
       local _sb_new="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}${sid}.scrollback"
-      local _sb_old="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX_LEGACY}${sid}.scrollback"
+      # Orphans under any older name are swept by _clean_scrollback_gc, which
+      # keys on the writer's pid rather than on the prefix.
+      local _sb_old=""
       local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
       tmux_sessv "$sid"
       if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ]; then

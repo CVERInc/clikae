@@ -150,24 +150,24 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   wake_pref_set off
-  tmux new-session -d -s "ck-claude-$(_sess)" 'sleep 20'
+  tmux new-session -d -s "clikae-claude-$(_sess)" 'sleep 20'
   run wake_offer claude "$(_sess)" "resets 3:50am (Asia/Tokyo)"
-  tmux kill-session -t "ck-claude-$(_sess)" 2>/dev/null || true
+  tmux kill-session -t "clikae-claude-$(_sess)" 2>/dev/null || true
   [ -z "$output" ]
 }
 
 @test "offer: on a live session with a real phrase, the waiter is attached" {
-  # 🔴 THE `ck-` NAME HERE IS LOAD-BEARING — do not "tidy" it to `clikae-`.
-  # A usage limit hits the ACCOUNT, so a session still carrying the pre-0.28.3
-  # name is exactly as stuck as a new one, and it needs a waiter just the same.
-  # This test is the only place that covers that, and it found the gap the day
-  # the prefix changed: wake_sessions_for built its match from the new prefix
-  # alone and the offer attached nothing, silently. Normalising the name here
-  # deletes the coverage without failing anything.
+  # This used to be a `ck-` name, deliberately, back when wake_sessions_for
+  # matched both prefixes — and it earned its keep: it caught the gap the day the
+  # prefix changed. That coverage is now retired on purpose. The v1->v2 migration
+  # renames every session off the old name at first run, so there is no longer a
+  # legacy session for a waiter to miss. The residual is stated in the CHANGELOG:
+  # a session made by an OLDER clikae after that, which hits a limit before
+  # anything launches into it, gets no waiter until it is next launched.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   wake_pref_set on
-  local s="ck-claude-$(_sess)"
+  local s="clikae-claude-$(_sess)"
   tmux new-session -d -s "$s" 'sleep 20'
   CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_offer claude "$(_sess)" "resets 3:50am (Asia/Tokyo)" >/dev/null
   run bash -c "tmux list-windows -t '$s' -F '#{window_name}' | grep -c '^wake'"

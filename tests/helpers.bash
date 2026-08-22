@@ -54,6 +54,14 @@ setup() {
   # have a background window typing into its session.
   mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
   printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
+  # 🔴 Stamp the CURRENT schema so no test is surprised by a migration. Without
+  # this, the first clikae in a test prints "migrated state v1 → v2" and the
+  # second does not — which broke the byte-identical-alias test the day the
+  # schema was bumped, for a reason that had nothing to do with aliases. Read
+  # from the source rather than written down, so the next bump does not repeat
+  # this. Tests that exercise migrations overwrite the file themselves.
+  printf '%s\n' "$(sed -n 's/^CLIKAE_STATE_VERSION=//p' \
+    "$CLIKAE_TEST_ROOT/lib/core/state_version.sh" | head -1)" > "$CLIKAE_HOME/version"
 
   # 🔴 PIN THE LIBRARY PATH, or a test inherits the developer's INSTALLED clikae.
   # Eleven test files source library code through $CLIKAE_LIB, and helpers did not

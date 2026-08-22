@@ -23,9 +23,9 @@ live_session_names() {
   # 🔴 An unset prefix here is WORSE than a no-op: `^(|)` matches every line, so
   # the board would claim every tmux session on the machine — including the ones
   # the human made by hand, which the prefix exists to leave alone. Refuse.
-  [ -n "${CLIKAE_SESS_PREFIX:-}" ] && [ -n "${CLIKAE_SESS_PREFIX_LEGACY:-}" ] || return 0
+  [ -n "${CLIKAE_SESS_PREFIX:-}" ] || return 0
   tmux list-sessions -F '#{session_name}	#{session_created}	#{session_attached}' 2>/dev/null \
-    | grep -E "^($CLIKAE_SESS_PREFIX|$CLIKAE_SESS_PREFIX_LEGACY)[^	]+	" \
+    | grep -E "^${CLIKAE_SESS_PREFIX}[^	]+	" \
     | sort -t'	' -k2,2 -rn || true
 }
 
@@ -45,8 +45,7 @@ live_session_names() {
 live_split() {
   local name="$1" rest engine tank
   case "$name" in
-    "$CLIKAE_SESS_PREFIX"*)        rest="${name#"$CLIKAE_SESS_PREFIX"}"        ;;
-    "$CLIKAE_SESS_PREFIX_LEGACY"*) rest="${name#"$CLIKAE_SESS_PREFIX_LEGACY"}" ;;
+    "$CLIKAE_SESS_PREFIX"*) rest="${name#"$CLIKAE_SESS_PREFIX"}" ;;
     *) return 1 ;;
   esac
   engine="${rest%%-*}"

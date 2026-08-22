@@ -45,14 +45,14 @@ _source_clean() {
   local sdir="$HOME/.clikae/state"
   mkdir -p "$sdir"
   # A lock nobody holds → the GC's non-blocking grab succeeds → treated as dead.
-  : > "$sdir/ck-ephem-claude-x-burn-1234.lock"
+  : > "$sdir/clikae-ephem-claude-x-burn-1234.lock"
   : > "$sdir/claude-x-burn-1234.sh"
   : > "$sdir/claude-x-burn-1234_exit"
   # No tmux session ck-claude-x-burn-1234 exists → the else branch removes state.
   _clean_tmux_gc 0
   [ ! -f "$sdir/claude-x-burn-1234.sh" ]
   [ ! -f "$sdir/claude-x-burn-1234_exit" ]
-  [ ! -f "$sdir/ck-ephem-claude-x-burn-1234.lock" ]
+  [ ! -f "$sdir/clikae-ephem-claude-x-burn-1234.lock" ]
 }
 
 @test "GC ignores a lock in /tmp (only the private state dir is scanned)" {
