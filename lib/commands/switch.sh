@@ -175,6 +175,15 @@ KV
   # already have is the point of keeping the old prefix readable.
   local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
   tmux_sessv "$sess_id"
+  # 🔴 EXISTING IS NOT THE SAME AS USABLE. A session whose only window is the
+  # wake waiter has no engine to talk to; attaching to it is how a human ends up
+  # staring at a countdown. Kill it and let the spawn below rebuild — nothing is
+  # lost, the waiter is the only thing in there, and it re-attaches on launch.
+  if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
+    log_dim "That session had only its wake watcher left — starting the engine again."
+    tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+    CLIKAE_TMUX_SESS_EXISTS=0
+  fi
 
   if [ -n "$TMUX" ]; then
     local current_pane_session
@@ -351,6 +360,10 @@ EOF
       local started_here=0
       local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
       tmux_sessv "$tank_id"
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
+        tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+        CLIKAE_TMUX_SESS_EXISTS=0
+      fi
       if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
         tmux_spawn_session "${relay_env[@]}" \
           --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"

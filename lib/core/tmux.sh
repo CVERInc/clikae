@@ -64,6 +64,26 @@ CLIKAE_SESS_PREFIX_LEGACY="ck-"
 # Both answers come from one pass because the callers need both and asking tmux
 # twice is two forks on the launch path. Sets variables rather than printing for
 # the same reason — see profile_store.sh's `...v` helpers.
+# tmux_sess_has_engine <session> -> 0 when it holds a window that is not the
+# waiter, i.e. when it is a tank you can actually use.
+#
+# 🔴 `has-session` IS THE WRONG QUESTION and this is the failure it hides. The
+# wake waiter lives in a window of the tank's own session, so when the engine
+# exits — you quit it, or it crashed — the SESSION SURVIVES with only the waiter
+# in it. wake_watch notices and leaves, but it polls on WAKE_WATCH_INTERVAL (60s),
+# so for up to a minute the session is alive and empty of anything to talk to.
+# `clikae <tank>` in that minute found has-session true, started no engine, and
+# attached the human to a countdown with nothing to type into. Reported as
+# "I had to press left-arrow to find you again".
+#
+# Prefix, not an exact name: the waiter renames its own window to carry the
+# countdown (`wake 9m`), so matching `wake` exactly stops working seconds in.
+tmux_sess_has_engine() {
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux list-windows -t "=$1:" -F '#{window_name}' 2>/dev/null \
+    | grep -qvE '^wake( |$)'
+}
+
 # shellcheck disable=SC2034  # CLIKAE_TMUX_SESS_EXISTS is an output slot, read by
 # the callers in switch.sh / antigravity.sh / burn.sh, which shellcheck analyses
 # as separate files. Same shape as tui.sh's TUI_KEY.

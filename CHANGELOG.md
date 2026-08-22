@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tank whose engine had exited dropped you into a countdown.** The wake
+  waiter lives in a window of the tank's OWN tmux session, so when the engine
+  ends — you quit it, or it crashed — the session survives with only the waiter
+  in it. `wake_watch` notices and leaves, but it polls every 60 seconds, and in
+  that minute `clikae <tank>` found `has-session` true, started no engine, and
+  attached you to "watching for a limit" with nothing to type into. Reported as
+  "I had to press left-arrow to find you again".
+
+  `switch` was only ever asking whether the session EXISTED. It now asks whether
+  it still holds a window that is not the waiter, and rebuilds it if not —
+  nothing is lost, the waiter is all that was in there and it re-attaches on
+  launch. Making the poll faster would only have shrunk the hole.
+
+  🔴 Three cases the check has to get right, each pinned: the waiter renames its
+  own window as it counts (`wake 9m`), so an exact match on `wake` stops working
+  seconds in; a window merely starting with `wake` (`wakeup`) is somebody else's
+  and must not make clikae kill the session; and the target is exact, so a
+  digest-suffixed neighbour is never consulted.
+
+
 ## [0.28.4] — 2026-08-22
 
 ### Fixed

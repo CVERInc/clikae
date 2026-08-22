@@ -4,43 +4,8 @@ load '../helpers'
 
 bats_require_minimum_version 1.5.0
 
-# A pty, portably. `script -q /dev/null cmd args` is the BSD form and util-linux
-# rejects it outright ("unexpected number of arguments"), which is how this file
-# passed on macOS and failed on ubuntu. python3's pty is on both runners and is
-# what tests/tools/pty-smoke.py already uses.
-_pty_run() {
-  python3 - "$@" <<'PYEOF'
-import os, pty, fcntl, termios, struct, sys
-
-# 80x24 on purpose: the point of this test is that 200 lines SCROLL OFF the
-# visible screen, so the pty must be a normal size. A pty left at its default
-# (or 0x0) can swallow the whole run, and then `capture-pane` without -S -
-# still finds line 1 — the probe passes whether the fix is there or not.
-master, slave = os.openpty()
-fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-pid = os.fork()
-if pid == 0:
-    os.setsid()
-    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-    for fd in (0, 1, 2):
-        os.dup2(slave, fd)
-    os.close(master); os.close(slave)
-    os.environ["TERM"] = os.environ.get("CK_PTY_TERM") or "xterm-256color"
-    os.execvp(sys.argv[1], sys.argv[1:])
-os.close(slave)
-chunks = []
-while True:
-    try:
-        d = os.read(master, 4096)
-    except OSError:
-        break
-    if not d:
-        break
-    chunks.append(d)
-os.waitpid(pid, 0)
-sys.stdout.write(b"".join(chunks).decode(errors="replace"))
-PYEOF
-}
+# _pty_run lives in tests/helpers.bash: session-usable.bats needs the same
+# thing, and a second copy of a pty runner is a second thing to keep in step.
 
 @test "switch scrollback capture retains 200 lines" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed (switch falls back to a direct run)"

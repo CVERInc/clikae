@@ -123,7 +123,45 @@ setup() {
   # once, for every test.
   export CLIKAE_NO_UPDATE_CHECK=1
   RC_FILE="$TEST_HOME/.zshrc"
-  # Make EVERY assertion count. bats only enforces a test's LAST command, so an
+  # A pty, portably. `script -q /dev/null cmd args` is the BSD form and util-linux
+# rejects it outright ("unexpected number of arguments"), which is how this file
+# passed on macOS and failed on ubuntu. python3's pty is on both runners and is
+# what tests/tools/pty-smoke.py already uses.
+_pty_run() {
+  python3 - "$@" <<'PYEOF'
+import os, pty, fcntl, termios, struct, sys
+
+# 80x24 on purpose: the point of this test is that 200 lines SCROLL OFF the
+# visible screen, so the pty must be a normal size. A pty left at its default
+# (or 0x0) can swallow the whole run, and then `capture-pane` without -S -
+# still finds line 1 — the probe passes whether the fix is there or not.
+master, slave = os.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    for fd in (0, 1, 2):
+        os.dup2(slave, fd)
+    os.close(master); os.close(slave)
+    os.environ["TERM"] = os.environ.get("CK_PTY_TERM") or "xterm-256color"
+    os.execvp(sys.argv[1], sys.argv[1:])
+os.close(slave)
+chunks = []
+while True:
+    try:
+        d = os.read(master, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    chunks.append(d)
+os.waitpid(pid, 0)
+sys.stdout.write(b"".join(chunks).decode(errors="replace"))
+PYEOF
+}
+
+# Make EVERY assertion count. bats only enforces a test's LAST command, so an
   # intermediate `[ … ]` (or command) that fails is otherwise silently ignored.
   # set -e (which persists into the test body — same shell) makes `[ … ]` and
   # command failures abort the test. NB: bash EXEMPTS `[[ … ]]` from set -e, so
