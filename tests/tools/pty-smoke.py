@@ -109,7 +109,7 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     # Host-safety: this harness IS a terminal, so clikae takes the tmux path and
     # really does create sessions. A throwaway $HOME does not contain those — the
     # tmux socket is chosen by $TMUX / $TMUX_TMPDIR, neither of which HOME touches
-    # — so without this a smoke run left `ck-*` sessions on the developer's own
+    # — so without this a smoke run left clikae's own sessions on the developer's
     # server, and anything that later swept them would sweep live tanks with them.
     # $TMUX must be REMOVED rather than overridden: a tmux client prefers it over
     # TMUX_TMPDIR, so setting only the latter changes nothing when the suite is
@@ -605,7 +605,7 @@ def mode_height():
 
 
 def mode_agy():
-    """`clikae agy <tank>` must land in a ck-* tmux session, like every engine does.
+    """`clikae agy <tank>` must land in a clikae-* tmux session, like every engine does.
 
     agy is a launch-only TARGET, and tmux is spawned in switch.sh's ENGINE path —
     targets never got it. `_agy_switch` ends in a bare `exec agy "$@"`, so an agy
@@ -619,7 +619,7 @@ def mode_agy():
     get a vote. The defect is only that the session never enters tmux at all.
 
     Assertion: after `clikae agy <tank>` on a real pty, a session named
-    ck-antigravity-<tank> exists on the sandbox's own tmux server.
+    clikae-antigravity-<tank> exists on the sandbox's own tmux server.
     """
     import time as _t, subprocess as _sp
     if not shutil.which('tmux'):
@@ -680,7 +680,7 @@ def mode_agy():
     found = ''
     for _ in range(10):
         found = sessions()
-        if 'ck-antigravity-g' in found:
+        if 'clikae-antigravity-g' in found:
             break
         _t.sleep(0.5)
 
@@ -695,7 +695,7 @@ def mode_agy():
     except Exception:
         pass
 
-    check('clikae agy lands in a ck-* tmux session', 'ck-antigravity-g' in found,
+    check('clikae agy lands in a clikae-* tmux session', 'clikae-antigravity-g' in found,
           'tmux sessions were: %r' % found.strip()[:200])
 
 
