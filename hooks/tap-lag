@@ -24,9 +24,20 @@ set -uo pipefail
 
 _note() { printf '  · tap: %s\n' "$1" >&2; }
 
-# Newest release tag in this repo, by version order.
-newest="$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1)"
-[ -n "$newest" ] || exit 0                     # no releases yet: nothing to lag behind
+# Newest release tag ON THE REMOTE, by version order.
+#
+# 🔴 THE REMOTE, NOT THIS CLONE — and the first version got this wrong in a way
+# only a real release showed. Keyed on the LOCAL tag, this refused the push of
+# the tag itself: the tap cannot be updated until the tag exists on GitHub (its
+# tarball url points at it), so the check deadlocked the release it existed to
+# complete. A tag that has not been pushed is not a release yet; the thing that
+# must not outrun the tap is a tag a stranger can already see.
+newest="$(git ls-remote --tags --refs origin 'v[0-9]*' 2>/dev/null \
+  | sed 's#.*refs/tags/##' | sort -V | tail -1)"
+if [ -z "$newest" ]; then
+  _note "could not list the remote's tags (offline?) — not blocking the push"
+  exit 0
+fi
 
 # What the tap serves. `--max-time` rather than a bare curl: a hung DNS lookup
 # must not become a hung push.

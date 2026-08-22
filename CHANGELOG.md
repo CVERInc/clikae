@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   did not stop it; `hooks/tap-lag` does, by making every push after a release
   refuse until the tap catches up.
 
+  🔴 It asks the REMOTE which tags exist, not this clone. The first version
+  asked the clone, and refused the push OF THE TAG — the tap cannot be updated
+  before the tag is on GitHub, because the formula's url points at its tarball,
+  so the check deadlocked the release it existed to complete. Found by cutting a
+  release with it, not by reading it. A tag nobody has pushed is not a release.
+
   🔴 It fails OPEN on any network trouble — unreachable, timed out, or a response
   it cannot parse — and says so. It is the only check here that touches the
   internet, and a missed reminder costs one more push while an unpushable repo

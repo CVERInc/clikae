@@ -16,18 +16,25 @@
 
 load '../helpers'
 
-# A repo with tags, and a stubbed `curl` standing in for the tap.
+# A repo with a REAL `origin` — the hook asks the remote which tags exist, so a
+# fixture with only local tags would be testing a question nobody asks.
 _repo() {
   HOOK="$CLIKAE_TEST_ROOT/hooks/tap-lag"
+  BARE="$TEST_HOME/origin.git"; git init -q --bare "$BARE"
   R="$TEST_HOME/r"; mkdir -p "$R"; cd "$R" || return 1
   git init -q .
   git config user.email t@example.com
   git config user.name Tester
   git config commit.gpgsign false
+  git remote add origin "$BARE"
   printf 'x\n' > f.txt; git add -A; git commit -qm base
+  git push -q --no-verify origin HEAD:refs/heads/main 2>/dev/null || true
   STUB="$TEST_HOME/stub"; mkdir -p "$STUB"
   export PATH="$STUB:$PATH"
 }
+
+# _released <version> — a tag that a stranger can already see.
+_released() { git tag "v$1"; git push -q --no-verify origin "v$1"; }
 
 # _tap_serves <version> — the tap answers with a formula naming that tag.
 _tap_serves() {
@@ -50,13 +57,13 @@ _tap_garbage() {
 }
 
 @test "tap-lag: passes when the tap serves the newest tag" {
-  _repo; git tag v1.2.3; _tap_serves 1.2.3
+  _repo; _released 1.2.3; _tap_serves 1.2.3
   run bash "$HOOK"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "tap-lag: REFUSES when the newest tag has not reached the tap" {
-  _repo; git tag v1.2.3; _tap_serves 1.2.2
+  _repo; _released 1.2.3; _tap_serves 1.2.2
   run bash "$HOOK"
   [ "$status" -ne 0 ] || { echo "let a shipped-nowhere release through"; false; }
   # The refusal has to say what to do; a blocked push with no next step is worse
@@ -69,7 +76,7 @@ _tap_garbage() {
 @test "tap-lag: version comparison is by VERSION, not by string" {
   # 1.2.10 is newer than 1.2.9; `>` on strings says otherwise, and that mistake
   # would let exactly the tenth patch of a series ship nowhere.
-  _repo; git tag v1.2.10; _tap_serves 1.2.9
+  _repo; _released 1.2.10; _tap_serves 1.2.9
   run bash "$HOOK"
   [ "$status" -ne 0 ] || { echo "read 1.2.10 as older than 1.2.9"; false; }
 }
@@ -77,14 +84,14 @@ _tap_garbage() {
 @test "tap-lag: a tap AHEAD of this clone is not this clone's problem" {
   # Someone released from another machine; this checkout has not fetched the tag.
   # Blocking here would punish a stale clone for being stale.
-  _repo; git tag v1.2.3; _tap_serves 1.3.0
+  _repo; _released 1.2.3; _tap_serves 1.3.0
   run bash "$HOOK"
   [ "$status" -eq 0 ] || { echo "blocked a push because the tap was newer: $output"; false; }
 }
 
 @test "tap-lag: FAILS OPEN when the tap cannot be reached" {
   # 🔴 The load-bearing exception. No network must never mean no work.
-  _repo; git tag v1.2.3; _tap_unreachable
+  _repo; _released 1.2.3; _tap_unreachable
   run bash "$HOOK"
   [ "$status" -eq 0 ] || { echo "an offline machine could not push: $output"; false; }
   [[ "$output" == *"offline"* ]] || { echo "failed open in silence: $output"; false; }
@@ -93,7 +100,7 @@ _tap_garbage() {
 @test "tap-lag: FAILS OPEN on a response it cannot parse" {
   # A redirect to a login page, a rewritten formula, an outage page. Guessing
   # from something unrecognised is worse than saying so.
-  _repo; git tag v1.2.3; _tap_garbage
+  _repo; _released 1.2.3; _tap_garbage
   run bash "$HOOK"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"no recognisable version"* ]] || { echo "$output"; false; }
@@ -106,7 +113,7 @@ _tap_garbage() {
 }
 
 @test "tap-lag: CLIKAE_SKIP_TAP_CHECK overrides it" {
-  _repo; git tag v1.2.3; _tap_serves 1.2.2
+  _repo; _released 1.2.3; _tap_serves 1.2.2
   run env CLIKAE_SKIP_TAP_CHECK=1 bash "$HOOK"
   [ "$status" -eq 0 ]
 }
@@ -124,7 +131,7 @@ _tap_garbage() {
   printf '#!/usr/bin/env bash\necho SUITE-RAN\nexit 0\n' > "$TEST_HOME/h/scripts/test.sh"
   chmod +x "$TEST_HOME/h/scripts/test.sh" "$TEST_HOME/h/hooks/"*
 
-  git tag v1.2.3; _tap_serves 1.2.2          # tap behind -> pre-push must refuse
+  _released 1.2.3; _tap_serves 1.2.2          # tap behind -> pre-push must refuse
   printf '# Changelog\n' > CHANGELOG.md
   printf 'more\n' > f.txt; git add -A; git commit -qm work
   local head base
@@ -134,4 +141,23 @@ _tap_garbage() {
                  | bash '$TEST_HOME/h/hooks/pre-push' origin git@example.com:x/y.git"
   [ "$status" -ne 0 ] || { echo "pre-push shipped a release nobody can install: $output"; false; }
   [[ "$output" == *"homebrew-clikae"* ]] || { echo "a different check refused: $output"; false; }
+}
+
+@test "tap-lag: a tag that has NOT been pushed is not a release yet" {
+  # 🔴 THE DEADLOCK, AS A TEST. Keyed on the local tag, this hook refused the
+  # push OF THE TAG — and the tap cannot be updated before the tag exists on the
+  # remote, because the formula's url points at its tarball. So the check blocked
+  # the release it was written to complete. Found by releasing, not by reading.
+  _repo; _tap_serves 1.2.2
+  git tag v1.2.3                      # local only, deliberately not pushed
+  run bash "$HOOK"
+  [ "$status" -eq 0 ] || { echo "refused the push of the tag itself: $output"; false; }
+}
+
+@test "tap-lag: FAILS OPEN when the remote's tags cannot be listed" {
+  _repo; _tap_serves 1.2.2
+  git remote set-url origin /nonexistent/nope.git
+  run bash "$HOOK"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"remote"* ]] || { echo "failed open without saying why: $output"; false; }
 }
