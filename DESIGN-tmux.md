@@ -4,6 +4,26 @@
 **Scope**: This document owns the lifecycle, environment isolation, and terminal rendering (Tmux) rules for Clikae tanks.
 **Boundary**: This is the Single Source of Truth for Tmux interactions. Where `orchestration.md` or `DESIGN-runtime.md` disagrees with this file regarding Tmux, this file wins.
 
+## 0. Session 名稱前綴（2026-08-22 起 `clikae-`）
+
+`clikae-<engine>-<tank>[-<argv 摘要>]`。舊前綴是 `ck-`，從 v0.4 用到 0.28.2 ——
+那個縮寫**從來沒有被決定過**：README、formula、alias、文件裡都沒有它，它只活在
+使用者唯一會讀到它的地方（`tmux ls`）。
+
+🔴 **舊前綴仍然被讀，而且必須繼續被讀。** 改名是**搬遷**不是字串替換：升級的那一刻
+有 session 正跑在舊名字底下、有狀態檔是用舊名字寫的。丟掉舊前綴的後果是那些 session
+從看板消失、attach 不到、而且會被開出一個重複的 session 把 tank 一分為二。
+`tmux_sessv` 兩個都找（新的優先），`live.sh` 兩個都列，`clean.sh` 的 GC 兩種鎖都掃
+——**GC 漏掉舊名字是永久的**：那個鎖從此不會被釋放也不會被刪。
+
+前綴只有一個定義（`lib/core/tmux.sh` 的 `CLIKAE_SESS_PREFIX`）。它先前以字面字串
+散在 64 個地方，那正是本文件開頭那個「規則說要收斂、函式從沒被寫出來、四個呼叫端
+各自漂移」的形狀在等著重演。
+
+🔴 **空值不可以安靜。** 前綴未設時，GC 的 glob 會匹配不到任何東西（無聲的 no-op），
+而 `live.sh` 的 `^(|)` 會匹配**每一行**——看板會把使用者手動開的 session 全部認領。
+兩邊都要在空值時拒絕執行。
+
 ## 1. 核心哲學 (Core Philosophy)
 - `clikae` 是業務邏輯與流程大腦（Source of Truth）。
 - `tmux` 是純粹的狀態容器（Persistence Layer），負責維持 Shell 存活。
@@ -27,7 +47,7 @@
 - **規範**：
   必須將全域設定與建立 Session 串在同一個指令，確保 Server 生命週期不中斷：
   ```bash
-  tmux set-option -g history-limit 50000 \; new-session -d -e "CLIKAE_TANK_NAME=$tank" -s "ck-<run_id>" "..."
+  tmux set-option -g history-limit 50000 \; new-session -d -e "CLIKAE_TANK_NAME=$tank" -s "clikae-<run_id>" "..."
   ```
   🔴 **這條被違反過，而且是靜音的。** `burn.sh` 用的是裸的 `tmux new-session -d`，一個前綴都沒有。因為 `switch` 之後會補上全域選項，所以只有「burn 是第一個跑的東西」那一瞬間看得到；量到的（2026-08-15，隔離 socket）：
   ```
@@ -37,7 +57,7 @@
   ```
   收斂到 `tmux_spawn_session` 之後回到 50000。`tests/bats/tmux-spawn.bats` 釘住它——那個測試在修之前是紅的。
   ⚠️ **量的時候 server 必須還活著**：`exit-empty` 讓 server 隨最後一個 session 消失，而對死掉的 server 問選項會**默默起一顆新的**、回答 tmux 的預設值——長得跟 bug 一模一樣，不管 bug 在不在。
-  互動模式時使用 `tmux attach -t "ck-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
+  互動模式時使用 `tmux attach -t "clikae-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
 
 ### Rule 2: tmux 是便利層，不是相依（三個出口）
 
@@ -200,13 +220,13 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   if [ -n "$TMUX" ]; then
     # 若為互動模式，切換畫面；若為無頭腳本，則靜默略過 switch-client 避免打斷自動化
     CURRENT_PANE_SESSION=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null)
-    tmux has-session -t "ck-<tank>" 2>/dev/null || tmux_spawn_session --session "ck-<tank>" …
+    tmux has-session -t "clikae-<tank>" 2>/dev/null || tmux_spawn_session --session "clikae-<tank>" …
     CLIENTS=$(tmux list-clients -t "$CURRENT_PANE_SESSION" 2>/dev/null)
     if [ -n "$CLIENTS" ]; then
-      tmux switch-client -t "ck-<tank>"
+      tmux switch-client -t "clikae-<tank>"
     fi
   else
-    tmux_spawn_session --session "ck-<tank>" …
+    tmux_spawn_session --session "clikae-<tank>" …
   fi
   ```
   *(備註：`tmux_spawn_session`（`lib/core/tmux.sh`）是上述 Rule 1、2、4、5、7 的封裝函式，也是全 repo 唯一呼叫 `tmux new-session` 的地方。舊稿把它叫作 `clikae_spawn_session`，那個名字從未存在於程式碼。)*
@@ -224,10 +244,10 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   - `exec 9> lock; lockf -k -t 0 9` 回傳 0。持有中他人搶鎖回傳 `75` (EX_TEMPFAIL)。用法錯誤回傳 `64`。
   - 若在 `rc=0` 後執行 `rm -f lock`，可能剛好刪除到同名新任務的鎖檔 (TOCTOU)。
 - **🔴 鎖檔必須放在私有目錄 `$HOME/.clikae/state`（0700），不可放世界可寫的 `/tmp`。**
-  鎖名是可預測的（`ck-ephem-<run_id>` / `ck-ephem-slot-<cksum>`），放在 `/tmp` 時**別的本機使用者**可以：
+  鎖名是可預測的（`clikae-ephem-<run_id>` / `clikae-ephem-slot-<cksum>`），放在 `/tmp` 時**別的本機使用者**可以：
   - 預先把它建成 symlink，讓我方的 `exec 9>` / `exec 8>` 沿著連結截斷受害檔（symlink-follow write）；
-  - 投放一個 `ck-ephem-<name>.lock`：它沒人持鎖，GC 判定為「dead」，於是把檔名當成 session id，
-    **殺掉你的 tmux session `ck-<name>`**、並 `rm -f` 你的 `$HOME/.clikae/state/<name>.*`——同機使用者
+  - 投放一個 `clikae-ephem-<name>.lock`：它沒人持鎖，GC 判定為「dead」，於是把檔名當成 session id，
+    **殺掉你的 tmux session `clikae-<name>`**、並 `rm -f` 你的 `$HOME/.clikae/state/<name>.*`——同機使用者
     對你活著的 session 與 state 的 DoS。
   私有目錄讓對方根本無從投放，同時避開 macOS 定期清 `/tmp` 造成的鎖檔消失。
   GC 另加 `case "$sid" in ''|.*) continue` 作縱深防禦。
@@ -235,18 +255,18 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   無痕模式必須利用 shell redirect 與 FD，保持鎖的生命週期綁定在 client attach 期間（正常 detach 也會觸發 GC 刪除）：
   ```bash
   mkdir -p "$HOME/.clikae/state"; chmod 0700 "$HOME/.clikae/state"
-  exec 9> "$HOME/.clikae/state/ck-ephem-<run_id>.lock"
+  exec 9> "$HOME/.clikae/state/clikae-ephem-<run_id>.lock"
   lockf -k -t 0 9
-  exec tmux attach -t "ck-<run_id>"
+  exec tmux attach -t "clikae-<run_id>"
   # 警告：exec 9> 與 exec tmux 之間，嚴禁任何 subshell 或關閉 FD 的操作
   ```
   清理巡邏程式 `clikae clean` 檢查鎖時，必須精確判斷 `rc==75`：
   ```bash
-  lockf -k -t 0 "$HOME/.clikae/state/ck-ephem-<run_id>.lock" true 2>/dev/null
+  lockf -k -t 0 "$HOME/.clikae/state/clikae-ephem-<run_id>.lock" true 2>/dev/null
   rc=$?
   if [ $rc -eq 0 ]; then
     # 搶鎖成功代表 FD 已釋放 (client 已斷開)
-    tmux kill-session -t "ck-<run_id>" 2>/dev/null
+    tmux kill-session -t "clikae-<run_id>" 2>/dev/null
   elif [ $rc -ne 75 ]; then
     echo "ERROR: lockf failed with rc=$rc" >&2
   fi

@@ -188,6 +188,6 @@ Without `-r`, bats does not recurse into `tests/bats/adapters/` and silently ski
 every adapter test — the run still reports success, just with ~50 fewer tests than
 you think. (CI was bitten by this once.)
 
-See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/52a0db28e7d947f1055835a12de54a468a42b20d/HANDOFF.md) for the full verification recipe, including an
+See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/e7cdfe2c8089661b10d83d4e087a426b6974f804/HANDOFF.md) for the full verification recipe, including an
 isolated end-to-end run that doesn't touch your real `$HOME` — and for what the
 gate cannot see (anything interactive: the board, the resume picker, `clean`).

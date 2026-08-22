@@ -535,6 +535,7 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 					} finally {
 						currentTask = null, currentPriorityLevel = previousPriorityLevel, isPerformingWork = !1;
 					}
+					hasMoreWork = void 0;
 				}
 			} finally {
 				hasMoreWork ? schedulePerformWorkUntilDeadline() : isMessageLoopRunning = !1;
@@ -10389,7 +10390,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-8ba8a804.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-ca52e466.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
