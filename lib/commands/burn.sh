@@ -512,7 +512,7 @@ cmd_burn() {
     # /tmp: a predictable name there let another local user plant it — as a symlink
     # (truncation) or a plain file the clean GC reads as dead, killing your session
     # and deleting your state files. Private dir closes it (see clean.sh).
-    local lock_file="$HOME/.clikae/state/ck-ephem-$run_id.lock"
+    local lock_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-$run_id.lock"
     
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
@@ -580,13 +580,13 @@ EOF
       if tmux_spawn_session \
            --env "CLIKAE_RUN_ID=$run_id" --env "HOME=$HOME" \
            --env "CLIKAE_HOME=$CLIKAE_HOME" \
-           --session "ck-$run_id" -- "bash \"$wrapper_script\""; then
+           --session "${CLIKAE_SESS_PREFIX}$run_id" -- "bash \"$wrapper_script\""; then
         # Wait for completion via state file polling (Coroner trap)
         local poll_int=1
         while [ ! -f "$state_file" ]; do
           sleep $poll_int
           [ "$poll_int" -lt 5 ] && poll_int=$((poll_int + 1))
-          if ! tmux has-session -t "=ck-$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
+          if ! tmux has-session -t "=${CLIKAE_SESS_PREFIX}$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
             # Session vanished without writing state
             echo 255 > "$state_file"
             break

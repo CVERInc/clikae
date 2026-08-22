@@ -314,7 +314,7 @@ wake_attach() {
 wake_sessions_for() {
   local engine="$1" tank="$2" base
   command -v tmux >/dev/null 2>&1 || return 0
-  base="ck-$engine-$tank"
+  base="${CLIKAE_SESS_PREFIX}$engine-$tank"
   tmux list-sessions -F '#{session_name}' 2>/dev/null \
     | grep -E "^${base}(-[0-9]+)?$" || true
 }

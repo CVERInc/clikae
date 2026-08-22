@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **tmux sessions are now `clikae-<engine>-<tank>`, not `ck-…`.** `ck` was an
+  abbreviation nobody chose: it appears in no README, no formula, no alias and no
+  document — it existed only in the one place a user actually reads it, `tmux ls`.
+
+  🔴 This is a MIGRATION, not a string edit. At the moment of upgrade there are
+  sessions running under the old name and state files written with it, so the old
+  prefix is still read everywhere: `tmux_sessv` finds a session under either name
+  (preferring the new one) rather than spawning a duplicate beside the tank you
+  are already sitting in, `live.sh` lists both, and `clean.sh`'s GC scans both
+  lock patterns — missing the old name there is permanent, because a lock the
+  loop never visits is never released and never deleted.
+
+  The prefix now has exactly one definition (`CLIKAE_SESS_PREFIX` in
+  `lib/core/tmux.sh`); it was a literal in 64 places, which is the shape that
+  file's own header warns about. An unset prefix refuses loudly in both
+  directions, because the two silent failures point opposite ways: the GC would
+  glob nothing and report success, while `live.sh` would build `^(|)` and claim
+  every tmux session on the machine, including the ones the human started.
+
 ### Fixed
 
 - **Every tmux target could name the wrong session.** `tmux -t` is not an exact

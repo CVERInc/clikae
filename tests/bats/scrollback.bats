@@ -90,7 +90,7 @@ for _ in $(seq 1 200); do
   sleep 0.05
 done
 _stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
-_stage "capture-bytes=$(tmux capture-pane -p -S - 2>/dev/null | wc -c) capture-t-bytes=$(tmux capture-pane -p -S - -t \"ck-claude-scrolltest\" 2>/dev/null | wc -c)"
+_stage "capture-bytes=$(tmux capture-pane -p -S - 2>/dev/null | wc -c) capture-t-bytes=$(tmux capture-pane -p -S - -t \"clikae-claude-scrolltest\" 2>/dev/null | wc -c)"
 _stage "parent=$(ps -o comm= -p $PPID 2>/dev/null | tr -d ' ')"
 # Outlive the engine. If the pane's shell gets to run the capture that follows
 # `clikae run` in target_cmd, this subshell is alive to see the file appear; if
@@ -118,9 +118,9 @@ INNER_EOF
   run _pty_run "$CLIKAE_BIN" claude scrolltest
   kill "$_watcher" 2>/dev/null || true
   # This test drives the REAL tmux server (switch has no socket override), so it
-  # must put back what it took: a surviving ck-claude-scrolltest changes what the
+  # must put back what it took: a surviving clikae-claude-scrolltest changes what the
   # next run of this file — and any other test that reaches tmux — walks into.
-  tmux kill-session -t "ck-claude-scrolltest" 2>/dev/null || true
+  tmux kill-session -t "clikae-claude-scrolltest" 2>/dev/null || true
   
   # strip all carriage returns and terminal escapes
   cleaned=$(echo "$output" | sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' | tr -d '\r' | sed -E 's/[^a-zA-Z0-9_ -]//g')
@@ -165,6 +165,6 @@ INNER_EOF
   # spending quota where nobody is looking.
   CK_PTY_TERM=dumb run _pty_run "$CLIKAE_BIN" claude dumbterm
   [[ "$output" == *"ENGINE_RAN_ANYWAY"* ]] || { echo "$output"; false; }
-  run tmux has-session -t "ck-claude-dumbterm"
+  run tmux has-session -t "clikae-claude-dumbterm"
   [ "$status" -ne 0 ]
 }

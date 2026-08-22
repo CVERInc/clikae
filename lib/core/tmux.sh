@@ -33,6 +33,57 @@
 # So creation is not an implementation detail to be inlined. It is the moment the
 # server's whole identity is decided, and it belongs to exactly one function.
 
+# THE SESSION NAME PREFIX, and why there are two.
+#
+# Every session clikae starts is `<prefix><engine>-<tank>[-<argv digest>]`, and
+# that prefix is how `live.sh` tells clikae's sessions apart from the ones the
+# human made by hand. It was `ck-` from v0.4 to 0.28.2 — an abbreviation nobody
+# chose, appearing in no README, no formula, no alias, and no doc: it existed
+# only in the one place a user actually reads it, `tmux ls`.
+#
+# 🔴 IT LIVED AS A LITERAL IN 64 PLACES. This file's own header tells the story
+# of a rule that said "converge on one set of functions", was never written, and
+# let four call sites drift apart. A bare string repeated 64 times is that same
+# shape waiting to happen, so the prefix now has exactly one definition and the
+# rename below is a one-line change for whoever comes next.
+CLIKAE_SESS_PREFIX="clikae-"
+
+# 🔴 AND THE OLD ONE STAYS READABLE. A rename is a MIGRATION: sessions started
+# before the upgrade are still running under `ck-`, and dropping the old prefix
+# would make them vanish from the board, refuse to be attached, and be spawned
+# over with a duplicate. Reading both is cheap; the day this is deleted is the
+# day no `ck-` session or state file can still exist anywhere.
+CLIKAE_SESS_PREFIX_LEGACY="ck-"
+
+# tmux_sessv <id> — sets CLIKAE_TMUX_SESS and CLIKAE_TMUX_SESS_EXISTS for a session id.
+#
+#   CLIKAE_TMUX_SESS         the name to USE: an already-running session under
+#                            either prefix, else the new-prefix name to create
+#   CLIKAE_TMUX_SESS_EXISTS  1 when that session is already up, 0 when it is not
+#
+# Both answers come from one pass because the callers need both and asking tmux
+# twice is two forks on the launch path. Sets variables rather than printing for
+# the same reason — see profile_store.sh's `...v` helpers.
+# shellcheck disable=SC2034  # CLIKAE_TMUX_SESS_EXISTS is an output slot, read by
+# the callers in switch.sh / antigravity.sh / burn.sh, which shellcheck analyses
+# as separate files. Same shape as tui.sh's TUI_KEY.
+tmux_sessv() {
+  CLIKAE_TMUX_SESS="$CLIKAE_SESS_PREFIX$1"
+  CLIKAE_TMUX_SESS_EXISTS=0
+  command -v tmux >/dev/null 2>&1 || return 0
+  if tmux has-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null; then
+    CLIKAE_TMUX_SESS_EXISTS=1
+    return 0
+  fi
+  # Nothing under the new name: an older session may still be up under the old
+  # one, and attaching to it is the whole point of keeping the legacy prefix.
+  if tmux has-session -t "=$CLIKAE_SESS_PREFIX_LEGACY$1" 2>/dev/null; then
+    CLIKAE_TMUX_SESS="$CLIKAE_SESS_PREFIX_LEGACY$1"
+    CLIKAE_TMUX_SESS_EXISTS=1
+  fi
+  return 0
+}
+
 # tmux_server_running -> 0 when a server is already up on the current socket.
 # `list-sessions` rather than `has-session`: no target to guess, and tmux's
 # exit-empty means a server with zero sessions does not linger.

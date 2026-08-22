@@ -59,7 +59,7 @@ plain, conventional verbs.
 | `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
 **Your session outlives the terminal.** A bare switch runs the engine inside a
-tmux session named `ck-<engine>-<tank>`, so closing the window — or an ssh
+tmux session named `clikae-<engine>-<tank>`, so closing the window — or an ssh
 connection dropping — leaves the work running. Come back with the same command
 and you land back in it (the same conversation, not a new one), at whatever size
 the terminal you are now sitting at happens to be. That is the roaming case:

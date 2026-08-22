@@ -27,6 +27,11 @@ _source_clean() {
   source "$CLIKAE_LIB/core/adapter_loader.sh"
   # shellcheck source=../../lib/core/tui.sh
   source "$CLIKAE_LIB/core/tui.sh"
+  # bin/clikae loads this before any command runs, and the GC's globs are built
+  # from its prefix constants. Sourcing clean.sh without it builds an environment
+  # that never exists at runtime.
+  # shellcheck source=../../lib/core/tmux.sh
+  source "$CLIKAE_LIB/core/tmux.sh"
   # shellcheck source=../../lib/commands/clean.sh
   source "$CLIKAE_LIB/commands/clean.sh"
 }

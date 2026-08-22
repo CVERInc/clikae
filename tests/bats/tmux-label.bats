@@ -38,7 +38,7 @@ teardown() {
   run tmux show-options -t "$(_sess)" status-left
   [[ "$output" == *"claude/work"* ]] || false
   # And the internal prefix is gone from what a person reads.
-  [[ "$output" != *"ck-"* ]] || false
+  [[ "$output" != *"clikae-"* ]] || false     # the session id, whatever its prefix
 }
 
 @test "label: the window is named after the engine, not the shell that starts it" {

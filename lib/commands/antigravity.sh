@@ -509,10 +509,12 @@ cmd_antigravity() {
     local -a _agy_env=(--env "CLIKAE_TANK_NAME=$tank" --env "HOME=$HOME")
     [ -n "${CLIKAE_HOME:-}" ] && _agy_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
 
-    if ! tmux has-session -t "=ck-$_agy_sess" 2>/dev/null; then
+    local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+    tmux_sessv "$_agy_sess"
+    if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
       tmux_spawn_session "${_agy_env[@]}" \
-        --session "ck-$_agy_sess" --window "agy" -- "bash -c $(_switch_shquote "$_agy_cmd")"
-      tmux_label "ck-$_agy_sess" "agy" "$tank"
+        --session "$CLIKAE_TMUX_SESS" --window "agy" -- "bash -c $(_switch_shquote "$_agy_cmd")"
+      tmux_label "$CLIKAE_TMUX_SESS" "agy" "$tank"
     fi
 
     if [ -n "${TMUX:-}" ]; then
@@ -520,13 +522,13 @@ cmd_antigravity() {
       _agy_here="$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null || true)"
       [ -z "$_agy_here" ] && _agy_here="$(tmux display-message -p '#S' 2>/dev/null || true)"
       if [ -n "$(tmux list-clients -t "=$_agy_here" 2>/dev/null || true)" ]; then
-        exec tmux switch-client -t "=ck-$_agy_sess"
+        exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
       fi
-      log_info "Started agy/$tank in tmux session ck-$_agy_sess (no client here to switch)."
-      log_dim  "Reach it with:  tmux switch-client -t ck-$_agy_sess"
+      log_info "Started agy/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
+      log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS"
       return 0
     fi
-    exec tmux attach -t "=ck-$_agy_sess"
+    exec tmux attach -t "=$CLIKAE_TMUX_SESS"
   fi
 
   _agy_switch "$tank" "${passthru[@]}"

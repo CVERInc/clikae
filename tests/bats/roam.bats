@@ -54,12 +54,12 @@ def tmux(*a):
     return subprocess.run(["tmux", *a], capture_output=True, text=True).stdout.strip()
 
 def width():
-    return tmux("display-message", "-p", "-t", "ck-codex-roam", "#{window_width}")
+    return tmux("display-message", "-p", "-t", "clikae-codex-roam", "#{window_width}")
 
-# Start from nothing. ck-codex-roam lives on the shared default socket, so a
+# Start from nothing. clikae-codex-roam lives on the shared default socket, so a
 # session left by an earlier run would be ATTACHED to instead of created — and
 # then the first width is whatever that run used, not ours.
-tmux("kill-session", "-t", "ck-codex-roam")
+tmux("kill-session", "-t", "clikae-codex-roam")
 
 def wait_for(cond, secs=20):
     """Wait for the thing, do not guess how long it takes.
@@ -86,7 +86,7 @@ def started(n):
         return False
 
 attach(100, 30)
-wait_for(lambda: "ck-codex-roam" in tmux("ls") and started(1))
+wait_for(lambda: "clikae-codex-roam" in tmux("ls") and started(1))
 # …and wait for the RESIZE too, not just for the session to exist. The second
 # measurement below already waits for its width; this one did not, so it raced
 # tmux propagating the client size and read default-size 80 instead of 100 —
@@ -95,22 +95,22 @@ wait_for(lambda: "ck-codex-roam" in tmux("ls") and started(1))
 wait_for(lambda: width() == "100")
 print("FIRST_WIDTH", width())
 
-tmux("detach-client", "-s", "ck-codex-roam")
+tmux("detach-client", "-s", "clikae-codex-roam")
 # THIS session, not "any session". The first version asked whether anything in
 # tmux was attached, which is never false on a developer's machine — so it burned
 # its whole timeout every run, and under a loaded suite that wasted time pushed
 # the test past the stub engine's lifetime. The session then died, the second
 # attach created a NEW one, and the "engine started exactly once" assertion
 # failed for a reason that had nothing to do with roaming.
-wait_for(lambda: tmux("display-message", "-p", "-t", "ck-codex-roam",
+wait_for(lambda: tmux("display-message", "-p", "-t", "clikae-codex-roam",
                       "#{session_attached}").strip() == "0")
-print("SURVIVED_DETACH", "yes" if "ck-codex-roam" in tmux("ls") else "no")
+print("SURVIVED_DETACH", "yes" if "clikae-codex-roam" in tmux("ls") else "no")
 
 attach(60, 20)
 wait_for(lambda: width() == "60")
 print("SECOND_WIDTH", width())
 
-tmux("kill-session", "-t", "ck-codex-roam")
+tmux("kill-session", "-t", "clikae-codex-roam")
 PYEOF
 
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -172,7 +172,7 @@ PYEOF
   # Running `tmux attach` inside tmux is refused ("sessions should be nested with
   # care"); the client has to be MOVED. If this regresses the client stays on
   # 'outer' and the tank runs where nobody is looking.
-  [[ "$output" == *"CLIENT_ON ck-codex-roam"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"CLIENT_ON clikae-codex-roam"* ]] || { echo "$output"; false; }
   [ "$(grep -c ENGINE_STARTED "$STUB_RUNS")" -eq 1 ] || { cat "$STUB_RUNS"; false; }
 }
 
@@ -180,7 +180,7 @@ PYEOF
   # The bug, reported 2026-08-13 and reproduced before this test existed: open a
   # tank, then from the board resume a DIFFERENT past session on the same tank.
   # The tmux session was named after the tank alone, so the second launch found
-  # `ck-codex-roam2` running and attached to it — two tabs, one screen — and the
+  # `clikae-codex-roam2` running and attached to it — two tabs, one screen — and the
   # `--resume <sid>` was dropped in silence, because nothing was started to take
   # it. A session is now keyed on what was asked for, so a different request is a
   # different session.
@@ -247,7 +247,7 @@ launch("codex", "roam2", "--", "resume", "SESSION-TWO")
 wait_for(lambda: started(2))
 
 names = sorted(n for n in tmux("list-sessions", "-F", "#{session_name}").split()
-               if n.startswith("ck-codex-roam2"))
+               if n.startswith("clikae-codex-roam2"))
 print("SESSIONS", len(names))
 for n in names:
     first = (tmux("capture-pane", "-p", "-t", n).strip().splitlines() or [""])[0]

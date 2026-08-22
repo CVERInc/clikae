@@ -869,7 +869,21 @@ _clean_select() {
 _clean_tmux_gc() {
   local dry_run="$1"
   local lock_file sid is_dead rc
-  for lock_file in "$HOME/.clikae/state/"ck-ephem-*.lock; do
+  # 🔴 AN UNSET PREFIX MUST NOT BE QUIET. Empty values turn both globs into
+  # `…/ephem-*.lock`, which matches nothing, and this GC becomes a no-op that
+  # reports success — the same silent-absence shape as a $TMUX_TMPDIR pointing at
+  # a deleted directory. bin/clikae sources lib/core/tmux.sh before any command
+  # runs; if something sourced this file alone, say so instead of doing nothing.
+  if [ -z "${CLIKAE_SESS_PREFIX:-}" ] || [ -z "${CLIKAE_SESS_PREFIX_LEGACY:-}" ]; then
+    log_warn "GC skipped: session-name prefix unset (lib/core/tmux.sh was not loaded)."
+    return 1
+  fi
+  # 🔴 BOTH PREFIXES. GC is the one place where missing the old name is permanent:
+  # a lock this loop never visits is never released and never deleted, so a
+  # `ck-ephem-*` file written before 0.28.3 would sit in the state dir forever
+  # while the session it names is long gone.
+  for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock \
+                   "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX_LEGACY}ephem-"*.lock; do
     [ -e "$lock_file" ] || continue
     is_dead=0
     if command -v flock >/dev/null 2>&1; then
@@ -895,17 +909,23 @@ _clean_tmux_gc() {
       # Defence in depth: a real sid is validated engine/tank names + a digest, so
       # an empty or dot-leading value is a malformed file — never act on it.
       case "$sid" in ''|.*) continue ;; esac
-      if tmux has-session -t "=ck-$sid" 2>/dev/null; then
+      # The scrollback carries whichever prefix was current when it was written,
+      # and this sid may be reached from either lock, so clear both names.
+      local _sb_new="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}${sid}.scrollback"
+      local _sb_old="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX_LEGACY}${sid}.scrollback"
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      tmux_sessv "$sid"
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ]; then
         if [ "$dry_run" = "1" ]; then
-          log_info "GC: [Dry Run] Would clean up abandoned tmux session ck-$sid"
+          log_info "GC: [Dry Run] Would clean up abandoned tmux session $CLIKAE_TMUX_SESS"
         else
-          tmux kill-session -t "=ck-$sid"
-          log_info "GC: Cleaned up abandoned tmux session ck-$sid"
-          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$HOME/.clikae/state/ck-${sid}.scrollback"
+          tmux kill-session -t "=$CLIKAE_TMUX_SESS"
+          log_info "GC: Cleaned up abandoned tmux session $CLIKAE_TMUX_SESS"
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$_sb_new" "$_sb_old"
         fi
       else
         if [ "$dry_run" != "1" ]; then
-          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$HOME/.clikae/state/ck-${sid}.scrollback"
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$_sb_new" "$_sb_old"
         fi
       fi
     fi

@@ -139,7 +139,7 @@ _switch_run_tmux_wrapped() {
 
   mkdir -p "$HOME/.clikae/state"
 
-  local target_cmd scrollback_file="$HOME/.clikae/state/ck-$sess_id-$$.scrollback"
+  local target_cmd scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$sess_id-$$.scrollback"
   target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
   # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
   # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
@@ -169,37 +169,44 @@ KV
   # where nobody would ever see it.
   wake_ask_once "$engine" "$tank"
 
+  # One resolution for both branches: which session name this id means today,
+  # and whether it is already up. Sessions started before 0.28.3 are still
+  # named `ck-…`, and tmux_sessv finds those too — attaching to the one you
+  # already have is the point of keeping the old prefix readable.
+  local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+  tmux_sessv "$sess_id"
+
   if [ -n "$TMUX" ]; then
     local current_pane_session
     current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
     [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
     
-    tmux has-session -t "=ck-$sess_id" 2>/dev/null || \
+    [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] || \
       tmux_spawn_session "${spawn_env[@]}" \
-        --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
-    tmux_label "ck-$sess_id" "$engine" "$tank"
-    wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
+        --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+    tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
     
     local clients
     clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
-      exec tmux switch-client -t "=ck-$sess_id"
+      exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
     fi
     # No client on this pane's session to move — we are inside a DETACHED one (a
     # burn wrapper, an agent run, a pane whose client went away). The engine has
-    # already been started in ck-$sess_id by this point, so returning here in
+    # already been started in $CLIKAE_TMUX_SESS by this point, so returning here in
     # silence reads as "the command did nothing" while a session quietly holds it
     # (and spends the account's quota). Say where it went instead. Not an attach:
     # attaching from inside tmux is what `switch-client` exists to avoid.
-    log_info "Started $engine/$tank in tmux session ck-$sess_id (no client here to switch)."
-    log_dim  "Reach it with:  tmux switch-client -t ck-$sess_id   (or: tmux attach -t ck-$sess_id)"
+    log_info "Started $engine/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
+    log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS   (or: tmux attach -t $CLIKAE_TMUX_SESS)"
   else
     local started_here=0
-    if ! tmux has-session -t "=ck-$sess_id" 2>/dev/null; then
+    if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
       tmux_spawn_session "${spawn_env[@]}" \
-        --session "ck-$sess_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
-      tmux_label "ck-$sess_id" "$engine" "$tank"
-      wake_enabled && wake_attach_watcher "ck-$sess_id" "$engine" "$tank"
+        --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+      tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+      wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
       started_here=1
     fi
 
@@ -212,7 +219,7 @@ KV
     # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
     # quietly taken roaming away from the one device this feature exists for.
     local attach_rc=0
-    tmux_attach "ck-$sess_id" "$started_here" "$scrollback_file" || attach_rc=$?
+    tmux_attach "$CLIKAE_TMUX_SESS" "$started_here" "$scrollback_file" || attach_rc=$?
     # 2 means the tmux SERVER went away while we were in it — not that this
     # terminal cannot host tmux. Falling through to `run` here is what left three
     # live sessions permanently outside tmux on 2026-08-21: reachable only from
@@ -307,7 +314,7 @@ EOF
     # session literally named "ck-", a scrollback file "ck--$$", and an empty
     # CLIKAE_TANK_NAME below.
     local tank_id="${engine}-${tank}"
-    local target_cmd scrollback_file="$HOME/.clikae/state/ck-$tank_id-$$.scrollback"
+    local target_cmd scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$tank_id-$$.scrollback"
     target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
   # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
   # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
@@ -337,14 +344,16 @@ EOF
     # no file-access grant, which no later call can repair (DESIGN-tmux Rule 7).
     if tmux_usable; then
       local started_here=0
-      if ! tmux has-session -t "=ck-$tank_id" 2>/dev/null; then
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      tmux_sessv "$tank_id"
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
         tmux_spawn_session "${relay_env[@]}" \
-          --session "ck-$tank_id" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
-        tmux_label "ck-$tank_id" "$engine" "$tank"
+          --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+        tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
         started_here=1
       fi
       local roam_rc=0
-      tmux_attach "ck-$tank_id" "$started_here" "$scrollback_file" || roam_rc=$?
+      tmux_attach "$CLIKAE_TMUX_SESS" "$started_here" "$scrollback_file" || roam_rc=$?
       [ "$roam_rc" -eq 0 ] && return 0
       # Same two-failures-one-code problem as the launch path above. The relay
       # below is the right answer for a terminal tmux cannot draw on; it is not
@@ -503,7 +512,7 @@ _switch_run_ephemeral() {
   mkdir -p "$lock_dir" 2>/dev/null || true
   chmod 0700 "$lock_dir" 2>/dev/null || true
   local slot_lock
-  slot_lock="$lock_dir/ck-ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
+  slot_lock="$lock_dir/${CLIKAE_SESS_PREFIX}ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
   # 🔴 `lockf -k`. Without -k the lock does not lock: measured 2026-08-15, two
   # processes both got rc=0 from `lockf -t 0 <fd>` on the same file. -k keeps the
   # file on release, and the second holder then gets 75 (EX_TEMPFAIL) — which is

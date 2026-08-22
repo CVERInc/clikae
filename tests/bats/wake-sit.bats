@@ -344,7 +344,7 @@ PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"PROMPT yes"* ]] || { echo "$output"; false; }
   [ "$(cat "$CLIKAE_HOME/wake-on-reset" 2>/dev/null | tr -d '[:space:]')" = "off" ]
-  tmux kill-session -t "ck-codex-$(_tankname)" 2>/dev/null || true
+  tmux kill-session -t "clikae-codex-$(_tankname)" 2>/dev/null || true
 }
 
 @test "ask: with nobody to answer, nothing is asked and nothing is assumed" {

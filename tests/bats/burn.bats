@@ -346,7 +346,7 @@ STUB
   [ "$status" -eq 0 ]
   [ -f "$A" ]
   run cat "$A"
-  [[ "$output" == ck-*-burn-* ]]
+  [[ "$output" == clikae-*-burn-* ]]
 }
 
 @test "burn --prompt-file builds the engine command via the hook and completes" {

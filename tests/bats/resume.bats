@@ -287,5 +287,5 @@ PYEOF
   run tmux list-sessions -F '#{session_name}'
   local sessions="$output"
   tmux kill-server 2>/dev/null || true
-  [[ "$sessions" == *"ck-claude-R"* ]] || { echo "resume started no tmux session: '$sessions'"; false; }
+  [[ "$sessions" == *"clikae-claude-R"* ]] || { echo "resume started no tmux session: '$sessions'"; false; }
 }

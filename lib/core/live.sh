@@ -20,8 +20,12 @@
 # Anything else in the user's tmux is theirs and is left alone.
 live_session_names() {
   command -v tmux >/dev/null 2>&1 || return 0
+  # 🔴 An unset prefix here is WORSE than a no-op: `^(|)` matches every line, so
+  # the board would claim every tmux session on the machine — including the ones
+  # the human made by hand, which the prefix exists to leave alone. Refuse.
+  [ -n "${CLIKAE_SESS_PREFIX:-}" ] && [ -n "${CLIKAE_SESS_PREFIX_LEGACY:-}" ] || return 0
   tmux list-sessions -F '#{session_name}	#{session_created}	#{session_attached}' 2>/dev/null \
-    | grep -E '^ck-[^	]+	' \
+    | grep -E "^($CLIKAE_SESS_PREFIX|$CLIKAE_SESS_PREFIX_LEGACY)[^	]+	" \
     | sort -t'	' -k2,2 -rn || true
 }
 
@@ -40,7 +44,11 @@ live_session_names() {
 # that cannot be opened.
 live_split() {
   local name="$1" rest engine tank
-  case "$name" in ck-*) rest="${name#ck-}" ;; *) return 1 ;; esac
+  case "$name" in
+    "$CLIKAE_SESS_PREFIX"*)        rest="${name#"$CLIKAE_SESS_PREFIX"}"        ;;
+    "$CLIKAE_SESS_PREFIX_LEGACY"*) rest="${name#"$CLIKAE_SESS_PREFIX_LEGACY"}" ;;
+    *) return 1 ;;
+  esac
   engine="${rest%%-*}"
   tank="${rest#*-}"
   [ -n "$engine" ] && [ -n "$tank" ] && [ "$engine" != "$rest" ] || return 1

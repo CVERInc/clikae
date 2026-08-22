@@ -284,7 +284,11 @@ _home_items() {
   # them together, so start it now, in the background, and collect it at the end.
   # The output order is unchanged; only the waiting is.
   local _rf="" _rpid=""
-  _rf="$(mktemp "${TMPDIR:-/tmp}/ck-recent.XXXXXX" 2>/dev/null)" || _rf=""
+  # A DIFFERENT NAMESPACE from the tmux session prefix, despite sharing the
+  # word: these are scratch files under $TMPDIR that live for one frame, and
+  # nothing looks them up by name. Renamed with the sessions only so the two
+  # do not read as unrelated conventions; there is no compatibility to keep.
+  _rf="$(mktemp "${TMPDIR:-/tmp}/clikae-recent.XXXXXX" 2>/dev/null)" || _rf=""
   if [ -n "$_rf" ]; then
     _home_recent_rows >"$_rf" 2>/dev/null &
     _rpid=$!
@@ -426,7 +430,7 @@ _home_dry_set() {
   # quota line at all, and a change with no specimen to test it against is a guess
   # about the one thing the board must not get wrong.
   local _gf="" _gpid=""
-  _gf="$(mktemp "${TMPDIR:-/tmp}/ck-tgt.XXXXXX" 2>/dev/null)" || _gf=""
+  _gf="$(mktemp "${TMPDIR:-/tmp}/clikae-tgt.XXXXXX" 2>/dev/null)" || _gf=""
   if [ -n "$_gf" ]; then
     _home_dry_targets >"$_gf" 2>/dev/null &
     _gpid=$!
@@ -522,8 +526,8 @@ _home_reap() {
 
 _home_refresh() {
   local _df _tf _dpid _tpid
-  _df="$(mktemp "${TMPDIR:-/tmp}/ck-dry.XXXXXX" 2>/dev/null)"   || _df=""
-  _tf="$(mktemp "${TMPDIR:-/tmp}/ck-tot.XXXXXX" 2>/dev/null)"   || _tf=""
+  _df="$(mktemp "${TMPDIR:-/tmp}/clikae-dry.XXXXXX" 2>/dev/null)"   || _df=""
+  _tf="$(mktemp "${TMPDIR:-/tmp}/clikae-tot.XXXXXX" 2>/dev/null)"   || _tf=""
   if [ -z "$_df" ] || [ -z "$_tf" ]; then
     # No writable temp dir — do it the old serial way rather than recursing.
     [ -n "$_df" ] && rm -f "$_df"
