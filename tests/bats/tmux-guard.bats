@@ -127,7 +127,11 @@ _real_tmux() {
   # — where it has run green, though nobody has A/B'd it there, so treat that as
   # "no failure seen" and not as "measured free". What bats gets instead is the
   # free check below: the isolation directory must still exist when a test ends.
-  local w; w="$(command -v tmux)"
+  # `|| true`: on a host with NO tmux at all — GitHub's macos runner, which is
+  # how this test broke CI for five commits while the local gate stayed green —
+  # `command -v` exits non-zero and the assignment itself fails the test. An
+  # absent tmux is not the guard either, so it satisfies what is being asserted.
+  local w; w="$(command -v tmux || true)"
   [ "$w" != "$TEST_HOME/.testbin/tmux" ] || {
     echo "the guard is back on the bats hot path; see the A/B above"; false; }
 }
