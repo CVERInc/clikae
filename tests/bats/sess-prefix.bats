@@ -40,9 +40,11 @@ teardown() {
   [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]
 }
 
-@test "prefix: a session already running under the OLD name is found, not duplicated" {
-  # The migration guarantee. Without this, upgrading mid-session starts a second
-  # tmux session for a tank you are already sitting in.
+@test "prefix: a session under the OLD name is RENAMED, not duplicated" {
+  # The migration guarantee, and the reason it is a rename rather than a second
+  # name to answer to: upgrading mid-session must not start a second tmux session
+  # for a tank you are already sitting in, and must not leave the old name
+  # around for something else to have to know about later.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _iso
   _t new-session -d -s 'ck-claude-x' 'sleep 30'
@@ -50,8 +52,29 @@ teardown() {
   local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
   tmux_sessv "claude-x"
   [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] || { echo "did not see the legacy session"; false; }
-  [ "$CLIKAE_TMUX_SESS" = "ck-claude-x" ] || {
-    echo "would have spawned '$CLIKAE_TMUX_SESS' alongside the running ck-claude-x"; false; }
+  [ "$CLIKAE_TMUX_SESS" = "clikae-claude-x" ] || {
+    echo "answered to '$CLIKAE_TMUX_SESS' instead of renaming"; false; }
+
+  # …and the server agrees: one session, under the new name.
+  run _t has-session -t '=clikae-claude-x'
+  [ "$status" -eq 0 ] || { echo "the new name does not exist on the server"; false; }
+  run _t has-session -t '=ck-claude-x'
+  [ "$status" -ne 0 ] || { echo "the old name is still there — it was copied, not renamed"; false; }
+}
+
+@test "prefix: renaming does not disturb a neighbour with a longer name" {
+  # `rename-session -t ck-claude-x` without an exact target would rename
+  # ck-claude-x-1492 when the plain one is absent — the prefix-matching defect,
+  # arriving through a new door.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _iso
+  _t new-session -d -s 'ck-claude-x-1492' 'sleep 30'
+
+  local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+  tmux_sessv "claude-x"
+  [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ] || { echo "matched a session it does not name"; false; }
+  run _t has-session -t '=ck-claude-x-1492'
+  [ "$status" -eq 0 ] || { echo "the neighbour was renamed out from under itself"; false; }
 }
 
 @test "prefix: the new name wins when both exist" {

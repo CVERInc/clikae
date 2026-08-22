@@ -727,3 +727,67 @@ sys.exit(1 if bad else 0)
   HOME="" run _clean_trash_usable
   [ "$status" -ne 0 ]
 }
+
+# --- orphaned scrollbacks -----------------------------------------------------
+#
+# 🔴 NOTHING EVER COLLECTED THESE. tmux_attach deletes the scrollback it made, on
+# both of its exits — if it reaches one. A clikae killed mid-attach leaves the
+# file, and the ephemeral GC above cannot see it: that loop is driven by
+# `*-ephem-*.lock`, and an ordinary `clikae claude x` writes no lock. Found on a
+# real machine: 14 orphans, oldest a week, zero locks.
+
+@test "GC removes a scrollback whose writer is gone" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  # A pid that cannot be running: allocate one, then make sure it is not.
+  local dead=999999
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  : > "$sdir/clikae-claude-x-$dead.scrollback"
+  _clean_scrollback_gc 0
+  [ ! -f "$sdir/clikae-claude-x-$dead.scrollback" ] || { echo "the orphan survived"; false; }
+}
+
+@test "GC keeps a scrollback whose writer is still running" {
+  # The direction that matters: a session you stay attached to for three days has
+  # a three-day-old scrollback and is very much alive. Age would delete it; the
+  # writer's pid does not.
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  : > "$sdir/clikae-claude-x-$$.scrollback"
+  _clean_scrollback_gc 0
+  [ -f "$sdir/clikae-claude-x-$$.scrollback" ] || {
+    echo "deleted a scrollback whose writer is this very process"; false; }
+  rm -f "$sdir/clikae-claude-x-$$.scrollback"
+}
+
+@test "GC leaves a scrollback with no trailing pid alone" {
+  # Not a name this code writes, so it is not this code's to delete.
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  : > "$sdir/someone-elses.scrollback"
+  _clean_scrollback_gc 0
+  [ -f "$sdir/someone-elses.scrollback" ] || { echo "deleted a file it does not own"; false; }
+}
+
+@test "GC dry run reports the orphan and deletes nothing" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999998
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  : > "$sdir/clikae-codex-m-$dead.scrollback"
+  run _clean_scrollback_gc 1
+  [[ "$output" == *"Would remove orphaned scrollback"* ]] || { echo "$output"; false; }
+  [ -f "$sdir/clikae-codex-m-$dead.scrollback" ] || { echo "a dry run deleted it"; false; }
+}
+
+@test "GC sweeps orphans under the OLD prefix too" {
+  # The 14 that started this were all `ck-*`; the sweep is prefix-agnostic on
+  # purpose, and this pins that rather than trusting the glob.
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999997
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  : > "$sdir/ck-claude-h-$dead.scrollback"
+  _clean_scrollback_gc 0
+  [ ! -f "$sdir/ck-claude-h-$dead.scrollback" ] || { echo "the legacy orphan survived"; false; }
+}

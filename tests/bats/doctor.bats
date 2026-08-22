@@ -114,3 +114,25 @@ STUB
   [[ "$output" == *"carry a saved login: haslogin"* ]] || false
   [[ "$output" == *"no saved login: nologin"* ]] || false
 }
+
+@test "doctor: says nothing about old names when there are none" {
+  # 🔴 Silence IS the reading. A line that always printed "0 legacy sessions"
+  # would be a number nobody can act on, on the screen whose whole job is to say
+  # what to do next — and for the person deciding when the legacy read paths can
+  # be deleted, "doctor says nothing" is the zero they are waiting for.
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"old names"* ]] || { echo "reported leftovers in a clean home: $output"; false; }
+}
+
+@test "doctor: counts state files still carrying the old prefix" {
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  : > "$sdir/ck-claude-x-4242.scrollback"
+  : > "$sdir/ck-ephem-claude-x-99.lock"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"old names"* ]] || { echo "did not notice two ck-* files: $output"; false; }
+  [[ "$output" == *"2 state file(s)"* ]] || { echo "wrong count: $output"; false; }
+  # …and says what will happen to them, because a count with no next step is noise.
+  [[ "$output" == *"clikae clean"* ]] || { echo "no action offered: $output"; false; }
+}

@@ -206,9 +206,14 @@ KV
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
       tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
-      wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
       started_here=1
     fi
+    # OUTSIDE the spawn guard, like the branch above. wake_attach_watcher returns
+    # early when a `wake` window is already there, so calling it every time costs
+    # nothing and heals a session that lost its waiter — which is exactly what
+    # happens when tmux_sessv renames one off the old prefix: the old waiter had
+    # the old name in its command and exits when that name stops resolving.
+    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
 
     # Whether this terminal can host tmux is tmux's call, not ours. `new-session -d`
     # happily succeeds under a TERM tmux cannot draw on (TERM=dumb: "open terminal

@@ -157,6 +157,31 @@ $(list_all_profiles 2>/dev/null || true)
 EOF
 }
 
+# _doctor_legacy_prefix -> say something ONLY when pre-0.28.3 names are still
+# around. Silence is the answer for everyone except the person deciding when the
+# legacy read paths can be deleted, and for them silence IS the reading: zero.
+#
+# A line that always printed "0 legacy sessions" would be a number nobody can act
+# on, on a screen that exists to tell you what to do next.
+_doctor_legacy_prefix() {
+  local sess=0 files=0
+  [ -n "${CLIKAE_SESS_PREFIX_LEGACY:-}" ] || return 0
+  if command -v tmux >/dev/null 2>&1; then
+    sess="$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+      | grep -c "^${CLIKAE_SESS_PREFIX_LEGACY}" || true)"
+  fi
+  local _f
+  for _f in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX_LEGACY}"*; do
+    [ -e "$_f" ] && files=$((files + 1))
+  done
+  [ "${sess:-0}" -gt 0 ] || [ "${files:-0}" -gt 0 ] || return 0
+  printf '  %-16s %s\n' "old names" \
+    "$sess session(s), $files state file(s) still named ${CLIKAE_SESS_PREFIX_LEGACY}*"
+  log_dim "    Sessions are renamed the next time clikae launches into them;"
+  log_dim "    orphaned state files go on the next \`clikae clean\`."
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -197,6 +222,7 @@ EOF
   local rows; rows="$(scan_clis)"
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
+  _doctor_legacy_prefix
 
   _doctor_keychain
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a

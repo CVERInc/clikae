@@ -75,11 +75,27 @@ tmux_sessv() {
     CLIKAE_TMUX_SESS_EXISTS=1
     return 0
   fi
-  # Nothing under the new name: an older session may still be up under the old
-  # one, and attaching to it is the whole point of keeping the legacy prefix.
-  if tmux has-session -t "=$CLIKAE_SESS_PREFIX_LEGACY$1" 2>/dev/null; then
-    CLIKAE_TMUX_SESS="$CLIKAE_SESS_PREFIX_LEGACY$1"
-    CLIKAE_TMUX_SESS_EXISTS=1
+  # Nothing under the new name. An older session may still be up under the old
+  # one — so RENAME it rather than learning to answer to two names forever.
+  #
+  # 🔴 Renaming on encounter, not in a one-shot migration, and the difference
+  # matters here: this machine also has clikae 0.27.0 installed by brew, and an
+  # older binary keeps creating `ck-` sessions after any migration has run. A
+  # once-only sweep would leave those behind with nothing left to collect them.
+  #
+  # The wake waiter inside such a session has the OLD name baked into its
+  # command (`clikae wake --watch … <session>`), and wake_watch exits cleanly the
+  # moment `has-session` on that name fails — so the rename closes its window by
+  # itself. switch.sh re-attaches one unconditionally, and wake_attach_watcher is
+  # idempotent, so the waiter comes back on the very next launch rather than
+  # being silently lost. It is the 3:50am nudge; it does not get to go missing.
+  local _legacy="$CLIKAE_SESS_PREFIX_LEGACY$1"
+  tmux has-session -t "=$_legacy" 2>/dev/null || return 0
+  CLIKAE_TMUX_SESS_EXISTS=1
+  if ! tmux rename-session -t "=$_legacy" "$CLIKAE_TMUX_SESS" 2>/dev/null; then
+    # Something took the new name between the check above and here, or this tmux
+    # refused. Answer to the old name rather than pretending the rename worked.
+    CLIKAE_TMUX_SESS="$_legacy"
   fi
   return 0
 }

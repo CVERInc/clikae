@@ -866,6 +866,42 @@ _clean_select() {
 # `rm -f`s your `$HOME/.clikae/state/<name>.*` — a co-tenant DoS on your live
 # sessions and state. A private 0700 dir removes the ability to plant at all; the
 # sid guard below is cheap defence in depth.
+# _clean_scrollback_gc <dry_run> -> delete scrollback files whose writer is gone.
+#
+# 🔴 NOTHING EVER COLLECTED THESE. tmux_attach removes the scrollback it created,
+# on both of its exits — but only if it reaches one. A clikae killed mid-attach
+# (a crash, a reboot, a `kill`) leaves the file behind, and the ephemeral GC above
+# never sees it: that loop is driven by `*-ephem-*.lock` files, and an ordinary
+# `clikae claude x` writes no lock. Found 2026-08-22 on the maintainer's machine:
+# 14 orphans, the oldest a week old, zero locks — so nothing would ever have
+# looked at them. Older than the prefix rename and unrelated to it; they were
+# simply all wearing the old name, which is how they were noticed.
+#
+# 🔴 THE TEST IS THE WRITER'S PID, NOT THE FILE'S AGE. The name ends in the pid
+# of the clikae that created it (switch.sh: `…-$$.scrollback`), and age is the
+# wrong question: a session you stay attached to for three days has a three-day-
+# old scrollback that is very much alive. A recycled pid makes this SKIP a dead
+# file, which leaves litter; there is no direction in which it deletes a live one.
+_clean_scrollback_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f base pid n=0
+  [ -d "$dir" ] || return 0
+  for f in "$dir/"*.scrollback; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"; base="${base%.scrollback}"
+    pid="${base##*-}"
+    # No trailing all-digit field: not a name this code writes. Leave it alone.
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null && continue          # its writer is still running
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned scrollback ${base}.scrollback"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned scrollback file(s)."
+  return 0
+}
+
 _clean_tmux_gc() {
   local dry_run="$1"
   local lock_file sid is_dead rc
@@ -963,6 +999,7 @@ cmd_clean() {
 
   # Run the Tmux Ephemeral GC before doing file scans
   _clean_tmux_gc "$dry_run"
+  _clean_scrollback_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

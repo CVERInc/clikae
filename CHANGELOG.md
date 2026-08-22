@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Sessions still under the old name are RENAMED on sight.** `tmux_sessv` no
+  longer just answers to `ck-…`; when it finds one it renames it to the new name,
+  so the old prefix stops existing instead of becoming something everything has
+  to keep knowing about. Renaming on encounter rather than in a one-shot
+  migration is deliberate: an older clikae installed alongside (0.27.0 via brew,
+  on the maintainer's own machine) keeps creating old names after any migration
+  would have run, and a once-only sweep leaves those behind forever.
+
+  The `wake` waiter inside such a session has the old name baked into its
+  command and exits cleanly when that name stops resolving — so `switch` now
+  re-attaches a watcher outside the "did we just spawn it" guard on both paths.
+  `wake_attach_watcher` was already idempotent, so this costs nothing and heals a
+  session that lost its waiter. It is the 3:50am nudge; it does not get to go
+  missing quietly.
+
+- **`clikae clean` collects orphaned scrollback files. Nothing ever did.**
+  `tmux_attach` deletes the scrollback it created on both of its exits — if it
+  reaches one. A clikae killed mid-attach leaves the file behind, and the
+  ephemeral GC could not see it: that loop is driven by `*-ephem-*.lock` files,
+  and an ordinary `clikae <engine> <tank>` writes no lock. Measured on a real
+  machine: 14 orphans, the oldest a week old, and zero locks — so nothing would
+  ever have looked at them. Older than the prefix rename and unrelated to it;
+  they were simply all wearing the old name, which is how they were noticed.
+
+  🔴 The test is the WRITER'S PID, not the file's age. The name ends in the pid
+  of the clikae that wrote it, and age is the wrong question — a session you stay
+  attached to for three days has a three-day-old scrollback that is very much
+  alive. A recycled pid makes the sweep SKIP a dead file, which leaves litter;
+  there is no direction in which it deletes a live one.
+
+- **`clikae doctor` reports what is still carrying the old name**, and only when
+  there is something. Silence is the reading: it is the zero that says the
+  compatibility paths can be deleted.
+
 - **tmux sessions are now `clikae-<engine>-<tank>`, not `ck-…`.** `ck` was an
   abbreviation nobody chose: it appears in no README, no formula, no alias and no
   document — it existed only in the one place a user actually reads it, `tmux ls`.
