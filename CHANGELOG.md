@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae resume` could start a second engine on a conversation you were
+  already in.** Resuming keys the tmux session on the argv it hands the engine
+  (`--resume <sid>`), which is what makes resuming a *different* conversation
+  open its own screen. But a session started plainly — `clikae claude x` — holds
+  a conversation that is invisible to that key, so resuming it opened a second
+  engine writing the same transcript.
+
+  🔴 It cannot simply ask. Measured on a real live session: the process inside
+  the pane is plain `claude`, with no `--resume` and no sid — which conversation
+  it holds is the engine's own state. So the check is EVIDENCE, not proof: only
+  the engine writes the transcript, so a file modified after a live session on
+  that tank started is a file something in that session has been writing. It is
+  asymmetric on purpose — it can say "probably open there", never "not open" —
+  and it asks rather than refuses.
+
+  It only asks when there is a terminal to ask on: `confirm` reads stdin, and a
+  failed read returns 1, which would have made `resume` silently do nothing in a
+  script.
+
+- **`stat` portability now has one implementation, not four.** `file_mtime` joins
+  `sessions_by_mtime` on the memoised GNU/BSD detection. 🔴 The rule that keeps
+  being relearned: ask `stat --version`, never "try `-f` and fall back" — GNU's
+  `-f` means `--file-system`, so it prints block counts and EXITS 0, and the
+  fallback never fires. Four times now, the latest three functions away from the
+  file that had already solved it.
+
+
 ## [0.28.3] — 2026-08-22
 
 ### Changed

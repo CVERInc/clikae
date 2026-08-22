@@ -136,6 +136,48 @@ EOF
 # _resume_exec <engine> <tank> <dir> <sid> [-- passthru...] — cd into the session's
 # recorded directory, then exec the engine's resume under <dir>'s config. Replaces
 # the process (never returns on success).
+# _resume_live_holder <engine> <tank> <transcript> -> the name of a live session
+# that may already be holding this conversation, or nothing.
+#
+# 🔴 WHY THIS CANNOT JUST ASK. A session started as `clikae claude x` carries no
+# conversation identity anywhere clikae can see: the pane runs plain `claude`,
+# and which conversation it is living in is Claude Code's own state. Measured on
+# the maintainer's own live session — the engine's argv is just `claude`, with no
+# --resume and no sid. So the question "is this conversation already open?" has
+# no direct answer, and anything claiming one would be guessing.
+#
+# What IS observable: only the engine writes the transcript. So a file modified
+# AFTER a live session on that tank started is a file something in that session
+# has been writing. Not proof — the same tank could have had two sessions — but
+# it is evidence, and it is asymmetric in the safe direction:
+#
+#   modified since the session began  -> probably open there, say so
+#   not modified                      -> unknown; stay quiet (today's behaviour)
+#
+# A fixed "modified in the last N seconds" window was the first idea and is
+# worse: a conversation whose agent is nine minutes into a test run has not
+# written for nine minutes and is extremely alive.
+_resume_live_holder() {
+  local engine="$1" tank="$2" file="$3" name created et
+  [ -n "$file" ] && [ -f "$file" ] || return 1
+  declare -F live_session_names >/dev/null 2>&1 || return 1
+  local mtime; mtime="$(file_mtime "$file")"
+  [ -n "$mtime" ] || return 1
+  while IFS="$(printf '\t')" read -r name created _; do
+    [ -n "$name" ] || continue
+    et="$(live_split "$name" 2>/dev/null)" || continue
+    [ "${et%%$(printf '\t')*}" = "$engine" ] || continue
+    [ "${et##*$(printf '\t')}" = "$tank" ] || continue
+    case "$created" in ''|*[!0-9]*) continue ;; esac
+    [ "$mtime" -gt "$created" ] || continue
+    printf '%s\n' "$name"
+    return 0
+  done <<EOF
+$(live_session_names 2>/dev/null)
+EOF
+  return 1
+}
+
 _resume_exec() {
   local engine="$1" tank="$2" dir="$3" sid="$4"; shift 4
   local -a passthru=()
@@ -147,6 +189,27 @@ _resume_exec() {
   local cwd="" found
   found="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
   [ -n "$found" ] && cwd="$(adapter_session_cwd "$found" 2>/dev/null || true)"
+
+  # 🔴 TWO ENGINES ON ONE TRANSCRIPT is what this is for. Resuming keys the tmux
+  # session on `--resume <sid>`, so a conversation you are ALREADY sitting in —
+  # under a session started plainly, which carries no sid in its name — is not
+  # recognised, and this opens a second engine writing the same file.
+  #
+  # The check is evidence, not proof (see _resume_live_holder), so it asks rather
+  # than refuses. And it only asks when there is a terminal to ask: `confirm`
+  # reads stdin, and a failed read returns 1, which would make resume silently do
+  # nothing in a script or a pipe — a worse outcome than the thing being guarded.
+  local _holder
+  if _holder="$(_resume_live_holder "$engine" "$tank" "$found" 2>/dev/null)"; then
+    log_warn "This conversation has been written to since '$_holder' started — it is probably open there."
+    log_dim  "  Attach to that screen instead:  clikae $tank"
+    log_dim  "  Resuming starts a SECOND engine on the same transcript."
+    if [ -t 0 ]; then
+      confirm "Resume anyway?" || { log_dim "Left it alone."; return 0; }
+    else
+      log_dim "  (no terminal to ask — resuming anyway)"
+    fi
+  fi
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     cd "$cwd" || log_warn "Couldn't cd to $cwd — resuming from $PWD instead."
   elif [ -n "$cwd" ]; then

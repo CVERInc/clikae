@@ -117,14 +117,38 @@ transcript_tail() {
 # the resume picker, every adapter's recent-session list and the board's agy
 # account column all call this repeatedly. Ask the once.
 _CLIKAE_STAT_FMT=""
-sessions_by_mtime() {
-  if [ -z "$_CLIKAE_STAT_FMT" ]; then
-    if stat --version 2>/dev/null | grep -q GNU; then
-      _CLIKAE_STAT_FMT='%Y %n'          # GNU
-    else
-      _CLIKAE_STAT_FMT='%m %N'          # BSD
-    fi
+
+# _clikae_statv -> decide once which stat this machine has.
+#
+# 🔴 ASK `--version`, NEVER "try -f and fall back". GNU stat's `-f` means
+# --file-system, so on a GNU-stat machine `stat -f %m file` PRINTS BLOCK COUNTS
+# AND EXITS 0 — an `||` fallback never fires and the caller gets filesystem
+# statistics where it expected an epoch. This repo has been caught by the two
+# flags four times; the fourth was a helper written three functions away from
+# this one, which had already solved it. BSD stat has no `--version`, so the
+# grep failing IS the BSD answer.
+_clikae_statv() {
+  [ -n "$_CLIKAE_STAT_FMT" ] && return 0
+  if stat --version 2>/dev/null | grep -q GNU; then
+    _CLIKAE_STAT_FMT='%Y %n'            # GNU
+  else
+    _CLIKAE_STAT_FMT='%m %N'            # BSD
   fi
+  return 0
+}
+
+# file_mtime <file> -> its mtime in epoch seconds, nothing if it cannot be read.
+file_mtime() {
+  _clikae_statv
+  if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
+    stat -c '%Y' "$1" 2>/dev/null
+  else
+    stat -f '%m' "$1" 2>/dev/null
+  fi
+}
+
+sessions_by_mtime() {
+  _clikae_statv
   if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
     stat -c '%Y %n' "$@" 2>/dev/null | sort -rn || true
   else
