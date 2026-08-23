@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The one-suite-at-a-time lock now covers the runs that skip the front door.**
+  `scripts/test.sh` has always locked, so two runs cannot race each other over
+  what no test can isolate — the real process table, tmux servers, ports,
+  `~/.Trash`. But the lock lived in the script, and `bats tests/bats/foo.bats`
+  walked straight past it. The maintainer spent an afternoon running single
+  files while a pre-push gate ran the whole suite, then read the gate's red as
+  interference. It was not: a real bug was underneath, and explaining the red
+  away would have shipped it. A preventable collision costs more than one bad
+  run — it teaches you a reason to disbelieve red ones.
+
+  The door is in `tests/helpers.bash` now, where every bats file comes in. Once
+  per FILE rather than per test, because a safety device on the hot path has to
+  be free. `CLIKAE_ALLOW_CONCURRENT_SUITE=1` is the deliberate override, and the
+  refusal says so.
+
 ### Fixed
 
 - **The stable SSH socket symlink pointed at itself, and stayed that way.**

@@ -9,6 +9,56 @@
 CLIKAE_TEST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae"
 
+# --- One suite at a time, including the ones that skip the front door ---------
+# scripts/test.sh takes a lock so two runs cannot race each other over the real
+# process table, the ~/.Trash, tmux servers and ports. But the lock lives in the
+# SCRIPT, and `bats tests/bats/foo.bats` walks straight past it — which is how
+# the maintainer spent an afternoon running single files while a pre-push gate
+# ran the whole suite, then read the gate's red as contamination. (It was not:
+# there was a real bug underneath. Reaching for "must be interference" is
+# exactly the habit a preventable interference teaches.)
+#
+# So the door is here too, where every bats file comes in. Once per FILE, not
+# once per test: a safety device on the hot path has to be free, and 960-odd
+# probes to answer one question is not free.
+_clikae_refuse_concurrent_suite() {
+  [ -z "${CLIKAE_SUITE_LOCKED:-}" ]           || return 0   # we ARE that suite
+  [ -z "${CLIKAE_ALLOW_CONCURRENT_SUITE:-}" ] || return 0   # deliberate override
+  local lock="${CLIKAE_SUITE_LOCK:-${TMPDIR:-/tmp}/clikae-test-suite.lock}"
+  # Never CREATE it: its absence is the common case and must stay free.
+  [ -e "$lock" ] || return 0
+
+  local busy=0
+  if command -v lockf >/dev/null 2>&1; then
+    lockf -k -t 0 "$lock" true 2>/dev/null || busy=1
+  elif command -v flock >/dev/null 2>&1; then
+    flock -n "$lock" true 2>/dev/null || busy=1
+  else
+    return 0
+  fi
+  [ "$busy" -eq 1 ] || return 0
+
+  {
+    echo ""
+    echo "  🔴 another clikae test suite is running on this machine."
+    echo ""
+    echo "  They share what no test can isolate: the process table, tmux"
+    echo "  servers, ports, ~/.Trash. Running both produces a red that is about"
+    echo "  neither of them — and a red you learn to explain away is worse than"
+    echo "  no gate at all."
+    echo ""
+    echo "  Wait for it, or run the whole thing:  ./scripts/test.sh"
+    echo "  If you are certain they cannot collide:"
+    echo "      CLIKAE_ALLOW_CONCURRENT_SUITE=1 bats <file>"
+    echo ""
+  } >&2
+  return 1
+}
+
+setup_file() {
+  _clikae_refuse_concurrent_suite
+}
+
 setup() {
   TEST_HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/clikae-test.XXXXXX")"
   export HOME="$TEST_HOME"

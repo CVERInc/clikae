@@ -31,8 +31,13 @@ cd "$(dirname "$0")/.."
 # process table said no.
 if [ "${1:-}" = "--locked" ]; then
   shift
+  # Tell the bats files they are the run that HOLDS the lock. Without this they
+  # would probe it, find it busy, and refuse the suite they are part of.
+  export CLIKAE_SUITE_LOCKED=1
 else
-_TEST_LOCK="${TMPDIR:-/tmp}/clikae-test-suite.lock"
+# Overridable so the tests that exercise the door can own their premise: a check
+# for "nothing else is running" cannot be run by the thing that is running.
+_TEST_LOCK="${CLIKAE_SUITE_LOCK:-${TMPDIR:-/tmp}/clikae-test-suite.lock}"
 if command -v lockf >/dev/null 2>&1; then
   # -k: hold the lock for the whole command. Without it two processes both get 0.
   if ! lockf -k -t 0 "$_TEST_LOCK" true 2>/dev/null; then
