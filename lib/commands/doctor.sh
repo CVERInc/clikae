@@ -217,13 +217,12 @@ _doctor_memory() {
     if [ -f "$members" ]; then
       engines="$(cut -f1 "$members" 2>/dev/null | cut -d/ -f1 | sort -u | tr '\n' ' ')"
     fi
-    if [ -r "$store" ]; then
-      printf '  %-16s %s\n' "" "the permission bits allow it and the read still failed."
-      # shellcheck disable=SC2086  # a space-separated engine list, deliberately split
-      _memory_denied_hints "$store" $engines
-    else
-      printf '  %-16s %s\n' "" "the permission bits deny it ($(ls -ld "$store" 2>/dev/null | awk '{print $1}'))."
-    fi
+    # The same answer the launch warning gives, in this screen's column. Not a
+    # second copy of the reasoning: doctor's first cut had its own `[ -r ]`
+    # branch and its own wording, and its lines landed two spaces out of true —
+    # which no substring assertion could see, only running it.
+    # shellcheck disable=SC2086  # a space-separated engine list, deliberately split
+    _memory_denied_why '                   ' "$store" $engines
   done
   return 0
 }

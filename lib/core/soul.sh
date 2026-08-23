@@ -184,13 +184,14 @@ _tcc_protected_root() {
 # one cause hands you a confident wrong move; one that lists what fits leaves the
 # choosing to the person who can see the screen.
 _memory_denied_hints() {
-  local mem="$1" real root bin n=0
-  shift
+  local g="$1" mem="$2" real root bin n=0 c
+  shift 2
+  c="$g        "                              # continuation: past the label column
   real="$(_path_follow "$mem")"
   root="$(_tcc_protected_root "$real")"
 
-  [ "$real" = "$mem" ] || printf '                 it really lives at: %s\n' "$real" >&2
-  [ -n "$root" ] && printf '                 that is inside %s, which macOS gates.\n' "$root" >&2
+  [ "$real" = "$mem" ] || printf '%sit really lives at: %s\n' "$c" "$real" >&2
+  [ -n "$root" ] && printf '%sthat is inside %s, which macOS gates.\n' "$c" "$root" >&2
   printf '\n' >&2
 
   # Every engine that shares this store, not just the one launching: a Soul is
@@ -203,34 +204,60 @@ _memory_denied_hints() {
     bin="$(_path_follow "$(command -v "$binary")")"
     _bin_identity_churns "$bin" || continue
     n=$((n + 1))
-    printf '         maybe:  %s auto-updated. macOS identifies a bare executable\n' "$binary" >&2
-    printf '                 by its PATH, and this one carries a version number:\n' >&2
-    printf '                     %s\n' "$bin" >&2
-    printf '                 so every update is a stranger and the grant is gone.\n' >&2
-    printf '         fix:    System Settings > Privacy & Security. In the list that\n' >&2
-    printf '                 gates the folder above, switch on the entry named\n' >&2
-    printf '                     %s\n' "${bin##*/}" >&2
-    printf '                 (it looks like a version because that IS its name).\n' >&2
+    printf '%smaybe:  %s auto-updated. macOS identifies a bare executable\n' "$g" "$binary" >&2
+    printf '%sby its PATH, and this one carries a version number:\n' "$c" >&2
+    printf '%s    %s\n' "$c" "$bin" >&2
+    printf '%sso every update is a stranger and the grant is gone.\n' "$c" >&2
+    printf '%sfix:    System Settings > Privacy & Security. In the list that\n' "$g" >&2
+    printf '%sgates the folder above, switch on the entry named\n' "$c" >&2
+    printf '%s    %s\n' "$c" "${bin##*/}" >&2
+    printf '%s(it looks like a version because that IS its name).\n' "$c" >&2
     printf '\n' >&2
   done
 
   if [ -n "${TMUX:-}" ]; then
     n=$((n + 1))
-    printf '         maybe:  the tmux server this session runs in was created by a\n' >&2
-    printf '                 process holding no file access, which it can never gain\n' >&2
-    printf '                 afterwards.\n' >&2
+    printf '%smaybe:  the tmux server this session runs in was created by a\n' "$g" >&2
+    printf '%sprocess holding no file access, which it can never gain\n' "$c" >&2
+    printf '%safterwards.\n' "$c" >&2
     local born; born="$(tmux_server_born 2>/dev/null || true)"
-    [ -n "$born" ] && printf '                 server born: %s\n' "$born" >&2
-    printf '         fix:    from a terminal that HAS the access: tmux kill-server,\n' >&2
-    printf '                 then start clikae again. (Costs every session on it.)\n' >&2
+    [ -n "$born" ] && printf '%sserver born: %s\n' "$c" "$born" >&2
+    printf '%sfix:    from a terminal that HAS the access: tmux kill-server,\n' "$g" >&2
+    printf '%sthen start clikae again. (Costs every session on it.)\n' "$c" >&2
     printf '\n' >&2
   fi
 
   if [ "$n" -eq 0 ]; then
-    printf '         cause:  something above the filesystem refused, and none of the\n' >&2
-    printf '                 patterns clikae knows about fits. On macOS, look for\n' >&2
-    printf '                 this program in System Settings > Privacy & Security.\n' >&2
+    printf '%scause:  something above the filesystem refused, and none of the\n' "$g" >&2
+    printf '%spatterns clikae knows about fits. On macOS, look for\n' "$c" >&2
+    printf '%sthis program in System Settings > Privacy & Security.\n' "$c" >&2
     printf '\n' >&2
+  fi
+}
+
+# _memory_denied_why <gutter> <mem> [binary...] — the whole answer to "why can
+# this not be read", at whatever indent the caller writes in.
+#
+# 🔴 ONE COPY. The launch warning and `clikae doctor` ask the identical question
+# and must not answer it in two voices — the first cut of the doctor check had
+# its own `[ -r ]` branch and its own wording, which is how a sentence ends up
+# fixed in one place and stale in the other.
+#
+# The gutter is a parameter rather than a constant because the two callers write
+# in different columns: the launch warning sits under `[ WARN ] `, doctor under
+# its own 16-wide label field. Hard-coding it left doctor's lines two spaces out
+# of true — visible only once it was run on a real machine, never in a test that
+# matched substrings.
+_memory_denied_why() {
+  local g="$1" mem="$2"
+  shift 2
+  if [ -r "$mem" ]; then
+    printf '%sbits:   allow it, and the read still failed.\n' "$g" >&2
+    _memory_denied_hints "$g" "$mem" "$@"
+  else
+    printf '%scause:  the permission bits deny it (%s).\n' \
+      "$g" "$(ls -ld "$mem" 2>/dev/null | awk '{print $1}')" >&2
+    printf '%sfix:    restore read access to that directory.\n' "$g" >&2
   fi
 }
 
@@ -269,14 +296,8 @@ memory_access_warn() {
 
   log_warn "this tank cannot read its own memory."
   printf '         memory: %s\n' "$mem" >&2
-  if [ -r "$mem" ]; then
-    printf '         bits:   allow it, and the read still failed.\n' >&2
-    _memory_denied_hints "$mem" $binary
-  else
-    printf '         cause:  the permission bits deny it (%s).\n' \
-      "$(ls -ld "$mem" 2>/dev/null | awk '{print $1}')" >&2
-    printf '         fix:    restore read access to that directory.\n' >&2
-  fi
+  # shellcheck disable=SC2086  # a space-separated engine list, deliberately split
+  _memory_denied_why '         ' "$mem" $binary
   # Neutral wording on purpose: soul_prelaunch is the universal memory hook, so
   # this also fires from `clikae memory share`, where "starting anyway" would be
   # a lie about what is happening.

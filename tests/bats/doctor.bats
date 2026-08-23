@@ -183,3 +183,46 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" == *"permission bits deny"* ]] || { echo "$output"; false; }
 }
+
+@test "doctor: the memory block's labels line up with the rows above it" {
+  # 🔴 A DEFECT EVERY SUBSTRING ASSERTION MISSED. The hint text was written for
+  # the launch warning, whose gutter sits under `[ WARN ] `; doctor writes in a
+  # 16-wide label field. Both printed all the right words, and the continuation
+  # lines landed two spaces out of true — invisible to `[[ $output == *x* ]]`,
+  # obvious the instant it ran on a real machine. So this measures COLUMNS.
+  mkdir -p "$CLIKAE_HOME/souls/t/memory"
+  : > "$CLIKAE_HOME/souls/t/memory/MEMORY.md"
+  cat > "$TEST_HOME/.testbin/ls" <<STUB
+#!/usr/bin/env bash
+case "\$*" in *"souls/t/memory"*) exit 1 ;; esac
+exec /bin/ls "\$@"
+STUB
+  chmod +x "$TEST_HOME/.testbin/ls"
+  run clikae doctor
+  rm -f "$TEST_HOME/.testbin/ls"
+  [ "$status" -eq 0 ]
+
+  # The column doctor's own rows use, taken from a row rather than hard-coded:
+  # a test that restates the constant would agree with the code and with nothing
+  # else.
+  local head_indent label_indent seen=0
+  head_indent="$(printf '%s\n' "$output" | sed -n "s/^\\( *\\)memory  *the 't' Soul.*/\\1/p" | head -1)"
+  head_indent=$(( ${#head_indent} + 16 + 1 ))
+
+  while IFS= read -r line; do
+    case "$line" in
+      *"bits:   "*|*"maybe:  "*|*"fix:    "*|*"cause:  "*) : ;;
+      *) continue ;;
+    esac
+    label_indent="$(printf '%s' "$line" | sed -n 's/^\( *\)[a-z].*/\1/p')"
+    label_indent=${#label_indent}
+    [ "$label_indent" -eq "$head_indent" ] || {
+      echo "label at column $label_indent, rows at $head_indent:"
+      printf '%s\n' "$line"; false; }
+    seen=$((seen + 1))
+  done <<EOF
+$output
+EOF
+  # Without this the loop could match nothing and pass in silence.
+  [ "$seen" -ge 2 ] || { echo "found $seen label lines to check"; printf '%s\n' "$output"; false; }
+}

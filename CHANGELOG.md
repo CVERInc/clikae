@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The memory diagnosis was written in the launch warning's column and printed
+  in doctor's.** Both said all the right words; doctor's continuation lines
+  landed two spaces out of true. Every assertion was a substring match, and a
+  substring match cannot see a column — it took running the thing on a real
+  machine. The gutter is a parameter now, and a test measures where the labels
+  actually sit (proven by putting the old width back and watching it name
+  "column 17, rows at 19").
+
+  While fixing it, the two callers stopped answering the same question twice:
+  doctor had its own `[ -r ]` branch and its own wording for "the bits allow it
+  and the read still failed", which is exactly how one copy goes stale. One
+  function now, at whatever indent the caller writes in.
+
 ## [0.28.7] — 2026-08-23
 
 ### Fixed
