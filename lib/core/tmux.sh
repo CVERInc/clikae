@@ -193,6 +193,50 @@ tmux_server_born() {
     | sed -n 's/^CLIKAE_SERVER_BORN=//p'
 }
 
+# _tmux_ssh_agent_link -> print the stable socket path to forward, or nothing.
+#
+# Rule 4 keeps ONE symlink at a fixed path so a session's SSH_AUTH_SOCK stays
+# valid across reconnects, and hands that path to the session instead of the
+# agent's own. Which means that inside a clikae session, $SSH_AUTH_SOCK IS THE
+# LINK — and spawning from in there ran
+#
+#     ln -sf <link> <link>
+#
+# which `-f` happily turns into a symlink pointing at itself. After that the
+# guard's own `[ -S ]` fails, so the block was skipped, so it never repaired
+# itself and stopped forwarding anything at all. Observed on the maintainer's
+# machine 2026-08-23 as `ssh-add -l` answering "Error connecting to agent: Too
+# many levels of symbolic links" — a sentence that names the mechanism perfectly
+# and helps nobody who has not already guessed it.
+#
+# 🔴 THE POST-CONDITION IS THE GUARD, not the path comparison. Reasoning about
+# which strings are equal covers the loop we know about; asking "is the thing I
+# just made a socket" covers every way of arriving at one, including a caller
+# whose SSH_AUTH_SOCK reaches the link by some other name.
+_tmux_ssh_agent_link() {
+  local link="$HOME/.clikae/state/clikae_ssh_auth.sock"
+  local src="${SSH_AUTH_SOCK:-}"
+  [ -n "$src" ] || return 1
+
+  mkdir -p "$HOME/.clikae/state" 2>/dev/null || true
+  chmod 0700 "$HOME/.clikae/state" 2>/dev/null || true
+
+  # Already inside a clikae session: the variable names the link, and the link
+  # is the only one who knows where the real agent is. Reuse it while it works;
+  # when it does not, delete it rather than pass a broken path on — a spawn from
+  # a terminal that still has a real agent will rebuild it.
+  if [ "$src" = "$link" ]; then
+    if [ -S "$link" ]; then printf '%s\n' "$link"; return 0; fi
+    rm -f "$link" 2>/dev/null || true
+    return 1
+  fi
+
+  [ -S "$src" ] || return 1
+  ln -sf "$src" "$link" 2>/dev/null || return 1
+  [ -S "$link" ] || { rm -f "$link" 2>/dev/null || true; return 1; }
+  printf '%s\n' "$link"
+}
+
 # tmux_spawn_session --session <name> [--window <name>] [--env K=V]… -- <command>
 #
 # The only `tmux new-session` in the codebase. Holds, in one place:
@@ -233,11 +277,17 @@ tmux_spawn_session() {
   case "$session" in *[!a-zA-Z0-9_-]*) return 2 ;; esac
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
-  if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK:-}" ]; then
-    mkdir -p "$HOME/.clikae/state" 2>/dev/null || true
-    chmod 0700 "$HOME/.clikae/state" 2>/dev/null || true
-    ln -sf "$SSH_AUTH_SOCK" "$HOME/.clikae/state/clikae_ssh_auth.sock" 2>/dev/null || true
-    env_args+=("-e" "SSH_AUTH_SOCK=$HOME/.clikae/state/clikae_ssh_auth.sock")
+  local _agent_sock=""
+  # 🔴 `|| _agent_sock=""` is load-bearing, and its absence killed every spawn on
+  # a machine with no agent. Two separate statements because `local x=$(...)`
+  # reports local's status rather than the command's — but then, under `set -e`,
+  # a bare assignment TAKES the exit status of its command substitution, and this
+  # one returns 1 exactly when there is nothing to forward. Being part of a `||`
+  # list is what exempts it. (`[ -n "$x" ] && …` on the next line is already
+  # exempt: only the command after the final `&&` counts.)
+  _agent_sock="$(_tmux_ssh_agent_link)" || _agent_sock=""
+  if [ -n "$_agent_sock" ]; then
+    env_args+=("-e" "SSH_AUTH_SOCK=$_agent_sock")
   fi
 
   # Ask BEFORE creating: after this call a server always exists, so "did I create

@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The stable SSH socket symlink pointed at itself, and stayed that way.**
+  DESIGN-tmux Rule 4 hands a session a fixed path instead of the agent's own so
+  the session survives a reconnect — which means that inside a clikae session
+  `$SSH_AUTH_SOCK` *is* that fixed path. Spawning from in there ran
+
+      ln -sf <link> <link>
+
+  and `-f` turns that into a symlink pointing at itself. After that the block's
+  own `[ -S ]` test failed, so it was skipped: it never repaired itself, and it
+  stopped forwarding anything at all. The feature that existed to make the path
+  stable is what broke it, permanently and in silence.
+
+  Found on the maintainer's machine, not by reading: `ssh-add -l` answering
+  *"Error connecting to agent: Too many levels of symbolic links"* — a sentence
+  that names the mechanism exactly and helps nobody who has not already guessed
+  it. Rule 4 is defensive there (33 of 35 repos use HTTPS), so nothing had
+  noticed.
+
+  The guard is now a POST-CONDITION — "is the thing I just made a socket" —
+  rather than a comparison of path strings, which only covers the loop you
+  thought of. A link already pointing at itself is removed instead of passed on,
+  so the next spawn from a terminal that still has a real agent rebuilds it.
+
+  🔴 The first cut of the fix broke every spawn on a machine with no agent. Under
+  `set -eo pipefail` a bare assignment takes the exit status of its command
+  substitution, and the new helper returns 1 for "nothing to forward" — which is
+  correct, and which killed `tmux_spawn_session` outright. Six unit tests stayed
+  green through it: they call the helper directly, where that 1 is harmless. The
+  suite went red one function further out. Both paths through that return are
+  pinned now, executed through a real spawn under `set -e`.
+
 - **The memory diagnosis was written in the launch warning's column and printed
   in doctor's.** Both said all the right words; doctor's continuation lines
   landed two spaces out of true. Every assertion was a substring match, and a
