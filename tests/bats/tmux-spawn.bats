@@ -88,6 +88,11 @@ _src_soul() {
 
 @test "memory probe: a read that fails while the bits allow it names the tmux server" {
   _src_soul
+  # 🔴 INSIDE a server, deliberately. The probe reads the memory in clikae's OWN
+  # process, so a denial seen from outside tmux says nothing about any server —
+  # it is clikae's own identity being refused. $TMUX is what makes the server a
+  # candidate at all, and helpers.bash unsets it for the whole suite.
+  export TMUX="/tmp/fake-tmux-socket,0,0"
   local m="$TEST_HOME/mem"; mkdir -p "$m"; : > "$m/MEMORY.md"
   # TCC cannot be synthesised in a test, so inject the SHAPE it produces: the
   # permission bits say yes and the read still says no. A stub `ls` ahead of the
@@ -103,7 +108,7 @@ STUB
   run memory_access_warn "$m"
   rm -f "$TEST_HOME/.testbin/ls"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"permission bits allow it and the read still failed"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"bits:   allow it, and the read still failed"* ]] || { echo "$output"; false; }
   [[ "$output" == *"kill-server"* ]] || { echo "$output"; false; }
   # And it keeps going: a tank with no memory still starts (DESIGN-tmux Rule 7).
   [[ "$output" == *"Continuing anyway"* ]] || { echo "$output"; false; }

@@ -182,6 +182,52 @@ _doctor_legacy_prefix() {
   return 0
 }
 
+# _doctor_memory -> say something ONLY when a Soul store cannot be read.
+#
+# 🔴 WHY DOCTOR AND NOT JUST THE LAUNCH WARNING. memory_access_warn fires when a
+# tank starts, which is the moment you can least act on it — you are already on
+# your way into a session, and the engine that goes on to read nothing has no
+# idea anything is wrong. This is the same question asked when you came looking
+# for an answer.
+#
+# It runs the real read, not `[ -r ]`: access(2) consults the permission bits and
+# so answers "yes" to exactly the failure worth catching. That read may raise a
+# TCC prompt on macOS — and unlike doctor's Keychain check, which refuses to
+# prompt because reading a secret is not its business, here the prompt IS the
+# repair. A dialog you can click beats the silence a background daemon gets.
+#
+# Silent when every store reads. A permanent "memory: fine" line on a screen
+# built to tell you what to do next is a number nobody can act on.
+_doctor_memory() {
+  local root store group members engines
+  root="$(souls_root 2>/dev/null || true)"
+  [ -n "$root" ] && [ -d "$root" ] || return 0
+  for store in "$root"/*/memory; do
+    [ -e "$store" ] || continue
+    ls "$store" >/dev/null 2>&1 && continue
+
+    group="$(basename "$(dirname "$store")")"
+    printf '  %-16s %s\n' "memory" "the '$group' Soul cannot be read"
+    printf '  %-16s %s\n' "" "$store"
+
+    # Which engines share this brain — the diagnosis names an identity, and a
+    # Soul is deliberately vendor-neutral, so there can be more than one.
+    members="$(soul_members_file "$group" 2>/dev/null || true)"
+    engines=""
+    if [ -f "$members" ]; then
+      engines="$(cut -f1 "$members" 2>/dev/null | cut -d/ -f1 | sort -u | tr '\n' ' ')"
+    fi
+    if [ -r "$store" ]; then
+      printf '  %-16s %s\n' "" "the permission bits allow it and the read still failed."
+      # shellcheck disable=SC2086  # a space-separated engine list, deliberately split
+      _memory_denied_hints "$store" $engines
+    else
+      printf '  %-16s %s\n' "" "the permission bits deny it ($(ls -ld "$store" 2>/dev/null | awk '{print $1}'))."
+    fi
+  done
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -223,6 +269,7 @@ EOF
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
   _doctor_legacy_prefix
+  _doctor_memory
 
   _doctor_keychain
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a

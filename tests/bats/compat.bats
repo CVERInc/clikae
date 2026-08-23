@@ -6,7 +6,19 @@
 
 load '../helpers'
 
-scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; }
+# 🔴 SKIPS WHOLE-LINE COMMENTS. These guards scan source TEXT, and a comment is
+# text — so the paragraph written to explain "we deliberately do not use
+# readlink -f here" satisfied the assertion that no such call exists, and the
+# guard went red at the one place that was obeying it. A check that fires on its
+# own documentation teaches people to stop documenting.
+#
+# Whole-line only, on purpose: a trailing comment still trips it. Erring toward
+# a false alarm is right for a guard whose job is to be conservative, and
+# stripping `#` correctly out of live shell code is not a job for a grep.
+scan() {
+  grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+}
 
 @test "no mapfile / readarray (bash 4+)" {
   run scan '\b(mapfile|readarray)\b'
@@ -21,6 +33,24 @@ scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; 
 @test "no readlink -f (not on macOS/BSD)" {
   run scan 'readlink[[:space:]]+-f'
   [ -z "$output" ]
+}
+
+@test "the compat scans do not fire on their own documentation" {
+  # 🔴 A CONTROL FOR THE RULER, not for the code. `scan` was a plain grep over
+  # source text until a comment saying "not readlink -f" turned it red. Both
+  # halves are pinned: a commented mention is ignored, a real call is not — the
+  # second is what stops this exemption from quietly disabling every guard above.
+  local probe="$TEST_HOME/probe"; mkdir -p "$probe/lib" "$probe/bin"
+  : > "$probe/bin/clikae"
+  printf '# we deliberately avoid readlink -f here\n' > "$probe/lib/note.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "readlink[[:space:]]+-f" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -z "$output" ] || { echo "still fires on a comment: $output"; false; }
+
+  printf 'target="$(readlink -f "$1")"\n' > "$probe/lib/real.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "readlink[[:space:]]+-f" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
 }
 
 @test "no &> redirection (use >file 2>&1)" {

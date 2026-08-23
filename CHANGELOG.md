@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"This tank cannot read its own memory" named one cause and was sure about
+  it.** The warning was written for the 2026-08-15 incident, where a tmux server
+  created without file access could never gain it afterwards, and it told you to
+  run `tmux kill-server`. On 2026-08-23 the same symptom came from somewhere
+  else: Claude Code had auto-updated, and macOS identifies a bare command-line
+  executable **by its path** —
+
+      ~/.local/share/claude/versions/2.1.241     <- 2.1.240 was a different "app"
+
+  Measured that day, the two versions' code signatures are identical down to the
+  designated requirement. Nothing about the program changed; only where it sat,
+  and that alone revoked the grant — silently, with no prompt at all in a
+  background session. Against that cause, killing the tmux server fixes nothing
+  and costs every session on it.
+
+  It now lists the causes whose **precondition holds** and never one whose does
+  not: the tmux server only when you are actually inside one, the update only
+  when the engine's path really does carry a version. Where it can, it names the
+  entry to switch on in System Settings — the meaningless-looking `2.1.241` in
+  that list — because a warning that says "permissions" and stops leaves you
+  hunting a column of identical rows. It follows the store's symlink to where it
+  really lands, and names the gated area it lands in.
+
+- **The bash-3.2 compatibility scans fired on their own documentation.** They
+  grep the source for constructs to avoid, and a comment is source: the
+  paragraph written to explain *"we deliberately do not use `readlink -f` here"*
+  satisfied the assertion that no such call exists. The guard went red at the one
+  place obeying it — a check that punishes documentation teaches people to stop
+  writing it. Whole-line comments are skipped now, with a control pinning that a
+  real call is still caught.
+
 - **`tap-lag` was reading a cached copy of the tap, and falsely refused pushes.**
   `raw.githubusercontent.com` is served from a CDN that kept answering the old
   version for minutes after the tap had been pushed; a cache-busting query string
@@ -19,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a push through; a stale read makes it refuse a push whose release is already
   finished, which is the one thing it must never do. Found within minutes of the
   hook shipping, by it blocking the release it had just been written for.
+
+### Added
+
+- **`clikae doctor` reads each Soul store, and says so when it cannot.** The
+  launch-time warning fires at the moment you can least act on it — already on
+  your way into a session — and on a background session nobody sees it at all.
+  (2026-08-22: three memory files written while the index was unwritable, no
+  error anywhere.) doctor is the same question asked when you came looking for
+  the answer. It performs the real read rather than `[ -r ]`, which consults the
+  permission bits and so answers "yes" to exactly the failure worth catching, and
+  it stays silent when every store reads.
 
 
 ## [0.28.6] — 2026-08-22

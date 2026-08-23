@@ -107,6 +107,133 @@ memory_heal_ephemeral() {
   fi
 }
 
+# --- Who macOS thinks is asking -----------------------------------------------
+# TCC does not grant access to "Claude Code"; it grants access to an IDENTITY.
+# For a bundled .app that identity is the bundle id and survives updates. For a
+# bare command-line executable it is the PATH — and Claude Code installs each
+# release at its own path:
+#
+#   ~/.local/share/claude/versions/2.1.241     <- 2.1.240 was a different "app"
+#
+# Measured 2026-08-23: the two versions' code signatures are IDENTICAL, down to
+# the designated requirement (`identifier "com.anthropic.claude-code" … OU =
+# Q6L2SF6YDW`). Nothing about the binary changed. The path did, and that alone
+# was enough for macOS to treat it as software it had never seen, revoking the
+# grant with no error, no prompt in a background session, and no trace anywhere
+# except EPERM. Four releases landed in 47 hours.
+#
+# So the fix is per-version and recurring, and the thing the human needs from us
+# is the NAME to look for in System Settings — which is the executable's own
+# basename, the meaningless-looking "2.1.241" in that list.
+
+# _path_follow <path> -> the file a path finally names. Not `readlink -f`: that
+# flag reached BSD readlink late, and this must not become the reason a warning
+# about permissions fails on an older machine.
+_path_follow() {
+  local p="$1" hops=0 t
+  while [ -L "$p" ] && [ "$hops" -lt 16 ]; do
+    t="$(readlink "$p" 2>/dev/null)" || break
+    [ -n "$t" ] || break
+    case "$t" in
+      /*) p="$t" ;;
+      *)  p="$(dirname "$p")/$t" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  printf '%s\n' "$p"
+}
+
+# _bin_identity_churns <resolved-path> -> true when the executable's own path
+# carries a version, i.e. every auto-update hands macOS a stranger.
+_bin_identity_churns() {
+  case "$1" in
+    */versions/*) return 0 ;;
+  esac
+  case "${1##*/}" in
+    [0-9]*.[0-9]*[0-9]) return 0 ;;
+  esac
+  return 1
+}
+
+# _tcc_protected_root <resolved-path> -> the gated area it lives in, named the
+# way the human sees it. NOT a guess at which Settings pane grants it: the same
+# binary appears under several, and sending someone to the wrong switch is worse
+# than sending them to the right list. (2026-08-22 that was exactly the mistake
+# — "add it to Full Disk Access", when the dialog had said Documents.)
+# shellcheck disable=SC2088  # `~/Documents` here is DISPLAY text, not a path to
+# open: it is how the folder is named in the dialog the human just dismissed and
+# in System Settings, and expanding it to /Users/<name>/Documents would make the
+# message harder to match against the screen it is about.
+_tcc_protected_root() {
+  case "$1" in
+    "$HOME/Library/Mobile Documents"/*) printf 'iCloud Drive (~/Library/Mobile Documents)\n' ;;
+    "$HOME/Documents"/*)                printf '~/Documents\n' ;;
+    "$HOME/Desktop"/*)                  printf '~/Desktop\n' ;;
+    "$HOME/Downloads"/*)                printf '~/Downloads\n' ;;
+  esac
+}
+
+# _memory_denied_hints <mem> [binary] — the candidate causes whose PRECONDITION
+# actually holds, each with the fix that matches it.
+#
+# 🔴 CANDIDATES, NOT A VERDICT. The first version of this warning named one cause
+# ("the tmux server was born without access") and told you to kill the server.
+# That was true in 2026-08-15's incident and it is still true sometimes — but on
+# 2026-08-23 the same symptom came from an auto-update instead, where killing the
+# server fixes nothing and costs you every session on it. A guard that asserts
+# one cause hands you a confident wrong move; one that lists what fits leaves the
+# choosing to the person who can see the screen.
+_memory_denied_hints() {
+  local mem="$1" real root bin n=0
+  shift
+  real="$(_path_follow "$mem")"
+  root="$(_tcc_protected_root "$real")"
+
+  [ "$real" = "$mem" ] || printf '                 it really lives at: %s\n' "$real" >&2
+  [ -n "$root" ] && printf '                 that is inside %s, which macOS gates.\n' "$root" >&2
+  printf '\n' >&2
+
+  # Every engine that shares this store, not just the one launching: a Soul is
+  # deliberately vendor-neutral (claude, codex and agy point at one brain), so
+  # "which identity is being refused" can have more than one answer.
+  local binary
+  for binary in "$@"; do
+    [ -n "$binary" ] || continue
+    command -v "$binary" >/dev/null 2>&1 || continue
+    bin="$(_path_follow "$(command -v "$binary")")"
+    _bin_identity_churns "$bin" || continue
+    n=$((n + 1))
+    printf '         maybe:  %s auto-updated. macOS identifies a bare executable\n' "$binary" >&2
+    printf '                 by its PATH, and this one carries a version number:\n' >&2
+    printf '                     %s\n' "$bin" >&2
+    printf '                 so every update is a stranger and the grant is gone.\n' >&2
+    printf '         fix:    System Settings > Privacy & Security. In the list that\n' >&2
+    printf '                 gates the folder above, switch on the entry named\n' >&2
+    printf '                     %s\n' "${bin##*/}" >&2
+    printf '                 (it looks like a version because that IS its name).\n' >&2
+    printf '\n' >&2
+  done
+
+  if [ -n "${TMUX:-}" ]; then
+    n=$((n + 1))
+    printf '         maybe:  the tmux server this session runs in was created by a\n' >&2
+    printf '                 process holding no file access, which it can never gain\n' >&2
+    printf '                 afterwards.\n' >&2
+    local born; born="$(tmux_server_born 2>/dev/null || true)"
+    [ -n "$born" ] && printf '                 server born: %s\n' "$born" >&2
+    printf '         fix:    from a terminal that HAS the access: tmux kill-server,\n' >&2
+    printf '                 then start clikae again. (Costs every session on it.)\n' >&2
+    printf '\n' >&2
+  fi
+
+  if [ "$n" -eq 0 ]; then
+    printf '         cause:  something above the filesystem refused, and none of the\n' >&2
+    printf '                 patterns clikae knows about fits. On macOS, look for\n' >&2
+    printf '                 this program in System Settings > Privacy & Security.\n' >&2
+    printf '\n' >&2
+  fi
+}
+
 # memory_access_warn <mem> — say something when the tank cannot read its own
 # memory, and say WHY.
 #
@@ -135,7 +262,7 @@ memory_heal_ephemeral() {
 # the same goes for what it can reach: a tank with no memory is a bad session, a
 # tank that refuses to start is a worse one. Say it loudly; the human decides.
 memory_access_warn() {
-  local mem="$1" born
+  local mem="$1" binary="${2:-}"
   [ -n "$mem" ] || return 0
   [ -e "$mem" ] || return 0                  # nothing there yet — a different story
   ls "$mem" >/dev/null 2>&1 && return 0      # readable — nothing to say
@@ -143,16 +270,8 @@ memory_access_warn() {
   log_warn "this tank cannot read its own memory."
   printf '         memory: %s\n' "$mem" >&2
   if [ -r "$mem" ]; then
-    printf '         cause:  the permission bits allow it and the read still failed.\n' >&2
-    printf '                 On macOS that means the tmux server this session runs\n' >&2
-    printf '                 in was created without file access, which it can never\n' >&2
-    printf '                 gain afterwards.\n' >&2
-    born="$(tmux_server_born 2>/dev/null || true)"
-    if [ -n "$born" ]; then
-      printf '                 server born: %s\n' "$born" >&2
-    fi
-    printf '         fix:    from a terminal that HAS the access, run tmux\n' >&2
-    printf '                 kill-server, then start clikae again.\n' >&2
+    printf '         bits:   allow it, and the read still failed.\n' >&2
+    _memory_denied_hints "$mem" $binary
   else
     printf '         cause:  the permission bits deny it (%s).\n' \
       "$(ls -ld "$mem" 2>/dev/null | awk '{print $1}')" >&2
@@ -173,7 +292,10 @@ soul_prelaunch() {
   # could be unreachable, and a solo tank losing its memory is the same defect.
   declare -F adapter_memory_dir >/dev/null 2>&1 || return 0
   local mem; mem="$(adapter_memory_dir "$cfg" 2>/dev/null || true)"
-  memory_access_warn "$mem"
+  # The binary too: which identity macOS is refusing is half the diagnosis, and
+  # only the adapter knows what this engine actually execs.
+  local ebin; ebin="$(adapter_meta_cli_binary 2>/dev/null || true)"
+  memory_access_warn "$mem" "$ebin"
   return 0
 }
 

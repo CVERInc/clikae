@@ -136,3 +136,50 @@ STUB
   # …and says what will happen to them, because a count with no next step is noise.
   [[ "$output" == *"clikae clean"* ]] || { echo "no action offered: $output"; false; }
 }
+
+# ── the memory-reachability row ─────────────────────────────────────────────
+# 🔴 WHY DOCTOR ASKS AT ALL. memory_access_warn fires when a tank starts — the
+# moment you can least act on it, already on your way into a session, while the
+# engine that goes on to read nothing has no idea. And on a background session
+# nobody even sees it: a TCC denial there is silent (2026-08-22, three memory
+# files written with the index unwritable and no error anywhere). doctor is the
+# same question asked when you came looking for the answer.
+
+@test "doctor: a readable Soul store says nothing" {
+  # Silence is the contract. A permanent "memory: fine" line on a screen built to
+  # tell you what to do next is a number nobody can act on.
+  mkdir -p "$CLIKAE_HOME/souls/t/memory"
+  : > "$CLIKAE_HOME/souls/t/memory/MEMORY.md"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Soul cannot be read"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor: an unreadable Soul store is reported, with the engines that share it" {
+  mkdir -p "$CLIKAE_HOME/souls/t/memory"
+  : > "$CLIKAE_HOME/souls/t/memory/MEMORY.md"
+  printf 'claude/x\tx@example.com\t%s\n' "$CLIKAE_HOME/souls/t/memory" \
+    > "$CLIKAE_HOME/souls/t/members"
+  # The shape TCC produces, which cannot be synthesised directly: the permission
+  # bits say yes and the read still says no.
+  cat > "$TEST_HOME/.testbin/ls" <<STUB
+#!/usr/bin/env bash
+case "\$*" in *"souls/t/memory"*) exit 1 ;; esac
+exec /bin/ls "\$@"
+STUB
+  chmod +x "$TEST_HOME/.testbin/ls"
+  run clikae doctor
+  rm -f "$TEST_HOME/.testbin/ls"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"Soul cannot be read"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"'t' Soul"* ]] || { echo "did not name the group: $output"; false; }
+}
+
+@test "doctor: an ordinary chmod on a Soul store is reported as itself" {
+  mkdir -p "$CLIKAE_HOME/souls/t/memory"
+  chmod 000 "$CLIKAE_HOME/souls/t/memory"
+  run clikae doctor
+  chmod 755 "$CLIKAE_HOME/souls/t/memory"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"permission bits deny"* ]] || { echo "$output"; false; }
+}
