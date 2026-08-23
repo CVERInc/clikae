@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.8] — 2026-08-23
+
 ### Added
 
 - **The one-suite-at-a-time lock now covers the runs that skip the front door.**
