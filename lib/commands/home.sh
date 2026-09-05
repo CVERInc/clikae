@@ -908,6 +908,48 @@ _home_lpadv() {
   printf -v _LPAD '%s%*s' "$s" "$pad" ''
 }
 
+# _home_live_dup_keysv <items> — sets $_LIVE_KEYS to one "<cli>/<profile>" line
+# per LIVE row in <items>, in the order they'll be drawn. Precomputed ONCE per
+# render (not per row) so a per-row lookup is a cheap grep over a handful of
+# lines, never a re-scan of the whole board.
+#
+# Why this exists: the same tank open in two tmux sessions at once (a bare one
+# and a resumed one) draws TWO live rows, and until now both showed the exact
+# same name — "l" and "l", with nothing to tell them apart (2026-09 report).
+# The tank's transcript can only ever name the tank, never which OF ITS
+# SESSIONS a given row is, so the fix lives entirely in the render layer: count
+# how many live rows share a (cli, profile) and, only when there's more than
+# one, badge them "#1", "#2", ... in the order the board already sorts live
+# sessions (newest first, from live_session_names). A tank with a single live
+# session is untouched — no badge, no column shift.
+_home_live_dup_keysv() {
+  _LIVE_KEYS=""
+  local _k_kind _k_cli _k_profile _k_rest
+  while IFS=$'\037' read -r _k_kind _k_cli _k_profile _k_rest; do
+    [ "$_k_kind" = "live" ] || continue
+    _LIVE_KEYS="$_LIVE_KEYS$_k_cli/$_k_profile"$'\n'
+  done <<EOF
+$1
+EOF
+}
+
+# _home_live_dup_suffixv <cli> <profile> <seen-so-far> — sets $_LIVE_SUFFIX to
+# " #N" (N = this row's 1-based ordinal among same-tank live rows) when this
+# (cli, profile) has MORE THAN ONE live row on the board, else "". <seen-so-far>
+# is the caller's running newline-list of "<cli>/<profile>" for live rows
+# already drawn THIS frame — the caller appends its own key to it after calling
+# this, so the ordinal advances row by row. Needs $_LIVE_KEYS from
+# _home_live_dup_keysv (called once, before the render loop starts).
+_home_live_dup_suffixv() {
+  local _key="$1/$2" _seen="$3" _total _ord
+  _LIVE_SUFFIX=""
+  _total="$(printf '%s' "$_LIVE_KEYS" | grep -Fxc "$_key" 2>/dev/null || true)"
+  [ -n "$_total" ] && [ "$_total" -gt 1 ] || return 0
+  _ord="$(printf '%s' "$_seen" | grep -Fxc "$_key" 2>/dev/null || true)"
+  [ -n "$_ord" ] || _ord=0
+  _LIVE_SUFFIX=" #$((_ord + 1))"
+}
+
 # _dwv <str> — the FORK-FREE _dwidth: leaves the answer in $_DW_W instead of
 # echoing it, so a caller in the redraw path can read a width without paying for
 # a `$(...)` subshell (~1.5ms each on macOS). Use this, not `w=$(_dwidth …)`, in
@@ -1224,13 +1266,14 @@ EOF
   fi
 
   local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 printed_live=0 rdot
-  local launch_cli="" launch_profile=""
+  local launch_cli="" launch_profile="" _live_seen=""
   # Title budget, in DISPLAY COLUMNS: cols minus this row's own fixed chrome
   # (4-space lead + dot + space + 7-col name + space + 8-col engine + space + 2
   # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
   # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
   # every resume row) rather than per row.
   _home_row_geom 25 20; local _resume_title_budget="$_RG_TITLE"
+  _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
@@ -1238,7 +1281,18 @@ EOF
         # Running right now, in the same columns as everything else on the page.
         if [ "$printed_live" -eq 0 ]; then printed_live=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"; fi
         _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
-        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" \
+        # Same tank, two live tmux sessions → same profile name on both rows
+        # with nothing to tell them apart (2026-09 report). Badge every row
+        # past the first "#2", "#3", … in board order (newest live session
+        # first); a tank with only one live session draws exactly as before.
+        _home_live_dup_suffixv "$cli" "$profile" "$_live_seen"
+        _live_seen="$_live_seen$cli/$profile"$'\n'
+        # 🔴 2026-09-06: this printed a bare, never-set $_ttl (always empty —
+        # every live row's "preview" quoted ""). $label IS the title
+        # (_home_live_rows' adapter_session_title), truncated to the same
+        # budget the interactive board and the resume rows already use.
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        printf '    %b %s%s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
           "$(_home_row_eng "$cli")" \
           "$__C_DIM" "$_ttl" "$__C_RESET"
         ;;
@@ -2063,7 +2117,7 @@ _home_pick_draw_body() {
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 printed_live=0 ldot mark dot _reset tdot _line rdot rage
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 printed_live=0 ldot mark dot _reset tdot _line rdot rage _live_seen=""
   # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
   # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
   # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
@@ -2075,6 +2129,7 @@ _home_pick_draw_body() {
   # mark — 2 columns each. Measured: with 25 the interactive rows came out
   # exactly 2 columns wider than the static ones at every width.
   _home_row_geom 27 20; local _resume_title_budget="$_RG_TITLE"
+  _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -2157,7 +2212,13 @@ _home_pick_draw_body() {
 $active
 LIVEACT
         _home_fuel_dotv "$dry" "$cli" "$profile"; ldot="$_FDOT"
-        local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD"
+        # Same tank, two live tmux sessions → same profile name on both rows
+        # with nothing to tell them apart (2026-09 report). Badge every row
+        # past the first "#2", "#3", … in board order (newest live session
+        # first); a tank with only one live session draws exactly as before.
+        _home_live_dup_suffixv "$cli" "$profile" "$_live_seen"
+        _live_seen="$_live_seen$cli/$profile"$'\n'
+        local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD$_LIVE_SUFFIX"
         _home_row_engv "$cli"; _len="$_RENG"
         local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
