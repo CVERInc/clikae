@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.9] — 2026-09-05
+
+### Fixed
+
+- **`cmd_burn`'s prelaunch ran two mutations of the same state with no lock
+  between two burns racing each other.** `soul_prelaunch` and
+  `fleet_mcp_prelaunch` both mutate state keyed on (engine/tank, `$PWD`) — the
+  memory symlink and the tank's `.claude.json` — and neither took a lock. Two
+  burns on the same tank and the same `$PWD` raced the `rm`/`mv`/`ln` and the
+  read-merge-write: the same bug class `switch.sh`'s `--ephemeral` path had
+  already fixed for itself after the 2026-07-19 incident. Root cause identified
+  in `reef-lanes/CLIKAE-SIGTERM-2026-09-06.md` §5.
+
+  It now takes a cksum-named slot lock under `~/.clikae/state`, held only
+  across the two prelaunch calls — never the engine run itself — and released
+  before the run starts. Unlike `--ephemeral`'s non-blocking "one run per slot"
+  refusal, this one blocks: a second burn queues behind the first's
+  symlink/`.claude.json` settling instead of being turned away. macOS has no
+  `flock(1)`; it falls back to `lockf(1)` on the bare fd, matching
+  `switch.sh`'s own fallback, and degrades to a logged warning if neither
+  exists.
+
+- **The same tank open in two tmux sessions drew two byte-identical Live
+  rows,** reported from a screenshot of the board — same dot, same name, same
+  engine, same title, nothing to tell them apart. Every live row past the
+  first for a given (cli, profile) now carries a "#2", "#3" … badge, in board
+  order, on both the static board and the interactive picker; a tank with a
+  single live session is unaffected.
+
+  While in there: the static board's Live row had been quoting a bare,
+  never-set `$_ttl` instead of the row's actual title — every static "Live"
+  preview printed `""` regardless of what was really running. It now uses
+  `$label`, same as the interactive picker and the Resume rows.
+
+- **An agy (antigravity) Live row showed a bare `""` preview instead of
+  "(no preview)" like every other engine.** `antigravity.sh` had no
+  `adapter_recent_sids`, so the board's `declare -F adapter_recent_sids` gate
+  failed outright and `adapter_session_title` was never even called. It has one
+  now — cwd-matched via `history.jsonl`'s `workspace` field, mirroring
+  `claude.sh` and `codex.sh`'s own `$PWD`-scoped versions — plus a
+  "(no preview)" fallback in `adapter_title_for_file` to match every other
+  adapter's convention.
+
 ## [0.28.8] — 2026-08-23
 
 ### Added
