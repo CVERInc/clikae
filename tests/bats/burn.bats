@@ -678,3 +678,44 @@ STUB
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *'"artifact_bytes"'* ]] || { echo "$output"; false; }
 }
+
+# --- prelaunch lock (2026-09-06 report): soul_prelaunch/fleet_mcp_prelaunch race
+# on (engine, tank, $PWD), unlocked, the same bug class switch.sh's --ephemeral
+# path fixed for itself after the 2026-07-19 incident. burn.sh now serializes on
+# a BLOCKING lock keyed the same way — held only across those two calls.
+@test "burn's soul/MCP prelaunch waits out a held lock instead of racing it" {
+  command -v lockf >/dev/null 2>&1 || skip "lockf needed to hold the lock"
+  _stub_codex
+  clikae init codex T1
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"    # for CLIKAE_SESS_PREFIX, same as burn.sh
+  cd "$BATS_TEST_TMPDIR"                    # fix $PWD: the lock key includes it
+  local lockfile
+  lockfile="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "codex/T1:$PWD" | cksum | cut -d' ' -f1).lock"
+  mkdir -p "$(dirname "$lockfile")"
+
+  # Hold the SAME lock burn.sh is about to want, the way suite-lock.bats holds
+  # its own door: a real external holder, not a mock.
+  lockf -k -t 5 "$lockfile" sleep 2 &
+  local holder=$!
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    lockf -k -t 0 "$lockfile" true 2>/dev/null || break   # confirmed busy
+    i=$((i + 1)); sleep 0.1
+  done
+  [ "$i" -lt 50 ] || { kill "$holder" 2>/dev/null; skip "could not get the lock held"; }
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  local t0; t0=$(date +%s)
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  local t1; t1=$(date +%s)
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  # It must still SUCCEED (a queued burn, not a refused one) …
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$A" ] || { echo "$output"; false; }
+  # … and it must have actually WAITED for the holder rather than stepping past
+  # it — the whole point of a blocking flock/lockf over a `-n` one.
+  [ "$((t1 - t0))" -ge 1 ] || { echo "finished in $((t1 - t0))s — did it wait at all?"; false; }
+}

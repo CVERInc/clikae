@@ -72,6 +72,13 @@ adapter_session_title() {
 # transcript has no user-rename event to prefer (checked 2026-07-12 alongside
 # claude.sh's customTitle fix; nothing invented — the opening request stays
 # the only title source).
+#
+# 🔴 2026-09-06: an empty extraction used to fall through as a bare "", which
+# the home board's Live row printed as a literal `""` — the ONLY row on the
+# board with no fallback text (codex/claude/grok all land on "(no preview)"
+# via their own adapter_title_for_file). Same fallback here, same reason: an
+# unreadable/pre-opening-message transcript still deserves SOME word in that
+# column, not silence that reads as a rendering bug.
 adapter_title_for_file() {
   local f="$1" t
   [ -n "$f" ] && [ -f "$f" ] || return 0
@@ -81,7 +88,44 @@ adapter_title_for_file() {
     t="${t#*<USER_REQUEST>}"
     t="${t%%</USER_REQUEST>*}"
   fi
-  printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
-    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//'
+  t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
+  [ -n "$t" ] || t="(no preview)"
+  printf '%s' "$t"
+}
+
+# Optional hook: CHEAP list of this directory's recent sessions under <dir> —
+# "<epoch-mtime>\037<session-id>" per line, newest first, capped at [limit]
+# (default 5) — the same contract as claude.sh's/codex.sh's twins, and the
+# missing half of why the home board's Live row showed an empty preview for
+# agy: without this hook, `_home_live_rows` (lib/commands/home.sh) never even
+# calls adapter_session_title — its `declare -F adapter_recent_sids` gate
+# failed outright, so title/recap stayed the empty strings they were
+# initialized to. `agy` has no equivalent of $PWD-embedded transcript paths
+# (claude) or in-file cwd records (codex); the only cwd record is
+# history.jsonl's "workspace" field per session, keyed by session id — so scope
+# by reading that back per candidate, same as adapter_session_cwd already does
+# for one session at a time.
+adapter_recent_sids() {
+  local dir="$1" limit="${2:-5}" brain want sdir sid f cwd
+  brain="$dir/antigravity-cli/brain"
+  [ -d "$brain" ] || return 0
+  want="${PWD%/}"
+  local -a afiles=()
+  for sdir in "$brain"/*/; do
+    [ -d "$sdir" ] || continue
+    f="${sdir}.system_generated/logs/transcript.jsonl"
+    [ -f "$f" ] || continue
+    cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
+    [ "${cwd%/}" = "$want" ] || continue
+    afiles+=("$f")
+  done
+  [ "${#afiles[@]}" -gt 0 ] || return 0
+  sessions_by_mtime "${afiles[@]}" | head -n "$limit" | while read -r mt f; do
+    [ -f "$f" ] || continue
+    sid="${f%/.system_generated/*}"; sid="${sid##*/}"
+    [ -n "$sid" ] || continue
+    printf '%s\037%s\n' "$mt" "$sid"
+  done
 }
 

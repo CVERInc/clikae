@@ -163,3 +163,31 @@ PATHDIRS
   # The one that broke: no waiter counting must read as empty, not as a leftover.
   [ -z "$wake" ] || { echo "wake leaked '$wake' out of the age"; false; }
 }
+
+@test "live: two sessions on the SAME tank draw two DISTINGUISHABLE rows, not duplicates" {
+  # 2026-09 report: a bare session + a resumed one on the same tank drew two
+  # byte-identical "l" rows — same dot, same name, same engine, same title —
+  # with nothing on screen to tell them apart or say which is which.
+  #
+  # Extracted by SECTION, not by grepping the tank name: _tank() bakes in $$ and
+  # BATS_TEST_NUMBER for uniqueness, which can run past the board's 7-column
+  # name budget and get ellipsis-truncated — a real row would then never
+  # contain the untruncated fixture string at all, which is a fact about the
+  # fixture, not the fix.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init codex "$(_tank)"
+  tmux new-session -d -s "$(_sess)" 'sleep 30'
+  tmux new-session -d -s "$(_sess)-4242" 'sleep 30'
+  run clikae
+  [ "$status" -eq 0 ]
+  local block n
+  block="$(printf '%s\n' "$output" | awk '/▸ Live/{f=1; next} /▸ /{f=0} f && NF')"
+  n="$(printf '%s\n' "$block" | grep -c .)"
+  [ "$n" -ge 2 ] || { echo "$output"; false; }
+  local first second
+  first="$(printf '%s\n' "$block" | sed -n '1p')"
+  second="$(printf '%s\n' "$block" | sed -n '2p')"
+  [ "$first" != "$second" ] || { echo "duplicate rows, indistinguishable:"; echo "$output"; false; }
+  # One of the two must carry a disambiguating badge.
+  [[ "$block" == *"#2"* ]] || { echo "$output"; false; }
+}
