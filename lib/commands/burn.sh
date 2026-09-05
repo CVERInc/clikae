@@ -489,8 +489,43 @@ cmd_burn() {
     # tank that actually runs is the one that needs its slot linked. Both are
     # no-ops for solo tanks and for slots already linked, so the reroute path
     # pays nothing to be correct.
+    #
+    # 🔴 2026-09-06: two burns on the SAME tank + SAME $PWD race this preflight
+    # unlocked — soul_prelaunch's memory symlink and fleet_mcp_prelaunch's
+    # .claude.json mv are both keyed on ($cli/$cur, $PWD), the exact bug class
+    # switch.sh's --ephemeral path already fixed for itself (the 2026-07-19
+    # incident, see _switch_run_ephemeral's slot_lock above). Serialize on the
+    # same key here too — a BLOCKING lock, held only across these two calls,
+    # never across the engine run itself: unlike --ephemeral's "one run per
+    # slot" hard limit, a second burn here should queue behind the first's
+    # symlink/.claude.json settling, not be refused outright.
+    local _prelock_dir="$HOME/.clikae/state"
+    mkdir -p "$_prelock_dir" 2>/dev/null || true
+    chmod 0700 "$_prelock_dir" 2>/dev/null || true
+    local _prelock
+    _prelock="$_prelock_dir/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "$cli/$cur:$PWD" | cksum | cut -d' ' -f1).lock"
+    local _prelocked=0
+    if command -v flock >/dev/null 2>&1; then
+      exec 7>"$_prelock"
+      flock 7
+      _prelocked=1
+    elif command -v lockf >/dev/null 2>&1; then
+      # `lockf FD` (no command, no -n/-t) blocks indefinitely on the fd itself —
+      # macOS has no `flock(1)`, only `lockf(1)`, and the fd form implies -k
+      # (man lockf(1)), so this is the direct equivalent of `flock 7` above.
+      exec 7>"$_prelock"
+      lockf 7
+      _prelocked=1
+    else
+      log_warn "no flock/lockf on this system — running soul/MCP prelaunch unlocked (safe unless another burn targets the same tank+dir right now)."
+    fi
     soul_prelaunch "$cli" "$cur" "$dir"        # member tank → fan this dir into its Soul
     fleet_mcp_prelaunch "$cli" "$cur" "$dir"   # non-solo tank → fan in the shared MCP list
+    # 🔴 `if`, not `[ … ] && exec …`: under bin/clikae's `set -eo pipefail`, a
+    # `&&` whose LEFT side is false (the no-flock/no-lockf fallback, _prelocked=0)
+    # makes the whole statement exit 1 — which set -e treats as this function
+    # failing, aborting the burn on the very system the fallback exists for.
+    if [ "$_prelocked" -eq 1 ]; then exec 7>&-; fi   # release before the (possibly long) engine run
 
     log_info "burn $cli/$cur → $binary ${cmd[*]}"
 
