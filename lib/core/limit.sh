@@ -102,7 +102,15 @@ limit_output_dry() {
   case "$cli" in
     codex)  limit_codex_output_dry "$out" ;;
     claude)
-      printf '%s' "$out" | grep -qaiE "hit your (session|usage|weekly)[ -]limit|weekly[ -]limit (reached|exceeded)" || return 1
+      # P2-2 (2026-09-08 review): "weekly[ -]limit (reached|exceeded)" was
+      # bare — every OTHER alternative here anchors on a verb naming the
+      # human ("hit your …"), but this one fired on ordinary prose that
+      # merely discusses a weekly limit ("the weekly limit reached its cap
+      # in July"). Anchored to the START OF A LINE instead: a genuine vendor
+      # sentence IS the line (or leads it), while prose ABOUT the limit is
+      # never the first thing on its line. grep matches `^`/`$` per line, not
+      # per buffer, so this holds even when $out has other lines around it.
+      printf '%s' "$out" | grep -qaiE "hit your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
       printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;

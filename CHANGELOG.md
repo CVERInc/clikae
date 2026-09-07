@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ordinary prose merely discussing a weekly limit fired a dry-tank
+  reroute.** `weekly[ -]limit (reached|exceeded)` was the only alternative in
+  the claude branch with no verb anchoring it to the human ("hit your …"), so
+  a sentence like "the weekly limit reached its cap in July" matched. It now
+  requires the phrase to lead its own line, matching how a genuine vendor
+  message actually appears (#45).
+
 - **A write landing just after the engine's own exit stopped counting as
   success.** #42's snapshot is taken the instant the engine's process tree
   exits; main's older behavior re-stat'd the artifact after the parent

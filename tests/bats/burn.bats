@@ -823,6 +823,24 @@ STUB
   [ "$status" -ne 0 ]
 }
 
+# --- P2-2 (2026-09-08 review): "weekly[ -]limit (reached|exceeded)" was the
+# only bare alternative in the claude branch — every other one anchors on a
+# verb naming the human ("hit your …"). Ordinary prose that merely discusses a
+# weekly limit fired it (review's test K, all three FALSE-DRY with reset:[]).
+
+@test "burn #45: prose merely discussing a weekly limit does not fire dry (P2-2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    "In the audit, the weekly limit reached its cap in July." \
+    "Document the case where the weekly limit reached zero." \
+    "the weekly limit exceeded expectations"
+  do
+    run limit_output_dry claude "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
 @test "burn #45: a weekly dry tank reroutes to a reserve" {
   _stub_burn_transport
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
