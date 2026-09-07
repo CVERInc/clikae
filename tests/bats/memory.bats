@@ -653,6 +653,31 @@ _legacy_memory() {
   [ "$(cat "$store/a.md")" = 'topic A real content' ]
 }
 
+@test "memory adopt: a trailing slash does not merge the same source's index twice (#49)" {
+  clikae init claude a
+  _legacy_memory
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  run clikae memory share me claude a --adopt "$LEGACY/"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(command grep -a -Fc "## Adopted from" "$store/MEMORY.md")" -eq 1 ]
+}
+
+@test "memory first share: an explicit --adopt with a trailing slash isn't ALSO listed as skipped (#49)" {
+  clikae init claude a
+  _legacy_memory
+  run clikae memory share me claude a --adopt "$LEGACY/"
+  [ "$status" -eq 0 ]
+  # Before the fix, the offer-loop compared the glob's "$LEGACY" against the
+  # user's "$LEGACY/" literally, saw two different strings, and warned this
+  # source was NOT imported in the same run that _memory_adopt (below) DID
+  # import it — a contradiction inside one command's output.
+  [[ "$output" != *"was NOT imported"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  cmp "$LEGACY/a.md" "$store/a.md"
+}
+
 @test "memory first share lists another tank project without importing it" {
   clikae init claude a
   local other="$CLIKAE_HOME/profiles/claude/a/projects/other/memory"

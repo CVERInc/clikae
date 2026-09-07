@@ -34,6 +34,18 @@
 # of it — soul_prelaunch re-projects the current directory at every launch.
 _memory_store_path() { soul_store_path "$1"; }
 
+# Are <a> and <b> the SAME directory? Resolved with `pwd -P` (symlinks followed,
+# trailing slashes and `..` collapsed) rather than compared as literal strings —
+# a trailing slash (what shell tab-completion adds) or a `..` segment must not
+# make two paths that name the same directory look like two different sources.
+# Prints nothing; empty output on either side (path doesn't exist) means "no".
+_memory_same_dir() {
+  local a b
+  a="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  b="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
 # Seed the Soul's operating manual into the store (write-back hygiene). claude
 # learns the memory protocol from its system prompt, but codex/agy only get the
 # pointer note's gist — so the full read+write rules live IN the store, where any
@@ -310,7 +322,7 @@ EOF
 # collisions stay in the source and are announced, never silently overwritten.
 _memory_adopt() {
   local source="$1" store="$2" f name tmp heading
-  [ "$(cd "$source" && pwd -P)" != "$(cd "$store" && pwd -P)" ] || return 0
+  ! _memory_same_dir "$source" "$store" || return 0
   for f in "$source"/*.md; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     name="${f##*/}"
@@ -345,17 +357,44 @@ _memory_adopt() {
   # Never append through an index symlink into somebody else's memory.
   [ ! -L "$store/MEMORY.md" ] || { log_err "Refusing to append to a symlinked MEMORY.md"; return 1; }
   heading="## Adopted from $source"
-  if ! command grep -a -Fqx -- "$heading" "$store/MEMORY.md" 2>/dev/null; then
+  if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
     { printf '\n%s\n\n' "$heading"; cat "$source/MEMORY.md" || return 1; printf '\n'; } >> "$store/MEMORY.md" || return 1
   fi
   log_done "Adopted memory by COPY from $source (originals untouched)."
+}
+
+# Does $store/MEMORY.md already carry an "## Adopted from <source>" heading for
+# THIS source — comparing by canonical directory, not literal text? A literal
+# `grep -Fqx` treated "…/memory" and "…/memory/" (what shell tab-completion
+# appends) as two different sources, so re-running --adopt with a trailing
+# slash re-merged the same source's index into a fresh duplicate section every
+# time, even though the per-file no-overwrite check above already skipped every
+# file in it as a collision.
+_memory_adopted_heading_exists() {
+  local file="$1" source="$2" line p
+  [ -f "$file" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      "## Adopted from "*)
+        p="${line#"## Adopted from "}"
+        { [ "$p" = "$source" ] || _memory_same_dir "$p" "$source"; } && return 0
+        ;;
+    esac
+  done < "$file"
+  return 1
 }
 
 _memory_offer_adoption() {
   local store="$1" group="$2" explicit="$3" seeded="$4" source f count label command_line adopt_path
   for source in "$HOME"/.claude/projects/*/memory "$MEM_CFG"/projects/*/memory; do
     [ -d "$source" ] && [ ! -L "$source" ] && [ -f "$source/MEMORY.md" ] && [ ! -L "$source/MEMORY.md" ] || continue
-    [ "$source" != "$explicit" ] || continue
+    # Canonical, not literal: an explicit --adopt path with a trailing slash
+    # (shell tab-completion) must still be recognised as this same source, or
+    # this loop offers to adopt it AGAIN while _memory_adopt (called separately,
+    # below, for the explicit path) already just adopted it — printing "was NOT
+    # imported" and "Adopted … (originals untouched)" for the same directory in
+    # the same run.
+    { [ -z "$explicit" ] || ! _memory_same_dir "$source" "$explicit"; } || continue
     count=0
     for f in "$source"/*.md; do
       [ -f "$f" ] && [ ! -L "$f" ] && count=$((count+1))
