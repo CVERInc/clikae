@@ -730,3 +730,46 @@ _perm_octal() {
   [ "$(cat "$store/MEMORY.md")" = 'MY REAL BRAIN' ]
   [ ! -e "$store/locked.md" ]
 }
+
+@test "memory adopt: a symlinked store MEMORY.md refuses before copying any topic files (R2-P2-1)" {
+  # Before this, the symlink check ran AFTER the per-file copy loop, so a
+  # source's topic files had already landed in the store by the time adoption
+  # refused — leaving them adopted with no index entry pointing at them.
+  clikae init claude a
+  _legacy_memory
+  clikae memory share me claude a
+  local store="$CLIKAE_HOME/souls/me/memory"
+  ln -sf "$TEST_HOME/elsewhere.md" "$store/MEMORY.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to append to a symlinked MEMORY.md"* ]] || false
+  [ ! -e "$store/a.md" ]
+  local leftover; leftover="$(find "$store" -maxdepth 1 -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+}
+
+@test "memory adopt: one unreadable file among several fails the WHOLE adopt, not just that file (R2-P2-1)" {
+  # Before staging, a source with several files copied them one at a time
+  # directly into the store — a failure partway left the ones copied BEFORE
+  # it behind, so "store non-empty" (the next share's seed gate) became true
+  # from a failed run, not only a successful one.
+  clikae init claude a
+  LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n[b](b.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic A real content\n' > "$LEGACY/a.md"
+  printf 'topic B real content\n' > "$LEGACY/b.md"
+  chmod 000 "$LEGACY/b.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -e "$store/a.md" ]
+  [ ! -e "$store/b.md" ]
+  local leftover; leftover="$(find "$store" -maxdepth 1 -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+  chmod 644 "$LEGACY/b.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$store/a.md")" = 'topic A real content' ]
+  [ "$(cat "$store/b.md")" = 'topic B real content' ]
+}

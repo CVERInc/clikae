@@ -343,49 +343,54 @@ EOF
   esac
 }
 
-# Adopt plain markdown by copy. Exclusive creation also protects dangling links;
-# collisions stay in the source and are announced, never silently overwritten.
+# Adopt plain markdown by copy. Collisions with an existing store file stay in
+# the source and are announced, never silently overwritten.
+#
+# Everything is staged in a scratch directory INSIDE the store first, and
+# moved into place only once the whole copy has succeeded. A copy that fails
+# partway (one unreadable file among several) must leave nothing behind: the
+# next share's seed gate is "store non-empty" (_memory_share:
+# `[ -z "$(ls -A "$store")" ]`) — before staging, that could only be true
+# after a real successful share; a half-copied adopt satisfied it too, so a
+# retry never seeded the joiner's own (stashed, reversible) memory in at all.
 _memory_adopt() {
-  local source="$1" store="$2" f name tmp heading
+  local source="$1" store="$2" f name staging dest heading
   ! _memory_same_dir "$source" "$store" || return 0
+  # Never append through an index symlink into somebody else's memory — check
+  # this FIRST, before touching anything, so a refusal here leaves the store
+  # exactly as it was. (Moved up from after the copy loop: it used to run only
+  # once topic files had already landed, so a symlinked MEMORY.md still left
+  # files adopted with no index entry pointing at them.)
+  [ ! -L "$store/MEMORY.md" ] || { log_err "Refusing to append to a symlinked MEMORY.md"; return 1; }
+
+  staging="$(mktemp -d "$store/.adopt.XXXXXX" 2>/dev/null)" \
+    || { log_err "Couldn't stage adoption of $source"; return 1; }
   for f in "$source"/*.md; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     name="${f##*/}"
     [ "$name" = MEMORY.md ] && continue
-    if [ -e "$store/$name" ] || [ -L "$store/$name" ]; then
-      log_warn "Keeping existing $name; source copy remains in $source."
-      continue
-    fi
-    # Copy to a TEMP name first, then move into place — never write directly to
-    # $store/$name. A direct `> "$store/$name"` creates the destination the
-    # instant the shell opens it, BEFORE `cat` runs; if the read then fails
-    # (permissions, I/O), a 0-byte file is left at the real name. That empty file
-    # then permanently blocks the real content: the no-overwrite check above
-    # treats it as "already adopted" on every future rerun, and nothing ever
-    # reports it as broken.
-    tmp="$store/.$name.tmp.$$"
-    rm -f "$tmp"
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
-    # file some other user on the machine can't read) instead of falling back to
-    # umask, which is what a plain `cat "$f" > "$tmp"` would do. The existing
-    # seed path (`cp -R` in _memory_share) already preserves mode this way; this
-    # is the same guarantee for the adopt path.
-    if ! cp -p "$f" "$tmp" 2>/dev/null; then
-      rm -f "$tmp"
+    # file some other user on the machine can't read) instead of falling back
+    # to umask, which is what a plain `cat "$f" > dest` would do.
+    if ! cp -p "$f" "$staging/$name" 2>/dev/null; then
+      rm -rf "$staging"
       return 1
     fi
-    # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
-    # EEXIST if $store/$name appeared between the check above and here, instead
-    # of silently overwriting it.
-    if ln "$tmp" "$store/$name" 2>/dev/null; then
-      rm -f "$tmp"
-    else
-      rm -f "$tmp"
-      log_warn "Keeping existing $name; source copy remains in $source."
-    fi
   done
-  # Never append through an index symlink into somebody else's memory.
-  [ ! -L "$store/MEMORY.md" ] || { log_err "Refusing to append to a symlinked MEMORY.md"; return 1; }
+
+  # The whole copy succeeded — move each staged file into place.
+  for f in "$staging"/*; do
+    [ -e "$f" ] || continue
+    name="${f##*/}"
+    dest="$store/$name"
+    # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
+    # EEXIST if $dest appeared between the scan above and here, instead of
+    # silently overwriting it.
+    ln "$f" "$dest" 2>/dev/null \
+      || log_warn "Keeping existing $name; source copy remains in $source."
+  done
+  rm -rf "$staging"
+
   heading="## Adopted from $source"
   if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
     { printf '\n%s\n\n' "$heading"; cat "$source/MEMORY.md" || return 1; printf '\n'; } >> "$store/MEMORY.md" || return 1

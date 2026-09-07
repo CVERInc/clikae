@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory share` no longer aborts entirely when one file in the tank's own
   memory can't be read while seeding — it's skipped and reported, and the rest
   still copies (#49).
+- A failed `--adopt` no longer leaves a half-copied store that looks seeded to
+  the next `share`. The whole copy is staged first and moved into place only
+  once it fully succeeds (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently
