@@ -144,8 +144,27 @@ _burn_output_infra() {
 # looping over it stays correct across the whole retry loop. Whichever form
 # supplied the task, exactly one of $prompt / $cmd is populated at any call
 # site, so checking $prompt first is enough to pick the right one.
+#
+# P1-2 (2026-09-08 round-3 review): bash's ${text//needle/repl} is
+# super-linear in the haystack's size, so redacting the WHOLE captured
+# output cost tens of seconds to minutes of pure bash string time AFTER the
+# engine had already exited — no progress output, outside --timeout's reach
+# (it bounds the engine, not this). Measured on an 8 MB capture: 1MB/4MB/8MB
+# single-pass costs of 382ms/5125ms/20209ms, and end-to-end ×23 (--prompt
+# form) to ×129 (raw argv, four minutes) versus a main-branch clone on the
+# same stub. burn's own purpose — long, unattended tasks — produces exactly
+# the large captures this is slowest on. The classifiers only need the
+# FINAL message anyway (limit.sh's own doc: "a genuine vendor sentence IS
+# the line, or leads it"), so bound the haystack to its own tail before
+# ever substituting into it — this is what P2-1's boundary/length fix below
+# also relies on to stay fast.
+_BURN_REDACT_TAIL_BYTES=${_BURN_REDACT_TAIL_BYTES:-65536}
+
 _burn_redact() {
   local text="$1" repl="${2:-}" c
+  if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
+    text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
+  fi
   if [ -n "${prompt:-}" ]; then
     text="${text//"$prompt"/$repl}"
   else

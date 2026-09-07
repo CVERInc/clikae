@@ -1340,6 +1340,36 @@ STUB
   [[ "$output" == *command.txt* ]] || false
 }
 
+# --- P1-2 (2026-09-08 ROUND-3 review): pre-classification redaction ran bash's
+# super-linear ${text//needle/repl} over the WHOLE captured output — measured
+# 129x main's time on an 8 MB raw-argv capture (240s vs 1.9s), entirely AFTER
+# the engine exits, invisible to --timeout. This is a timing GUARD, not a
+# stopwatch on a specific number: the threshold is generous (a fixed, main-
+# comparable multiple of the un-redacted case would be more precise but this
+# machine's own load is not controlled for) — it exists to go red if the
+# per-character substitution over the full capture ever comes back, not to
+# pin an exact millisecond figure.
+
+@test "burn #44: an 8MB capture still classifies fast (P1-2 timing guard)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 8000000 /dev/zero | tr '\0' 'x'
+printf "\nYou've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
+}
+
 # --- P2-1 (2026-09-08 review): #42's at-exit snapshot is narrower than main's
 # old behaviour, which re-stat'd the artifact after the parent finished
 # polling for completion — a write landing shortly after the engine's own

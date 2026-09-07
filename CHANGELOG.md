@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pre-classification redaction cost tens of seconds to minutes of pure bash
+  string time AFTER the engine had already exited.** `_burn_redact`'s
+  `${text//needle/repl}` is super-linear in the haystack's size and ran over
+  the WHOLE captured output; measured 129x main's time on an 8 MB raw-argv
+  capture (240s vs 1.9s) — invisible to `--timeout` (it bounds the engine,
+  not this) and with no progress output, so from outside it looked like burn
+  had hung. burn's own purpose (long, unattended tasks) produces exactly the
+  large captures this was slowest on. The classifiers only need the FINAL
+  message anyway, so the haystack is now bounded to its own tail before ever
+  being substituted into (#44).
+
 - **The "you've "/"you have " prefix that #45 required was never anchored to
   the start of a line, so it still matched its own documented
   counterexample.** CHANGELOG's own illustration of a fixed false positive —
