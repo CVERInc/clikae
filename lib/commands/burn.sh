@@ -131,13 +131,37 @@ _burn_output_infra() {
   printf '%s' "$1" | grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' >/dev/null
 }
 
-# Redact an engine's exact prompt echo BEFORE taking a diagnostic tail. Raw
-# engine output stays in its capture log; burn's progress never repeats the task.
+# _burn_redact <text> [replacement] -> <text> with the task's own content
+# taken out (or swapped for <replacement>, default empty) — whichever
+# dispatch form supplied it. P1-1 (2026-09-08 round-2 review): the previous
+# redaction only ever looked at $prompt, which is UNSET for the raw
+# `-- <engine argv...>` form ("the power-user way" — AGENTS.md's front door
+# and docs/orchestration.md both document it) — so an engine echoing its own
+# argv back on stdout sailed through unredacted on that path (PROBE B: two
+# extra full engine calls, a leaked task-text tail, and the wrong `reason`).
+# $cmd holds the raw argv for that form and is never reassigned by a
+# cross-engine reroute (unlike --prompt mode's regenerated flags), so
+# looping over it stays correct across the whole retry loop. Whichever form
+# supplied the task, exactly one of $prompt / $cmd is populated at any call
+# site, so checking $prompt first is enough to pick the right one.
+_burn_redact() {
+  local text="$1" repl="${2:-}" c
+  if [ -n "${prompt:-}" ]; then
+    text="${text//"$prompt"/$repl}"
+  else
+    for c in "${cmd[@]}"; do
+      [ -n "$c" ] && text="${text//"$c"/$repl}"
+    done
+  fi
+  printf '%s' "$text"
+}
+
+# Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
+# Raw engine output stays in its capture log; burn's progress never repeats
+# the task, on either dispatch form (see _burn_redact).
 _burn_output_tail() {
   local text="$1" lines="${2:-5}"
-  if [ -n "${prompt:-}" ] && [ -n "${saved_prompt:-}" ]; then
-    text="${text//"$prompt"/"[prompt: $saved_prompt]"}"
-  fi
+  [ -n "${saved_prompt:-}" ] && text="$(_burn_redact "$text" "[prompt: $saved_prompt]")"
   printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
@@ -830,10 +854,11 @@ KV
     # was already decided; codex and other engines can echo the user's own
     # instructions back on stdout (#43's stub models this: `printf '%s\n'
     # "${@: -1}"`), so a task that merely TALKS ABOUT a limit or a tool-host
-    # outage was misread as one. Same substitution _burn_output_tail uses, run
-    # earlier so it protects the classifiers too, not only the display.
-    local out_for_class="$out"
-    [ -n "${prompt:-}" ] && out_for_class="${out_for_class//"$prompt"/}"
+    # outage was misread as one. Same redaction _burn_output_tail uses (P1-1,
+    # 2026-09-08 round-2 review: now covers the raw `-- <argv>` form too, not
+    # only --prompt/--prompt-file — see _burn_redact), run earlier so it
+    # protects the classifiers too, not only the display.
+    local out_for_class; out_for_class="$(_burn_redact "$out")"
 
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out_for_class")"; then

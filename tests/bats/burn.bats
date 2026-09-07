@@ -1139,6 +1139,44 @@ STUB
   [[ "$output" != *'"reason":"infra"'* ]] || false
 }
 
+# --- P1-1 (2026-09-08 ROUND-2 review): the fix above only protected the
+# --prompt/--prompt-file form. The raw `-- <engine argv...>` form ("the
+# power-user way" — AGENTS.md/docs/orchestration.md's front door) never sets
+# $prompt, so the substitution was skipped entirely on that path and round
+# 1's P1-2 reappeared there verbatim (PROBE B in the review corpus: two
+# extra full engine calls, a leaked task-text tail, and the wrong `reason`).
+
+@test "burn #44: a tool-host phrase inside the engine's argv echo (raw -- form) does not trigger infra retries (P1-1 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+STUB
+  clikae init codex T1
+  local task='Review PR #44: it must retry when the engine prints "timed out negotiating with the code-mode host".'
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "$task"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
+@test "burn #44: raw -- form diagnostic tail does not repeat the engine's own argv echo (P1-1 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+echo 'task failed'
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "PRIVATE-ARGV-SECRET-XYZ"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-ARGV-SECRET-XYZ* ]] || false
+  [[ "$output" == *'task failed'* ]] || false
+  [[ "$output" == *command.txt* ]] || false
+}
+
 # --- P2-1 (2026-09-08 review): #42's at-exit snapshot is narrower than main's
 # old behaviour, which re-stat'd the artifact after the parent finished
 # polling for completion — a write landing shortly after the engine's own

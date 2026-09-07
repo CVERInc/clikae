@@ -149,8 +149,11 @@ run directory. Progress prints its path and the first 120 characters, with line
 breaks flattened. Reroutes print the path again without repeating the prompt;
 diagnostic tails replace an exact engine echo of the prompt with that path.
 The raw `-- <argv...>` form saves `command.txt` (one argument per line) instead,
-because raw commands have no engine-independent prompt position. Engine capture
-logs remain raw; the preview limit applies to burn's own progress messages.
+because raw commands have no engine-independent prompt position — an engine
+echoing one of those argv items back is redacted the same way, argv-item by
+argv-item, before either dry/infra classifier runs or a tail is taken. Engine
+capture logs remain raw; the preview limit applies to burn's own progress
+messages.
 
 **Retention.** These run directories are swept automatically: any `burn-*`
 directory older than `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`

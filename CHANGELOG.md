@@ -83,6 +83,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   burned extra engine calls. The gap is now bounded to the width every real
   phrasing in the corpus actually needs (#44).
 
+- **The task-echo redaction only covered `--prompt`/`--prompt-file`.** The
+  raw `-- <engine argv...>` dispatch form — documented in `AGENTS.md` as the
+  "power-user way" — never sets `$prompt`, so an engine echoing its own argv
+  back on stdout sailed through unredacted on that path: a task whose own
+  argv merely described a limit or tool-host outage burned extra engine
+  calls before being classified. Redaction now covers both forms — the
+  argv-supplied text is stripped argv-item by argv-item on the raw path,
+  same as the prompt string is on the other (#44).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed
