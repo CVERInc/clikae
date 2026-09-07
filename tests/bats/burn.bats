@@ -1149,6 +1149,63 @@ STUB
   [[ "$output" == *'"reason":"artifact produced"'* ]] || false
 }
 
+# --- P2-2 (2026-09-08 ROUND-2 review): the artifact-wins-outcome fix just
+# above unconditionally cleared the dry marker in its success branch — so a
+# run that finishes with a partial artifact WHILE its own reply also shows a
+# limit event happening right now turned the board's red dot green and
+# dropped the vendor's reset phrase from JSON, even though the account is
+# still genuinely out of fuel (review PROBE R: the same stub, only variance
+# is whether it also wrote a few bytes before the limit line). The artifact
+# must still win the OUTCOME (ok:true / reason: "artifact produced" —
+# unchanged), but the limit/reset is real account state and must still be
+# recorded and shown, not silently overwritten.
+
+@test "burn #42/#45: a fresh artifact does not drop the reset phrase when the SAME reply also shows a limit (P2-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+}
+
+@test "burn #42/#45: a fresh artifact with a concurrent limit event leaves the tank marked dry, not cleared (P2-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "Try again at Jul 6th, 2026 2:17 PM"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -eq 0 ]
+}
+
+@test "burn #42: a fresh artifact with NO limit in the reply still clears the dry marker (P2-2 r2 control)" {
+  _stub_burn_transport
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "Try again at Jul 6th, 2026 2:17 PM"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]
+}
+
 # --- P1-2 (2026-09-08 review): a tool-host phrase INSIDE THE PROMPT ECHO must
 # not fire the infra classifier. codex (and other engines) can echo the user's
 # own instructions back on stdout — PROBE A in the review used exactly this

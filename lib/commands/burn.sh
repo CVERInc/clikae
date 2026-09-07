@@ -833,21 +833,6 @@ KV
       artifact_bytes_snapshot="$(_burn_size "$artifact")"
     fi
 
-    # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
-    # A burn that FINISHED — the artifact is fresh — was being discarded as dry
-    # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a
-    # task about writing a quota runbook), which then re-fired the SAME task on
-    # a second account. Judge success before scanning any prose for a limit or
-    # an infra signature, so a completed task can never be rerouted to redo
-    # work that is already done.
-    if [ "$artifact_fresh" -eq 1 ]; then
-      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
-      _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
-      return 0
-    fi
-
     # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
     # BEFORE classifying — not just at display time. _burn_output_tail already
     # redacted the prompt from the DIAGNOSTIC tail, but only after the verdict
@@ -857,8 +842,41 @@ KV
     # outage was misread as one. Same redaction _burn_output_tail uses (P1-1,
     # 2026-09-08 round-2 review: now covers the raw `-- <argv>` form too, not
     # only --prompt/--prompt-file — see _burn_redact), run earlier so it
-    # protects the classifiers too, not only the display.
+    # protects the classifiers too, not only the display. Computed here,
+    # before the artifact check below, so BOTH branches can classify the
+    # SAME reply.
     local out_for_class; out_for_class="$(_burn_redact "$out")"
+
+    # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
+    # A burn that FINISHED — the artifact is fresh — was being discarded as dry
+    # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a
+    # task about writing a quota runbook), which then re-fired the SAME task on
+    # a second account. Judge success before scanning any prose for a limit or
+    # an infra signature, so a completed task can never be rerouted to redo
+    # work that is already done.
+    if [ "$artifact_fresh" -eq 1 ]; then
+      # P2-2 (2026-09-08 round-2 review): the artifact wins the OUTCOME — that
+      # guarantee above is unchanged — but a limit event that IS happening in
+      # this SAME reply is real account state, not noise the artifact should
+      # silently overwrite. Before this, the success branch unconditionally
+      # cleared the dry marker, so a run that finished with a few partial
+      # bytes on a tank the engine had JUST reported as out of fuel turned the
+      # board's red dot green (and dropped the vendor's reset phrase from
+      # JSON) while the account was still genuinely dry. Check the same
+      # signal the dry branch below would, and if it fires, keep the tank
+      # marked instead of clearing it, and surface the reset phrase.
+      local live_reset=""
+      if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
+        log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — leaving the tank marked dry."
+        limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$live_reset"
+      else
+        dry_store_clear "$cli" "$cur"   # a real success recovered this tank
+      fi
+      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
+      _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      return 0
+    fi
 
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out_for_class")"; then

@@ -201,9 +201,13 @@ for free.)
   (5s then 10s by default; integer 0–86400). `--timeout` applies per attempt.
   Exhaustion exits 1 with JSON `reason: "infra"`; existing keys and reasons stay
   unchanged. `--no-reroute` disables dry hops, not these retries. A fresh artifact
-  still proves success; a quota signal still follows the dry path. Generic task
-  timeouts without a tool-host signature remain task failures. agy's separate
-  capture loop does not use this retry policy.
+  still proves success; a quota signal still follows the dry path — but if BOTH
+  are true of the same reply (the engine wrote a few bytes before hitting its
+  limit), the artifact wins the outcome (`ok: true`) while the limit is still
+  recorded: the tank stays marked dry and `reset` still carries the vendor's
+  phrase, rather than either being silently dropped. Generic task timeouts
+  without a tool-host signature remain task failures. agy's separate capture
+  loop does not use this retry policy.
 - **Dry handling.** Claude weekly-limit messages follow the same dry path as
   session limits, including the vendor's verbatim reset time in JSON. `burn` auto-reroutes to the next reserve tank on a dry hit
   (account-aware: it skips siblings that share an already-dried login, and the tank

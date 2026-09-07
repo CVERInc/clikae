@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   straight into the verb, which every genuine phrase in the corpus has and
   none of the false positives do (#45).
 
+- **A fresh artifact silently erased a limit event happening in the SAME
+  reply.** The artifact-wins-outcome fix (#42) unconditionally cleared the
+  dry marker in its success branch, so a run that finished with a partial
+  artifact while its own reply also showed a vendor limit line turned the
+  board's red dot green and dropped the reset phrase from JSON — even though
+  the account was still genuinely out of fuel. The artifact still wins the
+  OUTCOME (`ok: true`, `reason: "artifact produced"`, unchanged), but a
+  concurrent limit is now recorded rather than overwritten: the tank stays
+  marked dry and `reset` carries the vendor's phrase (#42, #45).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed
