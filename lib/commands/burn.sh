@@ -766,8 +766,19 @@ KV
       return 0
     fi
 
+    # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
+    # BEFORE classifying — not just at display time. _burn_output_tail already
+    # redacted the prompt from the DIAGNOSTIC tail, but only after the verdict
+    # was already decided; codex and other engines can echo the user's own
+    # instructions back on stdout (#43's stub models this: `printf '%s\n'
+    # "${@: -1}"`), so a task that merely TALKS ABOUT a limit or a tool-host
+    # outage was misread as one. Same substitution _burn_output_tail uses, run
+    # earlier so it protects the classifiers too, not only the display.
+    local out_for_class="$out"
+    [ -n "${prompt:-}" ] && out_for_class="${out_for_class//"$prompt"/}"
+
     # Judge by limit-string + artifact, never the exit code.
-    if reset="$(limit_output_dry "$cli" "$out")"; then
+    if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
@@ -778,7 +789,7 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif _burn_output_infra "$out"; then
+    elif _burn_output_infra "$out_for_class"; then
       if [ "$infra_attempt" -lt "$infra_retries" ]; then
         infra_attempt=$((infra_attempt + 1))
         log_warn "$cli/$cur infrastructure failure — retry $infra_attempt/$infra_retries on the same tank in ${retry_delay}s."

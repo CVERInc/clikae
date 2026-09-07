@@ -999,3 +999,23 @@ STUB
   [[ "$output" == *'"ok":true'* ]] || false
   [[ "$output" == *'"reason":"artifact produced"'* ]] || false
 }
+
+# --- P1-2 (2026-09-08 review): a tool-host phrase INSIDE THE PROMPT ECHO must
+# not fire the infra classifier. codex (and other engines) can echo the user's
+# own instructions back on stdout — PROBE A in the review used exactly this
+# task text, and the un-redacted classifier burned two extra full engine calls
+# plus 15s of sleep before mislabelling a real task failure as "infra".
+
+@test "burn #44: a tool-host phrase inside the engine's PROMPT ECHO does not trigger infra retries" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+STUB
+  clikae init codex T1
+  local prompt='Review PR #44: it must retry when the engine prints "timed out negotiating with the code-mode host".'
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}

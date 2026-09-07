@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A task that merely TALKED ABOUT a tool-host error was classified as one.**
+  `_burn_output_infra` and `limit_output_dry` read the raw captured output,
+  which can carry the engine's own echo of the task text (codex echoes user
+  instructions verbatim). A code review whose prompt described a tool-host
+  failure burned two extra full engine calls and 15s of sleep before
+  mislabelling a real task failure as infra. The task's own prompt is now
+  stripped from the output before either classifier runs (#44).
+
 - **A `burn` that FINISHED could be discarded and re-fired on a second
   account** because the dry-phrase check ran before the artifact-freshness
   check: a task whose own reply happened to contain a limit phrase (e.g. a
