@@ -128,7 +128,13 @@ EOF
 # to 6 chars keeps every real corpus row matching while rejecting prose that
 # merely mentions the host somewhere upstream of an unrelated failure.
 _burn_output_infra() {
-  printf '%s' "$1" | grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' >/dev/null
+  # P2-1 (2026-09-08 round-4 review): a here-string, not a pipe from a
+  # separate `printf` process — see limit_codex_reset's comment for why a
+  # pipe risks hanging on a large, untruncated haystack. This one has no
+  # early-exit flag (no `-q`/`-m1`) so it was never actually exposed to that
+  # specific hang, but it reads the SAME out_for_class a large capture can
+  # now carry, so it gets the same safer plumbing on general principle.
+  grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' <<< "$1" >/dev/null
 }
 
 # _burn_redact <text> [replacement] -> <text> with the task's own content
@@ -180,10 +186,23 @@ _BURN_REDACT_MIN_LEN=${_BURN_REDACT_MIN_LEN:-20}
 _burn_redact_one() {
   local text="$1" needle="$2" repl="$3"
   [ "${#needle}" -ge "$_BURN_REDACT_MIN_LEN" ] || { printf '%s' "$text"; return 0; }
-  RTEXT="$text" RNEEDLE="$needle" RREPL="$repl" awk '
+  # P2-1 (2026-09-08 round-4 review): the haystack used to travel through
+  # ENVIRON (an exported env var), which is what forced the 64 KiB
+  # truncation below in the first place — a multi-MB capture in an env var
+  # risks E2BIG. Feed it over stdin instead (bash's NUL-free strings make
+  # RS="\x00" a safe "read the whole thing as one record" marker, so no
+  # substr/index behaviour below changes); only the small needle/repl still
+  # go through ENVIRON. That lets callers stop bounding the haystack for
+  # THIS function's sake — only _burn_redact (the truncated variant used for
+  # display) still bounds it, deliberately, not out of necessity here.
+  printf '%s' "$text" | RNEEDLE="$needle" RREPL="$repl" awk '
     BEGIN {
-      t = ENVIRON["RTEXT"]; n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
-      nlen = length(n); tlen = length(t)
+      RS = "\x00"
+      n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
+      nlen = length(n)
+    }
+    {
+      t = $0; tlen = length(t)
       out = ""; i = 1
       while (i <= tlen) {
         p = index(substr(t, i), n)
@@ -201,11 +220,25 @@ _burn_redact_one() {
     }'
 }
 
-_burn_redact() {
+# _burn_redact_full <text> [replacement] -> <text> with the task's own
+# content taken out, over the WHOLE haystack, no truncation.
+#
+# P2-1 (2026-09-08 round-4 review): _burn_redact (below) truncated to the
+# tail BEFORE substituting, which — since P1-2's fix made _burn_redact_one
+# an O(n) awk pass instead of bash's super-linear ${text//…} — was no longer
+# needed to keep substitution fast, but it was still unconditionally in the
+# path CLASSIFICATION reads (`out_for_class` in cmd_burn), so any dry/infra
+# signal past the last 64 KiB went blind: a task's own tool-host failure,
+# typically mid-run since the engine keeps talking afterward, drifts exactly
+# there on a long capture — burn's whole reason to exist. Substitution
+# staying bounded is fine; classification silently narrowing its view is
+# not. Split the two: this variant never truncates (safe now that the text
+# travels to awk over stdin, not ENVIRON — see _burn_redact_one), and is
+# what feeds the classifiers. _burn_redact still truncates, but only for the
+# short human-facing diagnostic tail below, where a bound is genuinely
+# harmless.
+_burn_redact_full() {
   local text="$1" repl="${2:-}" c
-  if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
-    text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
-  fi
   if [ -n "${prompt:-}" ]; then
     text="$(_burn_redact_one "$text" "$prompt" "$repl")"
   else
@@ -214,6 +247,14 @@ _burn_redact() {
     done
   fi
   printf '%s' "$text"
+}
+
+_burn_redact() {
+  local text="$1" repl="${2:-}"
+  if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
+    text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
+  fi
+  _burn_redact_full "$text" "$repl"
 }
 
 # Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
@@ -909,7 +950,14 @@ KV
     # protects the classifiers too, not only the display. Computed here,
     # before the artifact check below, so BOTH branches can classify the
     # SAME reply.
-    local out_for_class; out_for_class="$(_burn_redact "$out")"
+    #
+    # P2-1 (2026-09-08 round-4 review): this used to call _burn_redact, which
+    # truncates to the last 64 KiB before redacting — bounding not just the
+    # substitution (fine) but the CLASSIFIERS' entire view of the reply (not
+    # fine: a signal past that tail was invisible to both dry and infra
+    # detection). Use the untruncated variant here; only the display tail
+    # still bounds itself. See _burn_redact_full's comment.
+    local out_for_class; out_for_class="$(_burn_redact_full "$out")"
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry
