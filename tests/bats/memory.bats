@@ -712,3 +712,21 @@ _perm_octal() {
   [ "$status" -eq 0 ]
   command grep -a -Fqx 'other index' "$CLIKAE_HOME/souls/me/memory/MEMORY.md"
 }
+
+@test "memory share: one unreadable file in the tank's own memory doesn't fail the whole share (R2-P2-2)" {
+  # Before this, `cp -R … || log_fail` turned one unreadable topic file into a
+  # share that refused entirely — main never failed a share over this.
+  clikae init claude a
+  local mem; mem="$(_memdir a)"; mkdir -p "$mem"
+  printf 'MY REAL BRAIN\n' > "$mem/MEMORY.md"
+  printf 'readable\n' > "$mem/ok.md"
+  printf 'THE SECRET FACT\n' > "$mem/locked.md"
+  chmod 000 "$mem/locked.md"
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"weren't copied into the Soul"* || "$output" == *"were not copied into the Soul"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(cat "$store/ok.md")" = 'readable' ]
+  [ "$(cat "$store/MEMORY.md")" = 'MY REAL BRAIN' ]
+  [ ! -e "$store/locked.md" ]
+}

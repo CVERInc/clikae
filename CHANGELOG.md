@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   been redirected away — a black screen, forever. That prompt (and the
   cross-account confirmation) now checks that stdout is a terminal too, not
   just stdin (#49).
+- `memory share` no longer aborts entirely when one file in the tank's own
+  memory can't be read while seeding — it's skipped and reported, and the rest
+  still copies (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

@@ -94,6 +94,31 @@ _memory_seed_protocol() {
 PROTO
 }
 
+# Copy every file under <src> into <dst>, recursively, preserving mode (`cp
+# -p`, the same private-file guarantee _memory_adopt gives topic files). One
+# file that can't be read (permission denied) must not fail the whole seed —
+# before this it did, via `cp -R … || log_fail`, which turned "join the fleet"
+# from something that almost never failed into something that could, for a
+# reason that had nothing to do with the join itself. The tank's own memory at
+# <src> is unaffected either way — it is left in place here and only replaced
+# by a symlink later in _memory_share, once seeding is done. Reports what it
+# skipped; never fails.
+_memory_seed_dir() {
+  local src="$1" dst="$2" f rel skipped=0
+  while IFS= read -r f; do
+    rel="${f#"$src"/}"
+    mkdir -p "$dst/$(dirname "$rel")" 2>/dev/null
+    if ! cp -p "$f" "$dst/$rel" 2>/dev/null; then
+      log_warn "Couldn't read $rel while seeding memory from $src — skipped."
+      skipped=$((skipped+1))
+    fi
+  done < <(find "$src" -type f 2>/dev/null)
+  if [ "$skipped" -gt 0 ]; then
+    log_warn "$skipped file(s) under $src were not copied into the Soul (unreadable); the rest were — $src itself is unchanged."
+  fi
+  return 0
+}
+
 _memory_members_file() { soul_members_file "$1"; }
 
 # Drop a tank (field 1 == <engine>/<tank>) from a group's member file, in place.
@@ -528,7 +553,7 @@ _memory_share() {
   local seeded=0
   if [ "$MEM_STRATEGY" = symlink ] && [ -d "$MEM_DIR" ] && [ ! -L "$MEM_DIR" ]; then
     if [ -z "$(ls -A "$store" 2>/dev/null || true)" ]; then
-      cp -R "$MEM_DIR"/. "$store"/ || log_fail "Couldn't seed memory from $MEM_DIR"
+      _memory_seed_dir "$MEM_DIR" "$store"
       seeded=1
     fi
   fi
