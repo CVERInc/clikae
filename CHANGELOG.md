@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A write landing just after the engine's own exit stopped counting as
+  success.** #42's snapshot is taken the instant the engine's process tree
+  exits; main's older behavior re-stat'd the artifact after the parent
+  finished polling for completion, which caught a background child's write
+  landing shortly afterward. `burn` now takes a second look at the mtime
+  right before classifying if the first snapshot wasn't fresh, restoring that
+  window without weakening the snapshot's own guarantee (#42).
+
 - **A task that merely TALKED ABOUT a tool-host error was classified as one.**
   `_burn_output_infra` and `limit_output_dry` read the raw captured output,
   which can carry the engine's own echo of the task text (codex echoes user

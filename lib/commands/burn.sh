@@ -751,6 +751,23 @@ KV
     fi
     rm -f "$state_file" "$evidence_file"
 
+    # P2-1 (2026-09-08 review): the snapshot above is taken the instant the
+    # engine's own process exits, inside the same subshell — precise, but
+    # narrower than main's pre-#42 behaviour, which re-stat'd the artifact
+    # AFTER the parent finished polling the state file for completion. A
+    # background child that keeps writing a few hundred ms past the engine's
+    # own exit (A/B-measured against a main-branch clone, same stub, same
+    # params) landed inside that older window and no longer does — an
+    # undocumented narrowing. Restore it as a SECOND look, taken here before
+    # anything is classified: if the snapshot wasn't fresh, check the mtime
+    # once more right now. This can only ADD a success, never revoke one — a
+    # fresh=1 snapshot already means a consumer deleting the artifact right
+    # after DONE can't undo it (#42's guarantee still speaks first).
+    if [ "$artifact_fresh" -ne 1 ] && [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
+      artifact_fresh=1
+      artifact_bytes_snapshot="$(_burn_size "$artifact")"
+    fi
+
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry
     # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a

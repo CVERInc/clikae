@@ -733,6 +733,11 @@ for arg in "$@"; do
     'bash "'*)
       bash -c "$arg" >/dev/null 2>&1
       [ -z "${STUB_CONSUME_ARTIFACT:-}" ] || rm -f "$STUB_CONSUME_ARTIFACT"
+      # Simulate a write landing AFTER the engine-exit snapshot (P2-1): the
+      # engine's own process tree already exited empty-handed by the time
+      # `bash -c "$arg"` above returns, so this write is chronologically
+      # later than `_burn_snapshot` — but still before cmd_burn classifies.
+      [ -z "${STUB_LATE_WRITE_ARTIFACT:-}" ] || printf 'late' > "$STUB_LATE_WRITE_ARTIFACT"
       exit 0 ;;
   esac
 done
@@ -1018,4 +1023,21 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
   [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
+# --- P2-1 (2026-09-08 review): #42's at-exit snapshot is narrower than main's
+# old behaviour, which re-stat'd the artifact after the parent finished
+# polling for completion — a write landing shortly after the engine's own
+# process tree exits used to count and, on this branch, silently stopped
+# counting (measured A/B against a main-branch clone, same stub, same params).
+
+@test "burn #42: a write landing just after engine exit still counts as success (P2-1 grace window)" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_LATE_WRITE_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --json --artifact "$STUB_LATE_WRITE_ARTIFACT" -- noop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
 }

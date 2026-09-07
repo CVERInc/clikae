@@ -76,6 +76,15 @@ a real paid engine; the recipe is how you stop wasting it.
    change that verdict; `conduct` by the
    captured output; the legs by `--out` content. Never trust `$?`.
 
+   That first snapshot is taken the instant the engine's own process exits. If
+   it isn't fresh, `burn` takes one more look at the artifact's mtime right
+   before classifying anything else — a write landing in the brief gap
+   between the engine's own exit and `burn`'s classification (a background
+   child still flushing to disk) still counts. This can only ADD a success,
+   never revoke one: the first snapshot always wins when it says fresh, so a
+   consumer deleting the artifact the moment it sees DONE still can't turn
+   that into a failure.
+
 2. **Give the task the easy way — don't hand-roll the engine flags.** Use
    `--prompt-file <f>` (or `--prompt`) + `--add-dir <dir>` and clikae fills in each
    engine's headless-write dialect for you (`claude`'s `-p …
