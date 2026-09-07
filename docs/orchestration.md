@@ -71,7 +71,9 @@ a real paid engine; the recipe is how you stop wasting it.
 
 1. **Judge by the artifact / output, never the exit code.** A headless `codex exec`
    or `claude -p` exits `0` even when it hit its usage limit and wrote nothing.
-   `burn` judges by the artifact's presence + fresh mtime; `conduct` by the
+   `burn` snapshots the artifact's presence, fresh mtime, and byte count when the
+   engine exits, before publishing completion. Later cockpit consumption cannot
+   change that verdict; `conduct` by the
    captured output; the legs by `--out` content. Never trust `$?`.
 
 2. **Give the task the easy way — don't hand-roll the engine flags.** Use

@@ -45,7 +45,7 @@ Give the task in one of two ways:
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
   --add-dir <dir>     a directory the engine may write in. Defaults to the
                       artifact's parent. Repeatable. (codex uses the first as its cwd.)
-  --artifact <path>   the file the task must produce. Success = it appears, or (if
+  --artifact <path>   checked at engine exit. Success = it appears, or (if
                       it already existed) its timestamp changes — a STALE file from
                       a previous run is NOT counted as success.
   --fresh             delete <artifact> before running, for a clean slate.
@@ -159,6 +159,20 @@ _burn_size() {
   if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
 }
 
+# Capture evidence beside the engine, before publishing completion. Consumers
+# may move/delete the artifact as soon as they see DONE; the parent must never
+# re-stat it to reconstruct an earlier outcome. Publish the pair atomically.
+_burn_snapshot() {
+  local artifact="$1" before="$2" evidence="$3" fresh=0 bytes=null
+  if [ -e "$artifact" ]; then
+    bytes="$(_burn_size "$artifact")"
+    [ "$(_clikae_mtime "$artifact")" = "$before" ] || fresh=1
+  fi
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  printf '%s %s\n' "$fresh" "$bytes" > "$evidence.tmp"
+  mv -f "$evidence.tmp" "$evidence"
+}
+
 # _burn_compose <prompt> <post_cmd_count> <post_cmd...> -- <add_dir...>
 # Build the full engine argv into the global array BURN_ARGV: the per-engine
 # headless-write flags from adapter_burn_flags (which must be defined for the
@@ -258,7 +272,15 @@ _agy_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
-    local out; out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
+    local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    art_pre="$(_clikae_mtime "$artifact")"
+    local out; out="$(
+      "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
+      _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+    )" || true
+    read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    rm -f "$evidence_file"
 
     # Consume the run log once, then drop it on every path below — not just the
     # dry one — so a long reroute loop doesn't litter $TMPDIR.
@@ -267,10 +289,10 @@ _agy_burn() {
     rm -f "$runlog"
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      log_done "Done on agy/$cur — artifact present: $artifact"
+    elif [ "$artifact_fresh" -eq 1 ]; then
+      log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_result true agy "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
     elif printf '%s' "$out" | grep -qi "no output produced"; then
       # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
@@ -300,10 +322,11 @@ _agy_burn() {
       # (the same line `--dangerously-skip-permissions` sits on), and refusing
       # --artifact outright would remove the only verification burn has.
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
+        artifact_bytes_snapshot="$(_burn_size "$artifact")"
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
-        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
@@ -353,7 +376,11 @@ _burn_result() {
   [ "${as_json:-0}" -eq 1 ] || return 0
   local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
   local bytes=null
-  [ -n "$art" ] && [ -e "$art" ] && bytes="$(_burn_size "$art")"
+  if [ -n "${artifact_bytes_snapshot:-}" ]; then
+    bytes="$artifact_bytes_snapshot"
+  elif [ -n "$art" ] && [ -e "$art" ]; then
+    bytes="$(_burn_size "$art")"
+  fi
   printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
@@ -543,6 +570,9 @@ cmd_burn() {
     local run_id="${cli}-${cur}-burn-$$"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local state_file="$HOME/.clikae/state/${run_id}_exit"
+    local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    rm -f "$evidence_file"
     # Lock under $HOME/.clikae/state (0700, created just below), NOT world-writable
     # /tmp: a predictable name there let another local user plant it — as a symlink
     # (truncation) or a plain file the clean GC reads as dead, killing your session
@@ -552,6 +582,7 @@ cmd_burn() {
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
     
+    art_pre="$(_clikae_mtime "$artifact")"
     rc=0
     if command -v tmux >/dev/null 2>&1; then
       local wrapper_script="$HOME/.clikae/state/${run_id}.sh"
@@ -589,6 +620,10 @@ cmd_burn() {
         printf '} 2>/dev/null\n'
       } >> "$wrapper_script"
 
+      {
+        declare -f _clikae_mtime _burn_size _burn_snapshot
+        printf 'artifact=%q\nart_pre=%q\nevidence_file=%q\n' "$artifact" "$art_pre" "$evidence_file"
+      } >> "$wrapper_script"
       cat <<EOF >> "$wrapper_script"
 while IFS= read -r kv; do [ -n "\$kv" ] && export "\${kv%%=*}"="\${kv#*=}"; done <<'KV'
 $(adapter_export_env "$dir")
@@ -603,7 +638,11 @@ trap 'echo \$? > "$state_file"; exit' EXIT
 # 0). Without it the "real task failure (rc=…)" line always printed rc=0 — the
 # outcome was still judged by the artifact, but the diagnostic rc was a lie.
 set -o pipefail
-( $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null ) 2>&1 | tee "$log_file"
+( engine_rc=0
+  $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
+  exit "\$engine_rc"
+) 2>&1 | tee "$log_file"
 EOF
       chmod 0700 "$wrapper_script"
 
@@ -637,7 +676,10 @@ EOF
           while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$dir")
 KV
-          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+          engine_rc=0
+          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+          exit "$engine_rc"
         )" || rc=$?
       fi
     else
@@ -645,11 +687,17 @@ KV
         while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$dir")
 KV
-        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+        engine_rc=0
+        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+        exit "$engine_rc"
       )" || rc=$?
     fi
     
-    rm -f "$state_file"
+    if [ -f "$evidence_file" ]; then
+      read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    fi
+    rm -f "$state_file" "$evidence_file"
 
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out")"; then
@@ -663,11 +711,11 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
+    elif [ "$artifact_fresh" -eq 1 ]; then
       dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_done "Done on $cli/$cur — artifact present: $artifact"
+      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
       _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."

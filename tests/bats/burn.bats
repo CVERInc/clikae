@@ -719,3 +719,72 @@ STUB
   # it — the whole point of a blocking flock/lockf over a `-n` one.
   [ "$((t1 - t0))" -ge 1 ] || { echo "finished in $((t1 - t0))s — did it wait at all?"; false; }
 }
+
+
+# Synchronous tmux transport: execute the real generated wrapper, then let the
+# cockpit consume DONE before burn's parent observes the exit marker. No timing
+# lottery and no real server; engine/env/exit-trap code still runs unchanged.
+_stub_burn_transport() {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    'bash "'*)
+      bash -c "$arg" >/dev/null 2>&1
+      [ -z "${STUB_CONSUME_ARTIFACT:-}" ] || rm -f "$STUB_CONSUME_ARTIFACT"
+      exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/tmux"
+}
+
+
+@test "burn #42: cockpit consumption after engine exit preserves success and bytes" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_CONSUME_ARTIFACT="$BATS_TEST_TMPDIR/DONE"
+  run clikae burn codex T1 --json --artifact "$STUB_CONSUME_ARTIFACT" -- run "$STUB_CONSUME_ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STUB_CONSUME_ARTIFACT" ]
+  [[ "$output" == *'"artifact_bytes":0'* ]] || false
+  [[ "$output" == *'"ok":true'* ]] || false
+}
+
+
+@test "burn #42: snapshot preserves nonempty size after consumption" {
+  _src_burn
+  local artifact="$BATS_TEST_TMPDIR/DONE" evidence="$BATS_TEST_TMPDIR/evidence"
+  printf 'success' > "$artifact"
+  _burn_snapshot "$artifact" 0 "$evidence"
+  rm "$artifact"
+  [ "$(cat "$evidence")" = '1 7' ]
+}
+
+@test "burn #42: stale and absent snapshots cannot claim success" {
+  _src_burn
+  local artifact="$BATS_TEST_TMPDIR/DONE" evidence="$BATS_TEST_TMPDIR/evidence"
+  _burn_snapshot "$artifact" 0 "$evidence"
+  [ "$(cat "$evidence")" = '0 null' ]
+  printf old > "$artifact"
+  _burn_snapshot "$artifact" "$(_clikae_mtime "$artifact")" "$evidence"
+  [ "$(cat "$evidence")" = '0 3' ]
+}
+
+@test "burn #42: direct fallback keeps artifact evidence with a nonzero engine exit" {
+  _stub_burn_transport
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/tmux"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'done' > "$STUB_ARTIFACT"
+exit 7
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
+  [[ "$output" == *'"ok":true'* ]] || false
+}

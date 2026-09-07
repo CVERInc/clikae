@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `burn` snapshots artifact freshness and size at engine exit, so a cockpit
+  consuming DONE before the parent polls cannot turn success into failure (#42).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed
