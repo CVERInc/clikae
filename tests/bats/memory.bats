@@ -574,7 +574,9 @@ _legacy_memory() {
   _legacy_memory
   run clikae memory share me claude a
   [ "$status" -eq 0 ]
-  [[ "$output" == *"your ~/.claude memory (2 files) was NOT imported"* ]] || false
+  # 1, not 2: the count is every file _memory_adopt would actually copy (here,
+  # just a.md) — before the R2-P2-3 fix it also counted MEMORY.md itself.
+  [[ "$output" == *"your ~/.claude memory (1 files) was NOT imported"* ]] || false
   [[ "$output" == *"clikae memory share me claude a --adopt $LEGACY"* ]] || false
   [ ! -e "$CLIKAE_HOME/souls/me/memory/a.md" ]
   [ "$(cat "$LEGACY/a.md")" = 'legacy topic' ]
@@ -704,8 +706,11 @@ _perm_octal() {
   printf 'other index\n' > "$other/MEMORY.md"
   run clikae memory share me claude a --yes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Found memory: $other (1 files)"* ]] || false
-  [[ "$output" == *"tank memory (1 files) was NOT imported"* ]] || false
+  # 0, not 1: $other holds only MEMORY.md, no topic file — before the R2-P2-3
+  # fix the count included MEMORY.md itself, so an index with nothing else in
+  # it still reported "(1 files)".
+  [[ "$output" == *"Found memory: $other (0 files)"* ]] || false
+  [[ "$output" == *"tank memory (0 files) was NOT imported"* ]] || false
   [[ "$output" == *"--adopt $other.clikae-soul-stash"* ]] || false
   [ "$(cat "$other.clikae-soul-stash/MEMORY.md")" = 'other index' ]
   run clikae memory share me claude a --adopt "$other.clikae-soul-stash"
@@ -772,4 +777,34 @@ _perm_octal() {
   [ "$status" -eq 0 ]
   [ "$(cat "$store/a.md")" = 'topic A real content' ]
   [ "$(cat "$store/b.md")" = 'topic B real content' ]
+}
+
+@test "memory adopt copies files an index links to in subdirectories, not just top-level markdown (R2-P2-3)" {
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L/archive" "$L/notes"
+  printf '[a](a.md)\n[old](archive/old.md)\n[n](notes/n.md)\n[img](diagram.png)\n' > "$L/MEMORY.md"
+  printf 'topic a\n' > "$L/a.md"
+  printf 'archived fact\n' > "$L/archive/old.md"
+  printf 'nested fact\n' > "$L/notes/n.md"
+  printf 'PNG\n' > "$L/diagram.png"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(cat "$store/archive/old.md")" = 'archived fact' ]
+  [ "$(cat "$store/notes/n.md")" = 'nested fact' ]
+  [ "$(cat "$store/diagram.png")" = 'PNG' ]
+  # Every link the index makes now resolves — no broken-link warning.
+  [[ "$output" != *"didn't resolve"* ]] || false
+}
+
+@test "memory adopt reports index entries that still don't resolve after adopting (R2-P2-3)" {
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L"
+  printf '[a](a.md)\n[gone](never-existed.md)\n' > "$L/MEMORY.md"
+  printf 'topic a\n' > "$L/a.md"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 index entry in $L didn't resolve"* ]] || false
 }

@@ -343,8 +343,29 @@ EOF
   esac
 }
 
-# Adopt plain markdown by copy. Collisions with an existing store file stay in
-# the source and are announced, never silently overwritten.
+# Count of files _memory_adopt would actually copy from <source> — every
+# regular file under it, recursively (see _memory_adopt for why: adoption
+# follows the whole index, not just top-level markdown), except the index
+# itself. Used for the "Found memory: … (N files)" / "Adopt … (N files)?"
+# prompts, which before this counted only top-level *.md — AND counted
+# MEMORY.md itself as one of them, so a source with one real topic file
+# reported "(2 files)".
+_memory_adopt_count() {
+  local source="$1"
+  # `|| true` around the `find | grep` pair, not just at the end: callers run
+  # under `set -eo pipefail`, and `grep -v` exits 1 when EVERY line matched
+  # and got filtered out (source holds only MEMORY.md, so 0 lines remain) —
+  # without this, that "correct answer of zero" aborted the whole command.
+  { find "$source" -type f 2>/dev/null | grep -vFx "$source/MEMORY.md" || true; } | wc -l | tr -d ' '
+}
+
+# Adopt a source's memory by copy: every regular file under it, recursively —
+# not just top-level markdown. A source's MEMORY.md commonly links into
+# subdirectories (an archive/, per-topic notes/) and to non-markdown
+# attachments (a diagram); copying only the top level left those links
+# silently pointing at nothing once adopted, with no warning. Collisions with
+# an existing store file stay in the source and are announced, never silently
+# overwritten.
 #
 # Everything is staged in a scratch directory INSIDE the store first, and
 # moved into place only once the whole copy has succeeded. A copy that fails
@@ -354,7 +375,7 @@ EOF
 # after a real successful share; a half-copied adopt satisfied it too, so a
 # retry never seeded the joiner's own (stashed, reversible) memory in at all.
 _memory_adopt() {
-  local source="$1" store="$2" f name staging dest heading
+  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line
   ! _memory_same_dir "$source" "$store" || return 0
   # Never append through an index symlink into somebody else's memory — check
   # this FIRST, before touching anything, so a refusal here leaves the store
@@ -363,38 +384,66 @@ _memory_adopt() {
   # files adopted with no index entry pointing at them.)
   [ ! -L "$store/MEMORY.md" ] || { log_err "Refusing to append to a symlinked MEMORY.md"; return 1; }
 
+  # A trailing slash on $source (shell tab-completion) must not break the
+  # "$sdir/" prefix strip below: with the slash left in, the prefix pattern
+  # gains a SECOND slash ("…/legacy//") that never matches find's single-slash
+  # output, so nothing strips and `rel` ends up as the full absolute path —
+  # every file then lands nested under that whole path inside the store
+  # instead of at its real name. $source itself (trailing slash and all) is
+  # kept as-is everywhere else (the heading text, the dedup check) — only this
+  # local copy is normalized, for path arithmetic.
+  sdir="${source%/}"
+
   staging="$(mktemp -d "$store/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
-  for f in "$source"/*.md; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    name="${f##*/}"
-    [ "$name" = MEMORY.md ] && continue
+  while IFS= read -r f; do
+    rel="${f#"$sdir"/}"
+    [ "$rel" = MEMORY.md ] && continue
+    mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null || { rm -rf "$staging"; return 1; }
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
     # file some other user on the machine can't read) instead of falling back
     # to umask, which is what a plain `cat "$f" > dest` would do.
-    if ! cp -p "$f" "$staging/$name" 2>/dev/null; then
+    if ! cp -p "$f" "$staging/$rel" 2>/dev/null; then
       rm -rf "$staging"
       return 1
     fi
-  done
+  done < <(find "$sdir" -type f 2>/dev/null)
 
   # The whole copy succeeded — move each staged file into place.
-  for f in "$staging"/*; do
-    [ -e "$f" ] || continue
-    name="${f##*/}"
-    dest="$store/$name"
+  while IFS= read -r rel; do
+    dest="$store/$rel"
+    mkdir -p "$(dirname "$dest")" 2>/dev/null
     # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
     # EEXIST if $dest appeared between the scan above and here, instead of
     # silently overwriting it.
-    ln "$f" "$dest" 2>/dev/null \
-      || log_warn "Keeping existing $name; source copy remains in $source."
-  done
+    ln "$staging/$rel" "$dest" 2>/dev/null \
+      || log_warn "Keeping existing $rel; source copy remains in $source."
+  done < <(cd "$staging" && find . -type f 2>/dev/null | sed 's#^\./##')
   rm -rf "$staging"
 
   heading="## Adopted from $source"
   if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
     { printf '\n%s\n\n' "$heading"; cat "$source/MEMORY.md" || return 1; printf '\n'; } >> "$store/MEMORY.md" || return 1
   fi
+
+  # Report any index entry that still doesn't resolve inside the store — a
+  # relative link the copy above didn't reach (an absolute path, one escaping
+  # $source, or one already dangling in the source itself). Adoption must
+  # never say DONE while a link silently points at nothing.
+  while IFS= read -r line; do
+    case "$line" in
+      \[*\]\(*\))
+        target="${line##*\(}"; target="${target%\)}"
+        case "$target" in http://*|https://*|mailto:*|/*) continue ;; esac
+        [ -e "$store/$target" ] || broken=$((broken+1))
+        ;;
+    esac
+  done < "$source/MEMORY.md"
+  if [ "$broken" -gt 0 ]; then
+    local noun=entries; [ "$broken" -eq 1 ] && noun=entry
+    log_warn "$broken index $noun in $source didn't resolve after adopting — check $source/MEMORY.md."
+  fi
+
   log_done "Adopted memory by COPY from $source (originals untouched)."
 }
 
@@ -420,7 +469,7 @@ _memory_adopted_heading_exists() {
 }
 
 _memory_offer_adoption() {
-  local store="$1" group="$2" explicit="$3" seeded="$4" source f count label command_line adopt_path
+  local store="$1" group="$2" explicit="$3" seeded="$4" source count label command_line adopt_path
   for source in "$HOME"/.claude/projects/*/memory "$MEM_CFG"/projects/*/memory; do
     [ -d "$source" ] && [ ! -L "$source" ] && [ -f "$source/MEMORY.md" ] && [ ! -L "$source/MEMORY.md" ] || continue
     # Canonical, not literal: an explicit --adopt path with a trailing slash
@@ -430,10 +479,7 @@ _memory_offer_adoption() {
     # imported" and "Adopted … (originals untouched)" for the same directory in
     # the same run.
     { [ -z "$explicit" ] || ! _memory_same_dir "$source" "$explicit"; } || continue
-    count=0
-    for f in "$source"/*.md; do
-      [ -f "$f" ] && [ ! -L "$f" ] && count=$((count+1))
-    done
+    count="$(_memory_adopt_count "$source")"
     log_info "Found memory: $source ($count files)"
     # Preserve the existing automatic seed of this tank's current directory.
     if [ "$source" = "$MEM_DIR" ] && [ "$seeded" -eq 1 ]; then

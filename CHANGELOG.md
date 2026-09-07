@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failed `--adopt` no longer leaves a half-copied store that looks seeded to
   the next `share`. The whole copy is staged first and moved into place only
   once it fully succeeds (#49).
+- `--adopt` now copies the files a source's index links to — subdirectories,
+  non-markdown attachments — not just top-level markdown, and reports any
+  index entry that still doesn't resolve afterward (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently
