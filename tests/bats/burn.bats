@@ -841,6 +841,36 @@ STUB
   done
 }
 
+# --- P2-1 (2026-09-08 ROUND-2 review): the very fix above landed a bare
+# "reached your … limit" alongside the anchored "weekly[ -]limit" one — same
+# hole, reopened in the same commit sequence. Unlike "hit your …", "reached
+# your …" reads naturally in third-person documentation prose that also
+# addresses the reader as "you" (review's PROBE D, all three FALSE-DRY —
+# including one where a plain word-wrap happens to land the phrase at the
+# start of a line, showing a line anchor alone would not have been enough).
+
+@test "burn #45: prose that reads 'reached your … limit' without a direct vendor report does not fire dry (P2-1 r2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    $'The runbook covers what happens when you have\nreached your weekly limit and how to wait it out.' \
+    "Each seat has reached your weekly limit of five reviews." \
+    "> Once a tank has reached your usage limit the board turns red."
+  do
+    run limit_output_dry claude "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #45: a genuine 'reached your … limit' vendor report still fires dry (P2-1 r2)" {
+  _src_burn
+  run limit_output_dry claude "You've reached your session limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [ "$output" = "resets 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "You have reached your usage limit. Try again Sep 14."
+  [ "$status" -eq 0 ]
+}
+
 # --- P2-3 (2026-09-08 review): #45's reset-extraction claim ("preserving the
 # vendor's reset phrase") only held for two of five real-shaped declaration
 # sentences from the review's corpus (PROBE G) — a singular "reset at" phrasing

@@ -92,6 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argv-supplied text is stripped argv-item by argv-item on the raw path,
   same as the prompt string is on the other (#44).
 
+- **A second bare "reached your … limit" alternative reopened the hole its
+  sibling fix had just closed.** Unlike "hit your …", "reached your …" reads
+  naturally in third-person documentation prose that still addresses the
+  reader as "you" ("the runbook covers what happens when you have reached
+  your weekly limit…"), and a line anchor alone doesn't defend it — prose
+  can land the phrase at a fresh line by plain word-wrap. Both "hit"/"reached"
+  now require the direct vendor report ("You've "/"You have ") leading
+  straight into the verb, which every genuine phrase in the corpus has and
+  none of the false positives do (#45).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed
