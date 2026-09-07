@@ -160,16 +160,57 @@ _burn_output_infra() {
 # also relies on to stay fast.
 _BURN_REDACT_TAIL_BYTES=${_BURN_REDACT_TAIL_BYTES:-65536}
 
+# P2-1 (2026-09-08 round-3 review): the raw `-- <argv>` form redacted every
+# item of $cmd with NO minimum length and no word boundary — argv is full of
+# short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one got
+# blindly stripped out of the engine's ENTIRE reply. A day-to-day `-C .`
+# deleted every period in the reply, merging two sentences into one and
+# flipping "a real task failure" into "infra" (the tool-host bounded-gap
+# pattern only holds because a period normally separates unrelated
+# sentences); a short task string like `"hit"` shredded a genuine
+# "…hit your usage limit…" line into unrecognizable pieces. Short flags and
+# path fragments are not "the task's own text echoed back" — redacting them
+# buys no privacy and only corrupts unrelated prose. Below this length,
+# skip the item entirely; at or above it, replace only BOUNDARY-safe
+# occurrences (the byte immediately before/after the match, if any, is not
+# itself a word character) — plain substring search, not regex, so a
+# needle full of shell/path metacharacters is never mis-parsed.
+_BURN_REDACT_MIN_LEN=${_BURN_REDACT_MIN_LEN:-20}
+
+_burn_redact_one() {
+  local text="$1" needle="$2" repl="$3"
+  [ "${#needle}" -ge "$_BURN_REDACT_MIN_LEN" ] || { printf '%s' "$text"; return 0; }
+  RTEXT="$text" RNEEDLE="$needle" RREPL="$repl" awk '
+    BEGIN {
+      t = ENVIRON["RTEXT"]; n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
+      nlen = length(n); tlen = length(t)
+      out = ""; i = 1
+      while (i <= tlen) {
+        p = index(substr(t, i), n)
+        if (p == 0) { out = out substr(t, i); break }
+        start = i + p - 1; endc = start + nlen - 1
+        before = (start > 1)   ? substr(t, start - 1, 1) : ""
+        after  = (endc < tlen) ? substr(t, endc + 1, 1)  : ""
+        ok = 1
+        if (before != "" && before ~ /[A-Za-z0-9_]/) ok = 0
+        if (after  != "" && after  ~ /[A-Za-z0-9_]/) ok = 0
+        out = out substr(t, i, start - i) (ok ? r : substr(t, start, nlen))
+        i = endc + 1
+      }
+      printf "%s", out
+    }'
+}
+
 _burn_redact() {
   local text="$1" repl="${2:-}" c
   if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
     text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
   fi
   if [ -n "${prompt:-}" ]; then
-    text="${text//"$prompt"/$repl}"
+    text="$(_burn_redact_one "$text" "$prompt" "$repl")"
   else
     for c in "${cmd[@]}"; do
-      [ -n "$c" ] && text="${text//"$c"/$repl}"
+      text="$(_burn_redact_one "$text" "$c" "$repl")"
     done
   fi
   printf '%s' "$text"

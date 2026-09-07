@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The raw `-- <argv>` redaction had no minimum length or word/line
+  boundary, so an everyday `-C .` could flip the classification.** argv is
+  full of short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one
+  was blindly stripped out of the engine's ENTIRE reply. Deleting every `.`
+  merged two sentences into one and let the tool-host bounded-gap pattern
+  jump across what used to be a sentence break — a real task failure
+  misread as an infrastructure outage, spending extra engine calls and the
+  wrong `reason`. The reverse also held: a short task string could shred a
+  genuine "…hit your usage limit…" line into unrecognizable pieces. Below a
+  minimum length an argv item is skipped entirely; at or above it, only
+  BOUNDARY-safe occurrences are replaced (#44).
+
 - **Pre-classification redaction cost tens of seconds to minutes of pure bash
   string time AFTER the engine had already exited.** `_burn_redact`'s
   `${text//needle/repl}` is super-linear in the haystack's size and ran over

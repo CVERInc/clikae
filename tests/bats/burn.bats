@@ -1370,6 +1370,49 @@ STUB
   [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
 }
 
+# --- P2-1 (2026-09-08 ROUND-3 review): the raw `-- <argv>` redaction had no
+# minimum length or word/line boundary, so an everyday `-C .` deleted every
+# period in the engine's reply — merging two sentences into one and letting
+# the tool-host bounded-gap pattern jump across what used to be a sentence
+# break (review's PROBE G). The reverse also held: a short task string could
+# shred a genuine "…hit your usage limit…" line into unrecognizable pieces
+# (PROBE F).
+
+@test "burn #44: a day-to-day '-C .' no longer merges sentences into a false infra match (P2-1 r3, PROBE G)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+printf 'I stopped early: the build step needs the tool host. The connection closed before I could retry, so nothing was written.\n'
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C . -s workspace-write "refactor the parser"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 1 ]     # no infra retries spent
+}
+
+@test "burn #44: a short raw-argv task string cannot shred a genuine limit line (P2-1 r3, PROBE F)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+case "$CODEX_HOME" in
+  */T1) echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM." ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" -- exec -s workspace-write "hit"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["codex/T1"]'* ]] || false
+}
+
 # --- P2-1 (2026-09-08 review): #42's at-exit snapshot is narrower than main's
 # old behaviour, which re-stat'd the artifact after the parent finished
 # polling for completion — a write landing shortly after the engine's own
