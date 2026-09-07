@@ -808,3 +808,17 @@ _perm_octal() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 index entry in $L didn't resolve"* ]] || false
 }
+
+@test "memory adopt forces 0600 on the merged MEMORY.md, matching topic files (R2-P2-4)" {
+  clikae init claude a
+  _legacy_memory
+  chmod 600 "$LEGACY/MEMORY.md"
+  umask 022
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  # Before this, the topic file (via `cp -p`) stayed private but the merged
+  # index — created fresh by the `>>` that appends the source's index — landed
+  # at process umask instead.
+  [ "$(_perm_octal "$store/MEMORY.md")" = "600" ]
+}

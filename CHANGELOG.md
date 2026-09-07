@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--adopt` now copies the files a source's index links to — subdirectories,
   non-markdown attachments — not just top-level markdown, and reports any
   index entry that still doesn't resolve afterward (#49).
+- The `MEMORY.md` merged in by an adopt is now forced to `0600`, matching the
+  topic files it merges alongside (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

@@ -424,6 +424,11 @@ _memory_adopt() {
   heading="## Adopted from $source"
   if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
     { printf '\n%s\n\n' "$heading"; cat "$source/MEMORY.md" || return 1; printf '\n'; } >> "$store/MEMORY.md" || return 1
+    # The index is the part of a memory best worth reading — force 0600 on
+    # every merge, the same guarantee the topic files above get from `cp -p`.
+    # Without this, a MEMORY.md written fresh by the `>>` above lands at
+    # process umask instead of staying private.
+    chmod 600 "$store/MEMORY.md" 2>/dev/null || true
   fi
 
   # Report any index entry that still doesn't resolve inside the store — a
