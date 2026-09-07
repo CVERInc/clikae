@@ -556,6 +556,10 @@ cmd_burn() {
   [ "$reroute" -eq 1 ] && carry_notice_once
   # P2-4: sweep prompt-copy dirs from past runs before adding this run's own.
   _burn_sweep_old_logs
+  # Secure the parent before saving the task: validation below can exit before
+  # the engine loop gets a chance to set log-directory permissions.
+  mkdir -p "$HOME/.clikae/logs"
+  chmod 0700 "$HOME/.clikae/logs"
   # Keep a private, stable copy even when the input file is later consumed.
   local run_dir="$HOME/.clikae/logs/burn-$$" saved_prompt task_preview
   mkdir -p "$run_dir"

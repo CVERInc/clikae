@@ -1321,3 +1321,22 @@ STUB
   [ "$status" -eq 0 ]
   [ -d "$HOME/.clikae/logs/burn-99999" ]
 }
+
+# Early validation failures must leave both log directories private, even with
+# a permissive caller umask.
+@test "burn #43: ~/.clikae/logs is created 0700 even when burn fails before the engine loop (P2-3 r2)" {
+  _stub_burn_transport
+  clikae init codex T1
+  rm -rf "$HOME/.clikae/logs"
+  run bash -c 'umask 000; exec "$1" burn codex NOPE --artifact "$2" --prompt "x"' \
+    _ "$CLIKAE_BIN" "$BATS_TEST_TMPDIR/out"
+  [ "$status" -ne 0 ]
+  [ -d "$HOME/.clikae/logs" ]
+  local mode; mode="$(stat -c '%a' "$HOME/.clikae/logs" 2>/dev/null || stat -f '%Lp' "$HOME/.clikae/logs")"
+  [ "$mode" = 700 ]
+  local run_dirs=("$HOME/.clikae/logs"/burn-*)
+  [ "${#run_dirs[@]}" -eq 1 ]
+  [ -d "${run_dirs[0]}" ]
+  [ "$(stat -c '%a' "${run_dirs[0]}" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}")" = 700 ]
+  [ "$(stat -c '%a' "${run_dirs[0]}/prompt.txt" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}/prompt.txt")" = 600 ]
+}
