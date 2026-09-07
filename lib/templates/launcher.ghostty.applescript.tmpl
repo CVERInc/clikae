@@ -5,6 +5,15 @@
 -- app injecting a command), so a -e launcher looks like an empty shell until you
 -- click Allow. A user config file is trusted → no dialog, and the title sticks.
 --
+-- Tradeoff: `-n` opens a SEPARATE Ghostty instance, so if a Ghostty is already
+-- running you get a second Dock icon for the life of this window. It's the least-bad
+-- option today — without `-n` a running instance ignores --config-file and opens
+-- nothing, and -e (which WOULD reuse the instance) brings back the Allow dialog and
+-- drops the title. A supported macOS `ghostty +new-window` would fix this (reuse the
+-- running instance, keep command + title, no dialog); it exists on GTK via D-Bus but
+-- is a stub on macOS as of Ghostty 1.3.1. Tracking: ghostty-org/ghostty#12903 and
+-- discussion #14168. When it lands, prefer +new-window here and fall back to open -na.
+--
 -- The config lives in THIS bundle's Resources, located at runtime via `path to me`
 -- so the launcher keeps working if the .app is moved. app.sh writes
 -- Contents/Resources/clikae-ghostty.conf (a `title = …` + `command = …` pair) right

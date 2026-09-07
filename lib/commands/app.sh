@@ -159,6 +159,11 @@ The window's title is "<CLI> (<tank>)" (or "clikae" for --board) so you can tell
 windows apart. The Ghostty launcher passes its command through a trusted config
 file, so Ghostty never shows the "Allow Ghostty to execute…" dialog.
 
+Heads-up (Ghostty): the launcher opens a separate Ghostty instance, so if you
+already have Ghostty running you'll see a second Dock icon while the window is
+open. That's a current macOS limitation — it goes away once Ghostty ships a
+macOS `+new-window` (ghostty-org/ghostty#12903).
+
 macOS only.
 EOF
         return 0
