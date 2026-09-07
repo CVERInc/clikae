@@ -836,3 +836,94 @@ STUB
   [[ "$output" == *'"tank":"T2"'* ]] || false
   [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
 }
+
+@test "burn #44: tool-host outage retries same tank then reports infra" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+echo 'timed out negotiating with the code-mode host'
+exit 0
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 3 ]
+  [ "$(sort -u "$STUB_ARGV_LOG")" = "$CLIKAE_HOME/profiles/codex/T1" ]
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+  [[ "$output" != *'real task failure'* ]] || false
+}
+
+
+@test "burn #44: default backoff is 5 then 10 seconds and recovery stays on the same tank" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+if [ "$(wc -l < "$STUB_ARGV_LOG")" -lt 3 ]; then
+  echo 'failed to connect to the code-mode host'
+else
+  printf 'done' > "$STUB_ARTIFACT"
+fi
+STUB
+  cat > "$BATS_TEST_TMPDIR/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$STUB_DELAYS"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts" STUB_DELAYS="$BATS_TEST_TMPDIR/delays"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --no-reroute --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DELAYS")" = $'5\n10' ]
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 3 ]
+  [ "$(sort -u "$STUB_ARGV_LOG")" = "$CLIKAE_HOME/profiles/codex/T1" ]
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
+@test "burn #44: zero retries reports infra without sleeping or marking dry" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+echo 'connection to the tool host was closed'
+exit 1
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  run clikae burn codex T1 --json --infra-retries 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 1 ]
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]
+}
+
+@test "burn #44: ordinary task errors are not infrastructure failures" {
+  _src_burn
+  local phrase
+  for phrase in 'task timed out' 'failed to connect to database' 'weekly limit' 'connection refused'; do
+    run _burn_output_infra "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #44: invalid retry policy fails before launching" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  local value
+  for value in -1 nope 11 999999999999999999999; do
+    run clikae burn codex T1 --infra-retries "$value" --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'--infra-retries must be'* ]] || false
+  done
+  [ ! -e "$STUB_ARGV_LOG" ]
+}

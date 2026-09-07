@@ -65,14 +65,19 @@ Give the task in one of two ways:
                          reset, rerouted_from[], elapsed_s, run_id}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
-  --no-reroute        run once; on a dry tank, stop instead of falling through.
+  --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
+                      up to n times (default 2; 0 disables retries).
+  --infra-delay <s>   initial retry delay in whole seconds (default 5), doubled
+                      for each subsequent retry. --timeout bounds each attempt.
+  --no-reroute        on a dry tank, stop instead of falling through.
   --allow-active      let auto-reroute use a tank an interactive session is on.
                       By default the reserve SKIPS such tanks (rerouting a headless
                       job onto the tank you're mid-conversation on would silently
                       burn that quota) and tanks sharing an already-dry account.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
-no artifact but no limit -> a real task failure (NOT rerouted — it'd fail the same
+tool-host failure -> retry the same tank, then reason: infra (exit 1);
+no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
 on every tank).
 
 Examples:
@@ -100,6 +105,12 @@ Re-firing the same task on another account sits in the vendors' terms gray
 zone — where the line is, with the actual policy language and dates:
 docs/terms-and-your-accounts.md (shown once before your first carry).
 EOF
+}
+
+# Infrastructure signatures must name the tool host: a generic timeout can be
+# a task failure and must not spend another attempt automatically.
+_burn_output_infra() {
+  printf '%s' "$1" | grep -aiE 'timed out negotiating with (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection with) (the )?(code[ -]mode|tool)[ -]host|connection to (the )?(code[ -]mode|tool)[ -]host.*(closed|refused|timed out)|((code[ -]mode|tool)[ -]host).*(connection (closed|refused|lost)|disconnected)' >/dev/null
 }
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
@@ -401,6 +412,7 @@ _burn_tried_json() {
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
+  local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -411,6 +423,8 @@ cmd_burn() {
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
+      --infra-retries) shift; [ $# -gt 0 ] || log_fail "--infra-retries needs a count"; infra_retries="$1"; shift ;;
+      --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
@@ -423,6 +437,14 @@ cmd_burn() {
                     shift ;;
     esac
   done
+
+  case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
+  case "$infra_delay" in ''|*[!0-9]*) log_fail "--infra-delay must be a nonnegative integer" ;; esac
+  # Bounds also keep the exponential delay within portable shell arithmetic.
+  [ "${#infra_retries}" -le 2 ] && [ "$infra_retries" -le 10 ] || log_fail "--infra-retries must be between 0 and 10"
+  [ "${#infra_delay}" -le 5 ] && [ "$infra_delay" -le 86400 ] || log_fail "--infra-delay must be between 0 and 86400"
+  infra_retries=$((10#$infra_retries)); infra_delay=$((10#$infra_delay))
+  retry_delay="$infra_delay"
 
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
@@ -568,6 +590,7 @@ cmd_burn() {
       esac
     fi
     local run_id="${cli}-${cur}-burn-$$"
+    [ "$infra_attempt" -eq 0 ] || run_id="${run_id}-retry${infra_attempt}"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local state_file="$HOME/.clikae/state/${run_id}_exit"
     local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
@@ -717,6 +740,18 @@ KV
       _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
+    elif _burn_output_infra "$out"; then
+      if [ "$infra_attempt" -lt "$infra_retries" ]; then
+        infra_attempt=$((infra_attempt + 1))
+        log_warn "$cli/$cur infrastructure failure — retry $infra_attempt/$infra_retries on the same tank in ${retry_delay}s."
+        sleep "$retry_delay"
+        retry_delay=$((retry_delay * 2))
+        continue
+      fi
+      log_err "$cli/$cur infrastructure failure after $infra_attempt retries."
+      _burn_result false "$cli" "$cur" "$artifact" "infra"
+      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
@@ -771,6 +806,7 @@ KV
       fi
     fi
     cur="$nx_tank"
+    infra_attempt=0; retry_delay="$infra_delay"
     log_info "Rerouting (dry) → $cli/$cur"
   done
 }

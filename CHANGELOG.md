@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `burn` recognizes tool-host connection failures as infrastructure failures,
+  retries the same tank with bounded exponential backoff, and reports JSON
+  `reason: "infra"` when retries are exhausted (#44).
+
 - Claude weekly-limit output now classifies as dry in `burn`, preserving the
   vendor's reset phrase and normal reserve routing (#45).
 

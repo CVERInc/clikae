@@ -166,6 +166,17 @@ for free.)
   account's quota, not the budget of your main interactive session. That's the
   whole point — the expensive supervisor stays asleep; cheap workers burn whichever
   account still has gas.
+- **Infrastructure handling (Claude/Codex adapter burn).** A tool-host connection
+  failure such as `timed out negotiating with the code-mode host` retries the
+  **same tank**, with no dry mark or reserve hop. `--infra-retries N` defaults to
+  2 retries after the initial attempt (0 disables retries; maximum 10).
+  `--infra-delay S` defaults to 5 seconds, doubled before each subsequent retry
+  (5s then 10s by default; integer 0–86400). `--timeout` applies per attempt.
+  Exhaustion exits 1 with JSON `reason: "infra"`; existing keys and reasons stay
+  unchanged. `--no-reroute` disables dry hops, not these retries. A fresh artifact
+  still proves success; a quota signal still follows the dry path. Generic task
+  timeouts without a tool-host signature remain task failures. agy's separate
+  capture loop does not use this retry policy.
 - **Dry handling.** Claude weekly-limit messages follow the same dry path as
   session limits, including the vendor's verbatim reset time in JSON. `burn` auto-reroutes to the next reserve tank on a dry hit
   (account-aware: it skips siblings that share an already-dried login, and the tank
