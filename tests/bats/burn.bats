@@ -896,6 +896,45 @@ STUB
   [ "$output" = "reset at 5am (Asia/Tokyo)" ]
 }
 
+# --- P1-1 (2026-09-08 ROUND-3 review, closing item): the review's harder
+# complaint wasn't just the two counterexamples above — it was that
+# limit.sh's comment and CHANGELOG both claimed a "corpus" backed this
+# regex ("every genuine phrase in the corpus has … and none of the false
+# positives do") when `tests/fixtures/limit-reset-phrases.tsv` holds only
+# reset phrases, not full vendor sentences (`grep -c 'hit your'` on it is
+# 0 — CHANGELOG now carries a Correction note saying so). Nothing in this
+# suite tied the fixture's REAL reset-phrase corpus to a real vendor
+# sentence shape and proved the pair still classifies, and nothing proved
+# main's own literal corpus sentence — never broken by any of these fixes,
+# but never checked for claude specifically either — still fires dry.
+
+@test "burn #45: main's own corpus sentence still fires dry for claude (P1-1 closing)" {
+  _src_burn
+  run limit_output_dry claude "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+  [ "$output" = "Try again at Jul 7th, 2026 2:17 PM" ]
+}
+
+@test "burn #45: a real sample of the fixture's reset-phrase corpus fires dry under every real vendor-sentence shape (P1-1 closing)" {
+  _src_burn
+  local fixture="$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv"
+  local -a resets=()
+  local _e phrase _x
+  while IFS=$'\t' read -r _e phrase _x; do
+    [ -n "$phrase" ] || continue
+    resets+=("$phrase")
+  done < <(awk -F'\t' '!/^#/ && NF==3' "$fixture" | awk 'NR==1 || NR%37==0')
+  [ "${#resets[@]}" -ge 4 ]
+  local reset core
+  for reset in "${resets[@]}"; do
+    for core in "You've hit your usage limit." "You’ve hit your usage limit." "You have already hit your usage limit."; do
+      run limit_output_dry claude "$core $reset"
+      [ "$status" -eq 0 ]
+      [ "$output" = "$reset" ]
+    done
+  done
+}
+
 @test "burn #45: a real dry reply with a curly apostrophe reroutes instead of a hard failure (P1-1 r3)" {
   _stub_burn_transport
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
