@@ -74,6 +74,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `burn` snapshots artifact freshness and size at engine exit, so a cockpit
   consuming DONE before the parent polls cannot turn success into failure (#42).
 
+- **The widened tool-host infrastructure whitelist turned into a prose
+  catcher.** The "host `<gap>` failure verb" alternatives had no upper bound
+  on the gap, so any sentence merely mentioning the tool host somewhere
+  ahead of an unrelated failure verb in the same sentence matched — a
+  genuine task failure whose reply happened to explain a runbook section
+  named after the tool host was misread as an infrastructure failure and
+  burned extra engine calls. The gap is now bounded to the width every real
+  phrasing in the corpus actually needs (#44).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed

@@ -116,8 +116,19 @@ EOF
 # failure/closed-connection/disconnect NAMING the tool host) without
 # loosening the "must name the host" discipline that keeps this from becoming
 # a P1-2-style generic-timeout catcher.
+#
+# P1-2 (2026-09-08 round-2 review): the widening above turned the two
+# "host <gap> verb" alternatives into a prose catcher — `[^."]*` has no upper
+# bound, so ANY sentence that happens to mention "tool host" and, later in
+# the same period-free run, one of the failure verbs fired (e.g. "the tool
+# host section of the runbook explains why our Redis connection closed",
+# PROBE C-live in the review). Every real shape in the corpus — this round's
+# and the last — has the verb within a handful of characters of "host" (a
+# single connecting word like "was"/"'s", never a clause); bounding the gap
+# to 6 chars keeps every real corpus row matching while rejecting prose that
+# merely mentions the host somewhere upstream of an unrelated failure.
 _burn_output_infra() {
-  printf '%s' "$1" | grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]*(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]*(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' >/dev/null
+  printf '%s' "$1" | grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' >/dev/null
 }
 
 # Redact an engine's exact prompt echo BEFORE taking a diagnostic tail. Raw

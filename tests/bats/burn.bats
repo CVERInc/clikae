@@ -992,6 +992,48 @@ STUB
   done
 }
 
+# --- P1-2 (2026-09-08 ROUND-2 review): the widening above turned the two
+# "host <gap> failure verb" alternatives into an unbounded prose catcher —
+# `[^."]*` has no upper bound, so any sentence that mentions "tool host"
+# somewhere and, later in the same period-free run, one of the failure verbs
+# fired even when the two had nothing to do with each other (PROBE C-live in
+# the review: an engine's genuine task-failure reply that merely explains a
+# runbook section named after the tool host burned two extra full engine
+# calls and mislabelled a real failure as infra). Every real corpus row —
+# this round's and the last — has the verb within a handful of characters of
+# "host"; bounding the gap keeps them matching while rejecting prose whose
+# mention of the host and its failure verb are unrelated.
+
+@test "burn #44: prose that merely mentions the tool host near an unrelated failure verb is not infra (P1-2 r2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    'The tool host section of the runbook explains why our Redis connection closed.' \
+    'I checked the tool host docs; the websocket to the build server disconnected.' \
+    'Note: the code-mode host chapter is fine, but the SSH handshake failed twice.' \
+    'While the tool host was idle the database connection timed out.' \
+    'Tests for the tool host retry path assert that the connection timed out branch fires.' \
+    'I could not finish. The tool host section of the runbook explains why our Redis connection closed.'
+  do
+    run _burn_output_infra "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #44: a genuine task failure whose reply names the tool host in passing is not rerouted as infra (P1-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "I could not finish. The tool host section of the runbook explains why our Redis connection closed.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  run clikae burn claude T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt "summarise the incident"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
 @test "burn #44: invalid retry policy fails before launching" {
   _stub_burn_transport
   clikae init codex T1
