@@ -294,20 +294,36 @@ _src_app() {
 
 @test "app finds a terminal's icon when it's installed outside /Applications (#50)" {
   macos_only
-  [ -d "/Applications/iTerm.app" ] && skip "iTerm2 is installed system-wide; this test asserts the ~/Applications path"
-  clikae init claude work
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # A fake bundle at the real relative path _app_terminal_installed already
+  # accepts — but NOT a real .app (no executable, no scripting dictionary), so
+  # this stays icon-step-only and never asks osacompile/AppleScript to resolve
+  # iTerm2 terminology it doesn't have (that needs a real install; see "the
+  # iTerm2 launcher template compiles" above).
   mkdir -p "$TEST_HOME/Applications/iTerm.app/Contents/Resources"
   printf 'fixture-icon' > "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns"
-  run clikae app claude work --terminal iterm2 --out "$TEST_HOME/Apps"
+  mkdir -p "$TEST_HOME/fakeapp/Contents/Resources"
+  cat > "$TEST_HOME/fakeapp/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconFile</key>
+	<string>applet</string>
+</dict>
+</plist>
+PLIST
+  run _app_install_icon "$TEST_HOME/fakeapp" iterm2
   [ "$status" -eq 0 ]
-  # _app_terminal_installed already found it (via $HOME/Applications) to let the
-  # render proceed; before the fix, _app_terminal_icon still looked ONLY under
-  # /Applications and lost track of it, so this warning fired despite the
-  # terminal being right there.
+  # _app_terminal_installed already accepts this (via $HOME/Applications), so the
+  # render step proceeds — before the fix, _app_terminal_icon still looked ONLY
+  # under /Applications and lost track of it, so this warning fired despite the
+  # terminal being right there: it stated the wrong cause.
   [[ "$output" != *"No terminal or clikae icon found"* ]] || false
-  local app="$TEST_HOME/Apps/claude (work).app"
-  cmp "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
-  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  cmp "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns" \
+      "$TEST_HOME/fakeapp/Contents/Resources/AppIcon.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$TEST_HOME/fakeapp/Contents/Info.plist"
   [ "$output" = AppIcon.icns ]
 }
 
