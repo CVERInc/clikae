@@ -927,3 +927,33 @@ STUB
   done
   [ ! -e "$STUB_ARGV_LOG" ]
 }
+
+@test "burn #43: long multiline prompt is stored with only 120 characters previewed" {
+  _stub_burn_transport
+  clikae init codex T1
+  local prompt; prompt="$(printf '%0120d' 0)"$'\nPRIVATE-PROMPT-TAIL'
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-PROMPT-TAIL* ]] || false
+  [[ "$output" == *prompt.txt* ]] || false
+  local saved; saved="$(find "$HOME/.clikae/logs" -name prompt.txt -print)"
+  [ -f "$saved" ]
+  [ "$(cat "$saved")" = "$prompt" ]
+}
+
+@test "burn #43: diagnostic tail does not repeat the engine's multiline prompt echo" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+echo 'task failed'
+STUB
+  clikae init codex T1
+  local prompt; prompt="$(printf '%0120d' 0)"$'\nPRIVATE-PROMPT-TAIL'
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-PROMPT-TAIL* ]] || false
+  [[ "$output" == *'task failed'* ]] || false
+  local saved; saved="$(find "$HOME/.clikae/logs" -name prompt.txt -print)"
+  [ "$(stat -c '%a' "$saved" 2>/dev/null || stat -f '%Lp' "$saved")" = 600 ]
+}

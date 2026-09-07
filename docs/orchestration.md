@@ -133,6 +133,16 @@ clikae burn claude L \
   --timeout 1200 --fresh
 ```
 
+### Burn prompt logs
+
+`burn` saves the task to `~/.clikae/logs/burn-<pid>/prompt.txt` in a private
+run directory. Progress prints its path and the first 120 characters, with line
+breaks flattened. Reroutes print the path again without repeating the prompt;
+diagnostic tails replace an exact engine echo of the prompt with that path.
+The raw `-- <argv...>` form saves `command.txt` (one argument per line) instead,
+because raw commands have no engine-independent prompt position. Engine capture
+logs remain raw; the preview limit applies to burn's own progress messages.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and

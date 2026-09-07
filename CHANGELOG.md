@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `burn` stores its prompt under a private run directory and logs the path plus
+  a 120-character preview, avoiding repeated full prompts in progress and
+  diagnostic tails (#43).
+
 - `burn` recognizes tool-host connection failures as infrastructure failures,
   retries the same tank with bounded exponential backoff, and reports JSON
   `reason: "infra"` when retries are exhausted (#44).

@@ -113,6 +113,16 @@ _burn_output_infra() {
   printf '%s' "$1" | grep -aiE 'timed out negotiating with (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection with) (the )?(code[ -]mode|tool)[ -]host|connection to (the )?(code[ -]mode|tool)[ -]host.*(closed|refused|timed out)|((code[ -]mode|tool)[ -]host).*(connection (closed|refused|lost)|disconnected)' >/dev/null
 }
 
+# Redact an engine's exact prompt echo BEFORE taking a diagnostic tail. Raw
+# engine output stays in its capture log; burn's progress never repeats the task.
+_burn_output_tail() {
+  local text="$1" lines="${2:-5}"
+  if [ -n "${prompt:-}" ] && [ -n "${saved_prompt:-}" ]; then
+    text="${text//"$prompt"/"[prompt: $saved_prompt]"}"
+  fi
+  printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
+}
+
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto, in listing order — but the
 # reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
@@ -254,7 +264,7 @@ _agy_burn() {
       _agy_kc_verify_restore "$cur"
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
     fi
-    log_info "burn agy/$cur → agy -p ..."
+    log_info "burn agy/$cur → agy (task: $saved_prompt)"
 
     # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
     # symlink shared by every agy process on the tank, repointed by whichever
@@ -315,7 +325,7 @@ _agy_burn() {
       # yielded nothing — a status claim, not prose about an answer, and the
       # closest thing to a structured marker it offers.
       log_err "agy/$cur declined the task — nothing was produced."
-      printf '%s\n' "$out" | head -n 3 | sed 's/^/    /'
+      _burn_output_tail "$out" 3
       log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
@@ -347,7 +357,7 @@ _agy_burn() {
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      _burn_output_tail "$out"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
@@ -481,6 +491,25 @@ cmd_burn() {
   # Fall-through armed (the default) means a dry tank re-fires this task on the
   # next account — the cross-account carry case the one-time note is for.
   [ "$reroute" -eq 1 ] && carry_notice_once
+  # Keep a private, stable copy even when the input file is later consumed.
+  local run_dir="$HOME/.clikae/logs/burn-$$" saved_prompt task_preview
+  mkdir -p "$run_dir"
+  chmod 0700 "$run_dir"
+  saved_prompt="$run_dir/prompt.txt"
+  if [ "$prompt_set" -eq 1 ]; then
+    (umask 077; printf '%s' "$prompt" > "$saved_prompt")
+    task_preview="${prompt:0:120}"
+  else
+    # Raw argv has no portable prompt position; retain it as one argument per
+    # line rather than guessing an engine-specific option grammar.
+    saved_prompt="$run_dir/command.txt"
+    (umask 077; printf '%s\n' "${cmd[@]}" > "$saved_prompt")
+    task_preview="${cmd[*]}"; task_preview="${task_preview:0:120}"
+  fi
+  task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
+  log_info "task: $saved_prompt"
+  log_info "preview: $task_preview"
+
   case "$cli" in
     agy|antigravity)
       _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
@@ -576,7 +605,7 @@ cmd_burn() {
     # failing, aborting the burn on the very system the fallback exists for.
     if [ "$_prelocked" -eq 1 ]; then exec 7>&-; fi   # release before the (possibly long) engine run
 
-    log_info "burn $cli/$cur → $binary ${cmd[*]}"
+    log_info "burn $cli/$cur → $binary (task: $saved_prompt)"
 
     # Run headless with the tank's env, stdin CLOSED (the burn-writeup hang lesson:
     # a headless codex can't interrupt its own child if stdin is open), capturing
@@ -750,12 +779,12 @@ KV
       fi
       log_err "$cli/$cur infrastructure failure after $infra_attempt retries."
       _burn_result false "$cli" "$cur" "$artifact" "infra"
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      _burn_output_tail "$out"
       return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      _burn_output_tail "$out"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
