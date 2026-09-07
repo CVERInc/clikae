@@ -1,13 +1,13 @@
 # clikae memory — the Soul layer (convention)
 
-> **Status: cross-engine shipped (claude + codex).** This file defines the *schema
+> **Status: cross-engine shipped (claude + codex + agy).** This file defines the *schema
 > and conventions* for clikae's memory layer; `clikae memory share|isolate|status`
 > is live. The canonical Soul is ONE vendor-neutral markdown dir
 > (`$CLIKAE_HOME/souls/<group>/memory`); **claude** symlinks its memory dir into it,
-> **codex** gets a pointer note in `AGENTS.md` and reads/writes the same markdown via
+> **codex** gets a pointer note in `AGENTS.md` (and **agy** one in `GEMINI.md`) and reads/writes the same markdown via
 > the memory protocol — so cross-engine continuity needs **no translator and never
 > drifts** (it's literally the same file). Design rationale: [`grammar.md` §10](/grammar.md).
-> Coming: cross-engine **agy** (same pointer hook); an **optional** apfel translator
+> Coming: an **optional** apfel translator
 > (`CLIKAE_MEMORY_TRANSLATOR`) only for slicing/compressing a Soul (never required for
 > the basic experience); per-entry `scope:` dial.
 
