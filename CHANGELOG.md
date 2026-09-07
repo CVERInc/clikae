@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `burn` that FINISHED could be discarded and re-fired on a second
+  account** because the dry-phrase check ran before the artifact-freshness
+  check: a task whose own reply happened to contain a limit phrase (e.g. a
+  runbook about usage limits) was misread as dry even with a fresh artifact
+  on disk. Artifact evidence now outranks phrase-matching (#42).
+
 - `burn` stores its prompt under a private run directory and logs the path plus
   a 120-character preview, avoiding repeated full prompts in progress and
   diagnostic tails (#43).

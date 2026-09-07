@@ -957,3 +957,45 @@ STUB
   local saved; saved="$(find "$HOME/.clikae/logs" -name prompt.txt -print)"
   [ "$(stat -c '%a' "$saved" 2>/dev/null || stat -f '%Lp' "$saved")" = 600 ]
 }
+
+# --- P1-1 (2026-09-08 review): a FINISHED burn must not be discarded because
+# the engine's own reply happens to contain a limit phrase. The task below is
+# what a real runbook-about-quotas prompt provokes: the engine writes the
+# artifact AND signs off with a sentence containing "weekly limit" — before the
+# fix, the dry-string check ran BEFORE the artifact-freshness check and threw
+# the finished work away, rerouting the same task onto a second account.
+
+@test "burn #42: a finished task is not discarded because its OWN reply mentions a limit phrase" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%072d' 0 > "$STUB_ARTIFACT"
+printf "I wrote the runbook. It explains what to do once you've hit your weekly limit.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init claude C1
+  clikae init claude C2
+  run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt "write a runbook about usage limits"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"tank":"C1"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+  [[ "$output" == *'"artifact_bytes":72'* ]] || false
+}
+
+@test "burn #42: --no-reroute also honours a fresh artifact over a limit phrase in the reply" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%072d' 0 > "$STUB_ARTIFACT"
+printf "I wrote the runbook. It explains what to do once you've hit your weekly limit.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init claude C1
+  run clikae burn claude C1 --json --no-reroute --artifact "$STUB_ARTIFACT" --prompt "write a runbook about usage limits"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+}

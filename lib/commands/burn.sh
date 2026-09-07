@@ -751,6 +751,21 @@ KV
     fi
     rm -f "$state_file" "$evidence_file"
 
+    # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
+    # A burn that FINISHED — the artifact is fresh — was being discarded as dry
+    # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a
+    # task about writing a quota runbook), which then re-fired the SAME task on
+    # a second account. Judge success before scanning any prose for a limit or
+    # an infra signature, so a completed task can never be rerouted to redo
+    # work that is already done.
+    if [ "$artifact_fresh" -eq 1 ]; then
+      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
+      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
+      _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      return 0
+    fi
+
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
@@ -763,12 +778,6 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif [ "$artifact_fresh" -eq 1 ]; then
-      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
-      _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
-      return 0
     elif _burn_output_infra "$out"; then
       if [ "$infra_attempt" -lt "$infra_retries" ]; then
         infra_attempt=$((infra_attempt + 1))
