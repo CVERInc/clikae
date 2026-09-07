@@ -33,16 +33,31 @@ _app_shell_squote() {
   printf "'%s'" "$s"
 }
 
-# Is a terminal app installed? Args: <App display name> <bundle id>.
-# Checks the usual /Applications and ~/Applications paths, then Spotlight.
-_app_terminal_installed() {
-  local name="$1" bundle="$2"
-  [ -d "/Applications/$name.app" ] && return 0
-  [ -d "$HOME/Applications/$name.app" ] && return 0
+# Resolve the FULL PATH to an installed terminal app's bundle. Args: <App display
+# name> <bundle id>. Checks the usual /Applications and ~/Applications paths
+# first (cheap, no subprocess), then asks Spotlight, then asks Launch Services
+# directly (covers a Spotlight-excluded volume, and any other install location —
+# the same door System Settings ▸ Privacy & Security uses to find an app to
+# allow). Prints the bundle path and returns 0, or prints nothing and returns 1.
+_app_terminal_bundle_path() {
+  local name="$1" bundle="$2" hit
+  [ -d "/Applications/$name.app" ] && { printf '%s\n' "/Applications/$name.app"; return 0; }
+  [ -d "$HOME/Applications/$name.app" ] && { printf '%s\n' "$HOME/Applications/$name.app"; return 0; }
   if command -v mdfind >/dev/null 2>&1; then
-    [ -n "$(mdfind "kMDItemCFBundleIdentifier == '$bundle'" 2>/dev/null | head -n 1)" ] && return 0
+    hit="$(mdfind "kMDItemCFBundleIdentifier == '$bundle'" 2>/dev/null | head -n 1)"
+    [ -n "$hit" ] && [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
+  fi
+  if command -v osascript >/dev/null 2>&1; then
+    hit="$(osascript -e "POSIX path of (path to application id \"$bundle\")" 2>/dev/null)"
+    hit="${hit%/}"
+    [ -n "$hit" ] && [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
   fi
   return 1
+}
+
+# Is a terminal app installed? Args: <App display name> <bundle id>.
+_app_terminal_installed() {
+  _app_terminal_bundle_path "$1" "$2" >/dev/null
 }
 
 # _app_default_terminal -> the terminal to generate for when nobody said.
@@ -129,12 +144,24 @@ _app_write_ghostty_conf() {
 }
 
 # Kept separate so fixtures can supply a terminal icon without installing an app.
+#
+# Resolves the target's bundle via _app_terminal_bundle_path rather than a
+# hardcoded /Applications path — a terminal installed under ~/Applications (or
+# anywhere Spotlight/Launch Services can find it) IS installed, per
+# _app_terminal_installed above, so its icon must be findable too. Before this,
+# the two checks disagreed: a launcher would render for a ~/Applications-only
+# install, then fail to find its own icon and warn "no terminal found" — which
+# was simply false; the terminal was right there.
 _app_terminal_icon() {
+  local name bundle icns app
   case "$1" in
-    ghostty) printf '%s\n' /Applications/Ghostty.app/Contents/Resources/Ghostty.icns ;;
-    iterm2) printf '%s\n' /Applications/iTerm.app/Contents/Resources/AppIcon.icns ;;
-    terminal) printf '%s\n' /System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns ;;
+    ghostty) name=Ghostty bundle=com.mitchellh.ghostty icns=Ghostty.icns ;;
+    iterm2) name=iTerm bundle=com.googlecode.iterm2 icns=AppIcon.icns ;;
+    terminal) name=Terminal bundle=com.apple.Terminal icns=Terminal.icns ;;
+    *) return 1 ;;
   esac
+  app="$(_app_terminal_bundle_path "$name" "$bundle")" || return 1
+  printf '%s\n' "$app/Contents/Resources/$icns"
 }
 
 # Icon failure is cosmetic: keep the compiled applet usable.

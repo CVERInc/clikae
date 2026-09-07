@@ -292,6 +292,25 @@ _src_app() {
   [ "$status" -ne 0 ]
 }
 
+@test "app finds a terminal's icon when it's installed outside /Applications (#50)" {
+  macos_only
+  [ -d "/Applications/iTerm.app" ] && skip "iTerm2 is installed system-wide; this test asserts the ~/Applications path"
+  clikae init claude work
+  mkdir -p "$TEST_HOME/Applications/iTerm.app/Contents/Resources"
+  printf 'fixture-icon' > "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns"
+  run clikae app claude work --terminal iterm2 --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  # _app_terminal_installed already found it (via $HOME/Applications) to let the
+  # render proceed; before the fix, _app_terminal_icon still looked ONLY under
+  # /Applications and lost track of it, so this warning fired despite the
+  # terminal being right there.
+  [[ "$output" != *"No terminal or clikae icon found"* ]] || false
+  local app="$TEST_HOME/Apps/claude (work).app"
+  cmp "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = AppIcon.icns ]
+}
+
 @test "app missing icons leave applet icon with a warning" {
   _src_app
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"

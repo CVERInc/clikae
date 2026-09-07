@@ -493,6 +493,9 @@ maintainer, before changing the code.*
 ### Launcher icons
 
 `clikae app` copies the target terminal's icon into each generated macOS bundle,
-including `--force` rebuilds, and re-seals it. If unavailable, it uses a shipped
-`assets/clikae.icns`; if neither exists, it keeps the applet icon and warns.
-Icon failures do not fail launcher creation.
+including `--force` rebuilds, and re-seals it. The terminal's bundle is resolved
+by app name (checking `/Applications`, `~/Applications`, then Spotlight/Launch
+Services), not assumed to live in `/Applications` — an install anywhere else
+still gets its icon. If unavailable, it uses `assets/clikae.icns` when that is
+shipped; if neither exists, it keeps the applet icon and warns. Icon failures do
+not fail launcher creation.
