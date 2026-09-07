@@ -309,7 +309,7 @@ EOF
 # Adopt plain markdown by copy. Exclusive creation also protects dangling links;
 # collisions stay in the source and are announced, never silently overwritten.
 _memory_adopt() {
-  local source="$1" store="$2" f name heading
+  local source="$1" store="$2" f name tmp heading
   [ "$(cd "$source" && pwd -P)" != "$(cd "$store" && pwd -P)" ] || return 0
   for f in "$source"/*.md; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
@@ -317,8 +317,29 @@ _memory_adopt() {
     [ "$name" = MEMORY.md ] && continue
     if [ -e "$store/$name" ] || [ -L "$store/$name" ]; then
       log_warn "Keeping existing $name; source copy remains in $source."
+      continue
+    fi
+    # Copy to a TEMP name first, then move into place — never write directly to
+    # $store/$name. A direct `> "$store/$name"` creates the destination the
+    # instant the shell opens it, BEFORE `cat` runs; if the read then fails
+    # (permissions, I/O), a 0-byte file is left at the real name. That empty file
+    # then permanently blocks the real content: the no-overwrite check above
+    # treats it as "already adopted" on every future rerun, and nothing ever
+    # reports it as broken.
+    tmp="$store/.$name.tmp.$$"
+    rm -f "$tmp"
+    if ! cat "$f" > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      return 1
+    fi
+    # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
+    # EEXIST if $store/$name appeared between the check above and here, instead
+    # of silently overwriting it.
+    if ln "$tmp" "$store/$name" 2>/dev/null; then
+      rm -f "$tmp"
     else
-      (set -C; cat "$f" > "$store/$name") || return 1
+      rm -f "$tmp"
+      log_warn "Keeping existing $name; source copy remains in $source."
     fi
   done
   # Never append through an index symlink into somebody else's memory.

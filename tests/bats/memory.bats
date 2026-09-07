@@ -632,6 +632,27 @@ _legacy_memory() {
   [ "$status" -ne 0 ]
 }
 
+@test "memory adopt: a failed copy leaves no 0-byte partial, so a rerun actually adopts (#49)" {
+  clikae init claude a
+  LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n[b](b.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic A real content\n' > "$LEGACY/a.md"
+  printf 'topic B real content\n' > "$LEGACY/b.md"
+  chmod 000 "$LEGACY/a.md"   # any unreadable source (permissions, I/O) hits this path
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  # The old bug: `cat "$f" > "$store/$name"` creates the destination BEFORE the
+  # read fails, leaving a 0-byte file that every future rerun treats as "already
+  # adopted" — a permanently empty memory with no visible symptom.
+  [ ! -e "$store/a.md" ]
+  chmod 644 "$LEGACY/a.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$store/a.md")" = 'topic A real content' ]
+}
+
 @test "memory first share lists another tank project without importing it" {
   clikae init claude a
   local other="$CLIKAE_HOME/profiles/claude/a/projects/other/memory"
