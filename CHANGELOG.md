@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
+- **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**
+  Both self-invoke `memory share`, which since --adopt (#49) could reach an
+  adoption prompt that read from the same terminal while its own output had
+  been redirected away — a black screen, forever. That prompt (and the
+  cross-account confirmation) now checks that stdout is a terminal too, not
+  just stdin (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

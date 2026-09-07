@@ -410,7 +410,14 @@ _memory_offer_adoption() {
       log_dim "This tank's current memory was seeded by COPY."
       continue
     fi
-    if [ -t 0 ] && confirm "Adopt $source ($count files)?"; then
+    # Both ends, not just stdin: init.sh and solo.sh self-invoke `memory share`
+    # as `"$CLIKAE_BIN" memory share … >/dev/null 2>&1` — stdout+stderr go to
+    # /dev/null but stdin is left alone, so on a real terminal `[ -t 0 ]` alone
+    # was still true and `confirm` blocked on a `read` whose prompt had just
+    # been discarded: a black screen, forever. `[ -t 1 ]` is false the instant
+    # a caller redirects stdout, which is exactly the signal that this run
+    # isn't a human sitting in front of it, whoever set that redirection.
+    if [ -t 0 ] && [ -t 1 ] && confirm "Adopt $source ($count files)?"; then
       _memory_adopt "$source" "$store" || log_fail "Memory adoption failed: $source"
     else
       label="tank memory"
@@ -503,7 +510,11 @@ _memory_share() {
       printf '%s\n' "$others" | while IFS= read -r o; do [ -n "$o" ] && log_dim "    $o"; done
       log_warn "Joining $MEM_CLI/$MEM_TANK ($account) merges it into the SAME shared brain."
       if [ "$yes" -ne 1 ]; then
-        if [ -t 0 ]; then
+        # Same fix as the adoption prompt above, and the same reason: init.sh
+        # and solo.sh self-invoke this command with stdout+stderr routed to
+        # /dev/null, and a bare `[ -t 0 ]` can't tell that apart from a human
+        # at a real prompt.
+        if [ -t 0 ] && [ -t 1 ]; then
           confirm "Share across these accounts?" || log_fail "Aborted — memory not shared."
         else
           log_fail "Refusing to cross accounts non-interactively. Re-run with --yes if intended."
