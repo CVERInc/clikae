@@ -108,9 +108,16 @@ EOF
 }
 
 # Infrastructure signatures must name the tool host: a generic timeout can be
-# a task failure and must not spend another attempt automatically.
+# a task failure and must not spend another attempt automatically. This is a
+# hand-written whitelist, not a real-corpus one like limit.sh's 175-line
+# fixture (P2-5, 2026-09-08 review) — five plausible real tool-host failure
+# sentences all NO-MATCHED, one by a single word ("waiting" vs "negotiating").
+# Widened to cover more real phrasings of the same four shapes (a timeout/
+# failure/closed-connection/disconnect NAMING the tool host) without
+# loosening the "must name the host" discipline that keeps this from becoming
+# a P1-2-style generic-timeout catcher.
 _burn_output_infra() {
-  printf '%s' "$1" | grep -aiE 'timed out negotiating with (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection with) (the )?(code[ -]mode|tool)[ -]host|connection to (the )?(code[ -]mode|tool)[ -]host.*(closed|refused|timed out)|((code[ -]mode|tool)[ -]host).*(connection (closed|refused|lost)|disconnected)' >/dev/null
+  printf '%s' "$1" | grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]*(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]*(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' >/dev/null
 }
 
 # Redact an engine's exact prompt echo BEFORE taking a diagnostic tail. Raw

@@ -970,6 +970,28 @@ STUB
   done
 }
 
+# --- P2-5 (2026-09-08 review): the whitelist was hand-written, not drawn from
+# a real corpus like limit.sh's — five plausible real tool-host failure
+# sentences all NO-MATCHED (PROBE F), one of them by a single word
+# ("waiting" vs "negotiating"). This feature could ship and never once fire on
+# a real failure, silently falling back to the old behaviour, and nobody
+# would notice.
+
+@test "burn #44: real-shaped tool-host failure phrasings from the review corpus are recognized (P2-5)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    'Error: MCP server "code-mode" connection closed' \
+    'code-mode host exited unexpectedly' \
+    'tool host handshake failed' \
+    'timed out waiting for the code-mode host' \
+    'Error connecting to tool host'
+  do
+    run _burn_output_infra "$phrase"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "burn #44: invalid retry policy fails before launching" {
   _stub_burn_transport
   clikae init codex T1

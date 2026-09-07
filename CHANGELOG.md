@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The tool-host infrastructure whitelist missed real-shaped failure
+  phrasings.** Unlike `limit.sh`'s 175-line real corpus, `_burn_output_infra`
+  was hand-written; five plausible real tool-host sentences all failed to
+  match, one by a single word ("waiting" vs "negotiating"). Widened to cover
+  more phrasings of the same four shapes (timeout / connect-failure /
+  closed-connection / disconnect, always naming the host) without loosening
+  the "must name the tool host" discipline (#44).
+
 - **Prompt-copy run directories under `~/.clikae/logs` were never swept.**
   #43 traded a transient exposure (the full task text in a progress line) for
   a permanent one (a private but never-cleaned copy on disk) — `clikae clean`
