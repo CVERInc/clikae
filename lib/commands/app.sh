@@ -153,6 +153,12 @@ _app_install_icon() {
   fi
   /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $name" "$app/Contents/Info.plist" 2>/dev/null \
     || log_warn "Couldn't set launcher icon; leaving the applet icon."
+  # osacompile's applet bundle carries an asset-catalog CFBundleIconName ("applet")
+  # that OUTRANKS CFBundleIconFile on macOS 10.13+. Without this, CFBundleIconFile
+  # above is set correctly but nothing ever reads it, and the .app keeps showing
+  # the AppleScript scroll icon. Delete it so the .icns we just installed becomes
+  # the effective icon. A missing key is not an error (nothing to delete).
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$app/Contents/Info.plist" 2>/dev/null || true
   return 0
 }
 

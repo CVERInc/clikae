@@ -272,6 +272,26 @@ _src_app() {
   [ "$status" -eq 0 ]
 }
 
+@test "app clears CFBundleIconName so the copied .icns is the EFFECTIVE icon (#50)" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local plist="$TEST_HOME/Apps/clikae.app/Contents/Info.plist"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist"
+  [ "$output" = Fixture.icns ]
+  # CFBundleIconName references an asset catalog and OUTRANKS CFBundleIconFile on
+  # macOS 10.13+ — osacompile's applet bundle sets it to "applet". If it is still
+  # here, the .icns above is set but never shown: this is the actual bug, not the
+  # plist-value/cmp/codesign checks above it, which all pass while the icon never
+  # changes.
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$plist"
+  [ "$status" -ne 0 ]
+}
+
 @test "app missing icons leave applet icon with a warning" {
   _src_app
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
