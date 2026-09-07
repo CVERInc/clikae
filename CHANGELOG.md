@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Claude weekly-limit output now classifies as dry in `burn`, preserving the
+  vendor's reset phrase and normal reserve routing (#45).
+
 - `burn` snapshots artifact freshness and size at engine exit, so a cockpit
   consuming DONE before the parent polls cannot turn success into failure (#42).
 

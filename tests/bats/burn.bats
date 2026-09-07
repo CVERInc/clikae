@@ -788,3 +788,51 @@ STUB
   [[ "$output" == *'"artifact_bytes":4'* ]] || false
   [[ "$output" == *'"ok":true'* ]] || false
 }
+
+@test "burn #45: Claude weekly limit preserves dated reset in JSON" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your weekly limit · resets Jul 27 at 5am (Asia/Tokyo)\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  run clikae burn claude T1 --no-reroute --json --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"resets Jul 27 at 5am (Asia/Tokyo)"'* ]] || false
+}
+
+
+@test "burn #45: all Claude limit spellings relay reset text and ordinary prose stays clear" {
+  _src_burn
+  local phrase reset
+  reset="$(awk -F '\t' '!/^#/ && $2 ~ /Jul 27 at 5am/ {print $2; exit}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  [ -n "$reset" ]
+  for phrase in "You've hit your weekly limit" "You've hit your weekly-limit" 'Weekly limit reached' "You've hit your session limit" "You've hit your usage limit"; do
+    run limit_output_dry claude "$phrase · $reset"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$reset" ]
+  done
+  run limit_output_dry claude 'Please explain the weekly limit reset policy'
+  [ "$status" -ne 0 ]
+}
+
+@test "burn #45: a weekly dry tank reroutes to a reserve" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1) echo "You've hit your weekly limit · resets Jul 27 at 5am (Asia/Tokyo)" ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}

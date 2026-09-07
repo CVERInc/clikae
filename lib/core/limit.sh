@@ -102,7 +102,7 @@ limit_output_dry() {
   case "$cli" in
     codex)  limit_codex_output_dry "$out" ;;
     claude)
-      printf '%s' "$out" | grep -qaiE "hit your (session|usage) limit" || return 1
+      printf '%s' "$out" | grep -qaiE "hit your (session|usage|weekly)[ -]limit|weekly[ -]limit (reached|exceeded)" || return 1
       printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;

@@ -166,7 +166,8 @@ for free.)
   account's quota, not the budget of your main interactive session. That's the
   whole point — the expensive supervisor stays asleep; cheap workers burn whichever
   account still has gas.
-- **Dry handling.** `burn` auto-reroutes to the next reserve tank on a dry hit
+- **Dry handling.** Claude weekly-limit messages follow the same dry path as
+  session limits, including the vendor's verbatim reset time in JSON. `burn` auto-reroutes to the next reserve tank on a dry hit
   (account-aware: it skips siblings that share an already-dried login, and the tank
   an interactive session is live on). `conduct` doesn't reroute — it reports each
   leg as captured / dry / empty so you decide.
