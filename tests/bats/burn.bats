@@ -1282,6 +1282,56 @@ STUB
   [ "$status" -ne 0 ]
 }
 
+# --- P2-2 (2026-09-08 ROUND-3 review): limit_codex_output_dry — unlike
+# claude's branch — was never anchored on a direct vendor report; it matches
+# "hit your (usage|session) limit" bare, ANYWHERE in the reply. A codex task
+# that merely TALKS ABOUT the limit while it SUCCEEDS made the r2 fix above
+# call dry_store_mark on a healthy tank (limit_engine_detectable is false for
+# codex, the only engine dry_store is for), and --json said nothing about it
+# (ok:true, reset:null). dry_store.sh's own header promises "a successful run
+# clears it explicitly" — a fresh artifact must never WRITE a new marker.
+
+@test "burn #45: a successful codex burn that merely TALKS ABOUT the limit does not mark the tank dry (P2-2 r3, PROBE B)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'x' > "$STUB_ARTIFACT"
+printf 'Done. The runbook now explains what to do once you hit your usage limit.\n'
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # MARKER BEFORE: none
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # MARKER AFTER: still none
+}
+
+@test "burn #45: a fresh artifact with a concurrent GENUINE limit event leaves an EXISTING marker untouched, but writes none of its own (P2-2 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # no pre-existing marker
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # still none written
+}
+
 # --- P1-2 (2026-09-08 review): a tool-host phrase INSIDE THE PROMPT ECHO must
 # not fire the infra classifier. codex (and other engines) can echo the user's
 # own instructions back on stdout — PROBE A in the review used exactly this

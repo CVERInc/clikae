@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A SUCCESSFUL codex burn could silently mark a healthy tank dry.**
+  `limit_codex_output_dry` — unlike claude's branch — was never anchored on
+  a direct vendor report, so it matches "hit your (usage|session) limit"
+  bare, anywhere in the reply; a codex task that merely TALKS ABOUT the
+  limit while it succeeds ("Done. The runbook now explains what to do once
+  you hit your usage limit.") matched it too. The success branch called
+  `dry_store_mark` on that signal, and codex is the only engine that signal
+  is even used for — so a finished task wrote a dry marker on a tank that
+  had just proven it has fuel, with `--json` saying nothing (`ok:true`,
+  `reset:null`). `dry_store.sh`'s own header promises "a successful run
+  clears it explicitly"; a fresh artifact now never writes a new marker —
+  at most it leaves an existing one untouched when the same reply also
+  carries a live signal, never clears a tank that may still be dry (#45).
+
 - **The raw `-- <argv>` redaction had no minimum length or word/line
   boundary, so an everyday `-C .` could flip the classification.** argv is
   full of short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one

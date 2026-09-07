@@ -927,12 +927,31 @@ KV
       # bytes on a tank the engine had JUST reported as out of fuel turned the
       # board's red dot green (and dropped the vendor's reset phrase from
       # JSON) while the account was still genuinely dry. Check the same
-      # signal the dry branch below would, and if it fires, keep the tank
-      # marked instead of clearing it, and surface the reset phrase.
+      # signal the dry branch below would, and if it fires, leave any
+      # existing marker alone instead of clearing it, and surface the reset
+      # phrase.
+      #
+      # P2-2 (2026-09-08 round-3 review): that round-2 fix called
+      # dry_store_mark here — but limit_codex_output_dry (unlike claude's
+      # branch, never anchored on a direct vendor report) matches "hit your
+      # (usage|session) limit" bare, ANYWHERE in the reply. A codex task that
+      # merely TALKS ABOUT the limit while it succeeds ("Done. The runbook
+      # now explains what to do once you hit your usage limit.") matched it
+      # too, and limit_engine_detectable is false for codex — the ONLY
+      # engine that uses dry_store at all — so a SUCCESSFUL burn silently
+      # wrote a dry marker on a healthy tank (round-3 PROBE B), with --json
+      # showing ok:true and reset:null: nothing said it happened.
+      # dry_store.sh's own header promises "a successful run clears it
+      # explicitly" — writing one here breaks that promise on the one path
+      # it matters most (the tank that just proved it has fuel by finishing
+      # the task). A fresh artifact must never WRITE a new marker; if the
+      # SAME reply also shows a live signal, at most leave an existing
+      # marker as-is (never clear a tank that may still be genuinely dry).
+      # The reset phrase, when there is one, already reaches the caller via
+      # `_burn_result`'s "reset" field below — unchanged by this.
       local live_reset=""
       if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
-        log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — leaving the tank marked dry."
-        limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$live_reset"
+        log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
       else
         dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       fi
