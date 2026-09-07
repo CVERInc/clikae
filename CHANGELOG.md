@@ -172,9 +172,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifact while its own reply also showed a vendor limit line turned the
   board's red dot green and dropped the reset phrase from JSON — even though
   the account was still genuinely out of fuel. The artifact still wins the
-  OUTCOME (`ok: true`, `reason: "artifact produced"`, unchanged), but a
-  concurrent limit is now recorded rather than overwritten: the tank stays
-  marked dry and `reset` carries the vendor's phrase (#42, #45).
+  OUTCOME (`ok: true`, `reason: "artifact produced"`, unchanged), and a
+  concurrent limit is still recorded rather than dropped: `reset` carries the
+  vendor's phrase instead of coming back null. **Correction (round-4
+  review):** this entry originally said the tank "stays marked dry" — false.
+  A fresh artifact never *writes* a new dry marker on this path, only leaves
+  an EXISTING one (for engines whose dry state persists to disk, i.e. codex)
+  alone rather than clearing it — a task that merely mentions the limit
+  while succeeding still cannot mark a healthy tank dry (#42, #45).
 
 ## [0.28.9] — 2026-09-05
 
