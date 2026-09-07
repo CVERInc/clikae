@@ -180,6 +180,27 @@ _burn_size() {
   if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
 }
 
+# _burn_sweep_old_logs — best-effort retention for burn's own prompt-copy run
+# dirs. #43 made every burn write the FULL task text to
+# ~/.clikae/logs/burn-<pid>/prompt.txt (0600) so progress/diagnostic tails
+# never repeat it — a real privacy win over "it's in a log line" — but the net
+# effect was to trade a transient exposure for a PERMANENT one: nothing ever
+# swept these directories (P2-4, 2026-09-08 review; `clikae clean` has no
+# notion of ~/.clikae/logs at all). One sweep per burn invocation is enough —
+# this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
+# overrides the default (7); 0 disables the sweep (kept forever, old
+# behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+_burn_sweep_old_logs() {
+  local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$days" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  [ -d "$base" ] || return 0
+  local d
+  while IFS= read -r -d '' d; do
+    rm -rf "$d" 2>/dev/null || true
+  done < <(find "$base" -maxdepth 1 -type d -name 'burn-*' -mtime "+$days" -print0 2>/dev/null)
+}
+
 # Capture evidence beside the engine, before publishing completion. Consumers
 # may move/delete the artifact as soon as they see DONE; the parent must never
 # re-stat it to reconstruct an earlier outcome. Publish the pair atomically.
@@ -491,6 +512,8 @@ cmd_burn() {
   # Fall-through armed (the default) means a dry tank re-fires this task on the
   # next account — the cross-account carry case the one-time note is for.
   [ "$reroute" -eq 1 ] && carry_notice_once
+  # P2-4: sweep prompt-copy dirs from past runs before adding this run's own.
+  _burn_sweep_old_logs
   # Keep a private, stable copy even when the input file is later consumed.
   local run_dir="$HOME/.clikae/logs/burn-$$" saved_prompt task_preview
   mkdir -p "$run_dir"

@@ -1091,3 +1091,44 @@ STUB
   [[ "$output" == *'"reason":"artifact produced"'* ]] || false
   [[ "$output" == *'"artifact_bytes":4'* ]] || false
 }
+
+# --- P2-4 (2026-09-08 review): #43 made every burn write the FULL task text
+# to a private run dir under ~/.clikae/logs so progress/diagnostics never
+# repeat it — a real win over "it's in a log line", but nothing ever swept
+# those dirs, trading a transient exposure for a permanent one. `clikae clean`
+# has no notion of ~/.clikae/logs at all (`grep -c 'clikae/logs' → 0`).
+
+@test "burn #43: a stale prompt-log run directory is swept past the retention window (P2-4)" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-99999"
+  printf 'stale task text' > "$HOME/.clikae/logs/burn-99999/prompt.txt"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/burn-99999"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ ! -d "$HOME/.clikae/logs/burn-99999" ]
+}
+
+@test "burn #43: a recent prompt-log run directory survives the sweep (P2-4)" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-88888"
+  printf 'recent task text' > "$HOME/.clikae/logs/burn-88888/prompt.txt"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.clikae/logs/burn-88888" ]
+}
+
+@test "burn #43: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the sweep" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-99999"
+  printf 'stale task text' > "$HOME/.clikae/logs/burn-99999/prompt.txt"
+  touch -t "$(date -v-30d '+%Y%m%d%H%M' 2>/dev/null || date -d '30 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/burn-99999"
+  export CLIKAE_BURN_LOG_RETENTION_DAYS=0
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.clikae/logs/burn-99999" ]
+}

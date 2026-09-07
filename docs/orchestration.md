@@ -152,6 +152,11 @@ The raw `-- <argv...>` form saves `command.txt` (one argument per line) instead,
 because raw commands have no engine-independent prompt position. Engine capture
 logs remain raw; the preview limit applies to burn's own progress messages.
 
+**Retention.** These run directories are swept automatically: any `burn-*`
+directory older than `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
+disables the sweep) is removed at the start of the next burn. It's a
+stopgap, not a service — `clikae clean` does not yet reach `~/.clikae/logs`.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and

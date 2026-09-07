@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Prompt-copy run directories under `~/.clikae/logs` were never swept.**
+  #43 traded a transient exposure (the full task text in a progress line) for
+  a permanent one (a private but never-cleaned copy on disk) — `clikae clean`
+  has no notion of that directory at all. `burn` now sweeps `burn-*`
+  directories past `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
+  disables it) at the start of each run (#43).
+
 - **Two real declaration shapes for Claude's weekly limit were missed.**
   "Your limit will reset at 5am …" (singular "reset at") extracted no reset
   phrase (`reset:null`) even though the vendor's words were right there, and
