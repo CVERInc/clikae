@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two real declaration shapes for Claude's weekly limit were missed.**
+  "Your limit will reset at 5am …" (singular "reset at") extracted no reset
+  phrase (`reset:null`) even though the vendor's words were right there, and
+  "You've reached your weekly limit" (reached before "your", not after) was
+  not detected as dry at all — a real limit misread as a hard task failure,
+  worse than a missing reset string. Both are now recognized (#45).
+
 - **Ordinary prose merely discussing a weekly limit fired a dry-tank
   reroute.** `weekly[ -]limit (reached|exceeded)` was the only alternative in
   the claude branch with no verb anchoring it to the human ("hit your …"), so

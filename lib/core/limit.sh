@@ -110,8 +110,12 @@ limit_output_dry() {
       # sentence IS the line (or leads it), while prose ABOUT the limit is
       # never the first thing on its line. grep matches `^`/`$` per line, not
       # per buffer, so this holds even when $out has other lines around it.
-      printf '%s' "$out" | grep -qaiE "hit your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
-      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
+      printf '%s' "$out" | grep -qaiE "hit your (session|usage|weekly)[ -]limit|reached your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
+      # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
+      # shape from the review's corpus — "Your limit will reset at 5am …"
+      # (singular "reset at", no trailing s) — which silently produced
+      # reset:null even though the vendor's own words were right there.
+      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+|reset at [^.\"]+" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;
   esac

@@ -841,6 +841,38 @@ STUB
   done
 }
 
+# --- P2-3 (2026-09-08 review): #45's reset-extraction claim ("preserving the
+# vendor's reset phrase") only held for two of five real-shaped declaration
+# sentences from the review's corpus (PROBE G) — a singular "reset at" phrasing
+# extracted nothing (reset:null), and a "reached your … limit" ordering wasn't
+# even detected as dry at all (a real limit misread as a hard task failure,
+# which is worse than a missing reset string). The review could not confirm
+# which sentence a real vendor prints, so the honest fix widens coverage of
+# both known real shapes rather than inventing an unconfirmed corpus row.
+
+@test "burn #45: 'reset at' phrasing is extracted, not dropped to null (P2-3)" {
+  _src_burn
+  run limit_output_dry claude "You've hit your weekly limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [ "$output" = "reset at 5am (Asia/Tokyo)" ]
+}
+
+@test "burn #45: 'reached your weekly limit' ordering is detected as dry, not a hard task failure (P2-3)" {
+  _src_burn
+  run limit_output_dry claude "You've reached your weekly limit. Try again Sep 14."
+  [ "$status" -eq 0 ]
+}
+
+@test "burn #45: all five review PROBE-G declaration shapes are honoured" {
+  _src_burn
+  run limit_output_dry claude "You've hit your weekly limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]; [ "$output" = "resets 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "You've hit your weekly limit — resets Sep 14 at 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]; [ "$output" = "resets Sep 14 at 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "Weekly limit reached. Resets Sunday at 12:00 AM."
+  [ "$status" -eq 0 ]; [ "$output" = "Resets Sunday at 12:00 AM." ]
+}
+
 @test "burn #45: a weekly dry tank reroutes to a reserve" {
   _stub_burn_transport
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
