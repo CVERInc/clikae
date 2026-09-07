@@ -954,6 +954,140 @@ STUB
   [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
 }
 
+# --- P1-1 (2026-09-08 ROUND-4 review): the fix above anchored the direct
+# report to `^`, the very start of a line — narrower than main yet again,
+# for the third round running, this time on ordinary TRANSPORT noise no
+# caller ever chose to write (indentation, a tab, a leading "⚠ "). Tolerate
+# up to 12 bytes of LEADING NON-ALPHABETIC noise before "you've"/"you have"
+# instead of requiring the direct report to be the very first byte.
+# Corpus-as-contract: every row below MUST still fire dry, and every row in
+# the r2/r3 false-positive corpus MUST still NOT fire — the widened anchor
+# must not reopen either P2-2(r2)/P1-1(r3)'s closed prose cases. "Error: "/
+# "codex: "/timestamp prefixes are a KNOWN, documented gap (review's P3-4):
+# they carry their own letters, so a non-alphabetic-noise anchor cannot
+# recover them without a real vendor-output corpus — not asserted here as a
+# promise this round doesn't keep.
+
+@test "burn #45: leading transport noise (indent/tab/warning glyph) does not hide a real vendor sentence (P1-1 r4 must-match)" {
+  _src_burn
+  local -a must_match=(
+    "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    "  You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    $'\tYou\'ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.'
+    "⚠ You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  )
+  local line
+  for line in "${must_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Jul 7th"* ]] || false
+  done
+}
+
+@test "burn #45: the r2/r3 prose false-positive corpus still does not fire dry under the widened anchor (P1-1 r4 must-not-match)" {
+  _src_burn
+  local -a must_not_match=(
+    "the weekly limit reached its cap in July"
+    "Each seat has reached your weekly limit of five reviews."
+    "I could not write the file. The runbook covers what happens when you have reached your weekly limit."
+  )
+  local line
+  for line in "${must_not_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -ne 0 ]
+  done
+}
+
+# --- P2-1 (2026-09-08 ROUND-4 review): _burn_redact truncated to the last
+# 64 KiB BEFORE classification — bounding not just the (now O(n)) redaction
+# but the classifiers' ENTIRE view of the reply. burn's own purpose is long,
+# unattended tasks whose captures are large, and a vendor's own limit line
+# or a tool-host outage commonly sits well before the tail once the model
+# keeps talking afterward — exactly the captures burn exists for went blind.
+# Classification must see the full capture; only the short diagnostic tail
+# may still bound itself (see _burn_redact_full / _burn_redact in burn.sh).
+
+@test "burn #45: a dry signal more than 64KiB from the end of the capture still reroutes (P2-1 r4 must-match)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1)
+    printf "You've hit your usage limit · resets 5am (Asia/Tokyo)\n"
+    yes "trailing noise after the limit line, same reply" | head -c 100000
+    ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}
+
+@test "burn #45: a large CLEAN capture with no limit signal does not falsely reroute (P2-1 r4 must-not-match)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+yes "ordinary progress output, nothing to do with any limit" | head -c 100000
+printf 'done' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+}
+
+# --- P2-2 (2026-09-08 ROUND-4 review): limit_codex_output_dry matched a bare
+# "hit your (usage|session) limit" ANYWHERE in the reply — unlike claude's
+# branch, never anchored to a direct vendor report — so a task that merely
+# TALKS ABOUT the limit while genuinely FAILING for an unrelated reason was
+# misread as a real codex limit event: three tanks burned rerouting a task
+# that was never dry (review PROBE B / B3). Anchor codex the same way as
+# claude (line-start-tolerant direct report), AND require the reply to
+# actually yield a reset phrase — a genuine codex event always carries
+# "try again at …", prose about the limit almost never does.
+
+@test "burn #45: codex prose that merely talks about the limit during a real task failure does not reroute (P2-2 r4 must-not-match, PROBE B3)" {
+  _stub_burn_transport
+  _src_burn
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'I could not finish: the parser test still fails.\n'
+printf 'See docs/runbook.md for what to do once you hit your usage limit.\n'
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  clikae init codex T2
+  clikae init codex T3
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                         # no false marker written
+}
+
+@test "burn #45: a genuine anchored codex limit sentence still fires dry and yields a reset (P2-2 r4 must-match)" {
+  _src_burn
+  run limit_codex_output_dry "You've hit your usage limit. try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Jul 7th"* ]] || false
+}
+
+@test "burn #45: codex bare mention with no direct report and no reset phrase does not fire dry (P2-2 r4 must-not-match)" {
+  _src_burn
+  run limit_codex_output_dry "once you hit your usage limit, wait for the reset."
+  [ "$status" -ne 0 ]
+}
+
 # --- P2-3 (2026-09-08 ROUND-3 review): the "you've "/"you have " prefix check
 # above was never anchored to the start of a line, so it still matched its OWN
 # documented counterexample — CHANGELOG's "the runbook covers what happens
