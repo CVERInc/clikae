@@ -1,25 +1,43 @@
--- clikae Ghostty launcher. Ghostty's macOS CLI can't open a window directly, so we
--- go through `open -na Ghostty.app --args`. Crucially the command is passed via a
--- TRUSTED config file (--config-file=), NOT via -e: Ghostty pops an
--- "Allow Ghostty to execute …?" confirmation for -e (its guard against an external
--- app injecting a command), so a -e launcher looks like an empty shell until you
--- click Allow. A user config file is trusted → no dialog, and the title sticks.
+-- clikae Ghostty launcher.
 --
--- Tradeoff: `-n` opens a SEPARATE Ghostty instance, so if a Ghostty is already
--- running you get a second Dock icon for the life of this window. It's the least-bad
--- option today — without `-n` a running instance ignores --config-file and opens
--- nothing, and -e (which WOULD reuse the instance) brings back the Allow dialog and
--- drops the title. A supported macOS `ghostty +new-window` would fix this (reuse the
--- running instance, keep command + title, no dialog); it exists on GTK via D-Bus but
--- is a stub on macOS as of Ghostty 1.3.1. Tracking: ghostty-org/ghostty#12903 and
--- discussion #14168. When it lands, prefer +new-window here and fall back to open -na.
+-- Ghostty >= 1.3.0 has an AppleScript API, so when Ghostty is ALREADY RUNNING we open the
+-- window IN that instance: one Dock icon, and the command rides in a surface configuration
+-- (trusted, in-app) so Ghostty never shows its "Allow Ghostty to execute …?" dialog — the
+-- dialog only guards the external `-e` path. Object path is window → selected tab →
+-- focused terminal; the title is set with the `set_tab_title:` action.
 --
--- The config lives in THIS bundle's Resources, located at runtime via `path to me`
--- so the launcher keeps working if the .app is moved. app.sh writes
--- Contents/Resources/clikae-ghostty.conf (a `title = …` + `command = …` pair) right
--- after compiling this script. This template has no substitution tokens.
+-- When Ghostty is NOT running we `open -a` it with the bundled config (a cold start is one
+-- instance anyway, and the config carries `title` + `command`). If the AppleScript call fails
+-- (Ghostty < 1.3.0, `macos-applescript = false`, or Automation permission denied) we fall back
+-- to the old `open -na` path, which still works but shows a second Dock icon.
+--
+-- macOS asks once, on first launch, whether this .app may control Ghostty (Automation / TCC);
+-- click Allow and it's remembered.
+--
+-- Title + command are read at runtime from Contents/Resources/clikae-ghostty.conf, written by
+-- app.sh right after osacompile — one source of truth for both paths. No substitution tokens.
+-- `path to me` keeps the launcher working if the .app is moved.
 
 on run
     set confPath to (POSIX path of (path to me)) & "Contents/Resources/clikae-ghostty.conf"
-    do shell script "open -na Ghostty.app --args --config-file=" & quoted form of confPath
+    set theTitle to do shell script "sed -n 's/^title *= *//p' " & quoted form of confPath
+    set theCmd to do shell script "sed -n 's/^command *= *//p' " & quoted form of confPath
+    if application "Ghostty" is running then
+        try
+            tell application "Ghostty"
+                set cfg to new surface configuration
+                set command of cfg to theCmd
+                set win to new window with configuration cfg
+                delay 0.5
+                perform action ("set_tab_title:" & theTitle) on (focused terminal of selected tab of win)
+                activate window win
+            end tell
+            return
+        on error
+            -- AppleScript unavailable: keep the launcher working, accept the extra Dock icon.
+            do shell script "open -na Ghostty.app --args --config-file=" & quoted form of confPath
+        end try
+    else
+        do shell script "open -a Ghostty.app --args --config-file=" & quoted form of confPath
+    end if
 end run
