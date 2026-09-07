@@ -340,7 +340,12 @@ _memory_adopt() {
     # reports it as broken.
     tmp="$store/.$name.tmp.$$"
     rm -f "$tmp"
-    if ! cat "$f" > "$tmp" 2>/dev/null; then
+    # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
+    # file some other user on the machine can't read) instead of falling back to
+    # umask, which is what a plain `cat "$f" > "$tmp"` would do. The existing
+    # seed path (`cp -R` in _memory_share) already preserves mode this way; this
+    # is the same guarantee for the adopt path.
+    if ! cp -p "$f" "$tmp" 2>/dev/null; then
       rm -f "$tmp"
       return 1
     fi

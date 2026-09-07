@@ -678,6 +678,25 @@ _legacy_memory() {
   cmp "$LEGACY/a.md" "$store/a.md"
 }
 
+_perm_octal() {
+  # /usr/bin/stat, not bare `stat`: a dev machine with GNU coreutils' `stat`
+  # ahead of /usr/bin on PATH would otherwise silently run the wrong dialect.
+  if [ "$(uname -s)" = "Darwin" ]; then /usr/bin/stat -f '%Lp' "$1"; else stat -c '%a' "$1"; fi
+}
+
+@test "memory adopt preserves a private source file's permissions (#49)" {
+  clikae init claude a
+  _legacy_memory
+  chmod 600 "$LEGACY/a.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  # Before the fix, the copy went through `cat "$f" > "$store/$name"`, which
+  # falls back to umask (typically 644) instead of the source file's own mode —
+  # silently widening a memory file its owner had deliberately made private.
+  [ "$(_perm_octal "$store/a.md")" = "600" ]
+}
+
 @test "memory first share lists another tank project without importing it" {
   clikae init claude a
   local other="$CLIKAE_HOME/profiles/claude/a/projects/other/memory"
