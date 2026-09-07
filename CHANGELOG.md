@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The "you've "/"you have " prefix that #45 required was never anchored to
+  the start of a line, so it still matched its own documented
+  counterexample.** CHANGELOG's own illustration of a fixed false positive —
+  "the runbook covers what happens when you have reached your weekly
+  limit…" — still classified dry when it appears mid-sentence in a real
+  reply ("I could not write the file. The runbook covers…"), walking the
+  entire reserve on a genuine task failure (round-3 review PROBE O). A real
+  vendor sentence IS its line (or leads it); prose that merely quotes the
+  reader's own words never does. Anchored to the start of a line, same
+  reasoning as the `^weekly[ -]limit` alternative beside it (#45).
+
+- **A curly apostrophe or a one-word adverb between the direct vendor report
+  and its verb made a genuinely dry tank invisible.** #45's "you've "/"you
+  have " prefix (round-2 review) required it sit IMMEDIATELY before "hit"/
+  "reached" — narrower than main, which never required the prefix at all —
+  so "You’ve hit your usage limit" (curly quote) and "You have already hit
+  your usage limit" (adverb) stopped matching entirely: a real dry tank
+  read as a hard task failure (no reroute, no dry marker, no reset), the
+  exact misread `burn --help` warns about. Tolerates the ASCII/curly
+  apostrophe and up to two words between the prefix and its verb (#45).
+
 - **The tool-host infrastructure whitelist missed real-shaped failure
   phrasings.** Unlike `limit.sh`'s 175-line real corpus, `_burn_output_infra`
   was hand-written; five plausible real tool-host sentences all failed to
@@ -99,8 +120,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your weekly limit…"), and a line anchor alone doesn't defend it — prose
   can land the phrase at a fresh line by plain word-wrap. Both "hit"/"reached"
   now require the direct vendor report ("You've "/"You have ") leading
-  straight into the verb, which every genuine phrase in the corpus has and
-  none of the false positives do (#45).
+  straight into the verb (#45). **Correction (round-3 review):** the claim
+  that closed this entry — "which every genuine phrase in the corpus has and
+  none of the false positives do" — was not backed by any corpus row (the
+  fixture at `tests/fixtures/limit-reset-phrases.tsv` holds reset phrases,
+  not full sentences) and was disproved by this very example: run through
+  the unanchored prefix check above, "the runbook covers what happens when
+  you have reached your weekly limit…" still matched, because the prefix
+  requirement was never anchored to the start of a line. Anchored below (#45).
 
 - **A fresh artifact silently erased a limit event happening in the SAME
   reply.** The artifact-wins-outcome fix (#42) unconditionally cleared the

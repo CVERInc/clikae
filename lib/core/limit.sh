@@ -139,7 +139,19 @@ limit_output_dry() {
       # would be misread as a real task failure" means. Tolerate the ASCII
       # and curly apostrophe, and up to two words between the direct report
       # and its verb.
-      printf '%s' "$out" | grep -qaiE "(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
+      #
+      # P2-3 (2026-09-08 round-3 review): the prefix requirement above was
+      # never anchored to the start of a line, so it still matched its OWN
+      # documented counterexample — CHANGELOG.md's "the runbook covers what
+      # happens when you have reached your weekly limit…" — sitting mid-
+      # sentence after "I could not write the file. " walked the entire
+      # reserve on a real task failure (round-3 PROBE O). "You've "/"You
+      # have " leading straight into the verb is only a genuine vendor
+      # report when it also LEADS its line — third-person prose that quotes
+      # the reader's own words ("…when you have reached…") never does,
+      # while a real vendor sentence is the line (or leads it), same
+      # reasoning as the `^weekly[ -]limit` alternative just below.
+      printf '%s' "$out" | grep -qaiE "^(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
       # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
       # shape from the review's corpus — "Your limit will reset at 5am …"
       # (singular "reset at", no trailing s) — which silently produced

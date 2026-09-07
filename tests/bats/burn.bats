@@ -915,6 +915,38 @@ STUB
   [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
 }
 
+# --- P2-3 (2026-09-08 ROUND-3 review): the "you've "/"you have " prefix check
+# above was never anchored to the start of a line, so it still matched its OWN
+# documented counterexample — CHANGELOG's "the runbook covers what happens
+# when you have reached your weekly limit…" — the instant it appears mid-
+# sentence in a real reply, walking the entire reserve on a genuine task
+# failure (round-3 PROBE O). Also: CHANGELOG and this file's own comments
+# claimed "every genuine phrase in the corpus has it and none of the false
+# positives do" — a claim this exact input disproves and the fixture never
+# supported in the first place (it holds reset phrases, not full sentences).
+
+@test "burn #45: a third-person sentence that merely QUOTES 'you have reached … limit' mid-line does not fire dry (P2-3 r3)" {
+  _src_burn
+  run limit_output_dry claude "I could not write the file. The runbook covers what happens when you have reached your weekly limit and how to wait it out."
+  [ "$status" -ne 0 ]
+}
+
+@test "burn #45: that same sentence does not burn through the whole reserve (P2-3 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "I could not write the file. The runbook covers what happens when you have reached your weekly limit and how to wait it out."
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude C1
+  clikae init claude C2
+  clikae init claude C3
+  run clikae burn claude C1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
 # --- P2-3 (2026-09-08 review): #45's reset-extraction claim ("preserving the
 # vendor's reset phrase") only held for two of five real-shaped declaration
 # sentences from the review's corpus (PROBE G) — a singular "reset at" phrasing
