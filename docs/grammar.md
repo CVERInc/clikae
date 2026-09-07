@@ -489,3 +489,10 @@ engine's brain.
 
 *This grammar is a decision, not a sketch. Change it here first, with the
 maintainer, before changing the code.*
+
+### Launcher icons
+
+`clikae app` copies the target terminal's icon into each generated macOS bundle,
+including `--force` rebuilds, and re-seals it. If unavailable, it uses a shipped
+`assets/clikae.icns`; if neither exists, it keeps the applet icon and warns.
+Icon failures do not fail launcher creation.

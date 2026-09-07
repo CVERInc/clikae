@@ -254,3 +254,46 @@ _src_app() {
   run osacompile -o "$out" "$src"
   [ "$status" -eq 0 ]
 }
+
+@test "app force rebuild installs terminal fixture icon and seals the bundle" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps" --force
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/Fixture.icns" "$app/Contents/Resources/Fixture.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = Fixture.icns ]
+  run codesign --verify "$app"
+  [ "$status" -eq 0 ]
+}
+
+@test "app missing icons leave applet icon with a warning" {
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  CLIKAE_ROOT="$TEST_HOME"
+  run _app_install_icon "$TEST_HOME/test.app" terminal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No terminal or clikae icon found; leaving the applet icon."* ]] || false
+}
+
+@test "app uses the shipped icon when the terminal icon is absent" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  mkdir -p "$TEST_HOME/assets"
+  printf 'fallback fixture' > "$TEST_HOME/assets/clikae.icns"
+  CLIKAE_ROOT="$TEST_HOME"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/assets/clikae.icns" "$app/Contents/Resources/clikae.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = clikae.icns ]
+}

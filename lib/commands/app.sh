@@ -128,6 +128,34 @@ _app_write_ghostty_conf() {
   } > "$resdir/clikae-ghostty.conf"
 }
 
+# Kept separate so fixtures can supply a terminal icon without installing an app.
+_app_terminal_icon() {
+  case "$1" in
+    ghostty) printf '%s\n' /Applications/Ghostty.app/Contents/Resources/Ghostty.icns ;;
+    iterm2) printf '%s\n' /Applications/iTerm.app/Contents/Resources/AppIcon.icns ;;
+    terminal) printf '%s\n' /System/Applications/Utilities/Terminal.app/Contents/Resources/Terminal.icns ;;
+  esac
+}
+
+# Icon failure is cosmetic: keep the compiled applet usable.
+_app_install_icon() {
+  local app="$1" icon name
+  icon="$(_app_terminal_icon "$2")"
+  [ -f "$icon" ] || icon="$CLIKAE_ROOT/assets/clikae.icns"
+  if [ ! -f "$icon" ]; then
+    log_warn "No terminal or clikae icon found; leaving the applet icon."
+    return 0
+  fi
+  name="${icon##*/}"
+  if ! cp "$icon" "$app/Contents/Resources/$name" 2>/dev/null; then
+    log_warn "Couldn't copy launcher icon; leaving the applet icon."
+    return 0
+  fi
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $name" "$app/Contents/Info.plist" 2>/dev/null \
+    || log_warn "Couldn't set launcher icon; leaving the applet icon."
+  return 0
+}
+
 cmd_app() {
   local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-$(_app_default_terminal)}"
   while [ $# -gt 0 ]; do
@@ -164,6 +192,9 @@ instance through Ghostty's AppleScript API (1.3.0+) — one Dock icon, no "Allow
 execute" dialog. macOS asks once, on first launch, to let the .app control Ghostty
 (Automation permission). If AppleScript isn't available it falls back to a separate
 instance, which works but shows a second Dock icon.
+
+The launcher uses the target terminal’s icon, including with --force. If missing,
+it uses assets/clikae.icns when shipped, else keeps the applet icon with a warning.
 
 macOS only.
 EOF
@@ -242,6 +273,7 @@ EOF
 
   osacompile -o "$app_path" "$tmp_scpt"
   rm -rf "$tmp_dir"
+  _app_install_icon "$app_path" "$target"
   # Ghostty: drop the trusted config into the bundle the script reads via path-to-me,
   # then RE-SEAL. osacompile ad-hoc-signs the bundle; adding a Resource afterwards
   # breaks that seal ("a sealed resource is missing or invalid"), and on Apple
@@ -249,11 +281,12 @@ EOF
   # re-sign ad-hoc so the conf is sealed in and the launcher opens cleanly.
   if [ "$target" = "ghostty" ]; then
     _app_write_ghostty_conf "$app_path" "$title" "$shell_cmd"
-    xattr -cr "$app_path" 2>/dev/null || true
-    if command -v codesign >/dev/null 2>&1; then
-      codesign --force --sign - "$app_path" >/dev/null 2>&1 \
-        || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
-    fi
+  fi
+  # Every target now has bundle resources/plist edits to seal.
+  xattr -cr "$app_path" 2>/dev/null || true
+  if command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$app_path" >/dev/null 2>&1 \
+      || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
   fi
   log_done "Created $app_path"
   log_dim "  terminal: $target"
