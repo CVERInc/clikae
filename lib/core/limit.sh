@@ -61,8 +61,23 @@ limit_line_is_real() {
 # <date> <time>") if the text carries one, else nothing. Never computes a
 # countdown — relays the vendor's own words (same spirit as the other detectors).
 # Drives a "dry-until" window so watch/auto don't re-pick a tank before it recovers.
+#
+# P2-1 (2026-09-08 round-4 review): every classifier here used to read
+# `printf '%s' "$text" | grep …` — a PIPE from a forked producer to a forked
+# grep. That is fine for a short line, but once P2-1's fix stopped truncating
+# the haystack before classification, a genuine large capture with the match
+# near its START let grep exit (`-q`/`-o … | head -n 1`) long before the
+# producer had written it all; on this machine that reliably HUNG the whole
+# burn (SIGPIPE from the closed pipe never unblocked the producer in this
+# nested tmux-wrapper/retry-loop context — reproduced with a 100 KiB capture,
+# confirmed by backgrounding the same call and `wait`-ing on it, which did
+# not hang). A here-string writes the WHOLE haystack to a real fd (bash's own
+# temp file, not a bounded kernel pipe) before grep ever execs, so there is no
+# concurrent producer left to block. Every classifier below reads its
+# haystack the same way now — this one included, since it is handed
+# codex's full reply by limit_codex_output_dry.
 limit_codex_reset() {
-  printf '%s\n' "$1" | grep -oaiE "try again at [^.\"]+" | head -n 1 \
+  grep -oaiE "try again at [^.\"]+" <<< "$1" | head -n 1 \
     | sed -E 's/[[:space:]]+$//' || true
 }
 
@@ -72,9 +87,25 @@ limit_codex_reset() {
 # and writes no artifact (burn-confirmed 2026-06-03), so the exit code is useless —
 # the output string is the signal. Pair with an artifact check at the call site
 # (a dropped job = limit string seen AND/OR the expected artifact missing).
+#
+# P2-2 (2026-09-08 round-4 review): unlike claude's branch, this matched a bare
+# "hit your (usage|session) limit" ANYWHERE in the reply, so prose merely
+# talking about the limit while a task genuinely failed for an unrelated
+# reason ("See docs/runbook.md for what to do once you hit your usage
+# limit.") was misread as a real codex limit event — three tanks burned
+# rerouting a task that was never dry. codex's own real sentence is "You've
+# hit your usage limit. … try again at <date> <time>." (limit_line_is_real's
+# codex comment, burn-confirmed) — anchor on the SAME direct-report prefix as
+# claude's branch (tolerant of the same line-start noise and short adverb
+# gap), AND require the reply to actually yield a reset phrase: a genuine
+# codex event always carries "try again at …", prose about the limit rarely
+# does, so the two checks close different escapes than either alone.
 limit_codex_output_dry() {
-  printf '%s' "$1" | grep -qaiE "hit your (usage|session) limit" || return 1
-  limit_codex_reset "$1"
+  local out="$1" reset
+  grep -qaiE "^[^A-Za-z]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
+  reset="$(limit_codex_reset "$out")"
+  [ -n "$reset" ] || return 1
+  printf '%s' "$reset"
   return 0
 }
 
@@ -95,7 +126,7 @@ limit_codex_output_dry() {
 limit_output_dry() {
   local cli="$1" out="$2"
   if [ -n "${CLIKAE_LIMIT_PATTERN:-}" ]; then
-    printf '%s' "$out" | grep -qaiE "$CLIKAE_LIMIT_PATTERN" && return 0
+    grep -qaiE "$CLIKAE_LIMIT_PATTERN" <<< "$out" && return 0
     # No override match → fall through to the built-in per-engine matchers, so the
     # pattern only ADDS coverage, never masks a hit the built-in would have caught.
   fi
@@ -151,12 +182,25 @@ limit_output_dry() {
       # the reader's own words ("…when you have reached…") never does,
       # while a real vendor sentence is the line (or leads it), same
       # reasoning as the `^weekly[ -]limit` alternative just below.
-      printf '%s' "$out" | grep -qaiE "^(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
+      #
+      # P1-1 (2026-09-08 round-4 review): "leads its line" was read as
+      # "IS the first byte of the line" — a genuine vendor sentence can
+      # still be prefixed by non-alphabetic transport noise a caller didn't
+      # write (indentation, a tab, a leading "⚠ "), and the bare `^` anchor
+      # made those invisible too, narrower than main yet again for the same
+      # reason r3 already called out once. Tolerate up to 12 bytes of
+      # LEADING NON-ALPHABETIC noise before the direct report — prose never
+      # qualifies (it leads with more than 12 alphabetic bytes, e.g. "I could
+      # not write the file. "), so the r2/r3 false-positive corpus stays
+      # closed. A prefix carrying its own letters ("Error: ", "codex: ") is
+      # not recovered by this — that needs a real vendor-output corpus to
+      # bound safely, not another regex guess (see REPORT-clikae47-fix4.md).
+      grep -qaiE "^[^A-Za-z]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" <<< "$out" || return 1
       # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
       # shape from the review's corpus — "Your limit will reset at 5am …"
       # (singular "reset at", no trailing s) — which silently produced
       # reset:null even though the vendor's own words were right there.
-      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+|reset at [^.\"]+" | head -n 1 || true
+      grep -oaiE "resets [^\"]+|try again at [^.\"]+|reset at [^.\"]+" <<< "$out" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;
   esac
