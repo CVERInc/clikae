@@ -871,6 +871,50 @@ STUB
   [ "$status" -eq 0 ]
 }
 
+# --- P1-1 (2026-09-08 ROUND-3 review): the fix just above required "you've"/
+# "you have" to sit IMMEDIATELY before the verb — narrower than main, which
+# never required that prefix at all. A curly apostrophe or a one-word adverb
+# are both things a real vendor sentence can carry, and both made the phrase
+# invisible (review's PROBE A / A2): a genuinely dry tank was misread as a
+# hard task failure — no reroute, no dry marker, no reset, the exact failure
+# `burn --help` warns about.
+
+@test "burn #45: a curly apostrophe before the verb still fires dry (P1-1 r3)" {
+  _src_burn
+  run limit_output_dry claude "You’ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+}
+
+@test "burn #45: an adverb between the direct report and the verb still fires dry (P1-1 r3)" {
+  _src_burn
+  run limit_output_dry claude "You have already hit your usage limit."
+  [ "$status" -eq 0 ]
+  run limit_output_dry claude "You've just hit your session limit."
+  [ "$status" -eq 0 ]
+  run limit_output_dry claude "You have already hit your weekly limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [ "$output" = "reset at 5am (Asia/Tokyo)" ]
+}
+
+@test "burn #45: a real dry reply with a curly apostrophe reroutes instead of a hard failure (P1-1 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1) echo "You’ve hit your usage limit · resets 5am (Asia/Tokyo)" ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}
+
 # --- P2-3 (2026-09-08 review): #45's reset-extraction claim ("preserving the
 # vendor's reset phrase") only held for two of five real-shaped declaration
 # sentences from the review's corpus (PROBE G) — a singular "reset at" phrasing

@@ -126,7 +126,20 @@ limit_output_dry() {
       # (adjacent, not just present in the buffer: a wrapped "you have\n"
       # followed by "reached" on the next line does NOT satisfy it, since `.`
       # never matches the newline between them).
-      printf '%s' "$out" | grep -qaiE "(you'?ve|you have) (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
+      #
+      # P1-1 (2026-09-08 round-3 review): that "adjacent" requirement was
+      # stricter than it looked — it demanded "you've"/"you have" sit
+      # IMMEDIATELY before the verb, with nothing between. A real vendor
+      # sentence with a curly apostrophe ("You’ve hit …") or a one-word
+      # adverb ("You have already hit …", "You've just hit …") no longer
+      # matched at ALL — narrower than main, which never required this
+      # prefix in the first place. That is the worse failure: a genuinely
+      # dry tank now reads as a hard task failure (no reroute, no dry
+      # marker, no reset), exactly what `burn --help` warns "a dry tank
+      # would be misread as a real task failure" means. Tolerate the ASCII
+      # and curly apostrophe, and up to two words between the direct report
+      # and its verb.
+      printf '%s' "$out" | grep -qaiE "(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" || return 1
       # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
       # shape from the review's corpus — "Your limit will reset at 5am …"
       # (singular "reset at", no trailing s) — which silently produced
