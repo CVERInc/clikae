@@ -275,6 +275,13 @@ markdown via the memory protocol.
 Flags:
   -y, --yes    skip the cross-account confirmation (for scripts/automation)
 
+On a Claude tank's first share, existing ~/.claude and tank project memory is
+listed and offered for adoption [y/N]. Non-interactive runs print an exact command:
+  clikae memory share <group> claude <tank> --adopt <memory-dir>
+--adopt also works after joining. It copies markdown topics without overwriting
+names and appends MEMORY.md under a source heading; originals remain untouched.
+--yes confirms account sharing only, never adoption of discovered sources.
+
 Note: consent is given ONCE, not per tank. Nothing is shared until your first `share`;
 that share also records the group as this machine's default, and from then on a NEW
 tank joins it automatically at `clikae init`. A solo tank never joins. Crossing your
@@ -299,10 +306,71 @@ EOF
   esac
 }
 
+# Adopt plain markdown by copy. Exclusive creation also protects dangling links;
+# collisions stay in the source and are announced, never silently overwritten.
+_memory_adopt() {
+  local source="$1" store="$2" f name heading
+  [ "$(cd "$source" && pwd -P)" != "$(cd "$store" && pwd -P)" ] || return 0
+  for f in "$source"/*.md; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    name="${f##*/}"
+    [ "$name" = MEMORY.md ] && continue
+    if [ -e "$store/$name" ] || [ -L "$store/$name" ]; then
+      log_warn "Keeping existing $name; source copy remains in $source."
+    else
+      (set -C; cat "$f" > "$store/$name") || return 1
+    fi
+  done
+  # Never append through an index symlink into somebody else's memory.
+  [ ! -L "$store/MEMORY.md" ] || { log_err "Refusing to append to a symlinked MEMORY.md"; return 1; }
+  heading="## Adopted from $source"
+  if ! command grep -a -Fqx -- "$heading" "$store/MEMORY.md" 2>/dev/null; then
+    { printf '\n%s\n\n' "$heading"; cat "$source/MEMORY.md" || return 1; printf '\n'; } >> "$store/MEMORY.md" || return 1
+  fi
+  log_done "Adopted memory by COPY from $source (originals untouched)."
+}
+
+_memory_offer_adoption() {
+  local store="$1" group="$2" explicit="$3" seeded="$4" source f count label command_line adopt_path
+  for source in "$HOME"/.claude/projects/*/memory "$MEM_CFG"/projects/*/memory; do
+    [ -d "$source" ] && [ ! -L "$source" ] && [ -f "$source/MEMORY.md" ] && [ ! -L "$source/MEMORY.md" ] || continue
+    [ "$source" != "$explicit" ] || continue
+    count=0
+    for f in "$source"/*.md; do
+      [ -f "$f" ] && [ ! -L "$f" ] && count=$((count+1))
+    done
+    log_info "Found memory: $source ($count files)"
+    # Preserve the existing automatic seed of this tank's current directory.
+    if [ "$source" = "$MEM_DIR" ] && [ "$seeded" -eq 1 ]; then
+      log_dim "This tank's current memory was seeded by COPY."
+      continue
+    fi
+    if [ -t 0 ] && confirm "Adopt $source ($count files)?"; then
+      _memory_adopt "$source" "$store" || log_fail "Memory adoption failed: $source"
+    else
+      label="tank memory"
+      case "$source" in "$HOME"/.claude/*) label='your ~/.claude memory' ;; esac
+      adopt_path="$source"
+      # share stashes this tank's own slots below. The recovery command must
+      # name that preserved directory, not the soon-to-be shared symlink.
+      case "$source" in "$MEM_CFG"/projects/*/memory)
+        adopt_path="$source.clikae-soul-stash"
+        [ ! -e "$adopt_path" ] || adopt_path="$adopt_path.$$" ;;
+      esac
+      printf -v command_line 'clikae memory share %q %q %q --adopt %q' "$group" "$MEM_CLI" "$MEM_TANK" "$adopt_path"
+      log_warn "$label ($count files) was NOT imported; run $command_line to adopt"
+    fi
+  done
+}
+
 _memory_share() {
-  local group="" engine="" tank="" yes=0
+  local group="" engine="" tank="" yes=0 adopt=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --adopt)
+        [ $# -ge 2 ] && [ -n "$2" ] || log_fail "--adopt requires a memory directory"
+        [ -z "$adopt" ] || log_fail "Use one --adopt source per invocation"
+        adopt="$2"; shift 2 ;;
       -y|--yes) yes=1; shift ;;
       -*) log_fail "memory share: unknown flag: $1" ;;
       *) if [ -z "$group" ]; then group="$1"
@@ -325,6 +393,17 @@ _memory_share() {
     log_fail "If you really mean it: clikae solo $MEM_CLI $MEM_TANK --off"
   fi
 
+  if [ -n "$adopt" ]; then
+    [ "$MEM_CLI" = claude ] || log_fail "--adopt is supported for claude tanks only"
+    [ -d "$adopt" ] && [ -f "$adopt/MEMORY.md" ] && [ ! -L "$adopt/MEMORY.md" ] \
+      || log_fail "--adopt requires a directory with a regular MEMORY.md"
+    # Keep the path as the user typed it (an absolute, existing directory) — the heading in
+    # MEMORY.md is "## Adopted from <path>", and a user who typed /var/... must find it
+    # under that name, not under macOS's /private/var/... alias. Sameness against the store
+    # is still checked with pwd -P below (memory_adopt), so an aliased self-adopt is refused.
+    case "$adopt" in /*) ;; *) adopt="$PWD/$adopt" ;; esac
+  fi
+
   local store account members existing_group
   store="$(_memory_store_path "$group")"
   account="$(_memory_account)"
@@ -335,6 +414,9 @@ _memory_share() {
     # projected too (the same lazy repair soul_prelaunch does at launch).
     if [ "$MEM_STRATEGY" = "symlink" ] && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$store" ]; then
       soul_prelaunch "$MEM_CLI" "$MEM_TANK" "$MEM_CFG"
+    fi
+    if [ -n "$adopt" ]; then
+      _memory_adopt "$adopt" "$store" || log_fail "Memory adoption failed: $adopt"
     fi
     log_pass "$MEM_CLI/$MEM_TANK already shares '$group'."
     return 0
@@ -366,15 +448,24 @@ _memory_share() {
   fi
 
   mkdir -p "$store"
+  # Preserve current-directory seeding before additional sources fill the store.
+  local seeded=0
+  if [ "$MEM_STRATEGY" = symlink ] && [ -d "$MEM_DIR" ] && [ ! -L "$MEM_DIR" ]; then
+    if [ -z "$(ls -A "$store" 2>/dev/null || true)" ]; then
+      cp -R "$MEM_DIR"/. "$store"/ || log_fail "Couldn't seed memory from $MEM_DIR"
+      seeded=1
+    fi
+  fi
+  if [ "$MEM_CLI" = claude ]; then
+    if [ -z "$existing_group" ]; then
+      _memory_offer_adoption "$store" "$group" "$adopt" "$seeded"
+    fi
+    if [ -n "$adopt" ]; then
+      _memory_adopt "$adopt" "$store" || log_fail "Memory adoption failed: $adopt"
+    fi
+  fi
 
   if [ "$MEM_STRATEGY" = "symlink" ]; then
-    # Seed a NEW store by COPYING this tank's existing memory outward (never move the
-    # source). If the store already has content, the joiner adopts the shared brain.
-    if [ -d "$MEM_DIR" ] && [ ! -L "$MEM_DIR" ]; then
-      if [ -z "$(ls -A "$store" 2>/dev/null || true)" ]; then
-        cp -R "$MEM_DIR"/. "$store"/ 2>/dev/null || true
-      fi
-    fi
     # Self-heal a half-done prior run, then stash the tank's own memory (reversible)
     # and fan in to the shared store. Mirrors _switch_run_ephemeral's stash/restore.
     local stash="$MEM_DIR.clikae-soul-stash"

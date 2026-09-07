@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
+  preserving topic collisions and merging source indexes. First-share discovery
+  offers imports interactively or prints actionable warnings unattended (#49).
+
 ### Fixed
 
 - `clikae app` restores the target terminal icon on every build, including

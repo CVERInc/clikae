@@ -561,3 +561,89 @@ print(" ".join(sorted(t["tank"] for t in json.load(sys.stdin) if t["dispatchable
 print(" ".join(sorted(t["tank"] for t in json.load(sys.stdin) if t["solo"])))')"
   [ "$solo" = "alone" ] || { echo "solo was '$solo'"; false; }
 }
+
+_legacy_memory() {
+  LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'legacy topic\n' > "$LEGACY/a.md"
+}
+
+@test "memory first share warns that two legacy files were not imported" {
+  clikae init claude a
+  _legacy_memory
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"your ~/.claude memory (2 files) was NOT imported"* ]] || false
+  [[ "$output" == *"clikae memory share me claude a --adopt $LEGACY"* ]] || false
+  [ ! -e "$CLIKAE_HOME/souls/me/memory/a.md" ]
+  [ "$(cat "$LEGACY/a.md")" = 'legacy topic' ]
+}
+
+@test "memory adopt copies topics and merges source index without changing originals" {
+  clikae init claude a
+  _legacy_memory
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  cmp "$LEGACY/a.md" "$store/a.md"
+  command grep -a -Fqx "## Adopted from $LEGACY" "$store/MEMORY.md"
+  command grep -a -Fqx '[a](a.md)' "$store/MEMORY.md"
+  [ "$(cat "$LEGACY/MEMORY.md")" = '[a](a.md)' ]
+  [ ! -L "$LEGACY" ]
+}
+
+@test "memory adopt after joining preserves collisions and merges index once" {
+  clikae init claude a
+  _legacy_memory
+  clikae memory share me claude a
+  local store="$CLIKAE_HOME/souls/me/memory"
+  printf 'existing topic\n' > "$store/a.md"
+  printf 'existing index\n' > "$store/MEMORY.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Keeping existing a.md"* ]] || false
+  [ "$(cat "$store/a.md")" = 'existing topic' ]
+  command grep -a -Fqx 'existing index' "$store/MEMORY.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  [ "$(command grep -a -Fc "## Adopted from $LEGACY" "$store/MEMORY.md")" -eq 1 ]
+  [ "$(cat "$LEGACY/a.md")" = 'legacy topic' ]
+}
+
+@test "memory adopt never follows a destination topic symlink" {
+  clikae init claude a
+  _legacy_memory
+  clikae memory share me claude a
+  local store="$CLIKAE_HOME/souls/me/memory"
+  ln -s "$TEST_HOME/untouched" "$store/a.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  [ -L "$store/a.md" ]
+  [ ! -e "$TEST_HOME/untouched" ]
+}
+
+@test "memory adopt rejects invalid sources before sharing" {
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$TEST_HOME/missing"
+  [ "$status" -ne 0 ]
+  [ ! -e "$CLIKAE_HOME/souls/me/memory" ]
+  run clikae memory share me claude a --adopt
+  [ "$status" -ne 0 ]
+}
+
+@test "memory first share lists another tank project without importing it" {
+  clikae init claude a
+  local other="$CLIKAE_HOME/profiles/claude/a/projects/other/memory"
+  mkdir -p "$other"
+  printf 'other index\n' > "$other/MEMORY.md"
+  run clikae memory share me claude a --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Found memory: $other (1 files)"* ]] || false
+  [[ "$output" == *"tank memory (1 files) was NOT imported"* ]] || false
+  [[ "$output" == *"--adopt $other.clikae-soul-stash"* ]] || false
+  [ "$(cat "$other.clikae-soul-stash/MEMORY.md")" = 'other index' ]
+  run clikae memory share me claude a --adopt "$other.clikae-soul-stash"
+  [ "$status" -eq 0 ]
+  command grep -a -Fqx 'other index' "$CLIKAE_HOME/souls/me/memory/MEMORY.md"
+}

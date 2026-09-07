@@ -175,6 +175,17 @@ you set one: `clikae git-id <engine> <tank> --name N --email E` makes `clikae en
 export `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits aren't stamped with the engine's
 account email. clikae can only prevent the *next* mis-stamp, never rewrite history.
 
+
+On a Claude tank's first `memory share`, clikae lists existing project memory in
+`~/.claude/projects/*/memory` and the tank, with markdown file counts. It asks
+`[y/N]` per additional source on a terminal; unattended runs warn and print an
+exact `clikae memory share <group> claude <tank> --adopt <dir>` command. You can
+pass `--adopt` up front or after joining (one source per invocation). Adoption
+copies markdown topics, keeps existing same-named files, and appends the source
+index under an `Adopted from <dir>` heading once. Originals remain untouched;
+collisions are reported for manual review. `--yes` does not approve discovery
+imports. The tank's current directory retains its existing copy-seeding behavior.
+
 ## Where to look
 
 - [docs/playbooks.md](docs/playbooks.md) — which play for which situation (the decision layer above the mechanics).
