@@ -85,9 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture (240s vs 1.9s) — invisible to `--timeout` (it bounds the engine,
   not this) and with no progress output, so from outside it looked like burn
   had hung. burn's own purpose (long, unattended tasks) produces exactly the
-  large captures this was slowest on. The classifiers only need the FINAL
-  message anyway, so the haystack is now bounded to its own tail before ever
-  being substituted into (#44).
+  large captures this was slowest on (#44). **Correction (round-5 review):**
+  the claim that closed this entry — "the classifiers only need the FINAL
+  message anyway, so the haystack is now bounded to its own tail" — was
+  itself reversed one entry later in this same file (round-4's P2-1: bounding
+  *classification*, not just substitution, made a signal past the last 64
+  KiB invisible to both detectors, which is exactly the large-capture case
+  this entry describes). Classification reads the full capture; only
+  substitution's cost stays bounded, now by an O(n) single-pass redaction
+  instead of the truncation this entry originally described (#44).
 
 - **The "you've "/"you have " prefix that #45 required was never anchored to
   the start of a line, so it still matched its own documented
