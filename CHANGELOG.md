@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving topic collisions and merging source indexes. First-share discovery
   offers imports interactively or prints actionable warnings unattended (#49).
 
+- **`clikae wait <run_id|status-file>... [--any|--all] [--timeout <s>]`** —
+  blocks until one (`--any`, the default) or every (`--all`) named burn
+  reaches a terminal state, reading #41's status files instead of a
+  hand-rolled `until [ -e DONE ]; do sleep 60; done` plus a log grep. Prints
+  each finished burn's status object as one JSON line, in the order it
+  finishes. Exit code: `0` if any finished target is `done`, `2` if none are
+  `done` and every one is `dry`, `1` otherwise (`fail`/`infra`, or a timeout)
+  (#37).
+
 ### Fixed
 
 - `clikae app` restores the target terminal icon on every build, including

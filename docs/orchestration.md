@@ -205,6 +205,29 @@ and the run's own terminal outcome. A reader polling the file sees exactly
 what `--json` would have printed at exit, at any point along the way, from a
 different process.
 
+### `clikae wait` (#37)
+
+The cockpit-hand-rolled version of blocking on a burn was `until [ -e DONE ];
+do sleep 60; done`, plus a separate grep for "ran dry" / "[ FAIL ]" — exactly
+the false-alarm-prone pattern the status file above replaces. `clikae wait`
+blocks on the status file instead:
+
+```bash
+clikae burn claude L --artifact out.md --prompt-file t.md --json & 
+clikae wait "burn-$!" --timeout 20m && echo "L finished"
+
+clikae wait burn-111 burn-222 burn-333 --all --timeout 30m
+```
+
+A target is the run id `burn` printed (`burn-<pid>`), a bare pid (shorthand
+for the same thing), or a path straight to a `status.json`. `--any` (default)
+returns as soon as ONE target reaches a terminal state; `--all` waits for
+every one. Each terminal status object is printed as one JSON line, in the
+order it finishes — never a re-derived summary, the same object a cockpit
+would have read from disk. Exit code: `0` if at least one finished target is
+`done`; `2` if none are `done` and every finished target is `dry`; `1`
+otherwise (a `fail`/`infra` among them, or `--timeout` expired first).
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and
