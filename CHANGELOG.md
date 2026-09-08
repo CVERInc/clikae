@@ -67,6 +67,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now lives next to the store instead of inside it, a `trap` frees it on a
   signal too, and the seed gate itself ignores dotfiles/dot-directories (so
   residue from an older build can't fool it either) and sweeps any stale
+  `.adopt.*` it finds — in both the current and an older build's staging
+  location — naming what it swept (#49).
+- That signal trap cleaned up but never ended the process: bash resumes the
+  interrupted copy loop right after a trap handler returns, so a signal
+  mid-`--adopt` deleted the staging directory the loop was still using, let
+  the copy silently continue into a freshly recreated one, and could still
+  reach a green `[ DONE ]` over a Soul missing an unknown number of files —
+  or misreport the resulting move failure as a same-name collision that
+  never happened. `--adopt` now exits with the conventional 128+signal status
+  (130/143/129) on INT/TERM/HUP, matching every other trap in this codebase,
+  instead of resuming (#49).
+- `--adopt`'s move-into-place step now tells a genuine same-name collision
+  apart from any other reason `ln` could fail (most notably `EXDEV`, when the
+  store is a symlink onto a different filesystem): the latter used to be
+  misreported as "keeping existing" for every file and still end in
+  `[ DONE ]` with zero files actually adopted. It now fails loudly instead,
+  naming both the staging and store paths, and cleans up before returning (#49).
   `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**

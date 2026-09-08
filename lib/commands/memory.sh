@@ -448,11 +448,26 @@ _memory_adopt() {
   staging="$(mktemp -d "$(dirname "$store")/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
   # A signal (SIGINT/SIGTERM/SIGHUP — Ctrl-C, a killed session, a closed
-  # terminal) must free $staging exactly like a normal `return` does. Cleared
-  # right before each of the explicit `rm -rf "$staging"` calls below so a
-  # normal return never double-removes it through both the trap AND the
-  # explicit call.
-  trap 'rm -rf "$staging"' EXIT INT TERM HUP
+  # terminal) must free $staging AND end the function with the conventional
+  # 128+signal status, exactly like home.sh:2450, burn.sh:598-601 and
+  # switch.sh:582-583 do. A bare `trap 'rm -rf "$staging"' … INT TERM HUP`
+  # (R7-P2-1) only cleans up — bash resumes the interrupted loop right after
+  # the handler returns, so the copy continues into a staging dir the trap
+  # just deleted: files copied before the signal vanish silently while later
+  # ones land, `ln` then fails against a half-populated (or missing) staging
+  # dir and is misreported as a same-name collision, and the function still
+  # reaches the DONE path with a Soul missing an unknown number of files.
+  # `_memory_adopt` runs in the caller's own shell (never a subshell), so
+  # `exit` here ends that process, not just this function — the same process
+  # a killed `clikae memory share … --adopt` invocation is. Cleared right
+  # before each of the explicit `rm -rf "$staging"` calls below so a normal
+  # return never double-removes it through both the trap AND the explicit
+  # call; the EXIT trap firing again after `exit` is harmless (`rm -rf` on an
+  # already-gone directory is a no-op).
+  trap 'rm -rf "$staging"' EXIT
+  trap 'rm -rf "$staging"; exit 130' INT
+  trap 'rm -rf "$staging"; exit 143' TERM
+  trap 'rm -rf "$staging"; exit 129' HUP
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
@@ -507,15 +522,39 @@ _memory_adopt() {
   fi
 
   # The whole copy succeeded — move each staged file into place.
+  local move_failed=0
   while IFS= read -r rel; do
     dest="$store/$rel"
     mkdir -p "$(dirname "$dest")" 2>/dev/null
     # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
     # EEXIST if $dest appeared between the scan above and here, instead of
-    # silently overwriting it.
-    ln "$staging/$rel" "$dest" 2>/dev/null \
-      || log_warn "Keeping existing $rel; source copy remains in $source."
+    # silently overwriting it. But a failure where $dest does NOT exist is a
+    # DIFFERENT error entirely — most commonly EXDEV: $staging and $store are
+    # on different filesystems (e.g. $store is a symlink to another volume),
+    # so a hard link between them can never succeed, no matter how many times
+    # this is retried. Misreporting that as "Keeping existing" is doubly
+    # wrong: nothing existing is being kept, and every remaining file in this
+    # loop is about to fail the exact same way, landing zero of them while
+    # still reaching the DONE below (R7-P3-1). Stop at the first one instead.
+    if ! ln "$staging/$rel" "$dest" 2>/dev/null; then
+      # `-e` alone is false for a DANGLING symlink at $dest (its own target
+      # missing) even though a real directory entry sits there and `ln`
+      # correctly refused to overwrite it — `-L` catches that case the same
+      # way _memory_store_has_content above already does.
+      if [ -e "$dest" ] || [ -L "$dest" ]; then
+        log_warn "Keeping existing $rel; source copy remains in $source."
+      else
+        move_failed=1
+        break
+      fi
+    fi
   done < <(cd "$staging" && find . -type f 2>/dev/null | sed 's#^\./##')
+  if [ "$move_failed" -eq 1 ]; then
+    trap - EXIT INT TERM HUP
+    rm -rf "$staging"
+    log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Nothing was adopted."
+    return 1
+  fi
   trap - EXIT INT TERM HUP
   rm -rf "$staging"
 
@@ -630,17 +669,27 @@ _memory_store_has_content() {
 }
 
 # Self-heal residue from an OLDER clikae (before this fix, staging lived
-# INSIDE the store) or from a signal this build's own trap somehow missed:
-# any `.adopt.*` left in $store for more than a day is dead — a real adopt
-# stages and moves in well under a second even off a slow/iCloud source (the
-# only way one survives this long is that whatever created it is gone). Named
-# out loud rather than swept silently, so a maintainer who goes looking for
-# "why did my adopt vanish" finds the answer in the log instead of nothing.
-# The age floor also means a staging directory an adopt IN PROGRESS right now
-# is never at risk of being pulled out from under it.
+# INSIDE the store) or from a signal this build's own trap somehow missed
+# (e.g. a SIGKILL, which no trap can catch): any `.adopt.*` left for more
+# than a day is dead — a real adopt stages and moves in well under a second
+# even off a slow/iCloud source (the only way one survives this long is that
+# whatever created it is gone). Named out loud rather than swept silently, so
+# a maintainer who goes looking for "why did my adopt vanish" finds the
+# answer in the log instead of nothing. The age floor also means a staging
+# directory an adopt IN PROGRESS right now is never at risk of being pulled
+# out from under it.
+#
+# Swept in TWO locations: `$store/.adopt.*` (where an older clikae build
+# staged, before this fix moved staging out of the store) and
+# `$(dirname "$store")/.adopt.*` — the CURRENT build's own location (see
+# _memory_adopt). Sweeping only the old location would leave every fresh
+# build's own signal-missed residue to accumulate in the new one forever,
+# even though nothing else in `souls/<group>/` ever globs that directory
+# (only `members` lives there beside `memory`), so it never fools the seed
+# gate — just clutter the CHANGELOG already promises this sweeps away.
 _memory_sweep_stale_adopt_staging() {
   local store="$1" d
-  for d in "$store"/.adopt.*; do
+  for d in "$store"/.adopt.* "$(dirname "$store")"/.adopt.*; do
     [ -d "$d" ] || continue
     [ -n "$(find "$d" -maxdepth 0 -mmin +1440 2>/dev/null)" ] || continue
     log_warn "Sweeping stale adopt staging left behind at $d."

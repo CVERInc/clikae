@@ -1062,7 +1062,9 @@ exec sleep 30
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/cp"
 
-  PATH="$BATS_TEST_TMPDIR/bin:$PATH" "$CLIKAE_BIN" memory share me claude a --adopt "$LEGACY" &
+  local out="$BATS_TEST_TMPDIR/kill.out"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" "$CLIKAE_BIN" memory share me claude a --adopt "$LEGACY" \
+    > "$out" 2>&1 &
   local pid=$!
   local i=0
   while [ ! -f "$BATS_TEST_TMPDIR/ready" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
@@ -1072,26 +1074,129 @@ STUB
   local j=0
   while kill -0 "$pid" 2>/dev/null && [ $j -lt 100 ]; do sleep 0.05; j=$((j+1)); done
   kill -9 "$pid" 2>/dev/null || true                          # safety net, should be a no-op
-  wait "$pid" 2>/dev/null || true
+  local kill_status=0
+  wait "$pid" 2>/dev/null || kill_status=$?
 
   local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
-  [ -z "$leftover" ]
+  [ -z "$leftover" ]                                         # residue: still fixed (R6-P2-1)
+
+  # OUTCOME, not just absence of residue (R7-P2-1): the interrupted trap must
+  # end the process with the conventional 128+signal status, never reach the
+  # green DONE lines, and leave the Soul with nothing adopted — a fixed trap
+  # that merely cleans up and resumes would print DONE over a store missing
+  # an unknown number of files (see the review this fixes).
+  [ "$kill_status" -eq 143 ]
+  local kill_output; kill_output="$(cat "$out")"
+  [[ "$kill_output" != *"[ DONE ]"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -f "$store/a.md" ]                                     # nothing adopted, not even the one file
+  run clikae memory status
+  [[ "$output" == *"claude/a  → isolated"* ]] || false        # never got as far as sharing
 }
 
 @test "memory adopt: the success path still leaves nothing under the store's parent (R6-P2-1)" {
   clikae init claude a
   local LEGACY="$HOME/.claude/projects/x/memory"
   mkdir -p "$LEGACY"
-  printf '[a](a.md)\n' > "$LEGACY/MEMORY.md"
+  printf '[a](a.md)\n[b](b.md)\n[c](c.md)\n' > "$LEGACY/MEMORY.md"
   printf 'topic a\n' > "$LEGACY/a.md"
+  printf 'topic b\n' > "$LEGACY/b.md"
+  printf 'topic c\n' > "$LEGACY/c.md"
   run clikae memory share me claude a --adopt "$LEGACY"
   [ "$status" -eq 0 ]
   local store="$CLIKAE_HOME/souls/me/memory"
   [ "$(cat "$store/a.md")" = 'topic a' ]
+  # OUTCOME, not just "some file landed": every one of the three source topic
+  # files must have made it in, counted, not merely spot-checked (R7-P2-1 —
+  # a trap that cleans up without exiting can let the copy loop silently
+  # drop an unknown number of files while still reporting DONE).
+  local expected got
+  expected="$(find "$LEGACY" -type f ! -name MEMORY.md | wc -l | tr -d ' ')"
+  got="$(find "$store" -type f ! -name MEMORY.md ! -name PROTOCOL.md | wc -l | tr -d ' ')"
+  [ "$expected" -eq 3 ]
+  [ "$got" -eq "$expected" ]
   local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
   [ -z "$leftover" ]
   # A share right after this one must see real content and never sweep anything.
   run clikae memory share me claude a
   [ "$status" -eq 0 ]
   [[ "$output" != *"Sweeping stale adopt staging"* ]] || false
+}
+
+@test "memory adopt: a store on a different filesystem fails loudly instead of adopting zero files under a green DONE (R7-P3-1)" {
+  # Staging moved from INSIDE the store to the store's PARENT (R6-P2-1) on the
+  # assumption that "$store"'s parent is already on the store's own
+  # filesystem — true for the ordinary layout, false when $store itself is a
+  # symlink out to another volume (an external drive, a network share, or —
+  # as reproduced here without needing a real second filesystem — anything
+  # `ln` refuses to hard-link across). Before this fix, every `ln` in the
+  # move-into-place loop failed the same way `ln` fails on a genuine name
+  # collision, so each one was misreported as "Keeping existing" (there was
+  # nothing existing — see R7-P3-1 in the review this fixes) and the function
+  # still reached the green DONE with zero topic files actually adopted.
+  #
+  # Verified for real against a 64MB HFS ram disk (`hdiutil attach -nomount
+  # ram://131072` + `newfs_hfs` + mount, then $store replaced with a symlink
+  # to a directory on it) during development of this fix — same failure, same
+  # message. That setup needs hdiutil/newfs_hfs and isn't guaranteed
+  # available or safe to spin up in every CI environment, so the committed
+  # test below uses a stubbed `ln` that fails exactly the way a cross-device
+  # `ln` does (nonzero exit, $dest never created) instead.
+  clikae init claude a
+  local LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n[b](b.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/a.md"
+  printf 'topic b\n' > "$LEGACY/b.md"
+
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/ln" <<'STUB'
+#!/usr/bin/env bash
+# `-s` (symlink creation, used elsewhere in memory.sh) is left to the real
+# ln; only the plain hard-link form `ln SRC DEST` used by the adopt
+# move-into-place loop is stubbed to fail as EXDEV would: nonzero exit,
+# $DEST never created.
+[ "$1" = "-s" ] && exec /bin/ln "$@"
+echo "ln: $2: Cross-device link" >&2
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/ln"
+
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"[ FAIL ]"* ]] || false
+  [[ "$output" != *"[ DONE ]"* ]] || false
+  [[ "$output" != *"Keeping existing"* ]] || false           # nothing existing — must not be misnamed a collision
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [[ "$output" == *"$store"* ]] || false                     # names the store path
+  # names the staging path too — both sides of the failed move
+  [[ "$output" == *"$CLIKAE_HOME/souls/me/.adopt."* ]] || false
+  [ ! -f "$store/a.md" ]
+  [ ! -f "$store/b.md" ]
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]                                         # staging still cleaned up despite the failure
+}
+
+@test "memory share: a stale .adopt.* in the store's NEW parent location is swept and named too (R7-P3-2)" {
+  # _memory_sweep_stale_adopt_staging used to glob only "$store"/.adopt.* —
+  # the OLD staging location. Since R6-P2-1 moved staging to
+  # "$(dirname "$store")"/.adopt.*, residue this build's own signal handling
+  # somehow missed (a SIGKILL, which no trap can catch) would sit there
+  # forever: no glob anywhere in the codebase looks at that directory, so it
+  # never trips the seed gate, but it also never gets swept or named, contra
+  # the CHANGELOG's "sweeps any stale .adopt.* it finds".
+  clikae init claude a
+  _seed_memory a MEMORY.md "shared brain v1"
+  local store="$CLIKAE_HOME/souls/me/memory" parent="$CLIKAE_HOME/souls/me"
+  mkdir -p "$parent/.adopt.NewLoc1"
+  printf 'half\n' > "$parent/.adopt.NewLoc1/partial.md"
+  touch -t "$(date -v-2d '+%Y%m%d%H%M' 2>/dev/null || date -d '2 days ago' '+%Y%m%d%H%M')" \
+    "$parent/.adopt.NewLoc1"
+
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[ WARN ] Sweeping stale adopt staging left behind at $parent/.adopt.NewLoc1."* ]] || false
+  [ ! -e "$parent/.adopt.NewLoc1" ]                           # swept, not just ignored
+  [ -f "$store/MEMORY.md" ]
+  [[ "$(cat "$store/MEMORY.md")" == *"shared brain v1"* ]] || false
 }
