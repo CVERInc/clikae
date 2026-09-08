@@ -58,11 +58,41 @@ limit_line_is_real() {
 }
 
 # limit_codex_reset <text> -> echo codex's verbatim reset phrase ("try again at
-# <date> <time>") if the text carries one, else nothing. Never computes a
-# countdown — relays the vendor's own words (same spirit as the other detectors).
-# Drives a "dry-until" window so watch/auto don't re-pick a tank before it recovers.
+# <date> <time>", "resets …", or "reset at …") if the text carries one, else
+# nothing. Never computes a countdown — relays the vendor's own words (same
+# spirit as the other detectors). Drives a "dry-until" window so watch/auto
+# don't re-pick a tank before it recovers.
+#
+# P2-1 (2026-09-08 round-4 review): every classifier here used to read
+# `printf '%s' "$text" | grep …` — a PIPE from a forked producer to a forked
+# grep. That is fine for a short line, but once P2-1's fix stopped truncating
+# the haystack before classification, a genuine large capture with the match
+# near its START let grep exit (`-q`/`-o … | head -n 1`) long before the
+# producer had written it all; on this machine that reliably HUNG the whole
+# burn (SIGPIPE from the closed pipe never unblocked the producer in this
+# nested tmux-wrapper/retry-loop context — reproduced with a 100 KiB capture,
+# confirmed by backgrounding the same call and `wait`-ing on it, which did
+# not hang). A here-string writes the WHOLE haystack to a real fd (bash's own
+# temp file, not a bounded kernel pipe) before grep ever execs, so there is no
+# concurrent producer left to block. Every classifier below reads its
+# haystack the same way now — this one included, since it is handed
+# codex's full reply by limit_codex_output_dry.
+#
+# P1-1 (2026-09-08 round-5 review): this only ever recognized "try again
+# at …" — but the repo's OWN 175-row real-reset-phrase corpus
+# (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
+# at …" grammar (0 rows contain "try again at"), so every one of those 175
+# real phrases, prefixed with codex's own confirmed sentence, failed to
+# yield a reset and limit_codex_output_dry's second gate (below) then
+# discarded the whole event as not-dry. That silently closed reroute, the
+# board's ONLY red dot for codex (dry_store is codex-only —
+# limit_engine_detectable is false for it), and — worse — on the
+# fresh-artifact path (burn.sh) let a genuine EXISTING dry marker be
+# cleared, because "not dry" there means "safe to clear". Recognize the
+# same three grammars claude's branch (limit_output_dry) already does:
+# nothing here says codex's own vendor text is restricted to one of them.
 limit_codex_reset() {
-  printf '%s\n' "$1" | grep -oaiE "try again at [^.\"]+" | head -n 1 \
+  grep -oaiE 'resets [^"]+|try again at [^."]+|reset at [^."]+' <<< "$1" | head -n 1 \
     | sed -E 's/[[:space:]]+$//' || true
 }
 
@@ -72,9 +102,35 @@ limit_codex_reset() {
 # and writes no artifact (burn-confirmed 2026-06-03), so the exit code is useless —
 # the output string is the signal. Pair with an artifact check at the call site
 # (a dropped job = limit string seen AND/OR the expected artifact missing).
+#
+# P2-2 (2026-09-08 round-4 review): unlike claude's branch, this matched a bare
+# "hit your (usage|session) limit" ANYWHERE in the reply, so prose merely
+# talking about the limit while a task genuinely failed for an unrelated
+# reason ("See docs/runbook.md for what to do once you hit your usage
+# limit.") was misread as a real codex limit event — three tanks burned
+# rerouting a task that was never dry. codex's own real sentence is "You've
+# hit your usage limit. … try again at <date> <time>." (limit_line_is_real's
+# codex comment, burn-confirmed) — anchor on the SAME direct-report prefix as
+# claude's branch (tolerant of the same line-start noise and short adverb
+# gap), AND require the reply to actually yield a reset phrase: a genuine
+# codex event always carries "try again at …", prose about the limit rarely
+# does, so the two checks close different escapes than either alone.
+#
+# P2-1 (2026-09-08 round-5 review): the "12 bytes of leading NON-ALPHABETIC
+# noise" allowance (same class as claude's branch below) was wide enough to
+# admit markdown quoting/list syntax — `>`, `#`, a leading digit + `.` — none
+# of which are letters either. A real reply built around drafting a runbook
+# ("The runbook I was drafting says: > You have reached your weekly
+# limit.") let the blockquote marker stand in for transport noise. Narrowed
+# to the noise a caller's OWN transport actually adds (whitespace and stray
+# symbols), never markdown syntax a model's prose legitimately uses — see
+# the claude branch below for the shared rationale.
 limit_codex_output_dry() {
-  printf '%s' "$1" | grep -qaiE "hit your (usage|session) limit" || return 1
-  limit_codex_reset "$1"
+  local out="$1" reset
+  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
+  reset="$(limit_codex_reset "$out")"
+  [ -n "$reset" ] || return 1
+  printf '%s' "$reset"
   return 0
 }
 
@@ -95,15 +151,98 @@ limit_codex_output_dry() {
 limit_output_dry() {
   local cli="$1" out="$2"
   if [ -n "${CLIKAE_LIMIT_PATTERN:-}" ]; then
-    printf '%s' "$out" | grep -qaiE "$CLIKAE_LIMIT_PATTERN" && return 0
+    grep -qaiE "$CLIKAE_LIMIT_PATTERN" <<< "$out" && return 0
     # No override match → fall through to the built-in per-engine matchers, so the
     # pattern only ADDS coverage, never masks a hit the built-in would have caught.
   fi
   case "$cli" in
     codex)  limit_codex_output_dry "$out" ;;
     claude)
-      printf '%s' "$out" | grep -qaiE "hit your (session|usage) limit" || return 1
-      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
+      # P2-2 (2026-09-08 review): "weekly[ -]limit (reached|exceeded)" was
+      # bare — every OTHER alternative here anchors on a verb naming the
+      # human ("hit your …"), but this one fired on ordinary prose that
+      # merely discusses a weekly limit ("the weekly limit reached its cap
+      # in July"). Anchored to the START OF A LINE instead: a genuine vendor
+      # sentence IS the line (or leads it), while prose ABOUT the limit is
+      # never the first thing on its line. grep matches `^`/`$` per line, not
+      # per buffer, so this holds even when $out has other lines around it.
+      #
+      # P2-1 (2026-09-08 round-2 review): the SAME fix's own next commit
+      # (a3365a9) re-added a bare "reached your … limit" alongside it —
+      # unlike "hit your …", "reached your …" turns out to read naturally in
+      # third-person documentation prose that also addresses the reader as
+      # "you" ("The runbook covers what happens when you have reached your
+      # weekly limit…", "Each seat has reached your weekly limit of five
+      # reviews", round-2 PROBE D — all three FALSE-DRY). A line anchor alone
+      # doesn't defend this shape either: prose can land the phrase at a
+      # fresh line by pure word-wrap coincidence. What every genuine vendor
+      # sentence in the corpus actually shares, that none of the false
+      # positives do, is the direct report "You've " / "You have " leading
+      # straight into the verb — so both verbs now require that prefix
+      # (adjacent, not just present in the buffer: a wrapped "you have\n"
+      # followed by "reached" on the next line does NOT satisfy it, since `.`
+      # never matches the newline between them).
+      #
+      # P1-1 (2026-09-08 round-3 review): that "adjacent" requirement was
+      # stricter than it looked — it demanded "you've"/"you have" sit
+      # IMMEDIATELY before the verb, with nothing between. A real vendor
+      # sentence with a curly apostrophe ("You’ve hit …") or a one-word
+      # adverb ("You have already hit …", "You've just hit …") no longer
+      # matched at ALL — narrower than main, which never required this
+      # prefix in the first place. That is the worse failure: a genuinely
+      # dry tank now reads as a hard task failure (no reroute, no dry
+      # marker, no reset), exactly what `burn --help` warns "a dry tank
+      # would be misread as a real task failure" means. Tolerate the ASCII
+      # and curly apostrophe, and up to two words between the direct report
+      # and its verb.
+      #
+      # P2-3 (2026-09-08 round-3 review): the prefix requirement above was
+      # never anchored to the start of a line, so it still matched its OWN
+      # documented counterexample — CHANGELOG.md's "the runbook covers what
+      # happens when you have reached your weekly limit…" — sitting mid-
+      # sentence after "I could not write the file. " walked the entire
+      # reserve on a real task failure (round-3 PROBE O). "You've "/"You
+      # have " leading straight into the verb is only a genuine vendor
+      # report when it also LEADS its line — third-person prose that quotes
+      # the reader's own words ("…when you have reached…") never does,
+      # while a real vendor sentence is the line (or leads it), same
+      # reasoning as the `^weekly[ -]limit` alternative just below.
+      #
+      # P1-1 (2026-09-08 round-4 review): "leads its line" was read as
+      # "IS the first byte of the line" — a genuine vendor sentence can
+      # still be prefixed by non-alphabetic transport noise a caller didn't
+      # write (indentation, a tab, a leading "⚠ "), and the bare `^` anchor
+      # made those invisible too, narrower than main yet again for the same
+      # reason r3 already called out once. Tolerate up to 12 bytes of
+      # LEADING NON-ALPHABETIC noise before the direct report — prose never
+      # qualifies (it leads with more than 12 alphabetic bytes, e.g. "I could
+      # not write the file. "), so the r2/r3 false-positive corpus stays
+      # closed. A prefix carrying its own letters ("Error: ", "codex: ") is
+      # not recovered by this — that needs a real vendor-output corpus to
+      # bound safely, not another regex guess (see REPORT-clikae47-fix4.md).
+      #
+      # P2-1 (2026-09-08 round-5 review): "non-alphabetic" turned out to
+      # include markdown syntax a model's own prose legitimately produces —
+      # a blockquote marker (`>`) or a numbered-list digit + `.` — which is
+      # exactly what "prose never qualifies" assumed couldn't happen. A real
+      # task failure whose reply was drafting a runbook ("The runbook I was
+      # drafting says: > You have reached your weekly limit.", or "1. You
+      # have reached your weekly limit — explain this to the user.") walked
+      # the entire reserve on both round-5 PROBEs. `main` never matched
+      # either shape at all ("reached your weekly limit" isn't one of its
+      # alternatives), so this was a regression this PR introduced, not a
+      # pre-existing gap. The noise class is now the transport whitespace
+      # and stray symbols a caller's OWN wrapper might prepend — never `>`,
+      # `#`, a quote character, a digit, `.`, or `-`, all of which are
+      # markdown or list syntax a model writes on purpose. The two-space/
+      # tab/`⚠ ` cases the round-4 fix closed stay closed; the r2/r3 bare-
+      # prose corpus stays closed too (none of those start with a letter).
+      grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" <<< "$out" || return 1
+      # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
+      # shape from the review's corpus — "Your limit will reset at 5am …"
+      # (singular "reset at", no trailing s) — which silently produced
+      # reset:null even though the vendor's own words were right there.
+      grep -oaiE "resets [^\"]+|try again at [^.\"]+|reset at [^.\"]+" <<< "$out" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;
   esac

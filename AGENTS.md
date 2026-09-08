@@ -52,8 +52,9 @@ Three dispatch shapes — full field guide in
   `{ok, engine, tank, artifact, artifact_bytes, reason, reset, rerouted_from[],
   elapsed_s, run_id}`. Read `tank`, not the one you asked for — with rerouting
   they are often different, and `rerouted_from` is the trail. `reason`
-  distinguishes the two failures that matter: `every reachable tank is dry` (wait
-  or add fuel) from `no fresh artifact and no limit` (the task itself failed).
+  distinguishes `every reachable tank is dry` (wait or add fuel),
+  `no fresh artifact and no limit` (the task itself failed), and `infra`
+  (tool-host infrastructure failure after same-tank retries are exhausted).
 - **`clikae conduct --leg <e>/<t> … --prompt-file <f>`** — fan ONE read-only prompt
   across N accounts in parallel (best-of-N audits/analyses); collect every leg's
   output. clikae never judges — you pick the winner, which is exactly why

@@ -719,3 +719,1155 @@ STUB
   # it — the whole point of a blocking flock/lockf over a `-n` one.
   [ "$((t1 - t0))" -ge 1 ] || { echo "finished in $((t1 - t0))s — did it wait at all?"; false; }
 }
+
+
+# Synchronous tmux transport: execute the real generated wrapper, then let the
+# cockpit consume DONE before burn's parent observes the exit marker. No timing
+# lottery and no real server; engine/env/exit-trap code still runs unchanged.
+_stub_burn_transport() {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    'bash "'*)
+      bash -c "$arg" >/dev/null 2>&1
+      [ -z "${STUB_CONSUME_ARTIFACT:-}" ] || rm -f "$STUB_CONSUME_ARTIFACT"
+      # Simulate a write landing AFTER the engine-exit snapshot (P2-1): the
+      # engine's own process tree already exited empty-handed by the time
+      # `bash -c "$arg"` above returns, so this write is chronologically
+      # later than `_burn_snapshot` — but still before cmd_burn classifies.
+      [ -z "${STUB_LATE_WRITE_ARTIFACT:-}" ] || printf 'late' > "$STUB_LATE_WRITE_ARTIFACT"
+      exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/tmux"
+}
+
+
+@test "burn #42: cockpit consumption after engine exit preserves success and bytes" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_CONSUME_ARTIFACT="$BATS_TEST_TMPDIR/DONE"
+  run clikae burn codex T1 --json --artifact "$STUB_CONSUME_ARTIFACT" -- run "$STUB_CONSUME_ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STUB_CONSUME_ARTIFACT" ]
+  [[ "$output" == *'"artifact_bytes":0'* ]] || false
+  [[ "$output" == *'"ok":true'* ]] || false
+}
+
+
+@test "burn #42: snapshot preserves nonempty size after consumption" {
+  _src_burn
+  local artifact="$BATS_TEST_TMPDIR/DONE" evidence="$BATS_TEST_TMPDIR/evidence"
+  printf 'success' > "$artifact"
+  _burn_snapshot "$artifact" 0 "$evidence"
+  rm "$artifact"
+  [ "$(cat "$evidence")" = '1 7' ]
+}
+
+@test "burn #42: stale and absent snapshots cannot claim success" {
+  _src_burn
+  local artifact="$BATS_TEST_TMPDIR/DONE" evidence="$BATS_TEST_TMPDIR/evidence"
+  _burn_snapshot "$artifact" 0 "$evidence"
+  [ "$(cat "$evidence")" = '0 null' ]
+  printf old > "$artifact"
+  _burn_snapshot "$artifact" "$(_clikae_mtime "$artifact")" "$evidence"
+  [ "$(cat "$evidence")" = '0 3' ]
+}
+
+@test "burn #42: direct fallback keeps artifact evidence with a nonzero engine exit" {
+  _stub_burn_transport
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/tmux"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'done' > "$STUB_ARTIFACT"
+exit 7
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
+  [[ "$output" == *'"ok":true'* ]] || false
+}
+
+@test "burn #45: Claude weekly limit preserves dated reset in JSON" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your weekly limit · resets Jul 27 at 5am (Asia/Tokyo)\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  run clikae burn claude T1 --no-reroute --json --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"resets Jul 27 at 5am (Asia/Tokyo)"'* ]] || false
+}
+
+
+@test "burn #45: all Claude limit spellings relay reset text and ordinary prose stays clear" {
+  _src_burn
+  local phrase reset
+  reset="$(awk -F '\t' '!/^#/ && $2 ~ /Jul 27 at 5am/ {print $2; exit}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  [ -n "$reset" ]
+  for phrase in "You've hit your weekly limit" "You've hit your weekly-limit" 'Weekly limit reached' "You've hit your session limit" "You've hit your usage limit"; do
+    run limit_output_dry claude "$phrase · $reset"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$reset" ]
+  done
+  run limit_output_dry claude 'Please explain the weekly limit reset policy'
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-2 (2026-09-08 review): "weekly[ -]limit (reached|exceeded)" was the
+# only bare alternative in the claude branch — every other one anchors on a
+# verb naming the human ("hit your …"). Ordinary prose that merely discusses a
+# weekly limit fired it (review's test K, all three FALSE-DRY with reset:[]).
+
+@test "burn #45: prose merely discussing a weekly limit does not fire dry (P2-2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    "In the audit, the weekly limit reached its cap in July." \
+    "Document the case where the weekly limit reached zero." \
+    "the weekly limit exceeded expectations"
+  do
+    run limit_output_dry claude "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+# --- P2-1 (2026-09-08 ROUND-2 review): the very fix above landed a bare
+# "reached your … limit" alongside the anchored "weekly[ -]limit" one — same
+# hole, reopened in the same commit sequence. Unlike "hit your …", "reached
+# your …" reads naturally in third-person documentation prose that also
+# addresses the reader as "you" (review's PROBE D, all three FALSE-DRY —
+# including one where a plain word-wrap happens to land the phrase at the
+# start of a line, showing a line anchor alone would not have been enough).
+
+@test "burn #45: prose that reads 'reached your … limit' without a direct vendor report does not fire dry (P2-1 r2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    $'The runbook covers what happens when you have\nreached your weekly limit and how to wait it out.' \
+    "Each seat has reached your weekly limit of five reviews." \
+    "> Once a tank has reached your usage limit the board turns red."
+  do
+    run limit_output_dry claude "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #45: a genuine 'reached your … limit' vendor report still fires dry (P2-1 r2)" {
+  _src_burn
+  run limit_output_dry claude "You've reached your session limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [ "$output" = "resets 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "You have reached your usage limit. Try again Sep 14."
+  [ "$status" -eq 0 ]
+}
+
+# --- P1-1 (2026-09-08 ROUND-3 review): the fix just above required "you've"/
+# "you have" to sit IMMEDIATELY before the verb — narrower than main, which
+# never required that prefix at all. A curly apostrophe or a one-word adverb
+# are both things a real vendor sentence can carry, and both made the phrase
+# invisible (review's PROBE A / A2): a genuinely dry tank was misread as a
+# hard task failure — no reroute, no dry marker, no reset, the exact failure
+# `burn --help` warns about.
+
+@test "burn #45: a curly apostrophe before the verb still fires dry (P1-1 r3)" {
+  _src_burn
+  run limit_output_dry claude "You’ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+}
+
+@test "burn #45: an adverb between the direct report and the verb still fires dry (P1-1 r3)" {
+  _src_burn
+  run limit_output_dry claude "You have already hit your usage limit."
+  [ "$status" -eq 0 ]
+  run limit_output_dry claude "You've just hit your session limit."
+  [ "$status" -eq 0 ]
+  run limit_output_dry claude "You have already hit your weekly limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [ "$output" = "reset at 5am (Asia/Tokyo)" ]
+}
+
+# --- P1-1 (2026-09-08 ROUND-3 review, closing item): the review's harder
+# complaint wasn't just the two counterexamples above — it was that
+# limit.sh's comment and CHANGELOG both claimed a "corpus" backed this
+# regex ("every genuine phrase in the corpus has … and none of the false
+# positives do") when `tests/fixtures/limit-reset-phrases.tsv` holds only
+# reset phrases, not full vendor sentences (`grep -c 'hit your'` on it is
+# 0 — CHANGELOG now carries a Correction note saying so). Nothing in this
+# suite tied the fixture's REAL reset-phrase corpus to a real vendor
+# sentence shape and proved the pair still classifies, and nothing proved
+# main's own literal corpus sentence — never broken by any of these fixes,
+# but never checked for claude specifically either — still fires dry.
+
+@test "burn #45: main's own corpus sentence still fires dry for claude (P1-1 closing)" {
+  _src_burn
+  run limit_output_dry claude "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+  [ "$output" = "Try again at Jul 7th, 2026 2:17 PM" ]
+}
+
+@test "burn #45: a real sample of the fixture's reset-phrase corpus fires dry under every real vendor-sentence shape (P1-1 closing)" {
+  _src_burn
+  local fixture="$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv"
+  local -a resets=()
+  local _e phrase _x
+  while IFS=$'\t' read -r _e phrase _x; do
+    [ -n "$phrase" ] || continue
+    resets+=("$phrase")
+  done < <(awk -F'\t' '!/^#/ && NF==3' "$fixture" | awk 'NR==1 || NR%37==0')
+  [ "${#resets[@]}" -ge 4 ]
+  local reset core
+  for reset in "${resets[@]}"; do
+    for core in "You've hit your usage limit." "You’ve hit your usage limit." "You have already hit your usage limit."; do
+      run limit_output_dry claude "$core $reset"
+      [ "$status" -eq 0 ]
+      [ "$output" = "$reset" ]
+    done
+  done
+}
+
+@test "burn #45: a real dry reply with a curly apostrophe reroutes instead of a hard failure (P1-1 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1) echo "You’ve hit your usage limit · resets 5am (Asia/Tokyo)" ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}
+
+# --- P1-1 (2026-09-08 ROUND-4 review): the fix above anchored the direct
+# report to `^`, the very start of a line — narrower than main yet again,
+# for the third round running, this time on ordinary TRANSPORT noise no
+# caller ever chose to write (indentation, a tab, a leading "⚠ "). Tolerate
+# up to 12 bytes of LEADING NON-ALPHABETIC noise before "you've"/"you have"
+# instead of requiring the direct report to be the very first byte.
+# Corpus-as-contract: every row below MUST still fire dry, and every row in
+# the r2/r3 false-positive corpus MUST still NOT fire — the widened anchor
+# must not reopen either P2-2(r2)/P1-1(r3)'s closed prose cases. "Error: "/
+# "codex: "/timestamp prefixes are a KNOWN, documented gap (review's P3-4):
+# they carry their own letters, so a non-alphabetic-noise anchor cannot
+# recover them without a real vendor-output corpus — not asserted here as a
+# promise this round doesn't keep.
+
+@test "burn #45: leading transport noise (indent/tab/warning glyph) does not hide a real vendor sentence (P1-1 r4 must-match)" {
+  _src_burn
+  local -a must_match=(
+    "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    "  You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    $'\tYou\'ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.'
+    "⚠ You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  )
+  local line
+  for line in "${must_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Jul 7th"* ]] || false
+  done
+}
+
+@test "burn #45: the r2/r3 prose false-positive corpus still does not fire dry under the widened anchor (P1-1 r4 must-not-match)" {
+  _src_burn
+  local -a must_not_match=(
+    "the weekly limit reached its cap in July"
+    "Each seat has reached your weekly limit of five reviews."
+    "I could not write the file. The runbook covers what happens when you have reached your weekly limit."
+  )
+  local line
+  for line in "${must_not_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -ne 0 ]
+  done
+}
+
+# --- P2-1 (2026-09-08 round-5 review): the "up to 12 bytes of leading
+# NON-ALPHABETIC noise" allowance (round-4's fix, just above) was wide
+# enough to admit markdown syntax a model's own prose legitimately
+# produces — a blockquote marker (`>`) or a numbered-list digit + `.` —
+# neither of which are letters either. A real task failure whose reply was
+# drafting a runbook ("The runbook I was drafting says: > You have reached
+# your weekly limit.") let the blockquote marker stand in for transport
+# noise and walked the whole reserve. `main` never matched "reached your
+# weekly limit" at all, so this was a regression this PR introduced.
+
+@test "burn #45: a markdown blockquote/list marker in front of quoted prose does not fire dry (P2-1 r5 must-not-match)" {
+  _src_burn
+  local -a must_not_match=(
+    "> You have reached your weekly limit."
+    "1. You have reached your weekly limit — explain this to the user."
+  )
+  local line
+  for line in "${must_not_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #45: a real task failure whose reply quotes a runbook blockquote does not burn the whole reserve (P2-1 r5, PROBE B)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf 'I could not finish: the parser test still fails.\n'
+printf 'The runbook I was drafting says:\n'
+printf '> You have reached your weekly limit.\n'
+printf '...and that is all I got done.\n'
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude C1
+  clikae init claude C2
+  clikae init claude C3
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
+# --- the leading transport noise the round-4 fix DID close must stay closed.
+
+@test "burn #45: leading transport noise still fires dry under the narrowed noise class (P2-1 r5 must-match, no regression)" {
+  _src_burn
+  local -a must_match=(
+    "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    "  You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    $'\tYou\'ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.'
+    "⚠ You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  )
+  local line
+  for line in "${must_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Jul 7th"* ]] || false
+  done
+}
+
+# --- P2-1 (2026-09-08 ROUND-4 review): _burn_redact truncated to the last
+# 64 KiB BEFORE classification — bounding not just the (now O(n)) redaction
+# but the classifiers' ENTIRE view of the reply. burn's own purpose is long,
+# unattended tasks whose captures are large, and a vendor's own limit line
+# or a tool-host outage commonly sits well before the tail once the model
+# keeps talking afterward — exactly the captures burn exists for went blind.
+# Classification must see the full capture; only the short diagnostic tail
+# may still bound itself (see _burn_redact_full / _burn_redact in burn.sh).
+
+@test "burn #45: a dry signal more than 64KiB from the end of the capture still reroutes (P2-1 r4 must-match)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1)
+    printf "You've hit your usage limit · resets 5am (Asia/Tokyo)\n"
+    yes "trailing noise after the limit line, same reply" | head -c 100000
+    ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}
+
+@test "burn #45: a large CLEAN capture with no limit signal does not falsely reroute (P2-1 r4 must-not-match)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+yes "ordinary progress output, nothing to do with any limit" | head -c 100000
+printf 'done' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+}
+
+# --- P2-2 (2026-09-08 ROUND-4 review): limit_codex_output_dry matched a bare
+# "hit your (usage|session) limit" ANYWHERE in the reply — unlike claude's
+# branch, never anchored to a direct vendor report — so a task that merely
+# TALKS ABOUT the limit while genuinely FAILING for an unrelated reason was
+# misread as a real codex limit event: three tanks burned rerouting a task
+# that was never dry (review PROBE B / B3). Anchor codex the same way as
+# claude (line-start-tolerant direct report), AND require the reply to
+# actually yield a reset phrase — a genuine codex event always carries
+# "try again at …", prose about the limit almost never does.
+
+@test "burn #45: codex prose that merely talks about the limit during a real task failure does not reroute (P2-2 r4 must-not-match, PROBE B3)" {
+  _stub_burn_transport
+  _src_burn
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'I could not finish: the parser test still fails.\n'
+printf 'See docs/runbook.md for what to do once you hit your usage limit.\n'
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  clikae init codex T2
+  clikae init codex T3
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                         # no false marker written
+}
+
+@test "burn #45: a genuine anchored codex limit sentence still fires dry and yields a reset (P2-2 r4 must-match)" {
+  _src_burn
+  run limit_codex_output_dry "You've hit your usage limit. try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Jul 7th"* ]] || false
+}
+
+@test "burn #45: codex bare mention with no direct report and no reset phrase does not fire dry (P2-2 r4 must-not-match)" {
+  _src_burn
+  run limit_codex_output_dry "once you hit your usage limit, wait for the reset."
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-3 (2026-09-08 ROUND-3 review): the "you've "/"you have " prefix check
+# above was never anchored to the start of a line, so it still matched its OWN
+# documented counterexample — CHANGELOG's "the runbook covers what happens
+# when you have reached your weekly limit…" — the instant it appears mid-
+# sentence in a real reply, walking the entire reserve on a genuine task
+# failure (round-3 PROBE O). Also: CHANGELOG and this file's own comments
+# claimed "every genuine phrase in the corpus has it and none of the false
+# positives do" — a claim this exact input disproves and the fixture never
+# supported in the first place (it holds reset phrases, not full sentences).
+
+@test "burn #45: a third-person sentence that merely QUOTES 'you have reached … limit' mid-line does not fire dry (P2-3 r3)" {
+  _src_burn
+  run limit_output_dry claude "I could not write the file. The runbook covers what happens when you have reached your weekly limit and how to wait it out."
+  [ "$status" -ne 0 ]
+}
+
+@test "burn #45: that same sentence does not burn through the whole reserve (P2-3 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "I could not write the file. The runbook covers what happens when you have reached your weekly limit and how to wait it out."
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude C1
+  clikae init claude C2
+  clikae init claude C3
+  run clikae burn claude C1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
+# --- P2-3 (2026-09-08 review): #45's reset-extraction claim ("preserving the
+# vendor's reset phrase") only held for two of five real-shaped declaration
+# sentences from the review's corpus (PROBE G) — a singular "reset at" phrasing
+# extracted nothing (reset:null), and a "reached your … limit" ordering wasn't
+# even detected as dry at all (a real limit misread as a hard task failure,
+# which is worse than a missing reset string). The review could not confirm
+# which sentence a real vendor prints, so the honest fix widens coverage of
+# both known real shapes rather than inventing an unconfirmed corpus row.
+
+@test "burn #45: 'reset at' phrasing is extracted, not dropped to null (P2-3)" {
+  _src_burn
+  run limit_output_dry claude "You've hit your weekly limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [ "$output" = "reset at 5am (Asia/Tokyo)" ]
+}
+
+@test "burn #45: 'reached your weekly limit' ordering is detected as dry, not a hard task failure (P2-3)" {
+  _src_burn
+  run limit_output_dry claude "You've reached your weekly limit. Try again Sep 14."
+  [ "$status" -eq 0 ]
+}
+
+@test "burn #45: all five review PROBE-G declaration shapes are honoured" {
+  _src_burn
+  run limit_output_dry claude "You've hit your weekly limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]; [ "$output" = "resets 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "You've hit your weekly limit — resets Sep 14 at 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]; [ "$output" = "resets Sep 14 at 5am (Asia/Tokyo)" ]
+  run limit_output_dry claude "Weekly limit reached. Resets Sunday at 12:00 AM."
+  [ "$status" -eq 0 ]; [ "$output" = "Resets Sunday at 12:00 AM." ]
+}
+
+@test "burn #45: a weekly dry tank reroutes to a reserve" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+case "$CLAUDE_CONFIG_DIR" in
+  */T1) echo "You've hit your weekly limit · resets Jul 27 at 5am (Asia/Tokyo)" ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  clikae init claude T2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["claude/T1"]'* ]] || false
+}
+
+@test "burn #44: tool-host outage retries same tank then reports infra" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+echo 'timed out negotiating with the code-mode host'
+exit 0
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 3 ]
+  [ "$(sort -u "$STUB_ARGV_LOG")" = "$CLIKAE_HOME/profiles/codex/T1" ]
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+  [[ "$output" != *'real task failure'* ]] || false
+}
+
+
+@test "burn #44: default backoff is 5 then 10 seconds and recovery stays on the same tank" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+if [ "$(wc -l < "$STUB_ARGV_LOG")" -lt 3 ]; then
+  echo 'failed to connect to the code-mode host'
+else
+  printf 'done' > "$STUB_ARTIFACT"
+fi
+STUB
+  cat > "$BATS_TEST_TMPDIR/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$STUB_DELAYS"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts" STUB_DELAYS="$BATS_TEST_TMPDIR/delays"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --no-reroute --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_DELAYS")" = $'5\n10' ]
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 3 ]
+  [ "$(sort -u "$STUB_ARGV_LOG")" = "$CLIKAE_HOME/profiles/codex/T1" ]
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
+@test "burn #44: zero retries reports infra without sleeping or marking dry" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+echo 'connection to the tool host was closed'
+exit 1
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  run clikae burn codex T1 --json --infra-retries 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 1 ]
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]
+}
+
+@test "burn #44: ordinary task errors are not infrastructure failures" {
+  _src_burn
+  local phrase
+  for phrase in 'task timed out' 'failed to connect to database' 'weekly limit' 'connection refused'; do
+    run _burn_output_infra "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+# --- P2-5 (2026-09-08 review): the whitelist was hand-written, not drawn from
+# a real corpus like limit.sh's — five plausible real tool-host failure
+# sentences all NO-MATCHED (PROBE F), one of them by a single word
+# ("waiting" vs "negotiating"). This feature could ship and never once fire on
+# a real failure, silently falling back to the old behaviour, and nobody
+# would notice.
+
+@test "burn #44: real-shaped tool-host failure phrasings from the review corpus are recognized (P2-5)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    'Error: MCP server "code-mode" connection closed' \
+    'code-mode host exited unexpectedly' \
+    'tool host handshake failed' \
+    'timed out waiting for the code-mode host' \
+    'Error connecting to tool host'
+  do
+    run _burn_output_infra "$phrase"
+    [ "$status" -eq 0 ]
+  done
+}
+
+# --- P1-2 (2026-09-08 ROUND-2 review): the widening above turned the two
+# "host <gap> failure verb" alternatives into an unbounded prose catcher —
+# `[^."]*` has no upper bound, so any sentence that mentions "tool host"
+# somewhere and, later in the same period-free run, one of the failure verbs
+# fired even when the two had nothing to do with each other (PROBE C-live in
+# the review: an engine's genuine task-failure reply that merely explains a
+# runbook section named after the tool host burned two extra full engine
+# calls and mislabelled a real failure as infra). Every real corpus row —
+# this round's and the last — has the verb within a handful of characters of
+# "host"; bounding the gap keeps them matching while rejecting prose whose
+# mention of the host and its failure verb are unrelated.
+
+@test "burn #44: prose that merely mentions the tool host near an unrelated failure verb is not infra (P1-2 r2)" {
+  _src_burn
+  local phrase
+  for phrase in \
+    'The tool host section of the runbook explains why our Redis connection closed.' \
+    'I checked the tool host docs; the websocket to the build server disconnected.' \
+    'Note: the code-mode host chapter is fine, but the SSH handshake failed twice.' \
+    'While the tool host was idle the database connection timed out.' \
+    'Tests for the tool host retry path assert that the connection timed out branch fires.' \
+    'I could not finish. The tool host section of the runbook explains why our Redis connection closed.'
+  do
+    run _burn_output_infra "$phrase"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #44: a genuine task failure whose reply names the tool host in passing is not rerouted as infra (P1-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "I could not finish. The tool host section of the runbook explains why our Redis connection closed.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude T1
+  run clikae burn claude T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt "summarise the incident"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
+@test "burn #44: invalid retry policy fails before launching" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  local value
+  for value in -1 nope 11 999999999999999999999; do
+    run clikae burn codex T1 --infra-retries "$value" --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'--infra-retries must be'* ]] || false
+  done
+  [ ! -e "$STUB_ARGV_LOG" ]
+}
+
+@test "burn #43: long multiline prompt is stored with only 120 characters previewed" {
+  _stub_burn_transport
+  clikae init codex T1
+  local prompt; prompt="$(printf '%0120d' 0)"$'\nPRIVATE-PROMPT-TAIL'
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-PROMPT-TAIL* ]] || false
+  [[ "$output" == *prompt.txt* ]] || false
+  local saved; saved="$(find "$HOME/.clikae/logs" -name prompt.txt -print)"
+  [ -f "$saved" ]
+  [ "$(cat "$saved")" = "$prompt" ]
+}
+
+@test "burn #43: diagnostic tail does not repeat the engine's multiline prompt echo" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+echo 'task failed'
+STUB
+  clikae init codex T1
+  local prompt; prompt="$(printf '%0120d' 0)"$'\nPRIVATE-PROMPT-TAIL'
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-PROMPT-TAIL* ]] || false
+  [[ "$output" == *'task failed'* ]] || false
+  local saved; saved="$(find "$HOME/.clikae/logs" -name prompt.txt -print)"
+  [ "$(stat -c '%a' "$saved" 2>/dev/null || stat -f '%Lp' "$saved")" = 600 ]
+}
+
+# --- P1-1 (2026-09-08 review): a FINISHED burn must not be discarded because
+# the engine's own reply happens to contain a limit phrase. The task below is
+# what a real runbook-about-quotas prompt provokes: the engine writes the
+# artifact AND signs off with a sentence containing "weekly limit" — before the
+# fix, the dry-string check ran BEFORE the artifact-freshness check and threw
+# the finished work away, rerouting the same task onto a second account.
+
+@test "burn #42: a finished task is not discarded because its OWN reply mentions a limit phrase" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%072d' 0 > "$STUB_ARTIFACT"
+printf "I wrote the runbook. It explains what to do once you've hit your weekly limit.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init claude C1
+  clikae init claude C2
+  run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt "write a runbook about usage limits"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"tank":"C1"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+  [[ "$output" == *'"artifact_bytes":72'* ]] || false
+}
+
+@test "burn #42: --no-reroute also honours a fresh artifact over a limit phrase in the reply" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%072d' 0 > "$STUB_ARTIFACT"
+printf "I wrote the runbook. It explains what to do once you've hit your weekly limit.\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init claude C1
+  run clikae burn claude C1 --json --no-reroute --artifact "$STUB_ARTIFACT" --prompt "write a runbook about usage limits"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+}
+
+# --- P2-2 (2026-09-08 ROUND-2 review): the artifact-wins-outcome fix just
+# above unconditionally cleared the dry marker in its success branch — so a
+# run that finishes with a partial artifact WHILE its own reply also shows a
+# limit event happening right now turned the board's red dot green and
+# dropped the vendor's reset phrase from JSON, even though the account is
+# still genuinely out of fuel (review PROBE R: the same stub, only variance
+# is whether it also wrote a few bytes before the limit line). The artifact
+# must still win the OUTCOME (ok:true / reason: "artifact produced" —
+# unchanged), but the limit/reset is real account state and must still be
+# recorded and shown, not silently overwritten.
+
+@test "burn #42/#45: a fresh artifact does not drop the reset phrase when the SAME reply also shows a limit (P2-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+}
+
+@test "burn #42/#45: a fresh artifact with a concurrent limit event leaves the tank marked dry, not cleared (P2-2 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "Try again at Jul 6th, 2026 2:17 PM"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -eq 0 ]
+}
+
+# --- P1-1 (2026-09-08 round-5 review): the r2/r3 tests above only ever used
+# codex's "try again at …" grammar. limit_codex_reset (before this fix) only
+# recognized that ONE grammar, so a genuine concurrent limit phrased with
+# "resets …" (the repo's own 175-row real corpus is entirely this grammar)
+# yielded an empty reset, limit_codex_output_dry's second gate then treated
+# the whole event as not-dry, and the fresh-artifact branch — reading "not
+# dry" as "safe to recover" — CLEARED a real, pre-existing marker instead of
+# leaving it untouched (review PROBE H).
+
+@test "burn #45: a fresh artifact with a concurrent GENUINE limit phrased as \"resets …\" leaves an EXISTING marker untouched (P1-1 r5)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "resets 5am (Asia/Tokyo)"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reset":"resets 5am (Asia/Tokyo)"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -eq 0 ]                          # marker left in place, not cleared
+}
+
+@test "burn #42: a fresh artifact with NO limit in the reply still clears the dry marker (P2-2 r2 control)" {
+  _stub_burn_transport
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "Try again at Jul 6th, 2026 2:17 PM"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-2 (2026-09-08 ROUND-3 review): limit_codex_output_dry — unlike
+# claude's branch — was never anchored on a direct vendor report; it matches
+# "hit your (usage|session) limit" bare, ANYWHERE in the reply. A codex task
+# that merely TALKS ABOUT the limit while it SUCCEEDS made the r2 fix above
+# call dry_store_mark on a healthy tank (limit_engine_detectable is false for
+# codex, the only engine dry_store is for), and --json said nothing about it
+# (ok:true, reset:null). dry_store.sh's own header promises "a successful run
+# clears it explicitly" — a fresh artifact must never WRITE a new marker.
+
+@test "burn #45: a successful codex burn that merely TALKS ABOUT the limit does not mark the tank dry (P2-2 r3, PROBE B)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'x' > "$STUB_ARTIFACT"
+printf 'Done. The runbook now explains what to do once you hit your usage limit.\n'
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # MARKER BEFORE: none
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # MARKER AFTER: still none
+}
+
+@test "burn #45: a fresh artifact with a concurrent GENUINE limit event leaves an EXISTING marker untouched, but writes none of its own (P2-2 r3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  _src_burn
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # no pre-existing marker
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -ne 0 ]                          # still none written
+}
+
+# --- P1-2 (2026-09-08 review): a tool-host phrase INSIDE THE PROMPT ECHO must
+# not fire the infra classifier. codex (and other engines) can echo the user's
+# own instructions back on stdout — PROBE A in the review used exactly this
+# task text, and the un-redacted classifier burned two extra full engine calls
+# plus 15s of sleep before mislabelling a real task failure as "infra".
+
+@test "burn #44: a tool-host phrase inside the engine's PROMPT ECHO does not trigger infra retries" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+STUB
+  clikae init codex T1
+  local prompt='Review PR #44: it must retry when the engine prints "timed out negotiating with the code-mode host".'
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
+# --- P1-1 (2026-09-08 ROUND-2 review): the fix above only protected the
+# --prompt/--prompt-file form. The raw `-- <engine argv...>` form ("the
+# power-user way" — AGENTS.md/docs/orchestration.md's front door) never sets
+# $prompt, so the substitution was skipped entirely on that path and round
+# 1's P1-2 reappeared there verbatim (PROBE B in the review corpus: two
+# extra full engine calls, a leaked task-text tail, and the wrong `reason`).
+
+@test "burn #44: a tool-host phrase inside the engine's argv echo (raw -- form) does not trigger infra retries (P1-1 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+STUB
+  clikae init codex T1
+  local task='Review PR #44: it must retry when the engine prints "timed out negotiating with the code-mode host".'
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "$task"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+}
+
+@test "burn #44: raw -- form diagnostic tail does not repeat the engine's own argv echo (P1-1 r2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}"
+echo 'task failed'
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "PRIVATE-ARGV-SECRET-XYZ"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *PRIVATE-ARGV-SECRET-XYZ* ]] || false
+  [[ "$output" == *'task failed'* ]] || false
+  [[ "$output" == *command.txt* ]] || false
+}
+
+# --- P1-2 (2026-09-08 round-5 review): _burn_redact_one fed its haystack to
+# awk with RS="\x00" on the theory that a NUL byte can never appear in a
+# bash string, so it was safe as a "no separator, one record" marker. False
+# on macOS's own awk: it cannot hold a NUL in RS at all and silently falls
+# back to PARAGRAPH mode, splitting on blank lines — routine engine output
+# formatting — and gluing the pieces back together with NO separator, which
+# both hides a real limit line (the `^` anchor no longer leads it) and can
+# fabricate a false infra match (two unrelated sentences fused at the blank
+# line). These are function-level, not end-to-end, because the bug is
+# specific to the SHAPE of the haystack (a blank line) rather than any
+# particular classifier.
+
+@test "_burn_redact_full: a needle at or above the minimum length redacts across a blank-line capture (P1-2 r5)" {
+  _src_burn
+  prompt="this-is-the-secret-needle-value"
+  cmd=()
+  local text=$'Working on it.\n\nthis-is-the-secret-needle-value appears here.\n\nBye.'
+  run _burn_redact_full "$text"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"this-is-the-secret-needle-value"* ]] || false
+  # The blank lines (and the line structure the classifiers' `^` anchors
+  # depend on) must survive — not be fused into one line.
+  [[ "$output" == *$'Working on it.\n\n'* ]] || false
+  [[ "$output" == *$'appears here.\n\nBye.'* ]] || false
+}
+
+@test "_burn_redact_full: a blank-line capture no longer fabricates a false infra match by fusing sentences (P1-2 r5, PROBE G3)" {
+  _src_burn
+  prompt=""
+  cmd=("this-is-an-irrelevant-task-string-well-past-the-minimum-length")
+  local text=$'I read docs/tool-host\n\nconnection closed unexpectedly in the unrelated log.'
+  run _burn_output_infra "$(_burn_redact_full "$text")"
+  [ "$status" -ne 0 ]
+}
+
+# --- P1-2 (2026-09-08 ROUND-3 review): pre-classification redaction ran bash's
+# super-linear ${text//needle/repl} over the WHOLE captured output — measured
+# 129x main's time on an 8 MB raw-argv capture (240s vs 1.9s), entirely AFTER
+# the engine exits, invisible to --timeout. This is a timing GUARD, not a
+# stopwatch on a specific number: the threshold is generous (a fixed, main-
+# comparable multiple of the un-redacted case would be more precise but this
+# machine's own load is not controlled for) — it exists to go red if the
+# per-character substitution over the full capture ever comes back, not to
+# pin an exact millisecond figure.
+
+@test "burn #44: an 8MB capture still classifies fast (P1-2 timing guard)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 8000000 /dev/zero | tr '\0' 'x'
+printf "\nYou've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
+}
+
+# --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
+# reads the full, untruncated capture) put the redaction awk loop's
+# per-match `substr(t, i)` copy back in the hot path — and unlike P1-2
+# above, that cost is per MATCH, not per byte: a capture with the needle
+# repeated many times (exactly what a long build-log-style task echoes)
+# reopened the same "burn looks hung after the engine exits" symptom in a
+# new shape. Measured: a 4 MB capture with the redacted needle on every
+# line (53774 hits) took 26.5s. The 8MB/0-hit guard above would NOT have
+# caught this — it exercises the "no match" path, not "many matches".
+
+@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 20000 ]; do
+  printf 'line %d mentions /home/build/workspace/project-checkout-dir again\n' "$i"
+  i=$((i + 1))
+done
+printf "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a dense-needle capture — expected single-digit seconds"; false; }
+}
+
+# --- P2-1 (2026-09-08 ROUND-3 review): the raw `-- <argv>` redaction had no
+# minimum length or word/line boundary, so an everyday `-C .` deleted every
+# period in the engine's reply — merging two sentences into one and letting
+# the tool-host bounded-gap pattern jump across what used to be a sentence
+# break (review's PROBE G). The reverse also held: a short task string could
+# shred a genuine "…hit your usage limit…" line into unrecognizable pieces
+# (PROBE F).
+
+@test "burn #44: a day-to-day '-C .' no longer merges sentences into a false infra match (P2-1 r3, PROBE G)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$CODEX_HOME" >> "$STUB_ARGV_LOG"
+printf 'I stopped early: the build step needs the tool host. The connection closed before I could retry, so nothing was written.\n'
+STUB
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/attempts"
+  clikae init codex T1
+  run clikae burn codex T1 --json --infra-retries 2 --infra-delay 0 --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C . -s workspace-write "refactor the parser"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"infra"'* ]] || false
+  [ "$(wc -l < "$STUB_ARGV_LOG" | tr -d ' ')" = 1 ]     # no infra retries spent
+}
+
+@test "burn #44: a short raw-argv task string cannot shred a genuine limit line (P2-1 r3, PROBE F)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+case "$CODEX_HOME" in
+  */T1) echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM." ;;
+  *) printf 'done' > "$STUB_ARTIFACT" ;;
+esac
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  clikae init codex T2
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" -- exec -s workspace-write "hit"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"tank":"T2"'* ]] || false
+  [[ "$output" == *'"rerouted_from":["codex/T1"]'* ]] || false
+}
+
+# --- P2-1 (2026-09-08 review): #42's at-exit snapshot is narrower than main's
+# old behaviour, which re-stat'd the artifact after the parent finished
+# polling for completion — a write landing shortly after the engine's own
+# process tree exits used to count and, on this branch, silently stopped
+# counting (measured A/B against a main-branch clone, same stub, same params).
+
+@test "burn #42: a write landing just after engine exit still counts as success (P2-1 grace window)" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_LATE_WRITE_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --json --artifact "$STUB_LATE_WRITE_ARTIFACT" -- noop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [[ "$output" == *'"artifact_bytes":4'* ]] || false
+}
+
+# --- P2-4 (2026-09-08 review): #43 made every burn write the FULL task text
+# to a private run dir under ~/.clikae/logs so progress/diagnostics never
+# repeat it — a real win over "it's in a log line", but nothing ever swept
+# those dirs, trading a transient exposure for a permanent one. `clikae clean`
+# has no notion of ~/.clikae/logs at all (`grep -c 'clikae/logs' → 0`).
+
+@test "burn #43: a stale prompt-log run directory is swept past the retention window (P2-4)" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-99999"
+  printf 'stale task text' > "$HOME/.clikae/logs/burn-99999/prompt.txt"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/burn-99999"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ ! -d "$HOME/.clikae/logs/burn-99999" ]
+}
+
+@test "burn #43: a recent prompt-log run directory survives the sweep (P2-4)" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-88888"
+  printf 'recent task text' > "$HOME/.clikae/logs/burn-88888/prompt.txt"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.clikae/logs/burn-88888" ]
+}
+
+@test "burn #43: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the sweep" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/burn-99999"
+  printf 'stale task text' > "$HOME/.clikae/logs/burn-99999/prompt.txt"
+  touch -t "$(date -v-30d '+%Y%m%d%H%M' 2>/dev/null || date -d '30 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/burn-99999"
+  export CLIKAE_BURN_LOG_RETENTION_DAYS=0
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ -d "$HOME/.clikae/logs/burn-99999" ]
+}
+
+# Early validation failures must leave both log directories private, even with
+# a permissive caller umask.
+@test "burn #43: ~/.clikae/logs is created 0700 even when burn fails before the engine loop (P2-3 r2)" {
+  _stub_burn_transport
+  clikae init codex T1
+  rm -rf "$HOME/.clikae/logs"
+  run bash -c 'umask 000; exec "$1" burn codex NOPE --artifact "$2" --prompt "x"' \
+    _ "$CLIKAE_BIN" "$BATS_TEST_TMPDIR/out"
+  [ "$status" -ne 0 ]
+  [ -d "$HOME/.clikae/logs" ]
+  local mode; mode="$(stat -c '%a' "$HOME/.clikae/logs" 2>/dev/null || stat -f '%Lp' "$HOME/.clikae/logs")"
+  [ "$mode" = 700 ]
+  local run_dirs=("$HOME/.clikae/logs"/burn-*)
+  [ "${#run_dirs[@]}" -eq 1 ]
+  [ -d "${run_dirs[0]}" ]
+  [ "$(stat -c '%a' "${run_dirs[0]}" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}")" = 700 ]
+  [ "$(stat -c '%a' "${run_dirs[0]}/prompt.txt" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}/prompt.txt")" = 600 ]
+}

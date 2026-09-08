@@ -71,8 +71,19 @@ a real paid engine; the recipe is how you stop wasting it.
 
 1. **Judge by the artifact / output, never the exit code.** A headless `codex exec`
    or `claude -p` exits `0` even when it hit its usage limit and wrote nothing.
-   `burn` judges by the artifact's presence + fresh mtime; `conduct` by the
+   `burn` snapshots the artifact's presence, fresh mtime, and byte count when the
+   engine exits, before publishing completion. Later cockpit consumption cannot
+   change that verdict; `conduct` by the
    captured output; the legs by `--out` content. Never trust `$?`.
+
+   That first snapshot is taken the instant the engine's own process exits. If
+   it isn't fresh, `burn` takes one more look at the artifact's mtime right
+   before classifying anything else — a write landing in the brief gap
+   between the engine's own exit and `burn`'s classification (a background
+   child still flushing to disk) still counts. This can only ADD a success,
+   never revoke one: the first snapshot always wins when it says fresh, so a
+   consumer deleting the artifact the moment it sees DONE still can't turn
+   that into a failure.
 
 2. **Give the task the easy way — don't hand-roll the engine flags.** Use
    `--prompt-file <f>` (or `--prompt`) + `--add-dir <dir>` and clikae fills in each
@@ -131,6 +142,24 @@ clikae burn claude L \
   --timeout 1200 --fresh
 ```
 
+### Burn prompt logs
+
+`burn` saves the task to `~/.clikae/logs/burn-<pid>/prompt.txt` in a private
+run directory. Progress prints its path and the first 120 characters, with line
+breaks flattened. Reroutes print the path again without repeating the prompt;
+diagnostic tails replace an exact engine echo of the prompt with that path.
+The raw `-- <argv...>` form saves `command.txt` (one argument per line) instead,
+because raw commands have no engine-independent prompt position — an engine
+echoing one of those argv items back is redacted the same way, argv-item by
+argv-item, before either dry/infra classifier runs or a tail is taken. Engine
+capture logs remain raw; the preview limit applies to burn's own progress
+messages.
+
+**Retention.** These run directories are swept automatically: any `burn-*`
+directory older than `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
+disables the sweep) is removed at the start of the next burn. It's a
+stopgap, not a service — `clikae clean` does not yet reach `~/.clikae/logs`.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and
@@ -164,7 +193,26 @@ for free.)
   account's quota, not the budget of your main interactive session. That's the
   whole point — the expensive supervisor stays asleep; cheap workers burn whichever
   account still has gas.
-- **Dry handling.** `burn` auto-reroutes to the next reserve tank on a dry hit
+- **Infrastructure handling (Claude/Codex adapter burn).** A tool-host connection
+  failure such as `timed out negotiating with the code-mode host` retries the
+  **same tank**, with no dry mark or reserve hop. `--infra-retries N` defaults to
+  2 retries after the initial attempt (0 disables retries; maximum 10).
+  `--infra-delay S` defaults to 5 seconds, doubled before each subsequent retry
+  (5s then 10s by default; integer 0–86400). `--timeout` applies per attempt.
+  Exhaustion exits 1 with JSON `reason: "infra"`; existing keys and reasons stay
+  unchanged. `--no-reroute` disables dry hops, not these retries. A fresh artifact
+  still proves success; a quota signal still follows the dry path — but if BOTH
+  are true of the same reply (the engine wrote a few bytes before hitting its
+  limit), the artifact wins the outcome (`ok: true`) while the limit is still
+  recorded: `reset` carries the vendor's phrase rather than being silently
+  dropped, and — for engines whose dry state persists to disk (codex) — an
+  EXISTING dry marker is left in place rather than cleared. A fresh artifact
+  never *writes* a new marker on this path, only leaves one alone: a task that
+  merely mentions the limit while succeeding cannot mark a healthy tank dry.
+  Generic task timeouts without a tool-host signature remain task failures.
+  agy's separate capture loop does not use this retry policy.
+- **Dry handling.** Claude weekly-limit messages follow the same dry path as
+  session limits, including the vendor's verbatim reset time in JSON. `burn` auto-reroutes to the next reserve tank on a dry hit
   (account-aware: it skips siblings that share an already-dried login, and the tank
   an interactive session is live on). `conduct` doesn't reroute — it reports each
   leg as captured / dry / empty so you decide.

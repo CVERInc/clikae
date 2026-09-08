@@ -50,6 +50,62 @@ _src_limit() {
   [ "$status" -ne 0 ]
 }
 
+# --- P2-1 (2026-09-08 round-5 review): the same "12 bytes of leading
+# non-alphabetic noise" allowance claude's branch had was wide enough to
+# admit a markdown blockquote marker — narrowed on both branches together.
+
+@test "codex output_dry: a markdown blockquote marker does not stand in for transport noise (P2-1 r5)" {
+  _src_limit
+  run limit_codex_output_dry "> You've hit your usage limit. try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P1-1 (2026-09-08 round-5 review): limit_codex_reset only recognized
+# "try again at …" — but the repo's own 175-row real-reset-phrase corpus
+# (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
+# at …" grammar, so every one of those real phrases failed to yield a reset
+# and limit_codex_output_dry discarded the whole event as not-dry (175/175).
+# Widened to recognize the same three grammars claude's branch already does.
+
+@test "codex reset phrase: the \"resets …\" grammar is relayed (P1-1 r5)" {
+  _src_limit
+  run limit_codex_reset "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 5am (Asia/Tokyo)"* ]] || false
+}
+
+@test "codex reset phrase: the \"reset at …\" grammar is relayed (P1-1 r5)" {
+  _src_limit
+  run limit_codex_reset "You have already hit your usage limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reset at 5am (Asia/Tokyo)"* ]] || false
+}
+
+@test "codex output_dry: the \"resets …\" grammar fires dry, not just \"try again at …\" (P1-1 r5)" {
+  _src_limit
+  run limit_codex_output_dry "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 5am"* ]] || false
+}
+
+@test "codex output_dry: a real sample of the fixture's reset-phrase corpus fires dry (P1-1 r5, was 175/175 not-dry)" {
+  _src_limit
+  local fixture="$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv"
+  local -a resets=()
+  local _e phrase _x
+  while IFS=$'\t' read -r _e phrase _x; do
+    [ -n "$phrase" ] || continue
+    resets+=("$phrase")
+  done < <(awk -F'\t' '!/^#/ && NF==3' "$fixture" | awk 'NR==1 || NR%37==0')
+  [ "${#resets[@]}" -ge 4 ]
+  local reset
+  for reset in "${resets[@]}"; do
+    run limit_codex_output_dry "You've hit your usage limit. $reset"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$reset" ]
+  done
+}
+
 # --- $CLIKAE_LIMIT_PATTERN fallback for the headless output-dry path -----------
 # The built-in matcher leans on codex's CURRENT wording ("hit your usage limit").
 # If a vendor rewords its limit line, burn/conduct would misread a dry tank as a

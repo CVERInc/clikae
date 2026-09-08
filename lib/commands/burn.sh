@@ -45,7 +45,7 @@ Give the task in one of two ways:
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
   --add-dir <dir>     a directory the engine may write in. Defaults to the
                       artifact's parent. Repeatable. (codex uses the first as its cwd.)
-  --artifact <path>   the file the task must produce. Success = it appears, or (if
+  --artifact <path>   checked at engine exit. Success = it appears, or (if
                       it already existed) its timestamp changes — a STALE file from
                       a previous run is NOT counted as success.
   --fresh             delete <artifact> before running, for a clean slate.
@@ -65,14 +65,19 @@ Give the task in one of two ways:
                          reset, rerouted_from[], elapsed_s, run_id}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
-  --no-reroute        run once; on a dry tank, stop instead of falling through.
+  --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
+                      up to n times (default 2; 0 disables retries).
+  --infra-delay <s>   initial retry delay in whole seconds (default 5), doubled
+                      for each subsequent retry. --timeout bounds each attempt.
+  --no-reroute        on a dry tank, stop instead of falling through.
   --allow-active      let auto-reroute use a tank an interactive session is on.
                       By default the reserve SKIPS such tanks (rerouting a headless
                       job onto the tank you're mid-conversation on would silently
                       burn that quota) and tanks sharing an already-dry account.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
-no artifact but no limit -> a real task failure (NOT rerouted — it'd fail the same
+tool-host failure -> retry the same tank, then reason: infra (exit 1);
+no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
 on every tank).
 
 Examples:
@@ -100,6 +105,255 @@ Re-firing the same task on another account sits in the vendors' terms gray
 zone — where the line is, with the actual policy language and dates:
 docs/terms-and-your-accounts.md (shown once before your first carry).
 EOF
+}
+
+# Infrastructure signatures must name the tool host: a generic timeout can be
+# a task failure and must not spend another attempt automatically. This is a
+# hand-written whitelist, not a real-corpus one like limit.sh's 175-line
+# fixture (P2-5, 2026-09-08 review) — five plausible real tool-host failure
+# sentences all NO-MATCHED, one by a single word ("waiting" vs "negotiating").
+# Widened to cover more real phrasings of the same four shapes (a timeout/
+# failure/closed-connection/disconnect NAMING the tool host) without
+# loosening the "must name the host" discipline that keeps this from becoming
+# a P1-2-style generic-timeout catcher.
+#
+# P1-2 (2026-09-08 round-2 review): the widening above turned the two
+# "host <gap> verb" alternatives into a prose catcher — `[^."]*` has no upper
+# bound, so ANY sentence that happens to mention "tool host" and, later in
+# the same period-free run, one of the failure verbs fired (e.g. "the tool
+# host section of the runbook explains why our Redis connection closed",
+# PROBE C-live in the review). Every real shape in the corpus — this round's
+# and the last — has the verb within a handful of characters of "host" (a
+# single connecting word like "was"/"'s", never a clause); bounding the gap
+# to 6 chars keeps every real corpus row matching while rejecting prose that
+# merely mentions the host somewhere upstream of an unrelated failure.
+_burn_output_infra() {
+  # P2-1 (2026-09-08 round-4 review): a here-string, not a pipe from a
+  # separate `printf` process — see limit_codex_reset's comment for why a
+  # pipe risks hanging on a large, untruncated haystack. This one has no
+  # early-exit flag (no `-q`/`-m1`) so it was never actually exposed to that
+  # specific hang, but it reads the SAME out_for_class a large capture can
+  # now carry, so it gets the same safer plumbing on general principle.
+  grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' <<< "$1" >/dev/null
+}
+
+# _burn_redact <text> [replacement] -> <text> with the task's own content
+# taken out (or swapped for <replacement>, default empty) — whichever
+# dispatch form supplied it. P1-1 (2026-09-08 round-2 review): the previous
+# redaction only ever looked at $prompt, which is UNSET for the raw
+# `-- <engine argv...>` form ("the power-user way" — AGENTS.md's front door
+# and docs/orchestration.md both document it) — so an engine echoing its own
+# argv back on stdout sailed through unredacted on that path (PROBE B: two
+# extra full engine calls, a leaked task-text tail, and the wrong `reason`).
+# $cmd holds the raw argv for that form and is never reassigned by a
+# cross-engine reroute (unlike --prompt mode's regenerated flags), so
+# looping over it stays correct across the whole retry loop. Whichever form
+# supplied the task, exactly one of $prompt / $cmd is populated at any call
+# site, so checking $prompt first is enough to pick the right one.
+#
+# P1-2 (2026-09-08 round-3 review): bash's ${text//needle/repl} is
+# super-linear in the haystack's size, so redacting the WHOLE captured
+# output cost tens of seconds to minutes of pure bash string time AFTER the
+# engine had already exited — no progress output, outside --timeout's reach
+# (it bounds the engine, not this). Measured on an 8 MB capture: 1MB/4MB/8MB
+# single-pass costs of 382ms/5125ms/20209ms, and end-to-end ×23 (--prompt
+# form) to ×129 (raw argv, four minutes) versus a main-branch clone on the
+# same stub. burn's own purpose — long, unattended tasks — produces exactly
+# the large captures this is slowest on. The classifiers only need the
+# FINAL message anyway (limit.sh's own doc: "a genuine vendor sentence IS
+# the line, or leads it"), so bound the haystack to its own tail before
+# ever substituting into it — this is what P2-1's boundary/length fix below
+# also relies on to stay fast.
+_BURN_REDACT_TAIL_BYTES=${_BURN_REDACT_TAIL_BYTES:-65536}
+
+# P2-1 (2026-09-08 round-3 review): the raw `-- <argv>` form redacted every
+# item of $cmd with NO minimum length and no word boundary — argv is full of
+# short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one got
+# blindly stripped out of the engine's ENTIRE reply. A day-to-day `-C .`
+# deleted every period in the reply, merging two sentences into one and
+# flipping "a real task failure" into "infra" (the tool-host bounded-gap
+# pattern only holds because a period normally separates unrelated
+# sentences); a short task string like `"hit"` shredded a genuine
+# "…hit your usage limit…" line into unrecognizable pieces. Short flags and
+# path fragments are not "the task's own text echoed back" — redacting them
+# buys no privacy and only corrupts unrelated prose. Below this length,
+# skip the item entirely; at or above it, replace only BOUNDARY-safe
+# occurrences (the byte immediately before/after the match, if any, is not
+# itself a word character) — plain substring search, not regex, so a
+# needle full of shell/path metacharacters is never mis-parsed.
+_BURN_REDACT_MIN_LEN=${_BURN_REDACT_MIN_LEN:-20}
+
+# P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (below this comment)
+# made classification read the UNTRUNCATED capture, which put the awk loop's
+# per-match `substr(t, i)` back on the hook for every byte of a multi-MB
+# reply — and that copy is taken once PER MATCH, not once total, so a dense
+# needle (burn's own PROMPT or a repeated argv path, exactly what long
+# unattended tasks echo back a lot of) reopened round-3's P1-2 in a new
+# shape: O(matches × remaining-length) instead of O(capture-size). Measured
+# on this machine: a 4 MB capture with the needle on every line (53774
+# hits) took 26.5s, quadratic in the hit count (doubling MB ~4x'd the time).
+# Reworking the awk loop to avoid the copy (`split()`, `gsub()`) does not
+# help THIS awk (macOS's BWK build, `awk version 20200816`): raw `split()`
+# alone on 300000 matches took 55s CPU — the slowdown lives in its
+# many-match path generally, not in this loop's shape specifically.
+#
+# A SEPARATE, bigger cost hid behind that one: whichever tool does the
+# substitution, `_burn_redact_full` used to invoke it ONCE PER ARGV ITEM
+# (below), reassigning `text` through a bash command substitution each
+# time — even for items too short to redact. bash 3.2 (macOS's own
+# `/bin/bash`) turns out to be the real bottleneck for a multi-MB haystack:
+# measured, six bare pass-throughs of an 8 MB string via `local t="$1"` +
+# `printf '%s' "$t"` inside `$( )` took 75s — no awk or perl involved at
+# all. A raw `-- <argv>` task commonly has 2+ items at or above the minimum
+# length (a long `-C <path>` plus the task string itself), so this fired on
+# every dense-capture burn regardless of which substitution engine was
+# fixed. The fix is to stop reassigning `text` per item: gather every
+# qualifying needle first, then make exactly ONE pass over the haystack
+# (`perl` builds one alternation of all of them; that regex engine is
+# linear in matches — 0.11s CPU on a 300000-match input, 0.04s on the
+# 53774-hit/7 MB case — and is already an accepted dependency here,
+# `_burn_timeout_bin` falls back to it for `--timeout`). The no-perl
+# fallback below still loops per item (rare path, correct but slower).
+_BURN_REDACT_NEEDLE_SEP=$'\001'   # SOH — see the RS comment on the awk fallback for why not NUL
+
+_burn_redact_one_awk() {
+  local text="$1" needle="$2" repl="$3"
+  # P2-1 (2026-09-08 round-4 review): the haystack used to travel through
+  # ENVIRON (an exported env var), which is what forced the 64 KiB
+  # truncation below in the first place — a multi-MB capture in an env var
+  # risks E2BIG. Feed it over stdin instead, with RS set to a byte that
+  # never splits it, so the whole capture arrives as ONE record; only the
+  # small needle/repl still go through ENVIRON.
+  #
+  # P1-2 (2026-09-08 round-5 review): RS="\x00" was that byte, on the theory
+  # that bash strings are NUL-free so it could never appear in $text. False
+  # on macOS's own /usr/bin/awk (BWK awk, `awk version 20200816`): its RS
+  # cannot HOLD a NUL byte at all, and a "\x00" value silently collapses to
+  # RS="" — awk's PARAGRAPH-mode sentinel — not "no separator". A capture
+  # with a blank line (routine engine output formatting) then arrived as
+  # MULTIPLE records glued back together by `printf "%s"` below with no
+  # separator at all: "Working on it.\n\nYou've hit your usage limit\n\nBye."
+  # became "Working on it.You've hit your usage limitBye." — destroying the
+  # `^` line anchors both classifiers rely on (a real limit line stopped
+  # matching) and fabricating brand-new ones (two sentences fused at a blank
+  # line could spell a false infra match). Verified on this machine: `awk
+  # 'BEGIN{RS="\x00"}{print NR}' ` on a 3-blank-line-separated file reports
+  # NR=3, not 1. "\001" (SOH) is an ordinary byte, not the string
+  # terminator, so no awk implementation needs to special-case it — verified
+  # NR=1 on the same input. It is not impossible for an engine to emit a raw
+  # SOH byte, but it is not the C-string terminator every string primitive
+  # already treats specially, which NUL is.
+  printf '%s' "$text" | RNEEDLE="$needle" RREPL="$repl" awk '
+    BEGIN {
+      RS = "\001"
+      n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
+      nlen = length(n)
+    }
+    {
+      t = $0; tlen = length(t)
+      out = ""; i = 1
+      while (i <= tlen) {
+        p = index(substr(t, i), n)
+        if (p == 0) { out = out substr(t, i); break }
+        start = i + p - 1; endc = start + nlen - 1
+        before = (start > 1)   ? substr(t, start - 1, 1) : ""
+        after  = (endc < tlen) ? substr(t, endc + 1, 1)  : ""
+        ok = 1
+        if (before != "" && before ~ /[A-Za-z0-9_]/) ok = 0
+        if (after  != "" && after  ~ /[A-Za-z0-9_]/) ok = 0
+        out = out substr(t, i, start - i) (ok ? r : substr(t, start, nlen))
+        i = endc + 1
+      }
+      printf "%s", out
+    }'
+}
+
+# _burn_redact_full <text> [replacement] -> <text> with the task's own
+# content taken out, over the WHOLE haystack, no truncation.
+#
+# P2-1 (2026-09-08 round-4 review): _burn_redact (below) truncated to the
+# tail BEFORE substituting, which — since P1-2's fix made the substitution
+# an O(n) awk pass instead of bash's super-linear ${text//…} — was no longer
+# needed to keep substitution fast, but it was still unconditionally in the
+# path CLASSIFICATION reads (`out_for_class` in cmd_burn), so any dry/infra
+# signal past the last 64 KiB went blind: a task's own tool-host failure,
+# typically mid-run since the engine keeps talking afterward, drifts exactly
+# there on a long capture — burn's whole reason to exist. Substitution
+# staying bounded is fine; classification silently narrowing its view is
+# not. Split the two: this variant never truncates, and is what feeds the
+# classifiers. _burn_redact still truncates, but only for the short
+# human-facing diagnostic tail below, where a bound is genuinely harmless.
+#
+# P1-3 (2026-09-08 round-5 review): gather every needle at/above the
+# minimum length FIRST, then substitute all of them in exactly ONE pass
+# over `text` (one `perl`/`awk` invocation, one command substitution) —
+# see the cost comment above `_burn_redact_one_awk` for why looping this
+# per argv item was the actual bottleneck, independent of which tool did
+# the matching. $prompt is always a single item (and may be genuinely
+# multi-line, e.g. a `--prompt-file` task echoed back verbatim) so it skips
+# the multi-needle join entirely — joining/splitting on SOH would still be
+# safe (a raw SOH in a needle is exactly as unlikely, and exactly as
+# tolerated, as the awk fallback's RS byte above), but there is no reason
+# to pay for it when there is only one needle.
+_burn_redact_full() {
+  local text="$1" repl="${2:-}"
+  local -a needles=()
+  if [ -n "${prompt:-}" ]; then
+    [ "${#prompt}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles=("$prompt")
+  else
+    local c
+    for c in "${cmd[@]}"; do
+      [ "${#c}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles+=("$c")
+    done
+  fi
+  [ "${#needles[@]}" -gt 0 ] || { printf '%s' "$text"; return 0; }
+  if command -v perl >/dev/null 2>&1; then
+    local needle_list; needle_list="$(printf "%s${_BURN_REDACT_NEEDLE_SEP}" "${needles[@]}")"
+    # -0777 slurps the whole input as one string (undef $/), so a needle
+    # spanning multiple lines still matches as one unit. \Q..\E (via
+    # quotemeta) makes every needle a literal, never a regex — a path full
+    # of `.`/`/` must never be parsed as one. The lookaround pair is the
+    # same boundary rule as the awk fallback's before/after byte check,
+    # native instead of hand-rolled: a word character on either side means
+    # "not a citation of the task's own text", so leave it alone. Perl's
+    # backtracking tries each alternative in order and only commits once
+    # the trailing lookahead also holds, so a needle that is a PREFIX of
+    # another (rare, but possible across several argv items) still resolves
+    # to the longest real match at that position rather than a truncated
+    # one. $r is substituted as a whole Perl SCALAR, never re-parsed for
+    # `$`/`@`/backslash escapes of its own content.
+    printf '%s' "$text" | RNEEDLES="$needle_list" RREPL="$repl" RSEP="$_BURN_REDACT_NEEDLE_SEP" perl -0777 -pe '
+      BEGIN {
+        $r = $ENV{"RREPL"};
+        my @ns = split /\Q$ENV{"RSEP"}\E/, $ENV{"RNEEDLES"};
+        $pat = join("|", map { quotemeta($_) } @ns);
+      }
+      s/(?<![A-Za-z0-9_])(?:$pat)(?![A-Za-z0-9_])/$r/g if length($pat);
+    '
+    return 0
+  fi
+  local n
+  for n in "${needles[@]}"; do
+    text="$(_burn_redact_one_awk "$text" "$n" "$repl")"
+  done
+  printf '%s' "$text"
+}
+
+_burn_redact() {
+  local text="$1" repl="${2:-}"
+  if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
+    text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
+  fi
+  _burn_redact_full "$text" "$repl"
+}
+
+# Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
+# Raw engine output stays in its capture log; burn's progress never repeats
+# the task, on either dispatch form (see _burn_redact).
+_burn_output_tail() {
+  local text="$1" lines="${2:-5}"
+  [ -n "${saved_prompt:-}" ] && text="$(_burn_redact "$text" "[prompt: $saved_prompt]")"
+  printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
@@ -157,6 +411,41 @@ _burn_timeout_bin() {
 # _burn_size <path> -> byte count, or "?" if absent (for the summary line).
 _burn_size() {
   if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
+}
+
+# _burn_sweep_old_logs — best-effort retention for burn's own prompt-copy run
+# dirs. #43 made every burn write the FULL task text to
+# ~/.clikae/logs/burn-<pid>/prompt.txt (0600) so progress/diagnostic tails
+# never repeat it — a real privacy win over "it's in a log line" — but the net
+# effect was to trade a transient exposure for a PERMANENT one: nothing ever
+# swept these directories (P2-4, 2026-09-08 review; `clikae clean` has no
+# notion of ~/.clikae/logs at all). One sweep per burn invocation is enough —
+# this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
+# overrides the default (7); 0 disables the sweep (kept forever, old
+# behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+_burn_sweep_old_logs() {
+  local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$days" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  [ -d "$base" ] || return 0
+  local d
+  while IFS= read -r -d '' d; do
+    rm -rf "$d" 2>/dev/null || true
+  done < <(find "$base" -maxdepth 1 -type d -name 'burn-*' -mtime "+$days" -print0 2>/dev/null)
+}
+
+# Capture evidence beside the engine, before publishing completion. Consumers
+# may move/delete the artifact as soon as they see DONE; the parent must never
+# re-stat it to reconstruct an earlier outcome. Publish the pair atomically.
+_burn_snapshot() {
+  local artifact="$1" before="$2" evidence="$3" fresh=0 bytes=null
+  if [ -e "$artifact" ]; then
+    bytes="$(_burn_size "$artifact")"
+    [ "$(_clikae_mtime "$artifact")" = "$before" ] || fresh=1
+  fi
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  printf '%s %s\n' "$fresh" "$bytes" > "$evidence.tmp"
+  mv -f "$evidence.tmp" "$evidence"
 }
 
 # _burn_compose <prompt> <post_cmd_count> <post_cmd...> -- <add_dir...>
@@ -229,7 +518,7 @@ _agy_burn() {
       _agy_kc_verify_restore "$cur"
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
     fi
-    log_info "burn agy/$cur → agy -p ..."
+    log_info "burn agy/$cur → agy (task: $saved_prompt)"
 
     # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
     # symlink shared by every agy process on the tank, repointed by whichever
@@ -258,7 +547,15 @@ _agy_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
-    local out; out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
+    local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    art_pre="$(_clikae_mtime "$artifact")"
+    local out; out="$(
+      "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
+      _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+    )" || true
+    read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    rm -f "$evidence_file"
 
     # Consume the run log once, then drop it on every path below — not just the
     # dry one — so a long reroute loop doesn't litter $TMPDIR.
@@ -267,10 +564,10 @@ _agy_burn() {
     rm -f "$runlog"
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      log_done "Done on agy/$cur — artifact present: $artifact"
+    elif [ "$artifact_fresh" -eq 1 ]; then
+      log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_result true agy "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
     elif printf '%s' "$out" | grep -qi "no output produced"; then
       # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
@@ -282,7 +579,7 @@ _agy_burn() {
       # yielded nothing — a status claim, not prose about an answer, and the
       # closest thing to a structured marker it offers.
       log_err "agy/$cur declined the task — nothing was produced."
-      printf '%s\n' "$out" | head -n 3 | sed 's/^/    /'
+      _burn_output_tail "$out" 3
       log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
@@ -300,10 +597,11 @@ _agy_burn() {
       # (the same line `--dangerously-skip-permissions` sits on), and refusing
       # --artifact outright would remove the only verification burn has.
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
+        artifact_bytes_snapshot="$(_burn_size "$artifact")"
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
-        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
@@ -313,7 +611,7 @@ _agy_burn() {
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      _burn_output_tail "$out"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
@@ -353,7 +651,11 @@ _burn_result() {
   [ "${as_json:-0}" -eq 1 ] || return 0
   local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
   local bytes=null
-  [ -n "$art" ] && [ -e "$art" ] && bytes="$(_burn_size "$art")"
+  if [ -n "${artifact_bytes_snapshot:-}" ]; then
+    bytes="$artifact_bytes_snapshot"
+  elif [ -n "$art" ] && [ -e "$art" ]; then
+    bytes="$(_burn_size "$art")"
+  fi
   printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
@@ -374,6 +676,7 @@ _burn_tried_json() {
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
+  local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -384,6 +687,8 @@ cmd_burn() {
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
+      --infra-retries) shift; [ $# -gt 0 ] || log_fail "--infra-retries needs a count"; infra_retries="$1"; shift ;;
+      --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
@@ -396,6 +701,14 @@ cmd_burn() {
                     shift ;;
     esac
   done
+
+  case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
+  case "$infra_delay" in ''|*[!0-9]*) log_fail "--infra-delay must be a nonnegative integer" ;; esac
+  # Bounds also keep the exponential delay within portable shell arithmetic.
+  [ "${#infra_retries}" -le 2 ] && [ "$infra_retries" -le 10 ] || log_fail "--infra-retries must be between 0 and 10"
+  [ "${#infra_delay}" -le 5 ] && [ "$infra_delay" -le 86400 ] || log_fail "--infra-delay must be between 0 and 86400"
+  infra_retries=$((10#$infra_retries)); infra_delay=$((10#$infra_delay))
+  retry_delay="$infra_delay"
 
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
@@ -432,6 +745,31 @@ cmd_burn() {
   # Fall-through armed (the default) means a dry tank re-fires this task on the
   # next account — the cross-account carry case the one-time note is for.
   [ "$reroute" -eq 1 ] && carry_notice_once
+  # P2-4: sweep prompt-copy dirs from past runs before adding this run's own.
+  _burn_sweep_old_logs
+  # Secure the parent before saving the task: validation below can exit before
+  # the engine loop gets a chance to set log-directory permissions.
+  mkdir -p "$HOME/.clikae/logs"
+  chmod 0700 "$HOME/.clikae/logs"
+  # Keep a private, stable copy even when the input file is later consumed.
+  local run_dir="$HOME/.clikae/logs/burn-$$" saved_prompt task_preview
+  mkdir -p "$run_dir"
+  chmod 0700 "$run_dir"
+  saved_prompt="$run_dir/prompt.txt"
+  if [ "$prompt_set" -eq 1 ]; then
+    (umask 077; printf '%s' "$prompt" > "$saved_prompt")
+    task_preview="${prompt:0:120}"
+  else
+    # Raw argv has no portable prompt position; retain it as one argument per
+    # line rather than guessing an engine-specific option grammar.
+    saved_prompt="$run_dir/command.txt"
+    (umask 077; printf '%s\n' "${cmd[@]}" > "$saved_prompt")
+    task_preview="${cmd[*]}"; task_preview="${task_preview:0:120}"
+  fi
+  task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
+  log_info "task: $saved_prompt"
+  log_info "preview: $task_preview"
+
   case "$cli" in
     agy|antigravity)
       _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
@@ -527,7 +865,7 @@ cmd_burn() {
     # failing, aborting the burn on the very system the fallback exists for.
     if [ "$_prelocked" -eq 1 ]; then exec 7>&-; fi   # release before the (possibly long) engine run
 
-    log_info "burn $cli/$cur → $binary ${cmd[*]}"
+    log_info "burn $cli/$cur → $binary (task: $saved_prompt)"
 
     # Run headless with the tank's env, stdin CLOSED (the burn-writeup hang lesson:
     # a headless codex can't interrupt its own child if stdin is open), capturing
@@ -541,8 +879,12 @@ cmd_burn() {
       esac
     fi
     local run_id="${cli}-${cur}-burn-$$"
+    [ "$infra_attempt" -eq 0 ] || run_id="${run_id}-retry${infra_attempt}"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local state_file="$HOME/.clikae/state/${run_id}_exit"
+    local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    rm -f "$evidence_file"
     # Lock under $HOME/.clikae/state (0700, created just below), NOT world-writable
     # /tmp: a predictable name there let another local user plant it — as a symlink
     # (truncation) or a plain file the clean GC reads as dead, killing your session
@@ -552,6 +894,7 @@ cmd_burn() {
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
     
+    art_pre="$(_clikae_mtime "$artifact")"
     rc=0
     if command -v tmux >/dev/null 2>&1; then
       local wrapper_script="$HOME/.clikae/state/${run_id}.sh"
@@ -589,6 +932,10 @@ cmd_burn() {
         printf '} 2>/dev/null\n'
       } >> "$wrapper_script"
 
+      {
+        declare -f _clikae_mtime _burn_size _burn_snapshot
+        printf 'artifact=%q\nart_pre=%q\nevidence_file=%q\n' "$artifact" "$art_pre" "$evidence_file"
+      } >> "$wrapper_script"
       cat <<EOF >> "$wrapper_script"
 while IFS= read -r kv; do [ -n "\$kv" ] && export "\${kv%%=*}"="\${kv#*=}"; done <<'KV'
 $(adapter_export_env "$dir")
@@ -603,7 +950,11 @@ trap 'echo \$? > "$state_file"; exit' EXIT
 # 0). Without it the "real task failure (rc=…)" line always printed rc=0 — the
 # outcome was still judged by the artifact, but the diagnostic rc was a lie.
 set -o pipefail
-( $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null ) 2>&1 | tee "$log_file"
+( engine_rc=0
+  $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
+  exit "\$engine_rc"
+) 2>&1 | tee "$log_file"
 EOF
       chmod 0700 "$wrapper_script"
 
@@ -637,7 +988,10 @@ EOF
           while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$dir")
 KV
-          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+          engine_rc=0
+          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+          exit "$engine_rc"
         )" || rc=$?
       fi
     else
@@ -645,14 +999,108 @@ KV
         while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
 $(adapter_export_env "$dir")
 KV
-        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
+        engine_rc=0
+        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+        exit "$engine_rc"
       )" || rc=$?
     fi
     
-    rm -f "$state_file"
+    if [ -f "$evidence_file" ]; then
+      read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    fi
+    rm -f "$state_file" "$evidence_file"
+
+    # P2-1 (2026-09-08 review): the snapshot above is taken the instant the
+    # engine's own process exits, inside the same subshell — precise, but
+    # narrower than main's pre-#42 behaviour, which re-stat'd the artifact
+    # AFTER the parent finished polling the state file for completion. A
+    # background child that keeps writing a few hundred ms past the engine's
+    # own exit (A/B-measured against a main-branch clone, same stub, same
+    # params) landed inside that older window and no longer does — an
+    # undocumented narrowing. Restore it as a SECOND look, taken here before
+    # anything is classified: if the snapshot wasn't fresh, check the mtime
+    # once more right now. This can only ADD a success, never revoke one — a
+    # fresh=1 snapshot already means a consumer deleting the artifact right
+    # after DONE can't undo it (#42's guarantee still speaks first).
+    if [ "$artifact_fresh" -ne 1 ] && [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
+      artifact_fresh=1
+      artifact_bytes_snapshot="$(_burn_size "$artifact")"
+    fi
+
+    # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
+    # BEFORE classifying — not just at display time. _burn_output_tail already
+    # redacted the prompt from the DIAGNOSTIC tail, but only after the verdict
+    # was already decided; codex and other engines can echo the user's own
+    # instructions back on stdout (#43's stub models this: `printf '%s\n'
+    # "${@: -1}"`), so a task that merely TALKS ABOUT a limit or a tool-host
+    # outage was misread as one. Same redaction _burn_output_tail uses (P1-1,
+    # 2026-09-08 round-2 review: now covers the raw `-- <argv>` form too, not
+    # only --prompt/--prompt-file — see _burn_redact), run earlier so it
+    # protects the classifiers too, not only the display. Computed here,
+    # before the artifact check below, so BOTH branches can classify the
+    # SAME reply.
+    #
+    # P2-1 (2026-09-08 round-4 review): this used to call _burn_redact, which
+    # truncates to the last 64 KiB before redacting — bounding not just the
+    # substitution (fine) but the CLASSIFIERS' entire view of the reply (not
+    # fine: a signal past that tail was invisible to both dry and infra
+    # detection). Use the untruncated variant here; only the display tail
+    # still bounds itself. See _burn_redact_full's comment.
+    local out_for_class; out_for_class="$(_burn_redact_full "$out")"
+
+    # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
+    # A burn that FINISHED — the artifact is fresh — was being discarded as dry
+    # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a
+    # task about writing a quota runbook), which then re-fired the SAME task on
+    # a second account. Judge success before scanning any prose for a limit or
+    # an infra signature, so a completed task can never be rerouted to redo
+    # work that is already done.
+    if [ "$artifact_fresh" -eq 1 ]; then
+      # P2-2 (2026-09-08 round-2 review): the artifact wins the OUTCOME — that
+      # guarantee above is unchanged — but a limit event that IS happening in
+      # this SAME reply is real account state, not noise the artifact should
+      # silently overwrite. Before this, the success branch unconditionally
+      # cleared the dry marker, so a run that finished with a few partial
+      # bytes on a tank the engine had JUST reported as out of fuel turned the
+      # board's red dot green (and dropped the vendor's reset phrase from
+      # JSON) while the account was still genuinely dry. Check the same
+      # signal the dry branch below would, and if it fires, leave any
+      # existing marker alone instead of clearing it, and surface the reset
+      # phrase.
+      #
+      # P2-2 (2026-09-08 round-3 review): that round-2 fix called
+      # dry_store_mark here — but limit_codex_output_dry (unlike claude's
+      # branch, never anchored on a direct vendor report) matches "hit your
+      # (usage|session) limit" bare, ANYWHERE in the reply. A codex task that
+      # merely TALKS ABOUT the limit while it succeeds ("Done. The runbook
+      # now explains what to do once you hit your usage limit.") matched it
+      # too, and limit_engine_detectable is false for codex — the ONLY
+      # engine that uses dry_store at all — so a SUCCESSFUL burn silently
+      # wrote a dry marker on a healthy tank (round-3 PROBE B), with --json
+      # showing ok:true and reset:null: nothing said it happened.
+      # dry_store.sh's own header promises "a successful run clears it
+      # explicitly" — writing one here breaks that promise on the one path
+      # it matters most (the tank that just proved it has fuel by finishing
+      # the task). A fresh artifact must never WRITE a new marker; if the
+      # SAME reply also shows a live signal, at most leave an existing
+      # marker as-is (never clear a tank that may still be genuinely dry).
+      # The reset phrase, when there is one, already reaches the caller via
+      # `_burn_result`'s "reset" field below — unchanged by this.
+      local live_reset=""
+      if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
+        log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
+      else
+        dry_store_clear "$cli" "$cur"   # a real success recovered this tank
+      fi
+      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
+      _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      return 0
+    fi
 
     # Judge by limit-string + artifact, never the exit code.
-    if reset="$(limit_output_dry "$cli" "$out")"; then
+    if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
@@ -663,16 +1111,22 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_done "Done on $cli/$cur — artifact present: $artifact"
-      _burn_result true "$cli" "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
-      return 0
+    elif _burn_output_infra "$out_for_class"; then
+      if [ "$infra_attempt" -lt "$infra_retries" ]; then
+        infra_attempt=$((infra_attempt + 1))
+        log_warn "$cli/$cur infrastructure failure — retry $infra_attempt/$infra_retries on the same tank in ${retry_delay}s."
+        sleep "$retry_delay"
+        retry_delay=$((retry_delay * 2))
+        continue
+      fi
+      log_err "$cli/$cur infrastructure failure after $infra_attempt retries."
+      _burn_result false "$cli" "$cur" "$artifact" "infra"
+      _burn_output_tail "$out"
+      return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+      _burn_output_tail "$out"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     fi
@@ -723,6 +1177,7 @@ KV
       fi
     fi
     cur="$nx_tank"
+    infra_attempt=0; retry_delay="$infra_delay"
     log_info "Rerouting (dry) → $cli/$cur"
   done
 }

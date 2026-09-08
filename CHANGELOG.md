@@ -7,6 +7,229 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
+  own awk, and per-match redaction cost was quadratic in the hit count.**
+  `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently
+  collapses to `RS=""`, awk's PARAGRAPH mode, gluing the capture back
+  together at every blank line (routine engine output formatting) with NO
+  separator: a real limit line's `^` anchor stopped matching, and two
+  unrelated sentences fused at the blank line could fabricate a false infra
+  match. Separately, a capture with the redacted needle repeated many times
+  (a long build-log-style task echoing its own path back on every line) cost
+  26.5s of pure awk time on a 4 MB capture — the `substr` copy inside the
+  loop is taken once PER MATCH, not once total, and doubling the capture
+  quadrupled the time. Both are fixed the same way: gather every qualifying
+  needle first and substitute all of them in exactly ONE `perl -0777` pass
+  when `perl` is on PATH (its regex engine is linear in matches and has no
+  trouble holding a NUL byte) — already an accepted dependency here
+  (`_burn_timeout_bin` falls back to it for `--timeout`) — falling back to a
+  SOH-delimited (`\001`, not NUL) per-needle awk loop, correct but still
+  quadratic under a dense needle, only when it is not (#44).
+
+- **The "12 bytes of leading non-alphabetic noise" allowance let markdown
+  syntax stand in for transport noise.** A blockquote marker (`>`) or a
+  numbered-list digit + `.` are non-alphabetic too, so a real task failure
+  whose reply quoted or listed the phrase ("The runbook I was drafting
+  says: > You have reached your weekly limit.") walked the entire reserve —
+  a regression `main` never had (it never matched "reached your weekly
+  limit" at all). Narrowed the noise class, on both the codex and claude
+  branches, to the transport whitespace and stray symbols a caller's OWN
+  wrapper might actually prepend — never `>`, `#`, a quote character, a
+  digit, `.`, or `-` (#45).
+
+- **A genuine codex limit event phrased with either of codex's OTHER reset
+  grammars ("resets …" / "reset at …") was read as not-dry.** `limit_codex_reset`
+  only ever recognized "try again at …", so the repo's own 175-row real
+  reset-phrase corpus (`tests/fixtures/limit-reset-phrases.tsv`) — entirely
+  "resets …" / "reset at …" grammar — yielded no reset for a single one of
+  those 175 rows once prefixed with codex's own confirmed sentence.
+  `limit_codex_output_dry`'s second gate then discarded the whole event as
+  not-dry, silently closing reroute AND the board's only red dot for codex
+  (`dry_store` is codex-only) — and, on the fresh-artifact path, let a
+  genuine EXISTING marker be cleared, since "not dry" there means "safe to
+  clear". Recognizes the same three grammars claude's branch already does
+  (#45).
+
+- **A SUCCESSFUL codex burn could silently mark a healthy tank dry.**
+  `limit_codex_output_dry` — unlike claude's branch — was never anchored on
+  a direct vendor report, so it matches "hit your (usage|session) limit"
+  bare, anywhere in the reply; a codex task that merely TALKS ABOUT the
+  limit while it succeeds ("Done. The runbook now explains what to do once
+  you hit your usage limit.") matched it too. The success branch called
+  `dry_store_mark` on that signal, and codex is the only engine that signal
+  is even used for — so a finished task wrote a dry marker on a tank that
+  had just proven it has fuel, with `--json` saying nothing (`ok:true`,
+  `reset:null`). `dry_store.sh`'s own header promises "a successful run
+  clears it explicitly"; a fresh artifact now never writes a new marker —
+  at most it leaves an existing one untouched when the same reply also
+  carries a live signal, never clears a tank that may still be dry (#45).
+
+- **The raw `-- <argv>` redaction had no minimum length or word/line
+  boundary, so an everyday `-C .` could flip the classification.** argv is
+  full of short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one
+  was blindly stripped out of the engine's ENTIRE reply. Deleting every `.`
+  merged two sentences into one and let the tool-host bounded-gap pattern
+  jump across what used to be a sentence break — a real task failure
+  misread as an infrastructure outage, spending extra engine calls and the
+  wrong `reason`. The reverse also held: a short task string could shred a
+  genuine "…hit your usage limit…" line into unrecognizable pieces. Below a
+  minimum length an argv item is skipped entirely; at or above it, only
+  BOUNDARY-safe occurrences are replaced (#44).
+
+- **Pre-classification redaction cost tens of seconds to minutes of pure bash
+  string time AFTER the engine had already exited.** `_burn_redact`'s
+  `${text//needle/repl}` is super-linear in the haystack's size and ran over
+  the WHOLE captured output; measured 129x main's time on an 8 MB raw-argv
+  capture (240s vs 1.9s) — invisible to `--timeout` (it bounds the engine,
+  not this) and with no progress output, so from outside it looked like burn
+  had hung. burn's own purpose (long, unattended tasks) produces exactly the
+  large captures this was slowest on (#44). **Correction (round-5 review):**
+  the claim that closed this entry — "the classifiers only need the FINAL
+  message anyway, so the haystack is now bounded to its own tail" — was
+  itself reversed one entry later in this same file (round-4's P2-1: bounding
+  *classification*, not just substitution, made a signal past the last 64
+  KiB invisible to both detectors, which is exactly the large-capture case
+  this entry describes). Classification reads the full capture; only
+  substitution's cost stays bounded, now by an O(n) single-pass redaction
+  instead of the truncation this entry originally described (#44).
+
+- **The "you've "/"you have " prefix that #45 required was never anchored to
+  the start of a line, so it still matched its own documented
+  counterexample.** CHANGELOG's own illustration of a fixed false positive —
+  "the runbook covers what happens when you have reached your weekly
+  limit…" — still classified dry when it appears mid-sentence in a real
+  reply ("I could not write the file. The runbook covers…"), walking the
+  entire reserve on a genuine task failure (round-3 review PROBE O). A real
+  vendor sentence IS its line (or leads it); prose that merely quotes the
+  reader's own words never does. Anchored to the start of a line, same
+  reasoning as the `^weekly[ -]limit` alternative beside it (#45).
+
+- **A curly apostrophe or a one-word adverb between the direct vendor report
+  and its verb made a genuinely dry tank invisible.** #45's "you've "/"you
+  have " prefix (round-2 review) required it sit IMMEDIATELY before "hit"/
+  "reached" — narrower than main, which never required the prefix at all —
+  so "You’ve hit your usage limit" (curly quote) and "You have already hit
+  your usage limit" (adverb) stopped matching entirely: a real dry tank
+  read as a hard task failure (no reroute, no dry marker, no reset), the
+  exact misread `burn --help` warns about. Tolerates the ASCII/curly
+  apostrophe and up to two words between the prefix and its verb (#45).
+
+- **The tool-host infrastructure whitelist missed real-shaped failure
+  phrasings.** Unlike `limit.sh`'s 175-line real corpus, `_burn_output_infra`
+  was hand-written; five plausible real tool-host sentences all failed to
+  match, one by a single word ("waiting" vs "negotiating"). Widened to cover
+  more phrasings of the same four shapes (timeout / connect-failure /
+  closed-connection / disconnect, always naming the host) without loosening
+  the "must name the tool host" discipline (#44).
+
+- **Prompt-copy run directories under `~/.clikae/logs` were never swept.**
+  #43 traded a transient exposure (the full task text in a progress line) for
+  a permanent one (a private but never-cleaned copy on disk) — `clikae clean`
+  has no notion of that directory at all. `burn` now sweeps `burn-*`
+  directories past `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
+  disables it) at the start of each run (#43).
+
+- **Two real declaration shapes for Claude's weekly limit were missed.**
+  "Your limit will reset at 5am …" (singular "reset at") extracted no reset
+  phrase (`reset:null`) even though the vendor's words were right there, and
+  "You've reached your weekly limit" (reached before "your", not after) was
+  not detected as dry at all — a real limit misread as a hard task failure,
+  worse than a missing reset string. Both are now recognized (#45).
+
+- **Ordinary prose merely discussing a weekly limit fired a dry-tank
+  reroute.** `weekly[ -]limit (reached|exceeded)` was the only alternative in
+  the claude branch with no verb anchoring it to the human ("hit your …"), so
+  a sentence like "the weekly limit reached its cap in July" matched. It now
+  requires the phrase to lead its own line, matching how a genuine vendor
+  message actually appears (#45).
+
+- **A write landing just after the engine's own exit stopped counting as
+  success.** #42's snapshot is taken the instant the engine's process tree
+  exits; main's older behavior re-stat'd the artifact after the parent
+  finished polling for completion, which caught a background child's write
+  landing shortly afterward. `burn` now takes a second look at the mtime
+  right before classifying if the first snapshot wasn't fresh, restoring that
+  window without weakening the snapshot's own guarantee (#42).
+
+- **A task that merely TALKED ABOUT a tool-host error was classified as one.**
+  `_burn_output_infra` and `limit_output_dry` read the raw captured output,
+  which can carry the engine's own echo of the task text (codex echoes user
+  instructions verbatim). A code review whose prompt described a tool-host
+  failure burned two extra full engine calls and 15s of sleep before
+  mislabelling a real task failure as infra. The task's own prompt is now
+  stripped from the output before either classifier runs (#44).
+
+- **A `burn` that FINISHED could be discarded and re-fired on a second
+  account** because the dry-phrase check ran before the artifact-freshness
+  check: a task whose own reply happened to contain a limit phrase (e.g. a
+  runbook about usage limits) was misread as dry even with a fresh artifact
+  on disk. Artifact evidence now outranks phrase-matching (#42).
+
+- `burn` stores its prompt under a private run directory and logs the path plus
+  a 120-character preview, avoiding repeated full prompts in progress and
+  diagnostic tails (#43).
+
+- `burn` recognizes tool-host connection failures as infrastructure failures,
+  retries the same tank with bounded exponential backoff, and reports JSON
+  `reason: "infra"` when retries are exhausted (#44).
+
+- Claude weekly-limit output now classifies as dry in `burn`, preserving the
+  vendor's reset phrase and normal reserve routing (#45).
+
+- `burn` snapshots artifact freshness and size at engine exit, so a cockpit
+  consuming DONE before the parent polls cannot turn success into failure (#42).
+
+- **The widened tool-host infrastructure whitelist turned into a prose
+  catcher.** The "host `<gap>` failure verb" alternatives had no upper bound
+  on the gap, so any sentence merely mentioning the tool host somewhere
+  ahead of an unrelated failure verb in the same sentence matched — a
+  genuine task failure whose reply happened to explain a runbook section
+  named after the tool host was misread as an infrastructure failure and
+  burned extra engine calls. The gap is now bounded to the width every real
+  phrasing in the corpus actually needs (#44).
+
+- **The task-echo redaction only covered `--prompt`/`--prompt-file`.** The
+  raw `-- <engine argv...>` dispatch form — documented in `AGENTS.md` as the
+  "power-user way" — never sets `$prompt`, so an engine echoing its own argv
+  back on stdout sailed through unredacted on that path: a task whose own
+  argv merely described a limit or tool-host outage burned extra engine
+  calls before being classified. Redaction now covers both forms — the
+  argv-supplied text is stripped argv-item by argv-item on the raw path,
+  same as the prompt string is on the other (#44).
+
+- **A second bare "reached your … limit" alternative reopened the hole its
+  sibling fix had just closed.** Unlike "hit your …", "reached your …" reads
+  naturally in third-person documentation prose that still addresses the
+  reader as "you" ("the runbook covers what happens when you have reached
+  your weekly limit…"), and a line anchor alone doesn't defend it — prose
+  can land the phrase at a fresh line by plain word-wrap. Both "hit"/"reached"
+  now require the direct vendor report ("You've "/"You have ") leading
+  straight into the verb (#45). **Correction (round-3 review):** the claim
+  that closed this entry — "which every genuine phrase in the corpus has and
+  none of the false positives do" — was not backed by any corpus row (the
+  fixture at `tests/fixtures/limit-reset-phrases.tsv` holds reset phrases,
+  not full sentences) and was disproved by this very example: run through
+  the unanchored prefix check above, "the runbook covers what happens when
+  you have reached your weekly limit…" still matched, because the prefix
+  requirement was never anchored to the start of a line. Anchored below (#45).
+
+- **A fresh artifact silently erased a limit event happening in the SAME
+  reply.** The artifact-wins-outcome fix (#42) unconditionally cleared the
+  dry marker in its success branch, so a run that finished with a partial
+  artifact while its own reply also showed a vendor limit line turned the
+  board's red dot green and dropped the reset phrase from JSON — even though
+  the account was still genuinely out of fuel. The artifact still wins the
+  OUTCOME (`ok: true`, `reason: "artifact produced"`, unchanged), and a
+  concurrent limit is still recorded rather than dropped: `reset` carries the
+  vendor's phrase instead of coming back null. **Correction (round-4
+  review):** this entry originally said the tank "stays marked dry" — false.
+  A fresh artifact never *writes* a new dry marker on this path, only leaves
+  an EXISTING one (for engines whose dry state persists to disk, i.e. codex)
+  alone rather than clearing it — a task that merely mentions the limit
+  while succeeding still cannot mark a healthy tank dry (#42, #45).
+
 ## [0.28.9] — 2026-09-05
 
 ### Fixed
