@@ -378,13 +378,27 @@ _memory_adopt_count() {
 # aborting the adopt. Collisions with an existing store file stay in the
 # source and are announced, never silently overwritten.
 #
-# Everything is staged in a scratch directory INSIDE the store first, and
+# Everything is staged in a scratch directory NEXT TO the store (same
+# filesystem as the store's parent, never inside the store itself) first, and
 # moved into place only once the whole copy has succeeded. A copy that fails
 # partway (one unreadable file among several) must leave nothing behind: the
-# next share's seed gate is "store non-empty" (_memory_share:
-# `[ -z "$(ls -A "$store")" ]`) — before staging, that could only be true
-# after a real successful share; a half-copied adopt satisfied it too, so a
-# retry never seeded the joiner's own (stashed, reversible) memory in at all.
+# next share's seed gate used to be "store non-empty" (`[ -z "$(ls -A
+# "$store")" ]`) — before staging existed, that could only be true after a
+# real successful share; a half-copied adopt satisfied it too, so a retry
+# never seeded the joiner's own (stashed, reversible) memory in at all.
+#
+# 🔴 Staging used to live INSIDE the store (`mktemp -d "$store/.adopt.XXXXXX"`)
+# with no trap. An interrupted adopt (Ctrl-C, a closed terminal, a killed
+# session — anything that kills this process before any of the three explicit
+# `rm -rf "$staging"` returns below get to run) left that `.adopt.*` directory
+# behind FOREVER, and `ls -A "$store"` sees a dotdir just fine: the very next
+# `memory share` on this group read "store non-empty" and silently skipped
+# seeding — green output, an empty Soul (R6-P2-1). Two independent fixes: this
+# function no longer stages inside the store at all (so nothing it does can
+# trip that gate), and a `trap` frees the staging dir on a signal too, not
+# only on a `return`. Belt AND suspenders — `_memory_share`'s seed gate below
+# also ignores dotfiles/dot-dirs on its own, so residue from an OLDER build of
+# clikae (which did stage inside the store) can't fool it either.
 _memory_adopt() {
   local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line found=0 copied=0
   ! _memory_same_dir "$source" "$store" || return 0
@@ -427,8 +441,18 @@ _memory_adopt() {
   # the loop see the real directory, whichever path segment carried the link.
   sdir="$(cd "$sdir" && pwd -P)" || { log_err "Can't resolve $source"; return 1; }
 
-  staging="$(mktemp -d "$store/.adopt.XXXXXX" 2>/dev/null)" \
+  # Staged as a SIBLING of the store, not inside it — see the comment above —
+  # but still on the store's own filesystem: the move below (`ln`, a hard
+  # link) requires that, and `$store`'s parent already IS that filesystem
+  # (`_memory_share` just `mkdir -p`'d $store under it).
+  staging="$(mktemp -d "$(dirname "$store")/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
+  # A signal (SIGINT/SIGTERM/SIGHUP — Ctrl-C, a killed session, a closed
+  # terminal) must free $staging exactly like a normal `return` does. Cleared
+  # right before each of the explicit `rm -rf "$staging"` calls below so a
+  # normal return never double-removes it through both the trap AND the
+  # explicit call.
+  trap 'rm -rf "$staging"' EXIT INT TERM HUP
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
@@ -454,11 +478,13 @@ _memory_adopt() {
       log_warn "Skipping symlinked directory $rel in $source; its contents were not adopted."
       continue
     fi
-    mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null || { rm -rf "$staging"; return 1; }
+    mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null \
+      || { trap - EXIT INT TERM HUP; rm -rf "$staging"; return 1; }
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
     # file some other user on the machine can't read) instead of falling back
     # to umask, which is what a plain `cat "$f" > dest` would do.
     if ! cp -p "$f" "$staging/$rel" 2>/dev/null; then
+      trap - EXIT INT TERM HUP
       rm -rf "$staging"
       return 1
     fi
@@ -474,6 +500,7 @@ _memory_adopt() {
   # that copied nothing. Dangling links never reach $found (see above), so
   # one stale link alongside real content never trips this.
   if [ "$found" -gt 0 ] && [ "$copied" -eq 0 ]; then
+    trap - EXIT INT TERM HUP
     rm -rf "$staging"
     log_err "Adoption of $source copied 0 of $found file(s) found under it — nothing to merge."
     return 1
@@ -489,6 +516,7 @@ _memory_adopt() {
     ln "$staging/$rel" "$dest" 2>/dev/null \
       || log_warn "Keeping existing $rel; source copy remains in $source."
   done < <(cd "$staging" && find . -type f 2>/dev/null | sed 's#^\./##')
+  trap - EXIT INT TERM HUP
   rm -rf "$staging"
 
   heading="## Adopted from $source"
@@ -586,6 +614,40 @@ _memory_offer_adoption() {
   done
 }
 
+# Does $store hold any REAL content — as opposed to merely being non-empty?
+# `ls -A` (what the seed gate below used to test directly) counts dotfiles,
+# and a leftover `.adopt.*` staging directory from an interrupted --adopt is
+# exactly that: a dotdir with no memory in it (R6-P2-1). A bare glob (`*`)
+# already skips every dotfile/dot-directory by shell convention — the fix here
+# IS the difference between `ls -A` and this loop, not extra filtering logic.
+_memory_store_has_content() {
+  local store="$1" f
+  for f in "$store"/*; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    return 0
+  done
+  return 1
+}
+
+# Self-heal residue from an OLDER clikae (before this fix, staging lived
+# INSIDE the store) or from a signal this build's own trap somehow missed:
+# any `.adopt.*` left in $store for more than a day is dead — a real adopt
+# stages and moves in well under a second even off a slow/iCloud source (the
+# only way one survives this long is that whatever created it is gone). Named
+# out loud rather than swept silently, so a maintainer who goes looking for
+# "why did my adopt vanish" finds the answer in the log instead of nothing.
+# The age floor also means a staging directory an adopt IN PROGRESS right now
+# is never at risk of being pulled out from under it.
+_memory_sweep_stale_adopt_staging() {
+  local store="$1" d
+  for d in "$store"/.adopt.*; do
+    [ -d "$d" ] || continue
+    [ -n "$(find "$d" -maxdepth 0 -mmin +1440 2>/dev/null)" ] || continue
+    log_warn "Sweeping stale adopt staging left behind at $d."
+    rm -rf "$d"
+  done
+}
+
 _memory_share() {
   local group="" engine="" tank="" yes=0 adopt=""
   while [ $# -gt 0 ]; do
@@ -678,7 +740,10 @@ _memory_share() {
   # Preserve current-directory seeding before additional sources fill the store.
   local seeded=0
   if [ "$MEM_STRATEGY" = symlink ] && [ -d "$MEM_DIR" ] && [ ! -L "$MEM_DIR" ]; then
-    if [ -z "$(ls -A "$store" 2>/dev/null || true)" ]; then
+    # Self-heal BEFORE asking the gate — see _memory_sweep_stale_adopt_staging
+    # — so pre-fix residue does not even need a second `share` to clear out.
+    _memory_sweep_stale_adopt_staging "$store"
+    if ! _memory_store_has_content "$store"; then
       _memory_seed_dir "$MEM_DIR" "$store"
       seeded=1
     fi

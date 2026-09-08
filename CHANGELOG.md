@@ -58,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--adopt` and leave the tank isolated — contradicting the "dangling is
   skipped and reported, never fatal" rule two entries up. A dangling link no
   longer counts toward that refusal; it is still skipped and named (#49).
+- A signal that killed `--adopt` mid-copy (Ctrl-C, a closed terminal, a killed
+  session) used to leave its staging directory behind forever: it staged
+  *inside* the store with no `trap`, and `ls -A` can't tell that leftover
+  dotdir apart from real content — the next `share` on the same group read
+  "store non-empty" and silently skipped seeding the joiner's own memory in,
+  printing a clean `[ DONE ]` over a Soul that held nothing at all. Staging
+  now lives next to the store instead of inside it, a `trap` frees it on a
+  signal too, and the seed gate itself ignores dotfiles/dot-directories (so
+  residue from an older build can't fool it either) and sweeps any stale
+  `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

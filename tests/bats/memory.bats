@@ -1003,3 +1003,95 @@ _perm_octal() {
   run clikae memory status
   [[ "$output" == *"claude/a"*"shared 'me'"* ]] || false
 }
+
+# --- R6-P2-1: a leftover .adopt.* staging dir must never fool the seed gate -
+# `_memory_adopt` used to stage an --adopt at `$store/.adopt.XXXXXX` — INSIDE
+# the store — with no trap. An interrupted adopt (Ctrl-C, a killed session, a
+# closed terminal) left that dotdir behind forever, and the seed gate
+# (`[ -z "$(ls -A "$store")" ]`) cannot tell it apart from real content: the
+# very next `memory share` on this group saw "store non-empty", skipped
+# seeding, and still printed a clean DONE + "shared 'me'" over a Soul that
+# held nothing at all (REVIEW-clikae52-r6-2026-09-08.md §R6-P2-1).
+
+@test "memory share: a leftover .adopt.* from an older clikae doesn't block seeding, and gets swept (R6-P2-1)" {
+  # Reproduces the review's A/B probe (/tmp/r6/J.sh) "residue=yes" arm directly
+  # against the store, since this dotdir is exactly what an older build (or a
+  # signal this build's own trap somehow missed) would have left inside it.
+  clikae init claude a
+  _seed_memory a MEMORY.md "shared brain v1"
+  local store="$CLIKAE_HOME/souls/me/memory"
+  mkdir -p "$store/.adopt.AbCdEf"
+  printf 'half\n' > "$store/.adopt.AbCdEf/partial.md"
+  # Backdate past the sweep's 1-day floor: a staging dir an adopt is using
+  # RIGHT NOW must never be at risk of being pulled out from under it, so the
+  # sweep only touches ones old enough that whatever made them is long gone.
+  touch -t "$(date -v-2d '+%Y%m%d%H%M' 2>/dev/null || date -d '2 days ago' '+%Y%m%d%H%M')" \
+    "$store/.adopt.AbCdEf"
+
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  local share_output="$output"
+  # The actual R6-P2-1 symptom, checked FIRST: before the fix this store ends
+  # up with NO INDEX AT ALL — seeding was skipped by the residue alone, even
+  # though the command prints a clean [ DONE ].
+  [ -f "$store/MEMORY.md" ]
+  [[ "$(cat "$store/MEMORY.md")" == *"shared brain v1"* ]] || false
+  [[ "$share_output" == *"[ WARN ] Sweeping stale adopt staging left behind at $store/.adopt.AbCdEf."* ]] || false
+  [ ! -e "$store/.adopt.AbCdEf" ]                            # swept, not just ignored
+}
+
+@test "memory adopt: a killed process leaves no .adopt.* anywhere under the store's parent (R6-P2-1)" {
+  # A real interruption, not merely a failing cp: SIGTERM to BOTH this process
+  # and its cp child is the shape a killed session or a closed terminal's
+  # Ctrl-C takes on a foreground process group (mirrors the review's `perl
+  # setpgrp` + `kill -INT -$pgid` probe, and this repo's own HUP-trap test in
+  # ephemeral.bats). Before this fix, mktemp staged INSIDE the store with no
+  # trap — the whole process died right there, before its own `rm -rf`
+  # cleanup on the next line ever ran, leaving `.adopt.*` behind for good.
+  clikae init claude a
+  local LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/a.md"
+
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/cp" <<STUB
+#!/usr/bin/env bash
+touch "$BATS_TEST_TMPDIR/ready"
+exec sleep 30
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/cp"
+
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" "$CLIKAE_BIN" memory share me claude a --adopt "$LEGACY" &
+  local pid=$!
+  local i=0
+  while [ ! -f "$BATS_TEST_TMPDIR/ready" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+  [ -f "$BATS_TEST_TMPDIR/ready" ]                           # really mid-copy, not a race
+  kill -TERM "$pid" 2>/dev/null || true                      # the parent (trap must fire mid-wait)
+  pkill -TERM -P "$pid" 2>/dev/null || true                  # its cp child — unblocks bash's wait
+  local j=0
+  while kill -0 "$pid" 2>/dev/null && [ $j -lt 100 ]; do sleep 0.05; j=$((j+1)); done
+  kill -9 "$pid" 2>/dev/null || true                          # safety net, should be a no-op
+  wait "$pid" 2>/dev/null || true
+
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+}
+
+@test "memory adopt: the success path still leaves nothing under the store's parent (R6-P2-1)" {
+  clikae init claude a
+  local LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/a.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(cat "$store/a.md")" = 'topic a' ]
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+  # A share right after this one must see real content and never sweep anything.
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Sweeping stale adopt staging"* ]] || false
+}
