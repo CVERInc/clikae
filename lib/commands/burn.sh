@@ -23,7 +23,7 @@ _burn_help() {
 Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
-                   [--no-reroute] [--allow-active] [--fresh]
+                   [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -77,6 +77,14 @@ Give the task in one of two ways:
                       the tank you're mid-conversation on would silently burn
                       that quota, and two burns on one tank collide on the tmux
                       session name) and tanks sharing an already-dry account.
+  --wait-for-reset <dur>   (#38) when a tank runs dry AND its vendor-reported
+                      reset falls within <dur> (e.g. `30m`, `2h`, `90s`, or a
+                      bare integer of seconds), sleep until the reset and re-fire
+                      the SAME tank instead of rerouting or stopping. A reset
+                      further out than <dur>, or one burn can't parse into an
+                      instant (docs/orchestration.md's limit_reset_epoch — two
+                      grammars, both English), falls through to the normal
+                      reroute-or-stop behaviour unchanged.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
 tool-host failure -> retry the same tank, then reason: infra (exit 1);
@@ -486,7 +494,7 @@ _burn_compose() {
 }
 
 # _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
-#           <n_extra> <extra-agy-flags...> <add_dirs...>
+#           <wait_for_reset_s> <n_extra> <extra-agy-flags...> <add_dirs...>
 # The extras are whatever followed `--` on the command line. agy has no adapter,
 # so clikae cannot compose its flags for you; what it CAN do is stop dropping the
 # ones you asked for. Two that headless dispatch actually needs:
@@ -507,7 +515,7 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" n_extra="$7"; shift 7
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" n_extra="$8"; shift 8
   local -a extra=()
   while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
@@ -584,6 +592,26 @@ _agy_burn() {
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
+
+      # #38, agy side — same rule as cmd_burn's main loop: if the reset falls
+      # within --wait-for-reset's window, sleep to it and re-fire the SAME
+      # tank rather than hopping to the next agy tank or stopping. Before
+      # `agy_tried`/`tried` bookkeeping so a tank that only WAITED is never
+      # counted as one this burn moved away from.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ]; then
+        local _wfr_now _wfr_at _wfr_remain
+        _wfr_now="$(date +%s 2>/dev/null || echo 0)"
+        if _wfr_at="$(limit_reset_epoch "$reset" "$_wfr_now")"; then
+          _wfr_remain=$(( _wfr_at - _wfr_now ))
+          if [ "$_wfr_remain" -le "$wait_for_reset_s" ]; then
+            [ "$_wfr_remain" -lt 0 ] && _wfr_remain=0
+            log_info "agy/$cur resets in ${_wfr_remain}s, within --wait-for-reset ${wait_for_reset_s}s — waiting instead of moving on."
+            sleep "$_wfr_remain"
+            log_info "agy/$cur should be reset now — re-firing on the same tank."
+            continue
+          fi
+        fi
+      fi
     elif [ "$artifact_fresh" -eq 1 ]; then
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
@@ -749,10 +777,38 @@ _burn_status_write() {
   } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
 }
 
+# _burn_parse_duration <dur> -> whole seconds, for --wait-for-reset (#38).
+# Accepts a bare integer (seconds) or an integer with one trailing unit
+# s/m/h/d. Returns 1 (nothing echoed) for anything else — the caller must
+# refuse rather than guess, the same discipline limit_reset_epoch documents
+# for itself: a silent wrong number here would sleep for the wrong length of
+# time with nothing to show for it until the wait itself runs long or short.
+_burn_parse_duration() {
+  local s="$1" n unit
+  case "$s" in
+    *[0-9])
+      n="$s"; unit="" ;;
+    ?*[a-zA-Z])
+      n="${s%?}"; unit="${s: -1}" ;;
+    *)
+      return 1 ;;
+  esac
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  case "$unit" in
+    '') printf '%s' "$n" ;;
+    s)  printf '%s' "$n" ;;
+    m)  printf '%s' "$((n * 60))" ;;
+    h)  printf '%s' "$((n * 3600))" ;;
+    d)  printf '%s' "$((n * 86400))" ;;
+    *)  return 1 ;;
+  esac
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
+  local wait_for_reset_raw="" wait_for_reset_s=""
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -765,6 +821,7 @@ cmd_burn() {
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
       --infra-retries) shift; [ $# -gt 0 ] || log_fail "--infra-retries needs a count"; infra_retries="$1"; shift ;;
       --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
+      --wait-for-reset) shift; [ $# -gt 0 ] || log_fail "--wait-for-reset needs a duration (e.g. 30m)"; wait_for_reset_raw="$1"; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
@@ -777,6 +834,11 @@ cmd_burn() {
                     shift ;;
     esac
   done
+
+  if [ -n "$wait_for_reset_raw" ]; then
+    wait_for_reset_s="$(_burn_parse_duration "$wait_for_reset_raw")" \
+      || log_fail "--wait-for-reset: not a duration: $wait_for_reset_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
 
   case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
   case "$infra_delay" in ''|*[!0-9]*) log_fail "--infra-delay must be a nonnegative integer" ;; esac
@@ -886,7 +948,7 @@ cmd_burn() {
       # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
       # there is no adapter to compose, so `--prompt` still carries the task and
       # these ride alongside it. They used to be parsed and then silently dropped.
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" \
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
@@ -1218,6 +1280,31 @@ KV
     if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
       _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry" "$reset"
+
+      # #38 — a tank that runs dry minutes before its own reset just Stops
+      # today; if it would reset within --wait-for-reset's window, sleep to
+      # it and re-fire the SAME tank instead of moving on (reroute) or
+      # giving up (--no-reroute). Deliberately BEFORE the dry_store_mark /
+      # dried_accts bookkeeping below and the reroute decision further down:
+      # this tank isn't being abandoned, so it never gets counted as tried,
+      # marked dry on disk, or excluded as a same-account sibling — from the
+      # rest of this loop's point of view, nothing happened yet.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ]; then
+        local _wfr_now _wfr_at _wfr_remain
+        _wfr_now="$(date +%s 2>/dev/null || echo 0)"
+        if _wfr_at="$(limit_reset_epoch "$reset" "$_wfr_now")"; then
+          _wfr_remain=$(( _wfr_at - _wfr_now ))
+          if [ "$_wfr_remain" -le "$wait_for_reset_s" ]; then
+            [ "$_wfr_remain" -lt 0 ] && _wfr_remain=0
+            log_info "$cli/$cur resets in ${_wfr_remain}s, within --wait-for-reset ${wait_for_reset_s}s — waiting instead of moving on."
+            sleep "$_wfr_remain"
+            log_info "$cli/$cur should be reset now — re-firing on the same tank."
+            infra_attempt=0; retry_delay="$infra_delay"
+            continue
+          fi
+        fi
+      fi
+
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
       # this stdout and would otherwise vanish. Only for engines whose dry state is

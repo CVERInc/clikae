@@ -240,6 +240,20 @@ sharing an already-dry account. `--allow-active` opts out of both: it already
 meant "let this burn use a tank that's otherwise in active use", and a
 running burn is the headless shape of the same thing.
 
+### `--wait-for-reset` (#38)
+
+A tank that runs dry minutes before its own reset used to just Stop (under
+`--no-reroute`) or hop to the next reserve tank — even when waiting a few
+minutes would have let the SAME session finish the SAME task. `--wait-for-reset
+<dur>` (`30m`, `2h`, `90s`, or a bare integer of seconds) changes that: when a
+tank goes dry AND the vendor's own reset phrase resolves (via
+`limit_reset_epoch` — the same two English grammars documented in
+`lib/core/limit.sh`, "resets 3:50am (Asia/Tokyo)" / "resets Jul 27 at 5am
+(Asia/Tokyo)") to an instant within `<dur>`, `burn` prints one line, sleeps to
+it, and re-fires the SAME tank instead of moving on. A reset further out than
+`<dur>`, or one the phrase doesn't parse into an instant, falls through to the
+normal reroute-or-stop behaviour unchanged.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and

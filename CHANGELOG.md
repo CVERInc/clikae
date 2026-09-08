@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which already meant "let this burn use a tank in active use" — opts out of
   both the refusal and the reroute skip (#40).
 
+- **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
+  integer of seconds) — when a tank runs dry and the vendor's own reset
+  phrase resolves to an instant within `<dur>`, sleep to it and re-fire the
+  SAME tank instead of rerouting or Stopping under `--no-reroute`. A reset
+  further out than `<dur>`, or one that doesn't parse, falls through to the
+  existing reroute-or-stop behaviour unchanged (#38).
+
 ### Fixed
 
 - `clikae app` restores the target terminal icon on every build, including
