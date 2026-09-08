@@ -288,6 +288,25 @@ account. `--allow-active` opts out of both: it already meant "let this burn
 use a tank that's otherwise in active use", and a running burn is the
 headless shape of the same thing.
 
+**A live pid is not proof it's the SAME writer (2026-09-09 round-1 review,
+P2-1.)** `kill -0` alone only proves something exists at that pid — a burn
+that crashed or was `SIGKILL`ed leaves its pid free for the OS to hand to an
+unrelated process within the retention window (hours, not days, on a busy
+machine), and every burn on that tank was then refused FOREVER for a reason
+nobody could see. The marker's own `started_at` is now cross-checked against
+the recorded pid's actual process-start time (both BSD and GNU `date`
+grammars are tried — this machine's own PATH can put either first), falling
+back to the pid's command line actually being a `clikae` invocation when
+that can't be read or parsed on the current platform. Nothing usable from
+either check never refuses a live pid on that basis alone.
+
+**The check and the write are not atomic without help (P2-4.)** Two `clikae
+burn` processes started together both read the busy-check as free before
+either has written `running` — a per-tank `mkdir`-based lock (atomic even on
+bash 3.2, no `flock`/`lockf` dependency) now wraps the check-and-write, held
+only across those two statements, never across the engine run itself. A lock
+left by a since-dead holder is reclaimed rather than blocking forever.
+
 ### `--wait-for-reset` (#38)
 
 A tank that runs dry minutes before its own reset used to just Stop (under

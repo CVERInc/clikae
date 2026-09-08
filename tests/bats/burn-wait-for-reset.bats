@@ -208,8 +208,12 @@ STUB
   local run_id="burn-wfr-busy"
   local d="$CLIKAE_HOME/logs/$run_id"
   mkdir -p "$d"
-  printf '{"ok":null,"engine":"codex","tank":"T1","artifact":null,"artifact_bytes":null,"reason":"waiting for reset","reset":"resets soon","rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"waiting-reset","started_at":1,"updated_at":1,"pid":%s,"log":null,"reset_at":9999999999}\n' \
-    "$run_id" "$$" > "$d/status.json"
+  # started_at is "now" (P2-1: it's cross-checked against $$'s own process
+  # start time — a fixed 1970 placeholder would itself look like a recycled
+  # pid, the wrong failure mode for a fixture meaning "genuinely busy now").
+  local now; now="$(date +%s 2>/dev/null || echo 1)"
+  printf '{"ok":null,"engine":"codex","tank":"T1","artifact":null,"artifact_bytes":null,"reason":"waiting for reset","reset":"resets soon","rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"waiting-reset","started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":9999999999}\n' \
+    "$run_id" "$now" "$now" "$$" > "$d/status.json"
   local A="$BATS_TEST_TMPDIR/out.md"
   run clikae burn codex T1 --artifact "$A" -- run "$A"
   [ "$status" -ne 0 ]

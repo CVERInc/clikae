@@ -102,18 +102,69 @@ burn_status_resolve() {
   printf '%s' "$p"
 }
 
+# _burn_pid_matches_marker <pid> <recorded-started_at-epoch> -> 0 if <pid>
+# looks like the SAME process the marker's `started_at` was recorded for
+# (its own start time is at-or-before that moment, a few seconds' slack for
+# measurement lag), 1 if it looks like a DIFFERENT process — one that has
+# been recycled onto <pid> since the original writer died.
+#
+# P2-1 (2026-09-09 round-1 review): `kill -0` alone only proves SOMETHING is
+# alive at that pid, not that it is the SAME thing the marker names. A burn
+# that crashed or was SIGKILLed leaves its pid free for the OS to hand to an
+# unrelated process within the 7-day status-file retention window — hours,
+# not days, once a busy machine wraps macOS's ~100k pid space — and from
+# then on `burn_tank_busy` refused every burn on that tank FOREVER for a
+# reason nobody could see (a false positive: it blocks real work and looks
+# identical to a real busy tank, unlike the false-negative window every
+# other pid-liveness check here already accepts — see live.sh).
+#
+# Two independent checks, in order (either one settling it is enough — a
+# platform where one is unavailable/unparseable still gets the other):
+#   1. The pid's own process-start time (`ps -o lstart=`), parsed with BOTH
+#      the BSD (`date -j -f`, macOS's own `/bin/date`) and GNU (`date -d`)
+#      grammars — this machine's own dev shell can put either `date` first
+#      on PATH, and the target platform is documented as macOS/bash 3.2, so
+#      guessing one dialect is not safe (see hub-env's GNU/BSD note). A
+#      RECYCLED pid always started LATER than the marker it inherited.
+#   2. If lstart can't be read or parsed on this platform, fall back to the
+#      pid's own command line (`ps -o command=`) actually being a `clikae`
+#      invocation — a real burn's argv always is.
+# Nothing usable from either check (`recorded` itself unparseable, or a `ps`
+# that returns nothing) never REFUSES a live pid on that basis alone — the
+# absence of evidence is not evidence of a recycled pid.
+_burn_pid_matches_marker() {
+  local pid="$1" recorded="$2" lstart epoch
+  case "$recorded" in ''|*[!0-9]*) return 0 ;; esac
+  lstart="$(ps -o lstart= -p "$pid" 2>/dev/null)"
+  if [ -n "$lstart" ]; then
+    epoch="$(date -j -f '%a %b %e %T %Y' "$lstart" +%s 2>/dev/null)"
+    [ -n "$epoch" ] || epoch="$(date -d "$lstart" +%s 2>/dev/null)"
+    case "$epoch" in
+      ''|*[!0-9]*) ;;   # unparseable on this platform — fall through to the cmdline check
+      *)
+        [ "$epoch" -le "$((recorded + 5))" ] && return 0
+        return 1
+        ;;
+    esac
+  fi
+  case "$(ps -o command= -p "$pid" 2>/dev/null)" in
+    '')      return 0 ;;   # ps gave nothing usable — don't false-refuse a live pid
+    *clikae*) return 0 ;;
+    *)       return 1 ;;
+  esac
+}
+
 # burn_tank_busy <engine> <tank> [self-pid] -> 0 if some OTHER live process
 # currently has a burn in the `running` state on this exact <engine>/<tank>
 # (#40); 1 otherwise. <self-pid>, when given, is excluded from the scan (a
 # burn checking whether ITS OWN tank is busy must not see its own just-written
 # status file and refuse itself).
 #
-# "Live" means the recorded pid still exists — a status file left behind by a
-# burn that crashed or was killed says `running` forever otherwise, and a
-# once-collided tank would stay refused permanently. This is a plain
-# existence check (`kill -0`), not a name/identity check: a pid that has been
-# recycled onto an unrelated process is the same false-negative window every
-# pid-based liveness check in this codebase already accepts (see live.sh).
+# "Live" means the recorded pid still exists AND still looks like the same
+# process the marker names (`_burn_pid_matches_marker`, P2-1 above) — a
+# status file left behind by a burn that crashed or was killed says
+# `running` forever otherwise, and a once-collided tank would stay refused
+# permanently.
 #
 # `waiting-reset` (P1-2, 2026-09-09 round-1 review) counts as busy too: a
 # burn sleeping to a near vendor reset (`--wait-for-reset`) has NOT abandoned
@@ -121,7 +172,7 @@ burn_status_resolve() {
 # would collide with the re-fire this one is about to make, exactly like the
 # `running` case #40 already guards.
 burn_tank_busy() {
-  local eng="$1" tk="$2" self_pid="${3:-}" base d f json st feng ftk fpid
+  local eng="$1" tk="$2" self_pid="${3:-}" base d f json st feng ftk fpid fstarted
   base="$HOME/.clikae/logs"
   [ -d "$base" ] || return 1
   for d in "$base"/burn-*; do
@@ -138,6 +189,8 @@ burn_tank_busy() {
     case "$fpid" in ''|*[!0-9]*) continue ;; esac
     [ -n "$self_pid" ] && [ "$fpid" = "$self_pid" ] && continue
     kill -0 "$fpid" 2>/dev/null || continue   # stale — the writer is gone
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid, not the same writer
     return 0
   done
   return 1

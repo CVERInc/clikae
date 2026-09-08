@@ -61,7 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tmux session name. Detection reads #41's status files (a `running` state
   whose pid is still alive), never tmux session names. `--allow-active` —
   which already meant "let this burn use a tank in active use" — opts out of
-  both the refusal and the reroute skip (#40).
+  both the refusal and the reroute skip (#40). Liveness now also cross-checks
+  the marker's `started_at` against the recorded pid's own process-start time
+  (falling back to its command line actually being a `clikae` invocation
+  where that can't be read/parsed) — a crashed/`SIGKILL`ed burn's pid can be
+  recycled onto an unrelated process within the retention window, which used
+  to refuse that tank FOREVER for a reason nobody could see (2026-09-09
+  round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
+  in a per-tank `mkdir`-based lock (stale-safe, bash 3.2), closing the window
+  where two `clikae burn` processes started together could both pass the
+  check before either had written `running` (P2-4).
 
 - **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
   integer of seconds) — when a tank runs dry and the vendor's own reset

@@ -903,6 +903,66 @@ _burn_wait_for_reset() {
   return 0
 }
 
+# _burn_tank_lock_path <engine> <tank> -> the mkdir-based lock directory path
+# for this exact engine/tank pair.
+_burn_tank_lock_path() {
+  local safe
+  safe="$(printf '%s_%s' "$1" "$2" | tr -c 'A-Za-z0-9_' '_')"
+  printf '%s/.clikae/state/tank-busy-%s.lock\n' "$HOME" "$safe"
+}
+
+# _burn_tank_lock_acquire <engine> <tank> [timeout_s=10] -> 0 once THIS
+# process holds the per-tank lock, 1 on timeout.
+#
+# P2-4 (2026-09-09 round-1 review): the busy check (`burn_tank_busy`) and the
+# `running` write that makes a tank busy for anyone ELSE'S check are two
+# separate statements — between them sit nothing at all, but two `clikae
+# burn` processes started together both reach the check before either has
+# written `running`, and both pass. `mkdir` is atomic even without
+# flock/lockf (works on bash 3.2, NFS, anywhere `mkdir` itself works), so it
+# closes the SAME window `--ephemeral`'s slot_lock already closes for a
+# different resource (see cmd_burn's own soul/MCP prelaunch lock further
+# down) — held only across the check-and-write, never across the engine run
+# itself.
+#
+# Stale-safe: a lock dir a killed holder left behind (its pid file names a
+# now-dead process) is reclaimed rather than blocking forever.
+_burn_tank_lock_acquire() {
+  local eng="$1" tk="$2" timeout_s="${3:-10}" lock waited=0 holder
+  lock="$(_burn_tank_lock_path "$eng" "$tk")"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  chmod 0700 "$(dirname "$lock")" 2>/dev/null || true
+  while :; do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s' "$$" > "$lock/pid" 2>/dev/null || true
+      return 0
+    fi
+    holder="$(cat "$lock/pid" 2>/dev/null || true)"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;
+      # `rmdir` only removes an EMPTY directory — the pid file inside is what
+      # made the first attempt fail, so it has to go FIRST or `rmdir` fails
+      # silently (2>/dev/null) every time and this spins forever, never
+      # actually reclaiming a dead holder's lock.
+      *) kill -0 "$holder" 2>/dev/null || { rm -f "$lock/pid" 2>/dev/null; rmdir "$lock" 2>/dev/null; continue; } ;;
+    esac
+    [ "$waited" -lt "$timeout_s" ] || return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+# _burn_tank_lock_release <engine> <tank> — must be called before any exit
+# path out of the locked section (a `log_fail`/`exit`/signal that skips it
+# would leave the lock dir behind; each call site below releases explicitly
+# on every branch rather than relying on a trap, since the lock's whole
+# lifetime is a few statements, not the burn's).
+_burn_tank_lock_release() {
+  local lock; lock="$(_burn_tank_lock_path "$1" "$2")"
+  rm -f "$lock/pid" 2>/dev/null
+  rmdir "$lock" 2>/dev/null
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
@@ -1033,11 +1093,24 @@ cmd_burn() {
   # for the interactive-session guard elsewhere in this file; a running burn
   # is the headless shape of the same thing, so the same flag opts out of both
   # rather than adding a second flag for one more way to say "I know".
-  if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$tank" "$$"; then
-    log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+  # P2-4 (2026-09-09 round-1 review): hold a per-tank lock across the
+  # check-and-write below — without it, two `clikae burn` processes started
+  # together both reach the check before either has written `running`, and
+  # both pass (see _burn_tank_lock_acquire's comment). Never held past this
+  # block: the engine run itself, and everything else in this function, is
+  # outside the lock.
+  if [ "$allow_active" != "1" ]; then
+    _burn_tank_lock_acquire "$status_engine" "$tank" \
+      || log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — another clikae burn is mid-check on it right now."
+    if burn_tank_busy "$status_engine" "$tank" "$$"; then
+      _burn_tank_lock_release "$status_engine" "$tank"
+      log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+    fi
+    _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
+    _burn_tank_lock_release "$status_engine" "$tank"
+  else
+    _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
   fi
-
-  _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
   # P1-1 (2026-09-09 round-1 review): from here on, a status file exists that
   # claims this burn is `running` — install the safety net that keeps that
   # promise honest no matter how this process ends (see `_burn_exit_guard`'s

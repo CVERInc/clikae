@@ -21,3 +21,4 @@ artifact_bytes     ditto
 elapsed_s          ditto
 run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
+started_at         a field in #41's status.json, not a function
