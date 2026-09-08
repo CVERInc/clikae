@@ -941,41 +941,110 @@ _burn_tank_lock_path() {
 # down) — held only across the check-and-write, never across the engine run
 # itself.
 #
-# Stale-safe: a lock dir a killed holder left behind (its pid file names a
-# now-dead process) is reclaimed rather than blocking forever.
+# Stale-safe, and ATOMICALLY so (2026-09-09 round-2 review, P2-1): the naive
+# "read a dead holder, then `rm -f pid; rmdir`" is two unsynchronized
+# statements a SECOND contender who read the same dead holder can interleave
+# with — it can delete the pid file the FIRST reclaimer just wrote and finish
+# tearing the (now-recreated) directory down, so both contenders' `mkdir`
+# eventually succeeds and two processes hold "the" lock at once. Reclaiming
+# a stale lock therefore never mutates it in place; it `mv`s the whole
+# directory aside to a name unique to THIS pid first — a same-directory `mv`
+# is atomic, so of any number of contenders racing the same stale lock,
+# exactly one `mv` can succeed (the others fail with the source already gone
+# and just loop back to retry the plain `mkdir`). The mover then re-checks
+# that what it actually captured still names the holder it judged stale
+# before discarding it — `mv` only cares about the path, not the content, so
+# if some OTHER contender's fresh `mkdir` had already landed on this path in
+# the meantime (a narrower window than the one above, closed the same way:
+# verify before you destroy), the capture is put back rather than deleted.
+#
+# A lock directory with NO pid file (or an unparseable one) — reachable from
+# a kill between `mkdir` and the `pid` write below — gets the same atomic
+# reclaim, but only after a short grace: the directory may simply belong to
+# a holder that hasn't written its pid file yet.
 _burn_tank_lock_acquire() {
-  local eng="$1" tk="$2" timeout_s="${3:-10}" lock waited=0 holder
+  local eng="$1" tk="$2" timeout_s="${3:-10}" lock start_s now_s holder hstarted
+  local pidless_since="" grace_s=2 stale graveyard recheck_pid
   lock="$(_burn_tank_lock_path "$eng" "$tk")"
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   chmod 0700 "$(dirname "$lock")" 2>/dev/null || true
+  start_s=$SECONDS
   while :; do
-    if mkdir "$lock" 2>/dev/null; then
-      printf '%s' "$$" > "$lock/pid" 2>/dev/null || true
+    if mkdir -m 0700 "$lock" 2>/dev/null; then
+      (umask 077; printf '%s' "$$" > "$lock/pid") 2>/dev/null || true
+      (umask 077; date +%s > "$lock/started_at" 2>/dev/null) 2>/dev/null || true
       return 0
     fi
+    # Wall-clock ($SECONDS), checked BEFORE any stale-handling below, so the
+    # timeout bounds the WHOLE loop — not just the "not stale, about to
+    # sleep" tail. A reclaim attempt (the `continue` a few lines down) does
+    # not itself sleep, so without this check here a holder that keeps
+    # looking freshly-stale (a crash-loop of very short-lived acquirers, or
+    # this file's own tests deliberately racing one) could spin forever
+    # without ever timing out.
+    now_s=$SECONDS
+    [ "$((now_s - start_s))" -lt "$timeout_s" ] || return 1
+    stale=0
     holder="$(cat "$lock/pid" 2>/dev/null || true)"
     case "$holder" in
-      ''|*[!0-9]*) : ;;
-      # `rmdir` only removes an EMPTY directory — the pid file inside is what
-      # made the first attempt fail, so it has to go FIRST or `rmdir` fails
-      # silently (2>/dev/null) every time and this spins forever, never
-      # actually reclaiming a dead holder's lock.
-      *) kill -0 "$holder" 2>/dev/null || { rm -f "$lock/pid" 2>/dev/null; rmdir "$lock" 2>/dev/null; continue; } ;;
+      ''|*[!0-9]*)
+        # No pid file, or unparseable — give it `grace_s` seconds (wall
+        # clock, same clock as the timeout above) before treating the
+        # directory as abandoned rather than merely mid-acquire.
+        [ -n "$pidless_since" ] || pidless_since="$now_s"
+        [ "$((now_s - pidless_since))" -ge "$grace_s" ] && stale=1
+        ;;
+      *)
+        pidless_since=""
+        # Reuse the same liveness+identity test `burn_tank_busy` uses (P2-1,
+        # round-1): a bare `kill -0` only proves SOMETHING is alive at that
+        # pid, not that it's the SAME process the lock's own `started_at`
+        # names — this lock has exactly that recycled-pid weakness too.
+        if kill -0 "$holder" 2>/dev/null; then
+          hstarted="$(cat "$lock/started_at" 2>/dev/null || true)"
+          _burn_pid_matches_marker "$holder" "$hstarted" || stale=1
+        else
+          stale=1
+        fi
+        ;;
     esac
-    [ "$waited" -lt "$timeout_s" ] || return 1
+    if [ "$stale" -eq 1 ]; then
+      graveyard="${lock}.stale.$$"
+      if mv "$lock" "$graveyard" 2>/dev/null; then
+        recheck_pid="$(cat "$graveyard/pid" 2>/dev/null || true)"
+        if [ "$recheck_pid" = "$holder" ]; then
+          rm -rf "$graveyard" 2>/dev/null   # genuinely the stale generation we judged — discard it
+        else
+          # Captured a DIFFERENT (fresher) generation than the one we judged
+          # stale — some other contender's `mkdir` landed on this path
+          # between our check and this `mv`. Put it back; if that fails,
+          # someone else has since taken the path over again and this
+          # capture is now a true orphan, safe to discard.
+          mv "$graveyard" "$lock" 2>/dev/null || rm -rf "$graveyard" 2>/dev/null
+        fi
+      fi
+      continue
+    fi
     sleep 1
-    waited=$((waited + 1))
   done
 }
 
-# _burn_tank_lock_release <engine> <tank> — must be called before any exit
-# path out of the locked section (a `log_fail`/`exit`/signal that skips it
-# would leave the lock dir behind; each call site below releases explicitly
-# on every branch rather than relying on a trap, since the lock's whole
-# lifetime is a few statements, not the burn's).
+# _burn_tank_lock_release <engine> <tank> — safe to call unconditionally on
+# every exit path out of the locked section (a timed-out acquire that never
+# held the lock, a signal mid-check, the normal release after the write —
+# see the trap installed around the locked section in cmd_burn below).
+#
+# P2-1 (2026-09-09 round-2 review): removes the lock ONLY when its own `pid`
+# file names THIS process — never on trust that "I must be the one who
+# called acquire". Without that check, a caller that raced the lock away
+# (timed out while someone else holds it, or is cleaning up after a signal
+# whose acquire never actually succeeded) would delete a lock a DIFFERENT,
+# live process is legitimately holding.
 _burn_tank_lock_release() {
-  local lock; lock="$(_burn_tank_lock_path "$1" "$2")"
-  rm -f "$lock/pid" 2>/dev/null
+  local lock owner; lock="$(_burn_tank_lock_path "$1" "$2")"
+  owner="$(cat "$lock/pid" 2>/dev/null || true)"
+  [ "$owner" = "$$" ] || return 0
+  rm -f "$lock/pid" "$lock/started_at" 2>/dev/null
   rmdir "$lock" 2>/dev/null
 }
 
@@ -1115,15 +1184,45 @@ cmd_burn() {
   # both pass (see _burn_tank_lock_acquire's comment). Never held past this
   # block: the engine run itself, and everything else in this function, is
   # outside the lock.
+  #
+  # P2-1 (2026-09-09 round-2 review): every exit out of this section — the
+  # lock-timeout refusal, the busy refusal, a signal landing mid-check — has
+  # to release the lock; explicit releases on each branch alone miss a
+  # signal arriving BETWEEN them (there is no trap covering this window yet:
+  # `_burn_install_exit_trap` below is only reached once the lock is already
+  # gone). A trap scoped to exactly this section closes that gap; cleared
+  # again once the section's own explicit release has run, so it never
+  # outlives the few statements it exists for.
   if [ "$allow_active" != "1" ]; then
-    _burn_tank_lock_acquire "$status_engine" "$tank" \
-      || log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — another clikae burn is mid-check on it right now."
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 129' HUP
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 130' INT
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 143' TERM
+    trap '_burn_tank_lock_release "$status_engine" "$tank"' EXIT
+    if ! _burn_tank_lock_acquire "$status_engine" "$tank"; then
+      trap - HUP INT TERM EXIT
+      # P3-1 (2026-09-09 round-2 review): see the busy-refusal write below —
+      # the same "documented composition sees a stall, not a fail" gap.
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "busy: timed out waiting for the busy-tank lock on $status_engine/$tank" ""
+      log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — another clikae burn is mid-check on it right now."
+    fi
     if burn_tank_busy "$status_engine" "$tank" "$$"; then
       _burn_tank_lock_release "$status_engine" "$tank"
+      trap - HUP INT TERM EXIT
+      # P3-1 (2026-09-09 round-2 review): a refusal this early has never
+      # reached the first `running` write, so the documented `clikae burn …
+      # & clikae wait "burn-$!"` composition finds no status file at all and
+      # reads a 9-second-old refusal as "hasn't started yet" — stalling for
+      # the whole resolve window before giving up. `fail` is always
+      # terminal (it can never make this tank look busy to anyone else), so
+      # writing it before the refusal costs nothing.
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "busy: $status_engine/$tank already has a running burn on it (#40)" ""
       log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
     fi
     _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
     _burn_tank_lock_release "$status_engine" "$tank"
+    trap - HUP INT TERM EXIT
   else
     _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
   fi

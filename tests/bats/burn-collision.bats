@@ -207,3 +207,195 @@ _mark_busy() {
   [ "$status" -eq 0 ]
   [ "$elapsed" -lt 5 ] || false   # reclaimed promptly, not stuck to the timeout
 }
+
+# --- P2-1 (2026-09-09 round-2 review): the reclaim above, read then acted on
+# in two separate statements (`rm -f pid; rmdir`), let a SECOND contender who
+# read the same dead holder tear down the FIRST reclaimer's freshly-acquired
+# lock a moment later — both contenders' `mkdir` eventually succeeded and two
+# burns held "the" lock at once. Reclaim now `mv`s the stale directory aside
+# to a name unique to the reclaiming pid FIRST (a same-directory `mv` is
+# atomic — exactly one contender's can win), and release only ever removes a
+# lock this process's own pid actually holds. --------------------------------
+
+_dead_pid() {
+  ( exit 0 ) &
+  local p=$!
+  wait "$p" 2>/dev/null || true
+  printf '%s' "$p"
+}
+
+# A `cat` that reads immediately but SLEEPS before returning, on PATH ahead
+# of the real one — widens exactly the window between "I decided the holder
+# is dead" and "I act on that decision" the round-2 review's own probe used
+# to make the pre-fix reclaim race land on demand.
+_install_slow_cat() {
+  local bin="$BATS_TEST_TMPDIR/slowcat" real_cat
+  # `command cat` still walks $PATH (it only skips shell functions/aliases),
+  # so a wrapper installed AHEAD of the real `cat` under the same name that
+  # tried `command cat` would find ITSELF again — infinite self-recursion,
+  # not a slow read. Resolve the real binary's absolute path NOW, before
+  # $PATH is ever reordered, and bake that path in instead.
+  real_cat="$(command -v cat)"
+  mkdir -p "$bin"
+  cat > "$bin/cat" <<STUB
+#!/usr/bin/env bash
+out="\$("$real_cat" "\$@")"
+sleep 1
+printf '%s' "\$out"
+STUB
+  chmod +x "$bin/cat"
+  printf '%s' "$bin"
+}
+
+@test "_burn_tank_lock_acquire: two contenders racing a DEAD-holder lock — exactly one ever wins (5 trials)" {
+  _src_burn_lock
+  local slowcat_bin; slowcat_bin="$(_install_slow_cat)"
+  local trial
+  for trial in 1 2 3 4 5; do
+    local lock; lock="$(_burn_tank_lock_path codex "LOCKRACE$trial")"
+    mkdir -p "$lock"
+    printf '%s' "$(_dead_pid)" > "$lock/pid"
+
+    local out_a="$BATS_TEST_TMPDIR/won-a-$trial" out_b="$BATS_TEST_TMPDIR/won-b-$trial"
+    rm -f "$out_a" "$out_b"
+    # B: the slow cat ahead on PATH — reads "dead" fast, then sits on that
+    # decision for a full second before acting on it.
+    ( PATH="$slowcat_bin:$PATH"
+      _src_burn_lock
+      _burn_tank_lock_acquire codex "LOCKRACE$trial" 5 && : > "$out_b" ) &
+    local pid_b=$!
+    ( _src_burn_lock
+      _burn_tank_lock_acquire codex "LOCKRACE$trial" 5 && : > "$out_a" ) &
+    local pid_a=$!
+    wait "$pid_a" 2>/dev/null || true
+    wait "$pid_b" 2>/dev/null || true
+
+    local wins=0
+    [ -f "$out_a" ] && wins=$((wins + 1))
+    [ -f "$out_b" ] && wins=$((wins + 1))
+    [ "$wins" -eq 1 ] || { echo "trial $trial: $wins contenders acquired (want exactly 1)"; false; }
+  done
+}
+
+@test "_burn_tank_lock_acquire: a lock directory with NO pid file is reclaimed after a short grace, not forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKPIDLESS)"
+  mkdir -p "$lock"   # directory only — as if killed between mkdir and the pid write
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKPIDLESS 10
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -ge 1 ] || false   # genuinely waited out a grace, not an instant fluke
+  [ "$elapsed" -le 6 ] || false   # ...and nowhere near the 10s timeout — reclaimed, not "about to give up anyway"
+}
+
+@test "_burn_tank_lock_acquire: a lock whose pid is alive but RECYCLED (marker predates the pid's own start) is still reclaimed" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKRECYCLED)"
+  mkdir -p "$lock"
+  sleep 60 &
+  local live_pid=$!
+  printf '%s' "$live_pid" > "$lock/pid"
+  printf '1' > "$lock/started_at"   # 1970 — this genuinely-alive pid started decades later
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKRECYCLED 5
+  local elapsed=$((SECONDS - t0))
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -lt 5 ] || false
+}
+
+@test "_burn_tank_lock_acquire: a LIVE holder's lock is never stolen, even by several simultaneous contenders" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKLIVE)"
+  _burn_tank_lock_acquire codex LOCKLIVE 5   # this shell genuinely holds it
+  [ "$(cat "$lock/pid")" = "$$" ] || false
+
+  local -a pids=()
+  local _
+  for _ in 1 2 3 4 5; do
+    ( _src_burn_lock; _burn_tank_lock_acquire codex LOCKLIVE 2 ) &
+    pids+=("$!")
+  done
+  local p rc rc_sum=0
+  for p in "${pids[@]}"; do
+    if wait "$p" 2>/dev/null; then rc=0; else rc=$?; fi
+    rc_sum=$((rc_sum + rc))
+  done
+  # every one of the 5 must time out (rc 1) — none may ever acquire a lock a
+  # live holder still owns.
+  [ "$rc_sum" -eq 5 ] || { echo "at least one contender wrongly acquired a LIVE holder's lock"; false; }
+  [ "$(cat "$lock/pid")" = "$$" ] || false   # and OUR copy was never touched
+
+  _burn_tank_lock_release codex LOCKLIVE
+}
+
+@test "_burn_tank_lock_acquire/_burn_tank_lock_release: the lock is gone on every exit path — success, a losing timeout, and a trapped signal" {
+  _src_burn_lock
+
+  # success
+  _burn_tank_lock_acquire codex LOCKEXIT1 5
+  _burn_tank_lock_release codex LOCKEXIT1
+  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT1)" ]] || false
+
+  # a losing timeout must not disturb (or remove) the winner's own lock
+  _burn_tank_lock_acquire codex LOCKEXIT2 5
+  local winner_pid; winner_pid="$(cat "$(_burn_tank_lock_path codex LOCKEXIT2)/pid")"
+  run bash -c ". '$CLIKAE_TEST_ROOT/lib/core/log.sh'; . '$CLIKAE_TEST_ROOT/lib/core/json.sh'; . '$CLIKAE_TEST_ROOT/lib/core/burn_status.sh'; . '$CLIKAE_TEST_ROOT/lib/core/duration.sh'; . '$CLIKAE_TEST_ROOT/lib/commands/antigravity.sh'; . '$CLIKAE_TEST_ROOT/lib/commands/burn.sh'; _burn_tank_lock_acquire codex LOCKEXIT2 1"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(cat "$(_burn_tank_lock_path codex LOCKEXIT2)/pid")" = "$winner_pid" ] || false
+  _burn_tank_lock_release codex LOCKEXIT2
+  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT2)" ]] || false
+
+  # a signal landing while the SAME trap commands cmd_burn installs around
+  # its own check-and-write section are armed must still release the lock —
+  # exercised directly (forcing a real SIGTERM to land inside that exact
+  # multi-statement window of a real `clikae burn` is not reproducible on
+  # demand; the trap commands under test are byte-identical to burn.sh's own).
+  (
+    _src_burn_lock
+    status_engine=codex tank=LOCKEXIT3
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 143' TERM
+    trap '_burn_tank_lock_release "$status_engine" "$tank"' EXIT
+    _burn_tank_lock_acquire "$status_engine" "$tank"
+    sleep 5
+  ) &
+  local bg=$!
+  sleep 1
+  [[ -d "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || { echo "lock never appeared"; false; }
+  kill -TERM "$bg"
+  wait "$bg" 2>/dev/null || true
+  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || false
+}
+
+@test "_burn_tank_lock_acquire: the lock directory and its pid/started_at files are 0700/0600 (P3-5)" {
+  _src_burn_lock
+  _burn_tank_lock_acquire codex LOCKPERMS 5
+  local lock; lock="$(_burn_tank_lock_path codex LOCKPERMS)"
+  [ "$(stat -c '%a' "$lock" 2>/dev/null || stat -f '%Lp' "$lock")" = 700 ]
+  [ "$(stat -c '%a' "$lock/pid" 2>/dev/null || stat -f '%Lp' "$lock/pid")" = 600 ]
+  [ "$(stat -c '%a' "$lock/started_at" 2>/dev/null || stat -f '%Lp' "$lock/started_at")" = 600 ]
+  _burn_tank_lock_release codex LOCKPERMS
+}
+
+@test "burn-collision: a busy-tank refusal writes a terminal 'fail' status file with a busy reason (P3-1)" {
+  _stub_codex
+  clikae init codex T1
+  _mark_busy codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -ne 0 ]
+  local new_dir d
+  for d in "$CLIKAE_HOME"/logs/burn-*; do
+    case "$(basename "$d")" in burn-busy-*) continue ;; esac
+    new_dir="$(basename "$d")"
+  done
+  [ -n "$new_dir" ] || { echo "no run directory created for the refused burn"; false; }
+  local f="$CLIKAE_HOME/logs/$new_dir/status.json"
+  [ -f "$f" ] || { echo "no status.json written for the refused burn: $f"; false; }
+  local json; json="$(cat "$f")"
+  [[ "$json" == *'"state":"fail"'* ]] || { echo "$json"; false; }
+  [[ "$json" == *'"ok":false'* ]] || { echo "$json"; false; }
+  [[ "$json" == *'"reason":"busy:'* ]] || { echo "$json"; false; }
+}
