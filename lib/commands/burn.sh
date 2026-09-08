@@ -732,7 +732,7 @@ _burn_tried_json() {
 }
 
 # _burn_status_write <state> <ok:true|false|null> <engine> <tank> <artifact>
-#                     <reason> [reset]
+#                     <reason> [reset] [reset_at]
 #
 # #41: every burn writes ONE machine-readable status file, updated at every
 # transition — run start, each reroute hop, going dry, an infra retry, and the
@@ -749,8 +749,20 @@ _burn_tried_json() {
 # artifact, artifact_bytes, reason, reset, rerouted_from[], elapsed_s,
 # run_id}`), plus the fields only an outside-the-process reader needs and a
 # once-at-exit `--json` object cannot give it: `state`, `started_at`,
-# `updated_at`, `pid`, `log`. Written UNCONDITIONALLY (never gated on
-# `--json`) — #41 is "every burn", not "every --json burn".
+# `updated_at`, `pid`, `log`, `reset_at`. Written UNCONDITIONALLY (never gated
+# on `--json`) — #41 is "every burn", not "every --json burn".
+#
+# `reset_at` (P1-2, 2026-09-09 round-1 review): the epoch second
+# `--wait-for-reset` computed the vendor's reset to land on, populated only
+# for the non-terminal `waiting-reset` state below — null everywhere else.
+#
+# `ok` is the terminal/non-terminal signal this file's OWN readers rely on:
+# every call site in this codebase passes `null` for a state that is still IN
+# PROGRESS (`running`, an `infra` retry-in-progress, `waiting-reset`) and an
+# explicit `true`/`false` only once the outcome is actually known (`done`,
+# a real `dry`, `fail`, or `infra` giving up) — see `_BURN_TERMINAL_WRITTEN`
+# just below, which leans on exactly that invariant so the EXIT/INT/TERM/HUP
+# traps (P1-1) know whether a terminal state was already published.
 #
 # Reads the caller's own locals for everything this signature doesn't carry —
 # `run_dir`, `burn_id`, `started_at`, `t0`, `tried`, `log_file`,
@@ -759,7 +771,7 @@ _burn_tried_json() {
 # `_agy_burn`, which is what makes bash's dynamic scoping the right tool here
 # rather than a footgun.
 _burn_status_write() {
-  local state="$1" ok="$2" eng="$3" tk="$4" art="$5" reason="$6" reset="${7:-}"
+  local state="$1" ok="$2" eng="$3" tk="$4" art="$5" reason="$6" reset="${7:-}" reset_at="${8:-}"
   [ -n "${run_dir:-}" ] || return 0   # called before setup (should not happen) — no-op, never fatal
   local bytes="${artifact_bytes_snapshot:-}"
   if [ -z "$bytes" ] && [ -n "$art" ] && [ -e "$art" ]; then bytes="$(_burn_size "$art")"; fi
@@ -769,12 +781,62 @@ _burn_status_write() {
   local f="$run_dir/status.json"
   mkdir -p "$run_dir" 2>/dev/null || true
   {
-    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s}\n' \
+    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s}\n' \
       "${ok:-null}" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
       "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
       "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
-      "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")"
+      "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")" \
+      "$(json_or_null "$reset_at")"
   } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+  # P1-1 (2026-09-09 round-1 review): `ok` is null for every state that is
+  # still IN PROGRESS and true/false only once a real terminal outcome is
+  # known (see the comment above) — so this is the one place that gets to
+  # say "a terminal state now exists on disk", and every trap/poller below
+  # trusts it instead of re-deriving it from `state` alone.
+  [ "${ok:-null}" = "null" ] || _BURN_TERMINAL_WRITTEN=1
+}
+
+# _BURN_TERMINAL_WRITTEN — 0 until this burn's status file has recorded a
+# real terminal outcome (see `_burn_status_write` above), then 1 for the rest
+# of the process's life. `clikae burn` is a fresh process per invocation (see
+# bin/clikae's dispatch: it sources this file and calls `cmd_burn` once), so
+# the file-load-time 0 below is the only initialization this ever needs.
+_BURN_TERMINAL_WRITTEN=0
+
+# _burn_exit_guard [exit-code] — the P1-1 (2026-09-09 round-1 review) safety
+# net: a burn that dies WITHOUT ever writing a terminal state (a `log_fail`
+# this file doesn't yet cover explicitly, a raw `exit` from a sourced helper,
+# or SIGINT/TERM/HUP/an ordinary process exit) used to leave `status.json`
+# saying `running` forever — `clikae wait` would then block on a dead burn
+# until its own `--timeout` (if any) expired, since nothing ever told it the
+# writer was gone. Installed as an EXIT/INT/TERM/HUP trap immediately after
+# the FIRST `running` write in `cmd_burn` (before that point no status file
+# exists yet, so there is nothing to rescue), and a no-op once
+# `_BURN_TERMINAL_WRITTEN` is already 1 — the common, healthy case, where
+# this fires anyway (every trap converges on this Bash process's one EXIT)
+# but has nothing to do. Bash's dynamic scoping means `_burn_status_write`
+# still resolves `run_dir`/`cur`/`status_engine`/etc. from whichever of
+# `cmd_burn` / `_agy_burn` is on the call stack when the trap fires — the
+# same convention `_burn_status_write` itself already documents.
+_burn_exit_guard() {
+  local ec="${1:-$?}"
+  [ "${_BURN_TERMINAL_WRITTEN:-0}" -eq 1 ] && return 0
+  _burn_status_write fail false "${status_engine:-${cli:-}}" "${cur:-${tank:-}}" "${artifact:-}" \
+    "burn exited without reaching a terminal state (exit $ec)" ""
+}
+
+# Installed right after the first `running` write (see the comment above).
+# Each SIGNAL trap writes the terminal state THEN exits with the signal's
+# conventional code (128+n), so a killed burn's own exit code still reads as
+# a kill, not a plain failure; the EXIT trap is the catch-all for every other
+# path (a `log_fail` `exit 1`, a normal `return`, anything not already
+# terminal) and is always the last one to run, no matter which of these
+# fires first.
+_burn_install_exit_trap() {
+  trap '_burn_exit_guard 129; exit 129' HUP
+  trap '_burn_exit_guard 130; exit 130' INT
+  trap '_burn_exit_guard 143; exit 143' TERM
+  trap '_burn_exit_guard "$?"' EXIT
 }
 
 # _burn_parse_duration <dur> -> whole seconds, for --wait-for-reset (#38).
@@ -939,10 +1001,18 @@ cmd_burn() {
   fi
 
   _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
+  # P1-1 (2026-09-09 round-1 review): from here on, a status file exists that
+  # claims this burn is `running` — install the safety net that keeps that
+  # promise honest no matter how this process ends (see `_burn_exit_guard`'s
+  # own comment above `_burn_status_write`).
+  _burn_install_exit_trap
 
   case "$cli" in
     agy|antigravity)
-      _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
+      if ! _agy_enabled; then
+        _burn_status_write fail false "$status_engine" "$tank" "$artifact" "agy multi-account isn't set up yet" ""
+        log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
+      fi
       [ "$prompt_set" -eq 1 ] || log_fail "agy burn only supports the --prompt / --prompt-file form (agy has no adapter to fill in a raw '-- <cmd...>')."
       [ -z "$to" ] || log_fail "--to isn't supported for agy — it walks its own tanks (clikae init agy <name> to add more)."
       # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
@@ -958,11 +1028,16 @@ cmd_burn() {
   local -a post_cmd=("${cmd[@]}")
   load_adapter "$cli"
   local binary; binary="$(adapter_meta_cli_binary)"
-  command -v "$binary" >/dev/null 2>&1 || log_fail "'$binary' is not on PATH."
+  if ! command -v "$binary" >/dev/null 2>&1; then
+    _burn_status_write fail false "$cli" "$tank" "$artifact" "'$binary' is not on PATH" ""
+    log_fail "'$binary' is not on PATH."
+  fi
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
   if [ "$prompt_set" -eq 1 ]; then
-    declare -F adapter_burn_flags >/dev/null \
-      || log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
+    if ! declare -F adapter_burn_flags >/dev/null; then
+      _burn_status_write fail false "$cli" "$tank" "$artifact" "$cli has no headless-write recipe (no adapter_burn_flags)" ""
+      log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
+    fi
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
   fi
@@ -982,7 +1057,19 @@ cmd_burn() {
   local cur="$tank" tried="" dried_accts="" reset out rc
   while :; do
     validate_name profile "$cur"
-    local dir; dir="$(ensure_profile --require "$cli" "$cur")"
+    local dir
+    if ! dir="$(ensure_profile --require "$cli" "$cur")"; then
+      # ensure_profile --require already printed its own error (log_err, from
+      # inside the command-substitution subshell) — no need to repeat it here.
+      # P1-1: this is one of the "four early log_fail paths" the round-1
+      # review named; the generic EXIT trap installed above would also catch
+      # it (ensure_profile's own `exit 1` only ends its subshell, but the
+      # failed assignment then trips `set -e` in THIS shell), but writing
+      # `fail` explicitly here gives a caller a reason worth reading instead
+      # of the trap's generic "exited without a terminal state".
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "profile not found: $cli/$cur" ""
+      return 1
+    fi
 
     # soul_prelaunch's contract is "called from every non-ephemeral engine-launch
     # path, AFTER the adapter is loaded", and burn is one — it had no notion of

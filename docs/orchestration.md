@@ -205,6 +205,15 @@ and the run's own terminal outcome. A reader polling the file sees exactly
 what `--json` would have printed at exit, at any point along the way, from a
 different process.
 
+**Guaranteed to reach a terminal state (2026-09-09 round-1 review, P1-1.)**
+The FIRST `running` write installs an `EXIT`/`INT`/`TERM`/`HUP` trap that
+writes a terminal `fail` (with the exit code in `reason`) unless one was
+already published — so an early argument-validation failure, an unhandled
+error from a sourced helper, or the process being killed all leave the file
+saying `fail`, never a `running` that nothing will ever change again. A `wait`
+caller still has to handle a status file from an OLDER clikae (or one written
+before this fix): see `stale` below.
+
 ### `clikae wait` (#37)
 
 The cockpit-hand-rolled version of blocking on a burn was `until [ -e DONE ];
@@ -227,6 +236,16 @@ order it finishes — never a re-derived summary, the same object a cockpit
 would have read from disk. Exit code: `0` if at least one finished target is
 `done`; `2` if none are `done` and every finished target is `dry`; `1`
 otherwise (a `fail`/`infra` among them, or `--timeout` expired first).
+
+**A dead burn can never hang `wait` (2026-09-09 round-1 review, P1-1.)** A
+`running` status whose recorded `pid` is no longer alive is read as a
+terminal, `fail`-equivalent outcome — printed with `"state":"stale"` (a
+synthetic value `wait` itself computes at read time; burn never writes it to
+disk) instead of the frozen `"running"` the file still literally says. This
+is the safety net for a status file from before burn's own EXIT/INT/TERM/HUP
+trap existed (see above) — a new burn should never leave one of these behind,
+but `wait` does not get to assume every status file on disk came from the
+current clikae.
 
 ### Two burns can't collide on one tank (#40)
 

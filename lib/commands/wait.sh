@@ -79,15 +79,40 @@ cmd_wait() {
       local json st
       json="$(cat "${paths[i]}" 2>/dev/null)" || continue
       st="$(burn_status_state "$json")"
+
+      # P1-1 (2026-09-09 round-1 review): a burn that dies without ever
+      # writing a terminal state (burn.sh's own EXIT/INT/TERM/HUP trap now
+      # closes that gap for NEW burns, but a status file from before that
+      # fix, or one an older clikae wrote, can still say `running` with
+      # nobody left alive to ever change it) must not hang `wait` forever.
+      # `running` (and #38/P1-2's `waiting-reset`) with a DEAD pid is
+      # reclassified here, at READ time, as the synthetic state `stale` —
+      # never written to disk, only ever shown to a `wait` caller — and
+      # treated as a `fail`-equivalent terminal outcome below.
       case "$st" in
-        done|dry|fail|infra)
+        running|waiting-reset)
+          local pid; pid="$(burn_status_str "$json" pid)"
+          case "$pid" in
+            ''|*[!0-9]*) : ;;   # no usable pid recorded — can't judge, keep polling
+            *)
+              if ! kill -0 "$pid" 2>/dev/null; then
+                json="${json/\"state\":\"$st\"/\"state\":\"stale\"}"
+                st="stale"
+              fi
+              ;;
+          esac
+          ;;
+      esac
+
+      case "$st" in
+        done|dry|fail|infra|stale)
           printf '%s\n' "$json"
           reported[i]=1
           terminal_count=$((terminal_count + 1))
           case "$st" in
             done) any_done=1 ;;
             dry)  any_dry=1 ;;
-            *)    any_other=1 ;;
+            *)    any_other=1 ;;   # fail, infra, stale
           esac
           ;;
       esac

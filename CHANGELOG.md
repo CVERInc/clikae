@@ -16,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same fields as `--json`'s result object plus `state`
   (running/done/dry/fail/infra), `started_at`/`updated_at`, `pid`, and `log` —
   written whether or not `--json` was passed, and readable from a different
-  process. Documented as a contract in docs/orchestration.md (#41).
+  process. Documented as a contract in docs/orchestration.md (#41). An
+  EXIT/INT/TERM/HUP trap, installed right after the first `running` write,
+  guarantees the file never gets stuck saying `running` after the burn is
+  actually gone — every early argument-validation failure and an unclean
+  kill alike now leave it in a terminal `fail`, never live-forever `running`
+  (2026-09-09 round-1 review, P1-1).
 - `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
   preserving topic collisions and merging source indexes. First-share discovery
   offers imports interactively or prints actionable warnings unattended (#49).
@@ -28,7 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each finished burn's status object as one JSON line, in the order it
   finishes. Exit code: `0` if any finished target is `done`, `2` if none are
   `done` and every one is `dry`, `1` otherwise (`fail`/`infra`, or a timeout)
-  (#37).
+  (#37). A `running` (or `--wait-for-reset`'s `waiting-reset`) status whose
+  recorded pid is no longer alive is treated as a terminal, `fail`-equivalent
+  outcome (shown as the synthetic state `stale`, never written to disk)
+  instead of hanging until `--timeout` — a dead burn can otherwise leave
+  nothing to ever change its file (2026-09-09 round-1 review, P1-1).
 
 - **`burn` refuses to start on a tank that already has a burn running on it,
   and the reroute walk skips a busy tank instead of colliding with it.**
