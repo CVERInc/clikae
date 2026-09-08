@@ -52,18 +52,52 @@ burn_status_dir() { printf '%s/.clikae/logs/%s\n' "$HOME" "$1"; }
 #   - a run id as burn itself prints it, e.g. `burn-28186` (the top-level
 #     invocation's id — stable across a whole burn's reroutes/retries, unlike
 #     the per-attempt `run_id` in `--json`'s own output);
+#   - `--json`'s own per-attempt `run_id`, e.g. `codex-T1-burn-28186` or
+#     `codex-T1-burn-28186-retry2` (P2-5, 2026-09-09 round-1 review) —
+#     collapsed to the top-level `burn-28186` it was derived from, since that
+#     is the file that actually exists;
 #   - a bare pid, e.g. `28186` (shorthand for `burn-28186`);
 #   - anything else is tried as a literal run-directory name, so a caller who
 #     already knows burn's layout is never second-guessed.
+#
+# P1-4b (2026-09-09 round-1 review): "the status file doesn't exist YET" is a
+# NORMAL state, not an error — `clikae burn … --json & clikae wait "burn-$!"`
+# (both published examples use exactly this shape) loses the startup race
+# every time otherwise, since `wait` sources fewer libs than `burn` and gets
+# to its first read before `burn` has even reached its first status write.
+# So a computed (non-literal-file) path gets a short bounded wait for the
+# file to appear before giving up — overridable via
+# $CLIKAE_WAIT_RESOLVE_TIMEOUT_S (tests default it to 0: see tests/helpers.bash)
+# so "an unknown target refuses rather than hanging" stays instant.
 burn_status_resolve() {
-  local arg="$1" p
+  local arg="$1" p wait_s="${CLIKAE_WAIT_RESOLVE_TIMEOUT_S:-10}" waited=0
   [ -n "$arg" ] || return 1
   if [ -f "$arg" ]; then printf '%s' "$arg"; return 0; fi
   case "$arg" in
-    burn-*)        p="$(burn_status_dir "$arg")/status.json" ;;
-    ''|*[!0-9]*)   p="$(burn_status_dir "$arg")/status.json" ;;
-    *)             p="$(burn_status_dir "burn-$arg")/status.json" ;;
+    burn-*)
+      p="$(burn_status_dir "$arg")/status.json" ;;
+    *-burn-[0-9]*)
+      # --json's per-attempt run_id: "<engine>-<tank>-burn-<pid>[-retryN]".
+      # Strip everything up to and including the LAST "-burn-", then drop an
+      # optional trailing "-retryN" — what's left is the pid the top-level
+      # burn_id ("burn-<pid>") was keyed on.
+      local _tail; _tail="${arg##*-burn-}"
+      local _pid; _pid="${_tail%%-retry*}"
+      case "$_pid" in
+        ''|*[!0-9]*) p="$(burn_status_dir "$arg")/status.json" ;;   # not actually a pid — fall back to literal
+        *)           p="$(burn_status_dir "burn-$_pid")/status.json" ;;
+      esac
+      ;;
+    ''|*[!0-9]*)
+      p="$(burn_status_dir "$arg")/status.json" ;;
+    *)
+      p="$(burn_status_dir "burn-$arg")/status.json" ;;
   esac
+  case "$wait_s" in ''|*[!0-9]*) wait_s=0 ;; esac
+  while [ ! -f "$p" ] && [ "$waited" -lt "$wait_s" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
   [ -f "$p" ] || return 1
   printf '%s' "$p"
 }

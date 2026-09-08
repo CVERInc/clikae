@@ -17,6 +17,8 @@
 # through the adapter-driven loop below — it gets its own loop, _agy_burn.
 # shellcheck source=./antigravity.sh
 source "$CLIKAE_LIB/commands/antigravity.sh"
+# shellcheck source=../core/duration.sh
+source "$CLIKAE_LIB/core/duration.sh"
 
 _burn_help() {
   cat <<'EOF'
@@ -836,32 +838,10 @@ _burn_install_exit_trap() {
   trap '_burn_exit_guard "$?"' EXIT
 }
 
-# _burn_parse_duration <dur> -> whole seconds, for --wait-for-reset (#38).
-# Accepts a bare integer (seconds) or an integer with one trailing unit
-# s/m/h/d. Returns 1 (nothing echoed) for anything else — the caller must
-# refuse rather than guess, the same discipline limit_reset_epoch documents
-# for itself: a silent wrong number here would sleep for the wrong length of
-# time with nothing to show for it until the wait itself runs long or short.
-_burn_parse_duration() {
-  local s="$1" n unit
-  case "$s" in
-    *[0-9])
-      n="$s"; unit="" ;;
-    ?*[a-zA-Z])
-      n="${s%?}"; unit="${s: -1}" ;;
-    *)
-      return 1 ;;
-  esac
-  case "$n" in ''|*[!0-9]*) return 1 ;; esac
-  case "$unit" in
-    '') printf '%s' "$n" ;;
-    s)  printf '%s' "$n" ;;
-    m)  printf '%s' "$((n * 60))" ;;
-    h)  printf '%s' "$((n * 3600))" ;;
-    d)  printf '%s' "$((n * 86400))" ;;
-    *)  return 1 ;;
-  esac
-}
+# _burn_parse_duration now lives in lib/core/duration.sh (P1-4a, 2026-09-09
+# round-1 review) — `clikae wait --timeout` needs the exact same grammar and
+# has no other reason to source burn.sh's much larger dependency chain. See
+# that file for the function itself; sourced at the top of this file.
 
 # _burn_wait_for_reset <engine> <tank> <artifact> <reset-phrase> <window_s> ->
 # 0 once the tank's reset should have landed (the caller should re-fire the

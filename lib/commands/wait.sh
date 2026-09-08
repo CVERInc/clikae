@@ -10,10 +10,12 @@
 #
 # shellcheck source=../core/burn_status.sh
 source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=../core/duration.sh
+source "$CLIKAE_LIB/core/duration.sh"
 
 _wait_help() {
   cat <<'EOF'
-Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <secs>]
+Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
 fail, or infra (see #41's status.json contract, documented in
@@ -21,13 +23,19 @@ docs/orchestration.md) — and print each one's status object as one JSON line
 on stdout, in the order it finishes. Never greps a log.
 
 A target is either the run id `clikae burn` printed (e.g. `burn-28186`, stable
-across that burn's own reroutes and retries), a bare pid (shorthand for
-`burn-<pid>`), or a path straight to a status.json.
+across that burn's own reroutes and retries), `--json`'s own per-attempt
+run_id (e.g. `codex-T1-burn-28186`, resolved to the top-level id it came
+from), a bare pid (shorthand for `burn-<pid>`), or a path straight to a
+status.json. A target's status file not existing YET is a normal race (see
+`clikae burn ... & clikae wait "burn-$!"` below) — resolution waits up to
+$CLIKAE_WAIT_RESOLVE_TIMEOUT_S seconds (default 10) for it to appear before
+refusing.
 
   --any        stop as soon as ONE target reaches a terminal state (default).
   --all        wait for EVERY named target to reach a terminal state.
-  --timeout <secs>   give up after this many seconds (an integer; unbounded
-                     if omitted).
+  --timeout <dur>   give up after this long — a bare integer of seconds, or
+                    with a trailing s/m/h/d (e.g. 90, 90s, 20m, 2h); unbounded
+                    if omitted.
 
 Exit code — 0 only when the REQUESTED condition is met:
   --any (default): 0 if at least one target is done; 2 if none are done and
@@ -61,7 +69,14 @@ cmd_wait() {
   done
   [ "${#targets[@]}" -ge 1 ] || log_fail "clikae wait needs at least one <run_id|status-file>  (try: clikae wait --help)"
   if [ -n "$timeout_s" ]; then
-    case "$timeout_s" in ''|*[!0-9]*) log_fail "--timeout must be a nonnegative integer number of seconds" ;; esac
+    # P1-4a (2026-09-09 round-1 review): both published examples of this
+    # command (--help above and docs/orchestration.md) use `20m`/`30m` —
+    # accept the same s/m/h/d grammar `--wait-for-reset` already does,
+    # instead of rejecting every one of them and requiring bare seconds.
+    local _parsed_timeout
+    _parsed_timeout="$(_burn_parse_duration "$timeout_s")" \
+      || log_fail "--timeout: not a duration: $timeout_s  (use e.g. 30, 30s, 5m, 2h, or a bare integer of seconds)"
+    timeout_s="$_parsed_timeout"
   fi
 
   local -a paths=()

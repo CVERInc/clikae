@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `1`, in both modes, even if some other target was already `done` —
   2026-09-09 round-1 review, P1-3/P2-3, fixing a doc/code contradiction
   where `--all` returned `0` on ANY done target regardless of the others).
+  `--timeout` now accepts the same duration grammar `--wait-for-reset` does
+  (`20m`, `30m`, `90s`, or a bare integer of seconds — both documented
+  examples use a duration directly and previously failed on first try),
+  resolving a target waits up to `$CLIKAE_WAIT_RESOLVE_TIMEOUT_S` seconds
+  (default `10`) for its status file to appear instead of refusing
+  instantly (the documented `clikae burn … --json & clikae wait "burn-$!"`
+  composition otherwise loses that startup race every time), and `--json`'s
+  own per-attempt `run_id` (e.g. `codex-T1-burn-28186`) is now itself a valid
+  `wait` target, resolved to the top-level status file it was derived from
+  (2026-09-09 round-1 review, P1-4a/P1-4b/P2-5).
 
 - **`burn` refuses to start on a tank that already has a burn running on it,
   and the reroute walk skips a busy tank instead of colliding with it.**

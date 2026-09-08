@@ -230,12 +230,26 @@ clikae wait "burn-$!" --timeout 20m && echo "L finished"
 clikae wait burn-111 burn-222 burn-333 --all --timeout 30m
 ```
 
-A target is the run id `burn` printed (`burn-<pid>`), a bare pid (shorthand
-for the same thing), or a path straight to a `status.json`. `--any` (default)
-returns as soon as ONE target reaches a terminal state; `--all` waits for
-every one. Each terminal status object is printed as one JSON line, in the
-order it finishes — never a re-derived summary, the same object a cockpit
-would have read from disk.
+A target is the run id `burn` printed (`burn-<pid>`), `--json`'s own
+per-attempt `run_id` (e.g. `codex-T1-burn-28186`, resolved to the top-level
+`burn-28186` it was derived from — 2026-09-09 round-1 review, P2-5), a bare
+pid (shorthand for the same thing), or a path straight to a `status.json`.
+`--timeout` accepts the same duration grammar `--wait-for-reset` does (a bare
+integer of seconds, or one with a trailing `s`/`m`/`h`/`d` — both examples
+above use `20m`/`30m` directly; 2026-09-09 round-1 review, P1-4a). `--any`
+(default) returns as soon as ONE target reaches a terminal state; `--all`
+waits for every one. Each terminal status object is printed as one JSON
+line, in the order it finishes — never a re-derived summary, the same object
+a cockpit would have read from disk.
+
+**A target's status file not existing yet is normal, not an error
+(2026-09-09 round-1 review, P1-4b.)** The first example above is exactly
+`clikae burn … --json & clikae wait "burn-$!"` — `wait` sources far fewer
+libs than `burn` and can reach its first read before `burn` has written
+anything at all, losing that race every time with no bound on how long
+`wait` starts. Resolving a target now waits up to
+`$CLIKAE_WAIT_RESOLVE_TIMEOUT_S` seconds (default `10`) for its status file
+to appear before refusing with "no status file for: …".
 
 **Exit code — `0` only when the requested condition is actually met**
 (2026-09-09 round-1 review, P1-3/P2-3 — this used to contradict itself:

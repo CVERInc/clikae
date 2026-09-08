@@ -60,6 +60,8 @@ source "$CLIKAE_LIB/core/scan.sh"
 source "$CLIKAE_LIB/core/dry_store.sh"
 # shellcheck source=../lib/core/burn_status.sh
 source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=../lib/core/duration.sh
+source "$CLIKAE_LIB/core/duration.sh"
 # shellcheck source=../lib/core/update_check.sh
 source "$CLIKAE_LIB/core/update_check.sh"
 # shellcheck source=../lib/core/limit.sh
