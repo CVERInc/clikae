@@ -100,6 +100,15 @@ pass <code>--yes</code>, so a tank whose account is already known and different 
 rather than merged, and it keeps its own memory until you say otherwise.</p>
 <p>The framing, stated once: <strong>clikae controls where state lives, how long, and how
 widely shared</strong> — for auth (today), for fuel (the reframe), and now for memory.</p>
+<p>On a Claude tank's first <code>memory share</code>, clikae lists existing project memory in
+<code>~/.claude/projects/*/memory</code> and the tank, with markdown file counts. It asks
+<code>[y/N]</code> per additional source on a terminal; unattended runs warn and print an
+exact <code>clikae memory share &lt;group&gt; claude &lt;tank&gt; --adopt &lt;dir&gt;</code> command. You can
+pass <code>--adopt</code> up front or after joining (one source per invocation). Adoption
+copies markdown topics, keeps existing same-named files, and appends the source
+index under an <code>Adopted from &lt;dir&gt;</code> heading once. Originals remain untouched;
+collisions are reported for manual review. <code>--yes</code> does not approve discovery
+imports. The tank's current directory retains its existing copy-seeding behavior.</p>
 <h2 id="1-the-soul--brain-split">1. The Soul / Brain split</h2>
 <ul>
 <li><strong>Soul</strong> = the memory you <em>own</em>: plain markdown, portable, vendor-neutral —

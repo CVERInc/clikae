@@ -74,6 +74,16 @@ rather than merged, and it keeps its own memory until you say otherwise.
 The framing, stated once: **clikae controls where state lives, how long, and how
 widely shared** — for auth (today), for fuel (the reframe), and now for memory.
 
+On a Claude tank's first `memory share`, clikae lists existing project memory in
+`~/.claude/projects/*/memory` and the tank, with markdown file counts. It asks
+`[y/N]` per additional source on a terminal; unattended runs warn and print an
+exact `clikae memory share <group> claude <tank> --adopt <dir>` command. You can
+pass `--adopt` up front or after joining (one source per invocation). Adoption
+copies markdown topics, keeps existing same-named files, and appends the source
+index under an `Adopted from <dir>` heading once. Originals remain untouched;
+collisions are reported for manual review. `--yes` does not approve discovery
+imports. The tank's current directory retains its existing copy-seeding behavior.
+
 ## 1. The Soul / Brain split
 
 - **Soul** = the memory you *own*: plain markdown, portable, vendor-neutral —
