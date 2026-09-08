@@ -51,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the source index anyway, and printed a green `[ DONE ]`. Adoption now also
   refuses outright — rather than reporting success — if it ends up copying
   zero files from a non-empty source (#49).
+- That zero-copy refusal had its own bug: it counted a genuinely dangling
+  symlink (target doesn't exist) the same as a symlinked subdirectory `find`
+  can't descend into (target exists, but isn't reachable), so a single stale
+  link anywhere in an otherwise-inline source was enough to fail the whole
+  `--adopt` and leave the tank isolated — contradicting the "dangling is
+  skipped and reported, never fatal" rule two entries up. A dangling link no
+  longer counts toward that refusal; it is still skipped and named (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

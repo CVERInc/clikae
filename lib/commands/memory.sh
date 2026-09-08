@@ -432,9 +432,26 @@ _memory_adopt() {
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
-    found=$((found+1))
-    if [ -L "$f" ] && [ ! -f "$f" ]; then
+    # A genuinely dangling symlink (target doesn't exist at all) is skipped,
+    # named, and MUST NOT count toward $found below — it has nothing to
+    # contribute either way, so a source that is otherwise just an inline
+    # MEMORY.md plus one stale link must still end in DONE, not a refusal
+    # (R3-P2-2, R5-P2-1). `-e` (not `-f`) is the right test here: it is false
+    # only when the target is actually missing, unlike `-f`, which is also
+    # false for a live symlink to a directory — that's a different case,
+    # handled below.
+    if [ -L "$f" ] && [ ! -e "$f" ]; then
       log_warn "Skipping dangling symlink $rel in $source."
+      continue
+    fi
+    found=$((found+1))
+    # A symlink to a directory IS live (its target exists) but `find` never
+    # descends into an operand that is itself a symlink, so nothing under it
+    # was ever visited or copied. Unlike a dangling link, this one WAS
+    # supposed to contribute content the index likely references — count it
+    # toward $found so the all-skipped refusal below can fire for it.
+    if [ -L "$f" ] && [ -d "$f" ]; then
+      log_warn "Skipping symlinked directory $rel in $source; its contents were not adopted."
       continue
     fi
     mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null || { rm -rf "$staging"; return 1; }
@@ -448,12 +465,14 @@ _memory_adopt() {
     copied=$((copied+1))
   done < <(find "$sdir" \( -type f -o -type l \) 2>/dev/null)
 
-  # A source that genuinely holds nothing but its own MEMORY.md ($found == 0)
-  # is a legitimate empty adopt and still ends in DONE below. But $found > 0
-  # with $copied == 0 means every entry under the source was skipped (e.g. a
-  # symlinked subdirectory this loop doesn't recurse into) — the index is
-  # about to merge pointing at files that never landed. Refuse instead of
-  # printing a green DONE over an adopt that copied nothing.
+  # A source that genuinely holds nothing but its own MEMORY.md, or nothing
+  # but dangling links ($found == 0), is a legitimate empty adopt and still
+  # ends in DONE below. But $found > 0 with $copied == 0 means every entry
+  # that WAS live got skipped (e.g. a symlinked subdirectory this loop
+  # doesn't recurse into) — the index is about to merge pointing at files
+  # that never landed. Refuse instead of printing a green DONE over an adopt
+  # that copied nothing. Dangling links never reach $found (see above), so
+  # one stale link alongside real content never trips this.
   if [ "$found" -gt 0 ] && [ "$copied" -eq 0 ]; then
     rm -rf "$staging"
     log_err "Adoption of $source copied 0 of $found file(s) found under it — nothing to merge."

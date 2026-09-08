@@ -956,3 +956,50 @@ _perm_octal() {
   [ ! -e "$store/archive" ]
   ! command grep -a -Fq 'Adopted from' "$store/MEMORY.md" 2>/dev/null
 }
+
+@test "memory adopt: a source that is ONLY an inline MEMORY.md plus one stale link still succeeds (R5-P2-1)" {
+  # Distinct from the R3-P2-2 test above: that one always has a.md and
+  # linked.md alongside the dangling link, so copied is never 0 and the
+  # R4-P2-1 zero-copy refusal (found > 0, copied == 0) never has a chance to
+  # fire either way. Here the dangling link is the ONLY non-index entry, so
+  # before this fix `found` counted it anyway (incremented before the
+  # dangling check ran) and the refusal fired on a source that never had
+  # anything to copy in the first place — turning a harmless stale link into
+  # a hard failure that left the tank isolated.
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L"
+  printf '# Memory Index\nEverything I know is written right here, inline. No topic files.\n' \
+    > "$L/MEMORY.md"
+  ln -s "$HOME/gone-note.md" "$L/old-note.md"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[ DONE ]"* ]] || false
+  [[ "$output" == *"Skipping dangling symlink old-note.md in $L"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -e "$store/old-note.md" ]
+  command grep -a -Fq 'Adopted from' "$store/MEMORY.md"
+  run clikae memory status
+  [[ "$output" == *"claude/a"*"shared 'me'"* ]] || false
+}
+
+@test "memory adopt: one dangling symlink alongside a good symlink and a regular file copies two and reports one (R5-P2-1)" {
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L" "$TEST_HOME/notes"
+  printf '[a](a.md)\n[Linked](linked.md)\n' > "$L/MEMORY.md"
+  printf 'topic a\n' > "$L/a.md"
+  printf 'LINKED NOTE\n' > "$TEST_HOME/notes/linked.md"
+  ln -s "$TEST_HOME/notes/linked.md" "$L/linked.md"
+  ln -s "$TEST_HOME/notes/gone.md" "$L/dangling-link.md"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[ DONE ]"* ]] || false
+  [[ "$output" == *"Skipping dangling symlink dangling-link.md in $L"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(cat "$store/a.md")" = 'topic a' ]
+  [ "$(cat "$store/linked.md")" = 'LINKED NOTE' ]
+  [ ! -e "$store/dangling-link.md" ]
+  run clikae memory status
+  [[ "$output" == *"claude/a"*"shared 'me'"* ]] || false
+}
