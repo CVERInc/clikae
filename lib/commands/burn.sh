@@ -70,10 +70,13 @@ Give the task in one of two ways:
   --infra-delay <s>   initial retry delay in whole seconds (default 5), doubled
                       for each subsequent retry. --timeout bounds each attempt.
   --no-reroute        on a dry tank, stop instead of falling through.
-  --allow-active      let auto-reroute use a tank an interactive session is on.
-                      By default the reserve SKIPS such tanks (rerouting a headless
-                      job onto the tank you're mid-conversation on would silently
-                      burn that quota) and tanks sharing an already-dry account.
+  --allow-active      let auto-reroute use a tank an interactive session is on,
+                      AND (#40) let a burn start on a tank that already has a
+                      running burn on it — by default both are refused/skipped:
+                      the reserve SKIPS such tanks (rerouting a headless job onto
+                      the tank you're mid-conversation on would silently burn
+                      that quota, and two burns on one tank collide on the tmux
+                      session name) and tanks sharing an already-dry account.
 
 Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
 tool-host failure -> retry the same tank, then reason: infra (exit 1);
@@ -391,6 +394,15 @@ _burn_next_same_engine() {
         continue
       fi
     fi
+    # P2 (#40) — SKIP a tank that already has a RUNNING burn on it, per #41's
+    # status files (never tmux session names: two burns on one tank collide
+    # on the tmux session name before either gets far enough to prove
+    # anything from tmux). $$ excludes the tank THIS burn is on right now,
+    # which would otherwise appear busy on its own account.
+    if [ "$allow_active" != "1" ] && burn_tank_busy "$cli" "$t" "$$"; then
+      log_warn "skipping $cli/$t — another burn is already running on it (#40; --allow-active to override)."
+      continue
+    fi
     printf '%s\n' "$t"; return 0
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
@@ -525,7 +537,7 @@ _agy_burn() {
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
     fi
     log_info "burn agy/$cur → agy (task: $saved_prompt)"
-    _burn_status_write running null agy "$cur" "$artifact" "" ""
+    _burn_status_write running null "$status_engine" "$cur" "$artifact" "" ""
 
     # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
     # symlink shared by every agy process on the tank, repointed by whichever
@@ -571,10 +583,10 @@ _agy_burn() {
     rm -f "$runlog"
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
-      _burn_status_write dry false agy "$cur" "$artifact" "tank ran dry" "$reset"
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
     elif [ "$artifact_fresh" -eq 1 ]; then
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
-      _burn_status_write "done" true agy "$cur" "$artifact" "artifact produced" ""
+      _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
       _burn_result true agy "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
@@ -588,7 +600,7 @@ _agy_burn() {
       # yielded nothing — a status claim, not prose about an answer, and the
       # closest thing to a structured marker it offers.
       log_err "agy/$cur declined the task — nothing was produced."
-      _burn_status_write fail false agy "$cur" "$artifact" "agy declined the task" ""
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "agy declined the task" ""
       _burn_output_tail "$out" 3
       log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
@@ -609,19 +621,19 @@ _agy_burn() {
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
         artifact_bytes_snapshot="$(_burn_size "$artifact")"
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
-        _burn_status_write "done" true agy "$cur" "$artifact" "clikae captured stdout into the artifact" ""
+        _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "clikae captured stdout into the artifact" ""
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
         log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
-      _burn_status_write fail false agy "$cur" "$artifact" "clikae could not write the artifact" ""
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "clikae could not write the artifact" ""
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     else
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
-      _burn_status_write fail false agy "$cur" "$artifact" "engine produced nothing and showed no limit" ""
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "engine produced nothing and showed no limit" ""
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       _burn_output_tail "$out"
@@ -631,7 +643,7 @@ _agy_burn() {
 
     [ "$reroute" -eq 1 ] || {
       log_info "Dry, and --no-reroute is set. Stopping."
-      _burn_status_write dry false agy "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       return 1
     }
@@ -640,7 +652,7 @@ _agy_burn() {
     # instead of falling through to the "all dry" log_fail below.
     local nxt; nxt="$(_agy_tank_names | grep -vxF -f <(printf '%s\n' "${agy_tried[@]}") | head -1)" || true
     if [ -z "$nxt" ]; then
-      _burn_status_write dry false agy "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
       log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
     fi
     agy_tried+=("$nxt")
@@ -842,7 +854,29 @@ cmd_burn() {
   # above), one thing to find.
   local burn_id="burn-$$" started_at
   started_at="$(date +%s 2>/dev/null || echo 0)"
-  _burn_status_write running null "$cli" "$tank" "$artifact" "" ""
+
+  # #40: agy is always reported as "agy" (never its "antigravity" alias) in
+  # both _burn_result and _agy_burn's own log lines — match that here so a
+  # tank looks identical whichever path (busy-check, status file, --json)
+  # names it, and a reroute picker on a different engine can never collide
+  # with an agy row that used a different spelling of the same engine.
+  local status_engine="$cli"
+  [ "$status_engine" = antigravity ] && status_engine=agy
+
+  # #40: refuse to START a burn on a tank that already has one running —
+  # detected from #41's own status files (a `state: running` row whose pid is
+  # still alive), never from tmux session names: two burns on one tank
+  # collide on the tmux session name before either gets far enough to prove
+  # anything FROM tmux, which is the bug report this closes. --allow-active
+  # already means "let this burn use a tank that's otherwise in active use"
+  # for the interactive-session guard elsewhere in this file; a running burn
+  # is the headless shape of the same thing, so the same flag opts out of both
+  # rather than adding a second flag for one more way to say "I know".
+  if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$tank" "$$"; then
+    log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+  fi
+
+  _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
 
   case "$cli" in
     agy|antigravity)

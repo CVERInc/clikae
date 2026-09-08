@@ -67,3 +67,38 @@ burn_status_resolve() {
   [ -f "$p" ] || return 1
   printf '%s' "$p"
 }
+
+# burn_tank_busy <engine> <tank> [self-pid] -> 0 if some OTHER live process
+# currently has a burn in the `running` state on this exact <engine>/<tank>
+# (#40); 1 otherwise. <self-pid>, when given, is excluded from the scan (a
+# burn checking whether ITS OWN tank is busy must not see its own just-written
+# status file and refuse itself).
+#
+# "Live" means the recorded pid still exists — a status file left behind by a
+# burn that crashed or was killed says `running` forever otherwise, and a
+# once-collided tank would stay refused permanently. This is a plain
+# existence check (`kill -0`), not a name/identity check: a pid that has been
+# recycled onto an unrelated process is the same false-negative window every
+# pid-based liveness check in this codebase already accepts (see live.sh).
+burn_tank_busy() {
+  local eng="$1" tk="$2" self_pid="${3:-}" base d f json st feng ftk fpid
+  base="$HOME/.clikae/logs"
+  [ -d "$base" ] || return 1
+  for d in "$base"/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json="$(cat "$f" 2>/dev/null)" || continue
+    st="$(burn_status_state "$json")"
+    [ "$st" = running ] || continue
+    feng="$(burn_status_str "$json" engine)"
+    ftk="$(burn_status_str "$json" tank)"
+    [ "$feng" = "$eng" ] && [ "$ftk" = "$tk" ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$self_pid" ] && [ "$fpid" = "$self_pid" ] && continue
+    kill -0 "$fpid" 2>/dev/null || continue   # stale — the writer is gone
+    return 0
+  done
+  return 1
+}

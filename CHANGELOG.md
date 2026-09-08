@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `done` and every one is `dry`, `1` otherwise (`fail`/`infra`, or a timeout)
   (#37).
 
+- **`burn` refuses to start on a tank that already has a burn running on it,
+  and the reroute walk skips a busy tank instead of colliding with it.**
+  Starting a second burn on the same tank used to duplicate the Live row's
+  tmux session name. Detection reads #41's status files (a `running` state
+  whose pid is still alive), never tmux session names. `--allow-active` —
+  which already meant "let this burn use a tank in active use" — opts out of
+  both the refusal and the reroute skip (#40).
+
 ### Fixed
 
 - `clikae app` restores the target terminal icon on every build, including

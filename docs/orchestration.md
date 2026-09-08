@@ -228,6 +228,18 @@ would have read from disk. Exit code: `0` if at least one finished target is
 `done`; `2` if none are `done` and every finished target is `dry`; `1`
 otherwise (a `fail`/`infra` among them, or `--timeout` expired first).
 
+### Two burns can't collide on one tank (#40)
+
+Starting a second burn on a tank that already has one running used to
+duplicate the Live row's tmux session name (and break the agy name lookup).
+`burn` now refuses to START on a tank that already has a `running` burn on it
+(status-file-detected, pid checked for being alive — a burn that crashed
+leaves no false "busy" behind), and the reroute walk **skips** a busy tank
+the same way it already skips a tank an interactive session is using or one
+sharing an already-dry account. `--allow-active` opts out of both: it already
+meant "let this burn use a tank that's otherwise in active use", and a
+running burn is the headless shape of the same thing.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and

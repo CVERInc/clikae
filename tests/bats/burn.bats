@@ -223,8 +223,10 @@ _src_burn() {
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/json.sh"
   . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
   . "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"   # #40: _burn_next_same_engine calls burn_tank_busy
   . "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   . "$CLIKAE_TEST_ROOT/lib/core/proc.sh"
