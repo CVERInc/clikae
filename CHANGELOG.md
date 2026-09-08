@@ -119,6 +119,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   umask — under `umask 000` it was `0666` inside the world-writable
   `souls/<group>` directory, readable and appendable by anyone else on a
   shared machine while an adopt was in flight.
+- **The move loop's `mkdir -p "$(dirname "$dest")"` created a directory the
+  rollback never knew about.** It ran unconditionally at the top of every
+  iteration, before the manifest above was even touched, so any source with
+  a subdirectory (`archive/`, `notes/`, …) left an empty directory behind
+  after a signal or a hard move failure — the manifest's file-by-file
+  rollback had nothing to unlink there, because nothing under it had landed
+  yet. And the seed gate (`_memory_store_has_content`) couldn't tell that
+  apart from real content either: it treated any directory entry the same
+  as a file, so the empty directory alone satisfied it, and the very next
+  ordinary `share` silently skipped seeding — the same symptom the manifest
+  fix above closed for files, now showing up one layer up, as a directory.
+  Every directory the move loop actually creates is now recorded (never one
+  that already existed) in a manifest of its own, and the rollback removes
+  them with `rmdir` — deepest first, and only once every file above has
+  already been unlinked, so a non-empty directory (something this rollback
+  didn't account for) is simply left alone rather than destroyed. The seed
+  gate itself is now hardened the same way, independently: a directory only
+  counts as content if a real file or symlink turns up somewhere inside it,
+  recursively — an empty directory, or an empty tree of them, no longer
+  does.
+- `--adopt`'s per-`ln`-call stderr capture file is now also created `0600`
+  up front, the same fix and the same reasoning as the move-manifest file
+  above (and the same file it's a sibling of) — under `umask 000` it was
+  otherwise created at `0666` the first time the move loop's `2>` redirect
+  touched it.
   `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**

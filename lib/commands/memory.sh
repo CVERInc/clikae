@@ -399,6 +399,20 @@ _memory_adopt_count() {
 # only on a `return`. Belt AND suspenders — `_memory_share`'s seed gate below
 # also ignores dotfiles/dot-dirs on its own, so residue from an OLDER build of
 # clikae (which did stage inside the store) can't fool it either.
+#
+# One helper for every private scratch file this function writes as a
+# SIBLING of $staging (never inside it — see why above): 0600 explicitly,
+# because under `umask 000` a bare `: > "$f"` would leave it at 0666,
+# world-writable, inside `souls/<group>` (0777 — R4-P3-14, unrelated and
+# unchanged here). $moved lists absolute store paths the rollback below
+# unlinks/rmdirs by name, and $staging.lnerr captures `ln`'s stderr every
+# time through the move loop — either one, a co-resident user on a shared
+# machine could otherwise tamper with while an adopt is in flight (R9-P3-2,
+# R10-P3-1). $staging itself already gets 0700 from `mktemp -d`'s own mode,
+# independent of umask.
+_memory_adopt_private_tempfile() {
+  { : > "$1" && chmod 600 "$1"; } 2>/dev/null
+}
 # Undo exactly what THIS invocation's move-into-place loop (inside
 # _memory_adopt, below) has linked into $store so far — read from $moved, a
 # manifest of destination paths kept OUTSIDE $staging (see _memory_adopt's
@@ -410,15 +424,33 @@ _memory_adopt_count() {
 # so is never a candidate here. Best-effort throughout: one `rm -f` failing
 # must not stop the rest of the rollback (`$staging`, `$moved` themselves)
 # from being cleaned up.
+#
+# $dirs (R10-P2-1) is the companion manifest of directories the move loop's
+# own `mkdir -p` actually created (never ones that already existed — see the
+# move loop's own guard). Removed with `rmdir`, NEVER `rm -rf` — a directory
+# on a store path is never blown away wholesale here — and only AFTER every
+# file above has already been unlinked, so an empty one goes quietly and one
+# that (should never happen, but belt-and-suspenders) still holds something
+# this rollback didn't unlink is simply left in place. `sort -ru` is
+# deepest-first for free: a directory string is always a proper PREFIX of
+# anything nested under it, so plain lexicographic order already puts a
+# child after its own parent everywhere it matters, `-r` reverses that, and
+# `-u` collapses a directory recorded once per file it ended up holding down
+# to a single `rmdir` attempt.
 _memory_adopt_rollback() {
-  local moved="$1" staging="$2" d
+  local moved="$1" staging="$2" dirs="$3" d
   if [ -f "$moved" ]; then
     while IFS= read -r d; do
       [ -n "$d" ] && rm -f "$d" 2>/dev/null
     done < "$moved"
   fi
+  if [ -n "$dirs" ] && [ -f "$dirs" ]; then
+    while IFS= read -r d; do
+      [ -n "$d" ] && rmdir "$d" 2>/dev/null
+    done < <(sort -ru "$dirs" 2>/dev/null)
+  fi
   rm -rf "$staging"
-  rm -f "$moved" 2>/dev/null
+  rm -f "$moved" "$dirs" 2>/dev/null
   # "$staging.lnerr" — `ln`'s captured stderr for whichever call was in
   # flight — is a SIBLING of $staging (see why above), so `rm -rf "$staging"`
   # above doesn't reach it; a signal landing mid-`ln` can leave it behind.
@@ -427,7 +459,7 @@ _memory_adopt_rollback() {
 }
 
 _memory_adopt() {
-  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line found=0 copied=0 moved linked=0
+  local source="$1" store="$2" sdir f rel staging dest destdir newdir heading broken=0 target line found=0 copied=0 moved dirsfile linked=0
   ! _memory_same_dir "$source" "$store" || return 0
   # Never append through an index symlink into somebody else's memory — check
   # this FIRST, before touching anything, so a refusal here leaves the store
@@ -480,17 +512,36 @@ _memory_adopt() {
   # can never take it down before a trap or move_failed gets to read it. This
   # is what makes the move loop's own rollback (R8-P2-1) exact: it can unlink
   # precisely what THIS run linked, and never anything that was already in
-  # the store.
-  # 0600 explicitly (R9-P3-2): under `umask 000`, `: >` alone would leave this
-  # at 0666, world-writable, inside `souls/me` (0777 — R4-P3-14, unrelated and
-  # unchanged here). Its contents are a list of absolute paths the rollback
-  # below unlinks by name; on a shared machine another user could otherwise
-  # append arbitrary paths of their own while an adopt is in flight and have
-  # this user's next signal or move_failed delete them. $staging itself
-  # already gets this from `mktemp -d`'s own 0700, independent of umask.
+  # the store. 0600 via _memory_adopt_private_tempfile (R9-P3-2) — see that
+  # helper's own comment.
   moved="$staging.moved"
-  { : > "$moved" && chmod 600 "$moved"; } 2>/dev/null \
+  _memory_adopt_private_tempfile "$moved" \
     || { log_err "Couldn't stage adoption of $source"; rm -rf "$staging"; return 1; }
+  # Companion manifest (R10-P2-1): every directory the move loop's own
+  # `mkdir -p "$(dirname "$dest")"` actually creates — never one that already
+  # existed — so the rollback can `rmdir` exactly those, the same way $moved
+  # lets it `rm -f` exactly the files it linked. Before this, that mkdir -p
+  # ran unconditionally at the top of every iteration and nothing recorded or
+  # ever freed what it created: a source with even one subdirectory
+  # (archive/, notes/, …) left an empty directory behind after a signal or a
+  # move_failed, and _memory_store_has_content's glob below couldn't tell
+  # that apart from real content either — R8-P2-1's exact symptom, wearing a
+  # directory instead of a file.
+  dirsfile="$staging.dirs"
+  _memory_adopt_private_tempfile "$dirsfile" \
+    || { log_err "Couldn't stage adoption of $source"; rm -f "$moved"; rm -rf "$staging"; return 1; }
+  # $staging.lnerr (R10-P3-1): precreated here, ONCE, at 0600 — not left to
+  # whatever the `2>"$staging.lnerr"` redirect inside the move loop below
+  # would create it as on its first use. Under `umask 000` that redirect
+  # would otherwise open the file itself (O_CREAT) at 0666, world-writable,
+  # for exactly as long as it takes the loop to reach its first failing
+  # `ln` — the same class of gap R9-P3-2 closed for $moved, just on a
+  # different file. Precreating it here instead of inside the loop matters
+  # because `>` onto a file that ALREADY EXISTS only truncates its contents,
+  # never its mode or its inode, so one 0600 creation up front holds for
+  # every iteration after it.
+  _memory_adopt_private_tempfile "$staging.lnerr" \
+    || { log_err "Couldn't stage adoption of $source"; rm -f "$moved" "$dirsfile"; rm -rf "$staging"; return 1; }
   # A signal (SIGINT/SIGTERM/SIGHUP — Ctrl-C, a killed session, a closed
   # terminal) must free $staging AND end the function with the conventional
   # 128+signal status, exactly like home.sh:2450, burn.sh:598-601 and
@@ -518,10 +569,10 @@ _memory_adopt() {
   # double-runs it through both the trap AND the explicit call; the EXIT trap
   # firing again after `exit` is harmless (rolling back an already-empty
   # manifest, or `rm -rf`/`rm -f` on already-gone paths, are no-ops).
-  trap '_memory_adopt_rollback "$moved" "$staging"' EXIT
-  trap '_memory_adopt_rollback "$moved" "$staging"; exit 130' INT
-  trap '_memory_adopt_rollback "$moved" "$staging"; exit 143' TERM
-  trap '_memory_adopt_rollback "$moved" "$staging"; exit 129' HUP
+  trap '_memory_adopt_rollback "$moved" "$staging" "$dirsfile"' EXIT
+  trap '_memory_adopt_rollback "$moved" "$staging" "$dirsfile"; exit 130' INT
+  trap '_memory_adopt_rollback "$moved" "$staging" "$dirsfile"; exit 143' TERM
+  trap '_memory_adopt_rollback "$moved" "$staging" "$dirsfile"; exit 129' HUP
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
@@ -548,14 +599,14 @@ _memory_adopt() {
       continue
     fi
     mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null \
-      || { trap - EXIT INT TERM HUP; rm -rf "$staging"; rm -f "$moved"; return 1; }
+      || { trap - EXIT INT TERM HUP; rm -rf "$staging"; rm -f "$moved" "$dirsfile" "$staging.lnerr"; return 1; }
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
     # file some other user on the machine can't read) instead of falling back
     # to umask, which is what a plain `cat "$f" > dest` would do.
     if ! cp -p "$f" "$staging/$rel" 2>/dev/null; then
       trap - EXIT INT TERM HUP
       rm -rf "$staging"
-      rm -f "$moved"
+      rm -f "$moved" "$dirsfile" "$staging.lnerr"
       return 1
     fi
     copied=$((copied+1))
@@ -572,7 +623,7 @@ _memory_adopt() {
   if [ "$found" -gt 0 ] && [ "$copied" -eq 0 ]; then
     trap - EXIT INT TERM HUP
     rm -rf "$staging"
-    rm -f "$moved"
+    rm -f "$moved" "$dirsfile" "$staging.lnerr"
     log_err "Adoption of $source copied 0 of $found file(s) found under it — nothing to merge."
     return 1
   fi
@@ -581,7 +632,29 @@ _memory_adopt() {
   local move_failed=0 ln_err=""
   while IFS= read -r rel; do
     dest="$store/$rel"
-    mkdir -p "$(dirname "$dest")" 2>/dev/null
+    destdir="$(dirname "$dest")"
+    # Record into $dirsfile, BEFORE `mkdir -p` runs, every ancestor of
+    # $destdir that does not exist yet at all (R10-P2-1) — same discipline
+    # as $moved below: walk upward from $destdir, and for each level nothing
+    # sits at (no file, no directory, no symlink — `mkdir -p` only ever
+    # CREATES a level where NOTHING is there), append it, then keep walking
+    # up. The walk stops the moment it reaches a level that already exists
+    # in any form: if that's a real directory, everything above it is
+    # already there too (mkdir -p wouldn't touch it); if it's some OTHER
+    # kind of entry blocking the way (R9-P3-3's ENOTDIR shape — a file
+    # sitting where a directory needs to be), `mkdir -p` creates nothing at
+    # all for this $rel, so nothing here should be recorded as created
+    # either, and rollback's `rmdir` on a non-directory is a silent no-op
+    # regardless. Recording BEFORE the mkdir -p (not after) means a signal
+    # landing mid-syscall still leaves a record — over-recording a directory
+    # `mkdir -p` never got to finish creating costs nothing: `rmdir` on
+    # something that doesn't exist just fails quietly.
+    newdir="$destdir"
+    while [ ! -e "$newdir" ] && [ ! -L "$newdir" ]; do
+      printf '%s\n' "$newdir" >> "$dirsfile"
+      newdir="$(dirname "$newdir")"
+    done
+    mkdir -p "$destdir" 2>/dev/null
     # `-e` alone is false for a DANGLING symlink at $dest (its own target
     # missing) even though a real directory entry sits there — `-L` catches
     # that case the same way _memory_store_has_content above already does.
@@ -643,7 +716,7 @@ _memory_adopt() {
     # instead of the false claim R8-P3-1 found (some files landed, uncounted,
     # unindexed, while the message said none did).
     local rolled_back=$linked reason
-    _memory_adopt_rollback "$moved" "$staging"
+    _memory_adopt_rollback "$moved" "$staging" "$dirsfile"
     # Only actual EXDEV ("Cross-device link" — the wording both BSD and GNU
     # `ln` use for it) is reported as a filesystem mismatch; any other error
     # (ENOTDIR, EACCES, …) says only that the move failed, quoting `ln`'s own
@@ -665,7 +738,11 @@ _memory_adopt() {
   fi
   trap - EXIT INT TERM HUP
   rm -rf "$staging"
-  rm -f "$moved"
+  # $dirsfile isn't rolled back here — every destination inside those
+  # directories just landed for real, so they're non-empty and rmdir would
+  # be a no-op anyway — but the manifest itself is bookkeeping, not content,
+  # and must not survive as a stray dotfile next to a successful adopt.
+  rm -f "$moved" "$dirsfile"
 
   heading="## Adopted from $source"
   if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
@@ -768,10 +845,29 @@ _memory_offer_adoption() {
 # exactly that: a dotdir with no memory in it (R6-P2-1). A bare glob (`*`)
 # already skips every dotfile/dot-directory by shell convention — the fix here
 # IS the difference between `ls -A` and this loop, not extra filtering logic.
+#
+# A plain (non-symlink) directory is a SECOND way to satisfy `[ -e "$f" ]`
+# without holding any memory (R10-P2-1): the move loop's own `mkdir -p`
+# creates the destination directory before it creates any file inside it,
+# and before this fix nothing recorded or ever freed what it created — a
+# source with even one subdirectory left an empty directory behind after a
+# signal or a move_failed, and it satisfied `[ -e "$f" ]` exactly like a
+# real file would. The move loop's own manifest-and-`rmdir` rollback (added
+# alongside this) now closes that for a CURRENT build, but this gate is
+# hardened independently too — belt AND suspenders, the same shape as
+# R6-P2-1 above: residue from an OLDER build that never recorded directories
+# at all can't fool it either. A directory only counts here if `find` turns
+# up an actual regular file or symlink somewhere underneath it; a symlink AT
+# THIS LEVEL is never recursed into (dangling or not, it already counts on
+# its own, same as before) — only a real, non-symlink directory gets the
+# recursive check.
 _memory_store_has_content() {
   local store="$1" f
   for f in "$store"/*; do
     [ -e "$f" ] || [ -L "$f" ] || continue
+    if [ -d "$f" ] && [ ! -L "$f" ]; then
+      find "$f" \( -type f -o -type l \) -print -quit 2>/dev/null | grep -q . || continue
+    fi
     return 0
   done
   return 1

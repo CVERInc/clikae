@@ -1370,6 +1370,144 @@ STUB
   [ -z "$leftover" ]                                          # ASSERTION: the .moved manifest is gone too
 }
 
+# --- R10-P2-1: `mkdir -p "$(dirname "$dest")"` at the TOP of the move loop
+# creates a directory the manifest never recorded and the rollback never
+# removed — only the FILES it linked. A source with even one subdirectory
+# (archive/, sub/, …) left that directory behind after a signal OR a hard
+# move_failed, and the old seed gate (`for f in "$store"/*`) cannot tell an
+# empty directory apart from real content: the very next ordinary `share`
+# read "store has content" and silently skipped seeding, R8-P2-1's exact
+# symptom again, just wearing a directory instead of a file. -------------
+
+@test "memory adopt: kill -TERM mid-move with a subdirectory in the source leaves no leftover directory in the store (R10-P2-1)" {
+  # All three topic files live under one subdirectory, so whichever file
+  # find(1) happens to process first, "archive" is the FIRST thing the move
+  # loop's mkdir -p creates — deterministic regardless of find's own
+  # ordering, unlike picking a specific file position.
+  clikae init claude a
+  _seed_memory a MEMORY.md "own brain"
+  local LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY/archive"
+  printf '[a](archive/a.md)\n[b](archive/b.md)\n[c](archive/c.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/archive/a.md"
+  printf 'topic b\n' > "$LEGACY/archive/b.md"
+  printf 'topic c\n' > "$LEGACY/archive/c.md"
+
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/ln" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = "-s" ] && exec /bin/ln "\$@"
+n=\$(cat "$BATS_TEST_TMPDIR/ln_count" 2>/dev/null || echo 0)
+n=\$((n+1))
+echo "\$n" > "$BATS_TEST_TMPDIR/ln_count"
+if [ "\$n" -eq 1 ]; then
+  # Faithful: really link \$dest — by which point mkdir -p has already run
+  # for this same iteration — THEN block.
+  /bin/ln "\$1" "\$2"
+  touch "$BATS_TEST_TMPDIR/ready"
+  exec sleep 30
+fi
+exec /bin/ln "\$1" "\$2"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/ln"
+
+  local out="$BATS_TEST_TMPDIR/kill.out"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" "$CLIKAE_BIN" memory share me claude a --adopt "$LEGACY" \
+    > "$out" 2>&1 &
+  local pid=$!
+  local i=0
+  while [ ! -f "$BATS_TEST_TMPDIR/ready" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+  [ -f "$BATS_TEST_TMPDIR/ready" ]                            # really mid-MOVE, not a race
+  kill -TERM "$pid" 2>/dev/null || true                       # the parent (trap must fire mid-wait)
+  pkill -TERM -P "$pid" 2>/dev/null || true                   # its ln/sleep child — unblocks bash's wait
+  local j=0
+  while kill -0 "$pid" 2>/dev/null && [ $j -lt 100 ]; do sleep 0.05; j=$((j+1)); done
+  kill -9 "$pid" 2>/dev/null || true                          # safety net, should be a no-op
+  wait "$pid" 2>/dev/null || true
+
+  local store="$CLIKAE_HOME/souls/me/memory"
+  # ASSERTION: this is R10-P2-1 — the directory itself, not just the files
+  # under it, must not survive the rollback.
+  [ ! -e "$store/archive" ]
+  local strandedcount
+  strandedcount="$(find "$store" -mindepth 1 ! -name 'MEMORY.md' ! -name 'PROTOCOL.md' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$strandedcount" -eq 0 ]
+  # ASSERTION: the store's own pre-existing content is untouched.
+  [[ "$(cat "$store/MEMORY.md")" == *"own brain"* ]] || false
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+}
+
+@test "memory adopt: move_failed with a subdirectory leaves no leftover directory in the store (R10-P2-1)" {
+  # mkdir -p runs at the top of EVERY iteration regardless of whether that
+  # file's own ln later succeeds or is the one that fails — so "sub" gets
+  # created (and must get rolled back) no matter which of the three
+  # find(1) positions sub/b.md lands in.
+  clikae init claude a
+  local LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY/sub"
+  printf '[a](a.md)\n[b](sub/b.md)\n[c](c.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/a.md"
+  printf 'topic b\n' > "$LEGACY/sub/b.md"
+  printf 'topic c\n' > "$LEGACY/c.md"
+
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/ln" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = "-s" ] && exec /bin/ln "\$@"
+n=\$(cat "$BATS_TEST_TMPDIR/ln_count" 2>/dev/null || echo 0)
+n=\$((n+1))
+echo "\$n" > "$BATS_TEST_TMPDIR/ln_count"
+if [ "\$n" -ge 3 ]; then
+  echo "ln: \$2: Not a directory" >&2
+  exit 1
+fi
+exec /bin/ln "\$1" "\$2"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/ln"
+
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"[ FAIL ]"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -f "$store/a.md" ]; [ ! -f "$store/sub/b.md" ]; [ ! -f "$store/c.md" ]
+  # ASSERTION: this is R10-P2-1.
+  [ ! -e "$store/sub" ]
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+}
+
+@test "memory share: an empty pre-existing directory in the store does not block seeding (R10-P2-1)" {
+  # _memory_store_has_content's `for f in "$store"/*` gate satisfied
+  # `[ -e "$f" ]` for a bare empty directory the same as it would for real
+  # content — exactly what the move loop's own mkdir -p (above) leaves
+  # behind after an interruption. Simulate that residue directly (no signal
+  # needed) and confirm the very next ordinary share still seeds.
+  clikae init claude a
+  _seed_memory a MEMORY.md "own brain"
+  local store="$CLIKAE_HOME/souls/me/memory"
+  mkdir -p "$store/archive"                                   # empty: no files anywhere under it
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [ -f "$store/MEMORY.md" ]
+  [[ "$(cat "$store/MEMORY.md")" == *"own brain"* ]] || false  # ASSERTION: seeded, not skipped
+}
+
+@test "memory share: a non-empty pre-existing directory in the store still counts as content and blocks seeding" {
+  # Regression guard for the fix above: a directory is not blanket-exempted,
+  # only an EMPTY one (or an empty tree) is. Real content nested inside a
+  # subdirectory must still make the gate say "has content".
+  clikae init claude a
+  _seed_memory a MEMORY.md "own brain"
+  local store="$CLIKAE_HOME/souls/me/memory"
+  mkdir -p "$store/archive"
+  printf 'already there\n' > "$store/archive/keep.md"
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [ ! -f "$store/MEMORY.md" ]                                 # ASSERTION: seeding was skipped
+  [ -f "$store/archive/keep.md" ]                              # pre-existing content untouched
+}
+
 @test "memory share: re-sharing an ALREADY-shared tank also sweeps stale adopt staging, not just first share (R8-P3-2, partial)" {
   # _memory_sweep_stale_adopt_staging used to run only in the first-share
   # branch; re-sharing an already-shared tank (existing_group == group)
