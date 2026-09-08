@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   orphan `## Adopted from <source>` heading with nothing under it — which
   permanently blocked ever merging that source's real index, since the
   heading alone reads as "already adopted" (#49).
+- A symlinked memory file is now followed (its target's content copied in)
+  instead of being silently skipped by both `memory share` seeding and
+  `--adopt` — `find -type f` never matched it and never said so. A dangling
+  symlink is still skipped, but now reported by name (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

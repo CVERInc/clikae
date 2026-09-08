@@ -868,3 +868,45 @@ _perm_octal() {
   [ "$status" -ne 0 ]
   [ ! -e "$CLIKAE_HOME/souls/me/memory" ]
 }
+
+@test "memory share: a symlinked memory file is followed (content copied), not silently dropped (R3-P2-2)" {
+  # find's `-type f` doesn't match a symlink, and find never reports a type it
+  # wasn't asked for — so a symlinked memory file used to vanish with no
+  # warning at all, breaking whatever index entry pointed at it. main follows
+  # it; this must too.
+  clikae init claude a
+  local mem; mem="$(_memdir a)"; mkdir -p "$mem"
+  printf 'MY INDEX\n[shared](shared.md)\n' > "$mem/MEMORY.md"
+  printf 'plain\n' > "$mem/plain.md"
+  mkdir -p "$TEST_HOME/notes"
+  printf 'SHARED NOTE\n' > "$TEST_HOME/notes/shared.md"
+  ln -s "$TEST_HOME/notes/shared.md" "$mem/shared.md"
+  ln -s "$TEST_HOME/notes/gone.md" "$mem/dangling.md"
+  run clikae memory share me claude a
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipping dangling symlink dangling.md"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -L "$store/shared.md" ]
+  [ "$(cat "$store/shared.md")" = 'SHARED NOTE' ]
+  [ ! -e "$store/dangling.md" ]
+}
+
+@test "memory adopt: a symlinked file in the source is followed; a dangling one is skipped and named, not an abort (R3-P2-2)" {
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L"
+  printf '[a](a.md)\n[Linked](linked.md)\n' > "$L/MEMORY.md"
+  printf 'topic a\n' > "$L/a.md"
+  mkdir -p "$TEST_HOME/notes"
+  printf 'LINKED NOTE\n' > "$TEST_HOME/notes/linked.md"
+  ln -s "$TEST_HOME/notes/linked.md" "$L/linked.md"
+  ln -s "$TEST_HOME/notes/gone.md" "$L/dangling-link.md"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipping dangling symlink dangling-link.md in $L"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -L "$store/linked.md" ]
+  [ "$(cat "$store/linked.md")" = 'LINKED NOTE' ]
+  [ ! -e "$store/dangling-link.md" ]
+  [ "$(cat "$store/a.md")" = 'topic a' ]
+}

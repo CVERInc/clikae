@@ -95,24 +95,33 @@ PROTO
 }
 
 # Copy every file under <src> into <dst>, recursively, preserving mode (`cp
-# -p`, the same private-file guarantee _memory_adopt gives topic files). One
-# file that can't be read (permission denied) must not fail the whole seed —
-# before this it did, via `cp -R … || log_fail`, which turned "join the fleet"
-# from something that almost never failed into something that could, for a
-# reason that had nothing to do with the join itself. The tank's own memory at
-# <src> is unaffected either way — it is left in place here and only replaced
-# by a symlink later in _memory_share, once seeding is done. Reports what it
+# -p`, the same private-file guarantee _memory_adopt gives topic files). A
+# symlink is followed and its TARGET's content copied in (vendor-neutral: the
+# Soul shouldn't hold a link pointing back out at a path that only exists on
+# this machine) — except a dangling one, which is skipped and reported by
+# name, the same as an unreadable file. One file that can't be read
+# (permission denied) must not fail the whole seed — before this it did, via
+# `cp -R … || log_fail`, which turned "join the fleet" from something that
+# almost never failed into something that could, for a reason that had
+# nothing to do with the join itself. The tank's own memory at <src> is
+# unaffected either way — it is left in place here and only replaced by a
+# symlink later in _memory_share, once seeding is done. Reports what it
 # skipped; never fails.
 _memory_seed_dir() {
   local src="$1" dst="$2" f rel skipped=0
   while IFS= read -r f; do
     rel="${f#"$src"/}"
+    if [ -L "$f" ] && [ ! -f "$f" ]; then
+      log_warn "Skipping dangling symlink $rel while seeding memory from $src."
+      skipped=$((skipped+1))
+      continue
+    fi
     mkdir -p "$dst/$(dirname "$rel")" 2>/dev/null
     if ! cp -p "$f" "$dst/$rel" 2>/dev/null; then
       log_warn "Couldn't read $rel while seeding memory from $src — skipped."
       skipped=$((skipped+1))
     fi
-  done < <(find "$src" -type f 2>/dev/null)
+  done < <(find "$src" \( -type f -o -type l \) 2>/dev/null)
   if [ "$skipped" -gt 0 ]; then
     log_warn "$skipped file(s) under $src were not copied into the Soul (unreadable); the rest were — $src itself is unchanged."
   fi
@@ -363,9 +372,11 @@ _memory_adopt_count() {
 # not just top-level markdown. A source's MEMORY.md commonly links into
 # subdirectories (an archive/, per-topic notes/) and to non-markdown
 # attachments (a diagram); copying only the top level left those links
-# silently pointing at nothing once adopted, with no warning. Collisions with
-# an existing store file stay in the source and are announced, never silently
-# overwritten.
+# silently pointing at nothing once adopted, with no warning. A symlinked
+# file is followed and its target's content copied in; a DANGLING symlink is
+# skipped and reported by name, same as an unreadable file, rather than
+# aborting the adopt. Collisions with an existing store file stay in the
+# source and are announced, never silently overwritten.
 #
 # Everything is staged in a scratch directory INSIDE the store first, and
 # moved into place only once the whole copy has succeeded. A copy that fails
@@ -410,6 +421,10 @@ _memory_adopt() {
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
+    if [ -L "$f" ] && [ ! -f "$f" ]; then
+      log_warn "Skipping dangling symlink $rel in $source."
+      continue
+    fi
     mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null || { rm -rf "$staging"; return 1; }
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
     # file some other user on the machine can't read) instead of falling back
@@ -418,7 +433,7 @@ _memory_adopt() {
       rm -rf "$staging"
       return 1
     fi
-  done < <(find "$sdir" -type f 2>/dev/null)
+  done < <(find "$sdir" \( -type f -o -type l \) 2>/dev/null)
 
   # The whole copy succeeded — move each staged file into place.
   while IFS= read -r rel; do
