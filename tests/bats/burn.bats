@@ -998,6 +998,68 @@ STUB
   done
 }
 
+# --- P2-1 (2026-09-08 round-5 review): the "up to 12 bytes of leading
+# NON-ALPHABETIC noise" allowance (round-4's fix, just above) was wide
+# enough to admit markdown syntax a model's own prose legitimately
+# produces — a blockquote marker (`>`) or a numbered-list digit + `.` —
+# neither of which are letters either. A real task failure whose reply was
+# drafting a runbook ("The runbook I was drafting says: > You have reached
+# your weekly limit.") let the blockquote marker stand in for transport
+# noise and walked the whole reserve. `main` never matched "reached your
+# weekly limit" at all, so this was a regression this PR introduced.
+
+@test "burn #45: a markdown blockquote/list marker in front of quoted prose does not fire dry (P2-1 r5 must-not-match)" {
+  _src_burn
+  local -a must_not_match=(
+    "> You have reached your weekly limit."
+    "1. You have reached your weekly limit — explain this to the user."
+  )
+  local line
+  for line in "${must_not_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -ne 0 ]
+  done
+}
+
+@test "burn #45: a real task failure whose reply quotes a runbook blockquote does not burn the whole reserve (P2-1 r5, PROBE B)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf 'I could not finish: the parser test still fails.\n'
+printf 'The runbook I was drafting says:\n'
+printf '> You have reached your weekly limit.\n'
+printf '...and that is all I got done.\n'
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude C1
+  clikae init claude C2
+  clikae init claude C3
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" == *'"rerouted_from":[]'* ]] || false
+}
+
+# --- the leading transport noise the round-4 fix DID close must stay closed.
+
+@test "burn #45: leading transport noise still fires dry under the narrowed noise class (P2-1 r5 must-match, no regression)" {
+  _src_burn
+  local -a must_match=(
+    "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    "  You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+    $'\tYou\'ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.'
+    "⚠ You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  )
+  local line
+  for line in "${must_match[@]}"; do
+    run limit_output_dry claude "$line"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Jul 7th"* ]] || false
+  done
+}
+
 # --- P2-1 (2026-09-08 ROUND-4 review): _burn_redact truncated to the last
 # 64 KiB BEFORE classification — bounding not just the (now O(n)) redaction
 # but the classifiers' ENTIRE view of the reply. burn's own purpose is long,

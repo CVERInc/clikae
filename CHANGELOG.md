@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The "12 bytes of leading non-alphabetic noise" allowance let markdown
+  syntax stand in for transport noise.** A blockquote marker (`>`) or a
+  numbered-list digit + `.` are non-alphabetic too, so a real task failure
+  whose reply quoted or listed the phrase ("The runbook I was drafting
+  says: > You have reached your weekly limit.") walked the entire reserve —
+  a regression `main` never had (it never matched "reached your weekly
+  limit" at all). Narrowed the noise class, on both the codex and claude
+  branches, to the transport whitespace and stray symbols a caller's OWN
+  wrapper might actually prepend — never `>`, `#`, a quote character, a
+  digit, `.`, or `-` (#45).
+
 - **A genuine codex limit event phrased with either of codex's OTHER reset
   grammars ("resets …" / "reset at …") was read as not-dry.** `limit_codex_reset`
   only ever recognized "try again at …", so the repo's own 175-row real

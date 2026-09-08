@@ -115,9 +115,19 @@ limit_codex_reset() {
 # gap), AND require the reply to actually yield a reset phrase: a genuine
 # codex event always carries "try again at …", prose about the limit rarely
 # does, so the two checks close different escapes than either alone.
+#
+# P2-1 (2026-09-08 round-5 review): the "12 bytes of leading NON-ALPHABETIC
+# noise" allowance (same class as claude's branch below) was wide enough to
+# admit markdown quoting/list syntax — `>`, `#`, a leading digit + `.` — none
+# of which are letters either. A real reply built around drafting a runbook
+# ("The runbook I was drafting says: > You have reached your weekly
+# limit.") let the blockquote marker stand in for transport noise. Narrowed
+# to the noise a caller's OWN transport actually adds (whitespace and stray
+# symbols), never markdown syntax a model's prose legitimately uses — see
+# the claude branch below for the shared rationale.
 limit_codex_output_dry() {
   local out="$1" reset
-  grep -qaiE "^[^A-Za-z]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
+  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
   reset="$(limit_codex_reset "$out")"
   [ -n "$reset" ] || return 1
   printf '%s' "$reset"
@@ -210,7 +220,24 @@ limit_output_dry() {
       # closed. A prefix carrying its own letters ("Error: ", "codex: ") is
       # not recovered by this — that needs a real vendor-output corpus to
       # bound safely, not another regex guess (see REPORT-clikae47-fix4.md).
-      grep -qaiE "^[^A-Za-z]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" <<< "$out" || return 1
+      #
+      # P2-1 (2026-09-08 round-5 review): "non-alphabetic" turned out to
+      # include markdown syntax a model's own prose legitimately produces —
+      # a blockquote marker (`>`) or a numbered-list digit + `.` — which is
+      # exactly what "prose never qualifies" assumed couldn't happen. A real
+      # task failure whose reply was drafting a runbook ("The runbook I was
+      # drafting says: > You have reached your weekly limit.", or "1. You
+      # have reached your weekly limit — explain this to the user.") walked
+      # the entire reserve on both round-5 PROBEs. `main` never matched
+      # either shape at all ("reached your weekly limit" isn't one of its
+      # alternatives), so this was a regression this PR introduced, not a
+      # pre-existing gap. The noise class is now the transport whitespace
+      # and stray symbols a caller's OWN wrapper might prepend — never `>`,
+      # `#`, a quote character, a digit, `.`, or `-`, all of which are
+      # markdown or list syntax a model writes on purpose. The two-space/
+      # tab/`⚠ ` cases the round-4 fix closed stay closed; the r2/r3 bare-
+      # prose corpus stays closed too (none of those start with a letter).
+      grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" <<< "$out" || return 1
       # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
       # shape from the review's corpus — "Your limit will reset at 5am …"
       # (singular "reset at", no trailing s) — which silently produced

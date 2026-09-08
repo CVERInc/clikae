@@ -50,6 +50,16 @@ _src_limit() {
   [ "$status" -ne 0 ]
 }
 
+# --- P2-1 (2026-09-08 round-5 review): the same "12 bytes of leading
+# non-alphabetic noise" allowance claude's branch had was wide enough to
+# admit a markdown blockquote marker — narrowed on both branches together.
+
+@test "codex output_dry: a markdown blockquote marker does not stand in for transport noise (P2-1 r5)" {
+  _src_limit
+  run limit_codex_output_dry "> You've hit your usage limit. try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -ne 0 ]
+}
+
 # --- P1-1 (2026-09-08 round-5 review): limit_codex_reset only recognized
 # "try again at …" — but the repo's own 175-row real-reset-phrase corpus
 # (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
