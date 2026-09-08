@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every `burn` now writes one machine-readable status file, updated at every
+  transition.** A cockpit judging a burn's outcome used to grep the burn log
+  for "ran dry" / "[ FAIL ]" and got false alarms from a task's own PROMPT
+  containing either phrase. `~/.clikae/logs/burn-<pid>/status.json` carries
+  the same fields as `--json`'s result object plus `state`
+  (running/done/dry/fail/infra), `started_at`/`updated_at`, `pid`, and `log` —
+  written whether or not `--json` was passed, and readable from a different
+  process. Documented as a contract in docs/orchestration.md (#41).
 - `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
   preserving topic collisions and merging source indexes. First-share discovery
   offers imports interactively or prints actionable warnings unattended (#49).

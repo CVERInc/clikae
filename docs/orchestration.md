@@ -160,6 +160,51 @@ directory older than `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
 disables the sweep) is removed at the start of the next burn. It's a
 stopgap, not a service — `clikae clean` does not yet reach `~/.clikae/logs`.
 
+### Status file (#41)
+
+Tonight's incident that opened this: a cockpit judging dry/fail by grepping
+burn logs got two false alarms — a resume note whose PROMPT contained "ran
+dry", and a prompt containing "[ FAIL ]". Prose in the task's own text is not
+a safe signal. So every burn — with or without `--json` — writes ONE
+machine-readable status file, updated at every transition, and a cockpit reads
+that instead of grepping anything.
+
+**Where:** `~/.clikae/logs/burn-<pid>/status.json` — the same private (0700),
+swept run directory `burn` already makes for its task-text copy
+(`prompt.txt`/`command.txt`), keyed on the TOP-LEVEL `clikae burn` process's
+own pid. That id is stable across the whole run's reroute walk and infra
+retries — unlike the per-attempt `run_id` in `--json`'s own result object,
+which changes on every hop.
+
+**Shape:** the same fields as `--json`'s single result object, plus the
+fields a reader OUTSIDE this process needs that a once-at-exit `--json`
+object can't give it:
+
+```jsonc
+{
+  "ok": null,              // null while running; true/false at a terminal state
+  "engine": "codex", "tank": "T1",
+  "artifact": "/path/to/out.md", "artifact_bytes": null,
+  "reason": null,           // e.g. "artifact produced", "tank ran dry", "infra"
+  "reset": null,            // the vendor's verbatim reset phrase, when there is one
+  "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
+  "elapsed_s": 4,
+  "run_id": "burn-28186",   // stable across this burn's whole reroute walk
+  "state": "running",       // running | done | dry | fail | infra
+  "started_at": 1757400000, "updated_at": 1757400004,
+  "pid": 28186,
+  "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log"   // this attempt's own capture log, or null
+}
+```
+
+**Written at every transition:** run start, each reroute hop (`state:
+running`, `tank` and `rerouted_from` updated), a tank going dry (`state: dry`
+— transient if a reroute follows, terminal if `--no-reroute` or the reserve is
+exhausted), an infra retry (`state: infra`, transient while retries remain),
+and the run's own terminal outcome. A reader polling the file sees exactly
+what `--json` would have printed at exit, at any point along the way, from a
+different process.
+
 ## 5. Seeing your fleet
 
 **From a terminal:** `clikae` (the board — traffic-light fuel dots per tank) and

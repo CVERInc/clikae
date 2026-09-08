@@ -80,6 +80,11 @@ tool-host failure -> retry the same tank, then reason: infra (exit 1);
 no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
 on every tank).
 
+Every burn writes ONE machine-readable status file, updated at every
+transition, so a cockpit never has to grep a log for "ran dry" or "[ FAIL ]"
+(#41 — those are just as likely to be words from the task's own PROMPT). See
+"Status file" in docs/orchestration.md for the path and the field contract.
+
 Examples:
   clikae burn claude L --artifact out/core.test.cjs \
       --prompt-file task.txt --add-dir "$PWD"      # the easy way
@@ -507,6 +512,7 @@ _agy_burn() {
 
   local cur="$start_tank" tank_count; tank_count="$(_agy_tank_names | grep -c . || true)"
   local -a agy_tried=("$start_tank")
+  local tried=""   # "agy/<tank>"-per-hop, mirrors cmd_burn's own $tried — feeds #41's rerouted_from
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
@@ -519,6 +525,7 @@ _agy_burn() {
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
     fi
     log_info "burn agy/$cur → agy (task: $saved_prompt)"
+    _burn_status_write running null agy "$cur" "$artifact" "" ""
 
     # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
     # symlink shared by every agy process on the tank, repointed by whichever
@@ -564,8 +571,10 @@ _agy_burn() {
     rm -f "$runlog"
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
+      _burn_status_write dry false agy "$cur" "$artifact" "tank ran dry" "$reset"
     elif [ "$artifact_fresh" -eq 1 ]; then
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
+      _burn_status_write "done" true agy "$cur" "$artifact" "artifact produced" ""
       _burn_result true agy "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
@@ -579,6 +588,7 @@ _agy_burn() {
       # yielded nothing — a status claim, not prose about an answer, and the
       # closest thing to a structured marker it offers.
       log_err "agy/$cur declined the task — nothing was produced."
+      _burn_status_write fail false agy "$cur" "$artifact" "agy declined the task" ""
       _burn_output_tail "$out" 3
       log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
@@ -599,16 +609,19 @@ _agy_burn() {
       if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
         artifact_bytes_snapshot="$(_burn_size "$artifact")"
         log_done "agy/$cur finished — clikae captured its output into: $artifact"
+        _burn_status_write "done" true agy "$cur" "$artifact" "clikae captured stdout into the artifact" ""
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
         log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
+      _burn_status_write fail false agy "$cur" "$artifact" "clikae could not write the artifact" ""
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     else
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
+      _burn_status_write fail false agy "$cur" "$artifact" "engine produced nothing and showed no limit" ""
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       _burn_output_tail "$out"
@@ -618,6 +631,7 @@ _agy_burn() {
 
     [ "$reroute" -eq 1 ] || {
       log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_status_write dry false agy "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       return 1
     }
@@ -625,8 +639,12 @@ _agy_burn() {
     # tried — nothing left to select) would otherwise abort the script here
     # instead of falling through to the "all dry" log_fail below.
     local nxt; nxt="$(_agy_tank_names | grep -vxF -f <(printf '%s\n' "${agy_tried[@]}") | head -1)" || true
-    [ -n "$nxt" ] || log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+    if [ -z "$nxt" ]; then
+      _burn_status_write dry false agy "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
+      log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+    fi
     agy_tried+=("$nxt")
+    tried="${tried:+$tried }agy/$cur"
     cur="$nxt"
     log_info "Rerouting (dry) → agy/$cur"
   done
@@ -671,6 +689,52 @@ _burn_tried_json() {
     out="$out$(json_str "$w")"; first=0
   done
   printf '%s' "$out"
+}
+
+# _burn_status_write <state> <ok:true|false|null> <engine> <tank> <artifact>
+#                     <reason> [reset]
+#
+# #41: every burn writes ONE machine-readable status file, updated at every
+# transition — run start, each reroute hop, going dry, an infra retry, and the
+# terminal outcome — so a cockpit reading it from OUTSIDE this process never
+# has to grep a log for "ran dry" or "[ FAIL ]" (both false-positived on a
+# task PROMPT that merely contained those words — the incident that opened
+# this issue). It lives in the same private, swept run directory burn already
+# makes for the task-text copy (`$run_dir`, 0700, `_burn_sweep_old_logs`'s
+# retention), as `status.json` — one file per top-level `clikae burn`
+# invocation (keyed on `$burn_id`/`$$`), not one per reroute attempt, so a
+# caller can watch ONE path across a burn's whole reroute walk.
+#
+# Same field set as `--json`'s single result object (`{ok, engine, tank,
+# artifact, artifact_bytes, reason, reset, rerouted_from[], elapsed_s,
+# run_id}`), plus the fields only an outside-the-process reader needs and a
+# once-at-exit `--json` object cannot give it: `state`, `started_at`,
+# `updated_at`, `pid`, `log`. Written UNCONDITIONALLY (never gated on
+# `--json`) — #41 is "every burn", not "every --json burn".
+#
+# Reads the caller's own locals for everything this signature doesn't carry —
+# `run_dir`, `burn_id`, `started_at`, `t0`, `tried`, `log_file`,
+# `artifact_bytes_snapshot` — exactly the convention `_burn_result` already
+# uses one function up; both are only ever called from inside `cmd_burn` or
+# `_agy_burn`, which is what makes bash's dynamic scoping the right tool here
+# rather than a footgun.
+_burn_status_write() {
+  local state="$1" ok="$2" eng="$3" tk="$4" art="$5" reason="$6" reset="${7:-}"
+  [ -n "${run_dir:-}" ] || return 0   # called before setup (should not happen) — no-op, never fatal
+  local bytes="${artifact_bytes_snapshot:-}"
+  if [ -z "$bytes" ] && [ -n "$art" ] && [ -e "$art" ]; then bytes="$(_burn_size "$art")"; fi
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  local elapsed=$(( SECONDS - ${t0:-SECONDS} ))
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+  local f="$run_dir/status.json"
+  mkdir -p "$run_dir" 2>/dev/null || true
+  {
+    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s}\n' \
+      "${ok:-null}" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
+      "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
+      "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
+      "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")"
+  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
 }
 
 cmd_burn() {
@@ -769,6 +833,16 @@ cmd_burn() {
   task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
   log_info "task: $saved_prompt"
   log_info "preview: $task_preview"
+
+  # #41: one status file per top-level `clikae burn` invocation, keyed on this
+  # process's own pid — stable across the whole reroute walk below, unlike the
+  # per-ATTEMPT `run_id` further down (which changes on every reroute/retry).
+  # It lives in $run_dir, right beside the task-text copy: same private
+  # directory (0700), same retention sweep (_burn_sweep_old_logs already ran
+  # above), one thing to find.
+  local burn_id="burn-$$" started_at
+  started_at="$(date +%s 2>/dev/null || echo 0)"
+  _burn_status_write running null "$cli" "$tank" "$artifact" "" ""
 
   case "$cli" in
     agy|antigravity)
@@ -885,6 +959,12 @@ cmd_burn() {
     local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
     local artifact_fresh=0 artifact_bytes_snapshot=null
     rm -f "$evidence_file"
+
+    # #41 — this attempt is now the one actually running (first attempt, a
+    # reroute hop, or an infra retry all land here); `log` now points at THIS
+    # attempt's own capture log, and `rerouted_from` (via `$tried`) already
+    # reflects every tank tried before this one.
+    _burn_status_write running null "$cli" "$cur" "$artifact" "" ""
     # Lock under $HOME/.clikae/state (0700, created just below), NOT world-writable
     # /tmp: a predictable name there let another local user plant it — as a symlink
     # (truncation) or a plain file the clean GC reads as dead, killing your session
@@ -1094,6 +1174,7 @@ KV
         dry_store_clear "$cli" "$cur"   # a real success recovered this tank
       fi
       log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
+      _burn_status_write "done" true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
       _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
       return 0
@@ -1102,6 +1183,7 @@ KV
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry" "$reset"
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
       # this stdout and would otherwise vanish. Only for engines whose dry state is
@@ -1115,16 +1197,19 @@ KV
       if [ "$infra_attempt" -lt "$infra_retries" ]; then
         infra_attempt=$((infra_attempt + 1))
         log_warn "$cli/$cur infrastructure failure — retry $infra_attempt/$infra_retries on the same tank in ${retry_delay}s."
+        _burn_status_write infra null "$cli" "$cur" "$artifact" "infra retry $infra_attempt/$infra_retries" ""
         sleep "$retry_delay"
         retry_delay=$((retry_delay * 2))
         continue
       fi
       log_err "$cli/$cur infrastructure failure after $infra_attempt retries."
+      _burn_status_write infra false "$cli" "$cur" "$artifact" "infra" ""
       _burn_result false "$cli" "$cur" "$artifact" "infra"
       _burn_output_tail "$out"
       return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "no fresh artifact and no limit" ""
       _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
       _burn_output_tail "$out"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
@@ -1134,6 +1219,7 @@ KV
     # Dry → fall through to the next tank in the reserve.
     [ "$reroute" -eq 1 ] || {
       log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       return 1
     }
@@ -1148,6 +1234,7 @@ KV
       # The reserve is exhausted. log_fail exits, so the machine-readable answer
       # has to be said first — this is the outcome an agent most needs to tell
       # apart from a task failure, and prose is the only place it lived.
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
       log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
     fi

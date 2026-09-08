@@ -19,3 +19,4 @@ _                  a literal underscore used as a placeholder in an example
 rerouted_from      a field in `clikae burn --json`'s result object, not a function
 artifact_bytes     ditto
 elapsed_s          ditto
+run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
