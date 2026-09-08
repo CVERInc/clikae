@@ -254,3 +254,101 @@ _src_app() {
   run osacompile -o "$out" "$src"
   [ "$status" -eq 0 ]
 }
+
+@test "app force rebuild installs terminal fixture icon and seals the bundle" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps" --force
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/Fixture.icns" "$app/Contents/Resources/Fixture.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = Fixture.icns ]
+  run codesign --verify "$app"
+  [ "$status" -eq 0 ]
+}
+
+@test "app clears CFBundleIconName so the copied .icns is the EFFECTIVE icon (#50)" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local plist="$TEST_HOME/Apps/clikae.app/Contents/Info.plist"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist"
+  [ "$output" = Fixture.icns ]
+  # CFBundleIconName references an asset catalog and OUTRANKS CFBundleIconFile on
+  # macOS 10.13+ — osacompile's applet bundle sets it to "applet". If it is still
+  # here, the .icns above is set but never shown: this is the actual bug, not the
+  # plist-value/cmp/codesign checks above it, which all pass while the icon never
+  # changes.
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$plist"
+  [ "$status" -ne 0 ]
+}
+
+@test "app finds a terminal's icon when it's installed outside /Applications (#50)" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # A fake bundle at the real relative path _app_terminal_installed already
+  # accepts — but NOT a real .app (no executable, no scripting dictionary), so
+  # this stays icon-step-only and never asks osacompile/AppleScript to resolve
+  # iTerm2 terminology it doesn't have (that needs a real install; see "the
+  # iTerm2 launcher template compiles" above).
+  mkdir -p "$TEST_HOME/Applications/iTerm.app/Contents/Resources"
+  printf 'fixture-icon' > "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns"
+  mkdir -p "$TEST_HOME/fakeapp/Contents/Resources"
+  cat > "$TEST_HOME/fakeapp/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconFile</key>
+	<string>applet</string>
+</dict>
+</plist>
+PLIST
+  run _app_install_icon "$TEST_HOME/fakeapp" iterm2
+  [ "$status" -eq 0 ]
+  # _app_terminal_installed already accepts this (via $HOME/Applications), so the
+  # render step proceeds — before the fix, _app_terminal_icon still looked ONLY
+  # under /Applications and lost track of it, so this warning fired despite the
+  # terminal being right there: it stated the wrong cause.
+  [[ "$output" != *"No terminal or clikae icon found"* ]] || false
+  cmp "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns" \
+      "$TEST_HOME/fakeapp/Contents/Resources/AppIcon.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$TEST_HOME/fakeapp/Contents/Info.plist"
+  [ "$output" = AppIcon.icns ]
+}
+
+@test "app missing icons leave applet icon with a warning" {
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  CLIKAE_ROOT="$TEST_HOME"
+  run _app_install_icon "$TEST_HOME/test.app" terminal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No terminal or clikae icon found; leaving the applet icon."* ]] || false
+}
+
+@test "app uses the shipped icon when the terminal icon is absent" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  mkdir -p "$TEST_HOME/assets"
+  printf 'fallback fixture' > "$TEST_HOME/assets/clikae.icns"
+  CLIKAE_ROOT="$TEST_HOME"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/assets/clikae.icns" "$app/Contents/Resources/clikae.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = clikae.icns ]
+}

@@ -112,3 +112,39 @@ load '../helpers'
   run tank_is_solo codex work
   [ "$status" -eq 0 ]                                   # now solo
 }
+
+@test "solo --off: rejoining the group does not hang on a real terminal (R2-P1-1)" {
+  # Same self-invoke pattern as init.sh (see init.bats' matching test): `--off`
+  # rejoins the tank's group via `"$CLIKAE_BIN" memory share … >/dev/null
+  # 2>&1`, which silences the CHILD's stdout+stderr but not its stdin. With a
+  # discoverable legacy memory directory in place, that nested `memory share`
+  # used to block on a `read` from the real terminal forever — the prompt it
+  # was waiting on had just been discarded. A real pty is required to
+  # reproduce this; bats' `run` closes stdin, which hides it.
+  clikae init claude a
+  clikae memory share me claude a
+  clikae solo claude a "testing"
+  mkdir -p "$HOME/.claude/projects/legacy/memory"
+  printf '[x](x.md)\n' > "$HOME/.claude/projects/legacy/memory/MEMORY.md"
+  printf 'legacy fact\n' > "$HOME/.claude/projects/legacy/memory/x.md"
+
+  local out="$BATS_TEST_TMPDIR/solo-off.out"
+  _pty_run "$CLIKAE_BIN" solo claude a --off > "$out" 2>&1 &
+  local runner=$!
+
+  local i finished=0
+  for i in $(seq 1 40); do
+    kill -0 "$runner" 2>/dev/null || { finished=1; break; }
+    sleep 0.5
+  done
+  if [ "$finished" -eq 1 ]; then
+    wait "$runner" 2>/dev/null || true
+  else
+    kill "$runner" 2>/dev/null || true
+  fi
+  [ "$finished" -eq 1 ] || { echo "solo --off hung waiting on a prompt nobody could see (R2-P1-1)"; false; }
+
+  local out_content; out_content="$(cat "$out")"
+  [[ "$out_content" == *"rejoined the fleet"* ]] || false
+  [[ "$out_content" == *"rejoined the shared memory group"* || "$out_content" == *"couldn't rejoin the memory group"* ]] || false
+}

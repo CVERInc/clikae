@@ -7,8 +7,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
+  preserving topic collisions and merging source indexes. First-share discovery
+  offers imports interactively or prints actionable warnings unattended (#49).
+
 ### Fixed
 
+- `clikae app` restores the target terminal icon on every build, including
+  `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
+- **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**
+  Both self-invoke `memory share`, which since --adopt (#49) could reach an
+  adoption prompt that read from the same terminal while its own output had
+  been redirected away — a black screen, forever. That prompt (and the
+  cross-account confirmation) now checks that stdout is a terminal too, not
+  just stdin (#49).
+- `memory share` no longer aborts entirely when one file in the tank's own
+  memory can't be read while seeding — it's skipped and reported, and the rest
+  still copies (#49).
+- A failed `--adopt` no longer leaves a half-copied store that looks seeded to
+  the next `share`. The whole copy is staged first and moved into place only
+  once it fully succeeds (#49).
+- `--adopt` now copies the files a source's index links to — subdirectories,
+  non-markdown attachments — not just top-level markdown, and reports any
+  index entry that still doesn't resolve afterward (#49).
+- The `MEMORY.md` merged in by an adopt is now forced to `0600`, matching the
+  topic files it merges alongside (#49).
+- `--adopt` now validates that the source's index is actually readable and its
+  directory listable *before* creating anything inside the store. Previously,
+  an unreadable source `MEMORY.md` could still leave topic files copied and an
+  orphan `## Adopted from <source>` heading with nothing under it — which
+  permanently blocked ever merging that source's real index, since the
+  heading alone reads as "already adopted" (#49).
+- A symlinked memory file is now followed (its target's content copied in)
+  instead of being silently skipped by both `memory share` seeding and
+  `--adopt` — `find -type f` never matched it and never said so. A dangling
+  symlink is still skipped, but now reported by name (#49).
+- `--adopt <dir>` now resolves the adopt directory itself before listing it,
+  not just the files under it. `find` never descends into an operand that is
+  ITSELF a symlink, so a memory directory reached through a symlink (memory
+  kept in iCloud, a bare symlink pointing at it) copied zero files, merged
+  the source index anyway, and printed a green `[ DONE ]`. Adoption now also
+  refuses outright — rather than reporting success — if it ends up copying
+  zero files from a non-empty source (#49).
+- That zero-copy refusal had its own bug: it counted a genuinely dangling
+  symlink (target doesn't exist) the same as a symlinked subdirectory `find`
+  can't descend into (target exists, but isn't reachable), so a single stale
+  link anywhere in an otherwise-inline source was enough to fail the whole
+  `--adopt` and leave the tank isolated — contradicting the "dangling is
+  skipped and reported, never fatal" rule two entries up. A dangling link no
+  longer counts toward that refusal; it is still skipped and named (#49).
+- A signal that killed `--adopt` mid-copy (Ctrl-C, a closed terminal, a killed
+  session) used to leave its staging directory behind forever: it staged
+  *inside* the store with no `trap`, and `ls -A` can't tell that leftover
+  dotdir apart from real content — the next `share` on the same group read
+  "store non-empty" and silently skipped seeding the joiner's own memory in,
+  printing a clean `[ DONE ]` over a Soul that held nothing at all. Staging
+  now lives next to the store instead of inside it, a `trap` frees it on a
+  signal too, and the seed gate itself ignores dotfiles/dot-directories (so
+  residue from an older build can't fool it either) and sweeps any stale
+  `.adopt.*` it finds — in both the current and an older build's staging
+  location — naming what it swept (#49).
+- That signal trap cleaned up but never ended the process: bash resumes the
+  interrupted copy loop right after a trap handler returns, so a signal
+  mid-`--adopt` deleted the staging directory the loop was still using, let
+  the copy silently continue into a freshly recreated one, and could still
+  reach a green `[ DONE ]` over a Soul missing an unknown number of files —
+  or misreport the resulting move failure as a same-name collision that
+  never happened. `--adopt` now exits with the conventional 128+signal status
+  (130/143/129) on INT/TERM/HUP, matching every other trap in this codebase,
+  instead of resuming (#49).
+- `--adopt`'s move-into-place step now tells a genuine same-name collision
+  apart from any other reason `ln` could fail (most notably `EXDEV`, when the
+  store is a symlink onto a different filesystem): the latter used to be
+  misreported as "keeping existing" for every file and still end in
+  `[ DONE ]` with zero files actually adopted. It now fails loudly instead,
+  naming both the staging and store paths, and cleans up before returning (#49).
+- The previous fix only covered a signal landing during the COPY-into-staging
+  phase. The separate MOVE-into-store phase right after it — where `ln` links
+  each staged file into the real store — had no rollback at all: a signal
+  there (or a hard `ln` failure partway through) left every file already
+  linked permanently in the store, real markdown rather than a dotfile, so
+  the seed gate's dotfile-skipping fix (`_memory_store_has_content`) couldn't
+  see it either — the next ordinary `share` read "store has content" and
+  silently skipped seeding, ending in a green `[ DONE ]` over an unindexed,
+  un-seeded Soul. The move loop now records every destination it actually
+  links in a manifest kept outside the staging directory, and both the
+  signal traps and a hard move failure unlink exactly those before removing
+  staging — never anything that was already in the store. A hard move
+  failure also no longer claims "Nothing was adopted" once some files had
+  already landed; it reports how many were rolled back (#49).
+- Re-sharing an already-shared tank now also sweeps stale `.adopt.*` staging
+  first, not just a tank's first share — that path used to return early
+  before ever reaching the sweep (#49).
+- The move loop's rollback manifest above only recorded a destination
+  *after* `ln` had already created it — `ln` is an external command, and
+  bash defers a pending signal's trap until it exits, so a signal landing
+  while `ln` itself was running could still strand exactly the one file it
+  was working on: created, but never recorded, so the rollback that
+  "unlinks exactly those" had no record of it to unlink. The destination is
+  now recorded *before* `ln` runs, and only once it's confirmed nothing is
+  there yet, so a signal anywhere around `ln` — including mid-syscall — is
+  always covered, and the manifest still can never list a pre-existing
+  file.
+- The move_failed error also no longer blames "different filesystems" for
+  every kind of `ln` failure — only a genuine `EXDEV` is reported that way
+  now; anything else quotes `ln`'s own message instead of guessing a cause
+  that wasn't what happened.
+- The move loop's manifest file is now created `0600` instead of at process
+  umask — under `umask 000` it was `0666` inside the world-writable
+  `souls/<group>` directory, readable and appendable by anyone else on a
+  shared machine while an adopt was in flight.
+- **The move loop's `mkdir -p "$(dirname "$dest")"` created a directory the
+  rollback never knew about.** It ran unconditionally at the top of every
+  iteration, before the manifest above was even touched, so any source with
+  a subdirectory (`archive/`, `notes/`, …) left an empty directory behind
+  after a signal or a hard move failure — the manifest's file-by-file
+  rollback had nothing to unlink there, because nothing under it had landed
+  yet. And the seed gate (`_memory_store_has_content`) couldn't tell that
+  apart from real content either: it treated any directory entry the same
+  as a file, so the empty directory alone satisfied it, and the very next
+  ordinary `share` silently skipped seeding — the same symptom the manifest
+  fix above closed for files, now showing up one layer up, as a directory.
+  Every directory the move loop actually creates is now recorded (never one
+  that already existed) in a manifest of its own, and the rollback removes
+  them with `rmdir` — deepest first, and only once every file above has
+  already been unlinked, so a non-empty directory (something this rollback
+  didn't account for) is simply left alone rather than destroyed. The seed
+  gate itself is now hardened the same way, independently: a directory only
+  counts as content if a real file or symlink turns up somewhere inside it,
+  recursively — an empty directory, or an empty tree of them, no longer
+  does.
+- `--adopt`'s per-`ln`-call stderr capture file is now also created `0600`
+  up front, the same fix and the same reasoning as the move-manifest file
+  above (and the same file it's a sibling of) — under `umask 000` it was
+  otherwise created at `0666` the first time the move loop's `2>` redirect
+  touched it.
+  `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

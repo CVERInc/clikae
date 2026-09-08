@@ -91,3 +91,39 @@ load '../helpers'
   [ ! -L "$d/skills" ]
   [ -f "$d/skills/only-mine.md" ]
 }
+
+@test "init: auto-joining the machine's memory default does not hang on a real terminal (R2-P1-1)" {
+  # init.sh auto-joins a new tank to the machine's default Soul group by
+  # self-invoking `"$CLIKAE_BIN" memory share … >/dev/null 2>&1` — that
+  # silences the CHILD's stdout+stderr but leaves its stdin alone. When a
+  # discoverable legacy memory directory exists, `memory share` reaches its
+  # adoption prompt and used to `read` from that same real terminal while its
+  # own prompt had just gone to /dev/null: a black screen, forever. bats' own
+  # `run` closes stdin, which would hide this entirely (see tests/README.md's
+  # "prove it can fail") — a real pty is the only way to reproduce it.
+  clikae init claude a
+  clikae memory share me claude a
+  mkdir -p "$HOME/.claude/projects/legacy/memory"
+  printf '[x](x.md)\n' > "$HOME/.claude/projects/legacy/memory/MEMORY.md"
+  printf 'legacy fact\n' > "$HOME/.claude/projects/legacy/memory/x.md"
+
+  local out="$BATS_TEST_TMPDIR/init-b.out"
+  _pty_run "$CLIKAE_BIN" init claude b > "$out" 2>&1 &
+  local runner=$!
+
+  local i finished=0
+  for i in $(seq 1 40); do
+    kill -0 "$runner" 2>/dev/null || { finished=1; break; }
+    sleep 0.5
+  done
+  if [ "$finished" -eq 1 ]; then
+    wait "$runner" 2>/dev/null || true
+  else
+    kill "$runner" 2>/dev/null || true
+  fi
+  [ "$finished" -eq 1 ] || { echo "init hung waiting on a prompt nobody could see (R2-P1-1)"; false; }
+
+  local out_content; out_content="$(cat "$out")"
+  [[ "$out_content" == *"Created tank: claude/b"* ]] || false
+  [[ "$out_content" == *"joined the shared memory group"* || "$out_content" == *"could not join the memory group"* ]] || false
+}
