@@ -128,3 +128,91 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"--wait-for-reset"* ]] || false
 }
+
+# --- P1-2 (2026-09-09 round-1 review): the sleep used to be preceded by a
+# TERMINAL `dry` write — #41's `wait` and #40's `burn_tank_busy` both read a
+# tank sleeping to a near reset as "this run is over" for the whole window.
+# _burn_wait_for_reset is unit-tested directly (as _burn_parse_duration
+# already is above) with a fully controlled clock/sleep/reset-resolver, so
+# the mutation the round-1 review used to PROVE the gap (`sleep 1` in place
+# of `sleep "$_wfr_remain"`) has something that actually turns red.
+
+@test "_burn_wait_for_reset: sleeps the COMPUTED remaining seconds and shows a NON-terminal status meanwhile" {
+  _src_burn
+  run_dir="$BATS_TEST_TMPDIR/run-a"; mkdir -p "$run_dir"
+  t0=$SECONDS; tried=""; burn_id="burn-a"; started_at=100
+
+  date() { printf '1000\n'; }              # "now" is always 1000
+  limit_reset_epoch() { printf '1300\n'; } # the reset always resolves to 1300 (300s out)
+  SLEEP_LOG="$BATS_TEST_TMPDIR/sleep-a.log"
+  DURING_FILE="$BATS_TEST_TMPDIR/during-a.json"
+  sleep() {
+    printf '%s\n' "$1" >> "$SLEEP_LOG"
+    cat "$run_dir/status.json" > "$DURING_FILE" 2>/dev/null || true
+  }
+
+  run _burn_wait_for_reset codex T1 /tmp/x.md "resets soon (UTC)" 86400
+  [ "$status" -eq 0 ]
+  # THE mutation kill: a hardcoded `sleep 1` would log "1" here, not "300".
+  [ "$(head -n1 "$SLEEP_LOG")" = "300" ] || { echo "first sleep arg: $(cat "$SLEEP_LOG")"; false; }
+  [[ "$(cat "$DURING_FILE")" == *'"state":"waiting-reset"'* ]] || false
+  [[ "$(cat "$DURING_FILE")" == *'"ok":null'* ]] || false
+  [[ "$(cat "$DURING_FILE")" == *'"reset_at":1300'* ]] || false
+  [[ "$(cat "$DURING_FILE")" != *'"state":"dry"'* ]] || false
+}
+
+@test "_burn_wait_for_reset: re-checks on wake and waits once more if still short of the window" {
+  _src_burn
+  run_dir="$BATS_TEST_TMPDIR/run-c"; mkdir -p "$run_dir"
+  t0=$SECONDS; tried=""; burn_id="burn-c"; started_at=100
+
+  date() { printf '1000\n'; }   # the clock never advances (a no-op sleep, same as the E2E suite above)
+  limit_reset_epoch() { printf '1300\n'; }
+  SLEEP_LOG="$BATS_TEST_TMPDIR/sleep-c.log"
+  sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }
+
+  run _burn_wait_for_reset codex T1 /tmp/x.md "resets soon (UTC)" 86400
+  [ "$status" -eq 0 ]
+  # slept at least twice (the first wait, then the re-check's one bounded
+  # extra wait) — both for the same still-computed remaining time, never a
+  # busy/instant spin.
+  [ "$(wc -l < "$SLEEP_LOG" | tr -d ' ')" -ge 2 ] || false
+  [ "$(head -n1 "$SLEEP_LOG")" = "300" ] || false
+}
+
+@test "_burn_wait_for_reset: gives up once a moved reset would exceed the ORIGINAL window" {
+  _src_burn
+  run_dir="$BATS_TEST_TMPDIR/run-b"; mkdir -p "$run_dir"
+  t0=$SECONDS; tried=""; burn_id="burn-b"; started_at=100
+
+  date() { printf '1000\n'; }
+  # A counter in a FILE, not a variable: `limit_reset_epoch` is always called
+  # through `$(...)`, which forks a subshell per call — a plain variable
+  # increment there is thrown away the instant that subshell exits.
+  LRE_CALLS="$BATS_TEST_TMPDIR/lre_calls-b"; printf '0' > "$LRE_CALLS"
+  limit_reset_epoch() {
+    local n; n=$(($(cat "$LRE_CALLS") + 1)); printf '%s' "$n" > "$LRE_CALLS"
+    if [ "$n" -eq 1 ]; then printf '1200'; else printf '1500'; fi
+  }
+  SLEEP_LOG="$BATS_TEST_TMPDIR/sleep-b.log"
+  sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }
+
+  run _burn_wait_for_reset codex T1 /tmp/x.md "resets soon (UTC)" 200
+  [ "$status" -ne 0 ]
+  # never slept a SECOND time once the moved reset fell outside the window
+  [ "$(wc -l < "$SLEEP_LOG" | tr -d ' ')" -eq 1 ] || false
+}
+
+@test "burn_tank_busy: a waiting-reset marker with a live pid counts as busy" {
+  clikae init codex T1
+  local run_id="burn-wfr-busy"
+  local d="$CLIKAE_HOME/logs/$run_id"
+  mkdir -p "$d"
+  printf '{"ok":null,"engine":"codex","tank":"T1","artifact":null,"artifact_bytes":null,"reason":"waiting for reset","reset":"resets soon","rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"waiting-reset","started_at":1,"updated_at":1,"pid":%s,"log":null,"reset_at":9999999999}\n' \
+    "$run_id" "$$" > "$d/status.json"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already has a running burn"* ]] || false
+  [ ! -e "$A" ] || false
+}

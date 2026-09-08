@@ -52,7 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phrase resolves to an instant within `<dur>`, sleep to it and re-fire the
   SAME tank instead of rerouting or Stopping under `--no-reroute`. A reset
   further out than `<dur>`, or one that doesn't parse, falls through to the
-  existing reroute-or-stop behaviour unchanged (#38).
+  existing reroute-or-stop behaviour unchanged (#38). While sleeping, the
+  status file says the non-terminal `waiting-reset` (with the target epoch in
+  the new `reset_at` field), not a terminal `dry` — so `wait` and
+  `burn_tank_busy` (#40/#41) both read this tank as still working, not
+  abandoned, for the whole window; on wake the reset is re-checked (not
+  blindly trusted) before re-firing, bounded to the original window
+  (2026-09-09 round-1 review, P1-2).
 
 ### Fixed
 

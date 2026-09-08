@@ -80,6 +80,12 @@ burn_status_resolve() {
 # existence check (`kill -0`), not a name/identity check: a pid that has been
 # recycled onto an unrelated process is the same false-negative window every
 # pid-based liveness check in this codebase already accepts (see live.sh).
+#
+# `waiting-reset` (P1-2, 2026-09-09 round-1 review) counts as busy too: a
+# burn sleeping to a near vendor reset (`--wait-for-reset`) has NOT abandoned
+# its tank — a second burn (or the reroute walk) landing on it mid-sleep
+# would collide with the re-fire this one is about to make, exactly like the
+# `running` case #40 already guards.
 burn_tank_busy() {
   local eng="$1" tk="$2" self_pid="${3:-}" base d f json st feng ftk fpid
   base="$HOME/.clikae/logs"
@@ -90,7 +96,7 @@ burn_tank_busy() {
     [ -f "$f" ] || continue
     json="$(cat "$f" 2>/dev/null)" || continue
     st="$(burn_status_state "$json")"
-    [ "$st" = running ] || continue
+    case "$st" in running|waiting-reset) ;; *) continue ;; esac
     feng="$(burn_status_str "$json" engine)"
     ftk="$(burn_status_str "$json" tank)"
     [ "$feng" = "$eng" ] && [ "$ftk" = "$tk" ] || continue

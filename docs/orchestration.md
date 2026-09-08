@@ -190,10 +190,11 @@ object can't give it:
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
-  "state": "running",       // running | done | dry | fail | infra
+  "state": "running",       // running | waiting-reset | done | dry | fail | infra
   "started_at": 1757400000, "updated_at": 1757400004,
   "pid": 28186,
-  "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log"   // this attempt's own capture log, or null
+  "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log",  // this attempt's own capture log, or null
+  "reset_at": null          // epoch second `--wait-for-reset` is sleeping to, only during `waiting-reset`
 }
 ```
 
@@ -201,9 +202,10 @@ object can't give it:
 running`, `tank` and `rerouted_from` updated), a tank going dry (`state: dry`
 — transient if a reroute follows, terminal if `--no-reroute` or the reserve is
 exhausted), an infra retry (`state: infra`, transient while retries remain),
-and the run's own terminal outcome. A reader polling the file sees exactly
-what `--json` would have printed at exit, at any point along the way, from a
-different process.
+`--wait-for-reset` sleeping to a near reset (`state: waiting-reset`, always
+transient — see below), and the run's own terminal outcome. A reader polling
+the file sees exactly what `--json` would have printed at exit, at any point
+along the way, from a different process.
 
 **Guaranteed to reach a terminal state (2026-09-09 round-1 review, P1-1.)**
 The FIRST `running` write installs an `EXIT`/`INT`/`TERM`/`HUP` trap that
@@ -251,13 +253,14 @@ current clikae.
 
 Starting a second burn on a tank that already has one running used to
 duplicate the Live row's tmux session name (and break the agy name lookup).
-`burn` now refuses to START on a tank that already has a `running` burn on it
-(status-file-detected, pid checked for being alive — a burn that crashed
-leaves no false "busy" behind), and the reroute walk **skips** a busy tank
-the same way it already skips a tank an interactive session is using or one
-sharing an already-dry account. `--allow-active` opts out of both: it already
-meant "let this burn use a tank that's otherwise in active use", and a
-running burn is the headless shape of the same thing.
+`burn` now refuses to START on a tank that already has a `running` (or
+`--wait-for-reset`'s `waiting-reset`) burn on it (status-file-detected, pid
+checked for being alive — a burn that crashed leaves no false "busy"
+behind), and the reroute walk **skips** a busy tank the same way it already
+skips a tank an interactive session is using or one sharing an already-dry
+account. `--allow-active` opts out of both: it already meant "let this burn
+use a tank that's otherwise in active use", and a running burn is the
+headless shape of the same thing.
 
 ### `--wait-for-reset` (#38)
 
@@ -272,6 +275,17 @@ tank goes dry AND the vendor's own reset phrase resolves (via
 it, and re-fires the SAME tank instead of moving on. A reset further out than
 `<dur>`, or one the phrase doesn't parse into an instant, falls through to the
 normal reroute-or-stop behaviour unchanged.
+
+**This tank is NOT abandoned while it sleeps (2026-09-09 round-1 review,
+P1-2.)** The status file says the non-terminal `waiting-reset` for the whole
+sleep (`reset_at` carries the target epoch) — never the terminal `dry` #41's
+`wait` would read as "this run is over" or #40's `burn_tank_busy` would read
+as "this tank is free". On wake, the reset is RE-CHECKED (not blindly
+trusted — a relative vendor phrase re-anchored later, or a sleep that woke
+early, could mean it hasn't actually landed yet); one bounded extra wait is
+given, capped at the original `<dur>`, before falling back to the normal dry
+path. Only once a real outcome is known — the re-fire's own done/dry/fail —
+does the file go terminal.
 
 ## 5. Seeing your fleet
 

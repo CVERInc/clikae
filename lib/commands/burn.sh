@@ -591,27 +591,21 @@ _agy_burn() {
     rm -f "$runlog"
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
-      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
 
-      # #38, agy side — same rule as cmd_burn's main loop: if the reset falls
-      # within --wait-for-reset's window, sleep to it and re-fire the SAME
-      # tank rather than hopping to the next agy tank or stopping. Before
-      # `agy_tried`/`tried` bookkeeping so a tank that only WAITED is never
-      # counted as one this burn moved away from.
-      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ]; then
-        local _wfr_now _wfr_at _wfr_remain
-        _wfr_now="$(date +%s 2>/dev/null || echo 0)"
-        if _wfr_at="$(limit_reset_epoch "$reset" "$_wfr_now")"; then
-          _wfr_remain=$(( _wfr_at - _wfr_now ))
-          if [ "$_wfr_remain" -le "$wait_for_reset_s" ]; then
-            [ "$_wfr_remain" -lt 0 ] && _wfr_remain=0
-            log_info "agy/$cur resets in ${_wfr_remain}s, within --wait-for-reset ${wait_for_reset_s}s — waiting instead of moving on."
-            sleep "$_wfr_remain"
-            log_info "agy/$cur should be reset now — re-firing on the same tank."
-            continue
-          fi
-        fi
+      # P1-2 (2026-09-09 round-1 review): the terminal `dry` write used to
+      # land HERE, before the --wait-for-reset check below — which means a
+      # tank that is about to sleep 30 seconds and finish the SAME task
+      # published "this run is OVER, and it went dry" to every reader
+      # (`wait`, `burn_tank_busy`) for the entire sleep, up to `<dur>`. Decide
+      # whether this tank is actually being abandoned FIRST; only write the
+      # terminal `dry` on the branches that really do abandon it.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
+         && _burn_wait_for_reset "$status_engine" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
+        log_info "agy/$cur should be reset now — re-firing on the same tank."
+        continue
       fi
+
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
     elif [ "$artifact_fresh" -eq 1 ]; then
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
@@ -776,6 +770,9 @@ _burn_status_write() {
   local bytes="${artifact_bytes_snapshot:-}"
   if [ -z "$bytes" ] && [ -n "$art" ] && [ -e "$art" ]; then bytes="$(_burn_size "$art")"; fi
   case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  # reset_at is an epoch SECOND (a number, like started_at/updated_at/pid
+  # below), never a JSON string — json_or_null would quote it.
+  case "$reset_at" in ''|*[!0-9]*) reset_at=null ;; esac
   local elapsed=$(( SECONDS - ${t0:-SECONDS} ))
   local now; now="$(date +%s 2>/dev/null || echo 0)"
   local f="$run_dir/status.json"
@@ -786,7 +783,7 @@ _burn_status_write() {
       "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
       "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
       "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")" \
-      "$(json_or_null "$reset_at")"
+      "${reset_at}"
   } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
   # P1-1 (2026-09-09 round-1 review): `ok` is null for every state that is
   # still IN PROGRESS and true/false only once a real terminal outcome is
@@ -864,6 +861,66 @@ _burn_parse_duration() {
     d)  printf '%s' "$((n * 86400))" ;;
     *)  return 1 ;;
   esac
+}
+
+# _burn_wait_for_reset <engine> <tank> <artifact> <reset-phrase> <window_s> ->
+# 0 once the tank's reset should have landed (the caller should re-fire the
+# SAME tank now); 1 if the reset was never within <window_s> to begin with,
+# or moved out far enough on re-check that it no longer is.
+#
+# P1-2 (2026-09-09 round-1 review): before this, `--wait-for-reset` wrote a
+# TERMINAL `dry` (ok:false) BEFORE deciding whether to wait — so a tank that
+# was about to sleep a few minutes and finish the SAME task told every
+# reader "this run is OVER, and it went dry" for the whole sleep, up to
+# `<dur>`. `#41`'s own `wait` reads exactly that as a terminal outcome and
+# returns instantly; `#40`'s `burn_tank_busy` reads `state != running` as
+# "free" and lets a SECOND burn (or the reroute walk) land on the same tank
+# mid-wait. Neither is what "waiting, not abandoning" is supposed to mean.
+#
+# The fix: while this function is waiting, the status file says the
+# NON-terminal `waiting-reset` (ok:null, `reset_at` the epoch this is aiming
+# for) — `burn_tank_busy` (lib/core/burn_status.sh) now holds a tank busy on
+# that state exactly like `running`. Only the CALLER decides what terminal
+# state to write once this returns: 0 → re-fire, whose real outcome (done or
+# a fresh dry) is what finally gets published; 1 → the caller writes the
+# terminal `dry` it always would have.
+#
+# On wake, the reset is RE-CHECKED rather than trusted blindly — an
+# interrupted sleep, a suspended/resumed machine, or a vendor reset phrase
+# that (being relative, "resets in 30m") resolves to something later when
+# re-anchored from a fresh `now`, could all mean the target has not actually
+# arrived yet. One bounded extra wait is given, capped at the ORIGINAL
+# `<window_s>` from when this was first called (never re-extended) — not an
+# unbounded retry loop: a reset that keeps moving past the window gives up
+# and returns 1 rather than sleeping forever.
+_burn_wait_for_reset() {
+  local eng="$1" tk="$2" art="$3" reset="$4" window_s="$5"
+  local now at remain deadline
+  now="$(date +%s 2>/dev/null || echo 0)"
+  at="$(limit_reset_epoch "$reset" "$now")" || return 1
+  remain=$(( at - now ))
+  [ "$remain" -le "$window_s" ] || return 1
+  [ "$remain" -lt 0 ] && remain=0
+  deadline=$(( now + window_s ))
+
+  log_info "$eng/$tk resets in ${remain}s, within --wait-for-reset ${window_s}s — waiting instead of moving on."
+  _burn_status_write waiting-reset null "$eng" "$tk" "$art" "waiting for reset at ${reset}" "$reset" "$at"
+  sleep "$remain"
+
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [ "$now" -lt "$at" ] && [ "$now" -lt "$deadline" ]; then
+    local at2 remain2
+    if at2="$(limit_reset_epoch "$reset" "$now")" && [ "$at2" -le "$deadline" ]; then
+      remain2=$(( at2 - now ))
+      [ "$remain2" -lt 0 ] && remain2=0
+      log_info "$eng/$tk hasn't reset yet — waiting the remaining ${remain2}s (still inside the original window)."
+      _burn_status_write waiting-reset null "$eng" "$tk" "$art" "waiting for reset at ${reset}" "$reset" "$at2"
+      sleep "$remain2"
+    else
+      return 1   # the reset no longer resolves inside the window — give up
+    fi
+  fi
+  return 0
 }
 
 cmd_burn() {
@@ -1366,31 +1423,26 @@ KV
     # Judge by limit-string + artifact, never the exit code.
     if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
-      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry" "$reset"
 
-      # #38 — a tank that runs dry minutes before its own reset just Stops
-      # today; if it would reset within --wait-for-reset's window, sleep to
-      # it and re-fire the SAME tank instead of moving on (reroute) or
-      # giving up (--no-reroute). Deliberately BEFORE the dry_store_mark /
-      # dried_accts bookkeeping below and the reroute decision further down:
-      # this tank isn't being abandoned, so it never gets counted as tried,
-      # marked dry on disk, or excluded as a same-account sibling — from the
-      # rest of this loop's point of view, nothing happened yet.
-      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ]; then
-        local _wfr_now _wfr_at _wfr_remain
-        _wfr_now="$(date +%s 2>/dev/null || echo 0)"
-        if _wfr_at="$(limit_reset_epoch "$reset" "$_wfr_now")"; then
-          _wfr_remain=$(( _wfr_at - _wfr_now ))
-          if [ "$_wfr_remain" -le "$wait_for_reset_s" ]; then
-            [ "$_wfr_remain" -lt 0 ] && _wfr_remain=0
-            log_info "$cli/$cur resets in ${_wfr_remain}s, within --wait-for-reset ${wait_for_reset_s}s — waiting instead of moving on."
-            sleep "$_wfr_remain"
-            log_info "$cli/$cur should be reset now — re-firing on the same tank."
-            infra_attempt=0; retry_delay="$infra_delay"
-            continue
-          fi
-        fi
+      # P1-2 (2026-09-09 round-1 review): the terminal `dry` write used to
+      # land HERE, unconditionally, before ever checking --wait-for-reset —
+      # so a tank about to sleep a few minutes and finish the SAME task told
+      # every #41/#40 reader (`wait`, `burn_tank_busy`) "this run is OVER,
+      # and it went dry" for the entire sleep. Decide first; only the
+      # branches that really abandon this tank write a terminal `dry`.
+      # Deliberately BEFORE the dry_store_mark / dried_accts bookkeeping
+      # below and the reroute decision further down: a tank that only WAITED
+      # never gets counted as tried, marked dry on disk, or excluded as a
+      # same-account sibling — from the rest of this loop's point of view,
+      # nothing happened yet.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
+         && _burn_wait_for_reset "$cli" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
+        log_info "$cli/$cur should be reset now — re-firing on the same tank."
+        infra_attempt=0; retry_delay="$infra_delay"
+        continue
       fi
+
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry" "$reset"
 
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
