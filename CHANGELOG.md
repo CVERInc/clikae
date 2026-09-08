@@ -84,6 +84,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misreported as "keeping existing" for every file and still end in
   `[ DONE ]` with zero files actually adopted. It now fails loudly instead,
   naming both the staging and store paths, and cleans up before returning (#49).
+- The previous fix only covered a signal landing during the COPY-into-staging
+  phase. The separate MOVE-into-store phase right after it — where `ln` links
+  each staged file into the real store — had no rollback at all: a signal
+  there (or a hard `ln` failure partway through) left every file already
+  linked permanently in the store, real markdown rather than a dotfile, so
+  the seed gate's dotfile-skipping fix (`_memory_store_has_content`) couldn't
+  see it either — the next ordinary `share` read "store has content" and
+  silently skipped seeding, ending in a green `[ DONE ]` over an unindexed,
+  un-seeded Soul. The move loop now records every destination it actually
+  links in a manifest kept outside the staging directory, and both the
+  signal traps and a hard move failure unlink exactly those before removing
+  staging — never anything that was already in the store. A hard move
+  failure also no longer claims "Nothing was adopted" once some files had
+  already landed; it reports how many were rolled back (#49).
+- Re-sharing an already-shared tank now also sweeps stale `.adopt.*` staging
+  first, not just a tank's first share — that path used to return early
+  before ever reaching the sweep (#49).
   `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**

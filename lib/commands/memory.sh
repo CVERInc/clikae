@@ -399,8 +399,31 @@ _memory_adopt_count() {
 # only on a `return`. Belt AND suspenders — `_memory_share`'s seed gate below
 # also ignores dotfiles/dot-dirs on its own, so residue from an OLDER build of
 # clikae (which did stage inside the store) can't fool it either.
+# Undo exactly what THIS invocation's move-into-place loop (inside
+# _memory_adopt, below) has linked into $store so far — read from $moved, a
+# manifest of destination paths kept OUTSIDE $staging (see _memory_adopt's
+# comment). Called from the signal traps AND from the move_failed path, so
+# neither an interruption nor a hard failure mid-move can strand a `ln`'d
+# file with no "## Adopted from" heading pointing at it (R8-P2-1). Never
+# touches anything not listed in $moved — a pre-existing store file that a
+# collision skipped ("Keeping existing …") was never appended to $moved and
+# so is never a candidate here. Best-effort throughout: one `rm -f` failing
+# must not stop the rest of the rollback (`$staging`, `$moved` themselves)
+# from being cleaned up.
+_memory_adopt_rollback() {
+  local moved="$1" staging="$2" d
+  if [ -f "$moved" ]; then
+    while IFS= read -r d; do
+      [ -n "$d" ] && rm -f "$d" 2>/dev/null
+    done < "$moved"
+  fi
+  rm -rf "$staging"
+  rm -f "$moved" 2>/dev/null
+  return 0
+}
+
 _memory_adopt() {
-  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line found=0 copied=0
+  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line found=0 copied=0 moved linked=0
   ! _memory_same_dir "$source" "$store" || return 0
   # Never append through an index symlink into somebody else's memory — check
   # this FIRST, before touching anything, so a refusal here leaves the store
@@ -447,6 +470,16 @@ _memory_adopt() {
   # (`_memory_share` just `mkdir -p`'d $store under it).
   staging="$(mktemp -d "$(dirname "$store")/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
+  # Manifest of destination paths THIS invocation's move-into-place loop
+  # (below) actually `ln`s into $store — kept as a SIBLING file, OUTSIDE
+  # $staging, specifically so the `rm -rf "$staging"` on every exit path below
+  # can never take it down before a trap or move_failed gets to read it. This
+  # is what makes the move loop's own rollback (R8-P2-1) exact: it can unlink
+  # precisely what THIS run linked, and never anything that was already in
+  # the store.
+  moved="$staging.moved"
+  : > "$moved" 2>/dev/null \
+    || { log_err "Couldn't stage adoption of $source"; rm -rf "$staging"; return 1; }
   # A signal (SIGINT/SIGTERM/SIGHUP — Ctrl-C, a killed session, a closed
   # terminal) must free $staging AND end the function with the conventional
   # 128+signal status, exactly like home.sh:2450, burn.sh:598-601 and
@@ -457,17 +490,27 @@ _memory_adopt() {
   # ones land, `ln` then fails against a half-populated (or missing) staging
   # dir and is misreported as a same-name collision, and the function still
   # reaches the DONE path with a Soul missing an unknown number of files.
+  # 🔴 That fix only covered the COPY loop (into staging). The MOVE loop
+  # further down (`ln` from staging into $store) had no rollback at all: a
+  # signal landing there left every file this run had already `ln`'d into
+  # $store permanently in place — real, readable markdown, not a dotfile, so
+  # `_memory_store_has_content`'s dotfile-skipping glob (R6-P2-1) can't see
+  # them either, and the NEXT ordinary `share` reads "store has content" and
+  # silently skips seeding: green output, an unindexed, un-seeded Soul
+  # (R8-P2-1). `_memory_adopt_rollback` (below) is what the trap calls now —
+  # it undoes exactly the destinations recorded in $moved, never anything
+  # pre-existing, then frees staging.
   # `_memory_adopt` runs in the caller's own shell (never a subshell), so
   # `exit` here ends that process, not just this function — the same process
   # a killed `clikae memory share … --adopt` invocation is. Cleared right
-  # before each of the explicit `rm -rf "$staging"` calls below so a normal
-  # return never double-removes it through both the trap AND the explicit
-  # call; the EXIT trap firing again after `exit` is harmless (`rm -rf` on an
-  # already-gone directory is a no-op).
-  trap 'rm -rf "$staging"' EXIT
-  trap 'rm -rf "$staging"; exit 130' INT
-  trap 'rm -rf "$staging"; exit 143' TERM
-  trap 'rm -rf "$staging"; exit 129' HUP
+  # before each of the explicit cleanup calls below so a normal return never
+  # double-runs it through both the trap AND the explicit call; the EXIT trap
+  # firing again after `exit` is harmless (rolling back an already-empty
+  # manifest, or `rm -rf`/`rm -f` on already-gone paths, are no-ops).
+  trap '_memory_adopt_rollback "$moved" "$staging"' EXIT
+  trap '_memory_adopt_rollback "$moved" "$staging"; exit 130' INT
+  trap '_memory_adopt_rollback "$moved" "$staging"; exit 143' TERM
+  trap '_memory_adopt_rollback "$moved" "$staging"; exit 129' HUP
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
@@ -494,13 +537,14 @@ _memory_adopt() {
       continue
     fi
     mkdir -p "$staging/$(dirname "$rel")" 2>/dev/null \
-      || { trap - EXIT INT TERM HUP; rm -rf "$staging"; return 1; }
+      || { trap - EXIT INT TERM HUP; rm -rf "$staging"; rm -f "$moved"; return 1; }
     # `-p` PRESERVES the source's permission bits (e.g. a private 0600 memory
     # file some other user on the machine can't read) instead of falling back
     # to umask, which is what a plain `cat "$f" > dest` would do.
     if ! cp -p "$f" "$staging/$rel" 2>/dev/null; then
       trap - EXIT INT TERM HUP
       rm -rf "$staging"
+      rm -f "$moved"
       return 1
     fi
     copied=$((copied+1))
@@ -517,6 +561,7 @@ _memory_adopt() {
   if [ "$found" -gt 0 ] && [ "$copied" -eq 0 ]; then
     trap - EXIT INT TERM HUP
     rm -rf "$staging"
+    rm -f "$moved"
     log_err "Adoption of $source copied 0 of $found file(s) found under it — nothing to merge."
     return 1
   fi
@@ -547,16 +592,37 @@ _memory_adopt() {
         move_failed=1
         break
       fi
+    else
+      # Only a destination `ln` ACTUALLY created goes into $moved — never a
+      # pre-existing one ("Keeping existing", above, never reaches this
+      # branch) — so the rollback below can never remove anything but what
+      # this run put there. Written to disk immediately, not just counted in
+      # a variable, because the trap that reads it back runs asynchronously
+      # in this same shell and must see every prior iteration's line, not a
+      # value held only in memory up to whichever iteration was interrupted.
+      printf '%s\n' "$dest" >> "$moved"
+      linked=$((linked+1))
     fi
   done < <(cd "$staging" && find . -type f 2>/dev/null | sed 's#^\./##')
   if [ "$move_failed" -eq 1 ]; then
     trap - EXIT INT TERM HUP
-    rm -rf "$staging"
-    log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Nothing was adopted."
+    # $linked is exactly how many destinations THIS run already `ln`'d before
+    # the failing one — _memory_adopt_rollback undoes precisely those (never
+    # anything pre-existing), so "Nothing was adopted" below is true again
+    # instead of the false claim R8-P3-1 found (some files landed, uncounted,
+    # unindexed, while the message said none did).
+    local rolled_back=$linked
+    _memory_adopt_rollback "$moved" "$staging"
+    if [ "$rolled_back" -gt 0 ]; then
+      log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Rolled back $rolled_back already-moved file(s); nothing was adopted."
+    else
+      log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Nothing was adopted."
+    fi
     return 1
   fi
   trap - EXIT INT TERM HUP
   rm -rf "$staging"
+  rm -f "$moved"
 
   heading="## Adopted from $source"
   if ! _memory_adopted_heading_exists "$store/MEMORY.md" "$source"; then
@@ -746,6 +812,11 @@ _memory_share() {
   if [ "$existing_group" = "$group" ]; then
     # Membership already granted — just make sure THIS directory's slot is
     # projected too (the same lazy repair soul_prelaunch does at launch).
+    # Re-sharing an already-shared tank is a normal path (not just the
+    # first-share block further below) — sweep here too, or residue this
+    # build's own signal handling somehow missed sits until a DIFFERENT tank
+    # happens to take the first-share branch (R8-P3-2).
+    _memory_sweep_stale_adopt_staging "$store"
     if [ "$MEM_STRATEGY" = "symlink" ] && [ "$(readlink "$MEM_DIR" 2>/dev/null || true)" != "$store" ]; then
       soul_prelaunch "$MEM_CLI" "$MEM_TANK" "$MEM_CFG"
     fi
