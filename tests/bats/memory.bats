@@ -822,3 +822,49 @@ _perm_octal() {
   # at process umask instead.
   [ "$(_perm_octal "$store/MEMORY.md")" = "600" ]
 }
+
+@test "memory adopt: an unreadable source index fails before anything lands in the store, and a retry actually merges it (R3-P2-1)" {
+  # Before this, the per-file copy loop landed topic files in the store, THEN
+  # the index merge tried to `cat` the source's MEMORY.md — and if THAT failed
+  # (not a topic file, the index itself), the "## Adopted from <source>"
+  # heading had already been written with nothing under it. That orphan
+  # heading alone satisfies _memory_adopted_heading_exists, so a retry after
+  # fixing the permission would see "already adopted" and skip the merge
+  # forever, while topic files sat in a store that looked seeded to the next
+  # `share`.
+  clikae init claude a
+  LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n[b](b.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'stranger A\n' > "$LEGACY/a.md"
+  printf 'stranger B\n' > "$LEGACY/b.md"
+  chmod 000 "$LEGACY/MEMORY.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -ne 0 ]
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -e "$store" ] || [ -z "$(ls -A "$store" 2>/dev/null || true)" ]
+  local leftover; leftover="$(find "$CLIKAE_HOME/souls/me" -maxdepth 2 -name '.adopt.*' 2>/dev/null)"
+  [ -z "$leftover" ]
+
+  chmod 644 "$LEGACY/MEMORY.md"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  [ "$status" -eq 0 ]
+  command grep -a -Fqx "## Adopted from $LEGACY" "$store/MEMORY.md"
+  command grep -a -Fqx '[a](a.md)' "$store/MEMORY.md"
+  command grep -a -Fqx '[b](b.md)' "$store/MEMORY.md"
+  [ "$(cat "$store/a.md")" = 'stranger A' ]
+  [ "$(cat "$store/b.md")" = 'stranger B' ]
+}
+
+@test "memory adopt: an unlistable source directory fails before touching the store (R3-P2-1)" {
+  clikae init claude a
+  LEGACY="$HOME/.claude/projects/x/memory"
+  mkdir -p "$LEGACY"
+  printf '[a](a.md)\n' > "$LEGACY/MEMORY.md"
+  printf 'topic a\n' > "$LEGACY/a.md"
+  chmod 000 "$LEGACY"
+  run clikae memory share me claude a --adopt "$LEGACY"
+  chmod 755 "$LEGACY"   # restore so teardown's rm -rf can clean up
+  [ "$status" -ne 0 ]
+  [ ! -e "$CLIKAE_HOME/souls/me/memory" ]
+}

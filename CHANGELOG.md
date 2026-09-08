@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index entry that still doesn't resolve afterward (#49).
 - The `MEMORY.md` merged in by an adopt is now forced to `0600`, matching the
   topic files it merges alongside (#49).
+- `--adopt` now validates that the source's index is actually readable and its
+  directory listable *before* creating anything inside the store. Previously,
+  an unreadable source `MEMORY.md` could still leave topic files copied and an
+  orphan `## Adopted from <source>` heading with nothing under it — which
+  permanently blocked ever merging that source's real index, since the
+  heading alone reads as "already adopted" (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

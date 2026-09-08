@@ -394,6 +394,17 @@ _memory_adopt() {
   # local copy is normalized, for path arithmetic.
   sdir="${source%/}"
 
+  # Validate the source is actually usable BEFORE anything is created inside
+  # the store: an unlistable directory or an unreadable index must fail here.
+  # Without this, a failure reading $source/MEMORY.md while merging the index
+  # (below, well after topic files are already moved into place) left an
+  # orphan "## Adopted from" heading with nothing under it — and that heading
+  # alone is enough for _memory_adopted_heading_exists to treat this source as
+  # already merged, so no retry (even after fixing the permission) could ever
+  # append its index again.
+  [ -r "$sdir" ] && [ -x "$sdir" ] || { log_err "Can't list $source"; return 1; }
+  [ -r "$sdir/MEMORY.md" ] || { log_err "Can't read $source/MEMORY.md"; return 1; }
+
   staging="$(mktemp -d "$store/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
   while IFS= read -r f; do
