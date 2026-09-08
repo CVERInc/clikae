@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for "ran dry" / "[ FAIL ]" and got false alarms from a task's own PROMPT
   containing either phrase. `~/.clikae/logs/burn-<pid>/status.json` carries
   the same fields as `--json`'s result object plus `state`
-  (running/done/dry/fail/infra), `started_at`/`updated_at`, `pid`, and `log` —
+  (running/waiting-reset/done/dry/fail/infra), `started_at`/`updated_at`,
+  `pid`, and `log` —
   written whether or not `--json` was passed, and readable from a different
   process. Documented as a contract in docs/orchestration.md (#41). An
   EXIT/INT/TERM/HUP trap, installed right after the first `running` write,
@@ -53,7 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composition otherwise loses that startup race every time), and `--json`'s
   own per-attempt `run_id` (e.g. `codex-T1-burn-28186`) is now itself a valid
   `wait` target, resolved to the top-level status file it was derived from
-  (2026-09-09 round-1 review, P1-4a/P1-4b/P2-5).
+  (2026-09-09 round-1 review, P1-4a/P1-4b/P2-5). `stale` — the synthetic
+  terminal state a dead-pid `running`/`waiting-reset` row is read as — is
+  now listed in `clikae wait --help` too, not just docs/orchestration.md
+  (2026-09-09 round-2 review, P3-3).
 
 - **`burn` refuses to start on a tank that already has a burn running on it,
   and the reroute walk skips a busy tank instead of colliding with it.**
@@ -68,13 +72,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recycled onto an unrelated process within the retention window, which used
   to refuse that tank FOREVER for a reason nobody could see (2026-09-09
   round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
-  in a per-tank `mkdir`-based lock (stale-safe, bash 3.2), closing the window
-  where two `clikae burn` processes started together could both pass the
-  check before either had written `running` (P2-4). agy's own separate
-  reroute walk (`_agy_burn`, sequential-hop only — one global Keychain
-  account) now calls the same busy check too; it never had, which was the
-  worst engine to miss it on since agy structurally cannot run two tanks at
-  once (2026-09-09 round-1 review, P2-2).
+  in a per-tank `mkdir`-based lock (stale-safe, bash 3.2, 0700/0600), closing
+  the window where two `clikae burn` processes started together could both
+  pass the check before either had written `running` (P2-4). agy's own
+  separate reroute walk (`_agy_burn`, sequential-hop only — one global
+  Keychain account) now calls the same busy check too; it never had, which
+  was the worst engine to miss it on since agy structurally cannot run two
+  tanks at once (2026-09-09 round-1 review, P2-2). The lock's own dead-holder
+  reclaim is now atomic — reading "the holder is dead" and then deleting the
+  lock directory were two unsynchronized statements a second contender
+  reading the same dead holder could interleave with, so both `mkdir`s could
+  succeed and two burns hold "the" lock at once; reclaim now `mv`s the stale
+  directory aside (atomic, one winner) before discarding it, a pid-less lock
+  directory is reclaimed the same way after a short grace instead of
+  blocking forever, release only ever removes a lock this process's own pid
+  actually holds, and a trap scoped to the check-and-write releases the lock
+  on every exit out of that section including a signal (2026-09-09 round-2
+  review, P2-1). A refusal here (the lock timing out, or losing the busy
+  check) now writes a terminal `fail` (reason starting `busy:`) before
+  returning, so the documented `clikae burn … & clikae wait "burn-$!"`
+  composition reads an immediate `fail` instead of stalling the resolve
+  window on a status file that was never coming (2026-09-09 round-2 review,
+  P3-1).
 
 - **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
   integer of seconds) — when a tank runs dry and the vendor's own reset

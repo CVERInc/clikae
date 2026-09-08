@@ -207,14 +207,21 @@ transient — see below), and the run's own terminal outcome. A reader polling
 the file sees exactly what `--json` would have printed at exit, at any point
 along the way, from a different process.
 
-**Guaranteed to reach a terminal state (2026-09-09 round-1 review, P1-1.)**
-The FIRST `running` write installs an `EXIT`/`INT`/`TERM`/`HUP` trap that
-writes a terminal `fail` (with the exit code in `reason`) unless one was
-already published — so an early argument-validation failure, an unhandled
-error from a sourced helper, or the process being killed all leave the file
-saying `fail`, never a `running` that nothing will ever change again. A `wait`
-caller still has to handle a status file from an OLDER clikae (or one written
-before this fix): see `stale` below.
+**Guaranteed to reach a terminal state, with one exception (2026-09-09
+round-1 review, P1-1.)** The FIRST `running` write installs an
+`EXIT`/`INT`/`TERM`/`HUP` trap that writes a terminal `fail` (with the exit
+code in `reason`) unless one was already published — so an early
+argument-validation failure, an unhandled error from a sourced helper, or
+the process receiving a signal it can actually trap all leave the file
+saying `fail`, never a `running` that nothing will ever change again. The
+exception is `SIGKILL` (or a power cut): nothing can trap it, so the file is
+left saying `running` forever with no writer left to change it. A `wait`
+caller — and any direct reader of the file — still has to handle that case
+(and a status file from an OLDER clikae, or one written before this fix):
+`state == "running"` (or `"waiting-reset"`) with a `pid` that no longer
+answers `kill -0` means the burn is gone, not running; see `stale` below,
+which is exactly that two-line check, done once so no caller has to
+re-derive it.
 
 ### `clikae wait` (#37)
 
@@ -271,8 +278,10 @@ terminal, `fail`-equivalent outcome — printed with `"state":"stale"` (a
 synthetic value `wait` itself computes at read time; burn never writes it to
 disk) instead of the frozen `"running"` the file still literally says. This
 is the safety net for a status file from before burn's own EXIT/INT/TERM/HUP
-trap existed (see above) — a new burn should never leave one of these behind,
-but `wait` does not get to assume every status file on disk came from the
+trap existed (see above), and for the one case that trap still can't cover —
+a `SIGKILL` (or a power cut) leaves `running` on disk with nothing left to
+change it, same as an old status file would — so `wait` does not get to
+assume every status file on disk came from the
 current clikae.
 
 ### Two burns can't collide on one tank (#40)
@@ -309,9 +318,33 @@ either check never refuses a live pid on that basis alone.
 **The check and the write are not atomic without help (P2-4.)** Two `clikae
 burn` processes started together both read the busy-check as free before
 either has written `running` — a per-tank `mkdir`-based lock (atomic even on
-bash 3.2, no `flock`/`lockf` dependency) now wraps the check-and-write, held
-only across those two statements, never across the engine run itself. A lock
-left by a since-dead holder is reclaimed rather than blocking forever.
+bash 3.2, no `flock`/`lockf` dependency, 0700 directory / 0600 pid file) now
+wraps the check-and-write, held only across those two statements, never
+across the engine run itself. A refusal here — the lock timing out, or the
+busy check itself losing — writes a terminal `fail` (reason starting
+`busy:`) before returning, so `clikae burn … & clikae wait "burn-$!"` reads
+an immediate, correct `fail` instead of stalling out the resolve window on a
+status file that was never going to appear.
+
+**Reclaiming a dead holder's lock is itself atomic (2026-09-09 round-2
+review, P2-1.)** A lock a killed holder left behind is reclaimed rather than
+blocking forever — but reclaiming it by reading "the holder is dead" and
+then deleting the directory in two separate, un-synchronized statements lets
+a SECOND contender who read the same dead holder tear down the FIRST
+reclaimer's fresh lock a moment later, so both `mkdir`s eventually succeed
+and two processes hold "the" lock at once. Reclaiming now `mv`s the whole
+stale directory aside to a name unique to the reclaiming pid first — a
+same-directory `mv` is atomic, so exactly one contender's `mv` can succeed
+on any one stale generation — and only that contender's copy is discarded
+(re-verified, after the move, to still be the generation judged stale, in
+case a fresher `mkdir` had already landed on the path in between). The same
+path handles a lock directory with no readable pid file at all — reachable
+from a kill between the `mkdir` and the pid write — after a short grace, so
+it cannot wedge that tank open forever either. Release, symmetrically, only
+ever removes a lock whose pid file names the releasing process's own pid,
+and a trap scoped to the check-and-write section releases it on a signal
+too — the lock is gone on every exit out of that section, not just the
+happy one.
 
 ### `--wait-for-reset` (#38)
 

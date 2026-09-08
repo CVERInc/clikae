@@ -18,9 +18,11 @@ _wait_help() {
 Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
-fail, or infra (see #41's status.json contract, documented in
-docs/orchestration.md) — and print each one's status object as one JSON line
-on stdout, in the order it finishes. Never greps a log.
+fail, infra, or stale (a `running`/`waiting-reset` row whose recorded pid is
+no longer alive, synthesized here at read time, never written to disk — see
+#41's status.json contract, documented in docs/orchestration.md) — and print
+each one's status object as one JSON line on stdout, in the order it
+finishes. Never greps a log.
 
 A target is either the run id `clikae burn` printed (e.g. `burn-28186`, stable
 across that burn's own reroutes and retries), `--json`'s own per-attempt
@@ -39,11 +41,12 @@ refusing.
 
 Exit code — 0 only when the REQUESTED condition is met:
   --any (default): 0 if at least one target is done; 2 if none are done and
-                   every one that finished is dry; 1 otherwise (a fail/infra
-                   among them, an unresolved target, or a timeout).
+                   every one that finished is dry; 1 otherwise (a
+                   fail/infra/stale among them, an unresolved target, or a
+                   timeout).
   --all:           0 only if EVERY target is done; 2 only if EVERY target is
-                   dry; 1 otherwise (a done+dry mix, a fail/infra among them,
-                   an unresolved target, or a timeout).
+                   dry; 1 otherwise (a done+dry mix, a fail/infra/stale
+                   among them, an unresolved target, or a timeout).
 A timeout is always 1, in both modes, even if some other target was done.
 
 Examples:
