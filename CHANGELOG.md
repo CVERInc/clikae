@@ -70,7 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
   in a per-tank `mkdir`-based lock (stale-safe, bash 3.2), closing the window
   where two `clikae burn` processes started together could both pass the
-  check before either had written `running` (P2-4).
+  check before either had written `running` (P2-4). agy's own separate
+  reroute walk (`_agy_burn`, sequential-hop only — one global Keychain
+  account) now calls the same busy check too; it never had, which was the
+  worst engine to miss it on since agy structurally cannot run two tanks at
+  once (2026-09-09 round-1 review, P2-2).
 
 - **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
   integer of seconds) — when a tank runs dry and the vendor's own reset

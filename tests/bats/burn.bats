@@ -187,6 +187,60 @@ STUB
   [[ "$output" == *"All 2 agy tank(s) are dry"* ]] || false
 }
 
+# P2-2 (2026-09-09 round-1 review): the agy reroute walk never called
+# burn_tank_busy — the ONE engine this matters most for, since agy's login
+# is a single GLOBAL Keychain entry and the ~/.gemini swap is machine-wide
+# and exclusive (agy structurally CANNOT run two tanks at once, unlike
+# claude/codex where a busy tank is merely inconvenient to collide with).
+@test "burn agy: the reroute walk SKIPS a busy tank instead of colliding with it" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy third >/dev/null 2>&1   # "third" sorts before "work" (_agy_tank_names is glob order — alphabetical), so it's what the walk reaches FIRST
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"   # default is dry -> would normally reroute to third (alphabetically first)
+
+  # "third" already has a burn running on it, per #41's own status files —
+  # it must be SKIPPED, landing on "work" instead.
+  local run_id="burn-agy-busy-$RANDOM"
+  local d="$CLIKAE_HOME/logs/$run_id"
+  mkdir -p "$d"
+  local now; now="$(date +%s 2>/dev/null || echo 1)"
+  printf '{"ok":null,"engine":"agy","tank":"third","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null}\n' \
+    "$run_id" "$now" "$now" "$$" > "$d/status.json"
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$A" ] || false
+  [[ "$output" == *"skipping agy/third"* ]] || false
+  [[ "$output" == *"already running"* ]] || false
+  [[ "$output" == *"Done on agy/work"* ]] || false
+  [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]
+}
+
+@test "burn agy: --allow-active overrides the reroute-walk busy skip" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"
+
+  local run_id="burn-agy-busy2-$RANDOM"
+  local d="$CLIKAE_HOME/logs/$run_id"
+  mkdir -p "$d"
+  local now; now="$(date +%s 2>/dev/null || echo 1)"
+  printf '{"ok":null,"engine":"agy","tank":"work","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null}\n' \
+    "$run_id" "$now" "$now" "$$" > "$d/status.json"
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing" --allow-active
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$A" ] || false
+  [[ "$output" != *"skipping agy/work"* ]] || false
+  [[ "$output" == *"Done on agy/work"* ]] || false
+}
+
 @test "burn requires --artifact" {
   run clikae burn codex T1 -- run x
   [ "$status" -ne 0 ]

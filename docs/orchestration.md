@@ -284,9 +284,15 @@ duplicate the Live row's tmux session name (and break the agy name lookup).
 checked for being alive — a burn that crashed leaves no false "busy"
 behind), and the reroute walk **skips** a busy tank the same way it already
 skips a tank an interactive session is using or one sharing an already-dry
-account. `--allow-active` opts out of both: it already meant "let this burn
-use a tank that's otherwise in active use", and a running burn is the
-headless shape of the same thing.
+account — **including agy's own reroute walk** (P2-2, 2026-09-09 round-1
+review: this was true of claude/codex from the start, but agy's separate
+sequential-hop loop, `_agy_burn`, never called the busy check at all — the
+worst engine to miss it on, since agy's login is a single GLOBAL Keychain
+entry and the `~/.gemini` swap is machine-wide and exclusive: it structurally
+cannot run two tanks at once, unlike claude/codex where a collision is
+merely wasteful). `--allow-active` opts out of both, everywhere: it already
+meant "let this burn use a tank that's otherwise in active use", and a
+running burn is the headless shape of the same thing.
 
 **A live pid is not proof it's the SAME writer (2026-09-09 round-1 review,
 P2-1.)** `kill -0` alone only proves something exists at that pid — a burn

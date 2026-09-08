@@ -496,7 +496,7 @@ _burn_compose() {
 }
 
 # _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
-#           <wait_for_reset_s> <n_extra> <extra-agy-flags...> <add_dirs...>
+#           <wait_for_reset_s> <allow_active> <n_extra> <extra-agy-flags...> <add_dirs...>
 # The extras are whatever followed `--` on the command line. agy has no adapter,
 # so clikae cannot compose its flags for you; what it CAN do is stop dropping the
 # ones you asked for. Two that headless dispatch actually needs:
@@ -517,7 +517,7 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" n_extra="$8"; shift 8
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" n_extra="$9"; shift 9
   local -a extra=()
   while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
@@ -671,10 +671,26 @@ _agy_burn() {
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       return 1
     }
-    # `|| true`: under `set -e -o pipefail`, grep exiting 1 (every tank already
-    # tried — nothing left to select) would otherwise abort the script here
-    # instead of falling through to the "all dry" log_fail below.
-    local nxt; nxt="$(_agy_tank_names | grep -vxF -f <(printf '%s\n' "${agy_tried[@]}") | head -1)" || true
+    # P2-2 (2026-09-09 round-1 review): this picker never called
+    # burn_tank_busy — the ONE engine where that matters most, since agy's
+    # login is a single GLOBAL Keychain entry (§2 above) and the ~/.gemini
+    # swap is machine-wide and exclusive: agy structurally CANNOT run two
+    # tanks at once, unlike claude/codex where a busy tank is merely
+    # inconvenient to collide with. The start-of-run refusal in cmd_burn
+    # already guards the tank named on the command line; it never guarded a
+    # REROUTE target, which is exactly what this walk picks next.
+    local nxt=""
+    local _agy_cand
+    while IFS= read -r _agy_cand; do
+      [ -n "$_agy_cand" ] || continue
+      case " ${agy_tried[*]} " in *" $_agy_cand "*) continue ;; esac
+      if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$_agy_cand" "$$"; then
+        log_warn "skipping agy/$_agy_cand — another burn is already running on it (#40; --allow-active to override)."
+        continue
+      fi
+      nxt="$_agy_cand"
+      break
+    done < <(_agy_tank_names)
     if [ -z "$nxt" ]; then
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
       log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
@@ -1128,7 +1144,7 @@ cmd_burn() {
       # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
       # there is no adapter to compose, so `--prompt` still carries the task and
       # these ride alongside it. They used to be parsed and then silently dropped.
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" \
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
