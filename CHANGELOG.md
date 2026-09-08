@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
+  own awk, and per-match redaction cost was quadratic in the hit count.**
+  `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently
+  collapses to `RS=""`, awk's PARAGRAPH mode, gluing the capture back
+  together at every blank line (routine engine output formatting) with NO
+  separator: a real limit line's `^` anchor stopped matching, and two
+  unrelated sentences fused at the blank line could fabricate a false infra
+  match. Separately, a capture with the redacted needle repeated many times
+  (a long build-log-style task echoing its own path back on every line) cost
+  26.5s of pure awk time on a 4 MB capture — the `substr` copy inside the
+  loop is taken once PER MATCH, not once total, and doubling the capture
+  quadrupled the time. Both are fixed the same way: gather every qualifying
+  needle first and substitute all of them in exactly ONE `perl -0777` pass
+  when `perl` is on PATH (its regex engine is linear in matches and has no
+  trouble holding a NUL byte) — already an accepted dependency here
+  (`_burn_timeout_bin` falls back to it for `--timeout`) — falling back to a
+  SOH-delimited (`\001`, not NUL) per-needle awk loop, correct but still
+  quadratic under a dense needle, only when it is not (#44).
+
 - **The "12 bytes of leading non-alphabetic noise" allowance let markdown
   syntax stand in for transport noise.** A blockquote marker (`>`) or a
   numbered-list digit + `.` are non-alphabetic too, so a real task failure

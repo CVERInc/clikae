@@ -1653,6 +1653,41 @@ STUB
   [[ "$output" == *command.txt* ]] || false
 }
 
+# --- P1-2 (2026-09-08 round-5 review): _burn_redact_one fed its haystack to
+# awk with RS="\x00" on the theory that a NUL byte can never appear in a
+# bash string, so it was safe as a "no separator, one record" marker. False
+# on macOS's own awk: it cannot hold a NUL in RS at all and silently falls
+# back to PARAGRAPH mode, splitting on blank lines — routine engine output
+# formatting — and gluing the pieces back together with NO separator, which
+# both hides a real limit line (the `^` anchor no longer leads it) and can
+# fabricate a false infra match (two unrelated sentences fused at the blank
+# line). These are function-level, not end-to-end, because the bug is
+# specific to the SHAPE of the haystack (a blank line) rather than any
+# particular classifier.
+
+@test "_burn_redact_full: a needle at or above the minimum length redacts across a blank-line capture (P1-2 r5)" {
+  _src_burn
+  prompt="this-is-the-secret-needle-value"
+  cmd=()
+  local text=$'Working on it.\n\nthis-is-the-secret-needle-value appears here.\n\nBye.'
+  run _burn_redact_full "$text"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"this-is-the-secret-needle-value"* ]] || false
+  # The blank lines (and the line structure the classifiers' `^` anchors
+  # depend on) must survive — not be fused into one line.
+  [[ "$output" == *$'Working on it.\n\n'* ]] || false
+  [[ "$output" == *$'appears here.\n\nBye.'* ]] || false
+}
+
+@test "_burn_redact_full: a blank-line capture no longer fabricates a false infra match by fusing sentences (P1-2 r5, PROBE G3)" {
+  _src_burn
+  prompt=""
+  cmd=("this-is-an-irrelevant-task-string-well-past-the-minimum-length")
+  local text=$'I read docs/tool-host\n\nconnection closed unexpectedly in the unrelated log.'
+  run _burn_output_infra "$(_burn_redact_full "$text")"
+  [ "$status" -ne 0 ]
+}
+
 # --- P1-2 (2026-09-08 ROUND-3 review): pre-classification redaction ran bash's
 # super-linear ${text//needle/repl} over the WHOLE captured output — measured
 # 129x main's time on an 8 MB raw-argv capture (240s vs 1.9s), entirely AFTER
@@ -1681,6 +1716,40 @@ STUB
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
   local elapsed=$((t1 - t0))
   [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
+}
+
+# --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
+# reads the full, untruncated capture) put the redaction awk loop's
+# per-match `substr(t, i)` copy back in the hot path — and unlike P1-2
+# above, that cost is per MATCH, not per byte: a capture with the needle
+# repeated many times (exactly what a long build-log-style task echoes)
+# reopened the same "burn looks hung after the engine exits" symptom in a
+# new shape. Measured: a 4 MB capture with the redacted needle on every
+# line (53774 hits) took 26.5s. The 8MB/0-hit guard above would NOT have
+# caught this — it exercises the "no match" path, not "many matches".
+
+@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 20000 ]; do
+  printf 'line %d mentions /home/build/workspace/project-checkout-dir again\n' "$i"
+  i=$((i + 1))
+done
+printf "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a dense-needle capture — expected single-digit seconds"; false; }
 }
 
 # --- P2-1 (2026-09-08 ROUND-3 review): the raw `-- <argv>` redaction had no

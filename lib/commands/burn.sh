@@ -183,21 +183,69 @@ _BURN_REDACT_TAIL_BYTES=${_BURN_REDACT_TAIL_BYTES:-65536}
 # needle full of shell/path metacharacters is never mis-parsed.
 _BURN_REDACT_MIN_LEN=${_BURN_REDACT_MIN_LEN:-20}
 
-_burn_redact_one() {
+# P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (below this comment)
+# made classification read the UNTRUNCATED capture, which put the awk loop's
+# per-match `substr(t, i)` back on the hook for every byte of a multi-MB
+# reply — and that copy is taken once PER MATCH, not once total, so a dense
+# needle (burn's own PROMPT or a repeated argv path, exactly what long
+# unattended tasks echo back a lot of) reopened round-3's P1-2 in a new
+# shape: O(matches × remaining-length) instead of O(capture-size). Measured
+# on this machine: a 4 MB capture with the needle on every line (53774
+# hits) took 26.5s, quadratic in the hit count (doubling MB ~4x'd the time).
+# Reworking the awk loop to avoid the copy (`split()`, `gsub()`) does not
+# help THIS awk (macOS's BWK build, `awk version 20200816`): raw `split()`
+# alone on 300000 matches took 55s CPU — the slowdown lives in its
+# many-match path generally, not in this loop's shape specifically.
+#
+# A SEPARATE, bigger cost hid behind that one: whichever tool does the
+# substitution, `_burn_redact_full` used to invoke it ONCE PER ARGV ITEM
+# (below), reassigning `text` through a bash command substitution each
+# time — even for items too short to redact. bash 3.2 (macOS's own
+# `/bin/bash`) turns out to be the real bottleneck for a multi-MB haystack:
+# measured, six bare pass-throughs of an 8 MB string via `local t="$1"` +
+# `printf '%s' "$t"` inside `$( )` took 75s — no awk or perl involved at
+# all. A raw `-- <argv>` task commonly has 2+ items at or above the minimum
+# length (a long `-C <path>` plus the task string itself), so this fired on
+# every dense-capture burn regardless of which substitution engine was
+# fixed. The fix is to stop reassigning `text` per item: gather every
+# qualifying needle first, then make exactly ONE pass over the haystack
+# (`perl` builds one alternation of all of them; that regex engine is
+# linear in matches — 0.11s CPU on a 300000-match input, 0.04s on the
+# 53774-hit/7 MB case — and is already an accepted dependency here,
+# `_burn_timeout_bin` falls back to it for `--timeout`). The no-perl
+# fallback below still loops per item (rare path, correct but slower).
+_BURN_REDACT_NEEDLE_SEP=$'\001'   # SOH — see the RS comment on the awk fallback for why not NUL
+
+_burn_redact_one_awk() {
   local text="$1" needle="$2" repl="$3"
-  [ "${#needle}" -ge "$_BURN_REDACT_MIN_LEN" ] || { printf '%s' "$text"; return 0; }
   # P2-1 (2026-09-08 round-4 review): the haystack used to travel through
   # ENVIRON (an exported env var), which is what forced the 64 KiB
   # truncation below in the first place — a multi-MB capture in an env var
-  # risks E2BIG. Feed it over stdin instead (bash's NUL-free strings make
-  # RS="\x00" a safe "read the whole thing as one record" marker, so no
-  # substr/index behaviour below changes); only the small needle/repl still
-  # go through ENVIRON. That lets callers stop bounding the haystack for
-  # THIS function's sake — only _burn_redact (the truncated variant used for
-  # display) still bounds it, deliberately, not out of necessity here.
+  # risks E2BIG. Feed it over stdin instead, with RS set to a byte that
+  # never splits it, so the whole capture arrives as ONE record; only the
+  # small needle/repl still go through ENVIRON.
+  #
+  # P1-2 (2026-09-08 round-5 review): RS="\x00" was that byte, on the theory
+  # that bash strings are NUL-free so it could never appear in $text. False
+  # on macOS's own /usr/bin/awk (BWK awk, `awk version 20200816`): its RS
+  # cannot HOLD a NUL byte at all, and a "\x00" value silently collapses to
+  # RS="" — awk's PARAGRAPH-mode sentinel — not "no separator". A capture
+  # with a blank line (routine engine output formatting) then arrived as
+  # MULTIPLE records glued back together by `printf "%s"` below with no
+  # separator at all: "Working on it.\n\nYou've hit your usage limit\n\nBye."
+  # became "Working on it.You've hit your usage limitBye." — destroying the
+  # `^` line anchors both classifiers rely on (a real limit line stopped
+  # matching) and fabricating brand-new ones (two sentences fused at a blank
+  # line could spell a false infra match). Verified on this machine: `awk
+  # 'BEGIN{RS="\x00"}{print NR}' ` on a 3-blank-line-separated file reports
+  # NR=3, not 1. "\001" (SOH) is an ordinary byte, not the string
+  # terminator, so no awk implementation needs to special-case it — verified
+  # NR=1 on the same input. It is not impossible for an engine to emit a raw
+  # SOH byte, but it is not the C-string terminator every string primitive
+  # already treats specially, which NUL is.
   printf '%s' "$text" | RNEEDLE="$needle" RREPL="$repl" awk '
     BEGIN {
-      RS = "\x00"
+      RS = "\001"
       n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
       nlen = length(n)
     }
@@ -224,7 +272,7 @@ _burn_redact_one() {
 # content taken out, over the WHOLE haystack, no truncation.
 #
 # P2-1 (2026-09-08 round-4 review): _burn_redact (below) truncated to the
-# tail BEFORE substituting, which — since P1-2's fix made _burn_redact_one
+# tail BEFORE substituting, which — since P1-2's fix made the substitution
 # an O(n) awk pass instead of bash's super-linear ${text//…} — was no longer
 # needed to keep substitution fast, but it was still unconditionally in the
 # path CLASSIFICATION reads (`out_for_class` in cmd_burn), so any dry/infra
@@ -232,20 +280,62 @@ _burn_redact_one() {
 # typically mid-run since the engine keeps talking afterward, drifts exactly
 # there on a long capture — burn's whole reason to exist. Substitution
 # staying bounded is fine; classification silently narrowing its view is
-# not. Split the two: this variant never truncates (safe now that the text
-# travels to awk over stdin, not ENVIRON — see _burn_redact_one), and is
-# what feeds the classifiers. _burn_redact still truncates, but only for the
-# short human-facing diagnostic tail below, where a bound is genuinely
-# harmless.
+# not. Split the two: this variant never truncates, and is what feeds the
+# classifiers. _burn_redact still truncates, but only for the short
+# human-facing diagnostic tail below, where a bound is genuinely harmless.
+#
+# P1-3 (2026-09-08 round-5 review): gather every needle at/above the
+# minimum length FIRST, then substitute all of them in exactly ONE pass
+# over `text` (one `perl`/`awk` invocation, one command substitution) —
+# see the cost comment above `_burn_redact_one_awk` for why looping this
+# per argv item was the actual bottleneck, independent of which tool did
+# the matching. $prompt is always a single item (and may be genuinely
+# multi-line, e.g. a `--prompt-file` task echoed back verbatim) so it skips
+# the multi-needle join entirely — joining/splitting on SOH would still be
+# safe (a raw SOH in a needle is exactly as unlikely, and exactly as
+# tolerated, as the awk fallback's RS byte above), but there is no reason
+# to pay for it when there is only one needle.
 _burn_redact_full() {
-  local text="$1" repl="${2:-}" c
+  local text="$1" repl="${2:-}"
+  local -a needles=()
   if [ -n "${prompt:-}" ]; then
-    text="$(_burn_redact_one "$text" "$prompt" "$repl")"
+    [ "${#prompt}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles=("$prompt")
   else
+    local c
     for c in "${cmd[@]}"; do
-      text="$(_burn_redact_one "$text" "$c" "$repl")"
+      [ "${#c}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles+=("$c")
     done
   fi
+  [ "${#needles[@]}" -gt 0 ] || { printf '%s' "$text"; return 0; }
+  if command -v perl >/dev/null 2>&1; then
+    local needle_list; needle_list="$(printf "%s${_BURN_REDACT_NEEDLE_SEP}" "${needles[@]}")"
+    # -0777 slurps the whole input as one string (undef $/), so a needle
+    # spanning multiple lines still matches as one unit. \Q..\E (via
+    # quotemeta) makes every needle a literal, never a regex — a path full
+    # of `.`/`/` must never be parsed as one. The lookaround pair is the
+    # same boundary rule as the awk fallback's before/after byte check,
+    # native instead of hand-rolled: a word character on either side means
+    # "not a citation of the task's own text", so leave it alone. Perl's
+    # backtracking tries each alternative in order and only commits once
+    # the trailing lookahead also holds, so a needle that is a PREFIX of
+    # another (rare, but possible across several argv items) still resolves
+    # to the longest real match at that position rather than a truncated
+    # one. $r is substituted as a whole Perl SCALAR, never re-parsed for
+    # `$`/`@`/backslash escapes of its own content.
+    printf '%s' "$text" | RNEEDLES="$needle_list" RREPL="$repl" RSEP="$_BURN_REDACT_NEEDLE_SEP" perl -0777 -pe '
+      BEGIN {
+        $r = $ENV{"RREPL"};
+        my @ns = split /\Q$ENV{"RSEP"}\E/, $ENV{"RNEEDLES"};
+        $pat = join("|", map { quotemeta($_) } @ns);
+      }
+      s/(?<![A-Za-z0-9_])(?:$pat)(?![A-Za-z0-9_])/$r/g if length($pat);
+    '
+    return 0
+  fi
+  local n
+  for n in "${needles[@]}"; do
+    text="$(_burn_redact_one_awk "$text" "$n" "$repl")"
+  done
   printf '%s' "$text"
 }
 
