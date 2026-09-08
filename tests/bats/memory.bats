@@ -1212,12 +1212,20 @@ STUB
 # traps and the move_failed path unlink exactly those before removing
 # staging — never anything pre-existing. ----------------------------------
 
-@test "memory adopt: kill -TERM mid-MOVE-loop rolls back every file this run already linked, leaves the store's pre-existing content untouched, and no residue (R8-P2-1)" {
-  # Before the fix: the four traps only did `rm -rf "$staging"; exit N` — the
-  # copy-into-staging phase was already covered (R7-P2-1), but nothing
-  # protected the SEPARATE move-into-store phase below it. A stubbed `ln`
-  # that sleeps on its 3rd call lands the kill deterministically inside that
-  # loop, after two files have already been linked into the store for real.
+@test "memory adopt: kill -TERM landing ON ln itself (file already linked, not yet recorded) still rolls back every file, leaves the store's pre-existing content untouched, and no residue (R9-P2-1)" {
+  # R8-P2-1's fix recorded a destination into the manifest only AFTER `ln`
+  # returned. `ln` is an external command, and bash defers a pending
+  # signal's trap until the foreground command it's running actually exits
+  # — so a TERM landing WHILE `ln` itself was executing fell in the gap
+  # between "file created on disk" and "line appended to the manifest",
+  # stranding exactly that one file with no record for the rollback to read.
+  # A stub that only `exec sleep`s on its 3rd call (never touching $dest at
+  # all) can't reach that window — the file it's "blocked on" was never
+  # created in the first place, so of course rollback finds nothing to miss.
+  # This stub instead does what a real `ln` interrupted mid-syscall would
+  # have already done: it links the file for real, THEN blocks — so the
+  # in-flight created-but-(pre-fix)-unrecorded file genuinely exists in the
+  # store at the moment the signal lands.
   clikae init claude a
   _seed_memory a MEMORY.md "own brain"
   local LEGACY="$HOME/.claude/projects/x/memory"
@@ -1239,6 +1247,10 @@ n=\$(cat "$BATS_TEST_TMPDIR/ln_count" 2>/dev/null || echo 0)
 n=\$((n+1))
 echo "\$n" > "$BATS_TEST_TMPDIR/ln_count"
 if [ "\$n" -eq 3 ]; then
+  # Faithful: really link \$dest first — exactly what a real \`ln\` has
+  # already done by the time a signal it's given up the CPU to could land —
+  # THEN block, so the signal finds a created-but-maybe-unrecorded file.
+  /bin/ln "\$1" "\$2"
   touch "$BATS_TEST_TMPDIR/ready"
   exec sleep 30
 fi
@@ -1271,6 +1283,13 @@ STUB
   # (the one the kill landed inside) ever ran.
   [ ! -f "$store/a.md" ]; [ ! -f "$store/b.md" ]; [ ! -f "$store/c.md" ]
   [ ! -f "$store/d.md" ]; [ ! -f "$store/e.md" ]
+  # ASSERTION, unconditionally over the whole store, not just the five names
+  # above: zero stranded files. This is the one that actually catches
+  # R9-P2-1 — c.md is the file the faithful stub really linked before
+  # blocking, and it must not be sitting in the store under ANY name.
+  local strandedcount
+  strandedcount="$(find "$store" -type f ! -name 'MEMORY.md' ! -name 'PROTOCOL.md' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$strandedcount" -eq 0 ]
   # ASSERTION: the store's own PRE-EXISTING content (seeded before this
   # adopt ran) is untouched by the rollback.
   [[ "$(cat "$store/MEMORY.md")" == *"own brain"* ]] || false

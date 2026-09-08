@@ -101,6 +101,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-sharing an already-shared tank now also sweeps stale `.adopt.*` staging
   first, not just a tank's first share — that path used to return early
   before ever reaching the sweep (#49).
+- The move loop's rollback manifest above only recorded a destination
+  *after* `ln` had already created it — `ln` is an external command, and
+  bash defers a pending signal's trap until it exits, so a signal landing
+  while `ln` itself was running could still strand exactly the one file it
+  was working on: created, but never recorded, so the rollback that
+  "unlinks exactly those" had no record of it to unlink. The destination is
+  now recorded *before* `ln` runs, and only once it's confirmed nothing is
+  there yet, so a signal anywhere around `ln` — including mid-syscall — is
+  always covered, and the manifest still can never list a pre-existing
+  file.
+- The move_failed error also no longer blames "different filesystems" for
+  every kind of `ln` failure — only a genuine `EXDEV` is reported that way
+  now; anything else quotes `ln`'s own message instead of guessing a cause
+  that wasn't what happened.
+- The move loop's manifest file is now created `0600` instead of at process
+  umask — under `umask 000` it was `0666` inside the world-writable
+  `souls/<group>` directory, readable and appendable by anyone else on a
+  shared machine while an adopt was in flight.
   `.adopt.*` it finds, naming what it swept (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**

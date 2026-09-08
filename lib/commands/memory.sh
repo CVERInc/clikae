@@ -419,6 +419,10 @@ _memory_adopt_rollback() {
   fi
   rm -rf "$staging"
   rm -f "$moved" 2>/dev/null
+  # "$staging.lnerr" — `ln`'s captured stderr for whichever call was in
+  # flight — is a SIBLING of $staging (see why above), so `rm -rf "$staging"`
+  # above doesn't reach it; a signal landing mid-`ln` can leave it behind.
+  rm -f "${staging}.lnerr" 2>/dev/null
   return 0
 }
 
@@ -477,8 +481,15 @@ _memory_adopt() {
   # is what makes the move loop's own rollback (R8-P2-1) exact: it can unlink
   # precisely what THIS run linked, and never anything that was already in
   # the store.
+  # 0600 explicitly (R9-P3-2): under `umask 000`, `: >` alone would leave this
+  # at 0666, world-writable, inside `souls/me` (0777 — R4-P3-14, unrelated and
+  # unchanged here). Its contents are a list of absolute paths the rollback
+  # below unlinks by name; on a shared machine another user could otherwise
+  # append arbitrary paths of their own while an adopt is in flight and have
+  # this user's next signal or move_failed delete them. $staging itself
+  # already gets this from `mktemp -d`'s own 0700, independent of umask.
   moved="$staging.moved"
-  : > "$moved" 2>/dev/null \
+  { : > "$moved" && chmod 600 "$moved"; } 2>/dev/null \
     || { log_err "Couldn't stage adoption of $source"; rm -rf "$staging"; return 1; }
   # A signal (SIGINT/SIGTERM/SIGHUP — Ctrl-C, a killed session, a closed
   # terminal) must free $staging AND end the function with the conventional
@@ -567,43 +578,63 @@ _memory_adopt() {
   fi
 
   # The whole copy succeeded — move each staged file into place.
-  local move_failed=0
+  local move_failed=0 ln_err=""
   while IFS= read -r rel; do
     dest="$store/$rel"
     mkdir -p "$(dirname "$dest")" 2>/dev/null
-    # `ln` (not `mv`) so the no-overwrite contract stays atomic: it fails with
-    # EEXIST if $dest appeared between the scan above and here, instead of
-    # silently overwriting it. But a failure where $dest does NOT exist is a
-    # DIFFERENT error entirely — most commonly EXDEV: $staging and $store are
-    # on different filesystems (e.g. $store is a symlink to another volume),
-    # so a hard link between them can never succeed, no matter how many times
-    # this is retried. Misreporting that as "Keeping existing" is doubly
-    # wrong: nothing existing is being kept, and every remaining file in this
-    # loop is about to fail the exact same way, landing zero of them while
-    # still reaching the DONE below (R7-P3-1). Stop at the first one instead.
-    if ! ln "$staging/$rel" "$dest" 2>/dev/null; then
-      # `-e` alone is false for a DANGLING symlink at $dest (its own target
-      # missing) even though a real directory entry sits there and `ln`
-      # correctly refused to overwrite it — `-L` catches that case the same
-      # way _memory_store_has_content above already does.
-      if [ -e "$dest" ] || [ -L "$dest" ]; then
-        log_warn "Keeping existing $rel; source copy remains in $source."
-      else
-        move_failed=1
-        break
-      fi
-    else
-      # Only a destination `ln` ACTUALLY created goes into $moved — never a
-      # pre-existing one ("Keeping existing", above, never reaches this
-      # branch) — so the rollback below can never remove anything but what
-      # this run put there. Written to disk immediately, not just counted in
-      # a variable, because the trap that reads it back runs asynchronously
-      # in this same shell and must see every prior iteration's line, not a
-      # value held only in memory up to whichever iteration was interrupted.
-      printf '%s\n' "$dest" >> "$moved"
+    # `-e` alone is false for a DANGLING symlink at $dest (its own target
+    # missing) even though a real directory entry sits there — `-L` catches
+    # that case the same way _memory_store_has_content above already does.
+    #
+    # Checked, and recorded into $moved, BEFORE `ln` runs (R9-P2-1). `ln` is
+    # an external command, and bash defers a pending signal's trap until the
+    # foreground command it's running actually exits — so a TERM/INT/HUP
+    # landing WHILE `ln` itself is executing used to fall in the gap between
+    # "file created on disk" and "line appended to $moved" (that `printf` used
+    # to run only after `ln` succeeded), leaving a real, readable file behind
+    # that the trap's rollback had no record of and so could never remove.
+    # `_memory_store_has_content`'s dotfile-skipping glob can't see it either
+    # (R6-P2-1) — the next ordinary `share` reads "store has content" and
+    # silently skips seeding, exactly R8-P2-1's symptom, just for one file
+    # instead of every remaining one.
+    #
+    # Recording the destination FIRST — but only once this guard has
+    # confirmed nothing is there yet — closes that gap: the manifest can
+    # never list a file that pre-existed (the guard already sent that case to
+    # "Keeping existing" and skipped it), and a signal landing anywhere
+    # around `ln` — before it runs, mid-syscall, or after — is always
+    # covered. If `ln` never got as far as creating $dest, the rollback's
+    # `rm -f` on that path is simply a no-op. (A TOCTOU where some OTHER
+    # process creates $dest between this check and the `ln` below remains in
+    # principle, but it's a far narrower window than the one this closes.)
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+      log_warn "Keeping existing $rel; source copy remains in $source."
+      continue
+    fi
+    printf '%s\n' "$dest" >> "$moved"
+    # `ln` (not `mv`) so the no-overwrite contract stays atomic; the guard
+    # above already handles the ordinary "$dest exists" case, so any failure
+    # reaching here is something else entirely — most commonly EXDEV
+    # ($staging and $store on different filesystems, e.g. $store is a
+    # symlink to another volume), but not always (R9-P3-3: an ENOTDIR from a
+    # store entry blocking a later path is a different failure that used to
+    # be misreported with the same "different filesystems" wording). `ln`'s
+    # stderr is captured to a plain FILE redirect, not `$(ln … 2>&1)` —
+    # command substitution forks an extra subshell to run `ln` in, which
+    # would sit BETWEEN this process and `ln` for as long as it's running,
+    # and `pkill -P` (what a caller unblocking a stuck `wait` reaches for)
+    # only walks one level of children, not grandchildren. Read back and
+    # discarded immediately below, only once `ln` has already returned.
+    if ln "$staging/$rel" "$dest" 2>"$staging.lnerr"; then
       linked=$((linked+1))
+    else
+      ln_err="$(cat "$staging.lnerr" 2>/dev/null)"
+      rm -f "$staging.lnerr" 2>/dev/null
+      move_failed=1
+      break
     fi
   done < <(cd "$staging" && find . -type f 2>/dev/null | sed 's#^\./##')
+  rm -f "$staging.lnerr" 2>/dev/null
   if [ "$move_failed" -eq 1 ]; then
     trap - EXIT INT TERM HUP
     # $linked is exactly how many destinations THIS run already `ln`'d before
@@ -611,12 +642,24 @@ _memory_adopt() {
     # anything pre-existing), so "Nothing was adopted" below is true again
     # instead of the false claim R8-P3-1 found (some files landed, uncounted,
     # unindexed, while the message said none did).
-    local rolled_back=$linked
+    local rolled_back=$linked reason
     _memory_adopt_rollback "$moved" "$staging"
+    # Only actual EXDEV ("Cross-device link" — the wording both BSD and GNU
+    # `ln` use for it) is reported as a filesystem mismatch; any other error
+    # (ENOTDIR, EACCES, …) says only that the move failed, quoting `ln`'s own
+    # message instead of asserting a cause that wasn't what happened.
+    case "$ln_err" in
+      *"Cross-device link"*)
+        reason="are they on different filesystems (e.g. $store is a symlink to another volume)?"
+        ;;
+      *)
+        reason="could not move them ($ln_err)."
+        ;;
+    esac
     if [ "$rolled_back" -gt 0 ]; then
-      log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Rolled back $rolled_back already-moved file(s); nothing was adopted."
+      log_err "Couldn't move staged files from $staging into $store — $reason Rolled back $rolled_back already-moved file(s); nothing was adopted."
     else
-      log_err "Couldn't move staged files from $staging into $store — are they on different filesystems (e.g. $store is a symlink to another volume)? Nothing was adopted."
+      log_err "Couldn't move staged files from $staging into $store — $reason Nothing was adopted."
     fi
     return 1
   fi
