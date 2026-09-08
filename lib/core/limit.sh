@@ -58,9 +58,10 @@ limit_line_is_real() {
 }
 
 # limit_codex_reset <text> -> echo codex's verbatim reset phrase ("try again at
-# <date> <time>") if the text carries one, else nothing. Never computes a
-# countdown — relays the vendor's own words (same spirit as the other detectors).
-# Drives a "dry-until" window so watch/auto don't re-pick a tank before it recovers.
+# <date> <time>", "resets …", or "reset at …") if the text carries one, else
+# nothing. Never computes a countdown — relays the vendor's own words (same
+# spirit as the other detectors). Drives a "dry-until" window so watch/auto
+# don't re-pick a tank before it recovers.
 #
 # P2-1 (2026-09-08 round-4 review): every classifier here used to read
 # `printf '%s' "$text" | grep …` — a PIPE from a forked producer to a forked
@@ -76,8 +77,22 @@ limit_line_is_real() {
 # concurrent producer left to block. Every classifier below reads its
 # haystack the same way now — this one included, since it is handed
 # codex's full reply by limit_codex_output_dry.
+#
+# P1-1 (2026-09-08 round-5 review): this only ever recognized "try again
+# at …" — but the repo's OWN 175-row real-reset-phrase corpus
+# (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
+# at …" grammar (0 rows contain "try again at"), so every one of those 175
+# real phrases, prefixed with codex's own confirmed sentence, failed to
+# yield a reset and limit_codex_output_dry's second gate (below) then
+# discarded the whole event as not-dry. That silently closed reroute, the
+# board's ONLY red dot for codex (dry_store is codex-only —
+# limit_engine_detectable is false for it), and — worse — on the
+# fresh-artifact path (burn.sh) let a genuine EXISTING dry marker be
+# cleared, because "not dry" there means "safe to clear". Recognize the
+# same three grammars claude's branch (limit_output_dry) already does:
+# nothing here says codex's own vendor text is restricted to one of them.
 limit_codex_reset() {
-  grep -oaiE "try again at [^.\"]+" <<< "$1" | head -n 1 \
+  grep -oaiE 'resets [^"]+|try again at [^."]+|reset at [^."]+' <<< "$1" | head -n 1 \
     | sed -E 's/[[:space:]]+$//' || true
 }
 

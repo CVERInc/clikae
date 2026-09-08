@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A genuine codex limit event phrased with either of codex's OTHER reset
+  grammars ("resets …" / "reset at …") was read as not-dry.** `limit_codex_reset`
+  only ever recognized "try again at …", so the repo's own 175-row real
+  reset-phrase corpus (`tests/fixtures/limit-reset-phrases.tsv`) — entirely
+  "resets …" / "reset at …" grammar — yielded no reset for a single one of
+  those 175 rows once prefixed with codex's own confirmed sentence.
+  `limit_codex_output_dry`'s second gate then discarded the whole event as
+  not-dry, silently closing reroute AND the board's only red dot for codex
+  (`dry_store` is codex-only) — and, on the fresh-artifact path, let a
+  genuine EXISTING marker be cleared, since "not dry" there means "safe to
+  clear". Recognizes the same three grammars claude's branch already does
+  (#45).
+
 - **A SUCCESSFUL codex burn could silently mark a healthy tank dry.**
   `limit_codex_output_dry` — unlike claude's branch — was never anchored on
   a direct vendor report, so it matches "hit your (usage|session) limit"

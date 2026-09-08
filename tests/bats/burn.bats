@@ -1443,6 +1443,34 @@ STUB
   [ "$status" -eq 0 ]
 }
 
+# --- P1-1 (2026-09-08 round-5 review): the r2/r3 tests above only ever used
+# codex's "try again at …" grammar. limit_codex_reset (before this fix) only
+# recognized that ONE grammar, so a genuine concurrent limit phrased with
+# "resets …" (the repo's own 175-row real corpus is entirely this grammar)
+# yielded an empty reset, limit_codex_output_dry's second gate then treated
+# the whole event as not-dry, and the fresh-artifact branch — reading "not
+# dry" as "safe to recover" — CLEARED a real, pre-existing marker instead of
+# leaving it untouched (review PROBE H).
+
+@test "burn #45: a fresh artifact with a concurrent GENUINE limit phrased as \"resets …\" leaves an EXISTING marker untouched (P1-1 r5)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+printf 'ab' > "$STUB_ARTIFACT"
+STUB
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  clikae init codex T1
+  _src_burn
+  dry_store_mark codex T1 "resets 5am (Asia/Tokyo)"
+  run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reset":"resets 5am (Asia/Tokyo)"'* ]] || false
+  run dry_store_read codex T1
+  [ "$status" -eq 0 ]                          # marker left in place, not cleared
+}
+
 @test "burn #42: a fresh artifact with NO limit in the reply still clears the dry marker (P2-2 r2 control)" {
   _stub_burn_transport
   clikae init codex T1
