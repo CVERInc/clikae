@@ -910,3 +910,49 @@ _perm_octal() {
   [ ! -e "$store/dangling-link.md" ]
   [ "$(cat "$store/a.md")" = 'topic a' ]
 }
+
+@test "memory adopt: a symlinked LAST PATH SEGMENT on the adopt dir still copies the resolved directory's files (R4-P2-1)" {
+  # The maintainer's own layout: the memory directory lives elsewhere (iCloud)
+  # and a bare symlink in $HOME points at it. `find` never descends into an
+  # operand that is itself a symlink, so before the fix this adopted zero
+  # files, merged the index anyway, and printed a clean DONE. Uses the index
+  # format the repo's own docs teach — "- [Title](file.md) — hook" — which is
+  # also the shape the dangling-link safety net (R3-P3-1) doesn't recognize,
+  # so a regression here would show no warning at all, not a loud one.
+  local real="$TEST_HOME/icloud/memory"
+  mkdir -p "$real"
+  printf -- '# Memory Index\n- [Stripe pricing](stripe.md) — hook\n- [Key map](keys.md) — hook\n' \
+    > "$real/MEMORY.md"
+  printf 'S\n' > "$real/stripe.md"
+  printf 'K\n' > "$real/keys.md"
+  ln -s "$real" "$TEST_HOME/mem"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$TEST_HOME/mem"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[ DONE ]"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ "$(cat "$store/stripe.md")" = 'S' ]
+  [ "$(cat "$store/keys.md")" = 'K' ]
+  command grep -a -Fq -- '- [Stripe pricing](stripe.md) — hook' "$store/MEMORY.md"
+}
+
+@test "memory adopt: zero files copied refuses instead of a green DONE with a dangling index (R4-P2-1)" {
+  # Distinct from the case above: here the source directory itself is real,
+  # but everything under it besides MEMORY.md is a symlink to a directory —
+  # `-L "$f" && ! -f "$f"` treats that as "dangling" and skips it, same as
+  # before this fix, but now the adopt must refuse rather than merge an index
+  # that points at nothing.
+  local L="$HOME/.claude/projects/x/memory"
+  mkdir -p "$L" "$TEST_HOME/elsewhere/archive"
+  printf 'note\n' > "$TEST_HOME/elsewhere/archive/old.md"
+  printf '[Old](archive/old.md)\n' > "$L/MEMORY.md"
+  ln -s "$TEST_HOME/elsewhere/archive" "$L/archive"
+  clikae init claude a
+  run clikae memory share me claude a --adopt "$L"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"[ DONE ]"* ]] || false
+  [[ "$output" == *"copied 0 of"* ]] || false
+  local store="$CLIKAE_HOME/souls/me/memory"
+  [ ! -e "$store/archive" ]
+  ! command grep -a -Fq 'Adopted from' "$store/MEMORY.md" 2>/dev/null
+}

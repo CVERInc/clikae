@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of being silently skipped by both `memory share` seeding and
   `--adopt` — `find -type f` never matched it and never said so. A dangling
   symlink is still skipped, but now reported by name (#49).
+- `--adopt <dir>` now resolves the adopt directory itself before listing it,
+  not just the files under it. `find` never descends into an operand that is
+  ITSELF a symlink, so a memory directory reached through a symlink (memory
+  kept in iCloud, a bare symlink pointing at it) copied zero files, merged
+  the source index anyway, and printed a green `[ DONE ]`. Adoption now also
+  refuses outright — rather than reporting success — if it ends up copying
+  zero files from a non-empty source (#49).
 - **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
   own awk, and per-match redaction cost was quadratic in the hit count.**
   `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently

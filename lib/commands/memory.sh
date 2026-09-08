@@ -386,7 +386,7 @@ _memory_adopt_count() {
 # after a real successful share; a half-copied adopt satisfied it too, so a
 # retry never seeded the joiner's own (stashed, reversible) memory in at all.
 _memory_adopt() {
-  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line
+  local source="$1" store="$2" sdir f rel staging dest heading broken=0 target line found=0 copied=0
   ! _memory_same_dir "$source" "$store" || return 0
   # Never append through an index symlink into somebody else's memory — check
   # this FIRST, before touching anything, so a refusal here leaves the store
@@ -416,11 +416,23 @@ _memory_adopt() {
   [ -r "$sdir" ] && [ -x "$sdir" ] || { log_err "Can't list $source"; return 1; }
   [ -r "$sdir/MEMORY.md" ] || { log_err "Can't read $source/MEMORY.md"; return 1; }
 
+  # Resolve the adopt directory itself, not just the files under it. `find`
+  # never descends into an operand that is ITSELF a symlink — it only matches
+  # the symlink as a single `-type l` entry and stops there. That is exactly
+  # the maintainer's own layout (memory lives in iCloud; a bare symlink in
+  # $HOME points at it): `find "$sdir" …` below saw only $sdir, matched it as
+  # a dangling-looking symlink, and never listed a single file inside it,
+  # while the index still merged and printed a clean DONE. Canonicalizing
+  # first — the same `cd … && pwd -P` _memory_same_dir already uses — makes
+  # the loop see the real directory, whichever path segment carried the link.
+  sdir="$(cd "$sdir" && pwd -P)" || { log_err "Can't resolve $source"; return 1; }
+
   staging="$(mktemp -d "$store/.adopt.XXXXXX" 2>/dev/null)" \
     || { log_err "Couldn't stage adoption of $source"; return 1; }
   while IFS= read -r f; do
     rel="${f#"$sdir"/}"
     [ "$rel" = MEMORY.md ] && continue
+    found=$((found+1))
     if [ -L "$f" ] && [ ! -f "$f" ]; then
       log_warn "Skipping dangling symlink $rel in $source."
       continue
@@ -433,7 +445,20 @@ _memory_adopt() {
       rm -rf "$staging"
       return 1
     fi
+    copied=$((copied+1))
   done < <(find "$sdir" \( -type f -o -type l \) 2>/dev/null)
+
+  # A source that genuinely holds nothing but its own MEMORY.md ($found == 0)
+  # is a legitimate empty adopt and still ends in DONE below. But $found > 0
+  # with $copied == 0 means every entry under the source was skipped (e.g. a
+  # symlinked subdirectory this loop doesn't recurse into) — the index is
+  # about to merge pointing at files that never landed. Refuse instead of
+  # printing a green DONE over an adopt that copied nothing.
+  if [ "$found" -gt 0 ] && [ "$copied" -eq 0 ]; then
+    rm -rf "$staging"
+    log_err "Adoption of $source copied 0 of $found file(s) found under it — nothing to merge."
+    return 1
+  fi
 
   # The whole copy succeeded — move each staged file into place.
   while IFS= read -r rel; do
