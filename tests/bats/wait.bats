@@ -57,13 +57,33 @@ _mkstatus() {
   [[ "$output" != *"burn-1"* ]] || false   # burn-1 is still running — never reported
 }
 
-@test "wait: --all waits for every target and exits 0 if any is done" {
-  _mkstatus burn-1 dry false
+@test "wait: --all waits for every target and exits 0 only when EVERY one is done" {
+  _mkstatus burn-1 done true
   _mkstatus burn-2 done true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 0 ]
   [[ "$output" == *"burn-1"* ]] || false
   [[ "$output" == *"burn-2"* ]] || false
+}
+
+# P2-3 (2026-09-09 round-1 review): the exact bug — a done+dry mix under
+# --all used to exit 0 because ANY done anywhere won, unconditionally. The
+# caller explicitly asked about EVERY target; one of them being dry means
+# the requested condition was NOT met.
+@test "wait: --all exits 1 (not 0) on a done+dry mix — one finishing clean does not save the others" {
+  _mkstatus burn-1 dry false
+  _mkstatus burn-2 done true
+  run clikae wait burn-1 burn-2 --all
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"burn-1"* ]] || false
+  [[ "$output" == *"burn-2"* ]] || false
+}
+
+@test "wait: --all exits 1 (not 0) on a done+fail mix" {
+  _mkstatus burn-1 fail false
+  _mkstatus burn-2 done true
+  run clikae wait burn-1 burn-2 --all
+  [ "$status" -eq 1 ]
 }
 
 @test "wait: --all exits 2 when every target is dry" {
@@ -96,6 +116,24 @@ _mkstatus() {
   run clikae wait burn-1 --timeout 1
   [ "$status" -eq 1 ]
   [[ "$output" == *"timed out"* ]] || false
+}
+
+# P1-3 (2026-09-09 round-1 review): a timeout used to exit 0 whenever ANY
+# target happened to already be done, even under --all with the OTHER named
+# target still running — `clikae wait A B --all --timeout 2 && ship` shipped
+# on a timeout. `--timeout` expiring is 1, full stop, in both modes.
+@test "wait: --all exits 1 (not 0) on a timeout even when one target is already done" {
+  _mkstatus burn-1 done true
+  _mkstatus burn-2 running null
+  run clikae wait burn-1 burn-2 --all --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"timed out"* ]] || false
+}
+
+@test "wait: --any exits 1 (not 0) on a timeout with no target ever reaching done" {
+  _mkstatus burn-1 running null
+  run clikae wait burn-1 --timeout 1
+  [ "$status" -eq 1 ]
 }
 
 @test "wait: actually BLOCKS — a target that flips to done mid-wait is caught, not missed" {

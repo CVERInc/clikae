@@ -29,9 +29,14 @@ across that burn's own reroutes and retries), a bare pid (shorthand for
   --timeout <secs>   give up after this many seconds (an integer; unbounded
                      if omitted).
 
-Exit code: 0 if at least one of the targets that finished is `done`; 2 if none
-are `done` and every one that finished is `dry`; 1 otherwise (a `fail`/`infra`
-among them, an unresolved target, or a timeout).
+Exit code — 0 only when the REQUESTED condition is met:
+  --any (default): 0 if at least one target is done; 2 if none are done and
+                   every one that finished is dry; 1 otherwise (a fail/infra
+                   among them, an unresolved target, or a timeout).
+  --all:           0 only if EVERY target is done; 2 only if EVERY target is
+                   dry; 1 otherwise (a done+dry mix, a fail/infra among them,
+                   an unresolved target, or a timeout).
+A timeout is always 1, in both modes, even if some other target was done.
 
 Examples:
   clikae burn claude L --artifact out.md --prompt-file t.md --json &
@@ -122,12 +127,28 @@ cmd_wait() {
     [ "$mode" = "all" ] && [ "$terminal_count" -ge "$n" ] && break
     if [ -n "$timeout_s" ] && [ "$((SECONDS - start))" -ge "$timeout_s" ]; then
       log_err "clikae wait: timed out after ${timeout_s}s waiting for: ${targets[*]}"
-      [ "$any_done" -eq 1 ] && return 0
+      # P1-3 (2026-09-09 round-1 review): a timeout is a timeout, full stop —
+      # `--help`/docs say "1 … or --timeout expired first", unconditionally.
+      # Checking any_done here used to let `clikae wait A B --all --timeout
+      # 30m && ship` ship on a timeout whenever A merely happened to already
+      # be done while B never finished.
       return 1
     fi
     sleep 1
   done
 
+  # P2-3 (2026-09-09 round-1 review): the exit-code contract is PER-MODE, not
+  # "any done anywhere wins". Under `--all` the caller explicitly asked about
+  # EVERY target, so a done+fail (or done+dry) mix must not read as success
+  # just because one of them finished clean — `0` only when the REQUESTED
+  # condition is actually met.
+  if [ "$mode" = "all" ]; then
+    [ "$any_other" -eq 0 ] && [ "$any_dry" -eq 0 ] && [ "$any_done" -eq 1 ] && return 0
+    [ "$any_other" -eq 0 ] && [ "$any_done" -eq 0 ] && [ "$any_dry" -eq 1 ] && return 2
+    return 1
+  fi
+
+  # --any: at least one done is the whole ask.
   [ "$any_done" -eq 1 ] && return 0
   [ "$any_other" -eq 0 ] && [ "$any_dry" -eq 1 ] && return 2
   return 1

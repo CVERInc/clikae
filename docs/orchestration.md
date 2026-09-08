@@ -235,9 +235,21 @@ for the same thing), or a path straight to a `status.json`. `--any` (default)
 returns as soon as ONE target reaches a terminal state; `--all` waits for
 every one. Each terminal status object is printed as one JSON line, in the
 order it finishes — never a re-derived summary, the same object a cockpit
-would have read from disk. Exit code: `0` if at least one finished target is
-`done`; `2` if none are `done` and every finished target is `dry`; `1`
-otherwise (a `fail`/`infra` among them, or `--timeout` expired first).
+would have read from disk.
+
+**Exit code — `0` only when the requested condition is actually met**
+(2026-09-09 round-1 review, P1-3/P2-3 — this used to contradict itself:
+`--all` returned `0` whenever ANY target was `done`, even with a `fail`
+or `dry` among the others):
+
+- `--any` (default): `0` if at least one target is `done`; `2` if none are
+  `done` and every one that finished is `dry`; `1` otherwise (a `fail`/
+  `infra` among them, an unresolved target, or `--timeout` expiring first).
+- `--all`: `0` only if EVERY target is `done`; `2` only if EVERY target is
+  `dry` (none `done`, none failed); `1` otherwise — including a `done`+`dry`
+  mix, a `fail`/`infra` among them, or `--timeout` expiring first.
+- `--timeout` expiring is `1` unconditionally, in both modes — never `0`
+  just because some other target happened to already be `done`.
 
 **A dead burn can never hang `wait` (2026-09-09 round-1 review, P1-1.)** A
 `running` status whose recorded `pid` is no longer alive is read as a
