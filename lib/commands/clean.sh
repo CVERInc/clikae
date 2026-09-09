@@ -902,6 +902,58 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_tank_lock_gc <dry_run> -> remove per-tank burn locks (and reclaim
+# mutexes) whose recorded holder is no longer running.
+#
+# R4-P3-2 (2026-09-10 round-4 review; R3-P3-3 before it): nothing else EVER
+# swept $HOME/.clikae/state/tank-busy-*.lock[.reclaim]. `_burn_tank_lock_acquire`
+# (lib/commands/burn.sh) already reclaims a dead holder's lock, but only
+# when something calls it AGAIN for that exact engine/tank pair — a tank
+# nobody ever `burn`s again keeps a dead holder's lock (and, before round
+# 4's fix, could keep a permanently wedged reclaim mutex) forever. Same
+# shape as _clean_scrollback_gc above: the test is the recorded pid's
+# LIVENESS, never the file's age — a tank genuinely busy for hours is not
+# garbage just because its lock is old.
+_clean_tank_lock_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0
+  [ -d "$dir" ] || return 0
+  for f in "$dir/"tank-busy-*.lock "$dir/"tank-busy-*.lock.reclaim; do
+    [ -L "$f" ] || continue
+    target="$(readlink "$f" 2>/dev/null || true)"
+    holder="${target%%:*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;                               # malformed/empty — treat as dead below
+      *) kill -0 "$holder" 2>/dev/null && continue ;;  # its holder is still running
+    esac
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  # Graveyard entries (`_burn_reclaim_mutex_try`'s rename-to-unique-name
+  # reap) are private to the reaper that created them — its OWN pid is
+  # embedded in the filename, not in the target — and are normally removed
+  # by that same reaper a syscall or two later. One can only outlive it if
+  # the reaper itself was killed between its `mv` and its `rm`, so the
+  # liveness test here is the filename's pid, not the symlink's target.
+  for f in "$dir/"tank-busy-*.lock.reclaim.stale.*; do
+    [ -L "$f" ] || continue
+    holder="${f##*.stale.}"; holder="${holder%%.*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;
+      *) kill -0 "$holder" 2>/dev/null && continue ;;
+    esac
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned reclaim graveyard entry ${f##*/}"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n dead-holder tank lock(s)."
+  return 0
+}
+
 _clean_tmux_gc() {
   local dry_run="$1"
   local lock_file sid is_dead rc
@@ -995,6 +1047,7 @@ cmd_clean() {
   # Run the Tmux Ephemeral GC before doing file scans
   _clean_tmux_gc "$dry_run"
   _clean_scrollback_gc "$dry_run"
+  _clean_tank_lock_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

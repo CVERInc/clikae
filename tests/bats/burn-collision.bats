@@ -524,15 +524,272 @@ _race_contender() {
   [[ ! -L "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || false
 }
 
-@test "_burn_reclaim_mutex_try: the mutex directory and its pid file are 0700/0600 (P3-5)" {
+@test "_burn_reclaim_mutex_try: a successful claim is a symlink carrying pid:started_at from the instant it exists (R4-P1-1)" {
+  # Superseded by R4-P1-1 (2026-09-10 round-4 review): the mutex used to be
+  # a 0700 `mkdir`-ed directory with a separate 0600 pid FILE written right
+  # after — exactly the two-statement claim-then-identify race the symlink
+  # design abolishes one function down. There is no separate pid file any
+  # more to check permissions on; what must hold instead is that the mutex
+  # itself is a symlink and its payload is present atomically.
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKPERMS)"
   mkdir -p "$(dirname "$lock")"
-  local reclaim_dir="${lock}.reclaim"
-  _burn_reclaim_mutex_try "$reclaim_dir"
-  [ "$(stat -c '%a' "$reclaim_dir" 2>/dev/null || stat -f '%Lp' "$reclaim_dir")" = 700 ]
-  [ "$(stat -c '%a' "$reclaim_dir/pid" 2>/dev/null || stat -f '%Lp' "$reclaim_dir/pid")" = 600 ]
-  _burn_reclaim_mutex_release "$reclaim_dir"
+  local reclaim_link="${lock}.reclaim"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ -L "$reclaim_link" ]] || { echo "mutex is not a symlink"; false; }
+  local target; target="$(readlink "$reclaim_link")"
+  [ "${target%%:*}" = "$$" ] || { echo "mutex target=$target, expected pid $$"; false; }
+  case "${target#*:}" in
+    ''|*[!0-9]*) echo "mutex started_at not numeric: $target"; false ;;
+  esac
+  _burn_reclaim_mutex_release "$reclaim_link"
+  [[ ! -L "$reclaim_link" ]] || { echo "release left the mutex behind"; false; }
+}
+
+# --- R4-P1-1/R4-P1-2/R4-P1-3/R4-P2-1/R4-P2-2/R4-P2-3 (2026-09-10 round-4 review) ---
+#
+# All three P1s lived in the 17-line reclaim mutex itself, whose failure
+# branch had NO test coverage at all (P2-3): a pid-less mutex directory
+# (killed between `mkdir` and its separate pid write) was never reaped and
+# permanently disabled the tank; a stale reaper's check-then-act could
+# destroy a LIVE holder's mutex; and `stat -f` running first on a GNU-stat
+# PATH silently disabled the 30s age half of the stale rule. The fix makes
+# the mutex a symlink too (identity atomic with claim, like the lock it
+# guards) and reaps via rename-to-a-unique-graveyard-then-verify, never a
+# blind check-then-act — see the mutex's own header comment above.
+
+@test "_burn_tank_lock_acquire (R4-P1-1a): a pid-less LEGACY reclaim directory does not wedge the tank forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE1)"
+  mkdir -p "$(dirname "$lock")"
+  ln -s "$(_dead_pid):1" "$lock"
+  mkdir -p "${lock}.reclaim"   # pre-round-4 mkdir-based mutex, never given a pid file
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKWEDGE1 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -le 2 ] || {
+    echo "took ${elapsed}s -- the old bug never reaped a pid-less mutex at all (permanent refusal)"
+    false
+  }
+  [[ ! -e "${lock}.reclaim" ]] || { echo "reclaim mutex leaked"; false; }
+  _burn_tank_lock_release codex LOCKWEDGE1
+}
+
+@test "_burn_tank_lock_acquire (R4-P1-1b): a pid-less/malformed reclaim SYMLINK does not wedge the tank forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE2)"
+  mkdir -p "$(dirname "$lock")"
+  ln -s "$(_dead_pid):1" "$lock"
+  ln -s "" "${lock}.reclaim"   # a malformed payload from anywhere must self-heal, same as the pid-less directory above
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKWEDGE2 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -le 2 ] || { echo "took ${elapsed}s"; false; }
+  [[ ! -e "${lock}.reclaim" ]] || { echo "reclaim mutex leaked"; false; }
+  _burn_tank_lock_release codex LOCKWEDGE2
+}
+
+@test "_burn_tank_lock_acquire (R4-P1-1c): a SECOND, independent burn on a tank that just healed a wedged reclaim mutex also succeeds" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE3)"
+  mkdir -p "$(dirname "$lock")"
+  ln -s "$(_dead_pid):1" "$lock"
+  mkdir -p "${lock}.reclaim"
+  _burn_tank_lock_acquire codex LOCKWEDGE3 5
+  _burn_tank_lock_release codex LOCKWEDGE3
+
+  # The old bug's whole failure mode was "every burn AFTER the first one is
+  # refused forever" -- this is the one that must not regress.
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKWEDGE3 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -lt 2 ] || false
+  _burn_tank_lock_release codex LOCKWEDGE3
+}
+
+@test "_burn_reclaim_mutex_try (R4-P2-3a): a pid-less/malformed link is reaped on the first try and claimable on the second" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX1)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  ln -s "" "$reclaim_link"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }   # reaps, never claims for the caller
+  [[ ! -e "$reclaim_link" ]] || { echo "malformed mutex survived the reap attempt"; false; }
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }   # now claimable
+  _burn_reclaim_mutex_release "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R4-P2-3a2): a pre-round-4 LEGACY (non-symlink) reclaim directory is reaped the same way" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX2)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  mkdir -p "$reclaim_link"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ ! -e "$reclaim_link" ]] || { echo "legacy directory survived the reap attempt"; false; }
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _burn_reclaim_mutex_release "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R4-P2-3b): a DEAD-pid mutex younger than 30s is left alone" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX3)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  local dead; dead="$(_dead_pid)"
+  ln -s "${dead}:$(date +%s)" "$reclaim_link"   # dead, but its OWN started_at is "just now"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ -L "$reclaim_link" ]] || { echo "reaped a mutex younger than 30s"; false; }
+  rm -f "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R4-P2-3c): a mutex whose pid is ALIVE is never reaped, regardless of age" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX4)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  sleep 300 &
+  local live_pid=$!
+  ln -s "${live_pid}:1" "$reclaim_link"   # started_at=1 -- decades old by the 30s rule
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ -L "$reclaim_link" ]] || { echo "reaped a mutex whose pid was genuinely alive"; false; }
+  rm -f "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R4-P1-3): staleness is judged from started_at IN the symlink, never the symlink's own mtime" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKNOSTAT)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  local dead; dead="$(_dead_pid)"
+  local now; now="$(date +%s)"
+
+  # Embedded started_at says "60s ago" (past the 30s rule); force the
+  # symlink's OWN mtime to right now. A `stat`-mtime-based rule (or the old
+  # BSD-first bug, which silently forces age to "infinite" on a GNU PATH —
+  # the opposite failure) would both get this case right by accident or by
+  # bug; the one input that must NOT matter here is the filesystem mtime.
+  ln -s "${dead}:$((now - 60))" "$reclaim_link"
+  touch -h "$reclaim_link" 2>/dev/null || true
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ ! -e "$reclaim_link" ]] || { echo "not reaped despite a stale embedded started_at"; false; }
+
+  # Reverse: embedded started_at says "just now" (must NOT be reaped), but
+  # force the symlink's mtime to 2020 -- if age were ever read from the
+  # filesystem, this would misread as ancient and reap a brand-new mutex.
+  ln -s "${dead}:${now}" "$reclaim_link"
+  touch -h -t 202001010000 "$reclaim_link" 2>/dev/null || true
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ -L "$reclaim_link" ]] || {
+    echo "reaped a mutex younger than 30s just because its mtime was forced to 2020"
+    false
+  }
+  rm -f "$reclaim_link"
+}
+
+@test "_burn_tank_lock_acquire (R4-P2-1): a symlink whose target resolves to an existing directory is reclaimed, not nested into" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKNEST)"
+  mkdir -p "$(dirname "$lock")"
+  mkdir -p "$(dirname "$lock")/somedir"
+  ln -s "somedir" "$lock"   # foreign symlink resolving to an EXISTING DIRECTORY
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKNEST 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -lt 5 ] || false
+  [[ -L "$lock" ]] || { echo "lock is not a symlink"; false; }
+  local target; target="$(readlink "$lock")"
+  [ "${target%%:*}" = "$$" ] || { echo "lock target=$target"; false; }
+  # and the foreign directory was never nested into (the old bug would have
+  # created "somedir/$$:<epoch>" instead of failing/reclaiming "$lock" itself)
+  [ -z "$(ls -A "$(dirname "$lock")/somedir" 2>/dev/null)" ] || {
+    echo "the old bug landed the lock INSIDE somedir instead of reclaiming \$lock"
+    false
+  }
+  _burn_tank_lock_release codex LOCKNEST
+}
+
+@test "_burn_tank_lock_acquire (R4-P2-2): a durable empty-target symlink is reclaimed promptly, not spun on forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKEMPTY)"
+  mkdir -p "$(dirname "$lock")"
+  ln -s "" "$lock"   # durable empty target -- occupies the path forever on its own
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKEMPTY 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$elapsed" -le 2 ] || { echo "took ${elapsed}s -- the old bug spun at full CPU for the whole timeout"; false; }
+  local target; target="$(readlink "$lock")"
+  [ "${target%%:*}" = "$$" ] || { echo "lock target=$target"; false; }
+  _burn_tank_lock_release codex LOCKEMPTY
+}
+
+@test "_burn_tank_lock_acquire (R4-P1-2): 4 independent processes racing a DEAD-holder lock through the reclaim mutex — 0 violations, 0 leaks, 50 trials" {
+  # Same _race_contender harness as R3-P2-2 above (real separate processes,
+  # a barrier, an independent witness mutex, hold-then-release), scaled to
+  # the round-4 review's requested 50 trials, run specifically to re-verify
+  # mutual exclusion still holds through the REBUILT reclaim mutex (a
+  # direct-hammering probe of _burn_reclaim_mutex_try alone, bypassing the
+  # natural pacing every real caller has between retries, was also built
+  # and run as a scratchpad probe -- see the report for what it found and
+  # why that finding does not apply to any reachable call pattern in this
+  # codebase, and is deliberately NOT a committed test here).
+  _src_burn_lock
+  local slowcat_bin; slowcat_bin="$(_install_slow_cat)"
+  local trials=50 contenders=4 hold_s=0.3
+  local trial violations=0 leaked=0 wins_total=0
+  for trial in $(seq 1 "$trials"); do
+    local tank="R4RACE$trial"
+    local lock; lock="$(_burn_tank_lock_path codex "$tank")"
+    mkdir -p "$(dirname "$lock")"
+    ln -s "$(_dead_pid):1" "$lock"
+
+    local barrier="$BATS_TEST_TMPDIR/r4-barrier-$trial" witness="$BATS_TEST_TMPDIR/r4-witness-$trial"
+    rm -f "$barrier"; rm -rf "$witness"
+    local -a pids=()
+    local i won
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/r4-won-$trial-$i"
+      rm -f "$won" "$won.violation"
+      local slow=0; [ "$i" -eq 1 ] && slow=1
+      _race_contender "$tank" "$barrier" "$witness" "$won" "$slow" "$slowcat_bin" "$hold_s"
+      pids+=("$!")
+    done
+    : > "$barrier"   # release all 4 together
+    local p
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/r4-won-$trial-$i"
+      [ -f "$won" ] && wins_total=$((wins_total + 1))
+      [ -f "$won.violation" ] && violations=$((violations + 1))
+    done
+    if [ -L "$lock" ] || [ -e "$lock" ]; then
+      echo "trial $trial: lock still present after every contender finished — leaked"
+      leaked=$((leaked + 1))
+    fi
+  done
+  echo "trials=$trials contenders=$contenders wins=$wins_total violations=$violations leaked_locks=$leaked"
+  [ "$violations" -eq 0 ] || false
+  [ "$leaked" -eq 0 ] || false
 }
 
 @test "burn-collision: SIGTERM while blocked acquiring the busy-tank lock (before 'running' is ever written) still writes a terminal 'fail' status file (R3-P3-1)" {

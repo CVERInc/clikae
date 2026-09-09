@@ -942,49 +942,177 @@ _burn_tank_lock_path() {
   printf '%s/.clikae/state/tank-busy-%s.lock\n' "$HOME" "$safe"
 }
 
-# _burn_reclaim_mutex_try <reclaim_dir> -> 0 once THIS process holds the
-# mutex (its own `mkdir` succeeded, pid written immediately after); 1
-# otherwise.
+# _burn_reclaim_mutex_try <reclaim_link> -> 0 once THIS process holds the
+# mutex (its own `ln -s` succeeded); 1 otherwise.
 #
 # R3-P1-1/R3-P1-2 (2026-09-09 round-3 review): every REMOVAL of the tank
 # lock symlink — a stale reclaim tearing down a dead holder's link, or an
 # owner's own release — happens only while holding this SECOND, short-lived
-# mutex (`_burn_tank_lock_acquire`/`_burn_tank_lock_release` below). It is
-# itself `mkdir`-based and, unlike the lock it guards, is never vacated by
-# the thing that holds it — only ever removed by the loser-turned-reaper
-# path right below, on a mutex that looks abandoned.
+# mutex (`_burn_tank_lock_acquire`/`_burn_tank_lock_release` below).
 #
-# On failure to claim it, also reaps it if it looks abandoned: its own pid
-# is dead AND the directory is at least 30s old. Everything done under this
-# mutex — a readlink, at most one `rm`, an `rmdir` — is milliseconds, so 30s
-# cannot be a live holder's actual hold time; the only way a mutex survives
-# that long is a reclaimer that was itself killed mid-removal. Reaping here
-# never claims the mutex for the caller (the caller loops back and races the
-# `mkdir` again like everyone else) — it only keeps a crashed reclaimer's
-# mutex from wedging every future one forever.
+# R4-P1-1/R4-P1-2/R4-P1-3 (2026-09-10 round-4 review): round 3's mutex was a
+# directory claimed by `mkdir`, with its own pid written in a SEPARATE
+# statement right after — the exact two-statement claim-then-identify race
+# the symlink lock above exists to abolish, ported one function up and left
+# unguarded. A process killed between the `mkdir` and the pid write left a
+# directory with no pid inside, which was then never reaped (a pid-less
+# mutex read `''` and unconditionally `return 1`ed before ever reaching the
+# stale rule) — permanently disabling the tank it guarded. And even a
+# mutex WITH a pid was reaped by a check-then-act on a directory this
+# process does not own: read the pid, decide it's dead, then unconditionally
+# `rm`/`rmdir` — with nothing stopping a THIRD process from having
+# `mkdir`'d it, live, in between.
+#
+# Both are fixed the same way the lock itself was: the mutex is now a
+# SYMLINK, `ln -s "<pid>:<started_at>" "$reclaim_link"` — one atomic
+# syscall, identity present from the instant the path exists, so there is
+# no pid-less window at any level to leave permanently unclaimable. Its own
+# `started_at` travels IN that payload, so the "≥30s" half of the stale
+# rule is `now - started_at` read straight out of it — no `stat` call
+# anywhere in this function any more (R4-P1-3: there is no `stat -f`/`stat
+# -c` order left to get wrong, because there is no `stat` left).
+#
+# Reaping a mutex that looks abandoned never trusts its own read enough to
+# act on it directly: it first `mv`s the symlink to a private, unique
+# graveyard name (`mv` — i.e. `rename(2)` — of a symlink is atomic, and
+# because that destination name has never existed before, it can never
+# nest the way `ln -s`/`mv` onto an existing directory can). Only ONE
+# racing reaper's `mv` can possibly win, because after the first `mv`
+# there is nothing left at `$reclaim_link` for a second `mv` to move — the
+# decision of WHO gets to act is made by the filesystem, not by comparing
+# reads taken at different times. The winner then `readlink`s its OWN
+# graveyard copy and checks what it actually caught: if it still names the
+# pid judged dead, the eviction was correct — remove the graveyard entry
+# and return (the caller's loop races `ln -s` fresh; reaping here never
+# claims the mutex for the caller, same as before). If it names anyone
+# else, this reaper's `mv` raced a live holder's fresh `ln -s` into the
+# exact same window between the unsynchronized read and the `mv` — the
+# eviction was WRONG, and the `mv` just vacated a path that live holder
+# legitimately occupied (the same vacate hazard R3-P1-1 found in the main
+# lock, one function up). Rather than leave that vacancy open for any
+# length of time — even a bounded wait is a window a THIRD process's `ln
+# -s` could land in, becoming a second live holder — it is put back
+# immediately by RE-CREATING it with `ln -s` (not by trying to `mv` the
+# graveyard copy back — measured: `mv -n` onto an existing SYMLINK
+# destination silently CLOBBERS it on the system `/bin/mv`, `-n` only
+# reliably no-clobbers a regular-file destination; `ln -s` is EEXIST-on-
+# conflict by definition of the syscall, identical on every vendor): either
+# an equivalent entry lands right back (the destination was still empty),
+# or the attempt fails because something claimed it again in the handful
+# of syscalls since, in which case nothing safe is left to do but log it.
+# Either way, only the `mv` winner ever removes or restores anything, and
+# only the one graveyard path it alone created.
 _burn_reclaim_mutex_try() {
-  local reclaim_dir="$1" mpid mtime now
-  if mkdir -m 0700 "$reclaim_dir" 2>/dev/null; then
-    (umask 077; printf '%s' "$$" > "$reclaim_dir/pid") 2>/dev/null || true
+  local reclaim_link="$1" now_epoch target mpid mstarted evict_now
+  local grave gtarget gpid
+
+  # A non-symlink entry at this path (a pre-round-4 `mkdir`-based mutex
+  # directory, or anything else) can't carry an identity either way, and
+  # `ln -s` into an EXISTING DIRECTORY nests instead of failing (the same
+  # hazard `_burn_tank_lock_acquire` guards the lock itself against) — so
+  # this must never be allowed to reach the `ln -s` below while it might
+  # still be a directory. Whatever the `mv` winner catches here is
+  # unconditionally safe to discard: nothing legitimate is ever a
+  # directory at this path.
+  if [ -e "$reclaim_link" ] && [ ! -L "$reclaim_link" ]; then
+    grave="${reclaim_link}.stale.$$.$RANDOM"
+    mv "$reclaim_link" "$grave" 2>/dev/null && rm -rf "$grave" 2>/dev/null
+    return 1
+  fi
+
+  now_epoch="$(date +%s 2>/dev/null || echo 0)"
+  if ln -s "$$:$now_epoch" "$reclaim_link" 2>/dev/null; then
     return 0
   fi
-  mpid="$(cat "$reclaim_dir/pid" 2>/dev/null || true)"
-  case "$mpid" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$mpid" 2>/dev/null && return 1   # still alive — not abandoned
-  mtime="$(stat -f %m "$reclaim_dir" 2>/dev/null || stat -c %Y "$reclaim_dir" 2>/dev/null || echo 0)"
-  case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
-  now="$(date +%s 2>/dev/null || echo 0)"
-  [ "$((now - mtime))" -ge 30 ] || return 1
-  rm -f "$reclaim_dir/pid" 2>/dev/null
-  rmdir "$reclaim_dir" 2>/dev/null
+
+  [ -L "$reclaim_link" ] || return 1   # vanished between the checks above and here — caller retries
+  target="$(readlink "$reclaim_link" 2>/dev/null || true)"
+  mpid="${target%%:*}"
+  mstarted="${target#*:}"
+  case "$mstarted" in ''|*[!0-9]*) mstarted=0 ;; esac
+
+  evict_now=0
+  case "$mpid" in
+    ''|*[!0-9]*)
+      # Empty, dangling, or malformed payload: a well-formed mutex link
+      # ALWAYS has a numeric pid from the instant it exists (it's written
+      # atomically by the `ln -s` above), so this shape is foreign or
+      # corrupt, never a young legitimate holder — evict regardless of age.
+      evict_now=1
+      ;;
+    *)
+      kill -0 "$mpid" 2>/dev/null && return 1   # looks alive — do not evict
+      [ "$((now_epoch - mstarted))" -ge 30 ] && evict_now=1
+      ;;
+  esac
+  [ "$evict_now" -eq 1 ] || return 1
+
+  grave="${reclaim_link}.stale.$$.$RANDOM"
+  mv "$reclaim_link" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
+  gtarget="$(readlink "$grave" 2>/dev/null || true)"
+  gpid="${gtarget%%:*}"
+  if [ "$gpid" = "$mpid" ]; then
+    rm -f "$grave" 2>/dev/null   # exactly the abandoned mutex we judged dead — never claims it for the caller
+    return 1
+  fi
+  # We caught someone ELSE'S mutex: a live holder's fresh `ln -s` landed in
+  # this EXACT path in the window between our unsynchronized read (above)
+  # and our `mv` (just now) — our `mv` just vacated the path a live holder
+  # was legitimately occupying. That vacancy is itself a hazard structurally
+  # identical to R3-P1-1's original `mv`-vacate bug, just one function up:
+  # if left open, a THIRD process's `ln -s` can land in it and become a
+  # SECOND live holder of this mutex while the one we just evicted (still
+  # alive, still inside whatever it was doing) has no idea it happened.
+  #
+  # So the fix does NOT wait-then-discard (which leaves that vacancy open
+  # for as long as the wait, however short) — it puts an equivalent entry
+  # BACK immediately, by re-creating it with `ln -s "$gtarget" ...` rather
+  # than trying to `mv` the graveyard copy back. This is NOT the same
+  # thing: measured on this machine, `mv -n SRC DST` when DST is an
+  # EXISTING SYMLINK silently CLOBBERS it on the system `/bin/mv` (BSD) —
+  # `-n` reliably no-clobbers a regular-file destination but not a
+  # symlink-to-symlink `mv`, while GNU coreutils' `mv -n` gets this right;
+  # a fix that only works with one vendor's coreutils on `$PATH` is exactly
+  # the R4-P1-3 shape this same round already closed once. `ln -s`, by
+  # contrast, is EEXIST-on-conflict by definition of the syscall itself —
+  # confirmed identical on both `/bin/ln` and GNU coreutils' `ln`: it never
+  # overwrites, ever, on either vendor, because there is no `-n`-style
+  # switch to get inconsistently implemented in the first place. Re-
+  # creating (rather than moving) also means our graveyard copy is always
+  # `rm -f`-able afterward regardless of which branch we took — nothing
+  # downstream ever depends on the SAME inode surviving, only on the same
+  # payload existing at `$reclaim_link` again.
+  if ln -s "$gtarget" "$reclaim_link" 2>/dev/null; then
+    printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- restored it\n' "$reclaim_link" "$gpid" >&2
+  else
+    # The destination was reclaimed again in the few syscalls since our
+    # `mv`-away — nothing safe is left to do but log it; the live holder we
+    # mistakenly evicted is not restored, but its own release (if it ever
+    # runs) is now a same-pid check away from being a no-op against
+    # whatever fresh entry is actually there — see
+    # _burn_reclaim_mutex_release below.
+    printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- could NOT restore (a third claim landed first)\n' "$reclaim_link" "$gpid" >&2
+  fi
+  rm -f "$grave" 2>/dev/null
   return 1
 }
 
-# _burn_reclaim_mutex_release <reclaim_dir> — the counterpart to a
-# successful _burn_reclaim_mutex_try.
+# _burn_reclaim_mutex_release <reclaim_link> — the counterpart to a
+# successful _burn_reclaim_mutex_try. Always called by the same process
+# that just claimed it (every call site is `if _burn_reclaim_mutex_try
+# …; then … _burn_reclaim_mutex_release …; fi`), but re-verifies the link
+# still names THIS pid before removing it anyway — the same defence in
+# depth `_burn_tank_lock_release` applies to the lock itself: a reaper that
+# mistakenly `mv`-ed away a live holder's link (R4-P1-2's residual window,
+# between that reaper's `mv` and its own cleanup) could, in principle,
+# leave a THIRD process's fresh claim sitting at this exact path by the
+# time some other code path calls release — trusting "I must be the one
+# who's calling this" without checking is exactly the assumption that bit
+# the lock itself before its own release was hardened this way.
 _burn_reclaim_mutex_release() {
-  rm -f "$1/pid" 2>/dev/null
-  rmdir "$1" 2>/dev/null
+  local target; target="$(readlink "$1" 2>/dev/null || true)"
+  [ "${target%%:*}" = "$$" ] && rm -f "$1" 2>/dev/null
+  return 0
 }
 
 # _burn_tank_lock_acquire <engine> <tank> [timeout_s=10] -> 0 once THIS
@@ -1035,6 +1163,20 @@ _burn_reclaim_mutex_release() {
 #   3. Acquisition itself (`ln -s`) never touches the mutex — only removal
 #      does — so the common, uncontended case costs exactly one syscall,
 #      same as the `mkdir` it replaces.
+#
+# R4-P2-1/R4-P2-2 (2026-09-10 round-4 review): two corners of the symlink
+# design itself still weren't guarded. `[ -e "$lock" ] && [ ! -L "$lock" ]`
+# (point 1's own leftover-directory guard, and the round-2 non-symlink
+# check it descends from) DEREFERENCES via `-e`, so a symlink whose target
+# resolves to an EXISTING DIRECTORY slips past it and reaches `ln -s`
+# below, which then nests INTO that directory instead of failing (see the
+# `-L "$lock" && -d "$lock"` branch further down) — the same
+# destination-is-a-directory hazard as before, just indirected through a
+# foreign symlink. And a durably empty-target link (`ln -s "" "$lock"`)
+# was read as "vanished, retry immediately", forever, at full CPU, because
+# nothing ever makes a genuinely empty target become non-empty — fixed by
+# falling through to the ordinary stale-holder path instead of `continue`ing
+# past it (an empty/malformed holder is already `stale=1` there).
 _burn_tank_lock_acquire() {
   local eng="$1" tk="$2" timeout_s="${3:-10}" lock reclaim_dir start_s now_s
   local target holder hstarted stale now_epoch
@@ -1068,17 +1210,49 @@ _burn_tank_lock_acquire() {
       fi
       continue
     fi
+    if [ -L "$lock" ] && [ -d "$lock" ]; then
+      # R4-P2-1 (2026-09-10 round-4 review): the check above uses `-e`,
+      # which DEREFERENCES — a symlink whose target resolves to an
+      # EXISTING DIRECTORY makes `-e` true and `-L` true at once, so the
+      # branch above (which requires `! -L`) never fires for it, and `ln -s
+      # TARGET "$lock"` below does not fail on such a path: it follows
+      # `$lock` to that directory and creates the link INSIDE it, same
+      # nesting hazard as the non-symlink case, just one level indirected
+      # through a foreign symlink. Nothing this function ever writes
+      # resolves to a real directory (`<pid>:<epoch>` never names a real
+      # path), so `-L "$lock" && -d "$lock"` can only be a foreign or
+      # corrupt link — unconditionally reclaimable, `rm -f` (not `-rf`:
+      # this removes the SYMLINK itself, never the directory it points at).
+      if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        [ -L "$lock" ] && [ -d "$lock" ] && rm -f "$lock" 2>/dev/null
+        _burn_reclaim_mutex_release "$reclaim_dir"
+      fi
+      continue
+    fi
     now_epoch="$(date +%s 2>/dev/null || echo 0)"
     if ln -s "$$:$now_epoch" "$lock" 2>/dev/null; then
       return 0
     fi
     target="$(readlink "$lock" 2>/dev/null || true)"
-    if [ -z "$target" ]; then
-      # The path vanished between our failed `ln -s` above and this
+    if [ -z "$target" ] && [ ! -L "$lock" ]; then
+      # Genuinely vanished between our failed `ln -s` above and this
       # `readlink` (someone else's release or reclaim finishing) — it may
       # now be free; retry `ln -s` at the top immediately, no sleep.
       continue
     fi
+    # R4-P2-2 (2026-09-10 round-4 review): note this does NOT re-test
+    # `[ -z "$target" ]` alone — a link that is STILL THERE (`-L "$lock"`
+    # true above) but whose target reads empty, e.g. a durable `ln -s ""
+    # "$lock"`, occupies the path forever on its own: no future event ever
+    # makes `readlink` return non-empty, so the old code's blanket "empty
+    # means vanished, retry immediately" was an infinite hot spin — `ln -s`
+    # keeps failing EEXIST against the same dead weight, `continue` keeps
+    # firing with no sleep and no path to the reclaim logic below. Falling
+    # through here instead of `continue`ing routes it into the exact same
+    # stale-holder handling as any other unparseable payload (`holder=""`
+    # matches the `''|*[!0-9]*` case just below), which needs no separate
+    # sleep of its own: the reclaim mutex below already resolves this in
+    # one pass.
     holder="${target%%:*}"
     hstarted="${target#*:}"
     stale=0
@@ -1108,8 +1282,14 @@ _burn_tank_lock_acquire() {
       # `ln -s` landed on this exact path in the meantime). Only remove
       # what THIS read — taken while holding the one thing that can remove
       # it — still judges stale.
-      target="$(readlink "$lock" 2>/dev/null || true)"
-      if [ -n "$target" ]; then
+      #
+      # R4-P2-2: test `-L` here, not `-n "$target"` — an empty-target
+      # symlink (`-L` true, `readlink` empty) is still an OCCUPYING entry
+      # that must be removed if stale; `-n "$target"` would treat it the
+      # same as "already gone" and never remove it, permanently skipping
+      # the one removal that could ever clear it.
+      if [ -L "$lock" ]; then
+        target="$(readlink "$lock" 2>/dev/null || true)"
         holder="${target%%:*}"
         hstarted="${target#*:}"
         stale=0

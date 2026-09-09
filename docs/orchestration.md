@@ -344,22 +344,58 @@ entirely — it cannot happen). Acquisition never needs any additional
 synchronization beyond that single `ln -s`. What DOES need synchronization
 is removal: a stale reclaim tearing down a dead holder's link, and an
 owner's own release, both happen only while holding a second, short-lived
-`mkdir`-based mutex (`<lock>.reclaim`). Because the link can only disappear
-while that mutex is held, and can only newly appear via some OTHER
-contender's own unsynchronized `ln -s`, a reclaimer's re-read-then-remove —
-done immediately after the mutex is granted, re-verifying the CURRENT link
-rather than trusting an earlier, unsynchronized read — cannot delete a link
-a fresh holder claimed after the reclaimer's first look. The reclaim
-mutex's own stale rule (its holder's pid is dead AND the mutex directory is
-at least 30 seconds old) cannot steal it from a live reclaimer, since
-everything done under it — a readlink, at most one `rm`, an `rmdir` — is
-milliseconds of work. Release, symmetrically, only ever removes a lock
-that, re-read under that same mutex, still names the releasing process's own
-pid — never on trust that "I must be the one who called acquire" — and a
-trap scoped to the check-and-write section releases it (and, if a signal
-lands before the section's own explicit write, records a terminal `fail`
-too) on a signal — the lock is gone on every exit out of that section, not
-just the happy one.
+mutex (`<lock>.reclaim`). Because the link can only disappear while that
+mutex is held, and can only newly appear via some OTHER contender's own
+unsynchronized `ln -s`, a reclaimer's re-read-then-remove — done immediately
+after the mutex is granted, re-verifying the CURRENT link rather than
+trusting an earlier, unsynchronized read — cannot delete a link a fresh
+holder claimed after the reclaimer's first look. Release, symmetrically,
+only ever removes a lock that, re-read under that same mutex, still names
+the releasing process's own pid — never on trust that "I must be the one
+who called acquire" — and a trap scoped to the check-and-write section
+releases it (and, if a signal lands before the section's own explicit
+write, records a terminal `fail` too) on a signal — the lock is gone on
+every exit out of that section, not just the happy one.
+
+**The reclaim mutex is itself a symlink, and reaping it never trusts its
+own read (2026-09-10 round-4 review, R4-P1-1/R4-P1-2/R4-P1-3.)** Round 3's
+mutex was a `mkdir`-ed directory with its pid written in a SEPARATE
+statement right after — the exact two-statement claim-then-identify race
+the lock above exists to abolish, ported one function up and left
+unguarded. A process killed between the `mkdir` and the pid write left a
+pid-less mutex directory that the old code could never reap, permanently
+disabling the tank it guarded; and even a mutex WITH a pid was reaped by a
+check-then-act (read the pid, decide it's dead, then unconditionally
+`rm`/`rmdir` the directory) with nothing stopping a third process from
+having claimed it, live, in between — a stale reaper could destroy a live
+holder's mutex, which is precisely the double-holder precondition R3-P1-1
+closed for the lock itself. Both are fixed the same way: the mutex is now
+a symlink too, `ln -s "<pid>:<started_at>" <path>.reclaim`, with no pid-less
+window at any level, and its own `started_at` travels IN that payload —
+the "≥30 seconds since the holder died" half of the stale rule reads that
+value directly, with no `stat` call anywhere in this function any more (a
+GNU/BSD `stat -f`/`stat -c` ordering mistake — the previous shape of this
+exact bug — has nothing left to order). Reaping never acts on its own
+unsynchronized read: it `mv`s the symlink to a private, unique graveyard
+name first (`rename(2)` of a symlink is atomic, and the destination has
+never existed, so it can never nest); only one racing reaper's `mv` can
+possibly win, because after the first `mv` there is nothing left at the
+mutex path for a second `mv` to move. The winner then `readlink`s its OWN
+graveyard copy: if it still names the pid judged dead, the eviction was
+correct; if it names anyone else, this reaper's `mv` raced a live holder's
+fresh `ln -s` into the same window and just vacated a path that holder
+legitimately occupied — the same vacate hazard R3-P1-1 found in the main
+lock, one function up. Rather than leave that vacancy open for any length
+of time (even a bounded wait is a window a THIRD claim could land in), it
+is put back immediately by RE-CREATING it with `ln -s` (not by moving the
+graveyard copy back: `mv -n` onto an existing symlink destination silently
+clobbers it on the system `/bin/mv`, whereas `ln -s` fails EEXIST on
+conflict identically on every vendor, no `-n`-style switch to get
+inconsistently implemented): either an equivalent entry lands right back,
+or the attempt fails because something claimed the path again in the
+handful of syscalls since, in which case the mistake is logged and the
+graveyard copy discarded either way. Only the `mv` winner ever removes or
+restores anything, and only the one graveyard path it alone created.
 
 ### `--wait-for-reset` (#38)
 

@@ -791,3 +791,72 @@ sys.exit(1 if bad else 0)
   _clean_scrollback_gc 0
   [ ! -f "$sdir/ck-claude-h-$dead.scrollback" ] || { echo "the legacy orphan survived"; false; }
 }
+
+# --- dead-holder tank locks (R4-P3-2, R3-P3-3 before it) ----------------------
+#
+# 🔴 NOTHING ELSE EVER SWEPT THESE. `_burn_tank_lock_acquire` reclaims a dead
+# holder's lock, but only when something calls it AGAIN for that exact
+# engine/tank pair — a tank nobody ever burns again keeps a dead holder's lock
+# (and, before round 4, could keep a permanently wedged reclaim mutex) forever.
+
+@test "GC removes a tank lock whose holder is gone" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999996
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "$dead:1700000000" "$sdir/tank-busy-codex_T1.lock"
+  _clean_tank_lock_gc 0
+  [ ! -L "$sdir/tank-busy-codex_T1.lock" ] || { echo "the dead-holder lock survived"; false; }
+}
+
+@test "GC keeps a tank lock whose holder is still running" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  ln -s "$$:1700000000" "$sdir/tank-busy-codex_T2.lock"
+  _clean_tank_lock_gc 0
+  [ -L "$sdir/tank-busy-codex_T2.lock" ] || {
+    echo "deleted a tank lock whose holder is this very process"; false; }
+  rm -f "$sdir/tank-busy-codex_T2.lock"
+}
+
+@test "GC removes a pid-less/malformed reclaim mutex link" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  ln -s "" "$sdir/tank-busy-codex_T3.lock.reclaim"
+  _clean_tank_lock_gc 0
+  [ ! -L "$sdir/tank-busy-codex_T3.lock.reclaim" ] || { echo "the malformed mutex survived"; false; }
+}
+
+@test "GC removes an orphaned reclaim graveyard entry whose reaper is gone" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999995
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  # Filename carries the REAPER's pid ($dead here), the target carries whoever
+  # it evicted (irrelevant to this GC) — the liveness test is on the filename.
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T4.lock.reclaim.stale.$dead.12345"
+  _clean_tank_lock_gc 0
+  [ ! -L "$sdir/tank-busy-codex_T4.lock.reclaim.stale.$dead.12345" ] || {
+    echo "the orphaned graveyard entry survived"; false; }
+}
+
+@test "GC keeps a reclaim graveyard entry whose reaper is still running" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T5.lock.reclaim.stale.$$.12345"
+  _clean_tank_lock_gc 0
+  [ -L "$sdir/tank-busy-codex_T5.lock.reclaim.stale.$$.12345" ] || {
+    echo "deleted a graveyard entry whose reaper is this very process"; false; }
+  rm -f "$sdir/tank-busy-codex_T5.lock.reclaim.stale.$$.12345"
+}
+
+@test "GC dry run reports a dead-holder tank lock and deletes nothing" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999994
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "$dead:1700000000" "$sdir/tank-busy-codex_T6.lock"
+  run _clean_tank_lock_gc 1
+  [[ "$output" == *"Would remove dead-holder tank lock"* ]] || { echo "$output"; false; }
+  [ -L "$sdir/tank-busy-codex_T6.lock" ] || { echo "a dry run deleted it"; false; }
+}

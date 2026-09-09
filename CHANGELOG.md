@@ -89,9 +89,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the holder's identity from the instant it exists — no pid-less
   window to have a grace period for), and every REMOVAL of it — a stale
   reclaim, or an owner's own release — happens only under a second,
-  short-lived `mkdir`-based mutex, re-verifying the current link before
-  acting on it rather than trusting an earlier, unsynchronized read (2026-
-  09-09 round-3 review, R3-P1-1/R3-P1-2/R3-P2-1). A trap scoped to the
+  short-lived mutex, re-verifying the current link before acting on it
+  rather than trusting an earlier, unsynchronized read (2026-09-09 round-3
+  review, R3-P1-1/R3-P1-2/R3-P2-1). Round 3's own mutex was itself a
+  `mkdir`-ed directory with its pid written in a separate statement right
+  after — the same claim-then-identify race one function up, which left a
+  process killed mid-claim's mutex permanently unreapable (disabling the
+  tank it guarded) and let a stale reaper destroy a live holder's mutex on
+  a check-then-act. Round 4 makes the mutex a symlink too, reaped only by
+  renaming it to a private, unique name first and verifying what was
+  actually caught before ever deleting it (2026-09-10 round-4 review,
+  R4-P1-1/R4-P1-2/R4-P1-3). A trap scoped to the
   check-and-write releases the lock — and, if a signal lands before the
   section's own write, now also records a terminal `fail` — on every exit
   out of that section including a signal (2026-09-09 round-2/round-3
@@ -114,6 +122,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abandoned, for the whole window; on wake the reset is re-checked (not
   blindly trusted) before re-firing, bounded to the original window
   (2026-09-09 round-1 review, P1-2).
+
+- **`clikae clean` now also sweeps dead-holder tank locks.** Nothing ever
+  swept `~/.clikae/state/tank-busy-*` — a tank nobody `burn`s again keeps a
+  dead holder's lock (and, before round 4's reclaim-mutex fix, could keep a
+  wedged reclaim mutex) on disk forever, since `_burn_tank_lock_acquire`
+  only reclaims when something calls it again for that exact tank. Same
+  test as the existing tmux/scrollback GCs: the recorded pid's liveness,
+  never the file's age (2026-09-10 round-4 review, R4-P3-2 / R3-P3-3
+  before it).
+
+### Changed
+
+- **`wait` joined `burn`/`init`/etc. in `__clikae_is_reserved`.** A tank can
+  still be created and named `wait` (`clikae init codex wait` still
+  succeeds), but it is then unreachable by its bare name — `clikae wait`
+  always dispatches to the `wait` subcommand — the same tradeoff `burn`'s
+  own reservation already made, for the same reason: it names a top-level
+  `clikae` subcommand (2026-09-09 round-3 review, R3-P3-5 / 2026-09-10
+  round-4 review, R4-P3-1).
 
 ### Fixed
 
