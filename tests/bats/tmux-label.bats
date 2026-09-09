@@ -135,7 +135,7 @@ INNER_EOF
   [[ "$output" == *off* ]] || { echo "$output"; false; }
 
   run python3 - "$CLIKAE_BIN" "$sock" <<'PYEOF'
-import os, pty, fcntl, termios, struct, sys, time
+import os, pty, fcntl, termios, struct, sys, time, subprocess
 clikae, sock = sys.argv[1], sys.argv[2]
 master, slave = os.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -150,7 +150,25 @@ if pid == 0:
     os.environ.pop("TMUX_PANE", None)
     os.execv(clikae, [clikae, "codex", "keys"])
 os.close(slave)
-time.sleep(4)
+
+# Poll for the label instead of a blind sleep(4) (flaked under load: the
+# session sometimes takes longer than 4s to reach the tmux call that flips
+# extended-keys on, so the fixed sleep raced a session that had not gotten
+# there yet). Bounded at 10s so a genuinely broken session still fails fast.
+env = dict(os.environ, TMUX_TMPDIR=sock)
+env.pop("TMUX", None)
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    try:
+        out = subprocess.run(
+            ["tmux", "show", "-s", "extended-keys"],
+            env=env, capture_output=True, text=True, timeout=2,
+        ).stdout
+    except Exception:
+        out = ""
+    if "on" in out:
+        break
+    time.sleep(0.2)
 PYEOF
 
   run env -u TMUX TMUX_TMPDIR="$sock" tmux show -s extended-keys
