@@ -1701,8 +1701,18 @@ printf '%s\n' "${@: -1}"
 echo 'task failed'
 STUB
   clikae init codex T1
+  # A 120-char filler arg pushes the secret past the "preview:" line's own
+  # 120-char cutoff (see burn #43's "only 120 characters previewed" test,
+  # same technique) — without it, whether the secret survives inside that
+  # window depends on $BATS_TEST_TMPDIR's own length, which varies enough by
+  # platform (short on ubuntu-latest CI, long on macOS) to make this
+  # assertion pass or fail on the SAME code. Confirmed by CI run 34276613681:
+  # the diagnostic tail this test targets was already correctly redacted to
+  # "[prompt: …/command.txt]"; only the unrelated, size-capped preview line
+  # (#43's contract, not #47's) leaked, because this fixture never padded it.
+  local filler; filler="$(printf '%0120d' 0)"
   run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" \
-    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "PRIVATE-ARGV-SECRET-XYZ"
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "$filler" "PRIVATE-ARGV-SECRET-XYZ"
   [ "$status" -ne 0 ]
   [[ "$output" != *PRIVATE-ARGV-SECRET-XYZ* ]] || false
   [[ "$output" == *'task failed'* ]] || false
