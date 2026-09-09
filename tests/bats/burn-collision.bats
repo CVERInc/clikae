@@ -559,25 +559,6 @@ _race_contender() {
 # guards) and reaps via rename-to-a-unique-graveyard-then-verify, never a
 # blind check-then-act — see the mutex's own header comment above.
 
-@test "_burn_tank_lock_acquire (R4-P1-1a): a pid-less LEGACY reclaim directory does not wedge the tank forever" {
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE1)"
-  mkdir -p "$(dirname "$lock")"
-  ln -s "$(_dead_pid):1" "$lock"
-  mkdir -p "${lock}.reclaim"   # pre-round-4 mkdir-based mutex, never given a pid file
-
-  local t0=$SECONDS
-  run _burn_tank_lock_acquire codex LOCKWEDGE1 5
-  local elapsed=$((SECONDS - t0))
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$elapsed" -le 2 ] || {
-    echo "took ${elapsed}s -- the old bug never reaped a pid-less mutex at all (permanent refusal)"
-    false
-  }
-  [[ ! -e "${lock}.reclaim" ]] || { echo "reclaim mutex leaked"; false; }
-  _burn_tank_lock_release codex LOCKWEDGE1
-}
-
 @test "_burn_tank_lock_acquire (R4-P1-1b): a pid-less/malformed reclaim SYMLINK does not wedge the tank forever" {
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE2)"
@@ -594,25 +575,6 @@ _race_contender() {
   _burn_tank_lock_release codex LOCKWEDGE2
 }
 
-@test "_burn_tank_lock_acquire (R4-P1-1c): a SECOND, independent burn on a tank that just healed a wedged reclaim mutex also succeeds" {
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE3)"
-  mkdir -p "$(dirname "$lock")"
-  ln -s "$(_dead_pid):1" "$lock"
-  mkdir -p "${lock}.reclaim"
-  _burn_tank_lock_acquire codex LOCKWEDGE3 5
-  _burn_tank_lock_release codex LOCKWEDGE3
-
-  # The old bug's whole failure mode was "every burn AFTER the first one is
-  # refused forever" -- this is the one that must not regress.
-  local t0=$SECONDS
-  run _burn_tank_lock_acquire codex LOCKWEDGE3 5
-  local elapsed=$((SECONDS - t0))
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$elapsed" -lt 2 ] || false
-  _burn_tank_lock_release codex LOCKWEDGE3
-}
-
 @test "_burn_reclaim_mutex_try (R4-P2-3a): a pid-less/malformed link is reaped on the first try and claimable on the second" {
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKMX1)"
@@ -625,102 +587,6 @@ _race_contender() {
   run _burn_reclaim_mutex_try "$reclaim_link"
   [ "$status" -eq 0 ] || { echo "$output"; false; }   # now claimable
   _burn_reclaim_mutex_release "$reclaim_link"
-}
-
-@test "_burn_reclaim_mutex_try (R4-P2-3a2): a pre-round-4 LEGACY (non-symlink) reclaim directory is reaped the same way" {
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKMX2)"
-  mkdir -p "$(dirname "$lock")"
-  local reclaim_link="${lock}.reclaim"
-  mkdir -p "$reclaim_link"
-  run _burn_reclaim_mutex_try "$reclaim_link"
-  [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [[ ! -e "$reclaim_link" ]] || { echo "legacy directory survived the reap attempt"; false; }
-  run _burn_reclaim_mutex_try "$reclaim_link"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  _burn_reclaim_mutex_release "$reclaim_link"
-}
-
-@test "_burn_reclaim_mutex_try (R5-P1-1): a LEGACY directory mutex with a DEAD pid recorded inside it is discarded" {
-  # R5-P1-1 (2026-09-10 round-5 review): the non-symlink branch used to
-  # discard unconditionally with no liveness test at all. A legacy
-  # directory CAN carry an identity the pre-round-3 lock format used: a
-  # `pid` file written inside after the `mkdir`. A dead pid there is no
-  # different from no pid file at all -- still safe to discard.
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKMX5)"
-  mkdir -p "$(dirname "$lock")"
-  local reclaim_link="${lock}.reclaim"
-  local dead; dead="$(_dead_pid)"
-  mkdir -p "$reclaim_link"
-  printf '%s' "$dead" > "$reclaim_link/pid"
-  run _burn_reclaim_mutex_try "$reclaim_link"
-  [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [[ ! -e "$reclaim_link" ]] || { echo "a legacy directory with a dead recorded pid survived"; false; }
-}
-
-@test "_burn_reclaim_mutex_try (R5-P1-1/R6-P1-1): a LEGACY directory whose recorded pid is genuinely alive is left in place, never moved" {
-  # A legacy directory whose `pid` file names a pid that is still ALIVE
-  # must not be treated as safe-to-discard just because it isn't a symlink.
-  # R6-P1-1 (2026-09-10 round-6 review) found the ROUND-5 mechanism for
-  # this ("mv it aside unconditionally, then mv it back if it turns out to
-  # be alive") itself opened a window where an ordinary caller could claim
-  # the mutex while this branch still believed a live holder owned it --
-  # the fix classifies BEFORE moving anything, so a genuinely live holder
-  # (started at-or-before this directory's own creation, exactly like this
-  # fixture's `sleep 300 &`, which starts before the `mkdir` below) is
-  # never moved at all: same end state as round 5's "restored" (still a
-  # DIRECTORY, same recorded pid), reached without ever vacating the path.
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKMX6)"
-  mkdir -p "$(dirname "$lock")"
-  local reclaim_link="${lock}.reclaim"
-  sleep 300 &
-  local live_pid=$!
-  mkdir -p "$reclaim_link"
-  printf '%s' "$live_pid" > "$reclaim_link/pid"
-  run _burn_reclaim_mutex_try "$reclaim_link"
-  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
-  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims it FOR the caller
-  [ -d "$reclaim_link" ] || { echo "a legacy directory with a LIVE recorded pid was destroyed, not left alone"; false; }
-  [ -L "$reclaim_link" ] && { echo "wrong shape (symlink instead of directory) -- something moved it"; false; }
-  [ "$(cat "$reclaim_link/pid" 2>/dev/null)" = "$live_pid" ] || { echo "pid file changed -- something touched it"; false; }
-  rm -rf "$reclaim_link"
-}
-
-@test "_burn_reclaim_mutex_try (R6-P1-1): a LEGACY directory whose recorded pid is alive but RECYCLED (started after the directory) is reaped in one call, not kept forever" {
-  # The regression round 6 found: round 5's fix judged liveness with a bare
-  # `kill -0` -- proof SOMETHING is alive at that pid, never proof it's the
-  # SAME process that made the directory. A pid recycled onto a dead
-  # holder's number was "restored" and kept FOREVER (fb536ce: 10s timeout
-  # on _burn_tank_lock_acquire, no recovery path anywhere in the product).
-  # This format never wrote a `started_at` file, so the directory's OWN
-  # mtime stands in for it: backdate the directory well into the past, then
-  # start a brand-new process AFTER that -- exactly a recycled pid's shape
-  # (it necessarily started later than the truly dead original holder did).
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKMX8)"
-  mkdir -p "$(dirname "$lock")"
-  local reclaim_link="${lock}.reclaim"
-  mkdir -p "$reclaim_link"
-  sleep 300 &
-  local recycled_pid=$!
-  printf '%s' "$recycled_pid" > "$reclaim_link/pid"
-  # Backdate the directory AFTER writing into it -- writing a file inside a
-  # directory updates ITS mtime too, so backdating first (then writing)
-  # would silently erase the very backdate this fixture depends on.
-  touch -t "$(date -v-600S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '600 seconds ago' '+%Y%m%d%H%M.%S')" "$reclaim_link"
-
-  local t0=$SECONDS
-  run _burn_reclaim_mutex_try "$reclaim_link"
-  local elapsed=$((SECONDS - t0))
-  kill "$recycled_pid" 2>/dev/null; wait "$recycled_pid" 2>/dev/null || true
-  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims it FOR the caller
-  [ "$elapsed" -le 1 ] || {
-    echo "took ${elapsed}s -- fb536ce never reaps this at all (10s timeout upstream, wedged forever downstream)"
-    false
-  }
-  [[ ! -e "$reclaim_link" ]] || { echo "a legacy directory holding a RECYCLED pid survived -- the R6-P1-1 wedge"; false; }
 }
 
 @test "_burn_reclaim_mutex_try (R4-P2-3b): a DEAD-pid mutex younger than 30s is left alone" {
@@ -1057,97 +923,134 @@ _race_contender() {
   awk -v u="$user_s" 'BEGIN { exit !(u < 1.0) }' || { echo "user time ${user_s}s -- looks like a busy spin"; false; }
 }
 
-# --- R7-P1-1 (2026-09-10 round-7 review): the legacy-directory branch's
-# `mv` runs after a window spanning its WHOLE classification (several `[`
-# tests, a `cat` or two, `kill -0`, and for a live pid a `ps` plus one or
-# two `date` forks) -- long enough for an ordinary caller to reap the same
-# directory and re-claim the mutex with a plain `ln -s` before the `mv`
-# actually runs. What the `mv` then catches is that caller's LIVE SYMLINK,
-# not another directory: `[ -d "$grave" ]` reads false, and the classified
-# `gpid` -- non-empty (a dead pid was recorded) or empty (a pid-less
-# directory) -- either got "left it at …, not restored" (parked,
-# un-restorable) or, when empty, silently `rm -rf`'d because two empty
-# identity strings compared equal. Reproducing the exact race (a fork
-# lands between classify and `mv`) needs a synchronization gate this
-# codebase has no reachable call path for planting deterministically in a
-# committed unit test -- see the fix7 report for the gated reproduction
-# (5/5 -> 0/5, both the pid-recorded and pid-less shapes, plus a sibling-
-# branch regression check) run the same way round 5/6's own R6-P1-2a/2b
-# gate probes were: a `cp -a` copy of this file with one `sleep` inserted
-# at the exact gate point, never committed here because the gate itself is
-# not a reachable pattern, only a way to make an already-possible race
-# land on demand. What IS committed here is the deterministic half: the
-# empty-identity guard itself never treats two empty strings as a match. ---
+# --- KITT (2026-09-11, extreme-subtraction ruling on R8-P1-1/R8-P1-2): the
+# legacy-directory reclaim branch is deleted entirely (this PR never
+# shipped, so no released clikae ever created a directory-shaped reclaim
+# mutex -- its whole population was empty). One rule replaces it and the
+# foreign-symlink-to-directory guards it grew: a mutex path that is not a
+# symlink whose target is plain data -- a directory, a symlink resolving to
+# one, or a plain file -- is never touched by any reap or claim attempt. ---
 
-@test "_burn_reclaim_mutex_try (R7-P1-1): an empty classified pid is never treated as matching an empty caught one" {
-  # Directly exercises the fixed comparison (\`[ -n "\$gpid" ] && [ "\$rgpid" = "\$gpid" ]\`)
-  # on the shape the review's pidless variant hits: the graveyard copy
-  # reads back with no parseable pid (whether because it is a genuinely
-  # different, still-pidless directory, or -- the dangerous case -- a
-  # symlink the caller's own [ -d ] check reads as "no pid file"). Without
-  # the \`-n\` guard, a classified gpid of "" would match that empty \`rgpid\`
-  # and \`rm -rf\` a live claim silently; with it, the branch takes the
-  # "caught something else, leave it and say so" path instead.
+@test "_burn_reclaim_mutex_try (KITT/R8-P1-2): a foreign symlink-to-directory at the mutex path is refused, not reaped -- nothing removed, nothing nested into it" {
   _src_burn_lock
-  grep -q '\[ -n "\$gpid" \] && \[ "\$rgpid" = "\$gpid" \]' "$CLIKAE_TEST_ROOT/lib/commands/burn.sh" || {
-    echo "the empty-identity guard (R7-P1-1) is missing from _burn_reclaim_mutex_try"; false; }
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR1)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  local target; target="$(dirname "$lock")/FOREIGNDIR1-target"
+  mkdir -p "$target"
+  printf '%s' "$$" > "$target/pid"   # a live pid (this test's own) inside it
+  ln -s "$target" "$reclaim_link"    # the mutex PATH is a symlink resolving to a real directory
+
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; echo "-- refusal did not name itself foreign-mutex"; false; }
+  [[ "$output" == *"$reclaim_link"* ]] || { echo "$output"; echo "-- refusal did not name the path"; false; }
+  [ -L "$reclaim_link" ] || { echo "the foreign symlink itself was removed -- it must be left for a human"; false; }
+  [ "$(readlink "$reclaim_link")" = "$target" ] || { echo "the foreign symlink's target changed"; false; }
+  [ -d "$target" ] && [ "$(cat "$target/pid" 2>/dev/null)" = "$$" ] || {
+    echo "the foreign directory's own contents were touched"; false; }
+  [ -z "$(find "$target" -mindepth 1 ! -name pid)" ] || {
+    echo "a claim attempt nested a stray entry INSIDE the foreign directory"; false; }
+  rm -rf "$target"
 }
 
-@test "_burn_reclaim_mutex_try (R7-P1-1): the directory branch's mv restores a live holder's SYMLINK it catches, the same way the sibling branch does" {
-  # Structural companion to the gated reproduction in the fix7 report: the
-  # six-line \`[ -L "\$grave" ]\` arm must exist ahead of the directory
-  # verify, using the same EEXIST-atomic \`ln -s\` restore the sibling
-  # (non-directory) branch already had. A missing arm here is exactly what
-  # 5/5-ed in the report.
+@test "_burn_reclaim_mutex_try (KITT/R8-P1-2): a pre-round-3 mkdir left at the mutex path is refused, not reaped -- the directory and its pid file survive untouched" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR2)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  mkdir -p "$reclaim_link"           # a bare directory AT the mutex path itself
+  printf '%s' "$$" > "$reclaim_link/pid"
+
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; false; }
+  [ -d "$reclaim_link" ] && [ ! -L "$reclaim_link" ] || {
+    echo "the directory at the mutex path was removed or replaced"; false; }
+  [ "$(cat "$reclaim_link/pid" 2>/dev/null)" = "$$" ] || { echo "the directory's own pid file was touched"; false; }
+  rm -rf "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_available (KITT): mirrors try's foreign-mutex refusal for both shapes -- never previews either as removable" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR3)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+
+  mkdir -p "$reclaim_link"
+  run _burn_reclaim_mutex_available "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "bare directory previewed as available/removable"; false; }
+  rm -rf "$reclaim_link"
+
+  local target="$(dirname "$lock")/FOREIGNDIR3-target"
+  mkdir -p "$target"
+  ln -s "$target" "$reclaim_link"
+  run _burn_reclaim_mutex_available "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "symlink-to-directory previewed as available/removable"; false; }
+  [ -L "$reclaim_link" ] || { echo "the preview itself mutated the entry"; false; }
+  rm -rf "$target" "$reclaim_link"
+}
+
+@test "_burn_tank_lock_acquire (KITT): a dead-holder lock whose reclaim mutex is a foreign object times out refusing, never claims the tank" {
+  # The caller's own retry/timeout policy is unchanged by the foreign-mutex
+  # rule -- it backs off exactly like any other busy mutex, it does not hang
+  # forever and it does not fall through to claiming the lock anyway.
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR4)"
+  mkdir -p "$(dirname "$lock")"
+  local dead; dead="$(_dead_pid)"
+  ln -s "${dead}:1" "$lock"
+  mkdir -p "${lock}.reclaim"   # a foreign directory guarding a dead-holder lock
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex FOREIGNDIR4 2
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 1 ] || { echo "$output"; echo "-- acquired a lock whose reclaim mutex is a foreign object"; false; }
+  [ "$elapsed" -ge 2 ] || { echo "returned before the timeout — did not genuinely back off"; false; }
+  [ -d "${lock}.reclaim" ] && [ ! -L "${lock}.reclaim" ] || { echo "the foreign directory was removed"; false; }
+  rm -rf "${lock}.reclaim"
+}
+
+# --- KITT (R8-P1-1): the one remaining restore site (a live holder's fresh
+# symlink claim caught racing the age-based eviction of a stale mutex
+# symlink) must verify the restore landed by `readlink`, never by `ln -s`'s
+# own exit code (which returns rc=0 without doing anything when the
+# destination resolves to a directory, measured 10/10 false "restored it" on
+# the pre-fix shape) -- and a failed restore must keep the graveyard copy,
+# never discard the only surviving copy of a live claim. Reproducing the
+# actual race needs a synchronization gate this codebase has no reachable
+# call path for planting deterministically (same conclusion round 7/8's own
+# reviews reached for the sibling directory-branch race) -- these are the
+# deterministic, structural half: the shape itself cannot exist in the file. --
+
+@test "_burn_reclaim_mutex_try (KITT/R8-P1-1): the restore never branches on ln -s's own exit code" {
   _src_burn_lock
   local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
-  local dir_line grave_line l_line
-  dir_line="$(grep -n '^  if \[ ! -L "\$reclaim_link" \] && \[ -d "\$reclaim_link" \]; then$' "$burn" | head -1 | cut -d: -f1)"
-  [ -n "$dir_line" ] || { echo "the legacy-directory branch's own guard line moved -- update this test"; false; }
-  grave_line="$(awk -v s="$dir_line" 'NR>s && /grave="\$\{reclaim_link\}\.stale\.\$\$\.\$RANDOM"/{print NR; exit}' "$burn")"
-  [ -n "$grave_line" ] || { echo "could not find the directory branch's own \$grave= assignment"; false; }
-  l_line="$(awk -v s="$grave_line" 'NR>s && /if \[ -L "\$grave" \]; then/{print NR; exit}' "$burn")"
-  [ -n "$l_line" ] || { echo "R7-P1-1: no [ -L \"\$grave\" ] restore arm between the directory branch's mv and its rgpid verify"; false; }
-  # And it must come BEFORE the rgpid comparison, not after (an arm added
-  # after the rm -rf/else branch would be dead code).
-  local rgpid_line
-  rgpid_line="$(awk -v s="$grave_line" 'NR>s && /rgpid=""/{print NR; exit}' "$burn")"
-  [ -n "$rgpid_line" ] || { echo "could not find the rgpid verify to order against"; false; }
-  [ "$l_line" -lt "$rgpid_line" ] || { echo "the [ -L \"\$grave\" ] restore arm is not ahead of the rgpid comparison"; false; }
+  run grep -c 'if ln -s "\$gtarget" "\$reclaim_link"' "$burn"
+  [ "$output" = "0" ] || {
+    echo "a restore site still branches on ln -s's own exit code -- R8-P1-1 regression"; false; }
+  grep -qF 'ln -s "$gtarget" "$reclaim_link" 2>/dev/null || true' "$burn" || {
+    echo "no unconditional restore attempt found -- R8-P1-1's fix is missing"; false; }
 }
 
-# --- R7-P2-3 (2026-09-10 round-7 review): the legacy directory's mtime
-# helper used to \`echo 0\` on an stat failure -- a valid, PARSEABLE epoch
-# ("1970") that \`_burn_pid_matches_marker\` reads as a hard mismatch for
-# EVERY live pid, defeating that check's own documented policy for
-# unusable input ("absence of evidence is not evidence of a recycled
-# pid") and reaping a holder it simply could not see the timestamp for. ---
-
-@test "_burn_legacy_reclaim_dir_mtime (R7-P2-3): emits NOTHING on a stat failure, never a parseable 0" {
+@test "_burn_reclaim_mutex_try (KITT/R8-P1-1): the restore is verified by readlink right after the attempt, and a failed restore never discards the graveyard" {
   _src_burn_lock
-  local out
-  out="$(_burn_legacy_reclaim_dir_mtime "$BATS_TEST_TMPDIR/does-not-exist-$$-$RANDOM" 2>/dev/null)" || true
-  [ -z "$out" ] || { echo "expected empty output on a real stat failure (nonexistent path), got: [$out]"; false; }
-}
-
-@test "_burn_reclaim_mutex_try (R7-P2-3): a legacy directory whose mtime cannot be read still keeps a genuinely LIVE holder" {
-  _src_burn_lock
-  local dir="$CLIKAE_HOME/state/tank-busy-codex_T7P2P3.lock.reclaim"
-  mkdir -p "$dir"
-  printf '%s' "$$" > "$dir/pid"   # this test's OWN pid -- genuinely alive for the test's duration
-  # No started_at file -- forces the mtime fallback this residual is about.
-  # Stub `stat` to fail unconditionally, scoped to this ONE command only
-  # (never left on $PATH afterward) -- this failure IS what is being
-  # tested, not a detour around measuring it.
-  local stubbin="$BATS_TEST_TMPDIR/r7p2p3-stat-stub"
-  mkdir -p "$stubbin"
-  cat > "$stubbin/stat" <<'STUB'
-#!/usr/bin/env bash
-exit 1
-STUB
-  chmod +x "$stubbin/stat"
-  run env PATH="$stubbin:$PATH" bash -c '. "'"$CLIKAE_TEST_ROOT"'/lib/core/log.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/json.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/burn_status.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/duration.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/commands/antigravity.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/commands/burn.sh"; _burn_reclaim_mutex_try "'"$dir"'"'
-  [ "$status" -eq 1 ] || { echo "expected rc=1 (kept, busy); got $status. output: $output"; false; }
-  [ -d "$dir" ] || { echo "a stat failure reaped a genuinely LIVE legacy holder -- R7-P2-3"; false; }
-  rm -rf "$dir"
+  local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  local attempt_line verify_line restored_line rm_line else_line notrestore_line bad
+  attempt_line="$(grep -n 'ln -s "\$gtarget" "\$reclaim_link" 2>/dev/null || true' "$burn" | tail -1 | cut -d: -f1)"
+  [ -n "$attempt_line" ] || { echo "restore attempt line not found"; false; }
+  verify_line="$(awk -v s="$attempt_line" 'NR>s && NR<=s+2 && /= "\$gtarget" \]; then/{print NR; exit}' "$burn")"
+  [ -n "$verify_line" ] || { echo "no readlink-based verify right after the restore attempt -- R8-P1-1"; false; }
+  sed -n "${verify_line}p" "$burn" | grep -qF 'readlink "$reclaim_link"' || {
+    echo "the verify line does not readlink the mutex path"; false; }
+  restored_line="$(awk -v s="$verify_line" 'NR>s && NR<=s+2 && /-- restored it/{print NR; exit}' "$burn")"
+  [ -n "$restored_line" ] || { echo "restored-it message not found right after the verify"; false; }
+  rm_line="$(awk -v s="$restored_line" 'NR>s && NR<=s+1 && /rm -f "\$grave"/{print NR; exit}' "$burn")"
+  [ -n "$rm_line" ] || { echo "the graveyard is not cleaned up on a VERIFIED restore"; false; }
+  else_line="$(awk -v s="$rm_line" 'NR>s && NR<=s+1 && /^  else$/{print NR; exit}' "$burn")"
+  [ -n "$else_line" ] || { echo "no else branch immediately after the verified-restore cleanup"; false; }
+  notrestore_line="$(awk -v s="$else_line" 'NR>s && NR<=s+2 && /could NOT restore/{print NR; exit}' "$burn")"
+  [ -n "$notrestore_line" ] || { echo "no could-NOT-restore message in the else branch"; false; }
+  bad="$(awk -v s="$else_line" -v e="$((notrestore_line + 2))" 'NR>=s && NR<=e && /rm -f "\$grave"/{print NR}' "$burn")"
+  [ -z "$bad" ] || { echo "the failed-restore branch still discards the graveyard copy -- R8-P1-1"; false; }
 }

@@ -1027,6 +1027,13 @@ _clean_tank_lock_gc() {
     if [ "$dry_run" = "1" ]; then
       if _burn_reclaim_mutex_available "$reclaim_dir"; then
         log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # KITT (2026-09-11): a foreign object at the reclaim mutex path
+        # (a directory, a symlink to one, or a plain file) is never
+        # reapable, by `try` or by this preview -- report it under its own
+        # reason, not lumped in with an ordinary busy mutex.
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
       else
         log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is busy right now"
         skipped=$((skipped + 1))
@@ -1048,7 +1055,7 @@ _clean_tank_lock_gc() {
     if _burn_reclaim_mutex_try "$reclaim_dir"; then
       got=1
     elif { [ -L "$reclaim_dir" ] || [ -e "$reclaim_dir" ]; }; then
-      got=0   # genuinely busy -- something else holds it right now
+      got=0   # still occupied -- either genuinely busy, or a foreign-mutex `try` already refused (and logged) above
     elif _burn_reclaim_mutex_try "$reclaim_dir"; then
       got=1   # the first try's own call reaped it; the path is vacant now -- claim it
     fi
@@ -1066,6 +1073,9 @@ _clean_tank_lock_gc() {
         esac
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"
+    elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
     else
       log_info "GC: skipping ${f##*/} -- its reclaim mutex is busy right now"
       skipped=$((skipped + 1))
@@ -1077,6 +1087,12 @@ _clean_tank_lock_gc() {
     if [ "$dry_run" = "1" ]; then
       if _burn_reclaim_mutex_available "$f"; then
         log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$f"; then
+        # KITT (2026-09-11): a directory, a symlink to one, or a plain file
+        # at this path is never reapable, by `try` or by this preview --
+        # its own reason, never folded into "genuinely held".
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
       else
         log_info "GC: [Dry Run] skipping ${f##*/} -- it is genuinely held right now"
         skipped=$((skipped + 1))
@@ -1089,6 +1105,13 @@ _clean_tank_lock_gc() {
       # on its own) — this only won a fresh, empty claim; release it
       # immediately, GC has no removal to protect by holding it.
       _burn_reclaim_mutex_release "$f"
+    elif _burn_reclaim_mutex_is_foreign "$f"; then
+      # Checked BEFORE the generic "still there -- genuinely held" branch
+      # below: a foreign object is also `-L || -d` true, and `try` already
+      # refused (and logged) it for the reason named here, never for being
+      # genuinely held by a live clikae.
+      log_info "GC: skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
     elif { [ -L "$f" ] || [ -d "$f" ]; }; then
       # R7-P2-1: `_burn_reclaim_mutex_try` returning `1` here does not mean
       # "genuinely held" — it also returns `1` after reaping-and-discarding
@@ -1113,10 +1136,13 @@ _clean_tank_lock_gc() {
   # the reaper itself was killed between its `mv` and its `rm`, so the
   # liveness test here is the filename's pid, not the symlink's target.
   # This is never a live REMOVAL mutex's identity, so it needs no mutex of
-  # its own to sweep. A leaked GRAVEYARD DIRECTORY (R6-P1-1's legacy branch,
-  # when it caught a different identity than it classified and correctly
-  # refused to guess) is swept the same way — the filename's pid, not
-  # anything inside it, is still the only thing that ever needs checking.
+  # its own to sweep. KITT (2026-09-11): every graveyard `_burn_reclaim_
+  # mutex_try` can now create is a `mv` of a SYMLINK it caught (a foreign
+  # object at the mutex path is refused before ever reaching that `mv`, see
+  # the KITT ruling above `try`'s own refusal) — never a directory — but
+  # the `-d` half of this filter costs nothing to keep as a defensive
+  # backstop, and the filename's pid, not anything inside the entry, is
+  # still the only thing that ever needs checking.
   for f in "$dir/"tank-busy-*.lock.reclaim.stale.*; do
     { [ -L "$f" ] || [ -d "$f" ]; } || continue
     holder="${f##*.stale.}"; holder="${holder%%.*}"
