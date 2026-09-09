@@ -1002,21 +1002,103 @@ _burn_tank_lock_path() {
 # of syscalls since, in which case nothing safe is left to do but log it.
 # Either way, only the `mv` winner ever removes or restores anything, and
 # only the one graveyard path it alone created.
+# _BURN_RECLAIM_MUTEX_OWNED — empty when this process holds no reclaim
+# mutex right now, set to the reclaim_link path for the exact window this
+# process holds one. R5-P2-3 (2026-09-10 round-5 review): a signal landing
+# inside that window and running _burn_tank_lock_release from a trap must
+# not try to re-acquire a mutex this SAME process already holds — its own
+# liveness check would see its own live pid and correctly refuse to evict
+# it, deadlocking the release against itself for the full retry budget
+# (and again for the EXIT trap the signal handler's own `exit` triggers).
+# Every place that wins _burn_reclaim_mutex_try sets this before acting and
+# clears it right after _burn_reclaim_mutex_release, so a trap firing
+# anywhere in between can see it and skip straight to acting under the
+# mutex already held instead of looping to acquire it a second time.
+_BURN_RECLAIM_MUTEX_OWNED=""
+
 _burn_reclaim_mutex_try() {
-  local reclaim_link="$1" now_epoch target mpid mstarted evict_now
+  local reclaim_link="$1" now_epoch target mpid mstarted evict_now age
   local grave gtarget gpid
 
   # A non-symlink entry at this path (a pre-round-4 `mkdir`-based mutex
-  # directory, or anything else) can't carry an identity either way, and
-  # `ln -s` into an EXISTING DIRECTORY nests instead of failing (the same
-  # hazard `_burn_tank_lock_acquire` guards the lock itself against) — so
-  # this must never be allowed to reach the `ln -s` below while it might
-  # still be a directory. Whatever the `mv` winner catches here is
-  # unconditionally safe to discard: nothing legitimate is ever a
-  # directory at this path.
+  # directory, or anything else) can't carry an identity through `ln -s`
+  # itself, and `ln -s` into an EXISTING DIRECTORY nests instead of failing
+  # (the same hazard `_burn_tank_lock_acquire` guards the lock itself
+  # against) — so this must never be allowed to reach the `ln -s` below
+  # while it might still be a directory.
+  #
+  # R5-P1-1 (2026-09-10 round-5 review): this branch used to `mv` then
+  # unconditionally `rm -rf` whatever it caught, with no verify and no
+  # liveness test at all — the exact check-then-act shape R4-P1-2 closed
+  # four lines below, reintroduced here because the check at the top of
+  # this `if` (`[ ! -L … ]`) can be minutes old by the time the `mv` runs:
+  # a live holder's `ln -s` can land on this path in the meantime, and `mv`
+  # catches whatever is THERE, not whatever was there when the decision was
+  # made. It now gets the same discipline: `mv` to a private graveyard name
+  # first (the only real arbitration here — a second `mv` of an
+  # already-moved path simply fails), then look at what was actually
+  # caught before ever discarding it.
+  #
+  # Two shapes can turn up in the graveyard:
+  #   - A SYMLINK: not the directory this branch decided about at all — a
+  #     live holder's fresh `ln -s` raced into the window between the
+  #     check and the `mv`. Put it back immediately with `ln -s`, the same
+  #     re-create-not-move restore the reap path below uses (and for the
+  #     same reason: `mv -n` onto a symlink destination silently clobbers
+  #     it on this machine's `/bin/mv`; `ln -s` is EEXIST-on-conflict by
+  #     definition of the syscall, on every vendor).
+  #   - A DIRECTORY: the legacy artifact this branch exists for. It can
+  #     carry an identity the same way the pre-round-3 LOCK did: a `pid`
+  #     file written inside it after the `mkdir`. No `pid` file, or one
+  #     naming a pid that is no longer alive, means no live identity —
+  #     safe to discard outright, exactly as before. A `pid` file naming a
+  #     LIVE pid means a live holder is still using the old format; that is
+  #     restored too, by `mv`ing the directory straight back — but only
+  #     onto a path that is genuinely empty right now (re-checked
+  #     immediately before the `mv`), never forced onto one a fresh claim
+  #     landed on while this was running; losing that race means backing
+  #     off and discarding the graveyard copy instead, the same "nothing
+  #     safe left to do but log it" outcome the symlink-restore branch
+  #     above already accepts.
   if [ -e "$reclaim_link" ] && [ ! -L "$reclaim_link" ]; then
     grave="${reclaim_link}.stale.$$.$RANDOM"
-    mv "$reclaim_link" "$grave" 2>/dev/null && rm -rf "$grave" 2>/dev/null
+    if mv "$reclaim_link" "$grave" 2>/dev/null; then
+      if [ -L "$grave" ]; then
+        gtarget="$(readlink "$grave" 2>/dev/null || true)"
+        gpid="${gtarget%%:*}"
+        if ln -s "$gtarget" "$reclaim_link" 2>/dev/null; then
+          printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- restored it\n' "$reclaim_link" "$gpid" >&2
+        else
+          printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- could NOT restore (a third claim landed first)\n' "$reclaim_link" "$gpid" >&2
+        fi
+        rm -f "$grave" 2>/dev/null
+      elif [ -d "$grave" ]; then
+        gpid=""
+        [ -f "$grave/pid" ] && gpid="$(cat "$grave/pid" 2>/dev/null || true)"
+        case "$gpid" in
+          ''|*[!0-9]*)
+            rm -rf "$grave" 2>/dev/null   # no parseable identity inside -- safe to discard
+            ;;
+          *)
+            if kill -0 "$gpid" 2>/dev/null; then
+              if { [ -L "$reclaim_link" ] || [ -e "$reclaim_link" ]; }; then
+                printf 'clikae: reclaim mutex reaper for %s raced a live legacy holder (pid %s) -- could NOT restore (path reclaimed first)\n' "$reclaim_link" "$gpid" >&2
+                rm -rf "$grave" 2>/dev/null
+              elif mv "$grave" "$reclaim_link" 2>/dev/null; then
+                printf 'clikae: reclaim mutex reaper for %s raced a live legacy holder (pid %s) -- restored it\n' "$reclaim_link" "$gpid" >&2
+              else
+                printf 'clikae: reclaim mutex reaper for %s raced a live legacy holder (pid %s) -- could NOT restore (path reclaimed first)\n' "$reclaim_link" "$gpid" >&2
+                rm -rf "$grave" 2>/dev/null
+              fi
+            else
+              rm -rf "$grave" 2>/dev/null   # pid recorded but dead -- safe to discard
+            fi
+            ;;
+        esac
+      else
+        rm -rf "$grave" 2>/dev/null   # neither a symlink nor a directory -- foreign/corrupt, discard
+      fi
+    fi
     return 1
   fi
 
@@ -1041,8 +1123,29 @@ _burn_reclaim_mutex_try() {
       evict_now=1
       ;;
     *)
-      kill -0 "$mpid" 2>/dev/null && return 1   # looks alive — do not evict
-      [ "$((now_epoch - mstarted))" -ge 30 ] && evict_now=1
+      if kill -0 "$mpid" 2>/dev/null; then
+        # R5-P2-1 (2026-09-10 round-5 review): a bare `kill -0` only proves
+        # SOMETHING is alive at this pid, not that it's the SAME process
+        # this marker's `started_at` was recorded for — a pid recycled
+        # onto a dead holder's number would otherwise wedge this mutex,
+        # and the tank it guards, for the recycler's ENTIRE lifetime (a
+        # daemon or a long-lived tmux server: unbounded in practice). The
+        # tank lock itself is already guarded against exactly this
+        # (`_burn_pid_matches_marker`, further down); the mutex protecting
+        # its removal needs the same check, not a weaker one.
+        _burn_pid_matches_marker "$mpid" "$mstarted" && return 1   # alive AND matches -- do not evict
+        evict_now=1   # alive pid, but not the process that wrote this marker -- stale regardless of age
+      else
+        # R5-P2-2: clamp instead of trusting the sign. A `started_at`
+        # AHEAD of `now` (a backward clock step on the reader, or a
+        # forward one on the writer at claim time) must not make a dead
+        # holder's mutex permanently un-reapable until wall clock catches
+        # up to it -- treat a negative age the same as "long past due",
+        # not as "not due yet".
+        age=$((now_epoch - mstarted))
+        [ "$age" -lt 0 ] && age=30
+        [ "$age" -ge 30 ] && evict_now=1
+      fi
       ;;
   esac
   [ "$evict_now" -eq 1 ] || return 1
@@ -1104,11 +1207,28 @@ _burn_reclaim_mutex_try() {
 # still names THIS pid before removing it anyway — the same defence in
 # depth `_burn_tank_lock_release` applies to the lock itself: a reaper that
 # mistakenly `mv`-ed away a live holder's link (R4-P1-2's residual window,
-# between that reaper's `mv` and its own cleanup) could, in principle,
-# leave a THIRD process's fresh claim sitting at this exact path by the
-# time some other code path calls release — trusting "I must be the one
-# who's calling this" without checking is exactly the assumption that bit
-# the lock itself before its own release was hardened this way.
+# between that reaper's `mv` and its own cleanup) could leave a THIRD
+# process's fresh claim sitting at this exact path by the time some other
+# code path calls release — trusting "I must be the one who's calling
+# this" without checking is exactly the assumption that bit the lock
+# itself before its own release was hardened this way.
+#
+# R5-P1-3 (2026-09-10 round-5 review): this mutex is NOT mathematically
+# exclusive, and that is written down here rather than implied away. The
+# window this comment names is real: a reaper that mistakenly evicted a
+# live holder and then lost the restore race (a THIRD claim landing first)
+# leaves that live holder still believing it holds the mutex while the
+# third claim also holds it — two processes briefly inside the SAME
+# removal critical section. Measured at 0 in 300 real `clikae burn` trials
+# and 0/50 on this function's own calling path; a synthetic, zero-backoff
+# hammer of the mutex in total isolation (a rhythm no real caller
+# produces) found it at up to ~24%. The re-verify above is what bounds the
+# cost when it happens: it never lets EITHER process delete a link that
+# isn't its own, so the worst case is one extra live holder for the span
+# of one critical section, caught downstream by the tank LOCK's own
+# owner-only release — two burns briefly on one tank (#40), never a
+# corrupted lock file and never data loss. See docs/orchestration.md's
+# "Round 5" note for the full numbers.
 _burn_reclaim_mutex_release() {
   local target; target="$(readlink "$1" 2>/dev/null || true)"
   [ "${target%%:*}" = "$$" ] && rm -f "$1" 2>/dev/null
@@ -1205,8 +1325,10 @@ _burn_tank_lock_acquire() {
       # way, so it is unconditionally reclaimable, under the same removal
       # mutex as everything else.
       if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
         [ -e "$lock" ] && [ ! -L "$lock" ] && rm -rf "$lock" 2>/dev/null
         _burn_reclaim_mutex_release "$reclaim_dir"
+        _BURN_RECLAIM_MUTEX_OWNED=""
       fi
       continue
     fi
@@ -1224,8 +1346,10 @@ _burn_tank_lock_acquire() {
       # corrupt link — unconditionally reclaimable, `rm -f` (not `-rf`:
       # this removes the SYMLINK itself, never the directory it points at).
       if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
         [ -L "$lock" ] && [ -d "$lock" ] && rm -f "$lock" 2>/dev/null
         _burn_reclaim_mutex_release "$reclaim_dir"
+        _BURN_RECLAIM_MUTEX_OWNED=""
       fi
       continue
     fi
@@ -1276,6 +1400,7 @@ _burn_tank_lock_acquire() {
       continue
     fi
     if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
       # Re-verify under the mutex — required, not paranoia: the target may
       # have changed since the unsynchronized read above (a live holder
       # released, or the earlier reclaim finished, and a fresh contender's
@@ -1306,6 +1431,17 @@ _burn_tank_lock_acquire() {
         [ "$stale" -eq 1 ] && rm -f "$lock" 2>/dev/null
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"
+      _BURN_RECLAIM_MUTEX_OWNED=""
+    else
+      # R5-P2-4 (2026-09-10 round-5 review; the other half of R4-P2-2): the
+      # mutex being unclaimable right now (someone else holds it, or it's
+      # not yet 30s stale) fell straight through to the `continue` below
+      # with no sleep at all, spinning at full CPU for the rest of the
+      # timeout — measured ~79% of a core per blocked burn, on every tank
+      # merely recovering from a signal. The "holder is live" branch four
+      # lines up already sleeps 1s between retries; this path costs
+      # nothing extra to match it.
+      sleep 1
     fi
     continue   # whether we reclaimed it, someone else already did, or a
                # fresher check now says it's live — retry `ln -s` at the top
@@ -1333,19 +1469,41 @@ _burn_tank_lock_acquire() {
 # wedged mutex could ever block a FUTURE caller. Giving up here just means
 # this particular release didn't run this time — it never means a lock this
 # process doesn't own gets deleted.
+#
+# R5-P2-3 (2026-09-10 round-5 review): a signal can land while THIS
+# process already holds the reclaim mutex from _burn_tank_lock_acquire's
+# own reclaim path (see _BURN_RECLAIM_MUTEX_OWNED above). Looping on
+# _burn_reclaim_mutex_try in that situation deadlocks against ourselves —
+# the mutex's own liveness check sees our own live pid, correctly judges
+# it not abandoned, and refuses to evict it, for the full retry budget —
+# and the EXIT trap this function's caller's own `exit` then triggers runs
+# this same function a second time and pays the same cost again (measured:
+# 18-19s to exit, mutex leaked). Checking ownership first and acting
+# directly under the mutex already held, instead of trying to reacquire
+# it, closes both.
 _burn_tank_lock_release() {
   local lock reclaim_dir target holder tries=0
   lock="$(_burn_tank_lock_path "$1" "$2")"
   reclaim_dir="${lock}.reclaim"
+  if [ -n "$_BURN_RECLAIM_MUTEX_OWNED" ] && [ "$_BURN_RECLAIM_MUTEX_OWNED" = "$reclaim_dir" ]; then
+    target="$(readlink "$lock" 2>/dev/null || true)"
+    holder="${target%%:*}"
+    [ "$holder" = "$$" ] && rm -f "$lock" 2>/dev/null
+    _burn_reclaim_mutex_release "$reclaim_dir"
+    _BURN_RECLAIM_MUTEX_OWNED=""
+    return 0
+  fi
   while ! _burn_reclaim_mutex_try "$reclaim_dir"; do
     tries=$((tries + 1))
     [ "$tries" -lt 10 ] || return 0
     sleep 1
   done
+  _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
   target="$(readlink "$lock" 2>/dev/null || true)"
   holder="${target%%:*}"
   [ "$holder" = "$$" ] && rm -f "$lock" 2>/dev/null
   _burn_reclaim_mutex_release "$reclaim_dir"
+  _BURN_RECLAIM_MUTEX_OWNED=""
   return 0
 }
 

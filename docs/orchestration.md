@@ -397,6 +397,71 @@ handful of syscalls since, in which case the mistake is logged and the
 graveyard copy discarded either way. Only the `mv` winner ever removes or
 restores anything, and only the one graveyard path it alone created.
 
+**Round 5 closes the same shape twice more — both in the guards AROUND
+that mutex, not in the mutex itself (2026-09-10 round-5 review,
+R5-P1-1/R5-P1-2/R5-P2-1/R5-P2-2/R5-P2-3/R5-P2-4).** The non-symlink
+pre-check that exists to keep a pre-round-4, `mkdir`-based leftover away
+from `ln -s` used to reap whatever it found with a bare `mv` then
+unconditional `rm -rf` — no verify at all, on a decision that can be
+minutes old by the time the `mv` runs: a live holder's fresh `ln -s` can
+land on that exact path in between, and `mv` catches whatever is THERE,
+not whatever was there when the decision was made. It now gets the same
+discipline as the reap path above it: `mv` to a private graveyard name,
+then look at what was actually caught. A symlink caught there is a live
+holder's fresh claim, restored immediately the same way; a genuine legacy
+directory is checked for a `pid` file (the pre-round-3 marker format) — a
+live pid inside is restored by moving the directory back onto a path
+re-checked empty immediately before the move, never forced onto one a
+fresh claim landed on in the meantime; only a directory with no live
+identity inside is discarded outright, as before. And `clikae clean`'s own
+GC (below) removed the tank lock with **no mutex at all** — a second,
+unguarded remover of the one thing this entire design depends on never
+having a second remover — closed by giving it the identical
+`_burn_reclaim_mutex_try` gate, with one rule specific to a GC rather than
+a live acquirer: it SKIPS a busy tank rather than waiting for it.
+
+Two smaller gaps closed in the same round: the mutex's own liveness test
+used a bare `kill -0`, one check weaker than the lock it protects (which
+also verifies the pid's `started_at` against the process's own start time)
+— a pid recycled onto a dead mutex holder's number wedged the mutex, and
+the tank it guards, for the recycler's entire lifetime; it now runs the
+identical marker check, with a `started_at` reported ahead of `now` (a
+clock step in either direction) clamped rather than read as "not due yet."
+And a signal landing while a burn already held the reclaim mutex from its
+own reclaim path made the signal's own release trap try to RE-acquire a
+mutex it already held — correctly refused (the mutex sees its own live pid
+and won't evict it), so the release spun its whole retry budget, then did
+so again when the signal's own `exit` triggered the separate EXIT trap
+stacked behind it (measured: 18-19 seconds to actually exit, the mutex
+left leaked for that whole window, self-healing at the mutex's own 30s
+stale rule). One process-local flag now records which mutex, if any, this
+process currently holds, so a trap firing inside that window acts directly
+under it instead of trying to reacquire it. Separately, the "mutex is
+busy" branch of the lock's own retry loop had no backoff at all — only the
+neighboring "holder is live" branch slept — so a burn blocked behind a
+tank recovering from a signal spun at roughly 79% of a core for its whole
+timeout; the fix is the same one-second sleep the neighboring branch
+already pays.
+
+**The residual, honestly.** This mutex is not mathematically exclusive.
+A reaper can still lose the race between its own unsynchronized read and
+its `mv`: it evicts a live holder, and if a THIRD claim lands on the
+vacated path in the few syscalls before the reaper's restore attempt, that
+restore fails and is not retried — two processes are then briefly inside
+the same removal critical section at once. Measured at 0 violations across
+300 real `clikae burn` trials (six seeded-wreckage arms, three contenders
+each) and 0/50 on the reclaim mutex's own calling path; a synthetic,
+zero-backoff hammer of the mutex in complete isolation — a retry rhythm no
+real caller produces, since every real caller's own loop interleaves at
+least one lock read between mutex attempts — found it at up to roughly
+24%. The cost, on that rare miss, is bounded and self-correcting: one
+extra live holder for the span of one removal critical section, and the
+tank LOCK's own owner-only release (a re-read-then-`rm`-only-if-still-mine
+check, immediately below) is what actually catches it — the worst case
+measured is two burns briefly sharing one tank (#40, the exact symptom
+this whole mechanism exists to prevent), never data loss or a corrupted
+status file.
+
 ### `--wait-for-reset` (#38)
 
 A tank that runs dry minutes before its own reset used to just Stop (under

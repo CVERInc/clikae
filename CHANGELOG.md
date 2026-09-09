@@ -98,8 +98,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tank it guarded) and let a stale reaper destroy a live holder's mutex on
   a check-then-act. Round 4 makes the mutex a symlink too, reaped only by
   renaming it to a private, unique name first and verifying what was
-  actually caught before ever deleting it (2026-09-10 round-4 review,
-  R4-P1-1/R4-P1-2/R4-P1-3). A trap scoped to the
+  actually caught before ever deleting it — restoring a mistakenly evicted
+  live holder by RE-CREATING its entry with `ln -s`, not by moving the
+  graveyard copy back (`mv -n` onto an existing symlink destination
+  silently clobbers it on this system's `/bin/mv` (BSD); `ln -s` fails
+  EEXIST on conflict identically on every vendor, with no `-n`-style switch
+  to get inconsistently implemented) (2026-09-10 round-4 review,
+  R4-P1-1/R4-P1-2/R4-P1-3). Round 5 finds the same shape twice more, both
+  in the *guards around* that fixed mutex rather than in the mutex itself:
+  the non-symlink pre-check (for a pre-round-4 `mkdir`-based leftover)
+  reaped whatever it found with a bare `mv` + unconditional `rm -rf` and no
+  verify at all — capable of destroying a live holder's mutex that raced
+  a fresh `ln -s` into the same path between the check and the `mv` — now
+  given the identical mv-then-verify-then-restore discipline, treating a
+  live legacy holder's own `pid` file (the pre-round-3 marker format) as an
+  identity to restore, never a directory to unconditionally discard. And
+  the mutex's own liveness test used a bare `kill -0` where the lock proper
+  already used the pid+`started_at` marker check — a pid recycled onto a
+  dead mutex holder's number wedged it, and the tank it guards, for the
+  recycler's entire lifetime; it now reuses `_burn_pid_matches_marker`
+  itself, with a negative age (a `started_at` ahead of `now`, from a clock
+  step in either direction) clamped instead of read as "not due yet"
+  (2026-09-10 round-5 review, R5-P1-1/R5-P2-1/R5-P2-2). A signal landing
+  while a burn already held the reclaim mutex (inside its own reclaim path)
+  used to make its own release trap try to re-acquire a mutex it already
+  held — the mutex's liveness check correctly sees its own live pid and
+  refuses to evict it, so the release spun its full retry budget, then did
+  so AGAIN when the signal handler's own `exit` triggered the EXIT trap
+  (measured: 18-19s to exit, the mutex leaked for that long). One variable
+  now records which mutex this process currently holds, so a trap firing
+  inside that window acts directly instead of trying to reacquire it
+  (R5-P2-3); separately, the loop's "mutex is busy" retry had no backoff at
+  all — only the neighboring "holder is live" branch slept — so every burn
+  blocked on a tank recovering from a signal spun at ~79% of a core for the
+  whole timeout, the other half of round 4's P2-2 (R5-P2-4). **The residual
+  is not zero, and is written down rather than implied away:** the mutex is
+  not mathematically exclusive — a reaper that loses the race between its
+  own read and its `mv` can evict a live holder and fail to restore it (the
+  path having been reclaimed a third time in the interim), leaving two
+  processes inside the removal critical section at once. Measured at 0
+  violations in 300 real `clikae burn` trials and 0/50 on the mutex's own
+  calling path, and at up to ~24% under a synthetic, zero-backoff hammer of
+  the mutex in total isolation — a rhythm no real caller produces, since
+  every real caller's retry loop interleaves at least one lock read between
+  mutex attempts. The cost, on the rare miss, is bounded and self-healing:
+  one extra live holder for the duration of one critical section, caught by
+  the tank lock's own owner-only release; worst case is two burns briefly
+  on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
+  A trap scoped to the
   check-and-write releases the lock — and, if a signal lands before the
   section's own write, now also records a terminal `fail` — on every exit
   out of that section including a signal (2026-09-09 round-2/round-3
@@ -130,7 +176,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only reclaims when something calls it again for that exact tank. Same
   test as the existing tmux/scrollback GCs: the recorded pid's liveness,
   never the file's age (2026-09-10 round-4 review, R4-P3-2 / R3-P3-3
-  before it).
+  before it). **Round 5 review found this GC removed the lock with NO
+  mutex at all** — the one invariant this whole design rests on
+  ("the link can only disappear while the reclaim mutex is held") had a
+  second, unguarded remover the moment this GC shipped: measured 5/5
+  deterministic violations of a real `_burn_tank_lock_acquire`, already
+  past its own under-mutex re-verify and about to remove a lock it
+  correctly judged stale, racing this GC — a fresh contender's legitimate
+  claim lands on the path GC vacated, then the original holder's now-stale
+  `rm` deletes that fresh claim too, leaving two burns on one tank (#40).
+  The GC now takes the reclaim mutex first, re-verifies under it, and
+  SKIPS the tank — never waits — when the mutex is busy (a real acquire or
+  release is genuinely mid check-and-act on it right now); its own removal
+  of the reclaim mutex itself is now `_burn_reclaim_mutex_try`'s
+  reap-with-verify, not a bare `kill -0` + `rm -f` (a third, weaker
+  liveness rule for the same object). `clikae clean` also now skips any
+  tank whose own status file (#41) says a burn is `running` or
+  `waiting-reset`, independent of what the lock symlink itself reads as
+  (2026-09-10 round-5 review, R5-P1-2).
 
 ### Changed
 

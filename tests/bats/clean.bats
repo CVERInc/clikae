@@ -860,3 +860,63 @@ sys.exit(1 if bad else 0)
   [[ "$output" == *"Would remove dead-holder tank lock"* ]] || { echo "$output"; false; }
   [ -L "$sdir/tank-busy-codex_T6.lock" ] || { echo "a dry run deleted it"; false; }
 }
+
+# --- R5-P1-2 (2026-09-10 round-5 review): the GC used to remove the tank
+# lock with NO mutex at all — a second, unguarded remover of the one thing
+# this whole design depends on never having a second remover. Measured by
+# the review: a real acquirer already past its own under-mutex re-verify and
+# about to remove a lock it correctly judged stale, racing this GC — 5/5
+# deterministic violations, a fresh contender's legitimate claim landing on
+# the path GC vacated, then the original holder's now-stale `rm` deleting
+# that fresh claim too (two burns on one tank, #40). -------------------------
+
+@test "GC (R5-P1-2): skips a tank lock while its reclaim mutex is genuinely held, rather than racing it" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999993
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  local lock="$sdir/tank-busy-codex_T7.lock"
+  ln -s "$dead:1700000000" "$lock"   # looks dead by the lock's own liveness read
+  # Hold the reclaim mutex from a separate live process, exactly as a real
+  # _burn_tank_lock_acquire/_release mid check-and-act on this exact lock
+  # would — the GC must SKIP, not wait for it and not race it.
+  ( _burn_reclaim_mutex_try "$lock.reclaim"; sleep 2 ) &
+  local holder=$!
+  sleep 0.3
+  _clean_tank_lock_gc 0
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  [ -L "$lock" ] || { echo "GC removed a lock while its reclaim mutex was held by someone else"; false; }
+}
+
+@test "GC (R5-P1-2): skips a tank whose status file says a burn is RUNNING right now, independent of the lock's own liveness" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999992
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  local lock="$sdir/tank-busy-codex_T8.lock"
+  ln -s "$dead:1700000000" "$lock"   # the LOCK's own recorded holder looks dead
+  # But a status file (#41) says a burn is genuinely RUNNING on codex/T8
+  # right now, using this test's own $$ (alive for the test's duration) —
+  # the second, independent signal R5-P1-2 added.
+  local d="$HOME/.clikae/logs/burn-$$-t8"; mkdir -p "$d"
+  local now; now="$(date +%s)"
+  printf '{"ok":null,"engine":"codex","tank":"T8","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-t8","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null}\n' \
+    "$now" "$now" "$$" > "$d/status.json"
+  _clean_tank_lock_gc 0
+  [ -L "$lock" ] || { echo "GC removed a lock whose own status file said a burn is RUNNING"; false; }
+}
+
+@test "GC (R5-P1-2): a dead-holder mutex link (not a directory) is reaped through _burn_reclaim_mutex_try's own liveness rule" {
+  # The mutex's OWN removal is now the same reap-with-verify primitive
+  # everything else uses, not a bare kill -0 + rm -f (a third, weaker
+  # liveness rule for the same object).
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999991
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "${dead}:$(date +%s)" "$sdir/tank-busy-codex_T9.lock.reclaim"   # dead, but younger than 30s
+  _clean_tank_lock_gc 0
+  [[ -L "$sdir/tank-busy-codex_T9.lock.reclaim" ]] || {
+    echo "GC reaped a mutex younger than 30s -- ignoring the age half of the shared rule"; false; }
+  rm -f "$sdir/tank-busy-codex_T9.lock.reclaim"
+}

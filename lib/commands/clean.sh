@@ -33,6 +33,21 @@
 # shellcheck source=resume.sh
 source "$CLIKAE_LIB/commands/resume.sh"
 
+# _clean_tank_lock_gc (below) needs three things burn.sh/burn_status.sh own:
+# the tank lock's path convention and its reclaim-mutex reap-with-verify
+# primitive (burn.sh), and the pid+started_at marker check that primitive
+# (and the busy-tank scan) use to tell a live holder from a recycled pid
+# (burn_status.sh) — R5-P1-2 (2026-09-10 round-5 review). Sourced directly
+# here rather than assumed pre-sourced by bin/clikae, same reasoning as the
+# resume.sh source above: this file must work the same way when a test
+# harness sources it standalone. burn.sh defines functions only — sourcing
+# it runs no command and has no side effects (bin/clikae's own dispatcher
+# only ever calls `cmd_burn` after a separate, explicit invocation).
+# shellcheck source=../core/burn_status.sh
+source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=burn.sh
+source "$CLIKAE_LIB/commands/burn.sh"
+
 # The _rs_* slots are populated by resume.sh's _resume_session_fields (the
 # shared path decoder). Declared here too so shellcheck — which doesn't follow
 # the source above without -x — knows they're ours, not typos (SC2154).
@@ -902,6 +917,35 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_tank_lock_busy_paths -> newline-separated list of tank-lock PATHS
+# (never the `.reclaim` suffix) whose engine/tank pair has a status file
+# saying a burn is RUNNING or WAITING-RESET on it right now — burn_tank_busy's
+# own #40 test (lib/core/burn_status.sh), applied here as a second, independent
+# signal the GC below must never override: no matter what the lock symlink
+# itself reads as, a live burn's own status file saying it still holds this
+# tank is authoritative. R5-P1-2 (2026-09-10 round-5 review).
+_clean_tank_lock_busy_paths() {
+  local base="$HOME/.clikae/logs" d f json st feng ftk fpid fstarted
+  [ -d "$base" ] || return 0
+  for d in "$base"/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json="$(cat "$f" 2>/dev/null)" || continue
+    st="$(burn_status_state "$json")"
+    case "$st" in running|waiting-reset) ;; *) continue ;; esac
+    feng="$(burn_status_str "$json" engine)"
+    ftk="$(burn_status_str "$json" tank)"
+    [ -n "$feng" ] && [ -n "$ftk" ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$fpid" 2>/dev/null || continue           # stale — the writer is gone
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid
+    _burn_tank_lock_path "$feng" "$ftk"
+  done
+}
+
 # _clean_tank_lock_gc <dry_run> -> remove per-tank burn locks (and reclaim
 # mutexes) whose recorded holder is no longer running.
 #
@@ -914,11 +958,43 @@ _clean_scrollback_gc() {
 # shape as _clean_scrollback_gc above: the test is the recorded pid's
 # LIVENESS, never the file's age — a tank genuinely busy for hours is not
 # garbage just because its lock is old.
+#
+# R5-P1-2 (2026-09-10 round-5 review): this used to `rm -f` the tank lock
+# directly, with no mutex at all — the ONE invariant `docs/orchestration.md`
+# and `_burn_tank_lock_acquire`'s own comment both state in as many words
+# ("the link can only disappear while that mutex is held") had a second,
+# unguarded remover the moment this function shipped. Measured: a real
+# `_burn_tank_lock_acquire`, already past its OWN under-mutex re-verify and
+# about to `rm` a lock it correctly judged stale, racing this GC — 5/5
+# deterministic violations, a fresh contender's legitimate `ln -s` landing
+# on the path GC vacated, followed by the ORIGINAL holder's now-stale `rm`
+# deleting that fresh claim too. Two real burns holding one tank at once —
+# the #40 symptom this whole lock exists to prevent.
+#
+# Fixed by giving GC exactly the discipline every other remover already has:
+# take `_burn_reclaim_mutex_try` on `<lock>.reclaim` FIRST, re-verify under
+# it, and — critically — SKIP this tank (never wait, never retry) if the
+# mutex is busy: a busy mutex means some real `_burn_tank_lock_acquire` or
+# `_burn_tank_lock_release` is mid check-and-act on this exact lock right
+# now, and GC has no business racing it; the next `clean` run, or that
+# process's own eventual release/reclaim, gets another chance. The reclaim
+# mutex ITSELF is now reaped the same way `_burn_reclaim_mutex_try` reaps
+# everything else — mv to a private name, verify what was actually caught,
+# discard only if it still names the pid judged dead, restore otherwise —
+# instead of a bare `kill -0` + unconditional `rm -f`, which was a THIRD,
+# weaker liveness rule for the same object (no `started_at`/30s check, no
+# verify-before-discard).
 _clean_tank_lock_gc() {
   local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0
+  local busy_paths reclaim_dir had_link
   [ -d "$dir" ] || return 0
-  for f in "$dir/"tank-busy-*.lock "$dir/"tank-busy-*.lock.reclaim; do
+  busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
+
+  for f in "$dir/"tank-busy-*.lock; do
     [ -L "$f" ] || continue
+    if [ -n "$busy_paths" ] && printf '%s\n' "$busy_paths" | grep -qxF "$f"; then
+      continue   # a status file says a burn is RUNNING here right now — never touch it
+    fi
     target="$(readlink "$f" 2>/dev/null || true)"
     holder="${target%%:*}"
     case "$holder" in
@@ -927,16 +1003,60 @@ _clean_tank_lock_gc() {
     esac
     if [ "$dry_run" = "1" ]; then
       log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
-    else
-      rm -f "$f" && n=$((n + 1))
+      continue
     fi
+    reclaim_dir="$f.reclaim"
+    if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      # Re-verify under the mutex before acting — the target may have
+      # changed since the unsynchronized read above (a live holder
+      # released, or a fresh contender's `ln -s` landed on this exact path
+      # in the meantime).
+      if [ -L "$f" ]; then
+        target="$(readlink "$f" 2>/dev/null || true)"
+        holder="${target%%:*}"
+        case "$holder" in
+          ''|*[!0-9]*) rm -f "$f" && n=$((n + 1)) ;;
+          *) kill -0 "$holder" 2>/dev/null || { rm -f "$f" && n=$((n + 1)); } ;;
+        esac
+      fi
+      _burn_reclaim_mutex_release "$reclaim_dir"
+    fi
+    # else: the mutex is busy right now — SKIP, don't wait (see above).
   done
+
+  for f in "$dir/"tank-busy-*.lock.reclaim; do
+    [ -L "$f" ] || continue
+    if [ "$dry_run" = "1" ]; then
+      target="$(readlink "$f" 2>/dev/null || true)"
+      holder="${target%%:*}"
+      case "$holder" in
+        ''|*[!0-9]*) log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}" ;;
+        *) kill -0 "$holder" 2>/dev/null || log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}" ;;
+      esac
+      continue
+    fi
+    had_link=1; [ -L "$f" ] || had_link=0
+    if _burn_reclaim_mutex_try "$f"; then
+      # Nothing was actually there to reap (the path had just gone empty
+      # on its own) — this only won a fresh, empty claim; release it
+      # immediately, GC has no removal to protect by holding it.
+      _burn_reclaim_mutex_release "$f"
+    fi
+    # Whether it just reaped-and-discarded a dead mutex, restored a live
+    # one it mistakenly caught, or found a live one and left it alone,
+    # _burn_reclaim_mutex_try already applied the one liveness rule this
+    # object has everywhere else — nothing further for GC to decide here.
+    [ "$had_link" -eq 1 ] && [ ! -L "$f" ] && n=$((n + 1))
+  done
+
   # Graveyard entries (`_burn_reclaim_mutex_try`'s rename-to-unique-name
   # reap) are private to the reaper that created them — its OWN pid is
   # embedded in the filename, not in the target — and are normally removed
   # by that same reaper a syscall or two later. One can only outlive it if
   # the reaper itself was killed between its `mv` and its `rm`, so the
   # liveness test here is the filename's pid, not the symlink's target.
+  # This is never a live REMOVAL mutex's identity, so it needs no mutex of
+  # its own to sweep.
   for f in "$dir/"tank-busy-*.lock.reclaim.stale.*; do
     [ -L "$f" ] || continue
     holder="${f##*.stale.}"; holder="${holder%%.*}"

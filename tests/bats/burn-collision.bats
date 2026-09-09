@@ -641,6 +641,47 @@ _race_contender() {
   _burn_reclaim_mutex_release "$reclaim_link"
 }
 
+@test "_burn_reclaim_mutex_try (R5-P1-1): a LEGACY directory mutex with a DEAD pid recorded inside it is discarded" {
+  # R5-P1-1 (2026-09-10 round-5 review): the non-symlink branch used to
+  # discard unconditionally with no liveness test at all. A legacy
+  # directory CAN carry an identity the pre-round-3 lock format used: a
+  # `pid` file written inside after the `mkdir`. A dead pid there is no
+  # different from no pid file at all -- still safe to discard.
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX5)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  local dead; dead="$(_dead_pid)"
+  mkdir -p "$reclaim_link"
+  printf '%s' "$dead" > "$reclaim_link/pid"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ ! -e "$reclaim_link" ]] || { echo "a legacy directory with a dead recorded pid survived"; false; }
+}
+
+@test "_burn_reclaim_mutex_try (R5-P1-1): a LEGACY directory mutex with a LIVE pid recorded inside it is restored, not destroyed" {
+  # The other half of the same fix: a legacy directory whose `pid` file
+  # names a pid that is still ALIVE must not be treated as safe-to-discard
+  # just because it isn't a symlink -- it is restored onto the (currently
+  # empty) path exactly as a live symlink holder caught by this same
+  # branch would be.
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX6)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  sleep 300 &
+  local live_pid=$!
+  mkdir -p "$reclaim_link"
+  printf '%s' "$live_pid" > "$reclaim_link/pid"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims it FOR the caller
+  [ -d "$reclaim_link" ] || { echo "a legacy directory with a LIVE recorded pid was destroyed, not restored"; false; }
+  [ -L "$reclaim_link" ] && { echo "restored as the wrong shape (symlink instead of directory)"; false; }
+  [ "$(cat "$reclaim_link/pid" 2>/dev/null)" = "$live_pid" ] || { echo "restored with the wrong pid recorded"; false; }
+  rm -rf "$reclaim_link"
+}
+
 @test "_burn_reclaim_mutex_try (R4-P2-3b): a DEAD-pid mutex younger than 30s is left alone" {
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKMX3)"
@@ -654,19 +695,46 @@ _race_contender() {
   rm -f "$reclaim_link"
 }
 
-@test "_burn_reclaim_mutex_try (R4-P2-3c): a mutex whose pid is ALIVE is never reaped, regardless of age" {
+@test "_burn_reclaim_mutex_try (R4-P2-3c/R5-P2-1): a mutex whose pid is ALIVE and matches its recorded started_at is never reaped, regardless of age" {
+  # R5-P2-1 (2026-09-10 round-5 review) added a marker check here (the same
+  # one the main lock already used), so this fixture's started_at must now
+  # be this pid's OWN real start time, not an arbitrary old constant — a
+  # constant unrelated to the pid's real start is exactly the "recycled
+  # pid" shape the new check below exists to catch, tested separately.
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKMX4)"
   mkdir -p "$(dirname "$lock")"
   local reclaim_link="${lock}.reclaim"
   sleep 300 &
-  local live_pid=$!
-  ln -s "${live_pid}:1" "$reclaim_link"   # started_at=1 -- decades old by the 30s rule
+  local live_pid=$! real_started
+  real_started="$(date +%s)"   # this genuinely is $live_pid's own start
+  ln -s "${live_pid}:${real_started}" "$reclaim_link"
   run _burn_reclaim_mutex_try "$reclaim_link"
   kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
   [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [[ -L "$reclaim_link" ]] || { echo "reaped a mutex whose pid was genuinely alive"; false; }
+  [[ -L "$reclaim_link" ]] || { echo "reaped a mutex whose pid was genuinely alive and matched"; false; }
   rm -f "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R5-P2-1): a mutex whose pid is alive but does NOT match its recorded started_at is reaped like a recycled pid" {
+  # A bare `kill -0` alone cannot tell a genuine holder from a pid recycled
+  # onto its number — a live pid whose recorded started_at predates its own
+  # real start (as if it inherited a stale marker) must be treated as stale
+  # regardless of age, the same way the main lock already treats a
+  # recycled holder (R5-P2-1, 2026-09-10 round-5 review; before this fix
+  # it wedged the mutex, and the tank it guards, for this pid's whole
+  # lifetime).
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX4B)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  sleep 300 &
+  local live_pid=$!
+  ln -s "${live_pid}:1" "$reclaim_link"   # started_at=1 -- this pid did not exist then
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims the mutex FOR the caller either way
+  [[ ! -L "$reclaim_link" ]] || { echo "an alive-but-mismatched (recycled-shaped) mutex survived"; false; }
 }
 
 @test "_burn_reclaim_mutex_try (R4-P1-3): staleness is judged from started_at IN the symlink, never the symlink's own mtime" {
@@ -852,4 +920,98 @@ _race_contender() {
   [[ "$json" == *'"state":"fail"'* ]] || { echo "$json"; false; }
   [[ "$json" == *'"ok":false'* ]] || { echo "$json"; false; }
   [[ "$json" == *'"reason":"busy:'* ]] || { echo "$json"; false; }
+}
+
+# --- R5-P2-3/R5-P2-4 (2026-09-10 round-5 review) ----------------------------
+#
+# A signal landing while THIS process already holds the reclaim mutex (from
+# its own reclaim path inside _burn_tank_lock_acquire) used to make the
+# trap's own call to _burn_tank_lock_release try to RE-acquire a mutex it
+# already held: the mutex's liveness check correctly sees its own live pid
+# and refuses to evict it, so the release spun its whole retry budget, then
+# did so AGAIN when the signal's own `exit` triggered the EXIT trap stacked
+# behind it (measured by the review: 18-19s to actually exit, mutex leaked
+# for that whole window). Separately, the "mutex is busy" branch of the
+# lock's own retry loop had no backoff at all.
+
+@test "_burn_tank_lock_release (R5-P2-3): does not deadlock against itself when this process already holds the reclaim mutex" {
+  _src_burn_lock
+  local eng=codex tank=LOCKSIG1
+  _burn_tank_lock_acquire "$eng" "$tank" 5
+  local lock; lock="$(_burn_tank_lock_path "$eng" "$tank")"
+  local reclaim_dir="${lock}.reclaim"
+  # Simulate a signal landing while this SAME process already holds the
+  # reclaim mutex from its own internal reclaim path -- claim it directly
+  # and mark ownership exactly the way _burn_tank_lock_acquire's own
+  # internal call sites do (see _BURN_RECLAIM_MUTEX_OWNED in burn.sh).
+  _burn_reclaim_mutex_try "$reclaim_dir"
+  _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+  local start_s=$SECONDS
+  _burn_tank_lock_release "$eng" "$tank"
+  local elapsed=$((SECONDS - start_s))
+  [ "$elapsed" -lt 2 ] || { echo "took ${elapsed}s -- looped trying to reacquire its own mutex"; false; }
+  [[ ! -L "$lock" ]] || { echo "lock survived release"; false; }
+  [[ ! -L "$reclaim_dir" ]] || { echo "mutex leaked"; false; }
+  [ -z "$_BURN_RECLAIM_MUTEX_OWNED" ] || { echo "ownership flag not cleared"; false; }
+}
+
+@test "_burn_tank_lock_acquire/_burn_tank_lock_release (R5-P2-3): a real signal landing while this process holds the reclaim mutex exits promptly, no leak" {
+  # End-to-end version of the unit test above, using the SAME trap shape
+  # cmd_burn installs (see the existing "lock is gone on every exit path"
+  # test above) and a real SIGTERM landing while _BURN_RECLAIM_MUTEX_OWNED
+  # is genuinely set — the review's own measured window.
+  (
+    _src_burn_lock
+    status_engine=codex tank=LOCKSIG2
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 143' TERM
+    trap '_burn_tank_lock_release "$status_engine" "$tank"' EXIT
+    _burn_tank_lock_acquire "$status_engine" "$tank"
+    lock="$(_burn_tank_lock_path "$status_engine" "$tank")"
+    reclaim_dir="${lock}.reclaim"
+    _burn_reclaim_mutex_try "$reclaim_dir"
+    _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+    # backgrounded + waited-on, not a bare foreground `sleep`: bash only
+    # runs a pending trap once its CURRENT foreground command returns, and a
+    # bare `sleep 5` here would make this test measure "however much of the
+    # 5s was left", not the release logic's own speed — `wait` on a
+    # background job IS interruptible by an arriving signal, same as the
+    # real engine subprocess a live `clikae burn` is waiting on.
+    sleep 5 &   # the signal lands here, inside the held-mutex window
+    wait $!
+  ) &
+  local bg=$!
+  sleep 1
+  local start_s=$SECONDS
+  kill -TERM "$bg"
+  wait "$bg" 2>/dev/null || true
+  local elapsed=$((SECONDS - start_s))
+  [ "$elapsed" -le 2 ] || { echo "took ${elapsed}s to exit -- self-deadlocked"; false; }
+  [[ ! -L "$(_burn_tank_lock_path codex LOCKSIG2)" ]] || { echo "lock leaked"; false; }
+  [[ ! -L "$(_burn_tank_lock_path codex LOCKSIG2).reclaim" ]] || { echo "mutex leaked"; false; }
+}
+
+@test "_burn_tank_lock_acquire (R5-P2-4): a busy reclaim mutex backs off instead of spinning at full CPU" {
+  _src_burn_lock
+  local eng=codex tank=LOCKBACKOFF
+  local lock; lock="$(_burn_tank_lock_path "$eng" "$tank")"
+  mkdir -p "$(dirname "$lock")"
+  local dead; dead="$(_dead_pid)"
+  ln -s "${dead}:1" "$lock"   # dead holder -- every loop iteration re-enters the reclaim branch
+  local reclaim_dir="${lock}.reclaim"
+  # Hold the reclaim mutex from a separate live process for the whole probe,
+  # so every one of the caller's retries hits the "mutex is busy" branch.
+  ( _src_burn_lock; _burn_reclaim_mutex_try "$reclaim_dir"; sleep 3 ) &
+  local holder=$!
+  sleep 0.3   # let it actually claim the mutex first
+  TIMEFORMAT='%2U'
+  local timefile="$BATS_TEST_TMPDIR/time.out"
+  # The acquire is EXPECTED to time out (rc=1) -- the mutex stays busy for
+  # the whole 2s window -- so its own non-zero status must not fail the
+  # test; only the CPU-time measurement matters here.
+  { time { _burn_tank_lock_acquire "$eng" "$tank" 2 >/dev/null 2>&1 || true; }; } 2> "$timefile"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  local user_s; user_s="$(cat "$timefile")"
+  # A no-backoff spin burns most of a core for the whole 2s window; a 1s
+  # sleep between retries keeps user CPU time a small fraction of that.
+  awk -v u="$user_s" 'BEGIN { exit !(u < 1.0) }' || { echo "user time ${user_s}s -- looks like a busy spin"; false; }
 }
