@@ -497,11 +497,20 @@ directory atomically, so a live verdict is never risked in the first
 place — it returns straight away, untouched, and the caller backs off and
 retries exactly like it would against any other busy mutex. When the
 verdict is dead, the `mv` to a private graveyard name is re-verified the
-same way the symlink reap path re-verifies its own catch: if the graveyard
-still names the identity just classified, it is discarded; if it names
-anything else, there is no safe way back for a directory, so the graveyard
-copy is left exactly where the `mv` put it, logged once, and never moved
-again.
+same way the symlink reap path re-verifies its own catch: if what the `mv`
+caught is a live holder's SYMLINK (an ordinary caller reaped this same
+directory and re-claimed the mutex with `ln -s` inside the window the
+classification above spans), it is restored with `ln -s` — EEXIST-atomic,
+unlike a directory `mv` — the same way the sibling, non-directory branch
+already restores its own catch (round-7 review, R7-P1-1; an earlier
+version of this classify-then-verify compared two possibly-empty pid
+strings and could mistake that live symlink for its own classified,
+pid-less identity and silently discard it, 5/5). Only for an actual
+DIRECTORY is there no safe way back — `mv` onto an existing directory
+nests instead of failing — so if the graveyard still names the identity
+just classified it is discarded, and if it names a different directory
+the copy is left exactly where the `mv` put it, logged once, and never
+moved again.
 
 **The one residual this leaves, written down rather than found later:** a
 live PRE-ROUND-3 clikae (a mixed-version run) whose `mkdir` has returned
@@ -512,9 +521,12 @@ directory instantly (the committed R4-P1-1a/R4-P2-3a2 tests pin exactly
 that speed). If a reaper's classify→`mv` window lands inside that instant,
 the old binary loses its directory mutex. The consequence is bounded and
 loud, never silent: that binary's own next write or release call fails
-against a path that is simply gone. It is never a second live holder of
-this mutex — nothing in this branch ever hands the mutex to a fresh
-claimant while treating the original as still alive — and never data loss.
+against a path that is simply gone. What this branch actually guarantees
+is narrower than "never a second live holder of this mutex": the mutex
+path is never handed to a fresh claimant while this branch still believes
+a live DIRECTORY holder owns it — a live claimant caught by the `mv`
+itself (a symlink, not a directory) is restored rather than dropped, and
+never data loss.
 
 **A `SIGKILL`ed burn denies its tank for up to ~30 seconds, then self-heals
 — and the refusal a user reads during it now says so (2026-09-10 round-6

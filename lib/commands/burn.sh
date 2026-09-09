@@ -1016,8 +1016,8 @@ _burn_tank_lock_path() {
 # mutex already held instead of looping to acquire it a second time.
 _BURN_RECLAIM_MUTEX_OWNED=""
 
-# _burn_legacy_reclaim_dir_mtime <dir> -> its mtime in epoch seconds, or 0
-# if it cannot be read.
+# _burn_legacy_reclaim_dir_mtime <dir> -> its mtime in epoch seconds, or
+# nothing (empty stdout) if it cannot be read.
 #
 # 🔴 GNU stat's `-f` means --file-system, not "BSD-style file format" —
 # `stat -f %m "$dir" 2>/dev/null || stat -c %Y "$dir" 2>/dev/null` looks like
@@ -1032,11 +1032,21 @@ _BURN_RECLAIM_MUTEX_OWNED=""
 # because burn.sh must keep working when sourced standalone (its own test
 # harness never sources profile_store.sh) and this path is cold — only a
 # legacy directory with a live pid and no `started_at` file ever reaches it.
+#
+# R7-P2-3 (2026-09-10 round-7 review): an `stat` failure here (sandbox,
+# permission, the path vanishing between the caller's `[ -d ]` and this
+# call) used to `echo 0` — a valid, PARSEABLE epoch meaning "1970", which
+# `_burn_pid_matches_marker` reads as a hard mismatch for every live pid
+# and reaps a holder it simply couldn't see the timestamp for. The
+# caller's own liveness rule already has the correct policy for "nothing
+# usable" (`case "$recorded" in ''|*[!0-9]*) return 0`, i.e. keep the
+# holder) — emitting NOTHING on failure, instead of a number, is what lets
+# that policy actually fire instead of being silently defeated here.
 _burn_legacy_reclaim_dir_mtime() {
   if stat --version 2>/dev/null | grep -q GNU; then
-    stat -c %Y "$1" 2>/dev/null || echo 0
+    stat -c %Y "$1" 2>/dev/null
   else
-    stat -f %m "$1" 2>/dev/null || echo 0
+    stat -f %m "$1" 2>/dev/null
   fi
 }
 
@@ -1050,7 +1060,16 @@ _burn_reclaim_mutex_try() {
   # (the same hazard `_burn_tank_lock_acquire` guards the lock itself
   # against) — so this must never be allowed to reach the `ln -s` below
   # while it might still be a directory.
-  if [ -d "$reclaim_link" ]; then
+  #
+  # R7-P2-2 (2026-09-10 round-7 review): `-d` DEREFERENCES, so a SYMLINK
+  # whose target resolves to a real directory also made this true, and ran
+  # everything below against the TARGET's own `pid` file -- a foreign
+  # symlink-to-directory at this path with a live pid inside it wedged this
+  # tank forever, through a door nobody could close (`clean` calls it
+  # "genuinely held", `burn` calls it busy, neither ever reaps it). The
+  # lock's own equivalent check (further down, R4-P2-1) has excluded
+  # symlinks this way since round 4; this one needs the same `! -L` guard.
+  if [ ! -L "$reclaim_link" ] && [ -d "$reclaim_link" ]; then
     # R6-P1-1/R6-P1-2 (2026-09-10 round-6 review): R5-P1-1's fix for this
     # shape (below `2>/dev/null; then` branch) still `mv`-ed the directory
     # aside UNCONDITIONALLY, before ever looking at what was inside it —
@@ -1126,25 +1145,52 @@ _burn_reclaim_mutex_try() {
     # not do, to keep reaping a truly abandoned directory instant (see the
     # committed R4-P1-1a/R4-P2-3a2 tests this preserves). Consequence if
     # that race is lost: the old binary's OWN next write or release call
-    # fails loudly against a path that is simply gone — never silent data
-    # loss, and never a second live holder of this mutex, because nothing
-    # below ever hands the mutex to a fresh claimant while treating the
-    # original as still alive.
+    # fails loudly against a path that is simply gone, and if a modern
+    # claimant's `ln -s` had already landed in that same window, its claim
+    # is restored below rather than silently dropped (R7-P1-1). What this
+    # branch actually guarantees: the mutex path is never handed to a
+    # fresh claimant while this branch still believes a live DIRECTORY
+    # holder owns it.
     grave="${reclaim_link}.stale.$$.$RANDOM"
     if mv "$reclaim_link" "$grave" 2>/dev/null; then
+      if [ -L "$grave" ]; then
+        # R7-P1-1 (2026-09-10 round-7 review): the window this `mv` crosses
+        # is the WHOLE classification above (the `[ -f ]` reads, the
+        # `cat`s, `kill -0`, and for a live pid a `ps` plus one or two
+        # `date` forks) — long enough for an ordinary caller to reap this
+        # exact directory and re-claim the mutex with a plain `ln -s`
+        # before this `mv` runs. What lands in the graveyard is then that
+        # caller's LIVE SYMLINK, not another directory: `[ -d "$grave" ]`
+        # below reads false, `rgpid` stays empty, and when the classified
+        # `gpid` was ALSO empty (the pid-less-directory shape above) the
+        # two empty strings compared equal and this caught claim was
+        # silently `rm -rf`'d with no diagnostic at all. `ln -s` IS
+        # EEXIST-atomic, unlike the directory `mv` this branch already
+        # refuses to attempt, so restore it here the same way the sibling
+        # branch below (and `fb536ce` before it) always did.
+        gtarget="$(readlink "$grave" 2>/dev/null || true)"
+        if ln -s "$gtarget" "$reclaim_link" 2>/dev/null; then
+          printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- restored it\n' "$reclaim_link" "${gtarget%%:*}" >&2
+        else
+          printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- could NOT restore (a third claim landed first)\n' "$reclaim_link" "${gtarget%%:*}" >&2
+        fi
+        rm -f "$grave" 2>/dev/null
+        return 1
+      fi
       rgpid=""
       [ -d "$grave" ] && [ -f "$grave/pid" ] && rgpid="$(cat "$grave/pid" 2>/dev/null || true)"
-      if [ "$rgpid" = "$gpid" ]; then
+      if [ -n "$gpid" ] && [ "$rgpid" = "$gpid" ]; then
         rm -rf "$grave" 2>/dev/null   # exactly the dead identity we classified -- discard
       else
         # Caught something other than what was classified (its `pid` file
         # appeared or changed in the window between our read and this
-        # `mv`) — there is no EEXIST-atomic way to hand a DIRECTORY back
-        # (`mv` onto an existing directory nests instead of failing,
-        # R3-P1-2), so the one safe thing left is to leave it exactly where
-        # this `mv` put it and say so once. A leaked graveyard directory is
-        # `clean`'s to eventually sweep (R6-P3-2), not this function's to
-        # solve by guessing.
+        # `mv`, or -- when `gpid` was empty -- an empty match is never
+        # trusted as proof it's the same litter, R7-P1-1) — there is no
+        # EEXIST-atomic way to hand a DIRECTORY back (`mv` onto an existing
+        # directory nests instead of failing, R3-P1-2), so the one safe
+        # thing left is to leave it exactly where this `mv` put it and say
+        # so once. A leaked graveyard directory is `clean`'s to eventually
+        # sweep (R6-P3-2), not this function's to solve by guessing.
         printf 'clikae: reclaim mutex reaper for %s caught a different legacy identity than it classified (expected pid "%s", found "%s") -- left it at %s, not restored\n' "$reclaim_link" "$gpid" "$rgpid" "$grave" >&2
       fi
     fi
@@ -1174,6 +1220,34 @@ _burn_reclaim_mutex_try() {
         rm -rf "$grave" 2>/dev/null   # foreign/corrupt, not a live holder's claim -- discard
       fi
     fi
+    return 1
+  fi
+
+  if [ -L "$reclaim_link" ] && [ -d "$reclaim_link" ]; then
+    # R7-P2-2 continued: the `! -L` guard added to the legacy-directory
+    # branch above (and its mirror in `_burn_reclaim_mutex_available`)
+    # only keeps a foreign symlink-to-directory OUT of that branch — it
+    # does not, by itself, make the CLAIM attempt below safe against the
+    # same shape. `-d`/`-e` DEREFERENCE: a symlink whose target resolves to
+    # an EXISTING DIRECTORY makes `ln -s "$$:$now_epoch" "$reclaim_link"`
+    # below NOT fail (measured: rc=0, on both GNU coreutils' `ln` and BSD
+    # `/bin/ln` -- this is `ln`'s own destination-is-a-directory handling,
+    # not a vendor quirk) -- it follows `$reclaim_link` through the
+    # symlink and creates the new claim INSIDE that directory instead,
+    # same nesting hazard R3-P1-2 found in `mv` and R4-P2-1 found in the
+    # LOCK's own equivalent `ln -s`, one level indirected through a
+    # foreign symlink here. The caller would believe it claimed the
+    # mutex; `$reclaim_link` itself stays untouched, still pointing at the
+    # foreign directory, and that directory silently gains a stray
+    # `<pid>:<epoch>` entry. Nothing this function ever writes resolves to
+    # a real directory (a well-formed mutex link's target is DATA,
+    # `<pid>:<started_at>`, never a path), so `-L && -d` here can only be a
+    # foreign or corrupt link -- reclaimable outright, checked and cleared
+    # BEFORE the `ln -s` attempt below is ever allowed to reach it, the
+    # same ordering discipline the two branches above already use. `rm -f`
+    # (never `-rf`): this removes the SYMLINK itself, never the directory
+    # it points at.
+    rm -f "$reclaim_link" 2>/dev/null
     return 1
   fi
 
@@ -1342,7 +1416,13 @@ _burn_reclaim_mutex_available() {
   # every genuinely-held mutex as vacant. Same correction the review's own
   # leak detector needed ("a dangling symlink is invisible to `-e` alone").
   { [ -L "$reclaim_link" ] || [ -e "$reclaim_link" ]; } || return 0
-  if [ -d "$reclaim_link" ]; then
+  # R7-P2-2: `-d` DEREFERENCES a symlink -- mirror `_burn_reclaim_mutex_try`'s
+  # `! -L` guard here too, or a foreign symlink-to-directory previews as
+  # this function's legacy-directory shape while the real `try` (once
+  # guarded) treats it as the malformed/foreign symlink it actually is,
+  # which is exactly the dry-run/real-run disagreement this predicate
+  # exists to prevent.
+  if [ ! -L "$reclaim_link" ] && [ -d "$reclaim_link" ]; then
     gpid=""
     [ -f "$reclaim_link/pid" ] && gpid="$(cat "$reclaim_link/pid" 2>/dev/null || true)"
     case "$gpid" in

@@ -1056,3 +1056,98 @@ _race_contender() {
   # sleep between retries keeps user CPU time a small fraction of that.
   awk -v u="$user_s" 'BEGIN { exit !(u < 1.0) }' || { echo "user time ${user_s}s -- looks like a busy spin"; false; }
 }
+
+# --- R7-P1-1 (2026-09-10 round-7 review): the legacy-directory branch's
+# `mv` runs after a window spanning its WHOLE classification (several `[`
+# tests, a `cat` or two, `kill -0`, and for a live pid a `ps` plus one or
+# two `date` forks) -- long enough for an ordinary caller to reap the same
+# directory and re-claim the mutex with a plain `ln -s` before the `mv`
+# actually runs. What the `mv` then catches is that caller's LIVE SYMLINK,
+# not another directory: `[ -d "$grave" ]` reads false, and the classified
+# `gpid` -- non-empty (a dead pid was recorded) or empty (a pid-less
+# directory) -- either got "left it at …, not restored" (parked,
+# un-restorable) or, when empty, silently `rm -rf`'d because two empty
+# identity strings compared equal. Reproducing the exact race (a fork
+# lands between classify and `mv`) needs a synchronization gate this
+# codebase has no reachable call path for planting deterministically in a
+# committed unit test -- see the fix7 report for the gated reproduction
+# (5/5 -> 0/5, both the pid-recorded and pid-less shapes, plus a sibling-
+# branch regression check) run the same way round 5/6's own R6-P1-2a/2b
+# gate probes were: a `cp -a` copy of this file with one `sleep` inserted
+# at the exact gate point, never committed here because the gate itself is
+# not a reachable pattern, only a way to make an already-possible race
+# land on demand. What IS committed here is the deterministic half: the
+# empty-identity guard itself never treats two empty strings as a match. ---
+
+@test "_burn_reclaim_mutex_try (R7-P1-1): an empty classified pid is never treated as matching an empty caught one" {
+  # Directly exercises the fixed comparison (\`[ -n "\$gpid" ] && [ "\$rgpid" = "\$gpid" ]\`)
+  # on the shape the review's pidless variant hits: the graveyard copy
+  # reads back with no parseable pid (whether because it is a genuinely
+  # different, still-pidless directory, or -- the dangerous case -- a
+  # symlink the caller's own [ -d ] check reads as "no pid file"). Without
+  # the \`-n\` guard, a classified gpid of "" would match that empty \`rgpid\`
+  # and \`rm -rf\` a live claim silently; with it, the branch takes the
+  # "caught something else, leave it and say so" path instead.
+  _src_burn_lock
+  grep -q '\[ -n "\$gpid" \] && \[ "\$rgpid" = "\$gpid" \]' "$CLIKAE_TEST_ROOT/lib/commands/burn.sh" || {
+    echo "the empty-identity guard (R7-P1-1) is missing from _burn_reclaim_mutex_try"; false; }
+}
+
+@test "_burn_reclaim_mutex_try (R7-P1-1): the directory branch's mv restores a live holder's SYMLINK it catches, the same way the sibling branch does" {
+  # Structural companion to the gated reproduction in the fix7 report: the
+  # six-line \`[ -L "\$grave" ]\` arm must exist ahead of the directory
+  # verify, using the same EEXIST-atomic \`ln -s\` restore the sibling
+  # (non-directory) branch already had. A missing arm here is exactly what
+  # 5/5-ed in the report.
+  _src_burn_lock
+  local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  local dir_line grave_line l_line
+  dir_line="$(grep -n '^  if \[ ! -L "\$reclaim_link" \] && \[ -d "\$reclaim_link" \]; then$' "$burn" | head -1 | cut -d: -f1)"
+  [ -n "$dir_line" ] || { echo "the legacy-directory branch's own guard line moved -- update this test"; false; }
+  grave_line="$(awk -v s="$dir_line" 'NR>s && /grave="\$\{reclaim_link\}\.stale\.\$\$\.\$RANDOM"/{print NR; exit}' "$burn")"
+  [ -n "$grave_line" ] || { echo "could not find the directory branch's own \$grave= assignment"; false; }
+  l_line="$(awk -v s="$grave_line" 'NR>s && /if \[ -L "\$grave" \]; then/{print NR; exit}' "$burn")"
+  [ -n "$l_line" ] || { echo "R7-P1-1: no [ -L \"\$grave\" ] restore arm between the directory branch's mv and its rgpid verify"; false; }
+  # And it must come BEFORE the rgpid comparison, not after (an arm added
+  # after the rm -rf/else branch would be dead code).
+  local rgpid_line
+  rgpid_line="$(awk -v s="$grave_line" 'NR>s && /rgpid=""/{print NR; exit}' "$burn")"
+  [ -n "$rgpid_line" ] || { echo "could not find the rgpid verify to order against"; false; }
+  [ "$l_line" -lt "$rgpid_line" ] || { echo "the [ -L \"\$grave\" ] restore arm is not ahead of the rgpid comparison"; false; }
+}
+
+# --- R7-P2-3 (2026-09-10 round-7 review): the legacy directory's mtime
+# helper used to \`echo 0\` on an stat failure -- a valid, PARSEABLE epoch
+# ("1970") that \`_burn_pid_matches_marker\` reads as a hard mismatch for
+# EVERY live pid, defeating that check's own documented policy for
+# unusable input ("absence of evidence is not evidence of a recycled
+# pid") and reaping a holder it simply could not see the timestamp for. ---
+
+@test "_burn_legacy_reclaim_dir_mtime (R7-P2-3): emits NOTHING on a stat failure, never a parseable 0" {
+  _src_burn_lock
+  local out
+  out="$(_burn_legacy_reclaim_dir_mtime "$BATS_TEST_TMPDIR/does-not-exist-$$-$RANDOM" 2>/dev/null)" || true
+  [ -z "$out" ] || { echo "expected empty output on a real stat failure (nonexistent path), got: [$out]"; false; }
+}
+
+@test "_burn_reclaim_mutex_try (R7-P2-3): a legacy directory whose mtime cannot be read still keeps a genuinely LIVE holder" {
+  _src_burn_lock
+  local dir="$CLIKAE_HOME/state/tank-busy-codex_T7P2P3.lock.reclaim"
+  mkdir -p "$dir"
+  printf '%s' "$$" > "$dir/pid"   # this test's OWN pid -- genuinely alive for the test's duration
+  # No started_at file -- forces the mtime fallback this residual is about.
+  # Stub `stat` to fail unconditionally, scoped to this ONE command only
+  # (never left on $PATH afterward) -- this failure IS what is being
+  # tested, not a detour around measuring it.
+  local stubbin="$BATS_TEST_TMPDIR/r7p2p3-stat-stub"
+  mkdir -p "$stubbin"
+  cat > "$stubbin/stat" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$stubbin/stat"
+  run env PATH="$stubbin:$PATH" bash -c '. "'"$CLIKAE_TEST_ROOT"'/lib/core/log.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/json.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/burn_status.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/core/duration.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/commands/antigravity.sh"; . "'"$CLIKAE_TEST_ROOT"'/lib/commands/burn.sh"; _burn_reclaim_mutex_try "'"$dir"'"'
+  [ "$status" -eq 1 ] || { echo "expected rc=1 (kept, busy); got $status. output: $output"; false; }
+  [ -d "$dir" ] || { echo "a stat failure reaped a genuinely LIVE legacy holder -- R7-P2-3"; false; }
+  rm -rf "$dir"
+}

@@ -1008,7 +1008,7 @@ _clean_tank_lock_busy_paths() {
 # shapes, this loop only needed to stop filtering one out.
 _clean_tank_lock_gc() {
   local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0 skipped=0
-  local busy_paths reclaim_dir had_entry
+  local busy_paths reclaim_dir had_entry got
   [ -d "$dir" ] || return 0
   busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
 
@@ -1033,7 +1033,26 @@ _clean_tank_lock_gc() {
       fi
       continue
     fi
+    # R7-P2-1 (2026-09-10 round-7 review): `_burn_reclaim_mutex_try` returns
+    # `1` for two entirely different reasons — a live holder refused it, OR
+    # it just reaped a dead one and, by design, "never claims it for the
+    # caller" — and treating both as "busy" made THIS most common outcome
+    # print a reason that is definitely wrong (nothing is contending) and
+    # left the `.lock` behind for a second `clean` run to remove, needing
+    # two passes where one would do (measured 3/3 on the fixtures where the
+    # mutex was reapable, not genuinely held). Tell the two apart by
+    # re-testing the path itself, not the return code: still occupied means
+    # a live holder genuinely has it; vacant means this very call reaped
+    # it, and the vacancy is ours to claim in the same pass.
+    got=0
     if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1
+    elif { [ -L "$reclaim_dir" ] || [ -e "$reclaim_dir" ]; }; then
+      got=0   # genuinely busy -- something else holds it right now
+    elif _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1   # the first try's own call reaped it; the path is vacant now -- claim it
+    fi
+    if [ "$got" -eq 1 ]; then
       # Re-verify under the mutex before acting — the target may have
       # changed since the unsynchronized read above (a live holder
       # released, or a fresh contender's `ln -s` landed on this exact path
@@ -1070,7 +1089,13 @@ _clean_tank_lock_gc() {
       # on its own) — this only won a fresh, empty claim; release it
       # immediately, GC has no removal to protect by holding it.
       _burn_reclaim_mutex_release "$f"
-    else
+    elif { [ -L "$f" ] || [ -d "$f" ]; }; then
+      # R7-P2-1: `_burn_reclaim_mutex_try` returning `1` here does not mean
+      # "genuinely held" — it also returns `1` after reaping-and-discarding
+      # a dead entry outright (never claims it for the caller). Only say
+      # "genuinely held" once the path is checked and still actually there;
+      # a reap that already removed it needs no line here at all, the same
+      # way the `n` count below already only fires on a real removal.
       log_info "GC: skipping ${f##*/} -- it is genuinely held right now"
       skipped=$((skipped + 1))
     fi

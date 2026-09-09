@@ -178,9 +178,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function deliberately does not wait to find out (the same instant reap a
   pid-less directory always got); losing that race costs the old binary its
   directory mutex, and its own next write or release call then fails
-  loudly against a path that is simply gone — never a second live holder
-  of this mutex, and never data loss (2026-09-10 round-6 review,
-  R6-P1-1/R6-P1-2). **A `SIGKILL`ed burn denies its own tank for up to
+  loudly against a path that is simply gone (2026-09-10 round-6 review,
+  R6-P1-1/R6-P1-2). **Round 7 review found the classify-then-verify above
+  could still catch a LIVE HOLDER'S SYMLINK with its `mv` instead of the
+  directory it classified** — the classification spans several forks
+  (`kill -0`, and for a live pid a `ps` plus one or two `date` calls), long
+  enough for an ordinary caller to reap that same directory and re-claim
+  the mutex with a plain `ln -s` before the `mv` ran; the verify then read
+  `[ -d "$grave" ]` as false and had no arm for that shape, either parking
+  the live claim un-restorable (5/5) or, when the classified directory was
+  pid-less, silently `rm -rf`-ing it outright because two empty identity
+  strings compared equal (5/5, no diagnostic at all) — so "never a second
+  live holder of this mutex" was true only of a directory holder, not this
+  one. Fixed with the same `[ -L "$grave" ]` restore-with-`ln -s` arm the
+  sibling, non-directory branch already had, and by never trusting an
+  empty classified pid as a match for an empty caught one; what this
+  branch actually guarantees, corrected everywhere it was claimed
+  otherwise, is that the mutex path is never handed to a fresh claimant
+  while this branch still believes a live DIRECTORY holder owns it
+  (2026-09-10 round-7 review, R7-P1-1). **`clikae clean`'s GC called every
+  successful reap "its reclaim mutex is busy right now" and needed two
+  passes to converge** — `_burn_reclaim_mutex_try` returns `1` both when it
+  refuses a live holder and when it just reaped a dead one, and the GC read
+  both as "busy"; it now re-tests the path after a `1`, so a reap in this
+  pass claims the now-vacant lock instead of waiting for the next `clean`
+  (2026-09-10 round-7 review, R7-P2-1). **A foreign symlink-to-directory
+  left at the `.lock.reclaim` path was permanently un-reapable** —
+  `[ -d "$reclaim_link" ]` dereferences before any `-L` check, so a symlink
+  resolving to a real directory ran the legacy-directory branch against
+  the TARGET's own `pid` file forever; guarded with the same `! -L` check
+  the lock itself has had since round 4. That guard alone was not enough:
+  the CLAIM attempt further down (`ln -s "$$:$now_epoch" "$reclaim_link"`)
+  does not fail EEXIST against such a path either — `ln`'s own
+  destination-is-a-directory handling follows the symlink and creates the
+  new claim INSIDE the foreign directory instead (measured rc=0, on both
+  GNU coreutils' `ln` and BSD `/bin/ln` — this is `ln`'s documented
+  behaviour, not a vendor quirk), leaving `$reclaim_link` itself untouched
+  and the caller wrongly believing it claimed the mutex. A second guard,
+  mirroring the lock's own `-L "$lock" && -d "$lock"` check one level up,
+  evicts the foreign symlink with `rm -f` before the claim attempt is ever
+  allowed to reach it (2026-09-10 round-7 review, R7-P2-2). **The legacy
+  directory's own mtime helper returned `0` — a valid, parseable epoch —
+  when `stat` itself failed**, which
+  `_burn_pid_matches_marker` reads as "started in 1970" and refuses to
+  match ANY live pid, reaping a genuinely live legacy holder; it now emits
+  nothing on failure, so an unreadable mtime is treated as unknown and the
+  holder is kept, matching the policy every other unparseable input to
+  that check already gets (2026-09-10 round-7 review, R7-P2-3). **The
+  structural pin asserting no bare, unguarded remover exists had a
+  mutation check that only proved its pinned line-number list changes
+  when the file gets one line longer** — a pure comment satisfied it, and
+  a real, unguarded `rm -rf "$reclaim_dir"` inside the lock's own acquire
+  loop left the pinned set byte-identical; rewritten to parse actual
+  command lines with comments stripped, assert each remover's enclosing
+  function is in an allow-list that holds the mutex or names a graveyard,
+  and to prove itself on both mutations — the comment (still green) and
+  the real bare `rm -rf` (now red) (2026-09-10 round-7 review, R7-P2-4).
+  **A `SIGKILL`ed burn denies its own tank for up to
   ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the
   lock and its mutex are left exactly as they were, and every burn tried
   against that tank is refused until the mutex's own 30s stale rule
