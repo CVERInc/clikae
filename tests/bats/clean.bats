@@ -1212,6 +1212,39 @@ _pin_burn_removal_functions() {
   ' "$1" | sort | paste -sd' ' -
 }
 
+# _pin_clean_tank_lock_gc_removals <clean.sh path> — clean.sh's half of the
+# same pin, scoped to _clean_tank_lock_gc's OWN body ($f/$dir are reused by
+# OTHER GCs in this file that have nothing to do with the tank-busy lock,
+# so this must not grep the whole file). Found dynamically by function name
+# + matching closing brace (never an absolute line number), comments
+# stripped per line, and reports a MULTISET of matches ("RM" once per real
+# removal line) rather than their offsets.
+#
+# R9-P2-5 (2026-09-11 round-9 review): the pre-round-9 version of this half
+# pinned ABSOLUTE OFFSETS from the function's own start line ("62 63 147")
+# -- R7-P2-4's own fix for the file-wide absolute-line-number version, but
+# the SAME false-positive shape one level down: a PURE COMMENT inserted
+# anywhere INSIDE the function's body shifts every offset after it,
+# turning the pin red for an edit that added no remover at all (measured:
+# "62 63 147" -> "63 64 148" for one comment line). And it had no mutation
+# check at all -- unlike burn.sh's twin, nothing ever proved it goes red
+# for a real remover. This is burn.sh's own fix (round 7's function-scoped,
+# comment-stripped counting) applied to clean.sh's single function.
+_pin_clean_tank_lock_gc_removals() {
+  local clean="$1" gc_start gc_end
+  gc_start="$(grep -n '^_clean_tank_lock_gc() {' "$clean" | head -1 | cut -d: -f1)"
+  [ -n "$gc_start" ] || { echo "MISSING-FUNCTION-START"; return 1; }
+  gc_end="$(awk -v s="$gc_start" 'NR>s && /^}/{print NR; exit}' "$clean")"
+  [ -n "$gc_end" ] || { echo "MISSING-FUNCTION-END"; return 1; }
+  awk -v s="$gc_start" -v e="$gc_end" '
+    NR>=s && NR<=e {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      if (line ~ /rm (-rf|-f)[[:space:]]*"\$(f|dir)"/ || line ~ /rmdir[[:space:]]*"\$(f|dir)"/) print "RM"
+    }
+  ' "$clean" | sort | paste -sd' ' -
+}
+
 @test "structural (R6-P2-6/R7-P2-4/R8-P2-1): every removal touching the tank-busy lock or its reclaim mutex sits in an allow-listed function, and a SECOND one in an already-listed function is caught too" {
   local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   local clean="$CLIKAE_TEST_ROOT/lib/commands/clean.sh"
@@ -1219,17 +1252,25 @@ _pin_burn_removal_functions() {
   # burn.sh: `$grave` sites are all a private graveyard name (`<path>.stale.
   # $$.$RANDOM`, unique per caller, never a rendezvous point) or a
   # verified-by-`readlink` restore-with-`ln -s` of a live holder's own claim
-  # (R8-P1-1) followed by discarding the now-superfluous graveyard copy;
-  # `$lock`/`$reclaim_dir` sites are all inside a branch that has already won
-  # `_burn_reclaim_mutex_try` (or, in `_burn_tank_lock_release`'s fast path,
-  # already recorded as holding it via `_BURN_RECLAIM_MUTEX_OWNED`); the one
-  # `"$1"` site is `_burn_reclaim_mutex_release` itself, removing the mutex
-  # link it names ONLY after re-reading it and confirming it still names
-  # `$$` -- the mutex's own identity-checked self-release, not something a
-  # SEPARATE mutex needs to guard.
+  # (R8-P1-1/R9-P1-1) followed by discarding the now-superfluous graveyard
+  # copy; `$lock`/`$reclaim_dir` sites are all inside a branch that has
+  # already won `_burn_reclaim_mutex_try` (or, in `_burn_tank_lock_release`'s
+  # fast path, already recorded as holding it via
+  # `_BURN_RECLAIM_MUTEX_OWNED`); the one `"$1"` site is
+  # `_burn_reclaim_mutex_release` itself, removing the mutex link it names
+  # ONLY after re-reading it and confirming it still names `$$` -- the
+  # mutex's own identity-checked self-release, not something a SEPARATE
+  # mutex needs to guard.
+  #
+  # R9-P1-1 (2026-09-11 round-9 review): `_burn_tank_lock_acquire`'s own
+  # re-verify-under-the-mutex `rm -f "$lock"` moved into a new shared
+  # helper, `_burn_tank_lock_reap_verified` -- one fewer site directly in
+  # `_burn_tank_lock_acquire` (3 -> 2), two new `$grave` sites in the new
+  # function (the same mv-then-classify shape `_burn_reclaim_mutex_try`
+  # already has: discard on a match, restore-and-verify on a mismatch).
   run bash -c "$(declare -f _pin_burn_removal_functions); _pin_burn_removal_functions '$burn'"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$output" = "_burn_reclaim_mutex_release _burn_reclaim_mutex_try _burn_reclaim_mutex_try _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_release _burn_tank_lock_release" ] || {
+  [ "$output" = "_burn_reclaim_mutex_release _burn_reclaim_mutex_try _burn_reclaim_mutex_try _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_reap_verified _burn_tank_lock_reap_verified _burn_tank_lock_release _burn_tank_lock_release" ] || {
     echo "burn.sh's lock/mutex/graveyard removal sites changed shape: [$output]"
     echo "-- classify the new/moved site (mutex-guarded / private graveyard /"
     echo "   mutex's own identity-checked self-release) and update this allow-list,"
@@ -1239,19 +1280,13 @@ _pin_burn_removal_functions() {
 
   # clean.sh: scoped to _clean_tank_lock_gc's OWN body -- $f is reused by
   # OTHER GCs in this file (scrollback, tmux) that have nothing to do with
-  # the tank-busy lock, so this must not grep the whole file. Pinned by
-  # OFFSET from the function's own start line (R7-P2-4), not an absolute
-  # line number, so an edit anywhere else in clean.sh cannot shift this pin
-  # the way it shifted burn.sh's original one.
-  local gc_start gc_end
-  gc_start="$(grep -n '^_clean_tank_lock_gc() {' "$clean" | head -1 | cut -d: -f1)"
-  [ -n "$gc_start" ] || { echo "_clean_tank_lock_gc's own definition line moved or was renamed"; false; }
-  gc_end="$(awk -v s="$gc_start" 'NR>s && /^}/{print NR; exit}' "$clean")"
-  [ -n "$gc_end" ] || { echo "could not find _clean_tank_lock_gc's closing brace"; false; }
-  run bash -c "grep -nE 'rm (-rf|-f)|rmdir' '$clean' | grep -vE ':[[:space:]]*#' | awk -F: -v s=$gc_start -v e=$gc_end '\$1>=s && \$1<=e {print \$1-s}' | paste -sd' ' -"
+  # the tank-busy lock, so this must not grep the whole file. See
+  # _pin_clean_tank_lock_gc_removals's own header (above) for why this is a
+  # match-count, not an offset list (R9-P2-5).
+  run bash -c "$(declare -f _pin_clean_tank_lock_gc_removals); _pin_clean_tank_lock_gc_removals '$clean'"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$output" = "62 63 147" ] || {
-    echo "clean.sh's _clean_tank_lock_gc removal sites changed (offsets from the function's own start line): [$output]"
+  [ "$output" = "RM" ] || {
+    echo "clean.sh's _clean_tank_lock_gc removal-line count changed: [$output]"
     echo "-- classify the new/moved line and update this pin, or revert it."
     false
   }
@@ -1266,7 +1301,7 @@ _pin_burn_removal_functions() {
   local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   local baseline
   baseline="$(_pin_burn_removal_functions "$burn")"
-  [ "$baseline" = "_burn_reclaim_mutex_release _burn_reclaim_mutex_try _burn_reclaim_mutex_try _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_release _burn_tank_lock_release" ] || {
+  [ "$baseline" = "_burn_reclaim_mutex_release _burn_reclaim_mutex_try _burn_reclaim_mutex_try _burn_tank_lock_acquire _burn_tank_lock_acquire _burn_tank_lock_reap_verified _burn_tank_lock_reap_verified _burn_tank_lock_release _burn_tank_lock_release" ] || {
     echo "baseline allow-list already disagrees with the test above -- fix that test first: [$baseline]"; false; }
 
   # MUTATION A -- a real, bare, unguarded SECOND `rm -f "$lock"` inserted
@@ -1344,6 +1379,60 @@ _pin_burn_removal_functions() {
   [ "$after_comment" = "$baseline" ] || {
     echo "a pure comment prepended above everything turned the pin red -- it is not immune to renumbering (R7-P2-4)"
     echo "baseline: [$baseline]  after comment: [$after_comment]"
+    false
+  }
+}
+
+@test "structural (R9-P2-5) mutation check: clean.sh's OWN half of the pin goes RED on a real new remover and stays GREEN on a pure comment inside the function" {
+  # R9-P2-5 (2026-09-11 round-9 review): the pre-round-9 version of this
+  # half was a list of absolute OFFSETS from the function's own start line
+  # ("62 63 147") with NO mutation check anywhere -- unlike burn.sh's twin,
+  # nothing ever proved it goes red for a real remover, and a pure comment
+  # inserted inside the function (not just above it) shifted every offset
+  # after it and turned the pin red for an edit that added no remover at
+  # all (measured: "62 63 147" -> "63 64 148" for one comment line). This
+  # test is the mutation check that pin never had, against the count-based
+  # replacement (which reads by name + closing brace and strips comments,
+  # so a comment inside the function changes nothing it counts).
+  local clean="$CLIKAE_TEST_ROOT/lib/commands/clean.sh"
+  local baseline
+  baseline="$(_pin_clean_tank_lock_gc_removals "$clean")"
+  [ "$baseline" = "RM" ] || {
+    echo "baseline already disagrees with the test above -- fix that test first: [$baseline]"; false; }
+
+  # MUTATION-N -- a real, bare, unguarded, NEW `rm -rf "$dir"` inserted
+  # right after _clean_tank_lock_gc's own opening lines: a real removal
+  # this function's body did not have before.
+  local gc_line mutated_n mutated_n_pin
+  gc_line="$(grep -n '^_clean_tank_lock_gc() {' "$clean" | head -1 | cut -d: -f1)"
+  [ -n "$gc_line" ] || { echo "_clean_tank_lock_gc's own definition line moved or was renamed"; false; }
+  mutated_n="$BATS_TEST_TMPDIR/clean_mutation_n.sh"
+  awk -v n="$gc_line" '
+    NR==n { print; print "  rm -rf \"$dir\" 2>/dev/null   # MUTATION-N: bare, unguarded, new remover"; next }
+    { print }
+  ' "$clean" > "$mutated_n"
+  grep -q 'MUTATION-N: bare, unguarded' "$mutated_n" || { echo "mutation N did not apply -- _clean_tank_lock_gc's shape changed upstream"; false; }
+  mutated_n_pin="$(_pin_clean_tank_lock_gc_removals "$mutated_n")"
+  [ "$mutated_n_pin" != "$baseline" ] || {
+    echo "the pin did NOT go red for a real, bare, unguarded new remover"
+    echo "baseline: [$baseline]  mutation N: [$mutated_n_pin]"
+    false
+  }
+
+  # CONTROL -- a pure comment, no remover at all, inserted INSIDE the
+  # function's body (not merely above the whole file, which is what the
+  # burn.sh control above tests) -- the exact shape that shifted the OLD
+  # offset-based pin's numbers and turned it red for nothing.
+  local commented commented_pin
+  commented="$BATS_TEST_TMPDIR/clean_comment.sh"
+  awk -v n="$gc_line" '
+    NR==n { print; print "  # a harmless comment mentioning rm -f \"$f\" for illustration only"; next }
+    { print }
+  ' "$clean" > "$commented"
+  commented_pin="$(_pin_clean_tank_lock_gc_removals "$commented")"
+  [ "$commented_pin" = "$baseline" ] || {
+    echo "a pure comment inside the function turned the pin red -- it is not immune to renumbering (R9-P2-5, R7-P2-4's own shape one level down)"
+    echo "baseline: [$baseline]  after comment: [$commented_pin]"
     false
   }
 }

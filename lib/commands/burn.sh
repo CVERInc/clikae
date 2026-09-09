@@ -1016,16 +1016,47 @@ _burn_tank_lock_path() {
 # mutex already held instead of looping to acquire it a second time.
 _BURN_RECLAIM_MUTEX_OWNED=""
 
+# _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX — set by `_burn_tank_lock_acquire` to the
+# reclaim-mutex path it refused on, immediately before it `return`s 2 (R9-
+# P1-2/R9-P2-3, 2026-09-11 round-9 review): a foreign object never self-
+# heals, so that refusal is terminal rather than an ordinary busy-mutex
+# backoff, and the caller (`cmd_burn`) reads this to write the specific
+# `foreign-mutex: <path>` reason into the status file and the terminal
+# message, instead of the generic busy-timeout text. Empty whenever the
+# most recent `_burn_tank_lock_acquire` call did not return 2 for this
+# reason — callers must not read it after any OTHER return value.
+_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX=""
+
 # _burn_reclaim_mutex_is_foreign <reclaim_link> -> 0 if the path is occupied
 # by something this codebase never wrote and will never touch (a directory,
-# a symlink resolving to one, or a plain file), 1 for anything else
-# (vacant, or a well-formed `<pid>:<started_at>` symlink of ours, live or
-# dead). Shared by `_burn_reclaim_mutex_try`, `_burn_reclaim_mutex_available`
-# and `clean.sh`'s GC, so all three report the exact same "foreign-mutex"
+# a symlink resolving to one, a plain file, a fifo, a socket — anything
+# `-e` sees through to), 1 for anything else (vacant, or a well-formed
+# `<pid>:<started_at>` symlink of ours, live or dead). Shared by
+# `_burn_reclaim_mutex_try`, `_burn_reclaim_mutex_available` and
+# `clean.sh`'s GC, so all three report the exact same "foreign-mutex"
 # verdict for the exact same path — see the KITT ruling above `try`'s own
 # refusal for why this is a single rule rather than three cases.
+#
+# R9-P2-1 (2026-09-11 round-9 review): the shipped `[ -e "$1" ] && { [ ! -L
+# "$1" ] || [ -d "$1" ]; }` was three conditions where one already does the
+# whole job, and the extra two let one shape through: a symlink resolving
+# to an EXISTING NON-DIRECTORY (a regular file, a symlink chain to one, or
+# a device node) made `-e` true, `[ ! -L ]` false AND `[ -d ]` false, so
+# `is_foreign` returned 1 (not foreign) and the malformed-payload branch
+# below evicted it — measured, on a regular file, a chained symlink, and
+# `/dev/null`: removed, not refused, exactly the object all three surfaces
+# (this comment, `try`'s refusal message, and docs/orchestration.md) say is
+# never touched. `-e` alone is sufficient because it DEREFERENCES: our own
+# claim's target is always DATA (`<pid>:<started_at>`), never a real path,
+# so `-e` on our own claim is always false regardless of liveness — that
+# one property is the whole rule. *Anything* the path resolves to is
+# foreign, because nothing this codebase ever writes resolves to anything.
+# This also removes the ENOENT race the three-condition form had (R9-P3-1):
+# if the object vanished between a first and a second `stat`, `[ -e ]` was
+# true and `[ ! -L ]` was true (ENOENT), misclassifying a now-VACANT path as
+# foreign — with a single `stat` there is no second call left to race.
 _burn_reclaim_mutex_is_foreign() {
-  [ -e "$1" ] && { [ ! -L "$1" ] || [ -d "$1" ]; }
+  [ -e "$1" ]
 }
 
 _burn_reclaim_mutex_try() {
@@ -1049,11 +1080,19 @@ _burn_reclaim_mutex_try() {
   # "$reclaim_link" ]` catches a plain foreign file. Nothing this function
   # ever writes is anything but a symlink whose target is DATA
   # (`<pid>:<started_at>`, never a real path), so this condition can only be
-  # foreign: refuse loudly, name the path, and back off exactly like any
-  # other busy mutex -- the caller's own retry/timeout policy is unchanged,
-  # and there is no `--force` path in this PR. `clikae clean` reports the
-  # same refusal under the same reason (see clean.sh's
-  # `_clean_tank_lock_gc`), and never removes it either.
+  # foreign: refuse loudly and name the path. This function's own job stops
+  # at refusing once -- it never retries a refusal itself. R9-P1-2 (2026-
+  # 09-11 round-9 review): the OLD comment here said this "backs off exactly
+  # like any other busy mutex, the caller's own retry/timeout policy is
+  # unchanged" -- true of this function in isolation, false of what it
+  # licensed callers to assume, because a foreign object never self-heals
+  # the way an ordinary busy mutex does. `_burn_tank_lock_acquire` treats
+  # THIS specific refusal as terminal (see its own R9-P1-2 comment) rather
+  # than looping back with a backoff sleep; measured on the old
+  # loop-forever-with-no-sleep shape: 9.79s of CPU and 49,151 duplicate
+  # refusal lines in one 10s burn. `clikae clean`'s GC reports the same
+  # refusal under the same reason and moves on to the next tank without
+  # retrying this one either.
   if _burn_reclaim_mutex_is_foreign "$reclaim_link"; then
     printf 'clikae: reclaim mutex at %s is a foreign-mutex (a directory, a symlink to one, or a plain file) -- remove it by hand, then retry\n' "$reclaim_link" >&2
     return 1
@@ -1061,7 +1100,23 @@ _burn_reclaim_mutex_try() {
 
   now_epoch="$(date +%s 2>/dev/null || echo 0)"
   if ln -s "$$:$now_epoch" "$reclaim_link" 2>/dev/null; then
-    return 0
+    # R9-P2-2 (2026-09-11 round-9 review): `ln -s`'s own exit code is NOT
+    # proof the claim landed AT $reclaim_link -- the same fact R8-P1-1 found
+    # for the RESTORE twelve lines below applies just as much to this
+    # CLAIM: if a foreign directory arrives in the window between the
+    # is_foreign check above and this `ln -s` (this function does not hold
+    # any mutex over ITSELF), `ln -s` follows the now-existing directory and
+    # nests our claim INSIDE it, still returning rc=0 -- measured 5/5 with a
+    # hook planted in that exact window. Verify by `readlink`, exactly like
+    # the restore already does: on a match we genuinely hold the mutex; on
+    # a mismatch we hold nothing at `$reclaim_link` at all, so the caller's
+    # normal retry sees the object that arrived and the next `is_foreign`
+    # call refuses it correctly instead of two processes believing they
+    # both hold this mutex.
+    if [ -L "$reclaim_link" ] && [ "$(readlink "$reclaim_link" 2>/dev/null)" = "$$:$now_epoch" ]; then
+      return 0
+    fi
+    return 1
   fi
 
   [ -L "$reclaim_link" ] || return 1   # vanished between the checks above and here — caller retries
@@ -1260,8 +1315,82 @@ _burn_reclaim_mutex_available() {
   esac
 }
 
+# _burn_tank_lock_reap_verified <lock> <judged_holder> <judged_hstarted> ->
+# reap <lock> IF, AND ONLY IF, an atomic `mv` still catches the exact
+# identity the caller already judged stale from an earlier unsynchronized
+# read; if it catches anything else, put it back. 0 if the lock was
+# genuinely reaped, 1 otherwise (nothing to reap, or a live claim was
+# safely restored).
+#
+# R9-P1-1 (2026-09-11 round-9 review): every OTHER remover in this file
+# already earns mutual exclusion by never trusting a decision made before
+# the removal — `_burn_reclaim_mutex_try` itself is the model: `mv` first
+# (atomic; catches whatever is THERE, not whatever was there when a
+# fork-ago read happened), then classify what was actually caught. The two
+# call sites of THIS helper (`_burn_tank_lock_acquire`'s re-verify-under-
+# the-mutex block, and `_clean_tank_lock_gc`'s twin) had that discipline
+# applied to the MUTEX that serialises their removals, never to the LOCK
+# the mutex protects: both used to `readlink`-decide-then-`rm -f "$lock"`
+# directly, and `_burn_pid_matches_marker` forks `ps` AND `date` in
+# between decide and remove. The reclaim mutex serialises REMOVERS, never
+# CLAIMANTS — a claim is a bare `ln -s` with no mutex around it at all
+# (see the claim below) — so a live burn's fresh claim landing in that
+# fork-sized window was deleted by a reaper that never re-read what it was
+# about to `rm`. Measured through real `clikae burn`/`clikae clean`
+# binaries: 6 genuine engine overlaps (two burns holding one tank lock at
+# once, the #40 symptom this entire mechanism exists to prevent), and
+# deterministically 5/5 at each site with a hook planted immediately
+# before the old bare `rm -f "$lock"`.
+#
+# The fix is the same `mv`-then-classify shape, parameterised by the
+# identity the caller already believes is stale (so this helper re-derives
+# nothing about liveness itself — that stays the caller's job, exactly
+# once, right before calling this): `mv` is atomic on one filesystem, so
+# whatever is at `$lock` the instant this runs is what lands in the
+# graveyard and nothing else can land there afterward. If the graveyard's
+# own payload still names the judged-stale identity, the eviction was
+# correct and the graveyard copy is discarded. If it names anyone else, a
+# live holder's fresh claim landed in the window between the caller's read
+# and this `mv` — put it back immediately (never leave the path vacant for
+# a THIRD contender to land in, the same vacate hazard R3-P1-1 found in the
+# main lock and R4-P1-2 found in the mutex), and verify the restore by
+# `readlink`, not by `ln -s`'s own exit code (R8-P1-1's own rule, applied
+# here to the lock rather than the mutex): on a mismatch the graveyard copy
+# is KEPT, never discarded, because it is the only surviving copy of a live
+# holder's claim.
+_burn_tank_lock_reap_verified() {
+  local lock="$1" judged_holder="$2" judged_hstarted="$3"
+  local grave gtarget gholder ghstarted
+  [ -L "$lock" ] || return 1
+  grave="${lock}.stale.$$.$RANDOM"
+  mv "$lock" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
+  gtarget="$(readlink "$grave" 2>/dev/null || true)"
+  gholder="${gtarget%%:*}"
+  ghstarted="${gtarget#*:}"
+  if [ "$gholder" = "$judged_holder" ] && [ "$ghstarted" = "$judged_hstarted" ]; then
+    rm -f "$grave" 2>/dev/null   # exactly the identity we judged stale -- discard it
+    return 0
+  fi
+  # We caught someone ELSE'S claim: a live holder's fresh `ln -s` landed on
+  # this EXACT path in the window between the caller's unsynchronized read
+  # and this `mv`. Put an equivalent entry back immediately rather than
+  # leaving the vacancy open for any length of time.
+  ln -s "$gtarget" "$lock" 2>/dev/null || true
+  if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$gtarget" ]; then
+    printf 'clikae: tank lock reaper for %s raced a live claim (pid %s) -- restored it\n' "$lock" "$gholder" >&2
+    rm -f "$grave" 2>/dev/null
+  else
+    printf 'clikae: tank lock reaper for %s raced a live claim (pid %s) -- could NOT restore (the lock path is occupied) -- the claim is kept at %s\n' "$lock" "$gholder" "$grave" >&2
+  fi
+  return 1
+}
+
 # _burn_tank_lock_acquire <engine> <tank> [timeout_s=10] -> 0 once THIS
-# process holds the per-tank lock, 1 on timeout.
+# process holds the per-tank lock, 1 on an ordinary timeout (ONLY: the
+# reclaim mutex stayed busy, or a live holder never released), 2 if the
+# reclaim mutex is a foreign object -- a TERMINAL refusal, never retried,
+# never counted against the timeout (R9-P1-2/R9-P2-3, see
+# `_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX` above for the path).
 #
 # P2-4 (2026-09-09 round-1 review): the busy check (`burn_tank_busy`) and the
 # `running` write that makes a tank busy for anyone ELSE'S check are two
@@ -1354,6 +1483,21 @@ _burn_tank_lock_acquire() {
         [ -e "$lock" ] && [ ! -L "$lock" ] && rm -rf "$lock" 2>/dev/null
         _burn_reclaim_mutex_release "$reclaim_dir"
         _BURN_RECLAIM_MUTEX_OWNED=""
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # R9-P1-2 (2026-09-11 round-9 review): a foreign object at the
+        # RECLAIM MUTEX path (as opposed to at the lock itself, the case
+        # this branch exists for) never self-heals -- `_burn_reclaim_mutex_
+        # try` refuses it on EVERY call, forever, so looping back to
+        # `continue` with no backoff spun this whole branch at up to ~89%
+        # of a core, printing the refusal `try` already logged once, until
+        # the caller's outer timeout -- measured 49,151 duplicate lines in
+        # one 10s burn. Refuse ONCE more, terminally: exit the acquisition
+        # loop immediately rather than retrying a condition that cannot
+        # change without a human removing the object by hand.
+        _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+        return 2
+      else
+        sleep 1   # an ordinary busy mutex -- back off like every other branch does
       fi
       continue
     fi
@@ -1375,12 +1519,28 @@ _burn_tank_lock_acquire() {
         [ -L "$lock" ] && [ -d "$lock" ] && rm -f "$lock" 2>/dev/null
         _burn_reclaim_mutex_release "$reclaim_dir"
         _BURN_RECLAIM_MUTEX_OWNED=""
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # R9-P1-2, the sibling site: same terminal refusal as the
+        # non-symlink branch above, same reason.
+        _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+        return 2
+      else
+        sleep 1   # an ordinary busy mutex -- back off like every other branch does
       fi
       continue
     fi
     now_epoch="$(date +%s 2>/dev/null || echo 0)"
     if ln -s "$$:$now_epoch" "$lock" 2>/dev/null; then
-      return 0
+      # R9-P2-2 sibling site (2026-09-11 round-9 review): the same
+      # check-then-act hazard the reclaim mutex's own claim has -- `ln -s`
+      # returns rc=0 without landing at `$lock` when `$lock` resolves to a
+      # directory that arrived in the window since the `-L "$lock" && -d
+      # "$lock"` check above. Verify by `readlink` before believing we hold
+      # the tank lock; on a mismatch, fall through to the same handling as
+      # an outright `ln -s` failure below (this loop's normal retry path).
+      if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$$:$now_epoch" ]; then
+        return 0
+      fi
     fi
     target="$(readlink "$lock" 2>/dev/null || true)"
     if [ -z "$target" ] && [ ! -L "$lock" ]; then
@@ -1453,10 +1613,37 @@ _burn_tank_lock_acquire() {
             fi
             ;;
         esac
-        [ "$stale" -eq 1 ] && rm -f "$lock" 2>/dev/null
+        # R9-P1-1 (2026-09-11 round-9 review): this used to `rm -f "$lock"`
+        # directly on `$stale -eq 1` -- a bare readlink-decide-then-rm on
+        # the path, not on the entry actually caught. The reclaim mutex
+        # held across this whole block serialises REMOVERS (only one
+        # process ever reaches this `rm`), but it does not and cannot
+        # serialise CLAIMANTS: a claim is the bare `ln -s` above, which
+        # takes no mutex at all. Between the `readlink` a few lines up and
+        # the `rm -f` this replaces, `_burn_pid_matches_marker` forks `ps`
+        # AND `date` -- milliseconds under load -- and a live burn's fresh
+        # claim landing in that fork-sized window was deleted while it was
+        # inside its own check-and-write, producing two engines on one
+        # tank. Measured through real binaries: 6 overlaps in 130 trials
+        # with `clikae clean` racing `clikae burn`; deterministically 5/5
+        # with a hook. `_burn_tank_lock_reap_verified` closes it with the
+        # same `mv`-then-classify discipline `_burn_reclaim_mutex_try`
+        # already uses on itself, applied here to the LOCK: it re-catches
+        # whatever is actually at `$lock` atomically and only discards it
+        # if it still names the exact identity judged stale right above.
+        [ "$stale" -eq 1 ] && _burn_tank_lock_reap_verified "$lock" "$holder" "$hstarted"
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"
       _BURN_RECLAIM_MUTEX_OWNED=""
+    elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+      # R9-P1-2/R9-P2-3: the third call site with the same permanent
+      # refusal -- terminal, not a busy-mutex backoff. Measured on this
+      # exact fixture (a dead-holder lock, foreign reclaim mutex): the old
+      # shape spun the sibling `sleep 1` branch below for the WHOLE
+      # timeout, ending in the generic "try again shortly" busy-timeout
+      # message for a condition that never times out on its own.
+      _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+      return 2
     else
       # R5-P2-4 (2026-09-10 round-5 review; the other half of R4-P2-2): the
       # mutex being unclaimable right now (someone else holds it, or it's
@@ -1693,7 +1880,36 @@ cmd_burn() {
     trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 130; exit 130' INT
     trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 143; exit 143' TERM
     trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard "$?"' EXIT
-    if ! _burn_tank_lock_acquire "$status_engine" "$tank"; then
+    # 🔴 `cmd || rc=$?`, never a bare `cmd; rc=$?` — this whole file runs
+    # under bin/clikae's `set -eo pipefail`. A bare failing statement here
+    # is NOT the condition of any if/while/&&/||, so `set -e` aborts this
+    # function's execution AT THAT STATEMENT, before `_lock_acquire_rc=$?`
+    # or either `if` below ever runs — verified: it does not merely skip to
+    # the wrong branch, it exits immediately into the EXIT trap, which
+    # calls `_burn_tank_lock_release` (itself then retrying against the
+    # same foreign mutex for its own ~10-try backoff) and then
+    # `_burn_exit_guard`'s generic "burn exited without reaching a terminal
+    # state" fallback — neither the `foreign-mutex:` nor the `busy:` reason
+    # below is ever written. `cmd || rc=$?` keeps the whole statement's own
+    # exit status at 0 (the assignment succeeds) so `set -e` never fires,
+    # while still capturing the real code.
+    local _lock_acquire_rc=0
+    _burn_tank_lock_acquire "$status_engine" "$tank" || _lock_acquire_rc=$?
+    if [ "$_lock_acquire_rc" -eq 2 ]; then
+      # R9-P1-2/R9-P2-3 (2026-09-11 round-9 review): a foreign object at the
+      # reclaim mutex never self-heals, so `_burn_tank_lock_acquire` returns
+      # this terminally rather than after the ordinary timeout — and until
+      # this round the status file and the terminal message both collapsed
+      # it into the generic busy-timeout case below, which asserts a false
+      # cause ("mid self-heal … try again shortly") for the one condition
+      # of the three that never self-heals (the same false-assertion shape
+      # R6-P2-4 rewrote this same message to remove, for the SIGKILL case).
+      trap - HUP INT TERM EXIT
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "foreign-mutex: $_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX" ""
+      log_fail "clikae: reclaim mutex at $_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX is a foreign-mutex (a directory, a symlink to one, or a plain file) -- remove it by hand, then retry."
+    fi
+    if [ "$_lock_acquire_rc" -ne 0 ]; then
       trap - HUP INT TERM EXIT
       # P3-1 (2026-09-09 round-2 review): see the busy-refusal write below —
       # the same "documented composition sees a stall, not a fail" gap.

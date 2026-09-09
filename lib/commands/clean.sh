@@ -1004,10 +1004,23 @@ _clean_tank_lock_busy_paths() {
 # the opposite failure, noise nobody can act on. The `.lock.reclaim` loop
 # also no longer requires `-L`: a legacy DIRECTORY left at this path — the
 # exact shape R6-P1-1 found permanently wedged — was invisible to `clean`
-# too; `_burn_reclaim_mutex_try`/`_available` already understand both
-# shapes, this loop only needed to stop filtering one out.
+# too. KITT (2026-09-11): `_burn_reclaim_mutex_try`/`_available` now REFUSE
+# a bare directory (and every other foreign shape) rather than "understand"
+# it — this loop's job stays the same either way, report whatever they
+# decide and stop filtering either shape out before asking them.
+#
+# R9-P1-1 (2026-09-11 round-9 review): the `.lock` loop's own reap, further
+# down, used to `rm -f "$f"` directly once it judged the recorded holder
+# stale — a bare readlink-decide-then-rm on the path, not on the entry it
+# verified, racing a live burn's fresh claim into the same window
+# `_burn_reclaim_mutex_try` itself was rewritten (round 3) to close for the
+# MUTEX. Now goes through `_burn_tank_lock_reap_verified`
+# (lib/commands/burn.sh), the same `mv`-then-classify discipline applied to
+# the LOCK: measured, through this exact function via the real `bin/clikae
+# clean`, 5/5 destroyed a genuinely live claim under the old shape — GC's
+# own summary line called it a "dead-holder tank lock" while deleting it.
 _clean_tank_lock_gc() {
-  local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0 skipped=0
+  local dry_run="$1" dir="$HOME/.clikae/state" f target holder hstarted n=0 skipped=0
   local busy_paths reclaim_dir had_entry got
   [ -d "$dir" ] || return 0
   busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
@@ -1064,12 +1077,25 @@ _clean_tank_lock_gc() {
       # changed since the unsynchronized read above (a live holder
       # released, or a fresh contender's `ln -s` landed on this exact path
       # in the meantime).
+      #
+      # R9-P1-1 (2026-09-11 round-9 review): this used to `rm -f "$f"`
+      # directly once `$holder`'s liveness said stale — the same bare
+      # readlink-decide-then-rm burn.sh's own re-verify block had, and the
+      # same fix: `_burn_tank_lock_reap_verified` (lib/commands/burn.sh)
+      # `mv`s the lock atomically and only discards it if what it actually
+      # caught still names the exact identity judged stale here, restoring
+      # anything else (a live holder's fresh claim that landed in the
+      # window between this read and the `mv`). Measured through this
+      # exact function, via the real `bin/clikae clean`: 5/5 destroyed a
+      # genuinely live claim under the old shape, with GC's own summary
+      # line calling it a "dead-holder tank lock" as it deleted it.
       if [ -L "$f" ]; then
         target="$(readlink "$f" 2>/dev/null || true)"
         holder="${target%%:*}"
+        hstarted="${target#*:}"
         case "$holder" in
-          ''|*[!0-9]*) rm -f "$f" && n=$((n + 1)) ;;
-          *) kill -0 "$holder" 2>/dev/null || { rm -f "$f" && n=$((n + 1)); } ;;
+          ''|*[!0-9]*) _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)) ;;
+          *) kill -0 "$holder" 2>/dev/null || { _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)); } ;;
         esac
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"

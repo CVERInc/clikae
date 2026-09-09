@@ -103,7 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graveyard copy back (`mv -n` onto an existing symlink destination
   silently clobbers it on this system's `/bin/mv` (BSD); `ln -s` fails
   EEXIST on conflict identically on every vendor, with no `-n`-style switch
-  to get inconsistently implemented) (2026-09-10 round-4 review,
+  to get inconsistently implemented — against another SYMLINK; round 8
+  found the other half of this: against a DIRECTORY it does not fail at
+  all, it nests INSIDE it, and round 9 stopped trusting its exit code as
+  proof either claim or restore landed, verifying both by `readlink`
+  instead) (2026-09-10 round-4 review,
   R4-P1-1/R4-P1-2/R4-P1-3). Round 5 also hardens the mutex's own liveness
   test, which used a bare `kill -0` where the lock proper
   already used the pid+`started_at` marker check — a pid recycled onto a
@@ -124,16 +128,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all — only the neighboring "holder is live" branch slept — so every burn
   blocked on a tank recovering from a signal spun at ~79% of a core for the
   whole timeout, the other half of round 4's P2-2 (R5-P2-4). **The residual
-  is not zero, and is written down rather than implied away:** the mutex is
+  is not zero, and is written down rather than implied away** (numbers
+  corrected by round 9, see below): the mutex is
   not mathematically exclusive — a reaper that loses the race between its
   own read and its `mv` can evict a live holder and fail to restore it (the
   path having been reclaimed a third time in the interim), leaving two
-  processes inside the removal critical section at once. Measured at 0
-  violations in 300 real `clikae burn` trials and 0/50 on the mutex's own
-  calling path, and at up to ~24% under a synthetic, zero-backoff hammer of
-  the mutex in total isolation — a rhythm no real caller produces, since
-  every real caller's retry loop interleaves at least one lock read between
-  mutex attempts. The cost, on the rare miss, is bounded and self-healing:
+  processes inside the removal critical section at once. **This originally
+  claimed "0 violations in 300 real trials … a rhythm no real caller
+  produces" — round 9 found both halves false**, but for a different
+  reason than this mutex's own race: `clikae clean` (an ordinary real
+  caller, not a hammer) racing three real `clikae burn`s found 6
+  violations in 130 real trials, traced to a SEPARATE bug one level up —
+  the tank LOCK's own reap (`_burn_tank_lock_acquire`/
+  `_clean_tank_lock_gc`) was still a bare readlink-decide-then-`rm -f`,
+  never given this mutex's own mv-then-classify discipline. Fixed in round
+  9 by a shared helper, `_burn_tank_lock_reap_verified`, applying the
+  identical discipline to the lock (R9-P1-1, see below); the mutex's own
+  bounded residual described in this paragraph was not independently
+  re-measured after that fix. The cost, on the rare miss, is bounded and self-healing:
   one extra live holder for the duration of one critical section, caught by
   the tank lock's own owner-only release; worst case is two burns briefly
   on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
@@ -199,12 +211,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SET of allow-listed function names, not the multiset of removal sites
   inside them, left a SECOND bare `rm -f "$lock"` inside an
   already-allow-listed function byte-identical to baseline, and the
-  pattern still lacked the `reclaim_link` spelling this round's own new
-  guard removes by** — both of the review's committed mutations left the
-  allow-list green (R8-P2-1). Pinned by occurrence count per function
+  pattern still lacked the `reclaim_link` spelling — a fifth removal
+  variable this round's own foreign-mutex work touched** — both of the
+  review's committed mutations left the allow-list green (R8-P2-1). Pinned
+  by occurrence count per function
   (a second remover in an already-covered function now changes the
   multiset) and widened to the fifth spelling; a pure comment is still
   immune (2026-09-11, KITT ruling on the round-8 review, R8-P2-1).
+  **Round 9 found four things the round-8 rewrite still had wrong, and
+  closes them (2026-09-11 round-9 review, R9-P1-1/R9-P1-2/R9-P2-1/R9-P2-2).**
+  A reclaim mutex path occupied by anything clikae did not write there
+  itself — a directory, a symlink resolving to one, a regular file, a
+  fifo, a socket — is now refused rather than reaped. Every reclaim mutex
+  clikae creates is a symlink whose target is data (`<pid>:<started_at>`)
+  and therefore never resolves to anything, so "the path resolves to
+  something" is a complete and sufficient test for a foreign object
+  (`_burn_reclaim_mutex_is_foreign` is now exactly `[ -e "$1" ]` — the
+  shipped three-condition version let a symlink resolving to an existing
+  **non-directory** through, and it was deleted rather than refused,
+  measured on a regular file, a symlink chain to one, and `/dev/null`:
+  R9-P2-1). The reaper applies it before any removal is considered: it
+  names the path, reports the refusal under its own `foreign-mutex` reason
+  in the burn's status file and in `clikae clean`'s GC output, and removes
+  nothing. Because the condition never self-heals, the refusal is now
+  TERMINAL, not a backing-off retry: the old shape looped with no sleep at
+  two of its three call sites once the refusal became permanent, measured
+  at 9.79s of CPU (≈89% of a core) and 49,151 duplicate refusal lines in
+  one 10s burn; `_burn_tank_lock_acquire` now returns a distinct code and
+  exits the acquisition loop immediately, once, and `cmd_burn` writes
+  `foreign-mutex: <path>` into the status file's reason instead of the
+  generic busy-timeout text (R9-P1-2/R9-P2-3). Recovery is still to remove
+  the object by hand and retry; there is no `--force` path in this PR.
+  Both places that CLAIM a path with `ln -s` (the reclaim mutex's own, and
+  the tank lock's own) now verify the claim landed by `readlink`, the same
+  way the restore already does — `ln -s`'s own exit code is `rc=0` without
+  creating anything at the destination when it resolves to a directory
+  that arrived in the check-then-act window (R9-P2-2). Separately, every
+  removal of the per-tank lock itself now uses the same rename-then-
+  classify discipline as the mutex that guards it, through a new shared
+  helper (`_burn_tank_lock_reap_verified`): the reclaim mutex serialises
+  removers of the lock but cannot serialise claimants, so a reaper that
+  decided a lock was stale and then removed the *path* — rather than the
+  *entry it verified* — could delete a live burn's fresh claim landing in
+  the fork-sized window `_burn_pid_matches_marker`'s own `ps`/`date` calls
+  open up; measured as 6 genuine engine overlaps in 130 real trials with
+  `clikae clean` racing `clikae burn` (R9-P1-1, see the residual note
+  above for the numbers this replaces).
+
   **A `SIGKILL`ed burn denies its own tank for up to
   ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the
   lock and its mutex are left exactly as they were, and every burn tried

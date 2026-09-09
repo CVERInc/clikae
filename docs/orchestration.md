@@ -391,11 +391,18 @@ is put back immediately by RE-CREATING it with `ln -s` (not by moving the
 graveyard copy back: `mv -n` onto an existing symlink destination silently
 clobbers it on the system `/bin/mv`, whereas `ln -s` fails EEXIST on
 conflict identically on every vendor, no `-n`-style switch to get
-inconsistently implemented): either an equivalent entry lands right back,
-or the attempt fails because something claimed the path again in the
-handful of syscalls since, in which case the mistake is logged and the
-graveyard copy discarded either way. Only the `mv` winner ever removes or
-restores anything, and only the one graveyard path it alone created.
+inconsistently implemented — against another SYMLINK; round 8 found the
+other half of this, below: against a DIRECTORY it does not fail at all, it
+nests INSIDE it): either an equivalent entry lands right back, or the
+attempt fails/lands-elsewhere because something occupies the path again by
+the time this `ln -s` runs, in which case round 9 verifies the restore by
+`readlink` rather than trusting `ln -s`'s own exit code, and KEEPS the
+graveyard copy on a mismatch — never discards it — because it may be the
+only surviving copy of a live claim (see "Round 8/9" below; this paragraph
+described the pre-round-9 behaviour, "discarded either way", which round
+9's own review found this same file contradicting by the time it shipped).
+Only the `mv` winner ever removes or restores anything, and only the one
+graveyard path it alone created.
 
 **Round 5 closes the same shape twice more — both in the guards AROUND
 that mutex, not in the mutex itself (2026-09-10 round-5 review,
@@ -413,7 +420,19 @@ directory is checked for a `pid` file (the pre-round-3 marker format) — a
 live pid inside is restored by moving the directory back onto a path
 re-checked empty immediately before the move, never forced onto one a
 fresh claim landed on in the meantime; only a directory with no live
-identity inside is discarded outright, as before. And `clikae clean`'s own
+identity inside is discarded outright, as before.
+
+**This whole legacy-directory branch — the paragraph just above — is
+DELETED as of round 8/9 (see "Round 8/9" further down): it described a
+mixed-version scenario this PR never shipped into, so its population was
+always empty, and four straight rounds of P1s against its own removal
+sites (R5 through R8) were spent hardening code nothing could ever reach.
+Left here, in present tense, as the historical record of what round 5
+actually built and round 8 actually deleted — not as a description of the
+shipped `_burn_reclaim_mutex_try`, which no longer reads a `pid` file or
+reaps a directory at all.**
+
+And `clikae clean`'s own
 GC (below) removed the tank lock with **no mutex at all** — a second,
 unguarded remover of the one thing this entire design depends on never
 having a second remover — closed by giving it the identical
@@ -443,24 +462,44 @@ tank recovering from a signal spun at roughly 79% of a core for its whole
 timeout; the fix is the same one-second sleep the neighboring branch
 already pays.
 
-**The residual, honestly.** This mutex is not mathematically exclusive.
+**The residual, honestly (numbers corrected by round 9 — see "Round 9"
+further down for the fix).** This mutex is not mathematically exclusive.
 A reaper can still lose the race between its own unsynchronized read and
 its `mv`: it evicts a live holder, and if a THIRD claim lands on the
 vacated path in the few syscalls before the reaper's restore attempt, that
 restore fails and is not retried — two processes are then briefly inside
-the same removal critical section at once. Measured at 0 violations across
-300 real `clikae burn` trials (six seeded-wreckage arms, three contenders
-each) and 0/50 on the reclaim mutex's own calling path; a synthetic,
-zero-backoff hammer of the mutex in complete isolation — a retry rhythm no
-real caller produces, since every real caller's own loop interleaves at
-least one lock read between mutex attempts — found it at up to roughly
-24%. The cost, on that rare miss, is bounded and self-correcting: one
-extra live holder for the span of one removal critical section, and the
-tank LOCK's own owner-only release (a re-read-then-`rm`-only-if-still-mine
-check, immediately below) is what actually catches it — the worst case
-measured is two burns briefly sharing one tank (#40, the exact symptom
-this whole mechanism exists to prevent), never data loss or a corrupted
-status file.
+the same removal critical section at once. **This paragraph originally
+read "measured at 0 violations across 300 real `clikae burn` trials …
+a retry rhythm no real caller produces" — both halves of that sentence
+are false.** Round 9's own review put `clikae clean` (an entirely
+ordinary real caller — nobody's synthetic hammer) racing three real
+`clikae burn` processes on the same seeded-wreckage arm round 8 had
+already run at 0/50, now at four times the trial count: **6 violations
+in 130 real trials (≈4.6%)**, each carrying the ordering signature
+(`VIOLATION` written strictly between one engine's `ENGINE_IN` and its
+own `ENGINE_OUT`) that rules out an instrument artefact, and a paired,
+load-matched A/B against the pre-round-9 build found it there at roughly
+twice the rate (5/30 vs 2/30) — not a regression from round 9, but not
+"no real caller produces it" either. **The actual mechanism was not this
+mutex's own residual race at all** — it was a separate, unrelated bug one
+level up: `_burn_tank_lock_acquire`'s (and `_clean_tank_lock_gc`'s) own
+re-verify-under-the-mutex block decided the LOCK was stale from a
+`readlink` (forking `_burn_pid_matches_marker`'s `ps`+`date` in between)
+and then bare `rm -f`'d the path — the exact "decide, then trust an
+earlier read" shape this mutex exists to prevent, just never applied to
+the lock the mutex protects. Round 9 closes it: the lock's own reap now
+goes through `_burn_tank_lock_reap_verified`, the identical
+`mv`-then-classify discipline this mutex already uses on itself (5/5
+deterministic at each of the two sites with a hook). No fresh trial count
+for the MUTEX's own bounded residual (described above this note) is
+claimed here — round 9 measured the bug that was actually firing and
+fixed it, not the mutex's own separate, smaller residual, which remains
+un-re-measured after the fix. The worst case this residual can still
+produce is bounded and self-correcting: one extra live holder for the
+span of one removal critical section, caught by the tank lock's own
+owner-only release — two burns briefly sharing one tank (#40, the exact
+symptom this whole mechanism exists to prevent), never data loss or a
+corrupted status file.
 
 **Round 8 found the legacy-directory branch's own removal sites still
 unverified, and it is deleted rather than patched a fifth time (2026-09-11,
@@ -504,6 +543,74 @@ mismatch instead of discarding the only surviving copy of a live claim.
 The mtime-fallback helper this branch needed (round 7's fix for an `echo 0`
 sentinel that reaped a genuinely live legacy holder, R7-P2-3) has no other
 caller and is deleted with it.
+
+**Round 9 found four things the round-8 rewrite still had wrong, and
+closes them (2026-09-11 round-9 review, R9-P1-1/R9-P1-2/R9-P2-1/R9-P2-2).**
+
+*R9-P1-1 — the LOCK's own reap never got the mutex's own discipline.* The
+mutex's removal (above) is `mv`-then-classify; the LOCK it protects —
+`_burn_tank_lock_acquire`'s re-verify-under-the-mutex block, and
+`_clean_tank_lock_gc`'s twin — was still a bare `readlink`-decide-then-
+`rm -f "$lock"`, with `_burn_pid_matches_marker`'s `ps`+`date` forks sitting
+between decide and remove. The reclaim mutex serialises REMOVERS of the
+lock, never CLAIMANTS (a claim is a bare `ln -s`, no mutex at all), so a
+live burn's fresh claim landing in that fork-sized window was deleted
+while it was inside its own check-and-write — measured through real
+`clikae burn`/`clikae clean` binaries, 6 genuine engine overlaps in 130
+trials (see the residual note above). Fixed with a new shared helper,
+`_burn_tank_lock_reap_verified`: `mv` the lock atomically, then compare
+what was actually caught against the identity already judged stale; a
+match discards it, a mismatch restores it and verifies the restore by
+`readlink` (R8-P1-1's own rule, applied here to the lock). Deterministic
+at 5/5 at each of the two call sites with a hook.
+
+*R9-P1-2 — the foreign-mutex refusal is permanent, and two of its three
+call sites spun on it at full CPU.* "Refuse and back off like an ordinary
+busy mutex" is the rule's own promise, but a foreign object never
+self-heals: at the third call site (the ordinary stale-holder path) that
+promise was already a real `sleep 1`; the other two (a pre-round-3
+directory-shaped lock, and a symlink-to-directory-shaped lock) `continue`d
+with no sleep at all, which cost nothing while every foreign object was
+still reclaimable (pre-round-8) but became a hot spin the moment round 8
+made the refusal permanent — measured 9.79s of CPU (≈89% of a core) and
+49,151 duplicate refusal lines in one 10s burn. Since the condition is
+permanent by construction, the fix is not a bigger sleep: all three call
+sites now detect a foreign reclaim mutex specifically and return a
+distinct, TERMINAL code (`_burn_tank_lock_acquire` returns `2`, records
+the path in `_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX`) that exits the acquisition
+loop immediately — refused once, never retried, never counted against the
+ordinary busy-timeout. `cmd_burn` reads this to write a `foreign-mutex:
+<path>` reason into the status file and a message that names the actual,
+permanent cause instead of "try again shortly" (closing R9-P2-3 the same
+motion — the SIGKILL refusal below keeps its own, still-correct wording).
+An ordinary busy mutex (someone genuinely mid-check) still gets the plain
+`sleep 1` backoff on all three sites, unchanged.
+
+*R9-P2-1 — the foreign-mutex predicate did not implement the rule all
+three surfaces (this doc, the code comment, the refusal message) state.*
+`[ -e "$1" ] && { [ ! -L "$1" ] || [ -d "$1" ]; }` let one shape through:
+a symlink resolving to an EXISTING, NON-DIRECTORY object (a regular file,
+a symlink chain to one, `/dev/null`) made `-e` true but both of the other
+two conditions false, so it was classified NOT foreign and evicted —
+measured, removed rather than refused, exactly the object every surface
+promised was untouchable. `-e` alone is the whole rule: this codebase's
+own claim is always DATA (`<pid>:<started_at>`), never a real path, so
+`-e` on it is always false regardless of liveness, and *anything* the
+path resolves to is foreign because nothing here ever writes anything
+that resolves to anything. This also removes the predicate's own ENOENT
+race (a second/third `stat` misreading a path that vanished mid-check as
+foreign instead of vacant) — with one `stat` there is no second call left
+to race.
+
+*R9-P2-2 — the CLAIM trusted `ln -s`'s exit code the way the RESTORE used
+to.* The whole point of round 8's fix was "verify by `readlink`, not by
+`ln -s`'s own exit code" — applied to the restore, twelve lines from the
+top of the same function the CLAIM still branched on the bare exit code.
+The same hazard applies: a foreign directory arriving in the window
+between the `_burn_reclaim_mutex_is_foreign` check and the `ln -s` makes the claim nest INSIDE
+it while still returning `rc=0`. Both claim sites — the reclaim mutex's
+own, and the tank lock's own — now verify with `readlink` immediately
+after `ln -s`, exactly like the restore.
 
 **A `SIGKILL`ed burn denies its tank for up to ~30 seconds, then self-heals
 — and the refusal a user reads during it now says so (2026-09-10 round-6

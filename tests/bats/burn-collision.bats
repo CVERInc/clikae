@@ -829,6 +829,41 @@ _race_contender() {
   [[ "$json" == *'"reason":"busy:'* ]] || { echo "$json"; false; }
 }
 
+@test "burn-collision (KITT/R9-P1-2/R9-P2-3): a foreign reclaim mutex makes a real 'clikae burn' fail FAST with a foreign-mutex reason, never the generic busy-timeout message" {
+  _stub_codex
+  clikae init codex T1
+  local dead; dead="$(_dead_pid)"
+  local sdir="$CLIKAE_HOME/state"; mkdir -p "$sdir"
+  ln -s "$dead:1700000000" "$sdir/tank-busy-codex_T1.lock"
+  mkdir -p "$sdir/tank-busy-codex_T1.lock.reclaim"   # a foreign directory
+
+  local t0=$SECONDS
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- run "$BATS_TEST_TMPDIR/out.md"
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -ne 0 ] || { echo "$output"; echo "-- burn claimed a tank whose reclaim mutex is a foreign object"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/out.md" ] || { echo "burn's engine ran against a tank that should be wedged"; false; }
+  [ "$elapsed" -lt 5 ] || { echo "took ${elapsed}s against the default 10s timeout -- did not refuse terminally"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; echo "-- message did not name foreign-mutex"; false; }
+  [[ "$output" != *"try again shortly"* ]] || { echo "$output"; echo "-- still asserting the self-heal message for a condition that never self-heals"; false; }
+
+  local new_dir d
+  for d in "$CLIKAE_HOME"/logs/burn-*; do
+    new_dir="$(basename "$d")"
+  done
+  [ -n "$new_dir" ] || { echo "no run directory created for the refused burn"; false; }
+  local f="$CLIKAE_HOME/logs/$new_dir/status.json"
+  [ -f "$f" ] || { echo "no status.json written for the refused burn: $f"; false; }
+  local json; json="$(cat "$f")"
+  [[ "$json" == *'"state":"fail"'* ]] || { echo "$json"; false; }
+  [[ "$json" == *'"ok":false'* ]] || { echo "$json"; false; }
+  [[ "$json" == *'"reason":"foreign-mutex: '* ]] || { echo "$json"; echo "-- reason did not record the foreign-mutex cause"; false; }
+  [[ "$json" == *"$sdir/tank-busy-codex_T1.lock.reclaim"* ]] || { echo "$json"; echo "-- reason did not name the offending path"; false; }
+
+  [ -d "$sdir/tank-busy-codex_T1.lock.reclaim" ] && [ ! -L "$sdir/tank-busy-codex_T1.lock.reclaim" ] || {
+    echo "the foreign directory was removed"; false; }
+  rm -rf "$sdir/tank-busy-codex_T1.lock.reclaim"
+}
+
 # --- R5-P2-3/R5-P2-4 (2026-09-10 round-5 review) ----------------------------
 #
 # A signal landing while THIS process already holds the reclaim mutex (from
@@ -991,10 +1026,88 @@ _race_contender() {
   rm -rf "$target" "$reclaim_link"
 }
 
-@test "_burn_tank_lock_acquire (KITT): a dead-holder lock whose reclaim mutex is a foreign object times out refusing, never claims the tank" {
-  # The caller's own retry/timeout policy is unchanged by the foreign-mutex
-  # rule -- it backs off exactly like any other busy mutex, it does not hang
-  # forever and it does not fall through to claiming the lock anyway.
+@test "_burn_reclaim_mutex_try/_available (KITT/R9-P2-1): a symlink resolving to an EXISTING REGULAR FILE is refused as foreign, not reaped -- the shape all three surfaces named and the old three-condition predicate let through" {
+  # R9-P2-1 (2026-09-11 round-9 review): the shipped `[ -e "$1" ] && { [ !
+  # -L "$1" ] || [ -d "$1" ]; }` made `-e` true, `[ ! -L ]` false AND
+  # `[ -d ]` false for this exact shape, so `is_foreign` returned 1 (not
+  # foreign) and the malformed-payload branch evicted it -- measured,
+  # removed rather than refused. `[ -e "$1" ]` alone (the fix) dereferences
+  # to an existing file, so it's foreign, full stop.
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNFILE1)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  local target="$(dirname "$lock")/FOREIGNFILE1-target"
+  printf 'not ours\n' > "$target"
+  ln -s "$target" "$reclaim_link"    # symlink -> an EXISTING REGULAR FILE, never a directory
+
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; echo "-- claimed or reaped a symlink resolving to an existing regular file"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; echo "-- refusal did not name itself foreign-mutex"; false; }
+  [ -L "$reclaim_link" ] || { echo "the symlink itself was removed -- it must be left for a human"; false; }
+  [ "$(readlink "$reclaim_link")" = "$target" ] || { echo "the symlink's target changed"; false; }
+  [ -f "$target" ] && [ "$(cat "$target")" = "not ours" ] || { echo "the target file's own contents were touched"; false; }
+
+  run _burn_reclaim_mutex_available "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "a symlink to an existing regular file previewed as available/removable"; false; }
+  rm -f "$target" "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (KITT/R9-P2-1): a symlink CHAIN to an existing regular file, and a symlink to /dev/null, are both refused as foreign" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNFILE2)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+
+  local target="$(dirname "$lock")/FOREIGNFILE2-target"
+  local middle="$(dirname "$lock")/FOREIGNFILE2-middle"
+  printf 'not ours\n' > "$target"
+  ln -s "$target" "$middle"
+  ln -s "$middle" "$reclaim_link"    # symlink -> symlink -> an existing regular file
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; echo "-- claimed or reaped a symlink chain to an existing regular file"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; false; }
+  [ -L "$reclaim_link" ] && [ -L "$middle" ] && [ -f "$target" ] || { echo "some link in the chain was removed"; false; }
+  rm -f "$target" "$middle" "$reclaim_link"
+
+  ln -s /dev/null "$reclaim_link"    # symlink -> a real, existing, non-directory node
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; echo "-- claimed or reaped a symlink to /dev/null"; false; }
+  [[ "$output" == *"foreign-mutex"* ]] || { echo "$output"; false; }
+  [ -L "$reclaim_link" ] || { echo "the symlink to /dev/null was removed"; false; }
+  rm -f "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try/_burn_tank_lock_acquire (KITT/R9-P2-2): the CLAIM verifies by readlink, exactly like the restore -- structural" {
+  # R9-P2-2 (2026-09-11 round-9 review): `ln -s`'s own exit code is not
+  # proof a claim landed AT the path -- it returns rc=0 without creating
+  # anything there when the destination resolves to a directory that
+  # arrived in the check-then-act window. R8-P1-1 already fixed this for
+  # the RESTORE (verify by readlink, not exit code); this pins that the
+  # same verification now guards BOTH claim sites too -- the reclaim
+  # mutex's own claim, and the tank lock's own claim.
+  local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+
+  run grep -c 'if ln -s "\$\$:\$now_epoch" "\$reclaim_link" 2>/dev/null; then' "$burn"
+  [ "$output" = "1" ] || { echo "expected exactly one reclaim-mutex claim site, found: $output"; false; }
+  run grep -A15 'if ln -s "\$\$:\$now_epoch" "\$reclaim_link" 2>/dev/null; then' "$burn"
+  [[ "$output" == *'readlink "$reclaim_link"'*'"$$:$now_epoch"'* ]] || {
+    echo "$output"; echo "-- the reclaim-mutex claim does not readlink-verify before returning 0"; false; }
+
+  run grep -c 'if ln -s "\$\$:\$now_epoch" "\$lock" 2>/dev/null; then' "$burn"
+  [ "$output" = "1" ] || { echo "expected exactly one tank-lock claim site, found: $output"; false; }
+  run grep -A10 'if ln -s "\$\$:\$now_epoch" "\$lock" 2>/dev/null; then' "$burn"
+  [[ "$output" == *'readlink "$lock"'*'"$$:$now_epoch"'* ]] || {
+    echo "$output"; echo "-- the tank-lock claim does not readlink-verify before returning 0"; false; }
+}
+
+@test "_burn_tank_lock_acquire (KITT/R9-P1-2): a dead-holder lock whose reclaim mutex is a foreign object refuses TERMINALLY -- rc=2, immediately, never claims the tank, never backs off like an ordinary busy mutex" {
+  # R9-P1-2 (2026-09-11 round-9 review) supersedes this test's own original
+  # claim: a foreign object never self-heals, so looping back with a 1s
+  # backoff for the WHOLE timeout (the old assertion here) is exactly the
+  # shape measured at 9.79s of CPU and 49,151 duplicate refusal lines per
+  # 10s burn. The fix makes this refusal terminal -- rc=2, fast, once --
+  # and this test now asserts THAT instead of the old "backs off" claim.
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR4)"
   mkdir -p "$(dirname "$lock")"
@@ -1002,12 +1115,34 @@ _race_contender() {
   ln -s "${dead}:1" "$lock"
   mkdir -p "${lock}.reclaim"   # a foreign directory guarding a dead-holder lock
 
+  _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX=""
   local t0=$SECONDS
-  run _burn_tank_lock_acquire codex FOREIGNDIR4 2
+  run _burn_tank_lock_acquire codex FOREIGNDIR4 10
   local elapsed=$((SECONDS - t0))
-  [ "$status" -eq 1 ] || { echo "$output"; echo "-- acquired a lock whose reclaim mutex is a foreign object"; false; }
-  [ "$elapsed" -ge 2 ] || { echo "returned before the timeout — did not genuinely back off"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; echo "-- did not return the terminal foreign-mutex code (2)"; false; }
+  [ "$elapsed" -lt 2 ] || { echo "took ${elapsed}s against a 10s timeout -- spun/backed off instead of refusing terminally"; false; }
   [ -d "${lock}.reclaim" ] && [ ! -L "${lock}.reclaim" ] || { echo "the foreign directory was removed"; false; }
+  rm -rf "${lock}.reclaim"
+}
+
+@test "_burn_tank_lock_acquire (KITT/R9-P2-3): a foreign-mutex refusal records the offending path for the caller to report" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex FOREIGNDIR5)"
+  mkdir -p "$(dirname "$lock")"
+  local dead; dead="$(_dead_pid)"
+  ln -s "${dead}:1" "$lock"
+  mkdir -p "${lock}.reclaim"
+
+  # Not `run` -- `run` isolates the command (bats-core forks/subshells it
+  # to capture output+status safely under `set -e`), so a global variable
+  # this call sets would never be visible back here. Call directly and
+  # capture `$?` right after, before anything else can clobber it.
+  _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX=""
+  local rc=0
+  _burn_tank_lock_acquire codex FOREIGNDIR5 10 >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || { echo "rc=$rc"; false; }
+  [ "$_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX" = "${lock}.reclaim" ] || {
+    echo "expected _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX=[${lock}.reclaim], got [$_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX]"; false; }
   rm -rf "${lock}.reclaim"
 }
 
