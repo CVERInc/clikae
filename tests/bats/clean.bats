@@ -906,6 +906,81 @@ sys.exit(1 if bad else 0)
   [ -L "$lock" ] || { echo "GC removed a lock whose own status file said a burn is RUNNING"; false; }
 }
 
+# --- R6-P2-1 (2026-09-10 round-6 review): `--dry-run` used to preview a
+# `.lock` removal with NO knowledge of whether its reclaim mutex was even
+# claimable, and a `.lock.reclaim` removal with a bare `kill -0` -- both
+# promises wrong on the same fixture the review measured. -------------------
+
+@test "GC --dry-run (R6-P2-1): reports 'skipping', not 'Would remove', for a dead-holder lock whose reclaim mutex is genuinely held" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999989
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  local lock="$sdir/tank-busy-codex_T10.lock"
+  ln -s "$dead:1700000000" "$lock"   # looks dead by the lock's own liveness read
+  ( _burn_reclaim_mutex_try "$lock.reclaim"; sleep 2 ) &
+  local holder=$!
+  sleep 0.3
+  run _clean_tank_lock_gc 1
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  [[ "$output" != *"Would remove dead-holder tank lock ${lock##*/}"* ]] || {
+    echo "$output"; echo "-- dry run promised a removal the real run would have refused (mutex busy)"; false; }
+  [[ "$output" == *"skipping ${lock##*/}"* ]] || { echo "$output"; false; }
+  [ -L "$lock" ] || { echo "a dry run removed the lock"; false; }
+}
+
+@test "GC --dry-run (R6-P2-1): a dead-holder mutex link younger than 30s previews 'skipping', never a false promise, and is left untouched" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999988
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  local reclaim="$sdir/tank-busy-codex_T11.lock.reclaim"
+  local before; before="${dead}:$(date +%s)"
+  ln -s "$before" "$reclaim"   # dead, but recorded moments ago -- inside the 30s grace
+  run _clean_tank_lock_gc 1
+  [[ "$output" != *"Would remove dead-holder tank lock ${reclaim##*/}"* ]] || {
+    echo "$output"; echo "-- dry run promised a removal the real run's own 30s grace would refuse"; false; }
+  [ -L "$reclaim" ] || { echo "a dry run's own preview call destroyed the mutex link"; false; }
+  [ "$(readlink "$reclaim")" = "$before" ] || {
+    echo "a dry run's own preview call left the mutex claiming a DIFFERENT identity than before -- not side-effect-free"; false; }
+  rm -f "$reclaim"
+}
+
+@test "GC --dry-run (R6-P2-1): a genuinely LIVE reclaim mutex is never claimed by the preview itself" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local lock="$sdir/tank-busy-codex_T12.lock"
+  local dead=999987
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "$dead:1700000000" "$lock"
+  ( _burn_reclaim_mutex_try "$lock.reclaim"; sleep 2 ) &
+  local holder=$!
+  sleep 0.3
+  local before; before="$(readlink "$lock.reclaim")"
+  run _clean_tank_lock_gc 1
+  local after; after="$(readlink "$lock.reclaim")"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  [ "$before" = "$after" ] || {
+    echo "a dry run's own preview call changed who holds the reclaim mutex ($before -> $after)"; false; }
+}
+
+@test "GC (R6-P1-1 fix shape): a legacy DIRECTORY left at the .lock.reclaim path is swept, not skipped for lacking a symlink" {
+  # clean.sh:1027's old `[ -L "$f" ] || continue` made a legacy directory at
+  # this exact path invisible to `clean` -- the one thing that made R6-P1-1
+  # a permanent wedge instead of a recoverable one. _burn_reclaim_mutex_try
+  # already understands this shape; the GC's own loop just had to stop
+  # filtering it out.
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999986
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  local reclaim="$sdir/tank-busy-codex_T13.lock.reclaim"
+  mkdir -p "$reclaim"
+  printf '%s' "$dead" > "$reclaim/pid"
+  _clean_tank_lock_gc 0
+  [[ ! -e "$reclaim" ]] || { echo "a legacy directory with a dead recorded pid survived clean's GC"; false; }
+}
+
 @test "GC (R5-P1-2): a dead-holder mutex link (not a directory) is reaped through _burn_reclaim_mutex_try's own liveness rule" {
   # The mutex's OWN removal is now the same reap-with-verify primitive
   # everything else uses, not a bare kill -0 + rm -f (a third, weaker
@@ -919,4 +994,81 @@ sys.exit(1 if bad else 0)
   [[ -L "$sdir/tank-busy-codex_T9.lock.reclaim" ]] || {
     echo "GC reaped a mutex younger than 30s -- ignoring the age half of the shared rule"; false; }
   rm -f "$sdir/tank-busy-codex_T9.lock.reclaim"
+}
+
+# --- R6-P2-6 (2026-09-10 round-6 review): 36+64 tests and none of them ever
+# asserted the ONE invariant this whole design rests on -- "no code path
+# removes the tank-busy lock (or its reclaim mutex) without EITHER holding
+# the reclaim mutex first OR operating only on a private graveyard name" --
+# which is exactly how _clean_tank_lock_gc shipped 61/61 green while
+# breaking that invariant (R5-P1-2). A structural, grep-based pin: every
+# `rm`/`rmdir` touching `$lock`/`$grave` in burn.sh, or `$f` inside clean.sh's
+# OWN `_clean_tank_lock_gc`, is enumerated by line number and checked
+# against the exact set already hand-classified below. `$lock` and `$grave`
+# are used as variable names ONLY by burn.sh's tank-lock/reclaim-mutex
+# functions (confirmed: `grep -n '\$lock=\|\$grave='` names only
+# `_burn_tank_lock_acquire`/`_release`/`_burn_reclaim_mutex_try`), so this
+# grep cannot be confused by an unrelated `$lock` elsewhere in the file. -----
+
+@test "structural (R6-P2-6): every removal touching the tank-busy lock or its reclaim mutex is a known, hand-classified site -- a NEW one fails this test" {
+  local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  local clean="$CLIKAE_TEST_ROOT/lib/commands/clean.sh"
+
+  # burn.sh: $grave sites are all a private graveyard name (`<path>.stale.
+  # $$.$RANDOM`, unique per caller, never a rendezvous point); $lock sites
+  # are all inside a branch that has already won `_burn_reclaim_mutex_try`
+  # (or, in `_burn_tank_lock_release`'s fast path, already recorded as
+  # holding it via `_BURN_RECLAIM_MUTEX_OWNED`); the one `"$1"` site is
+  # `_burn_reclaim_mutex_release` itself, removing the mutex link it names
+  # ONLY after re-reading it and confirming it still names `$$` -- the
+  # mutex's own identity-checked self-release, not something a SEPARATE
+  # mutex needs to guard.
+  run bash -c "grep -nE 'rm (-rf|-f) \"\\\$(lock|grave|1)\"' '$burn' | cut -d: -f1 | paste -sd' ' -"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "1138 1172 1174 1233 1274 1309 1474 1495 1576 1636 1649" ] || {
+    echo "burn.sh's lock/mutex/graveyard removal sites changed: [$output]"
+    echo "-- classify the new/moved line (mutex-guarded / private graveyard /"
+    echo "   mutex's own identity-checked self-release) and update this pin,"
+    echo "   or revert it if it is a bare, unguarded remover."
+    false
+  }
+
+  # clean.sh: scoped to _clean_tank_lock_gc's OWN body -- $f is reused by
+  # OTHER GCs in this file (scrollback, tmux) that have nothing to do with
+  # the tank-busy lock, so this must not grep the whole file. Bounded by
+  # line range (function start to its own closing `}`) rather than by
+  # nesting an awk pattern inside `bash -c`'s own quoting.
+  local gc_start gc_end
+  gc_start="$(grep -n '^_clean_tank_lock_gc() {' "$clean" | head -1 | cut -d: -f1)"
+  [ -n "$gc_start" ] || { echo "_clean_tank_lock_gc's own definition line moved or was renamed"; false; }
+  gc_end="$(awk -v s="$gc_start" 'NR>s && /^}/{print NR; exit}' "$clean")"
+  [ -n "$gc_end" ] || { echo "could not find _clean_tank_lock_gc's closing brace"; false; }
+  run bash -c "grep -nE 'rm (-rf|-f)|rmdir' '$clean' | awk -F: -v s=$gc_start -v e=$gc_end '\$1>=s && \$1<=e {print \$1}' | paste -sd' ' -"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "1045 1046 1105" ] || {
+    echo "clean.sh's _clean_tank_lock_gc removal sites changed: [$output]"
+    echo "-- classify the new/moved line and update this pin, or revert it."
+    false
+  }
+}
+
+@test "structural (R6-P2-6) mutation check: a bare, unguarded rm -f \"\$lock\" turns the pin above red" {
+  # Proves the pin test above is a real ruler, not a tautology: copy
+  # burn.sh, drop one unguarded removal into a function that already uses
+  # $lock (so the ONLY thing wrong with it is the missing guard), and
+  # confirm the exact grep the test above runs now returns a DIFFERENT set.
+  local burn="$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  local mutated="$BATS_TEST_TMPDIR/burn_mutated.sh"
+  cp "$burn" "$mutated"
+  # Insert a bare, unconditional removal right after _burn_tank_lock_release
+  # computes $lock -- no mutex, no owner check, nothing guarding it.
+  perl -0pi -e 's/(_burn_tank_lock_release\(\) \{\n  local lock reclaim_dir target holder tries=0\n  lock="\$\(_burn_tank_lock_path "\$1" "\$2"\)"\n)/$1  rm -f "\$lock" 2>\/dev\/null   # MUTATION: bare, unguarded\n/' "$mutated"
+  grep -q 'MUTATION: bare, unguarded' "$mutated" || { echo "mutation did not apply -- _burn_tank_lock_release's shape changed upstream"; false; }
+
+  run bash -c "grep -nE 'rm (-rf|-f) \"\\\$(lock|grave|1)\"' '$mutated' | cut -d: -f1 | paste -sd' ' -"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" != "1138 1172 1174 1233 1274 1309 1474 1495 1576 1636 1649" ] || {
+    echo "the pin test's grep did not notice the injected unguarded rm -f \"\$lock\" -- it is not a real ruler"
+    false
+  }
 }

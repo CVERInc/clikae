@@ -984,28 +984,55 @@ _clean_tank_lock_busy_paths() {
 # instead of a bare `kill -0` + unconditional `rm -f`, which was a THIRD,
 # weaker liveness rule for the same object (no `started_at`/30s check, no
 # verify-before-discard).
+#
+# R6-P2-1/R6-P2-2 (2026-09-10 round-6 review): `--dry-run` used to preview
+# a `.lock` removal with NO knowledge of whether its reclaim mutex was even
+# claimable, and a `.lock.reclaim` removal with a bare `kill -0` — a THIRD,
+# weaker liveness rule than the one the real run actually uses (measured:
+# both promises wrong, 2 for 2, on the same fixture). The mutex-busy
+# decision now goes through `_burn_reclaim_mutex_available` (a read-only
+# mirror of `_burn_reclaim_mutex_try`'s own decision — see its header) for
+# the dry-run preview, so a dry run's "busy" and a real run's "busy" are the
+# same predicate, never approximations of each other. And every AMBIGUOUS
+# skip — a lock whose recorded holder is dead but whose reclaim mutex is
+# genuinely busy right now, or a reclaim mutex genuinely held — is reported
+# with why, in both modes, so `clikae clean`'s summary line no longer says
+# "Nothing to clean" over a lock it left behind for a reason it never named
+# (R6-P2-2); an ORDINARY skip (the recorded holder is simply alive, or a
+# status file says so) is not, since that is every routine `clean` run
+# while any tank is legitimately busy — reporting that every time would be
+# the opposite failure, noise nobody can act on. The `.lock.reclaim` loop
+# also no longer requires `-L`: a legacy DIRECTORY left at this path — the
+# exact shape R6-P1-1 found permanently wedged — was invisible to `clean`
+# too; `_burn_reclaim_mutex_try`/`_available` already understand both
+# shapes, this loop only needed to stop filtering one out.
 _clean_tank_lock_gc() {
-  local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0
-  local busy_paths reclaim_dir had_link
+  local dry_run="$1" dir="$HOME/.clikae/state" f target holder n=0 skipped=0
+  local busy_paths reclaim_dir had_entry
   [ -d "$dir" ] || return 0
   busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
 
   for f in "$dir/"tank-busy-*.lock; do
     [ -L "$f" ] || continue
     if [ -n "$busy_paths" ] && printf '%s\n' "$busy_paths" | grep -qxF "$f"; then
-      continue   # a status file says a burn is RUNNING here right now — never touch it
+      continue   # a status file says a burn is RUNNING here right now -- ordinary, not worth a line every run
     fi
     target="$(readlink "$f" 2>/dev/null || true)"
     holder="${target%%:*}"
     case "$holder" in
       ''|*[!0-9]*) : ;;                               # malformed/empty — treat as dead below
-      *) kill -0 "$holder" 2>/dev/null && continue ;;  # its holder is still running
+      *) kill -0 "$holder" 2>/dev/null && continue ;;  # its holder is still running -- ordinary, same as above
     esac
+    reclaim_dir="$f.reclaim"
     if [ "$dry_run" = "1" ]; then
-      log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      if _burn_reclaim_mutex_available "$reclaim_dir"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is busy right now"
+        skipped=$((skipped + 1))
+      fi
       continue
     fi
-    reclaim_dir="$f.reclaim"
     if _burn_reclaim_mutex_try "$reclaim_dir"; then
       # Re-verify under the mutex before acting — the target may have
       # changed since the unsynchronized read above (a live holder
@@ -1020,33 +1047,38 @@ _clean_tank_lock_gc() {
         esac
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"
+    else
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is busy right now"
+      skipped=$((skipped + 1))
     fi
-    # else: the mutex is busy right now — SKIP, don't wait (see above).
   done
 
   for f in "$dir/"tank-busy-*.lock.reclaim; do
-    [ -L "$f" ] || continue
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
     if [ "$dry_run" = "1" ]; then
-      target="$(readlink "$f" 2>/dev/null || true)"
-      holder="${target%%:*}"
-      case "$holder" in
-        ''|*[!0-9]*) log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}" ;;
-        *) kill -0 "$holder" 2>/dev/null || log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}" ;;
-      esac
+      if _burn_reclaim_mutex_available "$f"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is genuinely held right now"
+        skipped=$((skipped + 1))
+      fi
       continue
     fi
-    had_link=1; [ -L "$f" ] || had_link=0
+    had_entry=1
     if _burn_reclaim_mutex_try "$f"; then
       # Nothing was actually there to reap (the path had just gone empty
       # on its own) — this only won a fresh, empty claim; release it
       # immediately, GC has no removal to protect by holding it.
       _burn_reclaim_mutex_release "$f"
+    else
+      log_info "GC: skipping ${f##*/} -- it is genuinely held right now"
+      skipped=$((skipped + 1))
     fi
     # Whether it just reaped-and-discarded a dead mutex, restored a live
     # one it mistakenly caught, or found a live one and left it alone,
     # _burn_reclaim_mutex_try already applied the one liveness rule this
     # object has everywhere else — nothing further for GC to decide here.
-    [ "$had_link" -eq 1 ] && [ ! -L "$f" ] && n=$((n + 1))
+    [ "$had_entry" -eq 1 ] && [ ! -L "$f" ] && [ ! -d "$f" ] && n=$((n + 1))
   done
 
   # Graveyard entries (`_burn_reclaim_mutex_try`'s rename-to-unique-name
@@ -1056,9 +1088,12 @@ _clean_tank_lock_gc() {
   # the reaper itself was killed between its `mv` and its `rm`, so the
   # liveness test here is the filename's pid, not the symlink's target.
   # This is never a live REMOVAL mutex's identity, so it needs no mutex of
-  # its own to sweep.
+  # its own to sweep. A leaked GRAVEYARD DIRECTORY (R6-P1-1's legacy branch,
+  # when it caught a different identity than it classified and correctly
+  # refused to guess) is swept the same way — the filename's pid, not
+  # anything inside it, is still the only thing that ever needs checking.
   for f in "$dir/"tank-busy-*.lock.reclaim.stale.*; do
-    [ -L "$f" ] || continue
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
     holder="${f##*.stale.}"; holder="${holder%%.*}"
     case "$holder" in
       ''|*[!0-9]*) : ;;
@@ -1067,10 +1102,12 @@ _clean_tank_lock_gc() {
     if [ "$dry_run" = "1" ]; then
       log_info "GC: [Dry Run] Would remove orphaned reclaim graveyard entry ${f##*/}"
     else
-      rm -f "$f" && n=$((n + 1))
+      rm -rf "$f" && n=$((n + 1))
     fi
   done
-  [ "$n" -gt 0 ] && log_info "GC: removed $n dead-holder tank lock(s)."
+  if [ "$n" -gt 0 ] || [ "$skipped" -gt 0 ]; then
+    log_info "GC: removed $n dead-holder tank lock(s), skipped $skipped busy one(s)."
+  fi
   return 0
 }
 

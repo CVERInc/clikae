@@ -462,6 +462,94 @@ measured is two burns briefly sharing one tank (#40, the exact symptom
 this whole mechanism exists to prevent), never data loss or a corrupted
 status file.
 
+**Round 6 rewrites the legacy-directory branch: classify first, move
+second, never restore (2026-09-10 round-6 review, R6-P1-1/R6-P1-2.)**
+Round 5's fix for the pre-round-4 `mkdir`-based leftover still `mv`-ed the
+directory aside UNCONDITIONALLY before ever looking at what was inside
+it. That is not the same window the reap path above closes: no caller ever
+reaches the `ln -s` claim below while this path is still a directory
+(every concurrent `_burn_reclaim_mutex_try` call sees the same directory
+and takes the same branch), so that early `mv` was the ONLY thing that
+ever vacated a live legacy holder's path — measured 5/5, an ordinary
+caller's `ln -s` claims the mutex while the branch still believes a live
+holder owns it. And what landed in the graveyard was judged with a bare
+`kill -0` — the exact weaker rule R5-P2-1 replaced for the symlink shape
+further down in the same function — so a pid recycled onto a dead holder's number was
+"restored" and kept forever: the tank `34ca262` recovered in 0 seconds
+never recovers on the version this replaced, with no path in the product
+to clear it (`clean` skips a directory at this path; `burn` reports
+"another clikae burn is mid-check on it right now"). And the restore
+itself was a plain `mv` onto a path re-checked empty — not EEXIST-atomic
+for a directory the way `ln -s` is for a symlink — so a second legacy
+claimant landing in that same window nested instead of failing, 5/5, the
+exact `mv`-restore-nests shape R3-P1-2 closed for the lock itself,
+reintroduced here.
+
+The fix: CLASSIFY without moving anything — read the `pid` file (and a
+`started_at` file, if any writer ever leaves one; none does today), then
+apply the same `_burn_pid_matches_marker` rule every other liveness check
+in this file uses, substituting the directory's OWN mtime for the
+`started_at` this format never wrote. A recycled pid always started AFTER
+the directory that (genuinely) predates it, so this tells the two apart
+without ever touching the path to find out. Only once that classification
+says dead does anything move; there is still no way to restore a
+directory atomically, so a live verdict is never risked in the first
+place — it returns straight away, untouched, and the caller backs off and
+retries exactly like it would against any other busy mutex. When the
+verdict is dead, the `mv` to a private graveyard name is re-verified the
+same way the symlink reap path re-verifies its own catch: if the graveyard
+still names the identity just classified, it is discarded; if it names
+anything else, there is no safe way back for a directory, so the graveyard
+copy is left exactly where the `mv` put it, logged once, and never moved
+again.
+
+**The one residual this leaves, written down rather than found later:** a
+live PRE-ROUND-3 clikae (a mixed-version run) whose `mkdir` has returned
+but whose `pid` write has not yet landed is, for the instant in between,
+indistinguishable from genuine litter — and this function deliberately
+does not wait to find out, the same way it always reaped a pid-less
+directory instantly (the committed R4-P1-1a/R4-P2-3a2 tests pin exactly
+that speed). If a reaper's classify→`mv` window lands inside that instant,
+the old binary loses its directory mutex. The consequence is bounded and
+loud, never silent: that binary's own next write or release call fails
+against a path that is simply gone. It is never a second live holder of
+this mutex — nothing in this branch ever hands the mutex to a fresh
+claimant while treating the original as still alive — and never data loss.
+
+**A `SIGKILL`ed burn denies its tank for up to ~30 seconds, then self-heals
+— and the refusal a user reads during it now says so (2026-09-10 round-6
+review, R6-P2-4).** `SIGKILL` cannot be trapped, so a burn killed while it
+holds the tank lock leaves that lock exactly where it was — mutual
+exclusion is never broken, but every burn that tries the same tank until
+the lock's own mutex reaches its 30-second stale rule is refused outright,
+measured at ~30s total (round 5 measured `+32s`, the fixer `31s`, round 6
+`+30s` — the mechanism is the same 30s rule plus one 1s backoff, not a
+coincidence). The refusal used to read *"another clikae burn is mid-check
+on it right now"* — true for the ordinary busy case this same timeout also
+covers, but false here: there is no other burn, it died, and there is
+nothing to wait ON except the clock. `_burn_tank_lock_acquire`'s own
+timeout gives no way to tell the two causes apart from the refusal site, so
+the message now names both rather than asserting the wrong one, and this
+paragraph is the "goes in the docs too" half of that fix.
+
+**A `SIGKILL`ed burn also orphans its engine subprocess — the one still-live
+route to #40 this whole design exists to prevent, and it is not this lock's
+to close (2026-09-10 round-6 review, R6-P2-5).** `burn_tank_busy` keys on
+the BURN's own pid; a `SIGKILL` to the burn does not reach the engine
+process it launched, which keeps running to completion on the tank. Once
+the burn's own `running` status row reads as stale (its pid is gone), the
+next burn on that tank is let straight in — while the orphaned engine is
+still using it. Reproduced directly: an engine observed still alive 1
+second after its burn's `SIGKILL`, finishing 6 seconds after the burn that
+launched it died. This is the entire explanation for the one seeded-wreckage
+arm of the real-`clikae-burn` trial suite that ever sees a #40 violation at
+all — a `SIGKILL` storm with the orphan drained before the next wave is 0
+violations in 50 trials; the identical storm with the orphan left running
+is 50/50. Nothing in the lock or its reclaim mutex
+should try to fix this — the lock's job is serializing who gets to START a
+burn, not supervising a process it does not own the lifetime of — but it is
+written here because it was, until this round, written nowhere at all.
+
 ### `--wait-for-reset` (#38)
 
 A tank that runs dry minutes before its own reset used to just Stop (under

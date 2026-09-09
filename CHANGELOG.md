@@ -145,6 +145,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one extra live holder for the duration of one critical section, caught by
   the tank lock's own owner-only release; worst case is two burns briefly
   on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
+  **Round 6 review found round 5's own fix for the legacy `mkdir`-based
+  directory shape had traded that race for a permanent wedge:** it still
+  `mv`-ed the directory aside UNCONDITIONALLY before looking at what was
+  inside it — measured 5/5, an ordinary caller's `ln -s` claims the mutex
+  while the branch still believes a live legacy holder owns it, because no
+  caller ever reaches that `ln -s` while the path is still a directory, so
+  this early `mv` was the ONLY thing that ever vacated a live holder's
+  path. And what it caught was judged with a bare `kill -0` — the exact
+  weaker rule R5-P2-1 replaced for the symlink shape — so a pid recycled
+  onto a dead holder's number was "restored" and kept forever, with no
+  recovery path anywhere in the product (`clean` skips a directory at this
+  path; `burn` reports "another clikae burn is mid-check on it right
+  now"). Its restore was also a plain `mv` onto a path merely re-checked
+  empty — not EEXIST-atomic for a directory the way `ln -s` is for a
+  symlink — so a second legacy claimant landing in that same window nested
+  instead of failing, 5/5, the exact `mv`-restore-nests shape R3-P1-2
+  closed for the lock itself, reintroduced here (R6-P1-1/R6-P1-2). Fixed
+  by classifying WITHOUT moving anything — reading the `pid` file (and a
+  `started_at` file, if any writer ever leaves one) and applying the same
+  `_burn_pid_matches_marker` rule every other liveness check here uses,
+  substituting the directory's own mtime for the `started_at` this format
+  never wrote, so a recycled pid (started AFTER the directory that
+  genuinely predates it) is told apart from the real holder without ever
+  touching the path to find out — only once that verdict says dead does
+  anything move, and the `mv` to a private graveyard name is re-verified
+  the same way the symlink path re-verifies its own catch, left in place
+  and logged once (never moved back) if it turns out to name something
+  else. **The one residual left, not zero and written down:** a live
+  pre-round-3 clikae whose `mkdir` has returned but whose `pid` write has
+  not yet landed is briefly indistinguishable from genuine litter, and this
+  function deliberately does not wait to find out (the same instant reap a
+  pid-less directory always got); losing that race costs the old binary its
+  directory mutex, and its own next write or release call then fails
+  loudly against a path that is simply gone — never a second live holder
+  of this mutex, and never data loss (2026-09-10 round-6 review,
+  R6-P1-1/R6-P1-2). **A `SIGKILL`ed burn denies its own tank for up to
+  ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the
+  lock and its mutex are left exactly as they were, and every burn tried
+  against that tank is refused until the mutex's own 30s stale rule
+  reaches it (measured ~30s total, consistent across rounds 5 and 6).
+  Mutual exclusion is never broken, but the refusal used to claim
+  *"another clikae burn is mid-check on it right now"* even here, where
+  there is no other burn — it now names both the ordinary busy case and
+  this self-healing one, since the timeout alone can't tell them apart
+  (2026-09-10 round-6 review, R6-P2-4). **Separately, and not fixed by
+  this or any lock change: a `SIGKILL`ed burn also orphans its engine
+  subprocess**, which keeps running on the tank after `burn_tank_busy`
+  (keyed on the burn's own, now-dead pid) lets the next burn straight in
+  — reproduced directly, and confirmed as the entire explanation for the
+  one seeded-wreckage arm that shows any #40 violation at all in the real
+  `clikae burn` trial suite (0/50 with the orphan drained before the next
+  wave, 50/50 with it left running). Documented, not addressed here: the
+  lock's job is serializing who gets to start a burn, not supervising a
+  process it does not own the lifetime of (2026-09-10 round-6 review,
+  R6-P2-5).
   A trap scoped to the
   check-and-write releases the lock — and, if a signal lands before the
   section's own write, now also records a terminal `fail` — on every exit

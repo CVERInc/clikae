@@ -659,12 +659,18 @@ _race_contender() {
   [[ ! -e "$reclaim_link" ]] || { echo "a legacy directory with a dead recorded pid survived"; false; }
 }
 
-@test "_burn_reclaim_mutex_try (R5-P1-1): a LEGACY directory mutex with a LIVE pid recorded inside it is restored, not destroyed" {
-  # The other half of the same fix: a legacy directory whose `pid` file
-  # names a pid that is still ALIVE must not be treated as safe-to-discard
-  # just because it isn't a symlink -- it is restored onto the (currently
-  # empty) path exactly as a live symlink holder caught by this same
-  # branch would be.
+@test "_burn_reclaim_mutex_try (R5-P1-1/R6-P1-1): a LEGACY directory whose recorded pid is genuinely alive is left in place, never moved" {
+  # A legacy directory whose `pid` file names a pid that is still ALIVE
+  # must not be treated as safe-to-discard just because it isn't a symlink.
+  # R6-P1-1 (2026-09-10 round-6 review) found the ROUND-5 mechanism for
+  # this ("mv it aside unconditionally, then mv it back if it turns out to
+  # be alive") itself opened a window where an ordinary caller could claim
+  # the mutex while this branch still believed a live holder owned it --
+  # the fix classifies BEFORE moving anything, so a genuinely live holder
+  # (started at-or-before this directory's own creation, exactly like this
+  # fixture's `sleep 300 &`, which starts before the `mkdir` below) is
+  # never moved at all: same end state as round 5's "restored" (still a
+  # DIRECTORY, same recorded pid), reached without ever vacating the path.
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKMX6)"
   mkdir -p "$(dirname "$lock")"
@@ -676,10 +682,45 @@ _race_contender() {
   run _burn_reclaim_mutex_try "$reclaim_link"
   kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
   [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims it FOR the caller
-  [ -d "$reclaim_link" ] || { echo "a legacy directory with a LIVE recorded pid was destroyed, not restored"; false; }
-  [ -L "$reclaim_link" ] && { echo "restored as the wrong shape (symlink instead of directory)"; false; }
-  [ "$(cat "$reclaim_link/pid" 2>/dev/null)" = "$live_pid" ] || { echo "restored with the wrong pid recorded"; false; }
+  [ -d "$reclaim_link" ] || { echo "a legacy directory with a LIVE recorded pid was destroyed, not left alone"; false; }
+  [ -L "$reclaim_link" ] && { echo "wrong shape (symlink instead of directory) -- something moved it"; false; }
+  [ "$(cat "$reclaim_link/pid" 2>/dev/null)" = "$live_pid" ] || { echo "pid file changed -- something touched it"; false; }
   rm -rf "$reclaim_link"
+}
+
+@test "_burn_reclaim_mutex_try (R6-P1-1): a LEGACY directory whose recorded pid is alive but RECYCLED (started after the directory) is reaped in one call, not kept forever" {
+  # The regression round 6 found: round 5's fix judged liveness with a bare
+  # `kill -0` -- proof SOMETHING is alive at that pid, never proof it's the
+  # SAME process that made the directory. A pid recycled onto a dead
+  # holder's number was "restored" and kept FOREVER (fb536ce: 10s timeout
+  # on _burn_tank_lock_acquire, no recovery path anywhere in the product).
+  # This format never wrote a `started_at` file, so the directory's OWN
+  # mtime stands in for it: backdate the directory well into the past, then
+  # start a brand-new process AFTER that -- exactly a recycled pid's shape
+  # (it necessarily started later than the truly dead original holder did).
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKMX8)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  mkdir -p "$reclaim_link"
+  sleep 300 &
+  local recycled_pid=$!
+  printf '%s' "$recycled_pid" > "$reclaim_link/pid"
+  # Backdate the directory AFTER writing into it -- writing a file inside a
+  # directory updates ITS mtime too, so backdating first (then writing)
+  # would silently erase the very backdate this fixture depends on.
+  touch -t "$(date -v-600S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '600 seconds ago' '+%Y%m%d%H%M.%S')" "$reclaim_link"
+
+  local t0=$SECONDS
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  local elapsed=$((SECONDS - t0))
+  kill "$recycled_pid" 2>/dev/null; wait "$recycled_pid" 2>/dev/null || true
+  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never claims it FOR the caller
+  [ "$elapsed" -le 1 ] || {
+    echo "took ${elapsed}s -- fb536ce never reaps this at all (10s timeout upstream, wedged forever downstream)"
+    false
+  }
+  [[ ! -e "$reclaim_link" ]] || { echo "a legacy directory holding a RECYCLED pid survived -- the R6-P1-1 wedge"; false; }
 }
 
 @test "_burn_reclaim_mutex_try (R4-P2-3b): a DEAD-pid mutex younger than 30s is left alone" {
