@@ -175,8 +175,9 @@ _mark_busy() {
 @test "_burn_tank_lock_acquire: mutual exclusion — a second acquire blocks until the first releases" {
   _src_burn_lock
   _burn_tank_lock_acquire codex LOCKT1 5
-  local held_by; held_by="$(cat "$(_burn_tank_lock_path codex LOCKT1)/pid")"
-  [[ -n "$held_by" ]] || false
+  local lock; lock="$(_burn_tank_lock_path codex LOCKT1)"
+  local held; held="$(readlink "$lock")"
+  [ "${held%%:*}" = "$$" ] || false
 
   # A second acquire, while this shell still holds the lock, must time out
   # rather than succeed — prove the lock is actually exclusive, not just
@@ -185,37 +186,12 @@ _mark_busy() {
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 
   _burn_tank_lock_release codex LOCKT1
-  [[ ! -d "$(_burn_tank_lock_path codex LOCKT1)" ]] || false
+  [[ ! -L "$lock" ]] || false
 
   # Now that it's released, a fresh acquire succeeds immediately.
   run _burn_tank_lock_acquire codex LOCKT1 2
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
-
-@test "_burn_tank_lock_acquire: a lock left by a DEAD holder is reclaimed, not stuck forever" {
-  _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKT2)"
-  mkdir -p "$lock"
-  ( exit 0 ) &
-  local dead_pid=$!
-  wait "$dead_pid" 2>/dev/null || true
-  printf '%s' "$dead_pid" > "$lock/pid"
-
-  local t0=$SECONDS
-  run _burn_tank_lock_acquire codex LOCKT2 5
-  local elapsed=$((SECONDS - t0))
-  [ "$status" -eq 0 ]
-  [ "$elapsed" -lt 5 ] || false   # reclaimed promptly, not stuck to the timeout
-}
-
-# --- P2-1 (2026-09-09 round-2 review): the reclaim above, read then acted on
-# in two separate statements (`rm -f pid; rmdir`), let a SECOND contender who
-# read the same dead holder tear down the FIRST reclaimer's freshly-acquired
-# lock a moment later — both contenders' `mkdir` eventually succeeded and two
-# burns held "the" lock at once. Reclaim now `mv`s the stale directory aside
-# to a name unique to the reclaiming pid FIRST (a same-directory `mv` is
-# atomic — exactly one contender's can win), and release only ever removes a
-# lock this process's own pid actually holds. --------------------------------
 
 _dead_pid() {
   ( exit 0 ) &
@@ -224,17 +200,61 @@ _dead_pid() {
   printf '%s' "$p"
 }
 
+@test "_burn_tank_lock_acquire: a lock left by a DEAD holder is reclaimed, not stuck forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKT2)"
+  mkdir -p "$(dirname "$lock")"
+  ln -s "$(_dead_pid):1" "$lock"
+
+  local t0=$SECONDS
+  run _burn_tank_lock_acquire codex LOCKT2 5
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ]
+  [ "$elapsed" -lt 5 ] || false   # reclaimed promptly, not stuck to the timeout
+}
+
+# --- R3-P1-1/R3-P1-2/R3-P2-1/R3-P2-2 (2026-09-09 round-3 review) -----------
+#
+# Round 2's fix for the race below ("two contenders racing a DEAD-holder
+# lock — exactly one ever wins (5 trials)") was GREEN over a live mutual-
+# exclusion failure the round-3 review measured at 48% of trials. Three
+# independent reasons, all fixed here rather than patched around:
+#
+#   (a) Its two contenders were `( … ) &` SUBSHELLS OF THE SAME BATS SHELL,
+#       so `$$` — and therefore every identity the lock or a `mv`-based
+#       reclaim's graveyard name derived from it — was IDENTICAL across the
+#       "two" things it claimed to be racing. A fixture that can't tell its
+#       two doubles apart in the one field the mechanism uses for identity
+#       cannot detect a mechanism that gets that field wrong.
+#   (b) The winner never released, so a loser could never observe a SECOND
+#       stale generation — exactly the state every real violation passes
+#       through (one contender's reclaim succeeding, a second contender
+#       then racing the FRESH lock the first one just planted).
+#   (c) Two contenders is not enough. The interleaving that broke round 2
+#       needs a THIRD identity in the mix (one process vacating the path
+#       while a second restores and a third claims the gap) — reproduced by
+#       the review with 4, not 2.
+#
+# Rewritten below: each contender is a real, separate PROCESS (`bash -c`,
+# so `$$` genuinely differs — not a subshell of this bats shell), released
+# together off a barrier file so they actually overlap, at least 4 per
+# trial, against a pre-seeded stale (dead-pid) lock. A successful acquirer
+# must also win an INDEPENDENT witness mutex (`mkdir`) before it may count
+# itself a winner — if that `mkdir` fails, some OTHER contender is already
+# inside the critical section, which is the thing round 2's green test
+# could not observe even though it was happening.
+
 # A `cat` that reads immediately but SLEEPS before returning, on PATH ahead
 # of the real one — widens exactly the window between "I decided the holder
-# is dead" and "I act on that decision" the round-2 review's own probe used
-# to make the pre-fix reclaim race land on demand.
+# is dead" and "I act on that decision", the same window the round-2 AND
+# round-3 reviews both used to make the underlying races land reliably on
+# demand. `command cat` still walks $PATH (it only skips shell
+# functions/aliases), so a wrapper installed AHEAD of the real `cat` under
+# the same name that tried `command cat` would find ITSELF again —
+# infinite self-recursion, not a slow read. Resolve the real binary's
+# absolute path NOW, before $PATH is ever reordered, and bake that path in.
 _install_slow_cat() {
   local bin="$BATS_TEST_TMPDIR/slowcat" real_cat
-  # `command cat` still walks $PATH (it only skips shell functions/aliases),
-  # so a wrapper installed AHEAD of the real `cat` under the same name that
-  # tried `command cat` would find ITSELF again — infinite self-recursion,
-  # not a slow read. Resolve the real binary's absolute path NOW, before
-  # $PATH is ever reordered, and bake that path in instead.
   real_cat="$(command -v cat)"
   mkdir -p "$bin"
   cat > "$bin/cat" <<STUB
@@ -247,57 +267,153 @@ STUB
   printf '%s' "$bin"
 }
 
-@test "_burn_tank_lock_acquire: two contenders racing a DEAD-holder lock — exactly one ever wins (5 trials)" {
-  _src_burn_lock
-  local slowcat_bin; slowcat_bin="$(_install_slow_cat)"
-  local trial
-  for trial in 1 2 3 4 5; do
-    local lock; lock="$(_burn_tank_lock_path codex "LOCKRACE$trial")"
-    mkdir -p "$lock"
-    printf '%s' "$(_dead_pid)" > "$lock/pid"
-
-    local out_a="$BATS_TEST_TMPDIR/won-a-$trial" out_b="$BATS_TEST_TMPDIR/won-b-$trial"
-    rm -f "$out_a" "$out_b"
-    # B: the slow cat ahead on PATH — reads "dead" fast, then sits on that
-    # decision for a full second before acting on it.
-    ( PATH="$slowcat_bin:$PATH"
-      _src_burn_lock
-      _burn_tank_lock_acquire codex "LOCKRACE$trial" 5 && : > "$out_b" ) &
-    local pid_b=$!
-    ( _src_burn_lock
-      _burn_tank_lock_acquire codex "LOCKRACE$trial" 5 && : > "$out_a" ) &
-    local pid_a=$!
-    wait "$pid_a" 2>/dev/null || true
-    wait "$pid_b" 2>/dev/null || true
-
-    local wins=0
-    [ -f "$out_a" ] && wins=$((wins + 1))
-    [ -f "$out_b" ] && wins=$((wins + 1))
-    [ "$wins" -eq 1 ] || { echo "trial $trial: $wins contenders acquired (want exactly 1)"; false; }
-  done
+# _race_contender <tank> <barrier> <witness> <won-file> <slow 0|1> <slowcat_bin> <hold_s>
+# Launches ONE real background process (not a subshell of this shell) that
+# waits for <barrier> to appear, then calls the REAL, sourced
+# _burn_tank_lock_acquire against <tank>. On success it immediately races
+# every other winner for <witness> (`mkdir`, atomic) — the loser of THAT
+# race writes "<won-file>.violation" instead of "<won-file>", which is how a
+# genuine mutual-exclusion failure (two processes both inside the critical
+# section at once) is told apart from ordinary sequential hand-off. The
+# winner then HOLDS both the witness and the tank lock for <hold_s> (doing
+# nothing — standing in for real critical-section work) before releasing
+# both — without a hold, a winner that returns instantly can't be caught
+# overlapping anyone, which is a property of THIS TEST, not of the lock.
+# Sets $! to the new process's pid, as `&` always does.
+_race_contender() {
+  local tank="$1" barrier="$2" witness="$3" won="$4" slow="$5" slowcat_bin="$6" hold_s="$7"
+  bash -c '
+    root="$1"; tank="$2"; barrier="$3"; witness="$4"; won="$5"; slow="$6"; slowcat_bin="$7"; hold_s="$8"
+    if [ "$slow" = 1 ]; then PATH="$slowcat_bin:$PATH"; fi
+    # shellcheck source=/dev/null
+    . "$root/lib/core/log.sh"
+    . "$root/lib/core/json.sh"
+    . "$root/lib/core/burn_status.sh"
+    . "$root/lib/core/duration.sh"
+    . "$root/lib/commands/antigravity.sh"
+    . "$root/lib/commands/burn.sh"
+    while [ ! -f "$barrier" ]; do sleep 0.1; done
+    if _burn_tank_lock_acquire codex "$tank" 5; then
+      if mkdir "$witness" 2>/dev/null; then
+        : > "$won"
+        sleep "$hold_s"
+        rmdir "$witness" 2>/dev/null
+      else
+        printf "VIOLATION\n" > "${won}.violation"
+      fi
+      _burn_tank_lock_release codex "$tank"
+    fi
+  ' _ "$CLIKAE_TEST_ROOT" "$tank" "$barrier" "$witness" "$won" "$slow" "$slowcat_bin" "$hold_s" &
 }
 
-@test "_burn_tank_lock_acquire: a lock directory with NO pid file is reclaimed after a short grace, not forever" {
+# WIN can legitimately be >1 per trial here (releasing means a SECOND
+# contender can cleanly take the SAME tank after the first hands it back —
+# that's ordinary sequential access, not a defect). What must be exactly
+# zero is VIOLATION (two processes both held the witness — the mutual-
+# exclusion failure this whole file exists to catch) and a LEAKED lock
+# (the symlink still present after every contender has finished, which is
+# how R3-P1-2's nesting bug showed up: a lock that never became empty
+# again).
+@test "_burn_tank_lock_acquire (R3-P2-2): 4 independent processes racing a DEAD-holder lock — 0 violations, 0 leaks, 20 trials" {
   _src_burn_lock
-  local lock; lock="$(_burn_tank_lock_path codex LOCKPIDLESS)"
-  mkdir -p "$lock"   # directory only — as if killed between mkdir and the pid write
+  local slowcat_bin; slowcat_bin="$(_install_slow_cat)"
+  local trials=20 contenders=4 hold_s=0.3
+  local trial violations=0 leaked=0 wins_total=0
+  for trial in $(seq 1 "$trials"); do
+    local tank="RACE$trial"
+    local lock; lock="$(_burn_tank_lock_path codex "$tank")"
+    mkdir -p "$(dirname "$lock")"
+    ln -s "$(_dead_pid):1" "$lock"
+
+    local barrier="$BATS_TEST_TMPDIR/barrier-$trial" witness="$BATS_TEST_TMPDIR/witness-$trial"
+    rm -f "$barrier"; rm -rf "$witness"
+    local -a pids=()
+    local i won
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/won-$trial-$i"
+      rm -f "$won" "$won.violation"
+      local slow=0; [ "$i" -eq 1 ] && slow=1
+      _race_contender "$tank" "$barrier" "$witness" "$won" "$slow" "$slowcat_bin" "$hold_s"
+      pids+=("$!")
+    done
+    : > "$barrier"   # release all 4 together
+    local p
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/won-$trial-$i"
+      [ -f "$won" ] && wins_total=$((wins_total + 1))
+      [ -f "$won.violation" ] && violations=$((violations + 1))
+    done
+    if [ -L "$lock" ] || [ -e "$lock" ]; then
+      echo "trial $trial: lock still present after every contender finished — leaked"
+      leaked=$((leaked + 1))
+    fi
+  done
+  echo "trials=$trials contenders=$contenders wins=$wins_total violations=$violations leaked_locks=$leaked"
+  [ "$violations" -eq 0 ] || false
+  [ "$leaked" -eq 0 ] || false
+}
+
+@test "_burn_tank_lock_acquire (R3-P2-2 control): same harness with NO stale lock pre-seeded — 0 violations, 0 leaks, 8 trials" {
+  _src_burn_lock
+  local trials=8 contenders=4 hold_s=0.3
+  local trial violations=0 leaked=0 wins_total=0
+  for trial in $(seq 1 "$trials"); do
+    local tank="RACECTL$trial"
+    # No pre-seeded lock at all here (unlike the arm above) — this proves
+    # the harness isn't rigged to report "0 violations" regardless of what
+    # it's pointed at; it's a normal, uncontended free-for-all on a path
+    # nothing occupies yet.
+    local lock; lock="$(_burn_tank_lock_path codex "$tank")"
+    local barrier="$BATS_TEST_TMPDIR/ctl-barrier-$trial" witness="$BATS_TEST_TMPDIR/ctl-witness-$trial"
+    rm -f "$barrier"; rm -rf "$witness"
+    local -a pids=()
+    local i won
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/ctl-won-$trial-$i"
+      rm -f "$won" "$won.violation"
+      _race_contender "$tank" "$barrier" "$witness" "$won" 0 "" "$hold_s"
+      pids+=("$!")
+    done
+    : > "$barrier"
+    local p
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+    for i in $(seq 1 "$contenders"); do
+      won="$BATS_TEST_TMPDIR/ctl-won-$trial-$i"
+      [ -f "$won" ] && wins_total=$((wins_total + 1))
+      [ -f "$won.violation" ] && violations=$((violations + 1))
+    done
+    if [ -L "$lock" ] || [ -e "$lock" ]; then
+      echo "control trial $trial: lock still present after every contender finished — leaked"
+      leaked=$((leaked + 1))
+    fi
+  done
+  echo "control trials=$trials wins=$wins_total violations=$violations leaked_locks=$leaked"
+  [ "$violations" -eq 0 ] || false
+  [ "$leaked" -eq 0 ] || false
+}
+
+@test "_burn_tank_lock_acquire: a non-symlink leftover at the lock path (pre-round-3 directory-style lock) is reclaimed, not stuck forever" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKLEGACY)"
+  mkdir -p "$lock"   # as an old, pre-round-3 directory-style lock would leave behind
 
   local t0=$SECONDS
-  run _burn_tank_lock_acquire codex LOCKPIDLESS 10
+  run _burn_tank_lock_acquire codex LOCKLEGACY 5
   local elapsed=$((SECONDS - t0))
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$elapsed" -ge 1 ] || false   # genuinely waited out a grace, not an instant fluke
-  [ "$elapsed" -le 6 ] || false   # ...and nowhere near the 10s timeout — reclaimed, not "about to give up anyway"
+  [ "$elapsed" -lt 5 ] || false
+  [[ -L "$lock" ]] || false   # and it's now genuinely OUR symlink, not the old directory
 }
 
 @test "_burn_tank_lock_acquire: a lock whose pid is alive but RECYCLED (marker predates the pid's own start) is still reclaimed" {
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKRECYCLED)"
-  mkdir -p "$lock"
+  mkdir -p "$(dirname "$lock")"
   sleep 60 &
   local live_pid=$!
-  printf '%s' "$live_pid" > "$lock/pid"
-  printf '1' > "$lock/started_at"   # 1970 — this genuinely-alive pid started decades later
+  ln -s "$live_pid:1" "$lock"   # 1970 — this genuinely-alive pid started decades later
 
   local t0=$SECONDS
   run _burn_tank_lock_acquire codex LOCKRECYCLED 5
@@ -311,7 +427,8 @@ STUB
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKLIVE)"
   _burn_tank_lock_acquire codex LOCKLIVE 5   # this shell genuinely holds it
-  [ "$(cat "$lock/pid")" = "$$" ] || false
+  local held; held="$(readlink "$lock")"
+  [ "${held%%:*}" = "$$" ] || false
 
   local -a pids=()
   local _
@@ -327,9 +444,45 @@ STUB
   # every one of the 5 must time out (rc 1) — none may ever acquire a lock a
   # live holder still owns.
   [ "$rc_sum" -eq 5 ] || { echo "at least one contender wrongly acquired a LIVE holder's lock"; false; }
-  [ "$(cat "$lock/pid")" = "$$" ] || false   # and OUR copy was never touched
+  held="$(readlink "$lock")"
+  [ "${held%%:*}" = "$$" ] || false   # and OUR copy was never touched
 
   _burn_tank_lock_release codex LOCKLIVE
+}
+
+# R3-P2-1 arm: round 2's pid-less grace could steal a legitimate holder's
+# lock if that holder merely stalled between claiming the path and writing
+# its identity into it — reachable from ordinary fork/subshell lag, not
+# only a kill. The symlink design makes the underlying window structurally
+# impossible (pid+started_at are already IN the link the instant it
+# exists, so there is nothing separate left to stall on) — this test shows
+# the same real-world timing (a holder stalling for seconds under load)
+# still cannot displace a live holder, probe included per the review.
+@test "_burn_tank_lock_acquire (R3-P2-1 arm): a holder that stalls 3s after acquiring is never displaced" {
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex LOCKSTALL)"
+  (
+    _src_burn_lock
+    _burn_tank_lock_acquire codex LOCKSTALL 10
+    sleep 3
+    sleep 5
+  ) &
+  local holder_pid=$!
+  sleep 0.3
+  [[ -L "$lock" ]] || { echo "lock never appeared"; false; }
+  local -a pids=()
+  local i
+  for i in 1 2 3; do
+    ( _src_burn_lock; _burn_tank_lock_acquire codex LOCKSTALL 2 ) &
+    pids+=("$!")
+  done
+  local p rc rc_sum=0
+  for p in "${pids[@]}"; do
+    if wait "$p" 2>/dev/null; then rc=0; else rc=$?; fi
+    rc_sum=$((rc_sum + rc))
+  done
+  [ "$rc_sum" -eq 3 ] || { echo "a contender wrongly acquired the lock during the holder's stall"; false; }
+  kill "$holder_pid" 2>/dev/null; wait "$holder_pid" 2>/dev/null || true
 }
 
 @test "_burn_tank_lock_acquire/_burn_tank_lock_release: the lock is gone on every exit path — success, a losing timeout, and a trapped signal" {
@@ -338,16 +491,17 @@ STUB
   # success
   _burn_tank_lock_acquire codex LOCKEXIT1 5
   _burn_tank_lock_release codex LOCKEXIT1
-  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT1)" ]] || false
+  [[ ! -L "$(_burn_tank_lock_path codex LOCKEXIT1)" ]] || false
 
   # a losing timeout must not disturb (or remove) the winner's own lock
   _burn_tank_lock_acquire codex LOCKEXIT2 5
-  local winner_pid; winner_pid="$(cat "$(_burn_tank_lock_path codex LOCKEXIT2)/pid")"
+  local lock2; lock2="$(_burn_tank_lock_path codex LOCKEXIT2)"
+  local winner_target; winner_target="$(readlink "$lock2")"
   run bash -c ". '$CLIKAE_TEST_ROOT/lib/core/log.sh'; . '$CLIKAE_TEST_ROOT/lib/core/json.sh'; . '$CLIKAE_TEST_ROOT/lib/core/burn_status.sh'; . '$CLIKAE_TEST_ROOT/lib/core/duration.sh'; . '$CLIKAE_TEST_ROOT/lib/commands/antigravity.sh'; . '$CLIKAE_TEST_ROOT/lib/commands/burn.sh'; _burn_tank_lock_acquire codex LOCKEXIT2 1"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [ "$(cat "$(_burn_tank_lock_path codex LOCKEXIT2)/pid")" = "$winner_pid" ] || false
+  [ "$(readlink "$lock2")" = "$winner_target" ] || false
   _burn_tank_lock_release codex LOCKEXIT2
-  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT2)" ]] || false
+  [[ ! -L "$lock2" ]] || false
 
   # a signal landing while the SAME trap commands cmd_burn installs around
   # its own check-and-write section are armed must still release the lock —
@@ -364,20 +518,63 @@ STUB
   ) &
   local bg=$!
   sleep 1
-  [[ -d "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || { echo "lock never appeared"; false; }
+  [[ -L "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || { echo "lock never appeared"; false; }
   kill -TERM "$bg"
   wait "$bg" 2>/dev/null || true
-  [[ ! -d "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || false
+  [[ ! -L "$(_burn_tank_lock_path codex LOCKEXIT3)" ]] || false
 }
 
-@test "_burn_tank_lock_acquire: the lock directory and its pid/started_at files are 0700/0600 (P3-5)" {
+@test "_burn_reclaim_mutex_try: the mutex directory and its pid file are 0700/0600 (P3-5)" {
   _src_burn_lock
-  _burn_tank_lock_acquire codex LOCKPERMS 5
   local lock; lock="$(_burn_tank_lock_path codex LOCKPERMS)"
-  [ "$(stat -c '%a' "$lock" 2>/dev/null || stat -f '%Lp' "$lock")" = 700 ]
-  [ "$(stat -c '%a' "$lock/pid" 2>/dev/null || stat -f '%Lp' "$lock/pid")" = 600 ]
-  [ "$(stat -c '%a' "$lock/started_at" 2>/dev/null || stat -f '%Lp' "$lock/started_at")" = 600 ]
-  _burn_tank_lock_release codex LOCKPERMS
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_dir="${lock}.reclaim"
+  _burn_reclaim_mutex_try "$reclaim_dir"
+  [ "$(stat -c '%a' "$reclaim_dir" 2>/dev/null || stat -f '%Lp' "$reclaim_dir")" = 700 ]
+  [ "$(stat -c '%a' "$reclaim_dir/pid" 2>/dev/null || stat -f '%Lp' "$reclaim_dir/pid")" = 600 ]
+  _burn_reclaim_mutex_release "$reclaim_dir"
+}
+
+@test "burn-collision: SIGTERM while blocked acquiring the busy-tank lock (before 'running' is ever written) still writes a terminal 'fail' status file (R3-P3-1)" {
+  _stub_codex
+  clikae init codex T1
+  # A genuinely LIVE holder (not a fabricated status row) squats the
+  # TANK-LEVEL lock itself, not the busy-check status file, so the second
+  # burn below blocks inside _burn_tank_lock_acquire's retry loop -- the
+  # exact window whose own trap R3-P3-1 is about. It has never reached the
+  # first `running` write, so `_burn_install_exit_trap`'s safety net isn't
+  # even installed yet; only the section-scoped trap covers this.
+  sleep 60 &
+  local live_pid=$!
+  local lockdir="$CLIKAE_HOME/state"
+  mkdir -p "$lockdir"; chmod 0700 "$lockdir"
+  ln -s "$live_pid:$(date +%s)" "$lockdir/tank-busy-codex_T1.lock"
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  "$CLIKAE_BIN" burn codex T1 --artifact "$A" -- run "$A" &
+  local bpid=$!
+
+  sleep 2   # long enough to be solidly inside the acquire retry loop,
+            # short enough that the default 10s acquire timeout never fires
+  kill -TERM "$bpid" 2>/dev/null || true
+  local rc=0
+  wait "$bpid" 2>/dev/null || rc=$?
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+
+  [ "$rc" -eq 143 ] || { echo "rc=$rc (want 143)"; false; }
+  [ ! -e "$A" ] || { echo "engine ran despite never reaching the lock"; false; }
+
+  local f
+  f="$(ls "$CLIKAE_HOME"/logs/burn-*/status.json 2>/dev/null | head -n1)"
+  [ -n "$f" ] || { echo "no status.json was written at all for the killed burn"; false; }
+  local json; json="$(cat "$f")"
+  [[ "$json" == *'"state":"fail"'* ]] || { echo "$json"; false; }
+  [[ "$json" == *'"ok":false'* ]] || { echo "$json"; false; }
+
+  # The live holder's own lock must be untouched -- this signal killed a
+  # LOSING contender, not the holder, and losing must never steal.
+  local held; held="$(readlink "$lockdir/tank-busy-codex_T1.lock" 2>/dev/null)"
+  [ "${held%%:*}" = "$live_pid" ] || { echo "live holder's lock was disturbed: $held"; false; }
 }
 
 @test "burn-collision: a busy-tank refusal writes a terminal 'fail' status file with a busy reason (P3-1)" {

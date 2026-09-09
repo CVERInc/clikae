@@ -791,8 +791,22 @@ _burn_status_write() {
   # reset_at is an epoch SECOND (a number, like started_at/updated_at/pid
   # below), never a JSON string — json_or_null would quote it.
   case "$reset_at" in ''|*[!0-9]*) reset_at=null ;; esac
-  local elapsed=$(( SECONDS - ${t0:-SECONDS} ))
   local now; now="$(date +%s 2>/dev/null || echo 0)"
+  # R3-P3-2 (2026-09-09 round-3 review): `t0` (the reroute-loop clock) isn't
+  # set yet for the two refusals cmd_burn can write BEFORE it ever reaches
+  # that loop (the lock-timeout and busy refusals) — `${t0:-SECONDS}` made
+  # elapsed_s read a flat 0 on those no matter how long the wait actually
+  # was, silently contradicting the started_at/updated_at pair right next to
+  # it in the same object. Fall back to wall-clock epoch (started_at is set
+  # at function entry, well before either refusal) instead of `$SECONDS`
+  # itself when there's no `t0` yet.
+  local elapsed elapsed_base
+  if [ -n "${t0:-}" ]; then
+    elapsed=$(( SECONDS - t0 ))
+  else
+    elapsed_base="${started_at:-$now}"
+    elapsed=$(( now - elapsed_base ))
+  fi
   local f="$run_dir/status.json"
   mkdir -p "$run_dir" 2>/dev/null || true
   {
@@ -919,12 +933,58 @@ _burn_wait_for_reset() {
   return 0
 }
 
-# _burn_tank_lock_path <engine> <tank> -> the mkdir-based lock directory path
-# for this exact engine/tank pair.
+# _burn_tank_lock_path <engine> <tank> -> the rendezvous path for this exact
+# engine/tank pair's lock — a SYMLINK, never a directory (R3-P1-1/R3-P1-2,
+# 2026-09-09 round-3 review; see _burn_tank_lock_acquire below for why).
 _burn_tank_lock_path() {
   local safe
   safe="$(printf '%s_%s' "$1" "$2" | tr -c 'A-Za-z0-9_' '_')"
   printf '%s/.clikae/state/tank-busy-%s.lock\n' "$HOME" "$safe"
+}
+
+# _burn_reclaim_mutex_try <reclaim_dir> -> 0 once THIS process holds the
+# mutex (its own `mkdir` succeeded, pid written immediately after); 1
+# otherwise.
+#
+# R3-P1-1/R3-P1-2 (2026-09-09 round-3 review): every REMOVAL of the tank
+# lock symlink — a stale reclaim tearing down a dead holder's link, or an
+# owner's own release — happens only while holding this SECOND, short-lived
+# mutex (`_burn_tank_lock_acquire`/`_burn_tank_lock_release` below). It is
+# itself `mkdir`-based and, unlike the lock it guards, is never vacated by
+# the thing that holds it — only ever removed by the loser-turned-reaper
+# path right below, on a mutex that looks abandoned.
+#
+# On failure to claim it, also reaps it if it looks abandoned: its own pid
+# is dead AND the directory is at least 30s old. Everything done under this
+# mutex — a readlink, at most one `rm`, an `rmdir` — is milliseconds, so 30s
+# cannot be a live holder's actual hold time; the only way a mutex survives
+# that long is a reclaimer that was itself killed mid-removal. Reaping here
+# never claims the mutex for the caller (the caller loops back and races the
+# `mkdir` again like everyone else) — it only keeps a crashed reclaimer's
+# mutex from wedging every future one forever.
+_burn_reclaim_mutex_try() {
+  local reclaim_dir="$1" mpid mtime now
+  if mkdir -m 0700 "$reclaim_dir" 2>/dev/null; then
+    (umask 077; printf '%s' "$$" > "$reclaim_dir/pid") 2>/dev/null || true
+    return 0
+  fi
+  mpid="$(cat "$reclaim_dir/pid" 2>/dev/null || true)"
+  case "$mpid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$mpid" 2>/dev/null && return 1   # still alive — not abandoned
+  mtime="$(stat -f %m "$reclaim_dir" 2>/dev/null || stat -c %Y "$reclaim_dir" 2>/dev/null || echo 0)"
+  case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
+  now="$(date +%s 2>/dev/null || echo 0)"
+  [ "$((now - mtime))" -ge 30 ] || return 1
+  rm -f "$reclaim_dir/pid" 2>/dev/null
+  rmdir "$reclaim_dir" 2>/dev/null
+  return 1
+}
+
+# _burn_reclaim_mutex_release <reclaim_dir> — the counterpart to a
+# successful _burn_reclaim_mutex_try.
+_burn_reclaim_mutex_release() {
+  rm -f "$1/pid" 2>/dev/null
+  rmdir "$1" 2>/dev/null
 }
 
 # _burn_tank_lock_acquire <engine> <tank> [timeout_s=10] -> 0 once THIS
@@ -934,98 +994,141 @@ _burn_tank_lock_path() {
 # `running` write that makes a tank busy for anyone ELSE'S check are two
 # separate statements — between them sit nothing at all, but two `clikae
 # burn` processes started together both reach the check before either has
-# written `running`, and both pass. `mkdir` is atomic even without
-# flock/lockf (works on bash 3.2, NFS, anywhere `mkdir` itself works), so it
+# written `running`, and both pass. `ln -s` is atomic even without
+# flock/lockf (works on bash 3.2, NFS, anywhere symlink(2) works), so it
 # closes the SAME window `--ephemeral`'s slot_lock already closes for a
 # different resource (see cmd_burn's own soul/MCP prelaunch lock further
 # down) — held only across the check-and-write, never across the engine run
 # itself.
 #
-# Stale-safe, and ATOMICALLY so (2026-09-09 round-2 review, P2-1): the naive
-# "read a dead holder, then `rm -f pid; rmdir`" is two unsynchronized
-# statements a SECOND contender who read the same dead holder can interleave
-# with — it can delete the pid file the FIRST reclaimer just wrote and finish
-# tearing the (now-recreated) directory down, so both contenders' `mkdir`
-# eventually succeeds and two processes hold "the" lock at once. Reclaiming
-# a stale lock therefore never mutates it in place; it `mv`s the whole
-# directory aside to a name unique to THIS pid first — a same-directory `mv`
-# is atomic, so of any number of contenders racing the same stale lock,
-# exactly one `mv` can succeed (the others fail with the source already gone
-# and just loop back to retry the plain `mkdir`). The mover then re-checks
-# that what it actually captured still names the holder it judged stale
-# before discarding it — `mv` only cares about the path, not the content, so
-# if some OTHER contender's fresh `mkdir` had already landed on this path in
-# the meantime (a narrower window than the one above, closed the same way:
-# verify before you destroy), the capture is put back rather than deleted.
+# R3-P1-1/R3-P1-2/R3-P2-1 (2026-09-09 round-3 review): round 2's `mv`-aside
+# reclaim broke mutual exclusion rather than fixing it — `mv` IS atomic, but
+# the thing it made atomic was the wrong thing. `mv "$lock" "$graveyard"`
+# VACATES the rendezvous path, and a vacated path is exactly what every
+# OTHER contender's plain `mkdir` is waiting for; measured, the `mv` winner
+# and the next `mkdir` winner were two different processes in 48% of trials
+# — worse than the naive two-statement reclaim it replaced. Restoring a
+# capture (`mv "$graveyard" "$lock"`) also silently NESTED instead of
+# failing whenever `$lock` had been recreated in the meantime, leaking a
+# directory a later reclaim couldn't see through. And the pid-less grace it
+# also carried was reachable from ordinary fork/subshell lag on a loaded
+# machine, not only a kill mid-`mkdir` — it could steal a perfectly live
+# holder's lock if that holder merely stalled between claiming the path and
+# writing its identity into it.
 #
-# A lock directory with NO pid file (or an unparseable one) — reachable from
-# a kill between `mkdir` and the `pid` write below — gets the same atomic
-# reclaim, but only after a short grace: the directory may simply belong to
-# a holder that hasn't written its pid file yet.
+# The fix removes all three defects by construction:
+#
+#   1. The lock is a SYMLINK, never a directory. `ln -s "<pid>:<started_at>"
+#      "$lock"` is one atomic syscall (`symlink(2)`, EEXIST for the loser)
+#      that carries the holder's identity from the instant the path exists
+#      — there is no window where the path is claimed but pid-less, so the
+#      grace branch is gone entirely, not merely tightened.
+#   2. Nothing that REMOVES the link — a stale reclaim, or an owner's own
+#      release (see _burn_tank_lock_release below) — ever runs outside
+#      _burn_reclaim_mutex_try's mutex above. Because the link can only
+#      disappear while that mutex is held, and can only newly appear via
+#      some contender's own unsynchronized `ln -s`, a reclaimer's
+#      readlink→verify-dead→`rm`, done AFTER it holds the mutex, cannot
+#      delete a link a fresh holder claimed after the reclaimer's first,
+#      unsynchronized read — the re-read under the mutex is what's actually
+#      acted on.
+#   3. Acquisition itself (`ln -s`) never touches the mutex — only removal
+#      does — so the common, uncontended case costs exactly one syscall,
+#      same as the `mkdir` it replaces.
 _burn_tank_lock_acquire() {
-  local eng="$1" tk="$2" timeout_s="${3:-10}" lock start_s now_s holder hstarted
-  local pidless_since="" grace_s=2 stale graveyard recheck_pid
+  local eng="$1" tk="$2" timeout_s="${3:-10}" lock reclaim_dir start_s now_s
+  local target holder hstarted stale now_epoch
   lock="$(_burn_tank_lock_path "$eng" "$tk")"
+  reclaim_dir="${lock}.reclaim"
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   chmod 0700 "$(dirname "$lock")" 2>/dev/null || true
   start_s=$SECONDS
   while :; do
-    if mkdir -m 0700 "$lock" 2>/dev/null; then
-      (umask 077; printf '%s' "$$" > "$lock/pid") 2>/dev/null || true
-      (umask 077; date +%s > "$lock/started_at" 2>/dev/null) 2>/dev/null || true
-      return 0
-    fi
-    # Wall-clock ($SECONDS), checked BEFORE any stale-handling below, so the
-    # timeout bounds the WHOLE loop — not just the "not stale, about to
-    # sleep" tail. A reclaim attempt (the `continue` a few lines down) does
-    # not itself sleep, so without this check here a holder that keeps
-    # looking freshly-stale (a crash-loop of very short-lived acquirers, or
-    # this file's own tests deliberately racing one) could spin forever
-    # without ever timing out.
+    # Wall-clock ($SECONDS), checked at the TOP of every iteration —
+    # including the reclaim path below — so the timeout bounds the WHOLE
+    # loop, not just a "not stale, about to sleep" tail. A stuck reclaim
+    # mutex (see _burn_reclaim_mutex_try) still can't spin this forever: its
+    # own 30s stale rule reaps it long before most callers' timeouts.
     now_s=$SECONDS
     [ "$((now_s - start_s))" -lt "$timeout_s" ] || return 1
+    if [ -e "$lock" ] && [ ! -L "$lock" ]; then
+      # Some non-symlink entry occupies the path (e.g. a pre-round-3,
+      # directory-style lock left by an older clikae) — checked and cleared
+      # BEFORE ever attempting `ln -s` below, never after: `ln -s TARGET
+      # LINKNAME` where LINKNAME is an existing DIRECTORY does not fail,
+      # it creates the link INSIDE that directory (the same
+      # destination-is-a-directory nesting hazard R3-P1-2 found in `mv`) —
+      # so this path can never be allowed to reach the `ln -s` below while
+      # it might still be a directory. It can't carry an identity either
+      # way, so it is unconditionally reclaimable, under the same removal
+      # mutex as everything else.
+      if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        [ -e "$lock" ] && [ ! -L "$lock" ] && rm -rf "$lock" 2>/dev/null
+        _burn_reclaim_mutex_release "$reclaim_dir"
+      fi
+      continue
+    fi
+    now_epoch="$(date +%s 2>/dev/null || echo 0)"
+    if ln -s "$$:$now_epoch" "$lock" 2>/dev/null; then
+      return 0
+    fi
+    target="$(readlink "$lock" 2>/dev/null || true)"
+    if [ -z "$target" ]; then
+      # The path vanished between our failed `ln -s` above and this
+      # `readlink` (someone else's release or reclaim finishing) — it may
+      # now be free; retry `ln -s` at the top immediately, no sleep.
+      continue
+    fi
+    holder="${target%%:*}"
+    hstarted="${target#*:}"
     stale=0
-    holder="$(cat "$lock/pid" 2>/dev/null || true)"
     case "$holder" in
-      ''|*[!0-9]*)
-        # No pid file, or unparseable — give it `grace_s` seconds (wall
-        # clock, same clock as the timeout above) before treating the
-        # directory as abandoned rather than merely mid-acquire.
-        [ -n "$pidless_since" ] || pidless_since="$now_s"
-        [ "$((now_s - pidless_since))" -ge "$grace_s" ] && stale=1
-        ;;
+      ''|*[!0-9]*) stale=1 ;;
       *)
-        pidless_since=""
         # Reuse the same liveness+identity test `burn_tank_busy` uses (P2-1,
         # round-1): a bare `kill -0` only proves SOMETHING is alive at that
-        # pid, not that it's the SAME process the lock's own `started_at`
-        # names — this lock has exactly that recycled-pid weakness too.
+        # pid, not that it's the SAME process the lock's own recorded
+        # started_at names — this lock has exactly that recycled-pid
+        # weakness too.
         if kill -0 "$holder" 2>/dev/null; then
-          hstarted="$(cat "$lock/started_at" 2>/dev/null || true)"
           _burn_pid_matches_marker "$holder" "$hstarted" || stale=1
         else
           stale=1
         fi
         ;;
     esac
-    if [ "$stale" -eq 1 ]; then
-      graveyard="${lock}.stale.$$"
-      if mv "$lock" "$graveyard" 2>/dev/null; then
-        recheck_pid="$(cat "$graveyard/pid" 2>/dev/null || true)"
-        if [ "$recheck_pid" = "$holder" ]; then
-          rm -rf "$graveyard" 2>/dev/null   # genuinely the stale generation we judged — discard it
-        else
-          # Captured a DIFFERENT (fresher) generation than the one we judged
-          # stale — some other contender's `mkdir` landed on this path
-          # between our check and this `mv`. Put it back; if that fails,
-          # someone else has since taken the path over again and this
-          # capture is now a true orphan, safe to discard.
-          mv "$graveyard" "$lock" 2>/dev/null || rm -rf "$graveyard" 2>/dev/null
-        fi
-      fi
+    if [ "$stale" -ne 1 ]; then
+      sleep 1
       continue
     fi
-    sleep 1
+    if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      # Re-verify under the mutex — required, not paranoia: the target may
+      # have changed since the unsynchronized read above (a live holder
+      # released, or the earlier reclaim finished, and a fresh contender's
+      # `ln -s` landed on this exact path in the meantime). Only remove
+      # what THIS read — taken while holding the one thing that can remove
+      # it — still judges stale.
+      target="$(readlink "$lock" 2>/dev/null || true)"
+      if [ -n "$target" ]; then
+        holder="${target%%:*}"
+        hstarted="${target#*:}"
+        stale=0
+        case "$holder" in
+          ''|*[!0-9]*) stale=1 ;;
+          *)
+            if kill -0 "$holder" 2>/dev/null; then
+              _burn_pid_matches_marker "$holder" "$hstarted" || stale=1
+            else
+              stale=1
+            fi
+            ;;
+        esac
+        [ "$stale" -eq 1 ] && rm -f "$lock" 2>/dev/null
+      fi
+      _burn_reclaim_mutex_release "$reclaim_dir"
+    fi
+    continue   # whether we reclaimed it, someone else already did, or a
+               # fresher check now says it's live — retry `ln -s` at the top
   done
 }
 
@@ -1034,18 +1137,36 @@ _burn_tank_lock_acquire() {
 # held the lock, a signal mid-check, the normal release after the write —
 # see the trap installed around the locked section in cmd_burn below).
 #
-# P2-1 (2026-09-09 round-2 review): removes the lock ONLY when its own `pid`
-# file names THIS process — never on trust that "I must be the one who
-# called acquire". Without that check, a caller that raced the lock away
-# (timed out while someone else holds it, or is cleaning up after a signal
-# whose acquire never actually succeeded) would delete a lock a DIFFERENT,
-# live process is legitimately holding.
+# R3-P1-1 (2026-09-09 round-3 review): removal — like a stale reclaim — only
+# ever happens while holding the reclaim mutex (see _burn_reclaim_mutex_try
+# and _burn_tank_lock_acquire above), and only when the link, re-read AFTER
+# the mutex is held, still names THIS process — never on trust that "I must
+# be the one who called acquire". Without that second check, a caller that
+# raced the lock away (timed out while someone else holds it, or is
+# cleaning up after a signal whose acquire never actually succeeded) would
+# delete a lock a DIFFERENT, live process is legitimately holding.
+#
+# The retry here is bounded, not a bare loop, because this runs from exit
+# traps: real contention on the mutex is a momentary thing (its own hold
+# time is a readlink and an rm/rmdir), so a handful of one-second retries
+# covers it, and the mutex's own 30s stale-reap bounds how long a truly
+# wedged mutex could ever block a FUTURE caller. Giving up here just means
+# this particular release didn't run this time — it never means a lock this
+# process doesn't own gets deleted.
 _burn_tank_lock_release() {
-  local lock owner; lock="$(_burn_tank_lock_path "$1" "$2")"
-  owner="$(cat "$lock/pid" 2>/dev/null || true)"
-  [ "$owner" = "$$" ] || return 0
-  rm -f "$lock/pid" "$lock/started_at" 2>/dev/null
-  rmdir "$lock" 2>/dev/null
+  local lock reclaim_dir target holder tries=0
+  lock="$(_burn_tank_lock_path "$1" "$2")"
+  reclaim_dir="${lock}.reclaim"
+  while ! _burn_reclaim_mutex_try "$reclaim_dir"; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 10 ] || return 0
+    sleep 1
+  done
+  target="$(readlink "$lock" 2>/dev/null || true)"
+  holder="${target%%:*}"
+  [ "$holder" = "$$" ] && rm -f "$lock" 2>/dev/null
+  _burn_reclaim_mutex_release "$reclaim_dir"
+  return 0
 }
 
 cmd_burn() {
@@ -1193,11 +1314,22 @@ cmd_burn() {
   # gone). A trap scoped to exactly this section closes that gap; cleared
   # again once the section's own explicit release has run, so it never
   # outlives the few statements it exists for.
+  #
+  # R3-P3-1 (2026-09-09 round-3 review): a signal landing IN this window used
+  # to release the lock and exit without ever writing a status file — the
+  # very gap this same commit closes for its two sibling branches (the
+  # lock-timeout and busy refusals just below). `_burn_exit_guard` is
+  # already exactly that safety net (installed one section later, for the
+  # locked-out-window-after-this-one) — it no-ops once a terminal state is
+  # already on disk, so reusing it here rather than duplicating its "write a
+  # generic fail" logic is free: `run_dir`/`burn_id`/`started_at` are all
+  # already set by this point in cmd_burn, and status_engine/tank fall back
+  # correctly via the same dynamic-scoping convention it already documents.
   if [ "$allow_active" != "1" ]; then
-    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 129' HUP
-    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 130' INT
-    trap '_burn_tank_lock_release "$status_engine" "$tank"; exit 143' TERM
-    trap '_burn_tank_lock_release "$status_engine" "$tank"' EXIT
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 129; exit 129' HUP
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 130; exit 130' INT
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 143; exit 143' TERM
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard "$?"' EXIT
     if ! _burn_tank_lock_acquire "$status_engine" "$tank"; then
       trap - HUP INT TERM EXIT
       # P3-1 (2026-09-09 round-2 review): see the busy-refusal write below —

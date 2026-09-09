@@ -317,34 +317,49 @@ either check never refuses a live pid on that basis alone.
 
 **The check and the write are not atomic without help (P2-4.)** Two `clikae
 burn` processes started together both read the busy-check as free before
-either has written `running` — a per-tank `mkdir`-based lock (atomic even on
-bash 3.2, no `flock`/`lockf` dependency, 0700 directory / 0600 pid file) now
-wraps the check-and-write, held only across those two statements, never
-across the engine run itself. A refusal here — the lock timing out, or the
-busy check itself losing — writes a terminal `fail` (reason starting
-`busy:`) before returning, so `clikae burn … & clikae wait "burn-$!"` reads
-an immediate, correct `fail` instead of stalling out the resolve window on a
-status file that was never going to appear.
+either has written `running` — a per-tank lock now wraps the check-and-write,
+held only across those two statements, never across the engine run itself. A
+refusal here — the lock timing out, or the busy check itself losing — writes
+a terminal `fail` (reason starting `busy:`) before returning, so `clikae
+burn … & clikae wait "burn-$!"` reads an immediate, correct `fail` instead of
+stalling out the resolve window on a status file that was never going to
+appear.
 
-**Reclaiming a dead holder's lock is itself atomic (2026-09-09 round-2
-review, P2-1.)** A lock a killed holder left behind is reclaimed rather than
-blocking forever — but reclaiming it by reading "the holder is dead" and
-then deleting the directory in two separate, un-synchronized statements lets
-a SECOND contender who read the same dead holder tear down the FIRST
-reclaimer's fresh lock a moment later, so both `mkdir`s eventually succeed
-and two processes hold "the" lock at once. Reclaiming now `mv`s the whole
-stale directory aside to a name unique to the reclaiming pid first — a
-same-directory `mv` is atomic, so exactly one contender's `mv` can succeed
-on any one stale generation — and only that contender's copy is discarded
-(re-verified, after the move, to still be the generation judged stale, in
-case a fresher `mkdir` had already landed on the path in between). The same
-path handles a lock directory with no readable pid file at all — reachable
-from a kill between the `mkdir` and the pid write — after a short grace, so
-it cannot wedge that tank open forever either. Release, symmetrically, only
-ever removes a lock whose pid file names the releasing process's own pid,
-and a trap scoped to the check-and-write section releases it on a signal
-too — the lock is gone on every exit out of that section, not just the
-happy one.
+**The lock is a symlink, and every REMOVAL of it is serialized (2026-09-09
+round-3 review, R3-P1-1/R3-P1-2/R3-P2-1.)** Two earlier shapes both broke
+mutual exclusion. A pid-file-in-a-directory design (round 1) let two
+contenders both `mkdir` once the directory was ever removed. A `mv`-the-
+whole-directory-aside reclaim (round 2, meant to make the removal atomic)
+broke it WORSE, because a same-directory `mv` vacates the rendezvous path —
+and a vacated path is exactly what every other contender's plain `mkdir` is
+waiting for; measured, the `mv` winner and the next `mkdir` winner were two
+different processes holding the SAME tank at once in roughly half of trials.
+
+The fix (round 3) removes the defect by construction instead of patching
+around it. The lock is now a **symlink**: `ln -s "<pid>:<started_at>"
+<path>` is one atomic syscall that carries the holder's identity from the
+instant the path exists, so there is no window where the path is claimed but
+identity-less (the pid-less "grace" period earlier rounds needed is gone
+entirely — it cannot happen). Acquisition never needs any additional
+synchronization beyond that single `ln -s`. What DOES need synchronization
+is removal: a stale reclaim tearing down a dead holder's link, and an
+owner's own release, both happen only while holding a second, short-lived
+`mkdir`-based mutex (`<lock>.reclaim`). Because the link can only disappear
+while that mutex is held, and can only newly appear via some OTHER
+contender's own unsynchronized `ln -s`, a reclaimer's re-read-then-remove —
+done immediately after the mutex is granted, re-verifying the CURRENT link
+rather than trusting an earlier, unsynchronized read — cannot delete a link
+a fresh holder claimed after the reclaimer's first look. The reclaim
+mutex's own stale rule (its holder's pid is dead AND the mutex directory is
+at least 30 seconds old) cannot steal it from a live reclaimer, since
+everything done under it — a readlink, at most one `rm`, an `rmdir` — is
+milliseconds of work. Release, symmetrically, only ever removes a lock
+that, re-read under that same mutex, still names the releasing process's own
+pid — never on trust that "I must be the one who called acquire" — and a
+trap scoped to the check-and-write section releases it (and, if a signal
+lands before the section's own explicit write, records a terminal `fail`
+too) on a signal — the lock is gone on every exit out of that section, not
+just the happy one.
 
 ### `--wait-for-reset` (#38)
 

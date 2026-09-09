@@ -72,24 +72,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recycled onto an unrelated process within the retention window, which used
   to refuse that tank FOREVER for a reason nobody could see (2026-09-09
   round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
-  in a per-tank `mkdir`-based lock (stale-safe, bash 3.2, 0700/0600), closing
-  the window where two `clikae burn` processes started together could both
-  pass the check before either had written `running` (P2-4). agy's own
-  separate reroute walk (`_agy_burn`, sequential-hop only — one global
-  Keychain account) now calls the same busy check too; it never had, which
-  was the worst engine to miss it on since agy structurally cannot run two
-  tanks at once (2026-09-09 round-1 review, P2-2). The lock's own dead-holder
-  reclaim is now atomic — reading "the holder is dead" and then deleting the
-  lock directory were two unsynchronized statements a second contender
-  reading the same dead holder could interleave with, so both `mkdir`s could
-  succeed and two burns hold "the" lock at once; reclaim now `mv`s the stale
-  directory aside (atomic, one winner) before discarding it, a pid-less lock
-  directory is reclaimed the same way after a short grace instead of
-  blocking forever, release only ever removes a lock this process's own pid
-  actually holds, and a trap scoped to the check-and-write releases the lock
-  on every exit out of that section including a signal (2026-09-09 round-2
-  review, P2-1). A refusal here (the lock timing out, or losing the busy
-  check) now writes a terminal `fail` (reason starting `busy:`) before
+  in a per-tank lock, closing the window where two `clikae burn` processes
+  started together could both pass the check before either had written
+  `running` (P2-4). agy's own separate reroute walk (`_agy_burn`,
+  sequential-hop only — one global Keychain account) now calls the same busy
+  check too; it never had, which was the worst engine to miss it on since agy
+  structurally cannot run two tanks at once (2026-09-09 round-1 review,
+  P2-2). The lock's dead-holder reclaim went through two more broken shapes
+  before landing: reading "the holder is dead" and then deleting a lock
+  directory in two unsynchronized statements let two contenders interleave
+  (round 1); `mv`-ing the stale directory aside "atomically" instead
+  measurably made it WORSE, since a same-directory `mv` VACATES the
+  rendezvous path — exactly what another contender's plain `mkdir` is
+  waiting for (round 2). Round 3 replaces the whole shape: the lock is now a
+  **symlink** (`ln -s "<pid>:<started_at>" <path>`, one atomic syscall that
+  carries the holder's identity from the instant it exists — no pid-less
+  window to have a grace period for), and every REMOVAL of it — a stale
+  reclaim, or an owner's own release — happens only under a second,
+  short-lived `mkdir`-based mutex, re-verifying the current link before
+  acting on it rather than trusting an earlier, unsynchronized read (2026-
+  09-09 round-3 review, R3-P1-1/R3-P1-2/R3-P2-1). A trap scoped to the
+  check-and-write releases the lock — and, if a signal lands before the
+  section's own write, now also records a terminal `fail` — on every exit
+  out of that section including a signal (2026-09-09 round-2/round-3
+  reviews, P2-1/R3-P3-1). A refusal here (the lock timing out, or losing the
+  busy check) now writes a terminal `fail` (reason starting `busy:`) before
   returning, so the documented `clikae burn … & clikae wait "burn-$!"`
   composition reads an immediate `fail` instead of stalling the resolve
   window on a status file that was never coming (2026-09-09 round-2 review,
