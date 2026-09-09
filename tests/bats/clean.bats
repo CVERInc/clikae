@@ -64,6 +64,50 @@ _source_clean() {
   rm -f "$planted"
 }
 
+@test "clikae clean (KITT/R10-P1-1): a real, HELD ephemeral lock does not kill the whole run under errexit -- it is named, and the tank-lock GC still runs" {
+  # R10-P1-1 (2026-09-12 round-10 review): _clean_tmux_gc's own flock/lockf
+  # probes were bare statements ("… ; rc=$?") under bin/clikae's own
+  # `set -eo pipefail` -- the exact shape R9-P1-1 fixed at cmd_burn's own
+  # acquire call, just never grepped for at this sibling site. A
+  # GENUINELY HELD ephemeral lock (exactly what any real `clikae burn`'s
+  # tmux wrapper holds for its entire run, lib/commands/burn.sh) made the
+  # probe exit non-zero, and errexit killed the WHOLE `clikae clean`
+  # process right there: rc=75 (lockf) or rc=1 (flock), ZERO lines of
+  # output, before `_clean_scrollback_gc`/`_clean_tank_lock_gc` -- this
+  # PR's own documented recovery path for everything else -- ever ran.
+  # This drives the real binary against a REAL held lock (a backgrounded
+  # process blocked on its own `flock`/`lockf` fd, never a sleep loop
+  # pretending to be alive), not a unit call to `_clean_tmux_gc` alone
+  # (bats itself does not run under errexit, so a unit call could not
+  # reproduce this).
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999985
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  # A dead-holder tank lock the tank-lock GC should still find and report,
+  # proving it actually ran (not merely that clean's own exit code is 0).
+  ln -s "$dead:1700000000" "$sdir/tank-busy-codex_T20.lock"
+
+  local lock_file="$sdir/clikae-ephem-probe-$$.lock"
+  (
+    exec 9> "$lock_file"
+    if command -v flock >/dev/null 2>&1; then flock 9; else lockf 9; fi
+    sleep 5
+  ) &
+  local holder=$!
+  sleep 0.3
+
+  run clikae clean --dry-run
+  local rc="$status" out="$output"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null || true
+  rm -f "$lock_file" "$sdir/tank-busy-codex_T20.lock"
+
+  [ "$rc" -eq 0 ] || { echo "$out"; echo "-- clean died (rc=$rc) instead of skipping the held lock and continuing -- the R10-P1-1 errexit death"; false; }
+  [ -n "$out" ] || { echo "-- zero lines of output -- the exact silent-errexit-death symptom this test guards against"; false; }
+  [[ "$out" == *"clikae-ephem-probe-$$.lock"* ]] || { echo "$out"; echo "-- the busy ephemeral lock was never named"; false; }
+  [[ "$out" == *"Would remove dead-holder tank lock tank-busy-codex_T20.lock"* ]] || {
+    echo "$out"; echo "-- the tank-lock GC (the PR's own documented recovery path) did not run/report while the ephemeral lock was held"; false; }
+}
+
 # Seed a claude transcript for tank $1 with $3 conversation lines under a fixed
 # project dir; echoes the transcript path.
 _seed_lines() {
@@ -848,6 +892,84 @@ sys.exit(1 if bad else 0)
   [ -L "$sdir/tank-busy-codex_T5.lock.reclaim.stale.$$.12345" ] || {
     echo "deleted a graveyard entry whose reaper is this very process"; false; }
   rm -f "$sdir/tank-busy-codex_T5.lock.reclaim.stale.$$.12345"
+}
+
+# --- R10-P2-1 (2026-09-12 round-10 review): the LOCK family's own
+# restore-failure grave (`_burn_tank_lock_reap_verified`'s "could NOT
+# restore" branch, lib/commands/burn.sh -- the only surviving copy of a
+# live claim) has the identical shape as the mutex family's graveyard
+# above, but this GC's glob (`tank-busy-*.lock.reclaim.stale.*`)
+# structurally cannot match `tank-busy-*.lock.stale.*` (no `.reclaim.`
+# segment) -- so it had no sweeper anywhere in this codebase and would
+# accumulate forever. These pin the fix, mirroring the mutex-family pair
+# right above one-for-one, and confirm the two globs never see each
+# other's entries. -------------------------------------------------------
+
+@test "GC (R10-P2-1) removes an orphaned LOCK-family graveyard entry whose reaper is gone" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999983
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  # Filename carries the REAPER's pid ($dead here); the target carries
+  # whoever it could not restore (irrelevant to this GC) — same liveness
+  # test as the mutex family, on the filename, not the target.
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T21.lock.stale.$dead.12345"
+  run _clean_tank_lock_gc 0
+  [ ! -L "$sdir/tank-busy-codex_T21.lock.stale.$dead.12345" ] || {
+    echo "$output"; echo "-- the orphaned lock-family graveyard entry survived (R10-P2-1 regression)"; false; }
+  # Real (non-dry-run) removals of graveyard entries are counted, not named
+  # per-entry -- only the summary line reports them, same as the mutex
+  # family's own sibling test above; per-entry naming is dry-run's job
+  # (see the very next test).
+  [[ "$output" == *"GC: removed 1 dead-holder tank lock(s)"* ]] || {
+    echo "$output"; echo "-- the removal was not counted in the summary"; false; }
+}
+
+@test "GC (R10-P2-1) keeps a LOCK-family graveyard entry whose reaper is still running" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T22.lock.stale.$$.12345"
+  _clean_tank_lock_gc 0
+  [ -L "$sdir/tank-busy-codex_T22.lock.stale.$$.12345" ] || {
+    echo "deleted a lock-family graveyard entry whose reaper is this very process"; false; }
+  rm -f "$sdir/tank-busy-codex_T22.lock.stale.$$.12345"
+}
+
+@test "GC --dry-run (R10-P2-1) names an orphaned LOCK-family graveyard entry and deletes nothing" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999982
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T23.lock.stale.$dead.12345"
+  run _clean_tank_lock_gc 1
+  [[ "$output" == *"Would remove orphaned graveyard entry tank-busy-codex_T23.lock.stale.$dead.12345"* ]] || {
+    echo "$output"; false; }
+  [ -L "$sdir/tank-busy-codex_T23.lock.stale.$dead.12345" ] || { echo "a dry run deleted it"; false; }
+}
+
+@test "GC (R10-P2-1): the two graveyard globs never see each other's entries" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999981
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  # One entry from each family, same dead reaper pid — a naive combined
+  # glob (or an accidental substring collision) would double-count or
+  # cross-report one as the other's shape.
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T24.lock.stale.$dead.111"
+  ln -s "31337:1700000000" "$sdir/tank-busy-codex_T24.lock.reclaim.stale.$dead.222"
+  # Dry-run names each entry individually (unlike a real run, which only
+  # counts them into the summary line — see the two tests above) — the
+  # sharpest way to prove neither glob mis-sees the other's entry.
+  run _clean_tank_lock_gc 1
+  [[ "$output" == *"Would remove orphaned graveyard entry tank-busy-codex_T24.lock.stale.$dead.111"* ]] || {
+    echo "$output"; echo "-- lock-family entry not named"; false; }
+  [[ "$output" == *"Would remove orphaned graveyard entry tank-busy-codex_T24.lock.reclaim.stale.$dead.222"* ]] || {
+    echo "$output"; echo "-- mutex-family entry not named"; false; }
+  local n; n="$(printf '%s\n' "$output" | grep -c 'Would remove orphaned graveyard entry')"
+  [ "$n" -eq 2 ] || { echo "$output"; echo "-- expected exactly 2 preview lines, got $n"; false; }
+  [ -L "$sdir/tank-busy-codex_T24.lock.stale.$dead.111" ] && [ -L "$sdir/tank-busy-codex_T24.lock.reclaim.stale.$dead.222" ] || {
+    echo "a dry run deleted something"; false; }
+  rm -f "$sdir/tank-busy-codex_T24.lock.stale.$dead.111" "$sdir/tank-busy-codex_T24.lock.reclaim.stale.$dead.222"
 }
 
 @test "GC dry run reports a dead-holder tank lock and deletes nothing" {

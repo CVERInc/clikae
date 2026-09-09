@@ -145,7 +145,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9 by a shared helper, `_burn_tank_lock_reap_verified`, applying the
   identical discipline to the lock (R9-P1-1, see below); the mutex's own
   bounded residual described in this paragraph was not independently
-  re-measured after that fix. The cost, on the rare miss, is bounded and self-healing:
+  re-measured after that fix. **Round 10 re-ran the same arm on the fixed
+  build (`da975fc`): 0 violations in 100 trials (300 real `clikae burn`,
+  500 real `clikae clean`, 142 engines)**, with the witness validated on
+  the same fixture at 12 violations / 10 trials when
+  `_burn_tank_lock_acquire` is neutralised. A pre-round-9 build, run as a
+  paired control at the same load, also produced 0/50 — at this machine's
+  load (2.6–6.9 on 8 cores, against round 9's own 7–58) the wild arm alone
+  is not sensitive enough to separate the two builds; what separates them
+  is the deterministic rendezvous at each of the two `mv`-then-classify
+  call sites: 0/5 destroyed on HEAD vs 5/5 on the control. The cost, on the rare miss, is bounded and self-healing:
   one extra live holder for the duration of one critical section, caught by
   the tank lock's own owner-only release; worst case is two burns briefly
   on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
@@ -187,8 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch, and both of R7-P2-2's guards is ONE rule: a mutex path that is
   not a symlink whose target is plain data (a directory, a symlink to one,
   or a plain file) is never touched by any reap or claim attempt — `try`
-  refuses loudly, names the path, and backs off exactly like an ordinary
-  busy mutex, counted under its own `foreign-mutex` reason; `clikae clean`
+  refuses loudly, names the path, and — because the condition never
+  self-heals — refuses TERMINALLY rather than backing off (see Round 9
+  below), counted under its own `foreign-mutex` reason; `clikae clean`
   reports the same reason on the same shapes and never removes them either
   (no `--force` path in this PR). Nothing is ever restored and nothing
   non-symlink is ever removed, closing R8-P1-1 and R8-P1-2 by construction.
@@ -257,6 +267,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open up; measured as 6 genuine engine overlaps in 130 real trials with
   `clikae clean` racing `clikae burn` (R9-P1-1, see the residual note
   above for the numbers this replaces).
+
+  **Round 10 found the PR's own documented recovery path was dead exactly
+  when it was needed, a second graveyard family with no sweeper, and two
+  stale documentation sentences (2026-09-12 round-10 review, R10-P1-1/
+  R10-P2-1/R10-P2-2).** `clikae clean`'s tmux-lock GC (`_clean_tmux_gc`)
+  probed each ephemeral lock with a bare `flock -n …; rc=$?` /
+  `lockf -k -t 0 …; rc=$?` under `bin/clikae`'s `set -eo pipefail` — the
+  same shape R9-P1-1 fixed at `cmd_burn`'s own acquire call, just never
+  grepped for elsewhere. A genuinely-held ephemeral lock (any `clikae
+  burn`'s tmux wrapper holds one for its whole run) made the probe exit
+  non-zero, which errexit read as `_clean_tmux_gc` failing outright:
+  `clikae clean` died there with rc=75 (lockf) or rc=1 (flock) and ZERO
+  output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — this PR's own
+  stated recovery path for everything above — never ran, precisely while a
+  burn in flight is the moment most likely to have left something to
+  clean. Both probes now use `rc=0; cmd || rc=$?`, and a busy lock prints
+  one line naming it instead of failing silently (R10-P1-1). Separately,
+  the lock family's own restore-failure grave (`tank-busy-*.lock.stale.*`,
+  `_burn_tank_lock_reap_verified`'s "could NOT restore" branch — the only
+  surviving copy of a live claim) had no sweeper anywhere: `clean.sh`'s
+  graveyard loop matched only the mutex family's `*.lock.reclaim.stale.*`
+  glob, while its own comment claimed to cover "every graveyard." Both
+  globs are now swept the same way, and the comment says so (R10-P2-1).
+  And two sentences — one in this file, one in docs/orchestration.md —
+  still claimed in the present tense that a foreign-mutex refusal "backs
+  off exactly like an ordinary busy mutex," the exact behavior R9-P1-2
+  reversed into a terminal refusal a few dozen lines earlier in the same
+  file; both now say so (R10-P2-2). Clause (a) itself re-verified clean on
+  the fixed build: 0 violations in 100 trials (see the residual note
+  above), and the deterministic rendezvous at both `mv`-then-classify
+  sites held 0/5 destroyed vs 5/5 on a paired pre-R9 control. Also fixed
+  in the same round: the lock's own reap call was safe only because its
+  one caller happened to shield it under `|| rc=$?`, now guarded directly
+  (R10-P3-1); a claim that loses the race into an arriving foreign
+  directory left a stray symlink inside it uncleaned, now removed by name
+  (R10-P3-2); the CLAIM's readlink-verify had only a text-grepping
+  structural test guarding it, now joined by a behavioral test that drives
+  the actual race through a PATH-level `ln` substitution (R10-P3-3); both
+  reapers' restore/no-restore messages could print an
+  empty pid or overclaim "live" for an identity they never re-verified,
+  now reporting the raw caught identity instead (R10-P3-4); both graves'
+  names gained a wall-clock timestamp alongside `$$.$RANDOM`, shrinking
+  the collision window between a deliberately-kept grave and a later
+  pid-recycled process (R10-P3-5); the residual paragraph above now
+  carries these Round 10 numbers inline instead of leaving only the
+  pre-fix 6/130 for a reader to mistake for the current state (R10-P3-6);
+  and a 50-trial campaign that kept
+  state found residual litter in 27/50 trials — almost entirely ordinary
+  mutex-family graves, at a rate a pre-round-9 control build also showed
+  (28/50), fully removed by one subsequent `clikae clean` run — self-
+  healing that R10-P1-1 now makes reachable in practice (R10-P3-7).
 
   **A `SIGKILL`ed burn denies its own tank for up to
   ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the

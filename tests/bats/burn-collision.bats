@@ -1101,6 +1101,60 @@ _race_contender() {
     echo "$output"; echo "-- the tank-lock claim does not readlink-verify before returning 0"; false; }
 }
 
+@test "_burn_reclaim_mutex_try (KITT/R10-P3-3): the CLAIM's readlink-verify is exercised BEHAVIORALLY, through the real race, not just read as source text" {
+  # R10-P3-3 (2026-09-12 round-10 review): the R9-P2-2 test right above
+  # this one only greps source text -- a semantically-equivalent rewrite
+  # (e.g. the verify hoisted into a helper) would make it false-red, and a
+  # text-preserving-but-logic-broken edit would make it false-green (see
+  # `a-guard-that-reads-its-own-explanation`). This drives the ACTUAL race
+  # instead of reading about it: a PATH-level `ln` substitution creates a
+  # directory at the claim's destination in the exact window between
+  # `_burn_reclaim_mutex_is_foreign`'s check and the real `ln -s` call --
+  # reproducing, deterministically, the same race a concurrent process
+  # arriving in that window would cause -- and asserts on the function's
+  # REAL return code and REAL filesystem state, never on its source.
+  _src_burn_lock
+  local lock; lock="$(_burn_tank_lock_path codex R10P33)"
+  mkdir -p "$(dirname "$lock")"
+  local reclaim_link="${lock}.reclaim"
+  rm -rf "$reclaim_link"
+
+  local real_ln; real_ln="$(command -v ln)"
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/ln" <<SHIM
+#!/usr/bin/env bash
+# Simulate a foreign directory arriving in the unguarded window between
+# _burn_reclaim_mutex_try's is_foreign check and its own ln -s call: create
+# the directory immediately before the real ln -s runs, so the real
+# symlink(2) syscall itself is the one that nests into it (rc=0, exactly
+# the pre-R9-P2-2 hazard) -- not a simulation of ln's behavior, the real
+# syscall under the real race condition.
+if [ "\$1" = "-s" ] && [ "\$3" = "$reclaim_link" ]; then
+  mkdir -p "\$3" 2>/dev/null
+fi
+exec "$real_ln" "\$@"
+SHIM
+  chmod +x "$bin/ln"
+
+  PATH="$bin:$PATH" run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 1 ] || { echo "$output"; echo "-- claimed a mutex whose ln -s nested into a foreign directory instead of landing"; false; }
+  [ -d "$reclaim_link" ] && [ ! -L "$reclaim_link" ] || {
+    echo "the foreign directory from the race is gone -- test fixture broken"; false; }
+  [ -z "$(ls -A "$reclaim_link" 2>/dev/null)" ] || {
+    echo "R10-P3-2 regression: the nested junk this claim's own ln -s left inside the foreign directory was not cleaned up: $(ls -A "$reclaim_link")"; false; }
+
+  # Control: the SAME function, the SAME path, with the race REMOVED (real
+  # ln restored, no directory in the way) succeeds normally -- proving this
+  # test's failure mode above is sensitive to the fix, not a fixture that
+  # would fail regardless of what the function does.
+  rm -rf "$reclaim_link"
+  run _burn_reclaim_mutex_try "$reclaim_link"
+  [ "$status" -eq 0 ] || { echo "$output"; echo "-- control claim (no race) failed -- fixture is broken, not the function"; false; }
+  [ -L "$reclaim_link" ] && [[ "$(readlink "$reclaim_link")" == "$$:"* ]] || {
+    echo "control claim did not land a real symlink claim"; false; }
+  rm -f "$reclaim_link"
+}
+
 @test "_burn_tank_lock_acquire (KITT/R9-P1-2): a dead-holder lock whose reclaim mutex is a foreign object refuses TERMINALLY -- rc=2, immediately, never claims the tank, never backs off like an ordinary busy mutex" {
   # R9-P1-2 (2026-09-11 round-9 review) supersedes this test's own original
   # claim: a foreign object never self-heals, so looping back with a 1s

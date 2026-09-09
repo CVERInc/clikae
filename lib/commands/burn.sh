@@ -1116,6 +1116,22 @@ _burn_reclaim_mutex_try() {
     if [ -L "$reclaim_link" ] && [ "$(readlink "$reclaim_link" 2>/dev/null)" = "$$:$now_epoch" ]; then
       return 0
     fi
+    # R10-P3-2 (2026-09-12 round-10 review): the readlink verify above only
+    # tells us the claim did NOT land at $reclaim_link -- it does not undo
+    # what `ln -s` already did. When the destination that arrived in the
+    # unguarded window between the `is_foreign` check above and this
+    # `ln -s` resolves to a DIRECTORY, `ln -s` nests our claim INSIDE it
+    # (named by our own payload -- it carries no slash) instead of failing,
+    # still returning rc=0 -- measured 5/5 with a hook. Every surface (this
+    # function's own header, its refusal message above, docs/
+    # orchestration.md) promises a foreign object is "never touched"/
+    # "never removed either"; leaving litter INSIDE one breaks that promise
+    # as much as removing it would. Clean up only the exact entry we just
+    # created (named by our own pid:epoch payload) -- never anything else
+    # the foreign directory might already contain.
+    if [ -d "$reclaim_link" ]; then
+      rm -f "$reclaim_link/$$:$now_epoch" 2>/dev/null
+    fi
     return 1
   fi
 
@@ -1162,7 +1178,17 @@ _burn_reclaim_mutex_try() {
   esac
   [ "$evict_now" -eq 1 ] || return 1
 
-  grave="${reclaim_link}.stale.$$.$RANDOM"
+  # R10-P3-5 (2026-09-12 round-10 review): `$$.$RANDOM` alone is safe
+  # against two REAPERS colliding right now (no two processes share a
+  # pid), but not against a grave deliberately KEPT (the "could NOT
+  # restore" branch below, R10-P2-1's fix makes these sweepable, not
+  # instantly gone) colliding with a LATER process that recycles the same
+  # pid and happens to draw the same $RANDOM -- a `mv` onto that path would
+  # silently clobber the only surviving copy of a live claim. A wall-clock
+  # timestamp added to the same name shrinks that already-small window
+  # further without changing how any sweeper parses it (they all read only
+  # the first `.`-delimited field after `.stale.` as the pid).
+  grave="${reclaim_link}.stale.$$.$RANDOM.$(date +%s 2>/dev/null || echo 0)"
   mv "$reclaim_link" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
   gtarget="$(readlink "$grave" 2>/dev/null || true)"
   gpid="${gtarget%%:*}"
@@ -1210,12 +1236,24 @@ _burn_reclaim_mutex_try() {
   # without it an empty `$gtarget` (a caught empty-target link) compares
   # equal to `readlink`'s empty output on a path that does not exist at
   # all, and a false "restored" comes straight back.
+  # R10-P3-4 (2026-09-12 round-10 review): the two messages below used to
+  # say "raced a live holder (pid %s)" -- true in the common case, but
+  # wrong in two real ones this function itself can catch: a caught
+  # empty-target claim ($gpid empty, printing an empty "(pid )"), and a
+  # pid that matches the age-evicted holder's own but with a different
+  # `started_at` (a recycled marker) -- which is a DIFFERENT identity from
+  # the one just evicted, not provably "live". Reporting the raw caught
+  # identity (never empty in the printed string) instead of a liveness
+  # claim this function did not itself re-verify is accurate in all three
+  # cases. (Comment placed here, not between the verify and the message
+  # below, so it stays out of the structural pin's fixed-offset window --
+  # see the KITT/R8-P1-1 test right below this function's own test.)
   ln -s "$gtarget" "$reclaim_link" 2>/dev/null || true
   if [ -L "$reclaim_link" ] && [ "$(readlink "$reclaim_link" 2>/dev/null)" = "$gtarget" ]; then
-    printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- restored it\n' "$reclaim_link" "$gpid" >&2
+    printf 'clikae: reclaim mutex reaper for %s raced a holder it did not judge stale (identity: %s) -- restored it\n' "$reclaim_link" "${gtarget:-<empty>}" >&2
     rm -f "$grave" 2>/dev/null
   else
-    printf 'clikae: reclaim mutex reaper for %s raced a live holder (pid %s) -- could NOT restore (the mutex path is occupied) -- the claim is kept at %s\n' "$reclaim_link" "$gpid" "$grave" >&2
+    printf 'clikae: reclaim mutex reaper for %s raced a holder it did not judge stale (identity: %s) -- could NOT restore (the mutex path is occupied) -- the claim is kept at %s\n' "$reclaim_link" "${gtarget:-<empty>}" "$grave" >&2
   fi
   return 1
 }
@@ -1362,7 +1400,13 @@ _burn_tank_lock_reap_verified() {
   local lock="$1" judged_holder="$2" judged_hstarted="$3"
   local grave gtarget gholder ghstarted
   [ -L "$lock" ] || return 1
-  grave="${lock}.stale.$$.$RANDOM"
+  # R10-P3-5 (2026-09-12 round-10 review): same fix as the reclaim mutex's
+  # own grave naming above -- `$$.$RANDOM` alone only protects against two
+  # REAPERS colliding right now, not against a deliberately-kept grave (the
+  # "could NOT restore" branch below) colliding with a LATER pid-recycled
+  # process drawing the same $RANDOM. The added timestamp costs no sweeper
+  # anything: every sweeper reads only the first field after `.stale.`.
+  grave="${lock}.stale.$$.$RANDOM.$(date +%s 2>/dev/null || echo 0)"
   mv "$lock" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
   gtarget="$(readlink "$grave" 2>/dev/null || true)"
   gholder="${gtarget%%:*}"
@@ -1377,10 +1421,19 @@ _burn_tank_lock_reap_verified() {
   # leaving the vacancy open for any length of time.
   ln -s "$gtarget" "$lock" 2>/dev/null || true
   if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$gtarget" ]; then
-    printf 'clikae: tank lock reaper for %s raced a live claim (pid %s) -- restored it\n' "$lock" "$gholder" >&2
+    # R10-P3-4 (2026-09-12 round-10 review): "raced a live claim (pid %s)"
+    # is wrong in two real cases this function itself can catch: a caught
+    # empty-target claim ($gholder empty, printing an empty "(pid )"), and
+    # a pid that matches the judged-stale holder's own but with a
+    # different `started_at` (a recycled marker) -- a DIFFERENT identity
+    # from the one just judged stale, not provably "live". Reporting the
+    # raw caught identity (never empty in the printed string) instead of a
+    # liveness claim this function did not re-verify is accurate in all
+    # three cases.
+    printf 'clikae: tank lock reaper for %s raced a claim it did not judge stale (identity: %s) -- restored it\n' "$lock" "${gtarget:-<empty>}" >&2
     rm -f "$grave" 2>/dev/null
   else
-    printf 'clikae: tank lock reaper for %s raced a live claim (pid %s) -- could NOT restore (the lock path is occupied) -- the claim is kept at %s\n' "$lock" "$gholder" "$grave" >&2
+    printf 'clikae: tank lock reaper for %s raced a claim it did not judge stale (identity: %s) -- could NOT restore (the lock path is occupied) -- the claim is kept at %s\n' "$lock" "${gtarget:-<empty>}" "$grave" >&2
   fi
   return 1
 }
@@ -1631,7 +1684,23 @@ _burn_tank_lock_acquire() {
         # already uses on itself, applied here to the LOCK: it re-catches
         # whatever is actually at `$lock` atomically and only discards it
         # if it still names the exact identity judged stale right above.
-        [ "$stale" -eq 1 ] && _burn_tank_lock_reap_verified "$lock" "$holder" "$hstarted"
+        #
+        # R10-P3-1 (2026-09-12 round-10 review): `_burn_tank_lock_reap_
+        # verified` returns 1 in three ordinary, non-error cases (someone
+        # else already removed/released it; it caught and restored a live
+        # claim -- this whole helper's reason for existing; a restore that
+        # itself failed and kept the grave), and as the LAST command of an
+        # `&&` list under this file's `set -eo pipefail`, a `1` here used
+        # to terminate this function immediately via errexit -- it only
+        # didn't, in practice, because `cmd_burn`'s own call site happens
+        # to wrap this whole function in `|| _lock_acquire_rc=$?`, and
+        # errexit's suppression propagates into the callee. That is a
+        # correctness argument, not a guard against a caller who calls
+        # this function bare: it made itself safe rather than depending on
+        # its one caller shielding it forever.
+        if [ "$stale" -eq 1 ]; then
+          _burn_tank_lock_reap_verified "$lock" "$holder" "$hstarted" || true
+        fi
       fi
       _burn_reclaim_mutex_release "$reclaim_dir"
       _BURN_RECLAIM_MUTEX_OWNED=""

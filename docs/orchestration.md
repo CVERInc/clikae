@@ -494,7 +494,18 @@ deterministic at each of the two sites with a hook). No fresh trial count
 for the MUTEX's own bounded residual (described above this note) is
 claimed here — round 9 measured the bug that was actually firing and
 fixed it, not the mutex's own separate, smaller residual, which remains
-un-re-measured after the fix. The worst case this residual can still
+un-re-measured after the fix.
+
+**Round 10 re-ran that same arm on the fixed build** (`da975fc`): **0
+violations in 100 trials (300 real `clikae burn`, 500 real `clikae
+clean`, 142 engines)**, with the witness validated on the same fixture at
+**12 violations / 10 trials** when `_burn_tank_lock_acquire` is
+neutralised. The pre-round-9 build, run as a paired control at the same
+load, also produced 0/50 — at this machine's load (2.6–6.9 on 8 cores,
+against round 9's own 7–58) the wild arm is not sensitive enough to
+separate the two builds on its own; what actually separates them is the
+deterministic rendezvous at each of the two `mv`-then-classify call
+sites: **0/5 destroyed on HEAD vs 5/5 on the control**. The worst case this residual can still
 produce is bounded and self-correcting: one extra live holder for the
 span of one removal critical section, caught by the tank lock's own
 owner-only release — two burns briefly sharing one tank (#40, the exact
@@ -528,8 +539,9 @@ the sibling non-directory branch, and both of the foreign-symlink-to-
 directory guards is **one rule**: if the mutex path exists and is not a
 symlink whose target is plain data — a directory, a symlink resolving to
 one, or a regular file — the reaper never touches it. It refuses loudly,
-names the path, and backs off exactly like an ordinary busy mutex, counted
-under its own `foreign-mutex` reason; `clikae clean` reports the same
+names the path, and — because the condition never self-heals — refuses
+TERMINALLY rather than backing off (see Round 9 below), counted under its
+own `foreign-mutex` reason; `clikae clean` reports the same
 reason on the same shapes and never removes them either — there is no
 `--force` path in this PR, so recovery is "remove it by hand, then retry."
 Nothing is ever restored under this rule and nothing non-symlink is ever
@@ -645,6 +657,72 @@ is 50/50. Nothing in the lock or its reclaim mutex
 should try to fix this — the lock's job is serializing who gets to START a
 burn, not supervising a process it does not own the lifetime of — but it is
 written here because it was, until this round, written nowhere at all.
+
+**Round 10 re-verified clause (a) on the fixed build, then found three
+things blocking merge and seven smaller ones (2026-09-12 round-10 review,
+R10-P1-1/R10-P2-1/R10-P2-2, plus P3s).**
+
+*R10-P1-1 — `clikae clean`'s own tmux-lock GC died silently under errexit
+whenever a burn was running, taking the tank-lock GC down with it.*
+`_clean_tmux_gc`'s two probes (`flock -n …; rc=$?` / `lockf -k -t 0 …;
+rc=$?`) were the exact bare-statement-under-`set -eo pipefail` shape
+R9-P1-1 fixed at `cmd_burn`'s own acquire call, just never grepped for at
+the sibling site. A genuinely-held ephemeral lock — which any `clikae
+burn`'s tmux wrapper holds for its entire run — made the probe exit
+non-zero, and errexit terminated `clikae clean` right there: rc=75
+(lockf) or rc=1 (flock), zero lines of output, and `_clean_scrollback_gc`/
+`_clean_tank_lock_gc` — the recovery path this very PR documents for
+everything above — never ran. Fixed with the same `rc=0; cmd || rc=$?`
+shape as `cmd_burn`'s own fix, and the busy branch now names the lock
+instead of staying silent (`lib/commands/clean.sh`).
+
+*R10-P2-1 — round 9 added a second graveyard family; nothing sweeps it.*
+`_burn_tank_lock_reap_verified`'s own "could NOT restore" branch keeps a
+grave (`tank-busy-*.lock.stale.*`) as the only surviving copy of a live
+claim, exactly like the reclaim mutex's own grave — but `clean.sh`'s
+graveyard loop matched only the mutex family's `*.lock.reclaim.stale.*`
+glob, while its comment claimed to cover "every graveyard `_burn_reclaim_
+mutex_try` can now create." Fixed by sweeping both globs (they cannot
+collide — `.lock.stale.` never appears as a substring of
+`.lock.reclaim.stale.…`) and rewriting the comment to name both reapers.
+
+*R10-P2-2 — see R10-P2-2 above this note*: two sentences (one here, one
+in CHANGELOG.md) still claimed in the present tense that a foreign-mutex
+refusal "backs off exactly like an ordinary busy mutex" — the exact
+behavior R9-P1-2, a few dozen lines above in this same file, reversed
+into a terminal refusal. Both now say so.
+
+Seven smaller findings, all fixed in the same round: the lock's own reap
+call (`:1634`) was safe only because its one caller happened to wrap it
+in `|| rc=$?` — it now guards its own `&&`-list tail with `|| true` so it
+is safe regardless of how it is called (R10-P3-1); a claim that loses the
+race into a directory arriving in the unguarded window between the
+foreign check and `ln -s` used to leave a stray symlink INSIDE that
+foreign object with no cleanup — it is now removed by name, never
+anything else the foreign object contains (R10-P3-2); the CLAIM
+readlink-verify's only guard was a text-grepping structural test — a
+behavioral test now drives the actual race through a PATH-level `ln`
+substitution and asserts on real restore/no-restore behavior, not source
+text (R10-P3-3); both reapers' "raced a live claim/holder (pid %s)"
+messages could print an empty `(pid )` for a caught empty-target claim,
+and overclaimed "live" for a pid-matches/started_at-differs recycled
+marker — both now report the raw caught identity and say "did not judge
+stale" instead of asserting liveness they never re-checked (R10-P3-4);
+both graves' `$$.$RANDOM` naming is now joined by a wall-clock timestamp,
+closing the (already small, and shrinking further once R10-P2-1 sweeps
+kept graves promptly) collision window between a deliberately-kept grave
+and a later pid-recycled process drawing the same `$RANDOM` (R10-P3-5);
+the residual paragraph above had no post-fix numbers of its own, inviting
+a reader to mistake the pre-fix 6/130 for the current state — the Round
+10 numbers are now inline there too (R10-P3-6); and a 50-trial campaign that kept full state after every trial (rather
+than deleting clean ones, as the first campaign did) found residual
+litter in 27/50 trials — almost entirely mutex-family graves from
+ordinary reap-and-discard races, the same shape a pre-round-9 control
+build left at a similar rate (28/50), so this is not something round 9 or
+10 introduced. Every sampled trial's litter was removed completely by one
+subsequent real `clikae clean` run — self-healing was already true, and
+is now reachable in practice, not just in principle, because R10-P1-1
+means `clean` actually runs while it matters most (R10-P3-7).
 
 ### `--wait-for-reset` (#38)
 

@@ -1155,21 +1155,37 @@ _clean_tank_lock_gc() {
     [ "$had_entry" -eq 1 ] && [ ! -L "$f" ] && [ ! -d "$f" ] && n=$((n + 1))
   done
 
-  # Graveyard entries (`_burn_reclaim_mutex_try`'s rename-to-unique-name
-  # reap) are private to the reaper that created them — its OWN pid is
-  # embedded in the filename, not in the target — and are normally removed
-  # by that same reaper a syscall or two later. One can only outlive it if
-  # the reaper itself was killed between its `mv` and its `rm`, so the
-  # liveness test here is the filename's pid, not the symlink's target.
-  # This is never a live REMOVAL mutex's identity, so it needs no mutex of
-  # its own to sweep. KITT (2026-09-11): every graveyard `_burn_reclaim_
-  # mutex_try` can now create is a `mv` of a SYMLINK it caught (a foreign
-  # object at the mutex path is refused before ever reaching that `mv`, see
-  # the KITT ruling above `try`'s own refusal) — never a directory — but
-  # the `-d` half of this filter costs nothing to keep as a defensive
-  # backstop, and the filename's pid, not anything inside the entry, is
-  # still the only thing that ever needs checking.
-  for f in "$dir/"tank-busy-*.lock.reclaim.stale.*; do
+  # Graveyard entries — both `_burn_reclaim_mutex_try`'s (the MUTEX family,
+  # `tank-busy-*.lock.reclaim.stale.*`) and `_burn_tank_lock_reap_verified`'s
+  # (the LOCK family, `tank-busy-*.lock.stale.*`, added round 9 —
+  # lib/commands/burn.sh) rename-to-unique-name reaps — are private to the
+  # reaper that created them — its OWN pid is embedded in the filename, not
+  # in the target — and are normally removed by that same reaper a syscall
+  # or two later. One can only outlive it if the reaper itself was killed
+  # between its `mv` and its `rm`, OR its restore raced a live claim back
+  # into an occupied path and deliberately kept the grave as that claim's
+  # only surviving copy (see both reapers' own "could NOT restore"
+  # branches), so the liveness test here is the filename's pid, not the
+  # symlink's target. This is never a live REMOVAL mutex's identity, so it
+  # needs no mutex of its own to sweep. KITT (2026-09-11): every graveyard
+  # either reaper can create is a `mv` of a SYMLINK it caught (a foreign
+  # object at the mutex/lock path is refused before ever reaching that
+  # `mv`, see the KITT ruling above `try`'s own refusal) — never a
+  # directory — but the `-d` half of this filter costs nothing to keep as
+  # a defensive backstop, and the filename's pid, not anything inside the
+  # entry, is still the only thing that ever needs checking.
+  #
+  # R10-P2-1 (2026-09-12 round-10 review): this loop used to sweep ONLY the
+  # mutex family's glob, while this very comment claimed to cover "every
+  # graveyard" — round 9 introduced a SECOND graveyard family (the lock
+  # family, above) that this glob's `.reclaim.` segment structurally cannot
+  # match, so a restore-failure grave for a LOCK (the only surviving copy
+  # of a live claim `_burn_tank_lock_reap_verified` could not put back) had
+  # no sweeper anywhere in this codebase and would accumulate forever.
+  # Fixed by sweeping both globs the same way; they cannot collide with
+  # each other (`.lock.stale.` never appears as a substring of
+  # `.lock.reclaim.stale.…`, verified by direct glob expansion).
+  for f in "$dir/"tank-busy-*.lock.stale.* "$dir/"tank-busy-*.lock.reclaim.stale.*; do
     { [ -L "$f" ] || [ -d "$f" ]; } || continue
     holder="${f##*.stale.}"; holder="${holder%%.*}"
     case "$holder" in
@@ -1177,7 +1193,7 @@ _clean_tank_lock_gc() {
       *) kill -0 "$holder" 2>/dev/null && continue ;;
     esac
     if [ "$dry_run" = "1" ]; then
-      log_info "GC: [Dry Run] Would remove orphaned reclaim graveyard entry ${f##*/}"
+      log_info "GC: [Dry Run] Would remove orphaned graveyard entry ${f##*/}"
     else
       rm -rf "$f" && n=$((n + 1))
     fi
@@ -1203,21 +1219,45 @@ _clean_tmux_gc() {
   for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock; do
     [ -e "$lock_file" ] || continue
     is_dead=0
+    # R10-P1-1 (2026-09-12 round-10 review): both probes used to be bare
+    # statements (`… ; rc=$?`) under bin/clikae's `set -eo pipefail` — the
+    # exact errexit shape R9-P1-1 fixed at cmd_burn's own acquire call. A
+    # genuinely-held ephemeral lock makes `flock -n`/`lockf -k -t 0` exit
+    # non-zero, which `errexit` treated as this FUNCTION failing outright:
+    # `clikae clean` died here with rc=75 (lockf) or rc=1 (flock) and ZERO
+    # output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — the PR's own
+    # documented recovery path — never ran, precisely while a burn holding
+    # this lock is the most likely moment to have left something to clean.
+    # `|| rc=$?` keeps the non-zero exit from ever reaching errexit; the
+    # busy branch below is also no longer silent, so this stops being a
+    # trap nobody can see they walked into.
     if command -v flock >/dev/null 2>&1; then
-      flock -n "$lock_file" true 2>/dev/null
-      rc=$?
+      rc=0
+      flock -n "$lock_file" true 2>/dev/null || rc=$?
       if [ "$rc" -eq 0 ]; then
         is_dead=1
       elif [ "$rc" -eq 1 ]; then
         : # Lock held
       fi
     else
-      lockf -k -t 0 "$lock_file" true 2>/dev/null
-      rc=$?
+      rc=0
+      lockf -k -t 0 "$lock_file" true 2>/dev/null || rc=$?
       if [ "$rc" -eq 0 ]; then
         is_dead=1
       elif [ "$rc" -eq 75 ]; then
         : # Lock held
+      fi
+    fi
+    if [ "$is_dead" -eq 0 ]; then
+      # Named, not silent (R10-P1-1): a busy ephemeral lock is routine while
+      # its burn runs, but the old code left this branch's cost unpaid where
+      # nobody could see it -- one line, same register (and same dry-run/
+      # real distinction) as every other "skipping … busy" line this GC
+      # already prints elsewhere.
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
+      else
+        log_info "GC: skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
       fi
     fi
     if [ "$is_dead" -eq 1 ]; then
