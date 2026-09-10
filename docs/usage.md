@@ -330,19 +330,26 @@ does not tell you *which* piece of work that is.
 
 **Two live sessions on the same tank** (a bare one and a resumed one, say) draw
 two rows: the second is badged `#2` so they're not identical-looking
-duplicates, and each shows its OWN title, not whichever transcript happened to
-be written to most recently. For claude, that's true whether a window was
-started with `clikae resume` or started fresh: claude accepts a session id
-handed to it at launch (`--session-id <uuid>`), so clikae mints one itself
-before the engine ever runs and stamps the window with it — a bare "start
-fresh" claude session gets exact identity from the moment it exists, the same
-as a resumed one.
+duplicates, and each shows its OWN title rather than both collapsing onto
+whichever transcript happened to be written to most recently. For claude,
+that's true whether a window was started with `clikae resume` (or a
+hand-typed `--resume <sid>` / `-r <sid>`) or started completely fresh: claude
+accepts a session id handed to it at launch (`--session-id <uuid>`), so clikae
+mints one itself and hands it to the engine before it ever runs, then records
+that same id against the tmux window right after spawning it —
+but only for a launch whose own argv carries no resume/continue signal of its
+own. `clikae claude x -- --continue`, `-- -c`, or a bare `-- --resume` (the
+picker) run untouched, with no `--session-id` appended, because claude itself
+refuses to start with `--session-id` alongside `--continue`/`--resume` unless
+`--fork-session` is also given.
 
 Not every engine can be told its session id up front. codex and antigravity
 expose no equivalent flag today, so a window running either of those still
 falls back to a guess when it has no recorded identity: the tank's most
-recently active transcript that no OTHER window on the same tank has already
-claimed, marked with a trailing `?` so a guess never reads as a fact:
+recently active transcript that no OTHER live window on the same tank has
+already claimed — a real stamp, or another window's own guess, reserved
+before any row is drawn — marked with a trailing `?` so a guess never reads as
+a fact:
 
 ```
   ▸ Live
@@ -353,9 +360,21 @@ claimed, marked with a trailing `?` so a guess never reads as a fact:
 A tank with only one live session is never ambiguous this way and never shows
 the `?`, guess or not — there is nothing else it could be. And a guess is only
 ever a LAST resort: it never repeats a transcript another window on the same
-tank is already known to hold, so two windows read as two different pieces of
-work whenever there are two to tell apart — the `?` says "this one wasn't
-confirmed", not "this might be a duplicate of the row above it".
+tank is already known to hold — real or guessed — so two windows read as two
+different pieces of work whenever there are two transcripts to tell them
+apart, even when neither window carries a recorded identity at all. The `?`
+says "this one wasn't confirmed", not "this might be a duplicate of the row
+above it". What a guess still can't do is tell you WHICH window is which —
+only that they differ — so treat the pairing as a best-effort hint, not a
+guarantee, on any engine that has no way to record identity up front.
+
+A stamp can also go stale: `/clear` (or a fork) makes the engine start writing
+a brand-new transcript under a brand-new id, and the old stamp is never
+revisited. clikae notices when the stamped session's own transcript has a
+sibling — in that same session's own project, not wherever the board itself
+happens to be running from — that nothing else on the tank has claimed, and
+downgrades to a marked guess at that newer transcript rather than continuing
+to show a title the session has since moved on from.
 
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a

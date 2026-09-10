@@ -27,3 +27,4 @@ used_percent       a field in codex's own rate_limits JSON, not a function
 window_minutes     ditto
 resets_at          ditto
 codex_exec         the value of codex's own session_meta.originator field, quoted verbatim
+clikae_session_id  the per-session tmux user option `@clikae_session_id` (lib/core/tmux.sh's tmux_set_session_id, lib/core/live.sh's live_session_id), not a function

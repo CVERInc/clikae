@@ -256,14 +256,15 @@ _home_live_rows() {
   local _all; _all="$(live_session_names)"
   [ -n "$_all" ] || return 0
 
-  # One pass to know (a) which (engine, tank) pairs are ambiguous — more than
-  # one live session — and (b) which sids are already CLAIMED by a stamped row
-  # on that tank, before the render pass below decides, per row, what its own
-  # fallback guess is allowed to land on and whether it needs the "?" marker.
-  # A tank with exactly one live row is never ambiguous, however this
-  # resolves.
-  local _dupkeys="" _claimed="" _n _e _t _c0
-  while IFS=$'\t' read -r _n _ _; do
+  # PASS 1: derive engine/tank/stamp ONCE per live session (into $_rows, so
+  # neither the render pass below nor pass 2 has to re-run live_split /
+  # live_session_id a second time — R1-P3-6 / R2-P3-6 asked for exactly this),
+  # and from that: (a) which (engine, tank) pairs are ambiguous — more than
+  # one live session — and (b) which sids are already CLAIMED by a STAMPED row
+  # on that tank. A tank with exactly one live row is never ambiguous,
+  # however this resolves.
+  local _dupkeys="" _claimed="" _rows="" _n _cr _at _e _t _c0
+  while IFS=$'\t' read -r _n _cr _at; do
     [ -n "$_n" ] || continue
     IFS=$'\t' read -r _e _t <<SPLIT
 $(live_split "$_n" 2>/dev/null)
@@ -271,89 +272,172 @@ SPLIT
     [ -n "$_e" ] && [ -n "$_t" ] || continue
     _dupkeys="$_dupkeys$_e/$_t"$'\n'
     _c0="$(live_session_id "$_n" 2>/dev/null || true)"
+    # \037, not \t: $_c0 (the stamp) is routinely EMPTY for a bare session,
+    # and `IFS=$'\t' read` — tab being one of bash's "IFS whitespace"
+    # characters — COLLAPSES adjacent tab delimiters instead of yielding an
+    # empty field, silently shifting every field after it left by one. \037
+    # is not whitespace, so an empty field stays exactly one field.
+    _rows="$_rows$_n"$'\037'"$_e"$'\037'"$_t"$'\037'"$_c0"$'\037'"$_cr"$'\037'"$_at"$'\n'
     [ -n "$_c0" ] && _claimed="$_claimed$_e/$_t"$'\t'"$_c0"$'\n'
   done <<EOF
 $_all
 EOF
 
+  # PASS 2: give every UNSTAMPED session a provisional guess too, and add it
+  # to $_claimed the same as a real stamp — AFTER pass 1, so every genuine
+  # stamp on this board is already known before any guessing starts.
+  #
+  # Why this has to run before the render pass, not inside it (R2-P1-1): the
+  # STALE-stamp check below asks "is there a transcript in my tank newer than
+  # my own creation time that NOTHING ELSE has already claimed" — and without
+  # this pass, "nothing else has claimed it" only ever meant "no OTHER
+  # STAMPED row claims it". A second, merely BARE (unstamped) live session on
+  # the same tank is real and produces its own real transcript, and that
+  # transcript is, by construction, always newer than ITS OWN window's
+  # creation — which in practice means newer than a NEIGHBOURING stamped
+  # row's creation too, the instant the bare session exists, with no `/clear`
+  # involved at all. The old check read that as "my stamp went stale" on
+  # every row but whichever session had most recently been typed in —
+  # reproducible on REAL timing (a transcript mtime after both sessions'
+  # creation, not the pre-existing tests' fixed pre-creation dates) even in
+  # the simplest two-session, one-resumed-one-bare shape, which is issue
+  # #55's own example. Reserving each bare row's own best-available guess
+  # HERE, in session order (newest tmux session first, same order the render
+  # pass draws them, so an earlier/busier bare row's own reservation is
+  # respected by a later one on the same tank too), means a stamped row's
+  # stale check only ever sees a candidate as "unclaimed" when NOTHING on
+  # this board — stamped or guessed — already explains it, which is the only
+  # time treating it as "my session moved on" is actually warranted.
+  local _guessmap="" _gn _ge _gt _gc0 _gcr _gat
+  while IFS=$'\037' read -r _gn _ge _gt _gc0 _gcr _gat; do
+    [ -n "$_gn" ] || continue
+    [ -n "$_gc0" ] && continue   # a real stamp — already in $_claimed from pass 1
+    load_adapter "$_ge" >/dev/null 2>&1 || true
+    declare -F adapter_recent_sids >/dev/null 2>&1 || continue
+    local _gdir _gmt _gcand _gsid=""
+    _gdir="$(profile_dir "$_ge" "$_gt")"
+    while IFS=$'\037' read -r _gmt _gcand; do
+      [ -n "$_gcand" ] || continue
+      _home_sid_claimed "$_ge" "$_gt" "$_gcand" && continue
+      _gsid="$_gcand"
+      break
+    done <<EOF
+$(adapter_recent_sids "$_gdir" 10 2>/dev/null)
+EOF
+    if [ -n "$_gsid" ]; then
+      _claimed="$_claimed$_ge/$_gt"$'\t'"$_gsid"$'\n'
+      _guessmap="$_guessmap$_gn"$'\t'"$_gsid"$'\n'
+    fi
+  done <<EOF
+$_rows
+EOF
+
   local name created attached engine tank dir sid title recap age wake_left
   local guessed stale ambiguous mark
-  while IFS=$'\t' read -r name created attached; do
+  while IFS=$'\037' read -r name engine tank sid created attached; do
     [ -n "$name" ] || continue
-    IFS=$'\t' read -r engine tank <<SPLIT
-$(live_split "$name" 2>/dev/null)
-SPLIT
     [ -n "$engine" ] && [ -n "$tank" ] || continue
     dir="$(profile_dir "$engine" "$tank")"
 
-    title=""; recap=""; sid=""; guessed=0; stale=0
+    title=""; recap=""; guessed=0; stale=0
     load_adapter "$engine" >/dev/null 2>&1 || true
 
-    # Exact: this window carries its own recorded identity (see
-    # tmux_set_session_id, lib/core/tmux.sh).
-    sid="$(live_session_id "$name" 2>/dev/null || true)"
+    # $sid came straight out of $_rows (pass 1's live_session_id read) — this
+    # window's own recorded identity, if any (see tmux_set_session_id,
+    # lib/core/tmux.sh).
 
-    if [ -n "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
-      # R1-P2-1 — STALE STAMP. The stamp is written once, at spawn, and never
-      # revisited. `/clear` (or a fork) makes the engine start a NEW
-      # transcript under a NEW id — the old one stops being written to, but
-      # the tmux option and state file still point at it. A transcript in
-      # this tank NEWER than this session's own creation time and under a
-      # DIFFERENT id than the stamp is proof the engine has moved on: prefer
-      # it, same as an unstamped row would guess, and mark it — it is a
-      # guess now, not the fact it was at spawn.
-      local _fresh _fmt _fsid _created_n
-      _fresh="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1)"
-      _fmt="${_fresh%%$'\037'*}"; _fsid="${_fresh#*$'\037'}"
-      case "$_fmt" in ''|*[!0-9]*) _fmt="" ;; esac
-      _created_n="$created"; case "$_created_n" in ''|*[!0-9]*) _created_n="" ;; esac
-      if [ -n "$_fsid" ] && [ "$_fsid" != "$sid" ] && [ -n "$_fmt" ] && [ -n "$_created_n" ] \
-         && [ "$_fmt" -gt "$_created_n" ]; then
-        sid="$_fsid"; guessed=1; stale=1
-      fi
-    fi
-
-    if [ -n "$sid" ] && [ "$guessed" -eq 0 ]; then
+    if [ -n "$sid" ]; then
       # R1-P2-2 — exact identity, but `clikae resume` cd's to the session's
       # OWN recorded directory before exec'ing, which is routinely not
-      # wherever this board happens to be running from. adapter_session_title
-      # derives its path from $PWD (correct for the guess path below, which
-      # only ever names a transcript that IS under $PWD); a stamped sid needs
+      # wherever this board happens to be running from. A stamped sid needs
       # the same all-projects lookup the resume picker uses —
-      # adapter_find_session + adapter_title_for_file — or an out-of-$PWD
-      # stamp renders a blank title instead of a real one.
+      # adapter_find_session + adapter_title_for_file — never one derived
+      # from $PWD.
       local _ef=""
       if declare -F adapter_find_session >/dev/null 2>&1; then
         _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
       fi
+
+      if [ -n "$_ef" ] && declare -F adapter_sibling_sids >/dev/null 2>&1; then
+        # R2-P1-1 / R2-P2-1 — STALE STAMP, defined STRUCTURALLY instead of by
+        # mtime-vs-creation alone. A stamp is written once, at spawn, and
+        # never revisited: `/clear` (or a fork) makes the engine start a NEW
+        # transcript under a NEW id, and the old stamp just sits there.
+        #
+        # Candidates come from adapter_sibling_sids — scoped to the STAMPED
+        # session's OWN directory (derived from its OWN file, via
+        # adapter_find_session above), never $PWD, which is wrong the
+        # instant `clikae resume` changed directory before handing off
+        # (R2-P2-1: an unrelated, merely-newer transcript sitting under the
+        # BOARD's own $PWD is not evidence about a session that is actually
+        # running somewhere else entirely) — and only a candidate NOTHING
+        # ELSE on this tank has already claimed (pass 2 above, which now
+        # covers guessed rows too, not just stamped ones) can outrank the
+        # stamp: a busy neighbouring session's own transcript is always
+        # claimed by that neighbour by the time this runs, so it can never
+        # leak in here as "my session moved on" — only `/clear`'s brand-new
+        # sid, which nothing on this board explains, still wins.
+        local _created_n _smt _ssid
+        _created_n="$created"; case "$_created_n" in ''|*[!0-9]*) _created_n="" ;; esac
+        if [ -n "$_created_n" ]; then
+          while IFS=$'\037' read -r _smt _ssid; do
+            [ -n "$_ssid" ] || continue
+            [ "$_ssid" = "$sid" ] && continue
+            _home_sid_claimed "$engine" "$tank" "$_ssid" && continue
+            case "$_smt" in ''|*[!0-9]*) continue ;; esac
+            [ "$_smt" -gt "$_created_n" ] || continue
+            sid="$_ssid"; guessed=1; stale=1
+            break
+          done <<EOF
+$(adapter_sibling_sids "$_ef" 10 2>/dev/null)
+EOF
+        fi
+        if [ "$stale" -eq 1 ]; then
+          _ef=""
+          if declare -F adapter_find_session >/dev/null 2>&1; then
+            _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
+          fi
+        fi
+      fi
+
       if [ -n "$_ef" ] && declare -F adapter_title_for_file >/dev/null 2>&1; then
         title="$(adapter_title_for_file "$_ef" 2>/dev/null || true)"
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
       else
         # Stamped but unfindable anywhere (a wiped transcript, a foreign
-        # sid) — behave exactly as if nothing had been recorded, rather than
+        # sid, or a stale replacement whose own file vanished too) —
+        # behave exactly as if nothing had been recorded, rather than
         # rendering a confident blank.
-        sid=""
+        sid=""; stale=0
       fi
     fi
 
     if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
-      # No recorded identity — fall back to the tank's newest transcript, as
-      # before this fix, EXCLUDING any sid a stamped row on this same tank has
-      # already claimed (R1-P1-1): the naive "just take the newest" guess is
-      # what made a bare row and a resumed row on the same tank print the
-      # SAME title. Cheap (mtime-only, no content read) — 10 is headroom, not
-      # a real cap on how many live sessions a tank can have.
+      # No recorded identity — the tank-scoped guess pass 2 already computed
+      # for THIS exact row (R1-P1-1: excluding every sid a stamped OR
+      # already-guessed row on this same tank has claimed), looked up by
+      # session name rather than recomputed here, so the render pass and the
+      # exclusion set it depends on can never drift apart.
       guessed=1
-      local _cmt _csid
-      while IFS=$'\037' read -r _cmt _csid; do
-        [ -n "$_csid" ] || continue
-        _home_sid_claimed "$engine" "$tank" "$_csid" && continue
-        sid="$_csid"
-        break
-      done <<EOF
+      sid="$(printf '%s' "$_guessmap" | awk -F'\t' -v n="$name" '$1==n{print $2; exit}' 2>/dev/null || true)"
+      if [ -z "$sid" ]; then
+        # This row was STAMPED as of pass 2 (so pass 2 skipped it, having no
+        # reason yet to think it would need a guess) but turned out
+        # unfindable above. Compute the same exclusion-aware guess every
+        # OTHER bare row already got from pass 2, live, against the now
+        # fully-built $_claimed — this is the rare corner, not the common
+        # path, so recomputing it here rather than in pass 2 for every
+        # stamped row costs nothing in the common case.
+        local _cmt _csid
+        while IFS=$'\037' read -r _cmt _csid; do
+          [ -n "$_csid" ] || continue
+          _home_sid_claimed "$engine" "$tank" "$_csid" && continue
+          sid="$_csid"
+          break
+        done <<EOF
 $(adapter_recent_sids "$dir" 10 2>/dev/null)
 EOF
+      fi
     fi
 
     if [ -n "$sid" ] && [ -z "$title" ]; then
@@ -403,7 +487,7 @@ EOF
     printf 'live\037%s\037%s\037%s\037%s\037%s\036%s\036%s\037%s\n' \
       "$engine" "$tank" "$title" "$recap" "$attached" "$age" "$wake_left" "$name"
   done <<EOF
-$_all
+$_rows
 EOF
 }
 
@@ -1106,7 +1190,15 @@ _home_live_ttlv() {
   fi
   _home_truncv "$s" "$n"
   if [ "$marked" -eq 1 ]; then
-    _TRUNC="${_TRUNC}?"
+    # R1-P3-1 / R2-P3-3: a title that itself ends in "?" (a real, literal
+    # question in the transcript) must not grow a second one — "??" reads as
+    # a typo, not as "this title is a guess". One trailing "?" already IS the
+    # marker in that case; only add a fresh one when the title didn't supply
+    # its own.
+    case "$_TRUNC" in
+      *'?') : ;;
+      *) _TRUNC="${_TRUNC}?" ;;
+    esac
   fi
   return 0
 }

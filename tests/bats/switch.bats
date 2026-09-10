@@ -115,3 +115,79 @@ INNER_EOF
     [ "$sid" != "sidFOREIGN" ] || { echo "an ambient CLIKAE_LAUNCH_SID leaked into the stamp"; false; }
   fi
 }
+
+# 2026-09-12 round-2 review, R2-P1-2: --session-id was being appended
+# UNCONDITIONALLY, so a launch whose argv already carries claude's own
+# resume/continue semantics got a SECOND, conflicting session flag — and
+# claude itself refuses to start in that shape ("--session-id can only be
+# used with --continue or --resume if --fork-session is also specified",
+# verified live against claude 2.1.267). Each of these three real argv
+# shapes must start the engine with the ORIGINAL argv intact, no
+# --session-id appended — real end-to-end pty runs, not a unit test on the
+# adapter hook alone, so a regression here fails the same way a user would
+# actually see it: the engine refusing to start.
+@test "switch: -- -c (continue) does not get --session-id appended" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local tank="uc$$"
+  local sess="clikae-claude-$tank"
+  clikae init claude "$tank"
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${HOME:?}/claude-argv.log"
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/claude"
+
+  run _pty_run "$CLIKAE_BIN" claude "$tank" -- -c
+  tmux kill-session -t "$sess" 2>/dev/null || true
+
+  [ -f "$TEST_HOME/claude-argv.log" ] || { echo "engine never ran. output: $output"; false; }
+  grep -qx -- '-c' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv missing -c:"; cat "$TEST_HOME/claude-argv.log"; false; }
+  ! grep -qx -- '--session-id' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv wrongly carries --session-id alongside -c:"; cat "$TEST_HOME/claude-argv.log"; false; }
+}
+
+@test "switch: -- -r <sid> does not get a SECOND --session-id appended, and is stamped with the resumed sid" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local tank="ur$$"
+  local sess="clikae-claude-$tank"
+  clikae init claude "$tank"
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${HOME:?}/claude-argv.log"
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/claude"
+
+  local wantsid="cccccccc-1111-4111-8111-cccccccccccc"
+  run _pty_run "$CLIKAE_BIN" claude "$tank" -- -r "$wantsid"
+  tmux kill-session -t "$sess" 2>/dev/null || true
+
+  [ -f "$TEST_HOME/claude-argv.log" ] || { echo "engine never ran. output: $output"; false; }
+  grep -qx -- '-r' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv missing -r:"; cat "$TEST_HOME/claude-argv.log"; false; }
+  grep -qFx -- "$wantsid" "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv missing the resumed sid:"; cat "$TEST_HOME/claude-argv.log"; false; }
+  ! grep -qx -- '--session-id' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv wrongly carries a second session flag alongside -r <sid>:"; cat "$TEST_HOME/claude-argv.log"; false; }
+}
+
+@test "switch: -- --resume (the bare picker) does not get --session-id appended" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local tank="up$$"
+  local sess="clikae-claude-$tank"
+  clikae init claude "$tank"
+  cat <<'INNER_EOF' > "$TEST_HOME/.testbin/claude"
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${HOME:?}/claude-argv.log"
+INNER_EOF
+  chmod +x "$TEST_HOME/.testbin/claude"
+
+  run _pty_run "$CLIKAE_BIN" claude "$tank" -- --resume
+  tmux kill-session -t "$sess" 2>/dev/null || true
+
+  [ -f "$TEST_HOME/claude-argv.log" ] || { echo "engine never ran. output: $output"; false; }
+  grep -qx -- '--resume' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv missing --resume:"; cat "$TEST_HOME/claude-argv.log"; false; }
+  ! grep -qx -- '--session-id' "$TEST_HOME/claude-argv.log" \
+    || { echo "engine argv wrongly carries --session-id alongside the bare picker:"; cat "$TEST_HOME/claude-argv.log"; false; }
+}

@@ -182,11 +182,10 @@ KV
   # here was the asymmetry a prior review caught — R1-P3-2).
   #
   # Two ways a launch can already know its identity:
-  #   - it is a RESUME: the argv (built by adapter_resume_args, by `clikae
-  #     resume`, the board's own resume row, or typed by hand) already names a
-  #     past session id. adapter_sid_from_args reads it straight back out of
-  #     "$@" — the ORIGINAL argv, before anything below appends to it — which
-  #     is what replaces the old CLIKAE_LAUNCH_SID environment variable: that
+  #   - it is a RESUME (or otherwise already carries session-picking argv):
+  #     adapter_sid_from_args reads it straight back out of "$@" — the
+  #     ORIGINAL argv, before anything below appends to it — which is what
+  #     replaces the old CLIKAE_LAUNCH_SID environment variable: that
   #     variable was exported, never unset, and a tmux SERVER born under it
   #     handed it to every later session on that server, stamping bare launches
   #     with a foreign sid (R1-P1-2, DESIGN-tmux.md Rule 7).
@@ -196,19 +195,36 @@ KV
   #     codex/antigravity define no such flag and are left exactly as
   #     honest-guess as before (DESIGN-tmux.md Rule 2).
   #
+  # 🔴 adapter_sid_from_args reports a TRI-STATE, not just "found a sid or
+  # not": it returns 0 (with nothing printed) for a resume/continue SHAPE
+  # that names no explicit id (a bare `--resume`/`-r` — the picker — or
+  # `-c`/`--continue`, which resumes whatever claude itself judges most
+  # recent), and only returns 1 for a genuinely fresh launch. This is load-
+  # bearing: claude itself refuses to start when `--session-id` is appended
+  # alongside `--continue`/`--resume` without `--fork-session` ("--session-id
+  # can only be used with --continue or --resume if --fork-session is also
+  # specified" — verified live, claude 2.1.267), so gating the append on
+  # "$_launch_sid is empty" alone (the previous round's bug, R2-P1-2) made
+  # `-- --continue` / `-- -c` / `-- -r <sid>` / `-- --resume` refuse to start
+  # at all — there was no way to tell "fresh, mint one" apart from "already a
+  # resume, just didn't name an id here". $_launch_has_identity is that
+  # distinction.
+  #
   # A resumed uuid must never affect $sess_id above — it is read from the
   # ORIGINAL "$@" and appended to a COPY, never fed back into the digest. Doing
   # that would make every bare launch mint a new session name on every run,
   # breaking the one guarantee this function's own comment above makes: a bare
   # `clikae <engine> <tank>` keeps the stable name.
   local -a _engine_args=("$@")
-  local _launch_sid="" _fresh_spawn=0
+  local _launch_sid="" _launch_has_identity=0 _fresh_spawn=0
   [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ] && _fresh_spawn=1
 
   if declare -F adapter_sid_from_args >/dev/null 2>&1; then
-    _launch_sid="$(adapter_sid_from_args "$@" 2>/dev/null || true)"
+    if _launch_sid="$(adapter_sid_from_args "$@" 2>/dev/null)"; then
+      _launch_has_identity=1
+    fi
   fi
-  if [ "$_fresh_spawn" -eq 1 ] && [ -z "$_launch_sid" ] \
+  if [ "$_fresh_spawn" -eq 1 ] && [ "$_launch_has_identity" -eq 0 ] \
      && declare -F adapter_new_session_args >/dev/null 2>&1; then
     local _new_sid
     _new_sid="$(uuidgen 2>/dev/null || true)"

@@ -86,23 +86,31 @@ live_wake_note() {
 # live_session_id <session-name> -> the transcript session id THIS tmux session
 # was launched to drive, or nothing.
 #
-# Only ever set by lib/core/tmux.sh's tmux_set_session_id, and only at launch,
-# for the one case where the id is knowable before the engine starts: resuming
-# a SPECIFIC past session by id (`clikae resume`, and the board's own "resume"
-# row). A bare "start fresh" launch has nothing to record — the engine picks
-# its own id only once it is already running — so this returns nothing for
-# every such session, on purpose: the caller (_home_live_rows) falls back to
-# the tank-scoped guess and marks it as one, rather than this function
-# inventing an answer it does not have.
+# Set by lib/core/tmux.sh's tmux_set_session_id, at launch, whenever the
+# identity is knowable before or at the moment the engine starts: a RESUME of
+# a SPECIFIC past session by id (`clikae resume`, the board's own "resume"
+# row, or a hand-typed `--resume <sid>`), or — for an engine whose adapter
+# defines adapter_new_session_args (claude: `--session-id <uuid>`) — a bare
+# "start fresh" launch too, since clikae can mint the id itself and hand it to
+# the engine before it ever runs (see switch.sh's identity block). Only an
+# engine with NEITHER of those (codex, antigravity today) leaves a bare launch
+# with nothing recorded: this returns nothing for those sessions, on purpose,
+# and the caller (_home_live_rows) falls back to the tank-scoped guess and
+# marks it as one, rather than this function inventing an answer it does not
+# have.
 #
-# Reads the tmux option first (what a live board actually queries) and falls
-# back to the mirrored state file — set at the same moment, see
-# tmux_set_session_id — for a caller with no tmux to ask, or a session whose
-# option vanished from under it.
+# Reads the tmux option first (what a live board actually queries, and the
+# copy that goes away with the session) and falls back to the mirrored state
+# file — written at the same moment, see tmux_set_session_id — for a caller
+# with no tmux on PATH at all, or a session whose option vanished from under
+# it. The tmux check below guards only the FIRST read: returning early for
+# "no tmux" instead would skip the state file too, defeating the one case it
+# exists for.
 live_session_id() {
-  local name="$1" v
-  command -v tmux >/dev/null 2>&1 || return 0
-  v="$(tmux show-options -t "=$name:" -v '@clikae_session_id' 2>/dev/null || true)"
+  local name="$1" v=""
+  if command -v tmux >/dev/null 2>&1; then
+    v="$(tmux show-options -t "=$name:" -v '@clikae_session_id' 2>/dev/null || true)"
+  fi
   if [ -z "$v" ]; then
     v="$(cat "$HOME/.clikae/state/${name}.session_id" 2>/dev/null || true)"
   fi

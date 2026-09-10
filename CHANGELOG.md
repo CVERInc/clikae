@@ -430,36 +430,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   showed the tank's most recently active transcript's title — identical on
   both rows, because the title was resolved per TANK, never per WINDOW.
   `clikae resume`, the board's own "resume" row, and a hand-typed `clikae
-  claude x -- --resume <sid>` now all stamp the tmux session they start with
-  the exact id they're resuming (`@clikae_session_id`, and a mirrored
-  `~/.clikae/state/<session>.session_id`), read straight out of the engine's
-  own argv rather than an environment variable. For claude, a bare "start
-  fresh" launch is stamped too: claude accepts a caller-chosen session id up
-  front (`--session-id <uuid>`), so clikae mints one and hands it to the
-  engine before it ever runs, instead of waiting for the engine to pick its
-  own — a bare claude session now gets exact identity from the moment it
-  exists. codex and antigravity expose no equivalent flag, so a window
-  running either still falls back to a guess when it has no recorded
-  identity — the tank's most recently active transcript, EXCLUDING any
-  transcript another window on the same tank has already claimed — and that
-  guess only carries a trailing `?` when it is actually ambiguous: on a tank
-  with two or more live sessions and no recorded identity for this one,
-  rather than presenting a coin flip as a fact. A tank with a single live
-  session renders byte-identical to before. A stamp that has gone stale
-  (`/clear` or a fork starts the engine writing a new transcript under a new
-  id, which the stamp is never revisited to notice) is detected and
-  downgraded to a marked guess rather than a confidently wrong answer, and a
-  stamped id whose transcript lives outside the board's own working
-  directory (routine after `clikae resume`, which changes directory before
-  handing off) is looked up the same way the resume picker looks sessions up
-  — across every project, not just the current one — instead of rendering a
-  blank title. The `?` marker itself is now applied AFTER the title is
-  truncated to fit the row, not before, so a long guessed title can no longer
-  silently swallow it. `CLIKAE_LAUNCH_SID`, the exported environment variable
-  an earlier round of this fix threaded the resumed id through, is gone
-  entirely — it was never unset, so a tmux server born under it handed the
-  variable to every session that server spawned afterwards, occasionally
-  stamping an unrelated bare launch with a foreign session id.
+  claude x -- --resume <sid>` / `-r <sid>` now all stamp the tmux session they
+  start with the exact id they're resuming (`@clikae_session_id`, and a
+  mirrored `~/.clikae/state/<session>.session_id`), read straight out of the
+  engine's own argv rather than an environment variable. For claude, a bare
+  "start fresh" launch is stamped too: claude accepts a caller-chosen session
+  id up front (`--session-id <uuid>`), so clikae mints one and hands it to the
+  engine before it ever runs — but only when the launch's argv carries no
+  resume/continue signal of its own (a bare `-r`/`--resume` — the picker —
+  `-c`/`--continue`, `--fork-session`, or a hand-typed `--session-id`);
+  claude rejects `--session-id` alongside `--continue`/`--resume` unless
+  `--fork-session` is also given, so appending it unconditionally would make
+  every one of those real launch shapes refuse to start. codex and
+  antigravity expose no equivalent flag, so a window running either still
+  falls back to a guess when it has no recorded identity.
+
+  A tank's guess now excludes every sid ANY other live window on that tank has
+  already claimed — a real stamp, or another window's own guess, reserved in
+  session order before any row is drawn — so a stamped row and a bare
+  neighbour resolve to two DIFFERENT titles even once both have real
+  transcripts on disk, not just when the stamped one happens to still look
+  newest. A tank with a single live session renders byte-identical to before,
+  and two fully bare sessions on the same tank — genuinely nothing recorded to
+  tell them apart — still fall back to a marked guess (`?`), honestly, rather
+  than one being presented as fact.
+
+  A stamp that has gone stale (`/clear` or a fork starts the engine writing a
+  new transcript under a new id, which the stamp is never revisited to notice)
+  is now detected structurally: a sibling transcript in the STAMPED session's
+  OWN directory that nothing else live on the tank has already claimed,
+  rather than any transcript in the tank newer than this window's creation
+  time — the earlier version of that check could not tell "my session moved
+  on" apart from "a different, merely busier live session on the same tank
+  also has a transcript", and misfired the moment a second live session
+  existed. The same directory-scoped lookup also fixes a stamped id whose
+  transcript lives outside the board's own working directory (routine after
+  `clikae resume`, which changes directory before handing off): staleness and
+  title are both resolved against that session's OWN project, never the
+  board's `$PWD`, so an unrelated (if newer) local transcript can no longer
+  masquerade as proof the resumed session moved on. The `?` marker itself is
+  applied AFTER the title is truncated to fit the row, not before, so a long
+  guessed title can no longer silently swallow it. It also no longer doubles
+  up on a title that already ends in a literal `?` — one trailing `?` is the
+  marker in that case, not two. `CLIKAE_LAUNCH_SID`, the exported environment
+  variable an earlier round of this fix threaded the resumed id through, is
+  gone entirely — it was never unset, so a tmux server born under it handed
+  the variable to every session that server spawned afterwards, occasionally
+  stamping an unrelated bare launch with a foreign session id. `clikae clean`
+  now also sweeps `~/.clikae/state/<session>.session_id` files whose tmux
+  session is gone, matching what it already did for orphaned `.scrollback`
+  files.
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
 - **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**

@@ -405,6 +405,82 @@ PATHDIRS
   [[ "$block" != *'""'* ]] || { echo "title rendered as a literal empty string:"; echo "$output"; false; }
 }
 
+@test "live: a stamped row keeps its own title when a bare neighbour's transcript is written AFTER both sessions exist" {
+  # 2026-09-12 round-2 review, R2-P1-1: the "stamped row's sid is excluded"
+  # test above used transcript mtimes dated years before the tmux sessions
+  # were created, so the stale-stamp check's "is there a newer transcript in
+  # this tank" branch never actually got exercised there — every REAL
+  # session's transcript is, by construction, newer than that session's own
+  # creation time (it is written after the window exists). On real timing,
+  # the naive mtime-vs-creation test flagged the STAMPED row as stale the
+  # moment its bare neighbour wrote ANYTHING, because the neighbour's own
+  # transcript is necessarily newer than both windows' creation. Timestamps
+  # here are relative to NOW (both after this tmux session's real creation,
+  # whatever the machine's clock says), reproducing that instead of dodging
+  # it — the exact shape issue #55 itself used as its example.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  # $(_csess)-4242 is deliberately left unstamped — a bare launch.
+
+  local after1 after2
+  after1="$(date -v+60S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '+60 seconds' '+%Y%m%d%H%M.%S')"
+  after2="$(date -v+120S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '+120 seconds' '+%Y%m%d%H%M.%S')"
+  _claude_transcript "$dir" sidA "Resumed work" "$after1"
+  # sidB is written AFTER sidA and belongs to the BARE window, not to sidA —
+  # exactly the neighbour that used to masquerade as "sidA's stamp went stale".
+  _claude_transcript "$dir" sidB "Bare work"    "$after2"
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Resumed work"'*  ]] || { echo "stamped row's title was overwritten by a busier neighbour:"; echo "$output"; false; }
+  [[ "$block" != *'"Resumed work?"'* ]] || { echo "stamped row was wrongly downgraded to a guess:"; echo "$output"; false; }
+  [[ "$block" == *'"Bare work'*      ]] || { echo "unstamped row's own guess did not appear:"; echo "$output"; false; }
+  local first second
+  first="$(printf '%s\n' "$block" | sed -n '1p')"
+  second="$(printf '%s\n' "$block" | sed -n '2p')"
+  [ "$first" != "$second" ] || { echo "rows are identical:"; echo "$output"; false; }
+}
+
+@test "live: a stamped sid from another project still shows its own title after new transcripts appear under THIS project" {
+  # 2026-09-12 round-2 review, R2-P2-1: the "stamped sid outside this board's
+  # PWD project slug" test above had no OTHER transcript under $PWD to
+  # compete with — so it never actually exercised the failure the naive
+  # stale check introduced: the candidate pool for "is this stamp stale" was
+  # $PWD-scoped (adapter_recent_sids), not scoped to the stamped session's
+  # OWN directory, so a transcript that merely happens to be newer AND
+  # merely happens to sit under the board's own $PWD — with nothing to do
+  # with the resumed session running elsewhere — used to look exactly like
+  # proof that stamp had gone stale.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local otherslug="-some-other-project-dir"
+  mkdir -p "$dir/projects/$otherslug"
+  printf '{"type":"custom-title","customTitle":"%s"}\n' "Work done elsewhere" \
+    > "$dir/projects/$otherslug/sidFar.jsonl"
+  touch -t 202601010000 "$dir/projects/$otherslug/sidFar.jsonl"
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidFar
+
+  # A transcript under THIS board's own $PWD project, written well after the
+  # tmux session was created — unrelated to sidFar, which lives elsewhere.
+  local after; after="$(date -v+60S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '+60 seconds' '+%Y%m%d%H%M.%S')"
+  _claude_transcript "$dir" sidHere "Work right here" "$after"
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Work done elsewhere"'* ]] || { echo "cross-project stamp lost to an unrelated local transcript:"; echo "$output"; false; }
+  [[ "$block" != *'"Work right here'*      ]] || { echo "cross-project stamp was overwritten by an unrelated \$PWD transcript:"; echo "$output"; false; }
+}
+
 @test "live: the guess marker survives 80-column truncation instead of being cut off" {
   # 2026-09-12 round-1 review, R1-P2-3: the marker used to be appended to the
   # title BEFORE truncation, so a title long enough to get truncated for
@@ -427,4 +503,28 @@ PATHDIRS
   [ "$status" -eq 0 ]
   local block; block="$(_live_block "$output")"
   [[ "$block" == *'?"'* ]] || { echo "guess marker did not survive truncation:"; echo "$output"; false; }
+}
+
+@test "live: a guessed title that itself ends in \"?\" does not grow a second one" {
+  # 2026-09-12 round-2 review, R2-P3-3 (R1-P3-1 unaddressed): the marker was
+  # appended unconditionally after truncation, so a title that is itself a
+  # literal question ("Why is it slow?") became "Why is it slow??" once
+  # flagged as a guess — indistinguishable from a typo, and the two title
+  # rows this test sets up (one ending "?", one not) would otherwise both
+  # read as ending "??" / "?" with no way to tell which one had the real
+  # question mark.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "Why is it slow?" 202001010000
+  _claude_transcript "$dir" sidB "Fix the flake"    202601010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  # Neither stamped — both guess, on an ambiguous tank.
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" != *'slow??'* ]] || { echo "guess marker doubled up on a title that already ended in ?:"; echo "$output"; false; }
+  [[ "$block" == *'"Why is it slow?"'* ]] || { echo "title with its own literal ? lost its marker distinction:"; echo "$output"; false; }
 }

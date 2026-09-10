@@ -917,6 +917,43 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_session_id_gc <dry_run> -> delete `.session_id` state files whose
+# tmux session is gone.
+#
+# 🔴 NOTHING EVER COLLECTED THESE either (R1-P3-3 / R2-P3-5, 2026-09-12
+# review). tmux_set_session_id (lib/core/tmux.sh) writes
+# `~/.clikae/state/<session>.session_id` as the fallback mirror of the
+# `@clikae_session_id` tmux option, for a caller with no tmux on PATH or a
+# session whose option vanished — but nothing ever removes it once the tmux
+# session itself is gone, and doctor.sh's "old names" line has promised
+# "orphaned state files go on the next `clikae clean`" without this actually
+# being true for this file type.
+#
+# THE TEST IS THE SESSION'S OWN NAME, NOT AGE OR A PID: the file is named
+# after the tmux session it was written for (`<session>.session_id`), and
+# that session's whole lifetime is what makes the file meaningful — a session
+# alive for days is not stale just because the file is old. Without tmux on
+# PATH at all, liveness cannot be determined either way, so nothing here is
+# touched (same conservative direction as the pid check above: inconclusive
+# never deletes).
+_clean_session_id_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f base n=0
+  [ -d "$dir" ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  for f in "$dir/"*.session_id; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"; base="${base%.session_id}"
+    tmux has-session -t "=$base:" 2>/dev/null && continue   # its session is still alive
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned ${base}.session_id"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned session id file(s)."
+  return 0
+}
+
 # _clean_tank_lock_busy_paths -> newline-separated list of tank-lock PATHS
 # (never the `.reclaim` suffix) whose engine/tank pair has a status file
 # saying a burn is RUNNING or WAITING-RESET on it right now — burn_tank_busy's
@@ -1321,6 +1358,7 @@ cmd_clean() {
   # Run the Tmux Ephemeral GC before doing file scans
   _clean_tmux_gc "$dry_run"
   _clean_scrollback_gc "$dry_run"
+  _clean_session_id_gc "$dry_run"
   _clean_tank_lock_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the

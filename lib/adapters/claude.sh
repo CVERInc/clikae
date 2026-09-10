@@ -174,19 +174,50 @@ adapter_resume_args() {
 
 # Optional hook: given the engine argv clikae is about to run (the SAME argv
 # adapter_resume_args above builds, or one a human typed by hand), print the
-# session id it names — the inverse of adapter_resume_args. This is what lets
-# switch.sh stamp `@clikae_session_id` from argv alone, with no environment
-# variable in between (see lib/core/tmux.sh's tmux_set_session_id): whatever
-# built this argv — `clikae resume`, the board's own resume row, or someone
-# typing `clikae claude x -- --resume <sid>` by hand — is stamped the same way.
-# Returns non-zero when the argv carries no `--resume`.
+# session id it names — the inverse of adapter_resume_args — and return 0.
+#
+# 🔴 Returns 0 (printing NOTHING) for every OTHER shape that already carries
+# resume/continue semantics with no id to read back: a bare `--resume` /
+# `-r` (the resume picker — no id known yet), `-c` / `--continue` (resumes
+# whichever session claude itself judges most recent — clikae cannot know
+# which), or `--fork-session` used alongside one of the above. Only a
+# GENUINELY fresh launch — none of this — returns 1.
+#
+# Why the tri-state matters: switch.sh's identity block only calls
+# adapter_new_session_args (which appends `--session-id <uuid>`) when this
+# returns 1. claude's own rule is "`--session-id` can only be used with
+# `--continue` or `--resume` if `--fork-session` is also specified" (verified
+# live, claude 2.1.267) — so appending it unconditionally, as the previous
+# round did, made every one of `-- --continue` / `-- -c` / `-- -r <sid>` /
+# `-- --resume` refuse to start at all (R2-P1-2). A caller that only checked
+# "is _launch_sid empty" could not tell "fresh launch" apart from "resume
+# shape, id not spelled out here" — both printed nothing — so the hook itself
+# has to say which case it is, via its exit status, not just its output.
+#
+# Recognises every argv shape claude actually accepts (`--help`, 2.1.267):
+# `--resume [sid]` / `-r [sid]` / `--resume=<sid>`, `-c` / `--continue`,
+# `--fork-session`, and the user's OWN `--session-id <uuid>` / `--session-id=
+# <uuid>` (so a hand-typed `-- --session-id <uuid>` is recognised as already
+# having identity and is never handed a SECOND one).
 adapter_sid_from_args() {
-  local prev="" a
+  local prev="" a hit=0 sid=""
   for a in "$@"; do
-    if [ "$prev" = "--resume" ]; then printf '%s' "$a"; return 0; fi
+    if [ "$prev" = "--resume" ] || [ "$prev" = "-r" ] || [ "$prev" = "--session-id" ]; then
+      case "$a" in
+        -*) : ;;                            # next token is itself a flag: no value given
+        *)  sid="$a"; hit=1; prev="$a"; continue ;;
+      esac
+    fi
+    case "$a" in
+      --resume=*)     sid="${a#--resume=}"; hit=1 ;;
+      --session-id=*) sid="${a#--session-id=}"; hit=1 ;;
+      --resume|-r|--session-id|-c|--continue|--fork-session) hit=1 ;;
+    esac
     prev="$a"
   done
-  return 1
+  [ "$hit" -eq 1 ] || return 1
+  printf '%s' "$sid"
+  return 0
 }
 
 # Optional hook: the CLI flags to START A FRESH SESSION with a caller-chosen id,
@@ -528,6 +559,30 @@ adapter_recent_sids() {
     [ -n "$f" ] || continue
     f="${f##*/}"
     printf '%s\037%s\n' "$mt" "${f%.jsonl}"
+  done
+}
+
+# Optional hook: like adapter_recent_sids above, but scoped to the SAME
+# DIRECTORY a given transcript FILE already lives in, rather than $PWD.
+#
+# adapter_recent_sids answers "what's recent in the directory *I* am running
+# from"; a caller holding one SPECIFIC stamped session's own file (from
+# adapter_find_session) instead needs "what's recent in the project THAT
+# session is actually running in" — not necessarily the same directory, since
+# `clikae resume` cd's to the session's own recorded cwd before exec'ing
+# (adapter_session_cwd), which routinely differs from wherever a board asking
+# about it later happens to be running from. Used by home.sh's stale-stamp
+# check (R2-P1-1 / R2-P2-1): comparing against $PWD there made an unrelated
+# transcript that merely happens to be newer, in a directory the stamped
+# session never touches, look like proof the stamp had gone stale.
+adapter_sibling_sids() {
+  local f="$1" limit="${2:-5}" proj mt sf
+  proj="$(dirname "$f" 2>/dev/null)"
+  [ -n "$proj" ] && [ -d "$proj" ] || return 0
+  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt sf; do
+    [ -n "$sf" ] || continue
+    sf="${sf##*/}"
+    printf '%s\037%s\n' "$mt" "${sf%.jsonl}"
   done
 }
 
