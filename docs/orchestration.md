@@ -189,9 +189,12 @@ object can't give it:
   "reset": null,            // clikae-rendered reset text: the vendor's verbatim
                             // phrase when a tank ran dry, OR — on a HEALTHY
                             // codex run — clikae's own rendered text for its
-                            // tighter usage window (never null on a healthy
-                            // codex run once codex has ever reported usage;
-                            // see docs/DESIGN-board-fuel-dots.md)
+                            // tighter usage window. Usually non-null once
+                            // codex has ever reported usage, but still null
+                            // when BOTH windows have already reset (a fully
+                            // refilled tank) or this tank has no rate_limits
+                            // reading from the last 7 days; see
+                            // docs/DESIGN-board-fuel-dots.md
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk

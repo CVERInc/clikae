@@ -120,7 +120,7 @@ it can be rebuilt against `_limit_codex_render_reset`'s epoch→phrase
 direction, which does ship (see below).
 
 🔴 **Do not assume `primary` = 5h and `secondary` = weekly by POSITION.** A
-real free-tier account on the maintainer's own machine reported
+real free-tier account reported
 `limit_id:"codex"` with a 30-day (`window_minutes:43200`) window living in
 `primary` and `secondary` always `null` — nothing like the 5h/weekly split a
 different plan's `/status` shows. Each side is labelled by its OWN
@@ -161,17 +161,47 @@ phrase, written by the watch/auto capture, read by `_home_weekly_read`. Absent =
 no reading = the tank falls through to green/○.
 
 `$CLIKAE_HOME/cache/codex/<profile>` — two lines: a cache key (the rollout
-store's own file count + newest mtime) and the raw `rate_limits` fields last
-read from it, written/read by `limit_codex_status_cached`
-(`_limit_codex_rate_limits_cached`, lib/core/limit.sh). This replaced an
-earlier "no cache of its own, self-refreshes on every read" design: that
-premise was true only on the maintainer's own small store (6 rollouts, 5 MB);
-round-1 review (2026-09-12, P2-1) measured `limit_codex_status` at ~1.5s per
-call on a synthetic 120-rollout (~62 MB) store, because it re-scanned every
-rollout file's CONTENT on every board redraw — breaking `_home_fuel_dotv`'s
-own "fork-free" contract. The cache is keyed by the store's mtime/count, not
-a TTL: a redraw with no new codex activity since the last read costs one
-`find` + one `stat`, never a re-scan of file content. Light/note/reset
+store's own file count + newest mtime + TOTAL byte size) and the raw
+`rate_limits` fields last read from it, written/read by
+`limit_codex_status_cached` (`_limit_codex_rate_limits_cached`,
+lib/core/limit.sh). This replaced an earlier "no cache of its own,
+self-refreshes on every read" design: that premise was true only on the
+maintainer's own small store (6 rollouts, 5 MB); round-1 review (2026-09-12,
+P2-1) measured `limit_codex_status` at ~1.5s per call on a synthetic
+120-rollout (~62 MB) store, because it re-scanned every rollout file's
+CONTENT on every board redraw — breaking `_home_fuel_dotv`'s own "fork-free"
+contract. The cache is keyed by the store's mtime/count/size, not a TTL: a
+redraw with no new codex activity since the last read costs one `find` + one
+`stat` + one `wc -c`, never a re-scan of file content. Light/note/reset
 themselves are never cached — they depend on `now` (see the P1-1 note
 above) — only the raw vendor fields are, recomputed into a reading fresh on
 every call.
+
+🔴 **Size joined mtime in the key (round-2 review, P1-1).** codex appends to
+the SAME rollout file rather than opening a new one per event, and mtime
+alone is SECOND-resolution — a second `token_count` write landing in the
+same wall-clock second as the read that built the cache was invisible to a
+file-count+mtime-only key, so the board kept serving a stale reading
+indefinitely (reproduced against a real board: persistent false green on a
+tank already at 0% left). An append always changes the store's total byte
+size even within the same second, so size closes that gap.
+
+`$CLIKAE_HOME/cache/codex/<profile>.d/<rollout-basename>` — one small file
+PER rollout (round-2 review, P2-2), keyed the same way
+(`_limit_codex_file_state`: that file's own mtime + size) but scoped to a
+single file rather than the whole store. The whole-store cache above is
+still the fast path for an IDLE tank (one `find`+`stat`+`wc -c` and nothing
+else); on a whole-store miss, `_limit_codex_rate_limits_cached` falls back to
+these per-file entries instead of re-scanning every rollout — a redraw
+during ACTIVITY (a burn appending to one rollout every few seconds) then
+only re-scans that ONE file, reusing every other rollout's cached reading. A
+rollout with no `rate_limits` event of its own caches a "none" marker too,
+so a tank that has never reported usage doesn't pay a fresh scan of every
+rollout on every redraw either. Round-1's whole-store-only cache made the
+MISS path (any activity) costlier than the pre-cache code — 2.83s vs 1.68s
+on the 120-rollout synthetic store, because the miss path re-scanned every
+file AND (round-2's P2-1 finding) every one of those scans silently read
+each file whole under `bin/clikae`'s real `pipefail` — the per-file cache
+plus the pipefail fix together bring an ACTIVE-tank redraw back down near
+the pre-cache cost of scanning just the one changed file, while an IDLE
+redraw stays at the whole-store fast path's cost.

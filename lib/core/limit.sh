@@ -1009,17 +1009,19 @@ _limit_codex_window_label() {
 # the tail window until it actually contains a `token_count` line (or has
 # read the whole file), so the newest one is never dropped just because
 # something large was appended after it.
-_limit_codex_rate_limits() {
-  local dir="$1"
-  local sess_root="$dir/sessions"
-  [ -d "$sess_root" ] || return 1
-
-  local files
-  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
-  [ -n "$files" ] || return 1
-
+# _limit_codex_rate_limits_from_files <file>... -> "<pu>\037<pw>\037<pr>\037
+# <su>\037<sw>\037<sr>\037<ts>" from the NEWEST `token_count` event (by its
+# own timestamp) across the GIVEN files that carries a non-null primary or
+# secondary, or 1 + nothing if none ever did. The shared scan+awk core: both
+# `_limit_codex_rate_limits` (every rollout in the store, uncached — one call
+# per burn) and `_limit_codex_rate_limits_1file` (a SINGLE rollout, cached
+# per file — see P2-2 below) build on this; only the file LIST differs. `ts`
+# (the winning event's own timestamp) rides along as a 7th field so a caller
+# combining several already-scanned files (the per-file cache) can pick the
+# newest across them without re-parsing anything.
+_limit_codex_rate_limits_from_files() {
   local out
-  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
+  out="$(for f in "$@"; do
       [ -n "$f" ] && transcript_tail_scan "$f" '"type": *"token_count"'
     done | awk '
       function ts(s,   t) {
@@ -1055,13 +1057,35 @@ _limit_codex_rate_limits() {
           su = field(s, "used_percent"); sw = field(s, "window_minutes"); sr = field(s, "resets_at")
         }
       }
-      END { printf "%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr }
+      END { printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
     ')"
-  local pu pw pr su sw sr
-  IFS=$'\037' read -r pu pw pr su sw sr <<EOF
+  local pu pw pr su sw sr ts
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
 $out
 EOF
   [ -n "$pu" ] || [ -n "$su" ] || return 1
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$ts"
+}
+
+_limit_codex_rate_limits() {
+  local dir="$1"
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+
+  local files
+  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+  [ -n "$files" ] || return 1
+  local -a filearr=()
+  while IFS= read -r f; do [ -n "$f" ] && filearr+=("$f"); done <<EOF
+$files
+EOF
+
+  local out pu pw pr su sw sr ts
+  out="$(_limit_codex_rate_limits_from_files "${filearr[@]}")" || return 1
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$out
+EOF
+  : "$ts"
   printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr"
 }
 
@@ -1110,8 +1134,17 @@ limit_codex_status_note() {
 _limit_codex_status_render() {
   local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
   local light note reset pl sl other
-  if [ -n "$pr" ] && _limit_codex_window_expired "$pr" "$now"; then pu="0"; pr=""; fi
-  if [ -n "$sr" ] && _limit_codex_window_expired "$sr" "$now"; then su="0"; sr=""; fi
+  # P3 (2026-09-12 round-2 review): a side can carry a `resets_at` with NO
+  # `used_percent` at all (codex sent a reset instant but no reading for that
+  # window yet) — the OLD guard here was `[ -n "$pr" ]` alone, so an expired
+  # `resets_at` on a side clikae never actually had a percentage for still
+  # got "refilled" to a FABRICATED 0-used/100%-left reading. Every field in
+  # this file is supposed to be the vendor's own number (see
+  # _limit_codex_rate_limits' header) — a side that never reported a
+  # used_percent must stay absent, not be invented. Require `pu`/`su`
+  # themselves to already be non-empty before refilling them.
+  if [ -n "$pu" ] && [ -n "$pr" ] && _limit_codex_window_expired "$pr" "$now"; then pu="0"; pr=""; fi
+  if [ -n "$su" ] && [ -n "$sr" ] && _limit_codex_window_expired "$sr" "$now"; then su="0"; sr=""; fi
   light="$(limit_codex_status_light "$pu" "$su")" || return 1
   note="$(limit_codex_status_note "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now")"
   pl="$(_limit_codex_left "$pu" 2>/dev/null || printf 101)"
@@ -1148,12 +1181,26 @@ EOF
 
 # _limit_codex_cache_mtime <config_dir> -> a short string identifying the
 # CURRENT state of this tank's rollout store: the count of files in the
-# 7-day scan window plus the newest one's mtime — cheap (one `find`, one
-# `stat` via sessions_by_mtime, no file CONTENT read at all), unlike
+# 7-day scan window, the newest one's mtime, and the store's TOTAL byte size
+# — cheap (one `find`, one `stat` via sessions_by_mtime, one `wc -c` over the
+# already-known file list; no file CONTENT read), unlike
 # _limit_codex_rate_limits' tail+awk scan. The count guards the case where a
 # brand new rollout happens to share its predecessor's mtime second (same
 # burn, same wall-clock second) — an added file must still bust the cache
 # even if "newest mtime" alone did not change.
+#
+# P1-1 (2026-09-12 round-2 review): mtime alone (even with the file-count
+# guard above) is SECOND-resolution, and codex appends to the SAME rollout
+# file rather than opening a new one per event — file count never changes on
+# an append. So a second `token_count` write landing in the same wall-clock
+# second as the read that populated the cache was INVISIBLE to the old key:
+# `stat`'s mtime read back identical, the cache looked "still valid", and the
+# board kept serving the stale reading — reproduced 3/3 against a real
+# `bin/clikae` board (persistent false green on a tank already at 0% left,
+# never self-corrected). A byte-count is added to the key because an append
+# ALWAYS changes the store's total size, even when it lands in the same
+# second as the previous read — the one thing that is guaranteed to move
+# every time content that could change the reading actually changes.
 _limit_codex_cache_mtime() {
   local dir="$1" sess_root
   sess_root="$dir/sessions"
@@ -1163,14 +1210,91 @@ _limit_codex_cache_mtime() {
 $(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
 EOF
   [ "${#files[@]}" -gt 0 ] || { printf 'none'; return 0; }
-  local newest
+  local newest total
   newest="$(sessions_by_mtime "${files[@]}" 2>/dev/null | head -n 1 | awk '{print $1}')"
-  printf '%d:%s' "${#files[@]}" "$newest"
+  total="$(wc -c "${files[@]}" 2>/dev/null | awk 'END{print $1+0}')"
+  printf '%d:%s:%s' "${#files[@]}" "$newest" "$total"
+}
+
+# _limit_codex_file_state <file> -> "<mtime>:<size>", a cheap per-FILE
+# identity string (one `stat`, one `wc -c`) — the invalidation key for that
+# file's own cache entry (_limit_codex_rate_limits_1file_cached below). Same
+# size-plus-mtime reasoning as _limit_codex_cache_mtime's header: mtime alone
+# is second-resolution and blind to a same-second append; size always moves
+# when the file's content actually changes.
+_limit_codex_file_state() {
+  local f="$1" mt sz
+  mt="$(file_mtime "$f" 2>/dev/null)"; [ -n "$mt" ] || mt=0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  sz="${sz//[[:space:]]/}"
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  printf '%s:%s' "$mt" "$sz"
+}
+
+# _limit_codex_rate_limits_1file <file> -> same 7-field output as
+# _limit_codex_rate_limits_from_files, scoped to ONE rollout file.
+_limit_codex_rate_limits_1file() {
+  _limit_codex_rate_limits_from_files "$1"
+}
+
+# _limit_codex_rate_limits_1file_cached <file> <cache_dir> [precomputed_key]
+# -> same output as _limit_codex_rate_limits_1file, memoized per FILE under
+# <cache_dir> (one small file per rollout, named by the rollout's own
+# basename — rollout filenames are already unique per session), invalidated
+# by that file's own mtime:size identity. A file with no rate_limits event
+# caches a "none" marker too, so a tank that never reports usage doesn't
+# re-scan every one of its rollouts on every redraw either (see P2-2 below).
+# <precomputed_key> lets a caller iterating MANY files pass in a key it
+# already batch-computed (files_mtime_size, one stat for every file — see
+# _limit_codex_rate_limits_cached) instead of paying this function's own
+# _limit_codex_file_state fork PER file; omitted, it computes its own (this
+# function stays independently correct/callable on its own).
+#
+# P2-2 (2026-09-12 round-2 review): the round-1 cache was keyed on the WHOLE
+# store (_limit_codex_cache_mtime) — correct for an IDLE tank, but the moment
+# any one rollout changes (a burn in progress, appending every few seconds)
+# the aggregate key changes too, and round-1's cache-miss path re-scanned
+# EVERY file in the store again, which — combined with P2-1's SIGPIPE bug —
+# measured MORE expensive per redraw than the pre-cache code (2.83s vs the
+# old 1.68s on a 120-rollout store). Caching per file means a redraw during
+# activity only ever re-scans the ONE rollout that actually changed; every
+# other file's cache entry is still valid and costs (batched) one stat plus
+# one small read, matching this codebase's own "fork-free" cache philosophy
+# (docs/DESIGN-board-fuel-dots.md's Cache section).
+_limit_codex_rate_limits_1file_cached() {
+  local f="$1" cache_dir="$2" key="$3" cache_f cached_key cached_fields tmp
+  [ -n "$key" ] || key="$(_limit_codex_file_state "$f")"
+  cache_f="$cache_dir/${f##*/}"
+  if [ -f "$cache_f" ]; then
+    { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache_f" 2>/dev/null
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
+    fi
+  fi
+  mkdir -p "$cache_dir" 2>/dev/null
+  tmp="$cache_f.tmp.$$"
+  local fields
+  if fields="$(_limit_codex_rate_limits_1file "$f" 2>/dev/null)"; then
+    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    printf '%s' "$fields"
+    return 0
+  fi
+  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 1
 }
 
 # _limit_codex_rate_limits_cached <config_dir> <cache_file> -> same 6-field
-# output as _limit_codex_rate_limits, memoized in <cache_file>, invalidated
-# by _limit_codex_cache_mtime.
+# output as _limit_codex_rate_limits, memoized. Two layers:
+#   1. a whole-store fast path (<cache_file> itself, keyed by
+#      _limit_codex_cache_mtime) — an IDLE tank costs one `find` + one `stat`
+#      + one `wc -c` and nothing else, same shape as round-1's cache.
+#   2. on a whole-store miss, a PER-FILE fast path
+#      (_limit_codex_rate_limits_1file_cached, keyed per rollout) — an
+#      ACTIVE tank only re-scans the file(s) that actually changed, not
+#      every rollout in the store (P2-2).
 #
 # P2-1 (2026-09-12 round-1 review): _home_fuel_dotv's own header promises the
 # redraw path is "fork-free" for a value that "cannot change between two
@@ -1180,26 +1304,64 @@ EOF
 # 120-rollout (~62 MB) store: ~1.5s per call, vs ~0.002s for the weekly
 # cache's plain `read < file` (see docs/DESIGN-board-fuel-dots.md's Cache
 # section and REPORT-codex-light-fix1.md for the exact before/after numbers).
-# This makes the SAME tradeoff the weekly cache already made: memoize the
-# expensive read, keyed by the store's own mtime rather than a TTL, so a
-# redraw with no new rollout event since the last read costs one `find` +
-# one `stat` instead of a scan of file content. Deliberately caches only the
-# raw vendor fields, never light/note/reset — those depend on `now` (P1-1),
-# so the caller always recomputes them fresh even on a cache hit.
+# Deliberately caches only the raw vendor fields, never light/note/reset —
+# those depend on `now` (P1-1), so the caller always recomputes them fresh
+# even on a cache hit.
 _limit_codex_rate_limits_cached() {
-  local dir="$1" cache="$2" key cached_key cached_fields fields
+  local dir="$1" cache="$2" key cached_key cached_fields
   key="$(_limit_codex_cache_mtime "$dir")"
   if [ "$key" != "none" ] && [ -f "$cache" ]; then
     { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache" 2>/dev/null
-    if [ "$cached_key" = "$key" ] && [ -n "$cached_fields" ]; then
-      printf '%s' "$cached_fields"
-      return 0
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
     fi
   fi
-  fields="$(_limit_codex_rate_limits "$dir" 2>/dev/null)" || return 1
+
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+  local -a files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
+EOF
+  [ "${#files[@]}" -gt 0 ] || return 1
+
+  local files_cache_dir="${cache}.d"
+  # Batch every file's own mtime:size in ONE `stat` call (files_mtime_size,
+  # profile_store.sh) instead of forking `stat`+`wc` per file inside the loop
+  # below — 120 rollouts would otherwise cost ~240 forks just to find out
+  # WHICH files changed, before ever reading one. Positional: index i here
+  # lines up with files[i].
+  local -a mtimes=() sizes=()
+  while IFS=' ' read -r _mt _sz; do
+    mtimes+=("${_mt:-0}"); sizes+=("${_sz:-0}")
+  done < <(files_mtime_size "${files[@]}")
+
+  local f pf maxT="" pu pw pr su sw sr _pu _pw _pr _su _sw _sr _ts i=0
+  for f in "${files[@]}"; do
+    pf="$(_limit_codex_rate_limits_1file_cached "$f" "$files_cache_dir" "${mtimes[i]:-0}:${sizes[i]:-0}" 2>/dev/null)"
+    i=$((i + 1))
+    [ -n "$pf" ] || continue
+    IFS=$'\037' read -r _pu _pw _pr _su _sw _sr _ts <<EOF
+$pf
+EOF
+    if [ -n "$_ts" ] && { [ -z "$maxT" ] || [[ "$_ts" > "$maxT" ]]; }; then
+      maxT="$_ts"; pu="$_pu"; pw="$_pw"; pr="$_pr"; su="$_su"; sw="$_sw"; sr="$_sr"
+    fi
+  done
+
   mkdir -p "$(dirname "$cache")" 2>/dev/null
-  { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$cache" 2>/dev/null || true
-  printf '%s' "$fields"
+  local tmp="$cache.tmp.$$"
+  if [ -n "$pu" ] || [ -n "$su" ]; then
+    local fields; fields="$(printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr")"
+    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    printf '%s' "$fields"
+    return 0
+  fi
+  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 1
 }
 
 # limit_codex_status_cached <config_dir> <now_epoch> <cache_file> -> same

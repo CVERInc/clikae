@@ -351,6 +351,12 @@ _codex_token_count_line() {
   run transcript_tail_scan "$f" '"marker": *"needle"' 524288
   [ "$status" -eq 0 ]
   [[ "$output" == *'"marker":"needle"'* ]] || false
+  # P3 (round-2 review, item 4): needle-presence alone can't tell "grew the
+  # window a bit" from "read the whole file" — assert the BYTE COUNT too.
+  # The needle sits ~800 KB from the tail, so one quadrupling step
+  # (524288*4=2097152) must cover it — bounded well under the ~800 KB+ file.
+  local n; n=$(printf '%s' "$output" | wc -c)
+  [ "$n" -le 2097152 ]
 }
 
 @test "transcript_tail_scan: a pattern that never occurs still returns (the whole file, not an error)" {
@@ -360,6 +366,50 @@ _codex_token_count_line() {
   run transcript_tail_scan "$f" 'NEVER_MATCHES' 524288
   [ "$status" -eq 0 ]
   [[ "$output" == *'no match here'* ]] || false
+}
+
+# --- P2-1 (2026-09-12 round-2 review): correct under BOTH pipefail worlds ---
+# bin/clikae:6 runs the whole program under `set -eo pipefail`; bats itself
+# does NOT (confirmed by the first assertion below). A pipeline-exit-code
+# check inside transcript_tail_scan reads a genuine early match as "not
+# found" the moment SIGPIPE kills `tail` before it finishes writing — but
+# ONLY in the pipefail world. Both worlds are exercised explicitly so a
+# regression that only shows up under pipefail can't hide behind bats'
+# default.
+
+@test "transcript_tail_scan: an early match is not lost to SIGPIPE under set -o pipefail (P2-1)" {
+  _src_limit
+  # Confirm the premise: bats' own shell does NOT run under pipefail.
+  run bash -c 'false | true; exit $?'
+  [ "$status" -eq 0 ]
+
+  local f="$BATS_TEST_TMPDIR/pipefail.jsonl" bytes=524288 total
+  # Layout: a large prefix (well past the tail window), the needle, then a
+  # trailer that fills essentially the rest of the FIRST window — so a
+  # correct scan matches on iteration 1, with a large amount of data still
+  # queued behind the match point when grep exits. That is exactly the shape
+  # that starves `tail` of a reader and gets it SIGPIPE'd.
+  head -c 5242880 /dev/zero | tr '\0' 'p' > "$f"
+  printf '{"type": "token_count", "marker":"needle"}\n' >> "$f"
+  head -c 460000 /dev/zero | tr '\0' 'q' >> "$f"
+  printf '\n' >> "$f"
+  total=$(wc -c < "$f"); total="${total//[[:space:]]/}"
+
+  # World 1: plain (pipefail off — the world bats' own suite silently ran in).
+  run bash -c '. "$0"; transcript_tail_scan "$1" "$2" "$3" | wc -c' \
+    "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh" "$f" '"marker": *"needle"' "$bytes"
+  [ "$status" -eq 0 ]
+  local plain_n; plain_n="${output//[[:space:]]/}"
+  [ "$plain_n" -le $((bytes * 2)) ]
+  [ "$plain_n" -lt "$total" ]
+
+  # World 2: set -o pipefail — bin/clikae's REAL environment.
+  run bash -c 'set -o pipefail; . "$0"; transcript_tail_scan "$1" "$2" "$3" | wc -c' \
+    "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh" "$f" '"marker": *"needle"' "$bytes"
+  [ "$status" -eq 0 ]
+  local pf_n; pf_n="${output//[[:space:]]/}"
+  [ "$pf_n" -le $((bytes * 2)) ]
+  [ "$pf_n" -lt "$total" ]
 }
 
 # --- P2-1 (2026-09-12 round-1 review): the cached redraw path ---------------
@@ -397,6 +447,94 @@ _codex_token_count_line() {
         '{"used_percent":100.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
   second="$(TZ=UTC limit_codex_status_cached "$d" "$now" "$cache")"
   [[ "$second" == "red"* ]] || false
+}
+
+# --- P1-1 (2026-09-12 round-2 review): same-WALL-SECOND append busts cache --
+# The exact gap round-2 review found: file count doesn't change (same file,
+# appended-to) and mtime is SECOND-resolution, so a second write landing in
+# the same wall-clock second as the read that populated the cache was
+# invisible to a count+mtime-only key. `touch -t` pins both writes to the
+# IDENTICAL mtime deterministically (no real-time race needed) — the size
+# component of the key is the only thing left that can catch it.
+
+@test "limit_codex_status_cached: a second write in the SAME wall-clock second still busts the cache (P1-1)" {
+  _src_limit
+  local d="$CLIKAE_HOME/profiles/codex/samesecond" now cache f
+  now="$(TZ=UTC _at UTC '2026-09-10 10:00:00')"
+  cache="$CLIKAE_HOME/cache/codex/samesecond"
+  _seed_codex_token_count "$d" a \
+    "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
+        '{"used_percent":10.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
+  f="$d/sessions/2026/09/10/rollout-a.jsonl"
+  touch -t 202609101200.00 "$f"
+
+  local first; first="$(TZ=UTC limit_codex_status_cached "$d" "$now" "$cache")"
+  [[ "$first" == "green"* ]] || false
+
+  printf '%s\n' \
+    "$(_codex_token_count_line 2026-09-10T09:30:00.000Z \
+        '{"used_percent":100.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')" \
+    >> "$f"
+  # Force the SAME mtime second as before the append — the old count+mtime
+  # key would read this as "nothing changed".
+  touch -t 202609101200.00 "$f"
+
+  local second; second="$(TZ=UTC limit_codex_status_cached "$d" "$now" "$cache")"
+  [[ "$second" == "red"* ]] || false
+}
+
+# --- P2-2 (2026-09-12 round-2 review): only the CHANGED rollout is rescanned
+
+@test "limit_codex_status_cached: an unchanged rollout's per-file cache entry is reused, not rewritten (P2-2)" {
+  _src_limit
+  local d="$CLIKAE_HOME/profiles/codex/perfilecache" now cache fa fb
+  now="$(TZ=UTC _at UTC '2026-09-10 10:00:00')"
+  cache="$CLIKAE_HOME/cache/codex/perfilecache"
+  _seed_codex_token_count "$d" a \
+    "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
+        '{"used_percent":10.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
+  fa="$d/sessions/2026/09/10/rollout-a.jsonl"
+  TZ=UTC limit_codex_status_cached "$d" "$now" "$cache" >/dev/null
+  local a_cache_before; a_cache_before="$(cat "$cache.d/rollout-a.jsonl")"
+
+  sleep 1
+  _seed_codex_token_count "$d" b \
+    "$(_codex_token_count_line 2026-09-10T09:30:00.000Z \
+        '{"used_percent":50.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
+  fb="$d/sessions/2026/09/10/rollout-b.jsonl"
+  : "$fb"
+  TZ=UTC limit_codex_status_cached "$d" "$now" "$cache" >/dev/null
+
+  # rollout-a's own per-file cache entry must be byte-identical: the second
+  # call should never have re-scanned it, only rollout-b (the new file).
+  local a_cache_after; a_cache_after="$(cat "$cache.d/rollout-a.jsonl")"
+  [ "$a_cache_before" = "$a_cache_after" ]
+  [ -f "$cache.d/rollout-b.jsonl" ]
+}
+
+# --- P3 (2026-09-12 round-2 review): a null used_percent is never fabricated
+
+@test "limit_codex_status: an expired resets_at with NO used_percent is never fabricated into a reading (P3, r2)" {
+  # round-2 review: the P1-1 refill guard used to be [ -n \"\$pr\" ] alone, so
+  # a side that had a resets_at but NEVER reported a used_percent (pu empty)
+  # still got force-set to \"0\" (100% left) -- a reading clikae invented,
+  # not one the vendor ever sent. Every field here is supposed to be the
+  # vendor's own number (see _limit_codex_rate_limits' header).
+  _src_limit
+  local d="$CLIKAE_HOME/profiles/codex/nullused" now expired_reset weekly_reset
+  now="$(TZ=UTC _at UTC '2026-09-10 16:40:00')"
+  expired_reset="$(TZ=UTC _at UTC '2026-09-10 14:40:00')"
+  weekly_reset="$(TZ=UTC _at UTC '2026-09-17 10:00:00')"
+  _seed_codex_token_count "$d" a \
+    "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
+        '{"window_minutes":300,"resets_at":'"$expired_reset"'}' \
+        '{"used_percent":96.0,"window_minutes":10080,"resets_at":'"$weekly_reset"'}')"
+  TZ=UTC run limit_codex_status "$d" "$now"
+  [ "$status" -eq 0 ]
+  local light note reset
+  IFS=$'\037' read -r light note reset <<< "$output"
+  [[ "$note" != *"5h "* ]] || false        # no fabricated primary reading
+  [[ "$note" == *"weekly 4% left"* ]] || false
 }
 
 # --- P3-1 (2026-09-12 round-1 review): rounding must not be optimistic ------
