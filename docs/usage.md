@@ -357,8 +357,10 @@ a fact:
     ● work #2 codex    "Draft the v2 migration notes?"
 ```
 
-A tank with only one live session is never ambiguous this way and never shows
-the `?`, guess or not — there is nothing else it could be. And a guess is only
+A tank with only one live session is never ambiguous by GUESSING — there is
+nothing else it could be — so a single live session only ever shows a `?`
+when its OWN stamp has gone stale (see below), never merely for being alone
+on the board. And a guess is only
 ever a LAST resort: it never repeats a transcript another window on the same
 tank is already known to hold — real or guessed — so two windows read as two
 different pieces of work whenever there are two transcripts to tell them
@@ -368,13 +370,29 @@ above it". What a guess still can't do is tell you WHICH window is which —
 only that they differ — so treat the pairing as a best-effort hint, not a
 guarantee, on any engine that has no way to record identity up front.
 
-A stamp can also go stale: `/clear` (or a fork) makes the engine start writing
-a brand-new transcript under a brand-new id, and the old stamp is never
-revisited. clikae notices when the stamped session's own transcript has a
-sibling — in that same session's own project, not wherever the board itself
-happens to be running from — that nothing else on the tank has claimed, and
-downgrades to a marked guess at that newer transcript rather than continuing
-to show a title the session has since moved on from.
+A stamp can also go stale, but only for reasons specific to that exact
+session — never because of what anything ELSE on the tank is doing. clikae
+downgrades a stamp to a marked guess when either of two things is true about
+its own sid: its own transcript file is gone (deleted, moved, or a session id
+minted at launch whose engine never got the chance to write it), or its own
+engine process has stopped running while the tmux session outlives it (a
+`wake` watcher window, opened in a later window slot to nudge a rate-limited
+session back to life, can keep a session on the board after its engine's own
+window has already closed on its own).
+
+What does NOT count as evidence: a newer transcript merely existing
+somewhere else on the same tank. A `clikae burn`, an `--ephemeral` run, and an
+already-ended neighbour session can all leave one behind, and none of those
+say anything about whether THIS session is still good — an earlier version of
+this check treated "nothing on the board claims that newer file" as proof the
+stamp had moved on, and a `clikae burn` running alongside a perfectly healthy
+resumed session was enough to trigger it. In particular, `/clear` (or a fork)
+makes the engine start writing a brand-new transcript under a brand-new id
+while the OLD one it stamped just sits there, unrevisited — but the old file
+still exists and the engine process is usually still running, so today clikae
+has no reliable way to tell that case apart from a busy neighbour's own
+transcript. The row keeps showing the pre-`/clear` title until one of the two
+signals above actually fires.
 
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a

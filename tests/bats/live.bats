@@ -349,32 +349,97 @@ PATHDIRS
   [ "$first" != "$second" ] || { echo "rows are identical:"; echo "$output"; false; }
 }
 
-@test "live: a stale stamp (post-/clear) downgrades to a marked guess instead of a confident wrong answer" {
-  # 2026-09-12 round-1 review, R1-P2-1: a stamp is written once, at spawn, and
-  # never revisited. `/clear` (or a fork) makes the engine start writing a NEW
-  # transcript under a NEW id — the tmux option and state file still point at
-  # the old one. main happened to get this right (it always guessed the
-  # newest transcript); the PR under review made it WORSE by presenting the
-  # now-stale stamp as an unmarked fact. The fix must be at least as correct
-  # as main: prefer the newer transcript, but — unlike main's accidental
-  # correctness — say so with "?", because it is a guess now, not the
-  # recorded fact it was at spawn.
+@test "live: a stamped session's title is unaffected by a newer, unclaimed sibling transcript (a burn, not a /clear)" {
+  # 2026-09-12 round-3 review, R3-P1-1: this test used to assert the OPPOSITE
+  # — that a newer, unclaimed sibling transcript in the stamped session's own
+  # directory proved the stamp had gone stale (the theory being that this is
+  # what `/clear` produces). It was wrong to trust that signal at all: the
+  # exact same shape — a newer transcript nothing on the live BOARD claims —
+  # is also what a `clikae burn` on the same tank+directory produces (a
+  # burn's tmux session name does not parse as a tank, so live_split drops it
+  # and it never appears in $_claimed), what `--ephemeral` produces, and what
+  # an already-ended neighbour's own transcript looks like. Measured
+  # (probeF): one burn running alongside this exact fixture was enough to
+  # swap the resumed session's own title for the burn's — issue #55's own
+  # symptom, reintroduced by the fix that was supposed to close it.
+  #
+  # The corrected contract: a stamp is only downgraded by evidence ABOUT
+  # THAT SID — its own transcript missing, or its own engine process gone
+  # (see the two tests below) — never by another file's mtime, claimed or
+  # not. This is the regression test for that: a newer sibling transcript
+  # sits right there, unclaimed by anything, and the stamped row must not
+  # move.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
   local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
-  _claude_transcript "$dir" sidOld "Old before clear" 202001010000
+  _claude_transcript "$dir" sidOld "My own resumed work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux set-option -t "=$(_csess):" @clikae_session_id sidOld
-  # Stamped on a transcript that is about to stop being the newest one — dated
-  # WELL after this test runs, so it reads as "written after the session
-  # started" regardless of the machine's real clock.
-  _claude_transcript "$dir" sidNew "What I am doing now" 203001010000
+  # A newer transcript in the SAME directory that nothing on the board
+  # claims — stands in for a `clikae burn` writing its own transcript into
+  # the same tank+project while this stamped session keeps running.
+  _claude_transcript "$dir" sidBurn "clikae burn: review PR 57?" 203001010000
 
   run clikae
   [ "$status" -eq 0 ]
   local block; block="$(_live_block "$output")"
-  [[ "$block" == *'"What I am doing now'* ]] || { echo "stale stamp was not detected — still showing the old title:"; echo "$output"; false; }
-  [[ "$block" != *'"Old before clear"'*   ]] || { echo "$output"; false; }
+  [[ "$block" == *'"My own resumed work"'* ]] || { echo "stamped row's title was swapped for an unclaimed sibling's:"; echo "$output"; false; }
+  [[ "$block" != *'"clikae burn: review PR 57?'* ]] || { echo "$output"; false; }
+  [[ "$block" != *'"My own resumed work?"'* ]] || { echo "a ? was introduced where none is warranted:"; echo "$output"; false; }
+}
+
+@test "live: a stamped sid whose own transcript file is gone falls back to a MARKED guess, not a confident wrong answer" {
+  # 2026-09-12 round-3 review, R3-P2-2 (probeC5): "stamped but unfindable
+  # anywhere" used to throw the stale fact away (sid=""; stale=0) and fall
+  # back to an ordinary, UNMARKED guess — the one unambiguous stale signal
+  # (the file itself is simply gone) rendered as a confident fact, while the
+  # unreliable sibling-scan signal removed above was the one that got
+  # marked. This is a direct, sid-specific check now: the stamped sid's own
+  # transcript does not exist anywhere on disk.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  # The only real transcript on this tank belongs to nobody stamped —
+  # available as an honest fallback guess once the stamp is known stale.
+  _claude_transcript "$dir" sidReal "Something else" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  # Stamped on a sid that was never written — a uuid minted at launch whose
+  # engine crashed before it could write its own transcript, or one that was
+  # deleted afterward. Either way, adapter_find_session finds nothing.
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidGone
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Something else'* ]] || { echo "stale-by-missing-file did not fall back to the tank's real transcript:"; echo "$output"; false; }
+  [[ "$block" == *'?'* ]] || { echo "a stamp whose transcript is gone was NOT marked:"; echo "$output"; false; }
+}
+
+@test "live: a stamped session whose own engine window has already closed is marked stale" {
+  # 2026-09-12 round-3 review, R3-P2-2's other sub-case: the transcript is
+  # still there (the recorded identity is real), but the process that was
+  # writing it is gone. tmux_spawn_session always gives a freshly-spawned
+  # engine window index 0 and nothing ever sets remain-on-exit for it, so a
+  # closed engine window (not just a closed SESSION) is directly observable
+  # — live_engine_alive (lib/core/live.sh). A `wake` watcher window opened in
+  # a later slot is exactly why the SESSION can still be on the board after
+  # its engine window is gone: this fixture reproduces that shape without
+  # needing the real wake feature, by opening a second window by hand and
+  # killing window 0 out from under it.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "My own work" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'      # window 0 — stands in for the engine
+  tmux new-window -t "$(_csess):" -n wake 'sleep 30'  # window 1 — stands in for the wake watcher
+  tmux kill-window -t "$(_csess):0"                   # the engine's own window has closed
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"My own work'* ]] || { echo "the stamp's own title should still resolve — the transcript is real:"; echo "$output"; false; }
+  [[ "$block" == *'?'* ]] || { echo "a stamp whose engine window is gone was NOT marked:"; echo "$output"; false; }
 }
 
 @test "live: a stamped sid outside this board's PWD project slug still renders a title, not a blank one" {
@@ -527,4 +592,39 @@ PATHDIRS
   local block; block="$(_live_block "$output")"
   [[ "$block" != *'slow??'* ]] || { echo "guess marker doubled up on a title that already ended in ?:"; echo "$output"; false; }
   [[ "$block" == *'"Why is it slow?"'* ]] || { echo "title with its own literal ? lost its marker distinction:"; echo "$output"; false; }
+}
+
+@test "live: a row whose exclusion-aware guess pool is fully claimed still renders a title, never a blank one" {
+  # 2026-09-12 round-3 review, R3-P2-1 (probeE1): a stamp whose own transcript
+  # does not exist yet falls back to a guess (see the "engine window closed"
+  # / "transcript gone" tests above) — but the guess EXCLUDES every sid a
+  # stamped or already-guessed row on this tank has already claimed
+  # (R1-P1-1's own fix). When the tank has exactly one real transcript and it
+  # is already claimed by the OTHER row, that exclusion empties the
+  # candidate pool completely, and both $sid and $title stayed "" all the
+  # way to the printf — a literal empty string in the title column, which
+  # main never produced and which tests/bats/live.bats:380's own case exists
+  # to forbid on a different path (a cross-project stamp). This is the
+  # direct regression test for the exhausted-pool path itself: the second
+  # row must still render SOME title — main's own answer here, the tank's
+  # single real transcript with no exclusion — never a blank cell.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "Work in progress" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  # Stamped with a uuid minted at launch whose transcript was never written —
+  # the ONLY real transcript on this tank is sidA, and sidA is already
+  # claimed by the row above.
+  tmux set-option -t "=$(_csess)-4242:" @clikae_session_id sidNeverWritten
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" != *'""'* ]] || { echo "title rendered as a literal empty string:"; echo "$output"; false; }
+  local n; n="$(printf '%s\n' "$block" | grep -c .)"
+  [ "$n" -ge 2 ] || { echo "$output"; false; }
+  [[ "$block" == *'"Work in progress'* ]] || { echo "the exhausted-pool row did not fall back to the tank's real transcript:"; echo "$output"; false; }
 }

@@ -562,30 +562,6 @@ adapter_recent_sids() {
   done
 }
 
-# Optional hook: like adapter_recent_sids above, but scoped to the SAME
-# DIRECTORY a given transcript FILE already lives in, rather than $PWD.
-#
-# adapter_recent_sids answers "what's recent in the directory *I* am running
-# from"; a caller holding one SPECIFIC stamped session's own file (from
-# adapter_find_session) instead needs "what's recent in the project THAT
-# session is actually running in" — not necessarily the same directory, since
-# `clikae resume` cd's to the session's own recorded cwd before exec'ing
-# (adapter_session_cwd), which routinely differs from wherever a board asking
-# about it later happens to be running from. Used by home.sh's stale-stamp
-# check (R2-P1-1 / R2-P2-1): comparing against $PWD there made an unrelated
-# transcript that merely happens to be newer, in a directory the stamped
-# session never touches, look like proof the stamp had gone stale.
-adapter_sibling_sids() {
-  local f="$1" limit="${2:-5}" proj mt sf
-  proj="$(dirname "$f" 2>/dev/null)"
-  [ -n "$proj" ] && [ -d "$proj" ] || return 0
-  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt sf; do
-    [ -n "$sf" ] || continue
-    sf="${sf##*/}"
-    printf '%s\037%s\n' "$mt" "${sf%.jsonl}"
-  done
-}
-
 # --- resume a SPECIFIC past session by id (powers `clikae resume`) ----------
 #
 # `clikae relay`/`to` carry the CURRENT directory's live session forward. These

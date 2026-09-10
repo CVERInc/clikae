@@ -358,57 +358,51 @@ EOF
         _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
       fi
 
-      if [ -n "$_ef" ] && declare -F adapter_sibling_sids >/dev/null 2>&1; then
-        # R2-P1-1 / R2-P2-1 — STALE STAMP, defined STRUCTURALLY instead of by
-        # mtime-vs-creation alone. A stamp is written once, at spawn, and
-        # never revisited: `/clear` (or a fork) makes the engine start a NEW
-        # transcript under a NEW id, and the old stamp just sits there.
+      if [ -n "$_ef" ]; then
+        # R3-P1-1 — staleness is now decided ONLY by direct evidence about
+        # THIS SPECIFIC sid, never by what else is happening on the same
+        # tank. The R2 check treated "a newer transcript that nothing else
+        # on the BOARD claims" as proof this session had moved on (/clear) —
+        # but that signature is IDENTICAL to a `clikae burn`, an
+        # `--ephemeral` run, or an already-ended neighbour writing into the
+        # same tank+directory: none of those are on the live board (a
+        # burn's tmux session name does not parse as a tank — live_split
+        # drops it), so none of them show up in $_claimed either, and
+        # "nothing claims it" was never the same fact as "my own session
+        # wrote it". Measured (2026-09-12 R3 review, probeF): one `clikae
+        # burn` running alongside a resumed, exactly-identified session was
+        # enough to swap the resumed session's own title for the burn's —
+        # and D1/D2/D4/D5 showed the same swap from an already-ended
+        # neighbour, with no burn involved at all. Removed entirely, not
+        # narrowed: there is no signal here that is actually ABOUT this sid.
         #
-        # Candidates come from adapter_sibling_sids — scoped to the STAMPED
-        # session's OWN directory (derived from its OWN file, via
-        # adapter_find_session above), never $PWD, which is wrong the
-        # instant `clikae resume` changed directory before handing off
-        # (R2-P2-1: an unrelated, merely-newer transcript sitting under the
-        # BOARD's own $PWD is not evidence about a session that is actually
-        # running somewhere else entirely) — and only a candidate NOTHING
-        # ELSE on this tank has already claimed (pass 2 above, which now
-        # covers guessed rows too, not just stamped ones) can outrank the
-        # stamp: a busy neighbouring session's own transcript is always
-        # claimed by that neighbour by the time this runs, so it can never
-        # leak in here as "my session moved on" — only `/clear`'s brand-new
-        # sid, which nothing on this board explains, still wins.
-        local _created_n _smt _ssid
-        _created_n="$created"; case "$_created_n" in ''|*[!0-9]*) _created_n="" ;; esac
-        if [ -n "$_created_n" ]; then
-          while IFS=$'\037' read -r _smt _ssid; do
-            [ -n "$_ssid" ] || continue
-            [ "$_ssid" = "$sid" ] && continue
-            _home_sid_claimed "$engine" "$tank" "$_ssid" && continue
-            case "$_smt" in ''|*[!0-9]*) continue ;; esac
-            [ "$_smt" -gt "$_created_n" ] || continue
-            sid="$_ssid"; guessed=1; stale=1
-            break
-          done <<EOF
-$(adapter_sibling_sids "$_ef" 10 2>/dev/null)
-EOF
+        # What's left checks only THIS sid, directly:
+        #   1. its own transcript file still exists — just confirmed, above.
+        #   2. its own engine process is still running — live_engine_alive
+        #      (lib/core/live.sh) asks whether THIS tmux session's own
+        #      window (not a `wake` watcher window that can outlive it) is
+        #      still there. A window that closed on its own (nothing here
+        #      ever sets remain-on-exit for it) cannot still be the thing
+        #      this stamp names, even when the SESSION persists past it.
+        if ! live_engine_alive "$name"; then
+          stale=1
         fi
-        if [ "$stale" -eq 1 ]; then
-          _ef=""
-          if declare -F adapter_find_session >/dev/null 2>&1; then
-            _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
-          fi
+        if declare -F adapter_title_for_file >/dev/null 2>&1; then
+          title="$(adapter_title_for_file "$_ef" 2>/dev/null || true)"
+          recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         fi
-      fi
-
-      if [ -n "$_ef" ] && declare -F adapter_title_for_file >/dev/null 2>&1; then
-        title="$(adapter_title_for_file "$_ef" 2>/dev/null || true)"
-        recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
       else
-        # Stamped but unfindable anywhere (a wiped transcript, a foreign
-        # sid, or a stale replacement whose own file vanished too) —
-        # behave exactly as if nothing had been recorded, rather than
-        # rendering a confident blank.
-        sid=""; stale=0
+        # R3-P2-2 — the OTHER direct, sid-specific stale signal: the stamped
+        # transcript itself is simply gone (deleted, moved, or a uuid minted
+        # at launch whose file the engine never got the chance to write).
+        # This IS staleness, and unlike the sibling-scan removed above it
+        # needs no inference about anyone else — so it must fall through to
+        # the ordinary guess below MARKED, not silently as if nothing had
+        # ever been recorded. The previous behaviour (sid=""; stale=0 here)
+        # threw the stale fact away, so a stamp pointing nowhere rendered as
+        # an unmarked, confident guess (2026-09-12 R3 review, probeC5).
+        stale=1
+        sid=""
       fi
     fi
 
@@ -447,11 +441,41 @@ EOF
       [ -n "$recap" ] || recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
     fi
 
+    # R3-P2-1 — every path above can still come up with nothing to show: a
+    # stamp whose transcript was never written, or a guess whose entire
+    # exclusion-aware candidate pool was already claimed by other rows on a
+    # busy tank (2026-09-12 R3 review, probeE1/probeE2/D3 — a literal empty
+    # string rendered in the title column, the one thing
+    # tests/bats/live.bats has a case dedicated to forbidding). main never
+    # rendered a blank here, so when nothing else produced a title, fall back
+    # exactly the way main did: the tank's own single newest transcript, with
+    # no exclusion at all — an honest, possibly-duplicate guess beats a blank
+    # row — and only when there is truly nothing on disk yet, the tank's own
+    # name. $guessed is set either way: neither answer is a confirmed fact,
+    # and the mark logic below only actually flags it when this tank is
+    # ambiguous or this row was independently known stale, same as any other
+    # guess.
+    if [ -z "$title" ]; then
+      guessed=1
+      if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+        sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
+      fi
+      if [ -n "$sid" ] && declare -F adapter_session_title >/dev/null 2>&1; then
+        title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+        [ -n "$recap" ] || recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+      fi
+      [ -n "$title" ] || title="$tank"
+    fi
+
     # A stale stamp is worth flagging on its own — it is wrong regardless of
-    # how many other live sessions this tank has. An ordinary "no identity"
-    # guess is only worth flagging ON AN AMBIGUOUS TANK — the whole point is
-    # "this title might belong to the OTHER live row on this tank", which is
-    # not a sentence that means anything when there is no other row.
+    # how many other live sessions this tank has, and (R3-P2-2) it can now be
+    # true even when $sid was never cleared (the "engine process gone" case
+    # keeps the stamp's own sid and title — the transcript is real, just no
+    # longer being written to — so this must not require $guessed too). An
+    # ordinary "no identity" guess is only worth flagging ON AN AMBIGUOUS
+    # TANK — the whole point is "this title might belong to the OTHER live
+    # row on this tank", which is not a sentence that means anything when
+    # there is no other row.
     #
     # R1-P2-3: the marker is a SENTINEL (\001) here, not the literal "?" —
     # appended to the packed title BEFORE this field is truncated for display
@@ -462,10 +486,10 @@ EOF
     # site strips the sentinel, truncates the CLEAN title, then appends "?"
     # after — see _home_truncv's call sites.
     mark=0
-    if [ "$guessed" -eq 1 ] && [ -n "$title" ]; then
+    if [ -n "$title" ]; then
       if [ "$stale" -eq 1 ]; then
         mark=1
-      else
+      elif [ "$guessed" -eq 1 ]; then
         ambiguous="$(printf '%s' "$_dupkeys" | grep -Fxc "$engine/$tank" 2>/dev/null || true)"
         [ -n "$ambiguous" ] && [ "$ambiguous" -gt 1 ] && mark=1
       fi

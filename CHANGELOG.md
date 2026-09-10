@@ -450,29 +450,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session order before any row is drawn — so a stamped row and a bare
   neighbour resolve to two DIFFERENT titles even once both have real
   transcripts on disk, not just when the stamped one happens to still look
-  newest. A tank with a single live session renders byte-identical to before,
-  and two fully bare sessions on the same tank — genuinely nothing recorded to
-  tell them apart — still fall back to a marked guess (`?`), honestly, rather
-  than one being presented as fact.
+  newest. A tank with a single live session renders byte-identical to before
+  UNLESS that one session's own stamp is independently stale (see below —
+  staleness is never about how many other sessions a tank has), and two fully
+  bare sessions on the same tank — genuinely nothing recorded to tell them
+  apart — still fall back to a marked guess (`?`), honestly, rather than one
+  being presented as fact. A guess whose entire exclusion-aware candidate
+  pool has already been claimed by other rows on the tank now falls back to
+  the tank's own newest transcript with no exclusion (an honest,
+  possibly-duplicate guess), or to the tank's own name if there is nothing on
+  disk at all yet, rather than rendering a blank title.
 
-  A stamp that has gone stale (`/clear` or a fork starts the engine writing a
-  new transcript under a new id, which the stamp is never revisited to notice)
-  is now detected structurally: a sibling transcript in the STAMPED session's
-  OWN directory that nothing else live on the tank has already claimed,
-  rather than any transcript in the tank newer than this window's creation
-  time — the earlier version of that check could not tell "my session moved
-  on" apart from "a different, merely busier live session on the same tank
-  also has a transcript", and misfired the moment a second live session
-  existed. The same directory-scoped lookup also fixes a stamped id whose
-  transcript lives outside the board's own working directory (routine after
-  `clikae resume`, which changes directory before handing off): staleness and
-  title are both resolved against that session's OWN project, never the
-  board's `$PWD`, so an unrelated (if newer) local transcript can no longer
-  masquerade as proof the resumed session moved on. The `?` marker itself is
-  applied AFTER the title is truncated to fit the row, not before, so a long
-  guessed title can no longer silently swallow it. It also no longer doubles
-  up on a title that already ends in a literal `?` — one trailing `?` is the
-  marker in that case, not two. `CLIKAE_LAUNCH_SID`, the exported environment
+  A stamp that has gone stale is now detected only by evidence about that
+  EXACT session — never by what anything else on the tank is doing: its own
+  transcript file is gone (deleted, moved, or a session id minted at launch
+  whose engine never got the chance to write it), or its own engine process
+  has stopped running while the tmux session outlives it (a `wake` watcher
+  window can keep a session on the board after its engine's own window has
+  already closed on its own). An earlier version of this check instead
+  treated "a newer transcript in the stamped session's own directory that
+  nothing else on the board claims" as proof the session had moved on (meant
+  to catch `/clear`) — but that signature is identical to a `clikae burn`, an
+  `--ephemeral` run, or an already-ended neighbour writing into the same tank
+  and directory, none of which appear on the live board and so none of which
+  are ever "claimed" there either. One `clikae burn` running alongside a
+  resumed, exactly-identified session was enough to swap that session's own
+  title for the burn's. That check has been removed rather than narrowed:
+  there was no signal in it that was actually about the stamped sid. One
+  consequence is honestly documented, not hidden: `/clear` (or a fork) makes
+  the engine start writing a brand-new transcript under a brand-new id while
+  the OLD stamp just sits there, and today clikae has no reliable way to tell
+  that case apart from a busy neighbour's own transcript — the row keeps
+  showing the pre-`/clear` title until the transcript is actually gone or the
+  engine process actually stops. The `?` marker itself is applied AFTER the
+  title is truncated to fit the row, not before, so a long guessed title can
+  no longer silently swallow it. It also no longer doubles up on a title that
+  already ends in a literal `?` — one trailing `?` is the marker in that
+  case, not two. `CLIKAE_LAUNCH_SID`, the exported environment
   variable an earlier round of this fix threaded the resumed id through, is
   gone entirely — it was never unset, so a tmux server born under it handed
   the variable to every session that server spawned afterwards, occasionally
