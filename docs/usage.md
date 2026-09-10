@@ -394,6 +394,24 @@ has no reliable way to tell that case apart from a busy neighbour's own
 transcript. The row keeps showing the pre-`/clear` title until one of the two
 signals above actually fires.
 
+A second, narrower gap sits next to that one: a session that has JUST
+started has no transcript file on disk yet (the engine writes it after the
+first exchange, not at launch), so until that file appears it resolves the
+same way an unstamped window does — which can be the SAME title a neighbour
+on the same tank is already showing, with only the new row's `?` to tell
+them apart. This is not a regression (main shows the same duplicate, without
+even a `?`) and it closes on its own the moment the new session's own
+transcript exists, but it is the same visible symptom `/clear` produces, so
+it belongs in the same honesty: two rows CAN briefly show one title, and the
+`?` is your signal for "not yet confirmed", not "definitely wrong".
+
+Two rows can also land on the very same fallback sid rather than merely the
+same TITLE: the exclusion-aware guess only excludes a sid another row already
+resolved to, so a stamped row that fell back after its own stamp went stale
+does not reserve its fallback pick against anyone else's guess. `?` on both
+rows is the tell — main duplicates here too, so this is an honest tie, not a
+silent wrong answer.
+
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a
 waiter is really attached, on the line after:

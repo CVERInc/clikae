@@ -122,30 +122,39 @@ live_session_id() {
 # window has already closed.
 #
 # tmux_spawn_session (lib/core/tmux.sh) always creates a live session with its
-# engine as the ONLY window, at index 0 — clikae never sets base-index, so 0
-# is tmux's own default everywhere this runs, not an assumption this makes on
-# top of it — and nothing in this codebase ever turns on `remain-on-exit` for
-# that window. So when the engine's own process ends, the window disappears
-# immediately (there is no dead-but-present pane to observe): "window 0 is
-# gone" IS "the engine process is gone" here, not a proxy for it.
+# engine as the ONLY window, and nothing in this codebase ever turns on
+# `remain-on-exit` for that window. So when the engine's own process ends,
+# the window disappears immediately (there is no dead-but-present pane to
+# observe) — but WHICH window index that was is not something clikae gets to
+# assume: `base-index` is a per-server option read from the tmux user's own
+# `~/.tmux.conf` at server start (2026-09-12 R4 review, R4-P2-1) — clikae
+# never sets it, but "never sets it" means "inherits whatever the user set",
+# not "it is always 0". A `base-index 1` server hands the engine window
+# index 1, and a literal `grep -Fxq 0` here would then find no window 0 on
+# a perfectly healthy session and report every exactly-identified row stale.
 #
-# This can be true while the SESSION itself is not: wake_attach_watcher
-# (lib/core/wake.sh) opens its watcher in a LATER window slot, so a session
-# whose engine window has already closed on its own can still be sitting on
-# the board, kept alive only by that second window. home.sh's stale-stamp
-# check (R3-P2-2) is the one place this question matters: a transcript can
-# still be found on disk (R3-P2-2's OTHER stale signal is that it can't be)
-# while the process that was writing it is simply gone.
+# So this asks the same question tmux_sess_has_engine (lib/core/tmux.sh)
+# already asks correctly: is there a window that is NOT the `wake` watcher
+# (wake_attach_watcher, lib/core/wake.sh, opened in a LATER window slot so a
+# session whose engine window has already closed on its own can still be
+# sitting on the board, kept alive only by that second window) — by NAME,
+# never by numeric position. home.sh's stale-stamp check (R3-P2-2) is the
+# one place this question matters: a transcript can still be found on disk
+# (R3-P2-2's OTHER stale signal is that it can't be) while the process that
+# was writing it is simply gone.
 #
 # Best-effort, like everything else in this file: no tmux, or a query that
 # comes back empty (a session gone by the time we ask, or tmux unreachable),
 # answers "can't tell" and must never manufacture a false "gone" from that —
-# only a definite absence of window 0 does.
+# only a definite absence of a non-watcher window does. Unlike
+# tmux_sess_has_engine, whose callers want "no tmux" to mean "no engine",
+# this one's callers want it to mean "can't tell, so don't flag" — so the
+# two functions share the same window-name test but not its no-tmux return.
 live_engine_alive() {
   local name="$1" out
   [ -n "$name" ] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
-  out="$(tmux list-windows -t "=$name:" -F '#{window_index}' 2>/dev/null)" || return 0
+  out="$(tmux list-windows -t "=$name:" -F '#{window_name}' 2>/dev/null)" || return 0
   [ -n "$out" ] || return 0
-  printf '%s\n' "$out" | grep -Fxq 0
+  printf '%s\n' "$out" | grep -qvE '^wake( |$)'
 }

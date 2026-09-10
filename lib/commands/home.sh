@@ -446,12 +446,18 @@ EOF
     # exclusion-aware candidate pool was already claimed by other rows on a
     # busy tank (2026-09-12 R3 review, probeE1/probeE2/D3 — a literal empty
     # string rendered in the title column, the one thing
-    # tests/bats/live.bats has a case dedicated to forbidding). main never
-    # rendered a blank here, so when nothing else produced a title, fall back
-    # exactly the way main did: the tank's own single newest transcript, with
-    # no exclusion at all — an honest, possibly-duplicate guess beats a blank
-    # row — and only when there is truly nothing on disk yet, the tank's own
-    # name. $guessed is set either way: neither answer is a confirmed fact,
+    # tests/bats/live.bats has a case dedicated to forbidding). For the
+    # guess-pool-exhausted case, main matched this: there was always SOME
+    # transcript on the tank to fall back to, so main never rendered a blank
+    # there either. Falling back the same way here — the tank's own single
+    # newest transcript, with no exclusion at all (an honest,
+    # possibly-duplicate guess beats a blank row) — keeps that parity. The
+    # OTHER branch below is not parity, it's a bonus fix: when a tank has NO
+    # transcript on disk at all, main itself rendered a literal empty title
+    # (2026-09-12 R4 review, R4-P3-1, probe BI-6) — this falls back to the
+    # tank's own name instead, closing a pre-existing gap this comment used
+    # to claim didn't exist. $guessed is set either way: neither answer is a
+    # confirmed fact,
     # and the mark logic below only actually flags it when this tank is
     # ambiguous or this row was independently known stale, same as any other
     # guess.

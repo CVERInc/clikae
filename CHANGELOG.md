@@ -451,15 +451,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neighbour resolve to two DIFFERENT titles even once both have real
   transcripts on disk, not just when the stamped one happens to still look
   newest. A tank with a single live session renders byte-identical to before
-  UNLESS that one session's own stamp is independently stale (see below —
-  staleness is never about how many other sessions a tank has), and two fully
-  bare sessions on the same tank — genuinely nothing recorded to tell them
-  apart — still fall back to a marked guess (`?`), honestly, rather than one
-  being presented as fact. A guess whose entire exclusion-aware candidate
-  pool has already been claimed by other rows on the tank now falls back to
-  the tank's own newest transcript with no exclusion (an honest,
-  possibly-duplicate guess), or to the tank's own name if there is nothing on
-  disk at all yet, rather than rendering a blank title.
+  whenever its title resolves the same way it always did — no recorded
+  identity, or a stamp pointing at the same transcript the old tank-newest
+  guess would have chosen. When the stamp points somewhere else — the
+  routine case after `clikae resume`, or when a `clikae burn` has written
+  into the same tank+directory since — the row now shows its own session's
+  title instead of the tank's newest; that difference IS the fix, so it is
+  not byte-identical there and is not meant to be (2026-09-12 R4 review,
+  R4-P2-2 — the previous wording of this paragraph claimed otherwise). A
+  lone session can also gain a `?` when its own stamp is independently
+  stale (see below), and a tank with no transcript at all on disk now
+  renders the tank's own name where an earlier version rendered a literal
+  empty title — an incidental fix to a pre-existing gap (R4-P3-1), not new
+  behaviour this round set out to add. Two fully bare sessions on the same
+  tank — genuinely nothing recorded to tell them apart — still fall back to
+  a marked guess (`?`), honestly, rather than one being presented as fact. A
+  guess whose entire exclusion-aware candidate pool has already been
+  claimed by other rows on the tank now falls back to the tank's own newest
+  transcript with no exclusion (an honest, possibly-duplicate guess) — the
+  same tank-name fallback applies when there is nothing on disk at all yet,
+  rather than rendering a blank title.
 
   A stamp that has gone stale is now detected only by evidence about that
   EXACT session — never by what anything else on the tank is doing: its own
@@ -494,6 +505,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now also sweeps `~/.clikae/state/<session>.session_id` files whose tmux
   session is gone, matching what it already did for orphaned `.scrollback`
   files.
+
+  **Round 4 review found `live_engine_alive` asking the wrong question**
+  (2026-09-12 R4 review, R4-P2-1): it treated tmux window index `0` as "the
+  engine's window", but that index is the tmux USER's own `base-index`
+  setting (read from their `~/.tmux.conf` at server start), never clikae's
+  to assume — on a `base-index 1` machine, every exactly-identified row's
+  engine window sits at index 1, so the old check found no window 0 on a
+  perfectly healthy session and marked it stale. It now asks by window
+  NAME instead — "is there a window that is not the `wake` watcher" — the
+  same test `tmux_sess_has_engine` (`lib/core/tmux.sh`) already uses
+  correctly elsewhere in this codebase. The comment on `home.sh`'s fallback
+  ("main never rendered a blank here") was also wrong: main DOES render a
+  literal empty title when a tank has no transcript on disk at all — the
+  fallback to the tank's own name fixes that pre-existing gap too, not just
+  the guess-pool-exhausted case it was written for (R4-P3-1).
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
 - **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**

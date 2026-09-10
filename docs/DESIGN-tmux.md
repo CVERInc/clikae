@@ -71,6 +71,8 @@
 
 - **每 session（非全域）的 clikae 選項清冊**：`status-left` / `status-left-length`（`tmux_label`，視窗徽章）之外，2026-09 起新增 `@clikae_session_id`（`tmux_set_session_id`，`lib/core/tmux.sh`）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，`live_session_id`（`lib/core/live.sh`）讀回。與上面的全域選項不同，它是單一 session 作用域、`set-option -t "=$session:"`，不會漏到同一 server 的其他 session；但同樣只在 `tmux_spawn_session` 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 `~/.clikae/state/<session>.session_id` 鏡像檔。
 
+- **`base-index` 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0**：2026-09 起 `live_engine_alive`（`lib/core/live.sh`）需要問「這個 session 的引擎視窗還在不在」，一度用 `tmux list-windows -F '#{window_index}'` 比對字面 `0`——跟這條規則本身講的道理正是同一件事（`history-limit` 那個收據）：`tmux_spawn_session` 沒有設 `base-index` 不代表它是 0，代表它繼承使用者 `~/.tmux.conf` 裡設的任何值，而 `set -g base-index 1` 是很常見的一行。在 `base-index 1` 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗**名稱**：是否存在一個不是 `wake` 守望者（`^wake( |$)`，`wake_attach_watcher` 開的那個）的視窗——與 `tmux_sess_has_engine`（`lib/core/tmux.sh`）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。
+
 ### Rule 2: tmux 是便利層，不是相依（三個出口）
 
 - **症狀**：沒有 tmux 的機器、`TERM` 畫不了的終端機、或 CI，`clikae <engine> <tank>` 應該照樣把引擎跑起來，而不是壞掉或把 session 丟在背景。

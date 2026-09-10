@@ -419,13 +419,16 @@ PATHDIRS
   # 2026-09-12 round-3 review, R3-P2-2's other sub-case: the transcript is
   # still there (the recorded identity is real), but the process that was
   # writing it is gone. tmux_spawn_session always gives a freshly-spawned
-  # engine window index 0 and nothing ever sets remain-on-exit for it, so a
+  # engine its own window and nothing ever sets remain-on-exit for it, so a
   # closed engine window (not just a closed SESSION) is directly observable
-  # — live_engine_alive (lib/core/live.sh). A `wake` watcher window opened in
-  # a later slot is exactly why the SESSION can still be on the board after
-  # its engine window is gone: this fixture reproduces that shape without
-  # needing the real wake feature, by opening a second window by hand and
-  # killing window 0 out from under it.
+  # — live_engine_alive (lib/core/live.sh) asks by window NAME, never by
+  # position (round-4 review, R4-P2-1 — this fixture used to rely on the
+  # engine's window being literally index 0, which only holds on a
+  # default-`base-index` server; see the base-index-1 fixtures below). A
+  # `wake` watcher window opened in a later slot is exactly why the SESSION
+  # can still be on the board after its engine window is gone: this fixture
+  # reproduces that shape without needing the real wake feature, by opening
+  # a second window by hand and killing the first one out from under it.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
   local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
@@ -440,6 +443,77 @@ PATHDIRS
   local block; block="$(_live_block "$output")"
   [[ "$block" == *'"My own work'* ]] || { echo "the stamp's own title should still resolve — the transcript is real:"; echo "$output"; false; }
   [[ "$block" == *'?'* ]] || { echo "a stamp whose engine window is gone was NOT marked:"; echo "$output"; false; }
+}
+
+# _tmux_conf_base_index <n> — write $HOME/.tmux.conf with `base-index n`
+# BEFORE the first tmux call in a test. TMUX_TMPDIR is a fresh per-test
+# tempdir (tests/helpers.bash setup()), so the server this test's first tmux
+# invocation spawns is brand new and reads this file at birth — no other
+# test's server has ever seen it.
+_tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.conf"; }
+
+@test "live: an exactly-identified row is not marked stale on a base-index 1 tmux server (R4-P2-1)" {
+  # 2026-09-12 round-4 review, R4-P2-1: live_engine_alive used to ask "is
+  # there a window literally named index 0" — but base-index is the tmux
+  # USER's own ~/.tmux.conf setting, read at server birth, never clikae's to
+  # assume. On a `base-index 1` server the engine's only window IS index 1,
+  # so the old literal-0 check found nothing and marked every exactly
+  # -identified row stale — the opposite of what this whole PR exists to do.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _tmux_conf_base_index 1
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "My own work" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  local idx; idx="$(tmux list-windows -t "=$(_csess):" -F '#{window_index}')"
+  [ "$idx" = "1" ] || { echo "fixture assumption broken — engine window is not index 1: $idx"; false; }
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"My own work"'* ]] || { echo "a healthy base-index-1 session's exact title did not render:"; echo "$output"; false; }
+  [[ "$block" != *'"My own work?"'* ]] || { echo "a healthy base-index-1 session was wrongly marked stale:"; echo "$output"; false; }
+}
+
+@test "live: a stamped session whose own engine window has closed is still marked stale on a base-index 1 server (R4-P2-1)" {
+  # Same fixture as the engine-closed test above, but on a base-index 1
+  # server — the fix must keep catching REAL staleness by window NAME
+  # (not the wake watcher), not merely stop producing false positives.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _tmux_conf_base_index 1
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "My own work" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'      # engine window, index 1
+  tmux new-window -t "$(_csess):" -n wake 'sleep 30'  # wake watcher, index 2
+  tmux kill-window -t "$(_csess):1"                   # the engine's own window has closed
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"My own work'* ]] || { echo "the stamp's own title should still resolve — the transcript is real:"; echo "$output"; false; }
+  [[ "$block" == *'?'* ]] || { echo "a stamp whose engine window is gone was NOT marked on a base-index 1 server:"; echo "$output"; false; }
+}
+
+@test "live: an exactly-identified row is not marked stale on an explicit base-index 0 tmux server (R4-P2-1)" {
+  # Symmetry with the base-index 1 case above: an EXPLICIT `base-index 0` in
+  # the user's own ~/.tmux.conf (not just tmux's unconfigured default) must
+  # behave the same as no config file at all.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _tmux_conf_base_index 0
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "My own work" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"My own work"'* ]] || { echo "$output"; false; }
+  [[ "$block" != *'"My own work?"'* ]] || { echo "$output"; false; }
 }
 
 @test "live: a stamped sid outside this board's PWD project slug still renders a title, not a blank one" {
