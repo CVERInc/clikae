@@ -2269,6 +2269,14 @@ KV
           _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
           exit "$engine_rc"
         )" || rc=$?
+        # Neither direct-execution fallback pipes through `tee "$log_file"`
+        # the way the tmux wrapper script above does, so `$log_file` was
+        # never actually created here even though `_burn_status_write`'s
+        # "log" field always names it -- a status reader followed a path
+        # that only existed when tmux happened to be on PATH. Write the
+        # captured output there too, so the contract holds regardless of
+        # which path ran.
+        printf '%s\n' "$out" > "$log_file" 2>/dev/null || true
       fi
     else
       out="$(
@@ -2280,6 +2288,9 @@ KV
         _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
         exit "$engine_rc"
       )" || rc=$?
+      # Same gap as the "tmux failed to start" fallback above: no tmux at
+      # all means no `tee "$log_file"` ever ran.
+      printf '%s\n' "$out" > "$log_file" 2>/dev/null || true
     fi
     
     if [ -f "$evidence_file" ]; then
