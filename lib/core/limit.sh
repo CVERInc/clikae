@@ -776,3 +776,604 @@ limit_reset_phrase() {
   printf '%s' "$1" | grep -oaiE '[Rr]esets [^"\\]*' | head -n 1 \
     | sed -E 's/[[:space:]]+$//' || true
 }
+
+# ---------------------------------------------------------------------------
+# codex's OWN proactive usage status — the 5h/weekly windows it renders
+# itself (its `/status` panel shows e.g. "5h limit:  [████] 100% left
+# (resets 05:14)" and "Weekly limit: [████] 95% left (resets 22:12 on 15
+# Sep)"). Unlike everything above (which only ever fires once a tank has
+# ALREADY run dry), this is a proactive reading: codex reports the SAME two
+# numbers (% left, reset time) whether the tank is healthy or not, and
+# clikae had no light for it at all — `clikae burn codex … --json` always
+# printed `"reset": null` on a run that never hit a hard limit, even though
+# codex knew perfectly well when the window resets.
+#
+# Source: codex's own `rate_limits` object, persisted into the rollout
+# transcript (see docs/DESIGN-board-fuel-dots.md). Every codex session —
+# headless `codex exec` included, confirmed on this machine's own rollouts
+# (originator "codex_exec") — persists a `token_count` event whose
+# `rate_limits.primary`/`.secondary` carry a `used_percent` and an ABSOLUTE
+# `resets_at` epoch, both already resolved by the SERVER (no local-time
+# guessing at all — clikae only relays them). `limit_codex_status` /
+# `limit_codex_status_cached` are the two entry points; see the header above
+# each for which callers want which.
+#
+# (Round-1 review, 2026-09-12: an earlier revision of this file also shipped
+# a text-shape parser for the RENDERED status line, for a captured line where
+# the structured source doesn't reach. It had no real caller anywhere in
+# lib/bin/scripts — only its own tests exercised it — so it was deleted
+# rather than kept as permanently-untested dead code. If a real caller shows
+# up (a burn-log scraper, a `$CLIKAE_LIMIT_PATTERN`-style paste path), it can
+# be rebuilt against this same contract.)
+#
+# 🔴 Do NOT assume primary=5h / secondary=weekly BY POSITION. A real
+# free-tier sample on this machine (2026-09-10) showed `limit_id:"codex"`
+# with a `window_minutes:43200` (30 days) rider living in `primary` and
+# `secondary` always null — nothing like the 5h/weekly split the ticket's
+# `/status` example came from (a different plan tier). Position is not the
+# contract; `window_minutes` is — each side is labelled by ITS OWN window
+# length (_limit_codex_window_label), never by which JSON key it arrived in.
+#
+# 🔴 TIME VALIDITY (P1-1, 2026-09-12 round-1 review). `resets_at` is an
+# ABSOLUTE epoch the server computed at the moment it wrote that event — it
+# does not update itself afterwards. Once `now` passes it, the window has
+# REFILLED server-side and the `used_percent` sitting next to it is a stale
+# reading of a quota that no longer exists. A tank that burned to 100% at
+# 08:00 and reset at 12:00 must NOT still show red/"0% left" at 16:00 just
+# because that is the newest `token_count` event on disk — it must show
+# green/"100% left", the honest current state. _limit_codex_window_expired
+# is the single place that decides "is this side's number still current",
+# with a 60s tolerance for ordinary clock skew between this machine and the
+# server (the same tolerance _limit_codex_render_reset's own short/dated
+# split already used, now factored into one function both call).
+#
+# Percent LEFT is the canonical unit here (matching the vendor's own "N%
+# left" wording); `used_percent` is converted once, at the boundary
+# (_limit_codex_left).
+
+# _limit_codex_local — the SAME date arithmetic as _limit_local above, but
+# never force a TZ override. claude's phrases always carry an explicit zone
+# to resolve against; codex's status/rate_limits carry none, because codex
+# always renders/resolves in the machine's own local wall-clock — this reads
+# that ambient zone (whatever $TZ/the system already resolves to) instead of
+# one named in the text. Kept as a separate function, not a `tz=""` branch
+# bolted onto the claude one, so the claude path stays byte-for-byte what it
+# was — nothing here can regress it by accident.
+_limit_codex_local() {
+  local ep="$1" fmt="$2"
+  if [ "$(_limit_date_kind)" = gnu ]; then date -d "@$ep" "+$fmt" 2>/dev/null
+  else date -r "$ep" "+$fmt" 2>/dev/null; fi
+}
+
+# _limit_month_abbr <01..12> -> Jan..Dec (the reverse of _limit_month_num).
+_limit_month_abbr() {
+  case "$1" in
+    01) printf 'Jan' ;; 02) printf 'Feb' ;; 03) printf 'Mar' ;; 04) printf 'Apr' ;;
+    05) printf 'May' ;; 06) printf 'Jun' ;; 07) printf 'Jul' ;; 08) printf 'Aug' ;;
+    09) printf 'Sep' ;; 10) printf 'Oct' ;; 11) printf 'Nov' ;; 12) printf 'Dec' ;;
+  esac
+}
+
+# _limit_codex_window_expired <resets_at_epoch> <now> -> 0 if that window's
+# own reset instant is already more than 60s behind `now` (P1-1: the window
+# has REFILLED server-side and its `used_percent` no longer applies), 1
+# otherwise (still ahead of `now`, within the 60s clock-skew tolerance, or
+# not a number clikae can judge at all — never guess expiry on bad input).
+# The 60s tolerance matches ordinary clock skew between this machine and
+# codex's server, not a display choice — see the P1-1 note above.
+_limit_codex_window_expired() {
+  local ep="$1" now="$2"
+  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$((ep - now))" -lt -60 ]
+}
+
+# _limit_codex_render_reset <resets_at_epoch> <now> -> codex's own phrase
+# grammar rendered FROM an absolute epoch — local time, short form ("resets
+# HH:MM") when the reset lands within the next ~20h (the shape codex's own
+# 5h-window line always takes, since that window can never be more than 5h
+# out), dated form otherwise (the shape its weekly/longer windows take once
+# the reset is more than a day away).
+#
+# P1-1: an `ep` more than 60s behind `now` is EXPIRED (_limit_codex_window_expired)
+# and this returns 1 + nothing for it, full stop — it is never handed to the
+# dated branch below. Before this fix, a past `ep` fell through the old
+# short-form window check into the dated `else` and was rendered as if it
+# were a future date ("resets 14:20 on 10 Sep" printed at 16:40 on 10 Sep,
+# two hours after that exact instant already passed) — the vendor never
+# renders a reset that has already happened, so clikae must not either.
+#
+# P3-3 (2026-09-12 round-1 review, decided not to change): the dated form
+# has no year, matching codex's OWN grammar exactly — codex's `/status`
+# never shows one either. That is only unambiguous because `ep` here is
+# always `resets_at` from a live `rate_limits` reading, which is bounded by
+# that window's own length — the longest observed in practice is a 30-day
+# window (see the 🔴 free-tier note above), so `ep` is never more than a
+# few weeks past `now` and "D Mon" alone always reads as the next such date.
+# A synthetic epoch far beyond that (a test fixture landing in the year
+# 2100, say) would print a year-less date that LOOKS like next month rather
+# than 74 years out — but no real `resets_at` can ever be that far away, so
+# this is a property of test fixtures, not a reachable production bug.
+_limit_codex_render_reset() {
+  local ep="$1" now="$2" hm mon day
+  [ -n "$ep" ] && [ -n "$now" ] || return 1
+  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  _limit_codex_window_expired "$ep" "$now" && return 1
+  hm="$(_limit_codex_local "$ep" '%H:%M')"
+  [ -n "$hm" ] || return 1
+  if [ $(( ep - now )) -lt 72000 ]; then
+    printf 'resets %s' "$hm"
+    return 0
+  fi
+  mon="$(_limit_codex_local "$ep" '%m')"
+  day="$(_limit_codex_local "$ep" '%d')"
+  [ -n "$mon" ] && [ -n "$day" ] || return 1
+  printf 'resets %s on %d %s' "$hm" "$((10#$day))" "$(_limit_month_abbr "$mon")"
+}
+
+# _limit_codex_left <used_percent> -> percent LEFT (100 - used), or 1 +
+# nothing when <used_percent> is empty/not a number. The one place a
+# structured-source used_percent (e.g. "99.0") is converted to the same
+# "% left" unit the vendor's own text uses everywhere else here.
+#
+# P3-1 (2026-09-12 round-1 review): a bare truncation of the decimal part
+# (`${1%%.*}`) rounds towards ZERO USED — i.e. optimistic on the thing that
+# decides red/yellow/green. "99.5" truncated to "99" reads 1% left (yellow),
+# never red, until the vendor's own number hits exactly "100.0". When the
+# reading decides whether a tank looks safe to burn, the conservative
+# direction is to round USED up (ceiling) — any non-zero fractional part
+# bumps used to the next whole percent, so "99.5" reads 0% left (red) same
+# as "100.0" does, and only a used_percent that is a clean whole number (or
+# whose fraction is all zeros, "40.00") keeps its own truncated value.
+_limit_codex_left() {
+  local raw="$1" ip dp u
+  case "$raw" in ''|*[!0-9.]*) return 1 ;; esac
+  case "$raw" in
+    *.*)
+      ip="${raw%%.*}"; dp="${raw#*.}"
+      case "$ip" in ''|*[!0-9]*) return 1 ;; esac
+      case "$dp" in *[!0-9]*) return 1 ;; esac
+      case "$dp" in *[!0]*) u=$((10#$ip + 1)) ;; *) u=$((10#$ip)) ;; esac
+      ;;
+    *)
+      case "$raw" in ''|*[!0-9]*) return 1 ;; esac
+      u=$((10#$raw)) ;;
+  esac
+  [ "$u" -le 100 ] || u=100
+  printf '%d' "$((100 - u))"
+}
+
+# _limit_codex_pct_light <pct_left> -> red|yellow|green, or 1 + nothing when
+# <pct_left> is empty/not a number — an unknown reading is never a guessed
+# colour. Thresholds: 0% left is red (the same "can't burn now" meaning as
+# every other red dot on the board); under 15% left is yellow (a caution,
+# same spirit as claude's weekly-warn BETA); anything else is green.
+_limit_codex_pct_light() {
+  local left="$1"
+  case "$left" in ''|*[!0-9]*) return 1 ;; esac
+  if   [ "$left" -le 0 ];  then printf 'red'
+  elif [ "$left" -lt 15 ]; then printf 'yellow'
+  else printf 'green'; fi
+}
+
+# limit_codex_status_light <primary_used_percent> <secondary_used_percent>
+# -> red|yellow|green, or 1 + nothing when BOTH are empty. "Light = the
+# tighter one": whichever window is CLOSER to being exhausted decides the
+# colour — a tank at "5h: 90% left, weekly: 2% left" must show red, because
+# the weekly window is the one about to actually stop you.
+limit_codex_status_light() {
+  local pu="$1" su="$2" l worst="" got=0
+  if l="$(_limit_codex_left "$pu" 2>/dev/null)"; then
+    got=1; { [ -z "$worst" ] || [ "$l" -lt "$worst" ]; } && worst="$l"
+  fi
+  if l="$(_limit_codex_left "$su" 2>/dev/null)"; then
+    got=1; { [ -z "$worst" ] || [ "$l" -lt "$worst" ]; } && worst="$l"
+  fi
+  [ "$got" -eq 1 ] || return 1
+  _limit_codex_pct_light "$worst"
+}
+
+# _limit_codex_window_label <window_minutes> -> "5h" | "weekly" | "<N>d" |
+# "usage" (empty/unrecognised window). Labels by the window's OWN length,
+# never by which JSON key (primary/secondary) it arrived in — see the
+# 🔴 note at the top of this section for why position is not trustworthy.
+#
+# P3-2 (2026-09-12 round-1 review): the old upper bound for "weekly" was
+# 20160 minutes (14 DAYS), not codex's actual 7-day/10080-minute weekly
+# window — so a genuine 8..14-day window would have been mislabelled
+# "weekly" too. Tightened to the real boundary; anything longer falls
+# through to the "<N>d" form instead of a wrong, more specific-sounding name.
+_limit_codex_window_label() {
+  local win="$1"
+  case "$win" in ''|*[!0-9]*) printf 'usage'; return ;; esac
+  if   [ "$win" -le 360 ];   then printf '5h'
+  elif [ "$win" -le 10080 ]; then printf 'weekly'
+  else printf '%dd' "$((win / 1440))"; fi
+}
+
+# _limit_codex_rate_limits <config_dir> -> "<p_used>\037<p_window_min>\037
+# <p_resets_at>\037<s_used>\037<s_window_min>\037<s_resets_at>", from the
+# NEWEST `token_count` event (by its own timestamp) across this tank's
+# rollouts that carries a non-null primary or secondary — or 1 + nothing if
+# none ever did. Every field here is the VENDOR's own number (percent and an
+# ABSOLUTE epoch the server computed), never something clikae derives — same
+# "relay, don't guess" rule as every other reset in this file.
+#
+# P1-2 (2026-09-12 round-1 review): this used to read `transcript_tail`'s
+# fixed 512 KiB window — fine for a small rollout, but a codex session
+# commonly exceeds 1 MB, and the moment >512 KiB of tool output lands AFTER
+# the last `token_count` event, that event falls entirely outside the tail
+# and a strictly OLDER (possibly already-expired) event from another file
+# silently wins the `maxT` comparison instead — a false reading with no
+# error anywhere. `transcript_tail_scan` (lib/core/profile_store.sh) grows
+# the tail window until it actually contains a `token_count` line (or has
+# read the whole file), so the newest one is never dropped just because
+# something large was appended after it.
+# _limit_codex_rate_limits_from_files <file>... -> "<pu>\037<pw>\037<pr>\037
+# <su>\037<sw>\037<sr>\037<ts>" from the NEWEST `token_count` event (by its
+# own timestamp) across the GIVEN files that carries a non-null primary or
+# secondary, or 1 + nothing if none ever did. The shared scan+awk core: both
+# `_limit_codex_rate_limits` (every rollout in the store, uncached — one call
+# per burn) and `_limit_codex_rate_limits_1file` (a SINGLE rollout, cached
+# per file — see P2-2 below) build on this; only the file LIST differs. `ts`
+# (the winning event's own timestamp) rides along as a 7th field so a caller
+# combining several already-scanned files (the per-file cache) can pick the
+# newest across them without re-parsing anything.
+_limit_codex_rate_limits_from_files() {
+  local out
+  out="$(for f in "$@"; do
+      [ -n "$f" ] && transcript_tail_scan "$f" '"type": *"token_count"'
+    done | awk '
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      function side(s, key,   re) {
+        re = "\"" key "\": *\\{[^}]*\\}"
+        if (match(s, re)) return substr(s, RSTART, RLENGTH)
+        return ""
+      }
+      function field(obj, name,   re, v) {
+        re = "\"" name "\": *[0-9.]+"
+        if (match(obj, re)) {
+          v = substr(obj, RSTART, RLENGTH)
+          sub(/^"[a-zA-Z_]+": */, "", v)
+          return v
+        }
+        return ""
+      }
+      /"type": *"token_count"/ && /"rate_limits"/ {
+        if (!match($0, /"rate_limits": *\{/)) next
+        rl = substr($0, RSTART)
+        p = side(rl, "primary"); s = side(rl, "secondary")
+        if (p == "" && s == "") next
+        t = ts($0)
+        if (t != "" && (maxT == "" || t > maxT)) {
+          maxT = t
+          pu = field(p, "used_percent"); pw = field(p, "window_minutes"); pr = field(p, "resets_at")
+          su = field(s, "used_percent"); sw = field(s, "window_minutes"); sr = field(s, "resets_at")
+        }
+      }
+      END { printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
+    ')"
+  local pu pw pr su sw sr ts
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$out
+EOF
+  [ -n "$pu" ] || [ -n "$su" ] || return 1
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$ts"
+}
+
+_limit_codex_rate_limits() {
+  local dir="$1"
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+
+  local files
+  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+  [ -n "$files" ] || return 1
+  local -a filearr=()
+  while IFS= read -r f; do [ -n "$f" ] && filearr+=("$f"); done <<EOF
+$files
+EOF
+
+  local out pu pw pr su sw sr ts
+  out="$(_limit_codex_rate_limits_from_files "${filearr[@]}")" || return 1
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$out
+EOF
+  : "$ts"
+  printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr"
+}
+
+# limit_codex_status_note <p_used> <p_window_min> <p_resets_at> <s_used>
+# <s_window_min> <s_resets_at> <now_epoch> -> a human line exposing BOTH
+# windows, e.g. "5h 12% left (resets 05:14) · weekly 5% left (resets 22:12
+# on 15 Sep)" — only the sides that have data appear. The percentage IS the
+# vendor's own (never computed); the reset phrase is rendered from the
+# vendor's own absolute epoch (_limit_codex_render_reset).
+limit_codex_status_note() {
+  local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
+  local note="" label left phrase
+  if [ -n "$pu" ]; then
+    label="$(_limit_codex_window_label "$pw")"
+    left="$(_limit_codex_left "$pu" 2>/dev/null || true)"
+    phrase="$(_limit_codex_render_reset "$pr" "$now" 2>/dev/null || true)"
+    note="${label} ${left:-?}% left${phrase:+ (${phrase})}"
+  fi
+  if [ -n "$su" ]; then
+    label="$(_limit_codex_window_label "$sw")"
+    left="$(_limit_codex_left "$su" 2>/dev/null || true)"
+    phrase="$(_limit_codex_render_reset "$sr" "$now" 2>/dev/null || true)"
+    [ -n "$note" ] && note="$note · "
+    note="${note}${label} ${left:-?}% left${phrase:+ (${phrase})}"
+  fi
+  printf '%s' "$note"
+}
+
+# _limit_codex_status_render <p_used> <p_window_min> <p_resets_at> <s_used>
+# <s_window_min> <s_resets_at> <now_epoch> -> "<light>\037<note>\037
+# <reset phrase>", or 1 + nothing when both sides are empty. The PURE part of
+# limit_codex_status/limit_codex_status_cached: turns already-fetched raw
+# vendor fields into the light/note/reset triple. No file I/O, so it is cheap
+# to call on every redraw even when the raw fields came from a cache that
+# this call did not itself refresh — which matters because P1-1's
+# window-expiry check depends on `now`, not on when the fields were fetched.
+#
+# P1-1 (2026-09-12 round-1 review): before comparing anything, drop a side
+# whose OWN resets_at has already passed (_limit_codex_window_expired) —
+# that window has REFILLED server-side, so its used_percent is stale and
+# must never drive the light or be shown as "N% left (resets …)". Treated as
+# fully refilled (0 used / 100% left, no reset text), not discarded outright,
+# so "the other window is still exhausted" still wins the light correctly,
+# and "both windows expired" correctly reads green/100%/no-reset rather than
+# an honest-sounding but wrong red held over from hours ago.
+_limit_codex_status_render() {
+  local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
+  local light note reset pl sl other
+  # P3 (2026-09-12 round-2 review): a side can carry a `resets_at` with NO
+  # `used_percent` at all (codex sent a reset instant but no reading for that
+  # window yet) — the OLD guard here was `[ -n "$pr" ]` alone, so an expired
+  # `resets_at` on a side clikae never actually had a percentage for still
+  # got "refilled" to a FABRICATED 0-used/100%-left reading. Every field in
+  # this file is supposed to be the vendor's own number (see
+  # _limit_codex_rate_limits' header) — a side that never reported a
+  # used_percent must stay absent, not be invented. Require `pu`/`su`
+  # themselves to already be non-empty before refilling them.
+  if [ -n "$pu" ] && [ -n "$pr" ] && _limit_codex_window_expired "$pr" "$now"; then pu="0"; pr=""; fi
+  if [ -n "$su" ] && [ -n "$sr" ] && _limit_codex_window_expired "$sr" "$now"; then su="0"; sr=""; fi
+  light="$(limit_codex_status_light "$pu" "$su")" || return 1
+  note="$(limit_codex_status_note "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now")"
+  pl="$(_limit_codex_left "$pu" 2>/dev/null || printf 101)"
+  sl="$(_limit_codex_left "$su" 2>/dev/null || printf 101)"
+  if [ -n "$su" ] && [ "$sl" -le "$pl" ]; then
+    reset="$(_limit_codex_render_reset "$sr" "$now" 2>/dev/null || true)"; other="$pr"
+  else
+    reset="$(_limit_codex_render_reset "$pr" "$now" 2>/dev/null || true)"; other="$sr"
+  fi
+  # P3-4: the TIGHTER side may have no reset of its own (just refilled above,
+  # or simply missing on disk) while the OTHER side still has a real one —
+  # fall back to it rather than reporting an empty reset when one exists.
+  [ -n "$reset" ] || reset="$(_limit_codex_render_reset "$other" "$now" 2>/dev/null || true)"
+  printf '%s\037%s\037%s' "$light" "$note" "$reset"
+}
+
+# limit_codex_status <config_dir> <now_epoch> -> "<light>\037<note>\037
+# <reset phrase>", or 1 + nothing when this tank has never reported usage —
+# the same honest "no reading" as limit_engine_detectable's ○, never a
+# guessed green. <reset phrase> is the TIGHTER window's own rendered reset
+# (the single value burn --json's "reset" field and the board's fuel-dot
+# note fall back on); the full picture (both windows) is in <note>. Scans
+# the rollout store fresh every call — burn.sh's only caller runs this once
+# per burn, not per redraw, so the cost is a non-issue there. The redraw path
+# (home.sh) calls limit_codex_status_cached instead — see its header.
+limit_codex_status() {
+  local dir="$1" now="$2" fields pu pw pr su sw sr
+  fields="$(_limit_codex_rate_limits "$dir" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r pu pw pr su sw sr <<EOF
+$fields
+EOF
+  _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+}
+
+# _limit_codex_cache_mtime <config_dir> -> a short string identifying the
+# CURRENT state of this tank's rollout store: the count of files in the
+# 7-day scan window, the newest one's mtime, and the store's TOTAL byte size
+# — cheap (one `find`, one `stat` via sessions_by_mtime, one `wc -c` over the
+# already-known file list; no file CONTENT read), unlike
+# _limit_codex_rate_limits' tail+awk scan. The count guards the case where a
+# brand new rollout happens to share its predecessor's mtime second (same
+# burn, same wall-clock second) — an added file must still bust the cache
+# even if "newest mtime" alone did not change.
+#
+# P1-1 (2026-09-12 round-2 review): mtime alone (even with the file-count
+# guard above) is SECOND-resolution, and codex appends to the SAME rollout
+# file rather than opening a new one per event — file count never changes on
+# an append. So a second `token_count` write landing in the same wall-clock
+# second as the read that populated the cache was INVISIBLE to the old key:
+# `stat`'s mtime read back identical, the cache looked "still valid", and the
+# board kept serving the stale reading — reproduced 3/3 against a real
+# `bin/clikae` board (persistent false green on a tank already at 0% left,
+# never self-corrected). A byte-count is added to the key because an append
+# ALWAYS changes the store's total size, even when it lands in the same
+# second as the previous read — the one thing that is guaranteed to move
+# every time content that could change the reading actually changes.
+_limit_codex_cache_mtime() {
+  local dir="$1" sess_root
+  sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || { printf 'none'; return 0; }
+  local -a files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
+EOF
+  [ "${#files[@]}" -gt 0 ] || { printf 'none'; return 0; }
+  local newest total
+  newest="$(sessions_by_mtime "${files[@]}" 2>/dev/null | head -n 1 | awk '{print $1}')"
+  total="$(wc -c "${files[@]}" 2>/dev/null | awk 'END{print $1+0}')"
+  printf '%d:%s:%s' "${#files[@]}" "$newest" "$total"
+}
+
+# _limit_codex_file_state <file> -> "<mtime>:<size>", a cheap per-FILE
+# identity string (one `stat`, one `wc -c`) — the invalidation key for that
+# file's own cache entry (_limit_codex_rate_limits_1file_cached below). Same
+# size-plus-mtime reasoning as _limit_codex_cache_mtime's header: mtime alone
+# is second-resolution and blind to a same-second append; size always moves
+# when the file's content actually changes.
+_limit_codex_file_state() {
+  local f="$1" mt sz
+  mt="$(file_mtime "$f" 2>/dev/null)"; [ -n "$mt" ] || mt=0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  sz="${sz//[[:space:]]/}"
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  printf '%s:%s' "$mt" "$sz"
+}
+
+# _limit_codex_rate_limits_1file <file> -> same 7-field output as
+# _limit_codex_rate_limits_from_files, scoped to ONE rollout file.
+_limit_codex_rate_limits_1file() {
+  _limit_codex_rate_limits_from_files "$1"
+}
+
+# _limit_codex_rate_limits_1file_cached <file> <cache_dir> [precomputed_key]
+# -> same output as _limit_codex_rate_limits_1file, memoized per FILE under
+# <cache_dir> (one small file per rollout, named by the rollout's own
+# basename — rollout filenames are already unique per session), invalidated
+# by that file's own mtime:size identity. A file with no rate_limits event
+# caches a "none" marker too, so a tank that never reports usage doesn't
+# re-scan every one of its rollouts on every redraw either (see P2-2 below).
+# <precomputed_key> lets a caller iterating MANY files pass in a key it
+# already batch-computed (files_mtime_size, one stat for every file — see
+# _limit_codex_rate_limits_cached) instead of paying this function's own
+# _limit_codex_file_state fork PER file; omitted, it computes its own (this
+# function stays independently correct/callable on its own).
+#
+# P2-2 (2026-09-12 round-2 review): the round-1 cache was keyed on the WHOLE
+# store (_limit_codex_cache_mtime) — correct for an IDLE tank, but the moment
+# any one rollout changes (a burn in progress, appending every few seconds)
+# the aggregate key changes too, and round-1's cache-miss path re-scanned
+# EVERY file in the store again, which — combined with P2-1's SIGPIPE bug —
+# measured MORE expensive per redraw than the pre-cache code (2.83s vs the
+# old 1.68s on a 120-rollout store). Caching per file means a redraw during
+# activity only ever re-scans the ONE rollout that actually changed; every
+# other file's cache entry is still valid and costs (batched) one stat plus
+# one small read, matching this codebase's own "fork-free" cache philosophy
+# (docs/DESIGN-board-fuel-dots.md's Cache section).
+_limit_codex_rate_limits_1file_cached() {
+  local f="$1" cache_dir="$2" key="$3" cache_f cached_key cached_fields tmp
+  [ -n "$key" ] || key="$(_limit_codex_file_state "$f")"
+  cache_f="$cache_dir/${f##*/}"
+  if [ -f "$cache_f" ]; then
+    { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache_f" 2>/dev/null
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
+    fi
+  fi
+  mkdir -p "$cache_dir" 2>/dev/null
+  tmp="$cache_f.tmp.$$"
+  local fields
+  if fields="$(_limit_codex_rate_limits_1file "$f" 2>/dev/null)"; then
+    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    printf '%s' "$fields"
+    return 0
+  fi
+  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
+# _limit_codex_rate_limits_cached <config_dir> <cache_file> -> same 6-field
+# output as _limit_codex_rate_limits, memoized. Two layers:
+#   1. a whole-store fast path (<cache_file> itself, keyed by
+#      _limit_codex_cache_mtime) — an IDLE tank costs one `find` + one `stat`
+#      + one `wc -c` and nothing else, same shape as round-1's cache.
+#   2. on a whole-store miss, a PER-FILE fast path
+#      (_limit_codex_rate_limits_1file_cached, keyed per rollout) — an
+#      ACTIVE tank only re-scans the file(s) that actually changed, not
+#      every rollout in the store (P2-2).
+#
+# P2-1 (2026-09-12 round-1 review): _home_fuel_dotv's own header promises the
+# redraw path is "fork-free" for a value that "cannot change between two
+# keypresses" — but the codex branch called limit_codex_status straight
+# through to _limit_codex_rate_limits' tail+awk scan of EVERY rollout file in
+# the 7-day window, on every single redraw. Measured on a synthetic
+# 120-rollout (~62 MB) store: ~1.5s per call, vs ~0.002s for the weekly
+# cache's plain `read < file` (see docs/DESIGN-board-fuel-dots.md's Cache
+# section and REPORT-codex-light-fix1.md for the exact before/after numbers).
+# Deliberately caches only the raw vendor fields, never light/note/reset —
+# those depend on `now` (P1-1), so the caller always recomputes them fresh
+# even on a cache hit.
+_limit_codex_rate_limits_cached() {
+  local dir="$1" cache="$2" key cached_key cached_fields
+  key="$(_limit_codex_cache_mtime "$dir")"
+  if [ "$key" != "none" ] && [ -f "$cache" ]; then
+    { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache" 2>/dev/null
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
+    fi
+  fi
+
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+  local -a files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
+EOF
+  [ "${#files[@]}" -gt 0 ] || return 1
+
+  local files_cache_dir="${cache}.d"
+  # Batch every file's own mtime:size in ONE `stat` call (files_mtime_size,
+  # profile_store.sh) instead of forking `stat`+`wc` per file inside the loop
+  # below — 120 rollouts would otherwise cost ~240 forks just to find out
+  # WHICH files changed, before ever reading one. Positional: index i here
+  # lines up with files[i].
+  local -a mtimes=() sizes=()
+  while IFS=' ' read -r _mt _sz; do
+    mtimes+=("${_mt:-0}"); sizes+=("${_sz:-0}")
+  done < <(files_mtime_size "${files[@]}")
+
+  local f pf maxT="" pu pw pr su sw sr _pu _pw _pr _su _sw _sr _ts i=0
+  for f in "${files[@]}"; do
+    pf="$(_limit_codex_rate_limits_1file_cached "$f" "$files_cache_dir" "${mtimes[i]:-0}:${sizes[i]:-0}" 2>/dev/null)"
+    i=$((i + 1))
+    [ -n "$pf" ] || continue
+    IFS=$'\037' read -r _pu _pw _pr _su _sw _sr _ts <<EOF
+$pf
+EOF
+    if [ -n "$_ts" ] && { [ -z "$maxT" ] || [[ "$_ts" > "$maxT" ]]; }; then
+      maxT="$_ts"; pu="$_pu"; pw="$_pw"; pr="$_pr"; su="$_su"; sw="$_sw"; sr="$_sr"
+    fi
+  done
+
+  mkdir -p "$(dirname "$cache")" 2>/dev/null
+  local tmp="$cache.tmp.$$"
+  if [ -n "$pu" ] || [ -n "$su" ]; then
+    local fields; fields="$(printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr")"
+    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    printf '%s' "$fields"
+    return 0
+  fi
+  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
+# limit_codex_status_cached <config_dir> <now_epoch> <cache_file> -> same
+# contract as limit_codex_status, but sourced via
+# _limit_codex_rate_limits_cached so a redraw that has seen no new codex
+# activity since the last call never re-scans rollout content. This is what
+# _home_fuel_dotv/_home_codex_status_readv call — see P2-1 above.
+limit_codex_status_cached() {
+  local dir="$1" now="$2" cache="$3" fields pu pw pr su sw sr
+  fields="$(_limit_codex_rate_limits_cached "$dir" "$cache" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r pu pw pr su sw sr <<EOF
+$fields
+EOF
+  _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+}

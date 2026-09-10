@@ -97,6 +97,77 @@ transcript_tail() {
   tail -c "$b" "$f" 2>/dev/null || true
 }
 
+# transcript_tail_scan <file> <grep-pattern> [start-bytes] — like
+# transcript_tail, but for a caller that needs a SPECIFIC event to be inside
+# the window, not just "the last N bytes". Starts at <start-bytes> (default
+# $CLIKAE_TX_TAIL_BYTES) and QUADRUPLES it until the slice contains a line
+# matching <grep-pattern> or the slice already spans the whole file. Bounded:
+# each iteration is one bigger `tail -c`, not a re-read from scratch, so the
+# common case (the wanted event is well within the first window) costs
+# exactly one `tail -c`, and the worst case costs a handful of geometrically
+# growing reads — never more than "keep re-scanning the whole file every
+# redraw".
+#
+# P1-2 (2026-09-12 round-1 review): a fixed-size tail silently drops the
+# event a caller actually wants the moment something LARGE gets appended
+# after it — CONFIRMED on a >1 MB codex rollout whose last `token_count`
+# event was followed by >700 KB of trailing tool output: the fixed 512 KiB
+# window never saw that event at all, and an older (possibly already-stale)
+# one from a different file won the newest-wins comparison instead, with no
+# error anywhere to say so. Growing the window until the wanted event is
+# actually IN it closes that gap; the common case (the event is well within
+# the first window) still costs exactly one `tail -c`.
+#
+# P2-1 (2026-09-12 round-2 review): `bin/clikae:6` runs the WHOLE program
+# under `set -eo pipefail`, and this function used to test the window with
+# `tail -c "$bytes" "$f" | grep -qaE "$pat"` — a plain pipeline. The moment
+# `grep -q` matches early (the pattern sits near the START of the window,
+# with more data still queued behind it), it exits immediately; `tail` is
+# still writing to a now-closed pipe and dies of SIGPIPE (128+13=141). Under
+# `pipefail` that 141 — NOT grep's own 0 — becomes the pipeline's reported
+# exit status, so the `if` reads a genuine HIT as "not found" and keeps
+# quadrupling `bytes` until the final `bytes >= size` branch fires and the
+# ENTIRE file is read every single time, no matter where the pattern
+# actually sits. bats itself runs with pipefail OFF (confirmed — see the
+# tests below), so the whole test suite exercised a world `bin/clikae` never
+# runs in and never saw this. Fixed by deciding the window purely on `grep`'s
+# OWN exit status, with `pipefail` turned off for exactly this check (and
+# restored before returning, in case the caller relies on it) — SIGPIPE on
+# `tail`'s side then can't change what `if` sees, in EITHER world.
+transcript_tail_scan() {
+  local f="$1" pat="$2" bytes="${3:-$CLIKAE_TX_TAIL_BYTES}" size had_pipefail=0
+  [ -f "$f" ] || return 0
+  size="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  size="${size//[[:space:]]/}"
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  if [[ -o pipefail ]]; then had_pipefail=1; set +o pipefail; fi
+  # 🔴 NEVER capture the chunk into a shell variable to test it: `$( )`
+  # strips trailing newlines, and when several files' outputs are piped
+  # together (as every caller here does — one process per rollout, all
+  # feeding one awk) a stripped trailing newline SILENTLY MERGES this file's
+  # last line into the next file's first line into one giant awk record,
+  # which then matches whichever event happens to come first in that merge —
+  # exactly the kind of wrong-event bug this function exists to prevent.
+  # `tail -c` piped straight to `grep -q` never touches a variable, and the
+  # final emit below is the same direct `tail -c` transcript_tail itself
+  # uses, byte-for-byte including whatever trailing newline the file has.
+  while :; do
+    if [ "$bytes" -ge "$size" ]; then
+      tail -c "$bytes" "$f" 2>/dev/null || true
+      [ "$had_pipefail" -eq 1 ] && set -o pipefail
+      return 0
+    fi
+    # pipefail is OFF here (see above), so `$?`/the `if` reflect grep's OWN
+    # exit status only — a SIGPIPE-killed `tail` can never flip this.
+    if tail -c "$bytes" "$f" 2>/dev/null | grep -qaE "$pat" 2>/dev/null; then
+      tail -c "$bytes" "$f" 2>/dev/null || true
+      [ "$had_pipefail" -eq 1 ] && set -o pipefail
+      return 0
+    fi
+    bytes=$((bytes * 4))
+  done
+}
+
 # sessions_by_mtime <path-or-glob>...  -> "<mtime-epoch> <path>" per existing file,
 # NEWEST FIRST. ONE `stat` over every arg (the shell expands the globs first), then
 # sort by the leading mtime — so N files cost ~2 processes, not N. This is the
@@ -148,6 +219,22 @@ file_mtime() {
     stat -c '%Y' "$1" 2>/dev/null
   else
     stat -f '%m' "$1" 2>/dev/null
+  fi
+}
+
+# files_mtime_size <path>...  -> "<mtime> <size>" per arg, in the SAME ORDER
+# given (positional — unlike sessions_by_mtime, this never sorts, so a caller
+# can zip the output back onto its own argument list by index). ONE `stat`
+# call covers mtime AND size for every file, so a caller checking many small
+# files' own identity (e.g. a per-file cache key) pays one fork total instead
+# of 2*N — the same "ask the kernel once" reasoning as sessions_by_mtime's
+# own header, for a caller that needs the ORIGINAL order back, not recency.
+files_mtime_size() {
+  _clikae_statv
+  if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
+    stat -c '%Y %s' "$@" 2>/dev/null || true
+  else
+    stat -f '%m %z' "$@" 2>/dev/null || true
   fi
 }
 

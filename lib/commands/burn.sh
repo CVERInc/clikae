@@ -2379,6 +2379,22 @@ KV
         log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
       else
         dry_store_clear "$cli" "$cur"   # a real success recovered this tank
+        # codex's hard-limit text above is the only DRY signal; a HEALTHY
+        # codex run still has something worth showing — its own 5h/weekly
+        # usage, which codex persists (headless `codex exec` included,
+        # confirmed on this machine's own rollouts) as a `rate_limits`
+        # reading regardless of whether anything ran dry. Proactive, not a
+        # limit event — this is why `burn --json` used to print
+        # `"reset": null` on a run that never hit anything at all (see
+        # docs/DESIGN-board-fuel-dots.md). claude/agy are untouched: they
+        # have no such vendor-reported reading to relay.
+        if [ "$cli" = codex ]; then
+          local _cx_status
+          if _cx_status="$(limit_codex_status "$(profile_dir codex "$cur")" \
+                              "$(date +%s 2>/dev/null || echo 0)" 2>/dev/null)"; then
+            IFS=$'\037' read -r _ _ live_reset <<< "$_cx_status"
+          fi
+        fi
       fi
       log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"

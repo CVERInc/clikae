@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **codex tanks now get a real fuel light — not just a dry marker.** codex's
+  `/status` reports "5h limit: … N% left (resets …)" and "Weekly limit: … N%
+  left (resets …)" proactively, whether or not anything is exhausted, but
+  `clikae burn codex … --json` always printed `"reset": null` on a healthy
+  run and the board showed codex the same `·`/○ no-reading dot claude and agy
+  never see. Wired to codex's OWN `rate_limits` object, which every codex
+  session — headless `codex exec` included — persists into a `token_count`
+  event in its rollout transcript, already resolved by the server to a
+  percentage and an absolute reset epoch (cheaper and more reliable than
+  parsing the rendered progress bar). `limit_codex_status`
+  (lib/core/limit.sh) reads it, `clikae burn --json`'s `"reset"` field now
+  carries the tighter of the 5h/weekly windows' own reset text — clikae's own
+  rendered text, not the vendor's verbatim words, since codex's rate_limits
+  hands over a number and an epoch, not a sentence — and `clikae tanks`/`home`
+  shows a real red/yellow/green dot with both windows in the note. A window
+  whose own `resets_at` has already passed is treated as refilled (100% left,
+  no reset shown), never as its last stale percentage, so a tank read hours
+  after its own reset shows green again instead of a red light that quietly
+  expired. No data is ever read as "primary=5h/secondary=weekly" by
+  position — each window is labelled by its own length, since a real
+  free-tier account reported a 30-day window in `primary` with `secondary`
+  always null. The board's redraw path reads a small per-tank cache instead
+  of re-scanning the rollout store on every keypress. Documented in
+  docs/DESIGN-board-fuel-dots.md. claude's own reset path is untouched.
 - **Every `burn` now writes one machine-readable status file, updated at every
   transition.** A cockpit judging a burn's outcome used to grep the burn log
   for "ran dry" / "[ FAIL ]" and got false alarms from a task's own PROMPT

@@ -702,6 +702,25 @@ STUB
   grep -q 'Done on codex/T1' "$BATS_TEST_TMPDIR/e.txt" || { cat "$BATS_TEST_TMPDIR/e.txt"; false; }
 }
 
+@test "burn --json: a HEALTHY codex run carries its own proactive reset, not null" {
+  # The literal bug report: `clikae burn codex … --json` printed "reset":null
+  # on a run that never hit anything, even though codex's own rollout already
+  # knew when its 5h/weekly windows reset (see limit_codex_status).
+  _stub_codex
+  clikae init codex T1
+  local dir="$CLIKAE_HOME/profiles/codex/T1"
+  mkdir -p "$dir/sessions/2026/09/10"
+  printf '%s\n' \
+    '{"timestamp": "2026-09-10T09:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {}, "rate_limits": {"limit_id": "codex", "limit_name": null, "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": 4102444800}, "secondary": {"used_percent": 96.0, "window_minutes": 10080, "resets_at": 4103049600}, "credits": {"has_credits": false}}}}' \
+    > "$dir/sessions/2026/09/10/rollout-a.jsonl"
+  clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['reset'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [[ "$output" == "True resets "* ]] || { echo "got: $output"; false; }
+  [[ "$output" != "True None" ]] || { echo "reset was null: $output"; false; }
+}
+
 @test "burn --json: a reroute names the tank that ACTUALLY ran it" {
   # The case prose is worst at: you asked for T1, T2 did the work.
   _stub_codex
