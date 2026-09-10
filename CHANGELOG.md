@@ -9,9 +9,395 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every `burn` now writes one machine-readable status file, updated at every
+  transition.** A cockpit judging a burn's outcome used to grep the burn log
+  for "ran dry" / "[ FAIL ]" and got false alarms from a task's own PROMPT
+  containing either phrase. `~/.clikae/logs/burn-<pid>/status.json` carries
+  the same fields as `--json`'s result object plus `state`
+  (running/waiting-reset/done/dry/fail/infra), `started_at`/`updated_at`,
+  `pid`, and `log` —
+  written whether or not `--json` was passed, and readable from a different
+  process. Documented as a contract in docs/orchestration.md (#41). An
+  EXIT/INT/TERM/HUP trap, installed right after the first `running` write,
+  guarantees the file never gets stuck saying `running` after the burn is
+  actually gone — every early argument-validation failure and an unclean
+  kill alike now leave it in a terminal `fail`, never live-forever `running`
+  (2026-09-09 round-1 review, P1-1).
 - `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
   preserving topic collisions and merging source indexes. First-share discovery
   offers imports interactively or prints actionable warnings unattended (#49).
+
+- **`clikae wait <run_id|status-file>... [--any|--all] [--timeout <s>]`** —
+  blocks until one (`--any`, the default) or every (`--all`) named burn
+  reaches a terminal state, reading #41's status files instead of a
+  hand-rolled `until [ -e DONE ]; do sleep 60; done` plus a log grep. Prints
+  each finished burn's status object as one JSON line, in the order it
+  finishes (#37). A `running` (or `--wait-for-reset`'s `waiting-reset`)
+  status whose recorded pid is no longer alive is treated as a terminal,
+  `fail`-equivalent outcome (shown as the synthetic state `stale`, never
+  written to disk) instead of hanging until `--timeout` — a dead burn can
+  otherwise leave nothing to ever change its file (2026-09-09 round-1
+  review, P1-1). Exit code is `0` only when the REQUESTED condition is
+  actually met — `--any`: at least one target `done`; `--all`: every target
+  `done`; `2` when none are `done` and every one that finished is `dry`
+  (under `--all`, only when EVERY target is `dry`); `1` otherwise, including
+  a `done`+`dry`/`fail` mix under `--all` and a `--timeout` expiring (always
+  `1`, in both modes, even if some other target was already `done` —
+  2026-09-09 round-1 review, P1-3/P2-3, fixing a doc/code contradiction
+  where `--all` returned `0` on ANY done target regardless of the others).
+  `--timeout` now accepts the same duration grammar `--wait-for-reset` does
+  (`20m`, `30m`, `90s`, or a bare integer of seconds — both documented
+  examples use a duration directly and previously failed on first try),
+  resolving a target waits up to `$CLIKAE_WAIT_RESOLVE_TIMEOUT_S` seconds
+  (default `10`) for its status file to appear instead of refusing
+  instantly (the documented `clikae burn … --json & clikae wait "burn-$!"`
+  composition otherwise loses that startup race every time), and `--json`'s
+  own per-attempt `run_id` (e.g. `codex-T1-burn-28186`) is now itself a valid
+  `wait` target, resolved to the top-level status file it was derived from
+  (2026-09-09 round-1 review, P1-4a/P1-4b/P2-5). `stale` — the synthetic
+  terminal state a dead-pid `running`/`waiting-reset` row is read as — is
+  now listed in `clikae wait --help` too, not just docs/orchestration.md
+  (2026-09-09 round-2 review, P3-3).
+
+- **`burn` refuses to start on a tank that already has a burn running on it,
+  and the reroute walk skips a busy tank instead of colliding with it.**
+  Starting a second burn on the same tank used to duplicate the Live row's
+  tmux session name. Detection reads #41's status files (a `running` state
+  whose pid is still alive), never tmux session names. `--allow-active` —
+  which already meant "let this burn use a tank in active use" — opts out of
+  both the refusal and the reroute skip (#40). Liveness now also cross-checks
+  the marker's `started_at` against the recorded pid's own process-start time
+  (falling back to its command line actually being a `clikae` invocation
+  where that can't be read/parsed) — a crashed/`SIGKILL`ed burn's pid can be
+  recycled onto an unrelated process within the retention window, which used
+  to refuse that tank FOREVER for a reason nobody could see (2026-09-09
+  round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
+  in a per-tank lock, closing the window where two `clikae burn` processes
+  started together could both pass the check before either had written
+  `running` (P2-4). agy's own separate reroute walk (`_agy_burn`,
+  sequential-hop only — one global Keychain account) now calls the same busy
+  check too; it never had, which was the worst engine to miss it on since agy
+  structurally cannot run two tanks at once (2026-09-09 round-1 review,
+  P2-2). The lock's dead-holder reclaim went through two more broken shapes
+  before landing: reading "the holder is dead" and then deleting a lock
+  directory in two unsynchronized statements let two contenders interleave
+  (round 1); `mv`-ing the stale directory aside "atomically" instead
+  measurably made it WORSE, since a same-directory `mv` VACATES the
+  rendezvous path — exactly what another contender's plain `mkdir` is
+  waiting for (round 2). Round 3 replaces the whole shape: the lock is now a
+  **symlink** (`ln -s "<pid>:<started_at>" <path>`, one atomic syscall that
+  carries the holder's identity from the instant it exists — no pid-less
+  window to have a grace period for), and every REMOVAL of it — a stale
+  reclaim, or an owner's own release — happens only under a second,
+  short-lived mutex, re-verifying the current link before acting on it
+  rather than trusting an earlier, unsynchronized read (2026-09-09 round-3
+  review, R3-P1-1/R3-P1-2/R3-P2-1). Round 3's own mutex was itself a
+  `mkdir`-ed directory with its pid written in a separate statement right
+  after — the same claim-then-identify race one function up, which left a
+  process killed mid-claim's mutex permanently unreapable (disabling the
+  tank it guarded) and let a stale reaper destroy a live holder's mutex on
+  a check-then-act. Round 4 makes the mutex a symlink too, reaped only by
+  renaming it to a private, unique name first and verifying what was
+  actually caught before ever deleting it — restoring a mistakenly evicted
+  live holder by RE-CREATING its entry with `ln -s`, not by moving the
+  graveyard copy back (`mv -n` onto an existing symlink destination
+  silently clobbers it on this system's `/bin/mv` (BSD); `ln -s` fails
+  EEXIST on conflict identically on every vendor, with no `-n`-style switch
+  to get inconsistently implemented — against another SYMLINK; round 8
+  found the other half of this: against a DIRECTORY it does not fail at
+  all, it nests INSIDE it, and round 9 stopped trusting its exit code as
+  proof either claim or restore landed, verifying both by `readlink`
+  instead) (2026-09-10 round-4 review,
+  R4-P1-1/R4-P1-2/R4-P1-3). Round 5 also hardens the mutex's own liveness
+  test, which used a bare `kill -0` where the lock proper
+  already used the pid+`started_at` marker check — a pid recycled onto a
+  dead mutex holder's number wedged it, and the tank it guards, for the
+  recycler's entire lifetime; it now reuses `_burn_pid_matches_marker`
+  itself, with a negative age (a `started_at` ahead of `now`, from a clock
+  step in either direction) clamped instead of read as "not due yet"
+  (2026-09-10 round-5 review, R5-P1-1/R5-P2-1/R5-P2-2). A signal landing
+  while a burn already held the reclaim mutex (inside its own reclaim path)
+  used to make its own release trap try to re-acquire a mutex it already
+  held — the mutex's liveness check correctly sees its own live pid and
+  refuses to evict it, so the release spun its full retry budget, then did
+  so AGAIN when the signal handler's own `exit` triggered the EXIT trap
+  (measured: 18-19s to exit, the mutex leaked for that long). One variable
+  now records which mutex this process currently holds, so a trap firing
+  inside that window acts directly instead of trying to reacquire it
+  (R5-P2-3); separately, the loop's "mutex is busy" retry had no backoff at
+  all — only the neighboring "holder is live" branch slept — so every burn
+  blocked on a tank recovering from a signal spun at ~79% of a core for the
+  whole timeout, the other half of round 4's P2-2 (R5-P2-4). **The residual
+  is not zero, and is written down rather than implied away** (numbers
+  corrected by round 9, see below): the mutex is
+  not mathematically exclusive — a reaper that loses the race between its
+  own read and its `mv` can evict a live holder and fail to restore it (the
+  path having been reclaimed a third time in the interim), leaving two
+  processes inside the removal critical section at once. **This originally
+  claimed "0 violations in 300 real trials … a rhythm no real caller
+  produces" — round 9 found both halves false**, but for a different
+  reason than this mutex's own race: `clikae clean` (an ordinary real
+  caller, not a hammer) racing three real `clikae burn`s found 6
+  violations in 130 real trials, traced to a SEPARATE bug one level up —
+  the tank LOCK's own reap (`_burn_tank_lock_acquire`/
+  `_clean_tank_lock_gc`) was still a bare readlink-decide-then-`rm -f`,
+  never given this mutex's own mv-then-classify discipline. Fixed in round
+  9 by a shared helper, `_burn_tank_lock_reap_verified`, applying the
+  identical discipline to the lock (R9-P1-1, see below); the mutex's own
+  bounded residual described in this paragraph was not independently
+  re-measured after that fix. **Round 10 re-ran the same arm on the fixed
+  build (`da975fc`): 0 violations in 100 trials (300 real `clikae burn`,
+  500 real `clikae clean`, 142 engines)**, with the witness validated on
+  the same fixture at 12 violations / 10 trials when
+  `_burn_tank_lock_acquire` is neutralised. A pre-round-9 build, run as a
+  paired control at the same load, also produced 0/50 — at this machine's
+  load (2.6–6.9 on 8 cores, against round 9's own 7–58) the wild arm alone
+  is not sensitive enough to separate the two builds; what separates them
+  is the deterministic rendezvous at each of the two `mv`-then-classify
+  call sites: 0/5 destroyed on HEAD vs 5/5 on the control. The cost, on the rare miss, is bounded and self-healing:
+  one extra live holder for the duration of one critical section, caught by
+  the tank lock's own owner-only release; worst case is two burns briefly
+  on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
+  **`clikae clean`'s GC called every
+  successful reap "its reclaim mutex is busy right now" and needed two
+  passes to converge** — `_burn_reclaim_mutex_try` returns `1` both when it
+  refuses a live holder and when it just reaped a dead one, and the GC read
+  both as "busy"; it now re-tests the path after a `1`, so a reap in this
+  pass claims the now-vacant lock instead of waiting for the next `clean`
+  (2026-09-10 round-7 review, R7-P2-1). **A foreign symlink-to-directory left at the `.lock.reclaim`
+  path was permanently un-reapable** — `[ -d "$reclaim_link" ]` dereferences
+  before any `-L` check, so a symlink resolving to a real directory ran the
+  legacy-directory branch (below) against the TARGET's own `pid` file
+  forever; guarded with the same `! -L` check the lock itself has had since
+  round 4, plus a second guard evicting the foreign symlink outright before
+  a claim attempt could nest INSIDE the foreign directory instead of
+  failing EEXIST (measured rc=0 on both GNU coreutils' `ln` and BSD
+  `/bin/ln` — `ln`'s documented destination-is-a-directory handling, not a
+  vendor quirk) (2026-09-10 round-7 review, R7-P2-2). **Round 8 found both
+  of that legacy-directory branch's own removal sites unverified in turn**
+  — the fixed sibling arm's `[ -L "$grave" ]` restore trusted `ln -s`'s
+  exit code as proof a live holder's caught claim landed back at the mutex
+  path, when the same commit's own new guard had just proven `ln -s`
+  returns `rc=0` without doing anything whenever the destination
+  dereferences to a directory: `restored it` printed 10/10 while the claim
+  was created as junk inside a foreign directory and the only copy was
+  deleted (R8-P1-1); and the *second* guard added for R7-P2-2 removed the
+  mutex path with a bare `rm -f`, no re-test, no mutex, and no output at
+  all — a live claim landing in its two-statement window was deleted in
+  total silence, 5/5 (R8-P1-2). **Both are closed by deleting the
+  legacy-directory reclaim branch and its mtime-fallback helper entirely,
+  not patching either removal site a fifth time (moot with it: R8-P2-2,
+  an empty-identity guard the branch grew this round that mislabeled its
+  own ordinary pid-less reap as "a different legacy identity" and leaked
+  a graveyard on every one, 50/50)**: this PR never shipped,
+  so no released clikae ever created a directory-shaped reclaim mutex, and
+  the branch's population — the mixed-version scenario it existed to
+  humor — was always empty. What replaces it, the sibling non-directory
+  branch, and both of R7-P2-2's guards is ONE rule: a mutex path that is
+  not a symlink whose target is plain data (a directory, a symlink to one,
+  or a plain file) is never touched by any reap or claim attempt — `try`
+  refuses loudly, names the path, and — because the condition never
+  self-heals — refuses TERMINALLY rather than backing off (see Round 9
+  below), counted under its own `foreign-mutex` reason; `clikae clean`
+  reports the same reason on the same shapes and never removes them either
+  (no `--force` path in this PR). Nothing is ever restored and nothing
+  non-symlink is ever removed, closing R8-P1-1 and R8-P1-2 by construction.
+  The one remaining restore site (a live holder's fresh symlink claim
+  caught racing the age-based eviction of a stale mutex symlink) now
+  verifies the same way: `readlink` the path after `ln -s`, not its exit
+  code, and keep the graveyard copy on a mismatch instead of discarding the
+  only surviving copy of a live claim (2026-09-11, KITT ruling on the round-8
+  review, R8-P1-1/R8-P1-2). **The
+  structural pin asserting no bare, unguarded remover exists had a
+  mutation check that only proved its pinned line-number list changes
+  when the file gets one line longer** — a pure comment satisfied it, and
+  a real, unguarded `rm -rf "$reclaim_dir"` inside the lock's own acquire
+  loop left the pinned set byte-identical; rewritten to parse actual
+  command lines with comments stripped, assert each remover's enclosing
+  function is in an allow-list that holds the mutex or names a graveyard,
+  and to prove itself on both mutations — the comment (still green) and
+  the real bare `rm -rf` (now red) (2026-09-10 round-7 review, R7-P2-4).
+  **Round 8 found that rewrite immune to a real remover too: pinning the
+  SET of allow-listed function names, not the multiset of removal sites
+  inside them, left a SECOND bare `rm -f "$lock"` inside an
+  already-allow-listed function byte-identical to baseline, and the
+  pattern still lacked the `reclaim_link` spelling — a fifth removal
+  variable this round's own foreign-mutex work touched** — both of the
+  review's committed mutations left the allow-list green (R8-P2-1). Pinned
+  by occurrence count per function
+  (a second remover in an already-covered function now changes the
+  multiset) and widened to the fifth spelling; a pure comment is still
+  immune (2026-09-11, KITT ruling on the round-8 review, R8-P2-1).
+  **Round 9 found four things the round-8 rewrite still had wrong, and
+  closes them (2026-09-11 round-9 review, R9-P1-1/R9-P1-2/R9-P2-1/R9-P2-2).**
+  A reclaim mutex path occupied by anything clikae did not write there
+  itself — a directory, a symlink resolving to one, a regular file, a
+  fifo, a socket — is now refused rather than reaped. Every reclaim mutex
+  clikae creates is a symlink whose target is data (`<pid>:<started_at>`)
+  and therefore never resolves to anything, so "the path resolves to
+  something" is a complete and sufficient test for a foreign object
+  (`_burn_reclaim_mutex_is_foreign` is now exactly `[ -e "$1" ]` — the
+  shipped three-condition version let a symlink resolving to an existing
+  **non-directory** through, and it was deleted rather than refused,
+  measured on a regular file, a symlink chain to one, and `/dev/null`:
+  R9-P2-1). The reaper applies it before any removal is considered: it
+  names the path, reports the refusal under its own `foreign-mutex` reason
+  in the burn's status file and in `clikae clean`'s GC output, and removes
+  nothing. Because the condition never self-heals, the refusal is now
+  TERMINAL, not a backing-off retry: the old shape looped with no sleep at
+  two of its three call sites once the refusal became permanent, measured
+  at 9.79s of CPU (≈89% of a core) and 49,151 duplicate refusal lines in
+  one 10s burn; `_burn_tank_lock_acquire` now returns a distinct code and
+  exits the acquisition loop immediately, once, and `cmd_burn` writes
+  `foreign-mutex: <path>` into the status file's reason instead of the
+  generic busy-timeout text (R9-P1-2/R9-P2-3). Recovery is still to remove
+  the object by hand and retry; there is no `--force` path in this PR.
+  Both places that CLAIM a path with `ln -s` (the reclaim mutex's own, and
+  the tank lock's own) now verify the claim landed by `readlink`, the same
+  way the restore already does — `ln -s`'s own exit code is `rc=0` without
+  creating anything at the destination when it resolves to a directory
+  that arrived in the check-then-act window (R9-P2-2). Separately, every
+  removal of the per-tank lock itself now uses the same rename-then-
+  classify discipline as the mutex that guards it, through a new shared
+  helper (`_burn_tank_lock_reap_verified`): the reclaim mutex serialises
+  removers of the lock but cannot serialise claimants, so a reaper that
+  decided a lock was stale and then removed the *path* — rather than the
+  *entry it verified* — could delete a live burn's fresh claim landing in
+  the fork-sized window `_burn_pid_matches_marker`'s own `ps`/`date` calls
+  open up; measured as 6 genuine engine overlaps in 130 real trials with
+  `clikae clean` racing `clikae burn` (R9-P1-1, see the residual note
+  above for the numbers this replaces).
+
+  **Round 10 found the PR's own documented recovery path was dead exactly
+  when it was needed, a second graveyard family with no sweeper, and two
+  stale documentation sentences (2026-09-12 round-10 review, R10-P1-1/
+  R10-P2-1/R10-P2-2).** `clikae clean`'s tmux-lock GC (`_clean_tmux_gc`)
+  probed each ephemeral lock with a bare `flock -n …; rc=$?` /
+  `lockf -k -t 0 …; rc=$?` under `bin/clikae`'s `set -eo pipefail` — the
+  same shape R9-P1-1 fixed at `cmd_burn`'s own acquire call, just never
+  grepped for elsewhere. A genuinely-held ephemeral lock (any `clikae
+  burn`'s tmux wrapper holds one for its whole run) made the probe exit
+  non-zero, which errexit read as `_clean_tmux_gc` failing outright:
+  `clikae clean` died there with rc=75 (lockf) or rc=1 (flock) and ZERO
+  output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — this PR's own
+  stated recovery path for everything above — never ran, precisely while a
+  burn in flight is the moment most likely to have left something to
+  clean. Both probes now use `rc=0; cmd || rc=$?`, and a busy lock prints
+  one line naming it instead of failing silently (R10-P1-1). Separately,
+  the lock family's own restore-failure grave (`tank-busy-*.lock.stale.*`,
+  `_burn_tank_lock_reap_verified`'s "could NOT restore" branch — the only
+  surviving copy of a live claim) had no sweeper anywhere: `clean.sh`'s
+  graveyard loop matched only the mutex family's `*.lock.reclaim.stale.*`
+  glob, while its own comment claimed to cover "every graveyard." Both
+  globs are now swept the same way, and the comment says so (R10-P2-1).
+  And two sentences — one in this file, one in docs/orchestration.md —
+  still claimed in the present tense that a foreign-mutex refusal "backs
+  off exactly like an ordinary busy mutex," the exact behavior R9-P1-2
+  reversed into a terminal refusal a few dozen lines earlier in the same
+  file; both now say so (R10-P2-2). Clause (a) itself re-verified clean on
+  the fixed build: 0 violations in 100 trials (see the residual note
+  above), and the deterministic rendezvous at both `mv`-then-classify
+  sites held 0/5 destroyed vs 5/5 on a paired pre-R9 control. Also fixed
+  in the same round: the lock's own reap call was safe only because its
+  one caller happened to shield it under `|| rc=$?`, now guarded directly
+  (R10-P3-1); a claim that loses the race into an arriving foreign
+  directory left a stray symlink inside it uncleaned, now removed by name
+  (R10-P3-2); the CLAIM's readlink-verify had only a text-grepping
+  structural test guarding it, now joined by a behavioral test that drives
+  the actual race through a PATH-level `ln` substitution (R10-P3-3); both
+  reapers' restore/no-restore messages could print an
+  empty pid or overclaim "live" for an identity they never re-verified,
+  now reporting the raw caught identity instead (R10-P3-4); both graves'
+  names gained a wall-clock timestamp alongside `$$.$RANDOM`, shrinking
+  the collision window between a deliberately-kept grave and a later
+  pid-recycled process (R10-P3-5); the residual paragraph above now
+  carries these Round 10 numbers inline instead of leaving only the
+  pre-fix 6/130 for a reader to mistake for the current state (R10-P3-6);
+  and a 50-trial campaign that kept
+  state found residual litter in 27/50 trials — almost entirely ordinary
+  mutex-family graves, at a rate a pre-round-9 control build also showed
+  (28/50), fully removed by one subsequent `clikae clean` run — self-
+  healing that R10-P1-1 now makes reachable in practice (R10-P3-7).
+
+  **A `SIGKILL`ed burn denies its own tank for up to
+  ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the
+  lock and its mutex are left exactly as they were, and every burn tried
+  against that tank is refused until the mutex's own 30s stale rule
+  reaches it (measured ~30s total, consistent across rounds 5 and 6).
+  Mutual exclusion is never broken, but the refusal used to claim
+  *"another clikae burn is mid-check on it right now"* even here, where
+  there is no other burn — it now names both the ordinary busy case and
+  this self-healing one, since the timeout alone can't tell them apart
+  (2026-09-10 round-6 review, R6-P2-4). **Separately, and not fixed by
+  this or any lock change: a `SIGKILL`ed burn also orphans its engine
+  subprocess**, which keeps running on the tank after `burn_tank_busy`
+  (keyed on the burn's own, now-dead pid) lets the next burn straight in
+  — reproduced directly, and confirmed as the entire explanation for the
+  one seeded-wreckage arm that shows any #40 violation at all in the real
+  `clikae burn` trial suite (0/50 with the orphan drained before the next
+  wave, 50/50 with it left running). Documented, not addressed here: the
+  lock's job is serializing who gets to start a burn, not supervising a
+  process it does not own the lifetime of (2026-09-10 round-6 review,
+  R6-P2-5).
+  A trap scoped to the
+  check-and-write releases the lock — and, if a signal lands before the
+  section's own write, now also records a terminal `fail` — on every exit
+  out of that section including a signal (2026-09-09 round-2/round-3
+  reviews, P2-1/R3-P3-1). A refusal here (the lock timing out, or losing the
+  busy check) now writes a terminal `fail` (reason starting `busy:`) before
+  returning, so the documented `clikae burn … & clikae wait "burn-$!"`
+  composition reads an immediate `fail` instead of stalling the resolve
+  window on a status file that was never coming (2026-09-09 round-2 review,
+  P3-1).
+
+- **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
+  integer of seconds) — when a tank runs dry and the vendor's own reset
+  phrase resolves to an instant within `<dur>`, sleep to it and re-fire the
+  SAME tank instead of rerouting or Stopping under `--no-reroute`. A reset
+  further out than `<dur>`, or one that doesn't parse, falls through to the
+  existing reroute-or-stop behaviour unchanged (#38). While sleeping, the
+  status file says the non-terminal `waiting-reset` (with the target epoch in
+  the new `reset_at` field), not a terminal `dry` — so `wait` and
+  `burn_tank_busy` (#40/#41) both read this tank as still working, not
+  abandoned, for the whole window; on wake the reset is re-checked (not
+  blindly trusted) before re-firing, bounded to the original window
+  (2026-09-09 round-1 review, P1-2).
+
+- **`clikae clean` now also sweeps dead-holder tank locks.** Nothing ever
+  swept `~/.clikae/state/tank-busy-*` — a tank nobody `burn`s again keeps a
+  dead holder's lock (and, before round 4's reclaim-mutex fix, could keep a
+  wedged reclaim mutex) on disk forever, since `_burn_tank_lock_acquire`
+  only reclaims when something calls it again for that exact tank. Same
+  test as the existing tmux/scrollback GCs: the recorded pid's liveness,
+  never the file's age (2026-09-10 round-4 review, R4-P3-2 / R3-P3-3
+  before it). **Round 5 review found this GC removed the lock with NO
+  mutex at all** — the one invariant this whole design rests on
+  ("the link can only disappear while the reclaim mutex is held") had a
+  second, unguarded remover the moment this GC shipped: measured 5/5
+  deterministic violations of a real `_burn_tank_lock_acquire`, already
+  past its own under-mutex re-verify and about to remove a lock it
+  correctly judged stale, racing this GC — a fresh contender's legitimate
+  claim lands on the path GC vacated, then the original holder's now-stale
+  `rm` deletes that fresh claim too, leaving two burns on one tank (#40).
+  The GC now takes the reclaim mutex first, re-verifies under it, and
+  SKIPS the tank — never waits — when the mutex is busy (a real acquire or
+  release is genuinely mid check-and-act on it right now); its own removal
+  of the reclaim mutex itself is now `_burn_reclaim_mutex_try`'s
+  reap-with-verify, not a bare `kill -0` + `rm -f` (a third, weaker
+  liveness rule for the same object). `clikae clean` also now skips any
+  tank whose own status file (#41) says a burn is `running` or
+  `waiting-reset`, independent of what the lock symlink itself reads as
+  (2026-09-10 round-5 review, R5-P1-2).
+
+### Changed
+
+- **`wait` joined `burn`/`init`/etc. in `__clikae_is_reserved`.** A tank can
+  still be created and named `wait` (`clikae init codex wait` still
+  succeeds), but it is then unreachable by its bare name — `clikae wait`
+  always dispatches to the `wait` subcommand — the same tradeoff `burn`'s
+  own reservation already made, for the same reason: it names a top-level
+  `clikae` subcommand (2026-09-09 round-3 review, R3-P3-5 / 2026-09-10
+  round-4 review, R4-P3-1).
 
 ### Fixed
 

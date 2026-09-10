@@ -65,6 +65,13 @@ setup() {
   export CLIKAE_HOME="$TEST_HOME/.clikae"
   export SHELL="/bin/zsh"
   export NO_COLOR=1
+  # P1-4b (2026-09-09 round-1 review): burn_status_resolve gives a real
+  # `clikae wait` a short bounded wait for a status file that hasn't been
+  # written yet (the normal `burn … & wait "burn-$!"` startup race). Default
+  # it to 0 for the suite so "an unknown target refuses rather than hanging"
+  # and similar assertions stay instant; a test exercising the retry itself
+  # overrides this to a small nonzero value.
+  export CLIKAE_WAIT_RESOLVE_TIMEOUT_S=0
   # Host-safety: git exports these into every hook it runs, and $GIT_DIR is
   # RELATIVE (".git"). A test that cd's into its own throwaway repo and calls
   # `git config` would therefore write to whichever repo invoked the hook — the

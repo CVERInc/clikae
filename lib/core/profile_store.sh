@@ -121,12 +121,16 @@ _CLIKAE_STAT_FMT=""
 # _clikae_statv -> decide once which stat this machine has.
 #
 # 🔴 ASK `--version`, NEVER "try -f and fall back". GNU stat's `-f` means
-# --file-system, so on a GNU-stat machine `stat -f %m file` PRINTS BLOCK COUNTS
-# AND EXITS 0 — an `||` fallback never fires and the caller gets filesystem
-# statistics where it expected an epoch. This repo has been caught by the two
-# flags four times; the fourth was a helper written three functions away from
-# this one, which had already solved it. BSD stat has no `--version`, so the
-# grep failing IS the BSD answer.
+# --file-system, so on a GNU-stat machine `stat -f %m file` PRINTS FILESYSTEM
+# INFO (block size, block/inode counts) to stdout AND EXITS 1 — an `||`
+# fallback DOES fire, and the caller's `$(...)` capture gets that multi-line
+# report concatenated onto whatever the fallback call prints, not a clean
+# epoch (measured: GNU coreutils 9.11, `stat -f %m /tmp` → rc=1, five lines of
+# filesystem info; 2026-09-10 round-7 review, R7-P3-3, correcting this
+# comment's own "EXITS 0" claim). This repo has been caught by the two flags
+# four times; the fourth was a helper written three functions away from this
+# one, which had already solved it. BSD stat has no `--version`, so the grep
+# failing IS the BSD answer.
 _clikae_statv() {
   [ -n "$_CLIKAE_STAT_FMT" ] && return 0
   if stat --version 2>/dev/null | grep -q GNU; then

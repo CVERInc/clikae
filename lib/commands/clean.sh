@@ -33,6 +33,21 @@
 # shellcheck source=resume.sh
 source "$CLIKAE_LIB/commands/resume.sh"
 
+# _clean_tank_lock_gc (below) needs three things burn.sh/burn_status.sh own:
+# the tank lock's path convention and its reclaim-mutex reap-with-verify
+# primitive (burn.sh), and the pid+started_at marker check that primitive
+# (and the busy-tank scan) use to tell a live holder from a recycled pid
+# (burn_status.sh) — R5-P1-2 (2026-09-10 round-5 review). Sourced directly
+# here rather than assumed pre-sourced by bin/clikae, same reasoning as the
+# resume.sh source above: this file must work the same way when a test
+# harness sources it standalone. burn.sh defines functions only — sourcing
+# it runs no command and has no side effects (bin/clikae's own dispatcher
+# only ever calls `cmd_burn` after a separate, explicit invocation).
+# shellcheck source=../core/burn_status.sh
+source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=burn.sh
+source "$CLIKAE_LIB/commands/burn.sh"
+
 # The _rs_* slots are populated by resume.sh's _resume_session_fields (the
 # shared path decoder). Declared here too so shellcheck — which doesn't follow
 # the source above without -x — knows they're ours, not typos (SC2154).
@@ -902,6 +917,293 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_tank_lock_busy_paths -> newline-separated list of tank-lock PATHS
+# (never the `.reclaim` suffix) whose engine/tank pair has a status file
+# saying a burn is RUNNING or WAITING-RESET on it right now — burn_tank_busy's
+# own #40 test (lib/core/burn_status.sh), applied here as a second, independent
+# signal the GC below must never override: no matter what the lock symlink
+# itself reads as, a live burn's own status file saying it still holds this
+# tank is authoritative. R5-P1-2 (2026-09-10 round-5 review).
+_clean_tank_lock_busy_paths() {
+  local base="$HOME/.clikae/logs" d f json st feng ftk fpid fstarted
+  [ -d "$base" ] || return 0
+  for d in "$base"/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json="$(cat "$f" 2>/dev/null)" || continue
+    st="$(burn_status_state "$json")"
+    case "$st" in running|waiting-reset) ;; *) continue ;; esac
+    feng="$(burn_status_str "$json" engine)"
+    ftk="$(burn_status_str "$json" tank)"
+    [ -n "$feng" ] && [ -n "$ftk" ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$fpid" 2>/dev/null || continue           # stale — the writer is gone
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid
+    _burn_tank_lock_path "$feng" "$ftk"
+  done
+}
+
+# _clean_tank_lock_gc <dry_run> -> remove per-tank burn locks (and reclaim
+# mutexes) whose recorded holder is no longer running.
+#
+# R4-P3-2 (2026-09-10 round-4 review; R3-P3-3 before it): nothing else EVER
+# swept $HOME/.clikae/state/tank-busy-*.lock[.reclaim]. `_burn_tank_lock_acquire`
+# (lib/commands/burn.sh) already reclaims a dead holder's lock, but only
+# when something calls it AGAIN for that exact engine/tank pair — a tank
+# nobody ever `burn`s again keeps a dead holder's lock (and, before round
+# 4's fix, could keep a permanently wedged reclaim mutex) forever. Same
+# shape as _clean_scrollback_gc above: the test is the recorded pid's
+# LIVENESS, never the file's age — a tank genuinely busy for hours is not
+# garbage just because its lock is old.
+#
+# R5-P1-2 (2026-09-10 round-5 review): this used to `rm -f` the tank lock
+# directly, with no mutex at all — the ONE invariant `docs/orchestration.md`
+# and `_burn_tank_lock_acquire`'s own comment both state in as many words
+# ("the link can only disappear while that mutex is held") had a second,
+# unguarded remover the moment this function shipped. Measured: a real
+# `_burn_tank_lock_acquire`, already past its OWN under-mutex re-verify and
+# about to `rm` a lock it correctly judged stale, racing this GC — 5/5
+# deterministic violations, a fresh contender's legitimate `ln -s` landing
+# on the path GC vacated, followed by the ORIGINAL holder's now-stale `rm`
+# deleting that fresh claim too. Two real burns holding one tank at once —
+# the #40 symptom this whole lock exists to prevent.
+#
+# Fixed by giving GC exactly the discipline every other remover already has:
+# take `_burn_reclaim_mutex_try` on `<lock>.reclaim` FIRST, re-verify under
+# it, and — critically — SKIP this tank (never wait, never retry) if the
+# mutex is busy: a busy mutex means some real `_burn_tank_lock_acquire` or
+# `_burn_tank_lock_release` is mid check-and-act on this exact lock right
+# now, and GC has no business racing it; the next `clean` run, or that
+# process's own eventual release/reclaim, gets another chance. The reclaim
+# mutex ITSELF is now reaped the same way `_burn_reclaim_mutex_try` reaps
+# everything else — mv to a private name, verify what was actually caught,
+# discard only if it still names the pid judged dead, restore otherwise —
+# instead of a bare `kill -0` + unconditional `rm -f`, which was a THIRD,
+# weaker liveness rule for the same object (no `started_at`/30s check, no
+# verify-before-discard).
+#
+# R6-P2-1/R6-P2-2 (2026-09-10 round-6 review): `--dry-run` used to preview
+# a `.lock` removal with NO knowledge of whether its reclaim mutex was even
+# claimable, and a `.lock.reclaim` removal with a bare `kill -0` — a THIRD,
+# weaker liveness rule than the one the real run actually uses (measured:
+# both promises wrong, 2 for 2, on the same fixture). The mutex-busy
+# decision now goes through `_burn_reclaim_mutex_available` (a read-only
+# mirror of `_burn_reclaim_mutex_try`'s own decision — see its header) for
+# the dry-run preview, so a dry run's "busy" and a real run's "busy" are the
+# same predicate, never approximations of each other. And every AMBIGUOUS
+# skip — a lock whose recorded holder is dead but whose reclaim mutex is
+# genuinely busy right now, or a reclaim mutex genuinely held — is reported
+# with why, in both modes, so `clikae clean`'s summary line no longer says
+# "Nothing to clean" over a lock it left behind for a reason it never named
+# (R6-P2-2); an ORDINARY skip (the recorded holder is simply alive, or a
+# status file says so) is not, since that is every routine `clean` run
+# while any tank is legitimately busy — reporting that every time would be
+# the opposite failure, noise nobody can act on. The `.lock.reclaim` loop
+# also no longer requires `-L`: a legacy DIRECTORY left at this path — the
+# exact shape R6-P1-1 found permanently wedged — was invisible to `clean`
+# too. KITT (2026-09-11): `_burn_reclaim_mutex_try`/`_available` now REFUSE
+# a bare directory (and every other foreign shape) rather than "understand"
+# it — this loop's job stays the same either way, report whatever they
+# decide and stop filtering either shape out before asking them.
+#
+# R9-P1-1 (2026-09-11 round-9 review): the `.lock` loop's own reap, further
+# down, used to `rm -f "$f"` directly once it judged the recorded holder
+# stale — a bare readlink-decide-then-rm on the path, not on the entry it
+# verified, racing a live burn's fresh claim into the same window
+# `_burn_reclaim_mutex_try` itself was rewritten (round 3) to close for the
+# MUTEX. Now goes through `_burn_tank_lock_reap_verified`
+# (lib/commands/burn.sh), the same `mv`-then-classify discipline applied to
+# the LOCK: measured, through this exact function via the real `bin/clikae
+# clean`, 5/5 destroyed a genuinely live claim under the old shape — GC's
+# own summary line called it a "dead-holder tank lock" while deleting it.
+_clean_tank_lock_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f target holder hstarted n=0 skipped=0
+  local busy_paths reclaim_dir had_entry got
+  [ -d "$dir" ] || return 0
+  busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
+
+  for f in "$dir/"tank-busy-*.lock; do
+    [ -L "$f" ] || continue
+    if [ -n "$busy_paths" ] && printf '%s\n' "$busy_paths" | grep -qxF "$f"; then
+      continue   # a status file says a burn is RUNNING here right now -- ordinary, not worth a line every run
+    fi
+    target="$(readlink "$f" 2>/dev/null || true)"
+    holder="${target%%:*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;                               # malformed/empty — treat as dead below
+      *) kill -0 "$holder" 2>/dev/null && continue ;;  # its holder is still running -- ordinary, same as above
+    esac
+    reclaim_dir="$f.reclaim"
+    if [ "$dry_run" = "1" ]; then
+      if _burn_reclaim_mutex_available "$reclaim_dir"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # KITT (2026-09-11): a foreign object at the reclaim mutex path
+        # (a directory, a symlink to one, or a plain file) is never
+        # reapable, by `try` or by this preview -- report it under its own
+        # reason, not lumped in with an ordinary busy mutex.
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is busy right now"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
+    # R7-P2-1 (2026-09-10 round-7 review): `_burn_reclaim_mutex_try` returns
+    # `1` for two entirely different reasons — a live holder refused it, OR
+    # it just reaped a dead one and, by design, "never claims it for the
+    # caller" — and treating both as "busy" made THIS most common outcome
+    # print a reason that is definitely wrong (nothing is contending) and
+    # left the `.lock` behind for a second `clean` run to remove, needing
+    # two passes where one would do (measured 3/3 on the fixtures where the
+    # mutex was reapable, not genuinely held). Tell the two apart by
+    # re-testing the path itself, not the return code: still occupied means
+    # a live holder genuinely has it; vacant means this very call reaped
+    # it, and the vacancy is ours to claim in the same pass.
+    got=0
+    if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1
+    elif { [ -L "$reclaim_dir" ] || [ -e "$reclaim_dir" ]; }; then
+      got=0   # still occupied -- either genuinely busy, or a foreign-mutex `try` already refused (and logged) above
+    elif _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1   # the first try's own call reaped it; the path is vacant now -- claim it
+    fi
+    if [ "$got" -eq 1 ]; then
+      # Re-verify under the mutex before acting — the target may have
+      # changed since the unsynchronized read above (a live holder
+      # released, or a fresh contender's `ln -s` landed on this exact path
+      # in the meantime).
+      #
+      # R9-P1-1 (2026-09-11 round-9 review): this used to `rm -f "$f"`
+      # directly once `$holder`'s liveness said stale — the same bare
+      # readlink-decide-then-rm burn.sh's own re-verify block had, and the
+      # same fix: `_burn_tank_lock_reap_verified` (lib/commands/burn.sh)
+      # `mv`s the lock atomically and only discards it if what it actually
+      # caught still names the exact identity judged stale here, restoring
+      # anything else (a live holder's fresh claim that landed in the
+      # window between this read and the `mv`). Measured through this
+      # exact function, via the real `bin/clikae clean`: 5/5 destroyed a
+      # genuinely live claim under the old shape, with GC's own summary
+      # line calling it a "dead-holder tank lock" as it deleted it.
+      if [ -L "$f" ]; then
+        target="$(readlink "$f" 2>/dev/null || true)"
+        holder="${target%%:*}"
+        hstarted="${target#*:}"
+        case "$holder" in
+          ''|*[!0-9]*) _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)) ;;
+          *) kill -0 "$holder" 2>/dev/null || { _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)); } ;;
+        esac
+      fi
+      _burn_reclaim_mutex_release "$reclaim_dir"
+    elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
+    else
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is busy right now"
+      skipped=$((skipped + 1))
+    fi
+  done
+
+  for f in "$dir/"tank-busy-*.lock.reclaim; do
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
+    if [ "$dry_run" = "1" ]; then
+      if _burn_reclaim_mutex_available "$f"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$f"; then
+        # KITT (2026-09-11): a directory, a symlink to one, or a plain file
+        # at this path is never reapable, by `try` or by this preview --
+        # its own reason, never folded into "genuinely held".
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is genuinely held right now"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
+    had_entry=1
+    if _burn_reclaim_mutex_try "$f"; then
+      # Nothing was actually there to reap (the path had just gone empty
+      # on its own) — this only won a fresh, empty claim; release it
+      # immediately, GC has no removal to protect by holding it.
+      _burn_reclaim_mutex_release "$f"
+    elif _burn_reclaim_mutex_is_foreign "$f"; then
+      # Checked BEFORE the generic "still there -- genuinely held" branch
+      # below: a foreign object is also `-L || -d` true, and `try` already
+      # refused (and logged) it for the reason named here, never for being
+      # genuinely held by a live clikae.
+      log_info "GC: skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
+    elif { [ -L "$f" ] || [ -d "$f" ]; }; then
+      # R7-P2-1: `_burn_reclaim_mutex_try` returning `1` here does not mean
+      # "genuinely held" — it also returns `1` after reaping-and-discarding
+      # a dead entry outright (never claims it for the caller). Only say
+      # "genuinely held" once the path is checked and still actually there;
+      # a reap that already removed it needs no line here at all, the same
+      # way the `n` count below already only fires on a real removal.
+      log_info "GC: skipping ${f##*/} -- it is genuinely held right now"
+      skipped=$((skipped + 1))
+    fi
+    # Whether it just reaped-and-discarded a dead mutex, restored a live
+    # one it mistakenly caught, or found a live one and left it alone,
+    # _burn_reclaim_mutex_try already applied the one liveness rule this
+    # object has everywhere else — nothing further for GC to decide here.
+    [ "$had_entry" -eq 1 ] && [ ! -L "$f" ] && [ ! -d "$f" ] && n=$((n + 1))
+  done
+
+  # Graveyard entries — both `_burn_reclaim_mutex_try`'s (the MUTEX family,
+  # `tank-busy-*.lock.reclaim.stale.*`) and `_burn_tank_lock_reap_verified`'s
+  # (the LOCK family, `tank-busy-*.lock.stale.*`, added round 9 —
+  # lib/commands/burn.sh) rename-to-unique-name reaps — are private to the
+  # reaper that created them — its OWN pid is embedded in the filename, not
+  # in the target — and are normally removed by that same reaper a syscall
+  # or two later. One can only outlive it if the reaper itself was killed
+  # between its `mv` and its `rm`, OR its restore raced a live claim back
+  # into an occupied path and deliberately kept the grave as that claim's
+  # only surviving copy (see both reapers' own "could NOT restore"
+  # branches), so the liveness test here is the filename's pid, not the
+  # symlink's target. This is never a live REMOVAL mutex's identity, so it
+  # needs no mutex of its own to sweep. KITT (2026-09-11): every graveyard
+  # either reaper can create is a `mv` of a SYMLINK it caught (a foreign
+  # object at the mutex/lock path is refused before ever reaching that
+  # `mv`, see the KITT ruling above `try`'s own refusal) — never a
+  # directory — but the `-d` half of this filter costs nothing to keep as
+  # a defensive backstop, and the filename's pid, not anything inside the
+  # entry, is still the only thing that ever needs checking.
+  #
+  # R10-P2-1 (2026-09-12 round-10 review): this loop used to sweep ONLY the
+  # mutex family's glob, while this very comment claimed to cover "every
+  # graveyard" — round 9 introduced a SECOND graveyard family (the lock
+  # family, above) that this glob's `.reclaim.` segment structurally cannot
+  # match, so a restore-failure grave for a LOCK (the only surviving copy
+  # of a live claim `_burn_tank_lock_reap_verified` could not put back) had
+  # no sweeper anywhere in this codebase and would accumulate forever.
+  # Fixed by sweeping both globs the same way; they cannot collide with
+  # each other (`.lock.stale.` never appears as a substring of
+  # `.lock.reclaim.stale.…`, verified by direct glob expansion).
+  for f in "$dir/"tank-busy-*.lock.stale.* "$dir/"tank-busy-*.lock.reclaim.stale.*; do
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
+    holder="${f##*.stale.}"; holder="${holder%%.*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;
+      *) kill -0 "$holder" 2>/dev/null && continue ;;
+    esac
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned graveyard entry ${f##*/}"
+    else
+      rm -rf "$f" && n=$((n + 1))
+    fi
+  done
+  if [ "$n" -gt 0 ] || [ "$skipped" -gt 0 ]; then
+    log_info "GC: removed $n dead-holder tank lock(s), skipped $skipped busy one(s)."
+  fi
+  return 0
+}
+
 _clean_tmux_gc() {
   local dry_run="$1"
   local lock_file sid is_dead rc
@@ -917,21 +1219,45 @@ _clean_tmux_gc() {
   for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock; do
     [ -e "$lock_file" ] || continue
     is_dead=0
+    # R10-P1-1 (2026-09-12 round-10 review): both probes used to be bare
+    # statements (`… ; rc=$?`) under bin/clikae's `set -eo pipefail` — the
+    # exact errexit shape R9-P1-1 fixed at cmd_burn's own acquire call. A
+    # genuinely-held ephemeral lock makes `flock -n`/`lockf -k -t 0` exit
+    # non-zero, which `errexit` treated as this FUNCTION failing outright:
+    # `clikae clean` died here with rc=75 (lockf) or rc=1 (flock) and ZERO
+    # output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — the PR's own
+    # documented recovery path — never ran, precisely while a burn holding
+    # this lock is the most likely moment to have left something to clean.
+    # `|| rc=$?` keeps the non-zero exit from ever reaching errexit; the
+    # busy branch below is also no longer silent, so this stops being a
+    # trap nobody can see they walked into.
     if command -v flock >/dev/null 2>&1; then
-      flock -n "$lock_file" true 2>/dev/null
-      rc=$?
+      rc=0
+      flock -n "$lock_file" true 2>/dev/null || rc=$?
       if [ "$rc" -eq 0 ]; then
         is_dead=1
       elif [ "$rc" -eq 1 ]; then
         : # Lock held
       fi
     else
-      lockf -k -t 0 "$lock_file" true 2>/dev/null
-      rc=$?
+      rc=0
+      lockf -k -t 0 "$lock_file" true 2>/dev/null || rc=$?
       if [ "$rc" -eq 0 ]; then
         is_dead=1
       elif [ "$rc" -eq 75 ]; then
         : # Lock held
+      fi
+    fi
+    if [ "$is_dead" -eq 0 ]; then
+      # Named, not silent (R10-P1-1): a busy ephemeral lock is routine while
+      # its burn runs, but the old code left this branch's cost unpaid where
+      # nobody could see it -- one line, same register (and same dry-run/
+      # real distinction) as every other "skipping … busy" line this GC
+      # already prints elsewhere.
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
+      else
+        log_info "GC: skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
       fi
     fi
     if [ "$is_dead" -eq 1 ]; then
@@ -995,6 +1321,7 @@ cmd_clean() {
   # Run the Tmux Ephemeral GC before doing file scans
   _clean_tmux_gc "$dry_run"
   _clean_scrollback_gc "$dry_run"
+  _clean_tank_lock_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

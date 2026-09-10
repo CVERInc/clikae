@@ -50,6 +50,8 @@ Keep burning when a tank runs dry:
                                    limit lifts (asks once) · wake <engine> <tank>
   burn <engine> <tank> -- <cmd>    run a headless task on a tank; on a dry tank,
                                    re-fire it on the next (verify by --artifact)
+  wait <run_id|status-file>...     block until a burn (or several) reaches a
+                                   terminal state — never a hand-rolled loop
   conduct --leg <e>/<t>... --prompt-file <f>   (BETA) fan ONE prompt across N
                                    accounts in parallel, collect each full result
 
