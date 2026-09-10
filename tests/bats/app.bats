@@ -233,10 +233,15 @@ _src_app() {
   [ "$status" -eq 0 ]
 }
 
-@test "the Ghostty launcher template compiles (it is dictionary-free by design)" {
+@test "the Ghostty launcher template compiles (needs Ghostty's own AppleScript dictionary)" {
   macos_only
-  # Ghostty can't be driven by AppleScript, so its launcher goes through
-  # `do shell script` — which is also why it compiles anywhere, unlike iTerm2's.
+  # The template now has an in-app path for Ghostty >= 1.3.0 (`tell
+  # application "Ghostty" … new surface configuration …`), so it is NOT
+  # dictionary-free the way it used to be — osacompile resolves those terms
+  # against Ghostty's own terminology at compile time, which needs the app
+  # installed (running is not required), same as the iTerm2 template below.
+  [ -d "/Applications/Ghostty.app" ] || [ -d "$HOME/Applications/Ghostty.app" ] \
+    || skip "Ghostty not installed -- its AppleScript dictionary cannot be resolved here"
   local out="$TEST_HOME/g.app" src="$TEST_HOME/g.applescript"
   sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
     "$CLIKAE_TEST_ROOT/lib/templates/launcher.ghostty.applescript.tmpl" > "$src"
