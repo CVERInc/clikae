@@ -559,6 +559,32 @@ _agy_log() { # <line>
   [ "$_dry"   != "$_week" ] || false
 }
 
+@test "_home_fuel_dot: a codex tank with a real rate_limits reading gets its own light, not the faintest mark" {
+  # Unlike the dry set and the weekly-BETA cache, codex's OWN rate_limits
+  # reading fires on a HEALTHY tank too — see limit_codex_status and
+  # docs/DESIGN-board-fuel-dots.md ("codex gets a real light now").
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local d="$CLIKAE_HOME/profiles/codex/cheap"
+  mkdir -p "$d/sessions/2026/09/10"
+  printf '%s\n' \
+    '{"timestamp": "2026-09-10T09:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {}, "rate_limits": {"limit_id": "codex", "limit_name": null, "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": 4102444800}, "secondary": {"used_percent": 96.0, "window_minutes": 10080, "resets_at": 4103049600}, "credits": {"has_credits": false}}}}' \
+    > "$d/sessions/2026/09/10/rollout-a.jsonl"
+  # secondary at 96% used (4% left) is the tighter window → yellow, its own
+  # shape (◐, matching the existing weekly-BETA glyph, never a guessed ●).
+  run _home_fuel_dot "" codex cheap
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" == *"5h"* ]]     || false   # both windows named in the note
+  [[ "$output" == *"weekly"* ]] || false
+  # An existing hard-dry marker still outranks the proactive reading — a real
+  # persisted dry event is worth more than a vendor "N% left" snapshot.
+  run _home_fuel_dot "$(printf 'codex\037cheap\037x')" codex cheap
+  [[ "$output" == *"○"* ]] || false
+}
+
 @test "_home_fuel_dot: a dry tank is ○ with its verbatim reset phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"

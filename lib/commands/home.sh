@@ -622,6 +622,33 @@ _home_fuel_dot() {
   printf '%s\037%s' "$_FDOT" "$_FNOTE"
 }
 
+# _home_codex_status_readv <profile> — codex's OWN proactive 5h/weekly usage
+# (unlike the dry set and the weekly-BETA cache above, this fires on a
+# HEALTHY tank too — codex reports "N% left, resets …" for both windows
+# whether or not either is exhausted). Sets $_CODEX_DOT/$_CODEX_NOTE,
+# returns 0 when codex has ever reported anything for this tank, 1
+# (never a guessed reading) when it hasn't. See lib/core/limit.sh's
+# limit_codex_status and docs/DESIGN-board-fuel-dots.md.
+_home_codex_status_readv() {
+  local profile="$1" dir now fields light note
+  dir="$(profile_dir codex "$profile")"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  fields="$(limit_codex_status "$dir" "$now" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r light note _ <<< "$fields"
+  # Glyph = which state (matches the existing shapes exactly — dry is ALWAYS
+  # ○, weekly-warn is ALWAYS ◐, ready is ALWAYS ● — see the legend a few
+  # hundred lines down and DESIGN-board-fuel-dots.md's "glyph carries the
+  # meaning, colour only reinforces it"); colour is redundant on purpose.
+  case "$light" in
+    red)    _CODEX_DOT="${__C_RED}○$__C_RESET" ;;
+    yellow) _CODEX_DOT="${__C_YELLOW}◐$__C_RESET" ;;
+    green)  _CODEX_DOT="${__C_GREEN}●$__C_RESET" ;;
+    *)      return 1 ;;
+  esac
+  _CODEX_NOTE="$note"
+  return 0
+}
+
 # _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, fork-free, into $_FDOT.
 #
 # The redraw path wants just the mark, and every row was paying a `$( )` to get
@@ -637,6 +664,9 @@ _home_fuel_dotv() {
   fi
   if _home_weekly_readv "$cli" "$profile"; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
+  fi
+  if [ "$cli" = codex ] && _home_codex_status_readv "$profile"; then
+    _FDOT="$_CODEX_DOT"; _FNOTE="$_CODEX_NOTE"; return 0
   fi
   if limit_engine_detectable "$cli"; then _FDOT="${__C_GREEN}●$__C_RESET"; return 0; fi
   _FDOT="${__C_DIM}·$__C_RESET"
