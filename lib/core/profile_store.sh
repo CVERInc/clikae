@@ -97,6 +97,50 @@ transcript_tail() {
   tail -c "$b" "$f" 2>/dev/null || true
 }
 
+# transcript_tail_scan <file> <grep-pattern> [start-bytes] — like
+# transcript_tail, but for a caller that needs a SPECIFIC event to be inside
+# the window, not just "the last N bytes". Starts at <start-bytes> (default
+# $CLIKAE_TX_TAIL_BYTES) and QUADRUPLES it until the slice contains a line
+# matching <grep-pattern> or the slice already spans the whole file.
+#
+# P1-2 (2026-09-12 round-1 review): a fixed-size tail silently drops the
+# event a caller actually wants the moment something LARGE gets appended
+# after it — CONFIRMED on a >1 MB codex rollout whose last `token_count`
+# event was followed by >700 KB of trailing tool output: the fixed 512 KiB
+# window never saw that event at all, and an older (possibly already-stale)
+# one from a different file won the newest-wins comparison instead, with no
+# error anywhere to say so. Growing the window until the wanted event is
+# actually IN it closes that gap; the common case (the event is well within
+# the first window) still costs exactly one `tail -c`.
+transcript_tail_scan() {
+  local f="$1" pat="$2" bytes="${3:-$CLIKAE_TX_TAIL_BYTES}" size
+  [ -f "$f" ] || return 0
+  size="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  size="${size//[[:space:]]/}"
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  # 🔴 NEVER capture the chunk into a shell variable to test it: `$( )`
+  # strips trailing newlines, and when several files' outputs are piped
+  # together (as every caller here does — one process per rollout, all
+  # feeding one awk) a stripped trailing newline SILENTLY MERGES this file's
+  # last line into the next file's first line into one giant awk record,
+  # which then matches whichever event happens to come first in that merge —
+  # exactly the kind of wrong-event bug this function exists to prevent.
+  # `tail -c` piped straight to `grep -q` never touches a variable, and the
+  # final emit below is the same direct `tail -c` transcript_tail itself
+  # uses, byte-for-byte including whatever trailing newline the file has.
+  while :; do
+    if [ "$bytes" -ge "$size" ]; then
+      tail -c "$bytes" "$f" 2>/dev/null || true
+      return 0
+    fi
+    if tail -c "$bytes" "$f" 2>/dev/null | grep -qaE "$pat" 2>/dev/null; then
+      tail -c "$bytes" "$f" 2>/dev/null || true
+      return 0
+    fi
+    bytes=$((bytes * 4))
+  done
+}
+
 # sessions_by_mtime <path-or-glob>...  -> "<mtime-epoch> <path>" per existing file,
 # NEWEST FIRST. ONE `stat` over every arg (the shell expands the globs first), then
 # sort by the leading mtime — so N files cost ~2 processes, not N. This is the

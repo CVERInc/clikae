@@ -628,12 +628,22 @@ _home_fuel_dot() {
 # whether or not either is exhausted). Sets $_CODEX_DOT/$_CODEX_NOTE,
 # returns 0 when codex has ever reported anything for this tank, 1
 # (never a guessed reading) when it hasn't. See lib/core/limit.sh's
-# limit_codex_status and docs/DESIGN-board-fuel-dots.md.
+# limit_codex_status_cached and docs/DESIGN-board-fuel-dots.md.
+#
+# P2-1 (2026-09-12 round-1 review): calls the CACHED entry point, not
+# limit_codex_status directly — the plain form re-scans every rollout file's
+# content on every call, which broke _home_fuel_dotv's fork-free contract
+# (a couple of SECONDS on a 120-rollout store; see limit_codex_status_cached's
+# header and REPORT-codex-light-fix1.md for the exact before/after numbers).
+# The cache lives at $CLIKAE_HOME/cache/codex/<profile>, the same shape as
+# the weekly cache a few lines up.
 _home_codex_status_readv() {
-  local profile="$1" dir now fields light note
+  local profile="$1" dir now cache fields light note
+  _CODEX_DOT=""; _CODEX_NOTE=""
   dir="$(profile_dir codex "$profile")"
   now="$(date +%s 2>/dev/null || echo 0)"
-  fields="$(limit_codex_status "$dir" "$now" 2>/dev/null)" || return 1
+  cache="$CLIKAE_HOME/cache/codex/$profile"
+  fields="$(limit_codex_status_cached "$dir" "$now" "$cache" 2>/dev/null)" || return 1
   IFS=$'\037' read -r light note _ <<< "$fields"
   # Glyph = which state (matches the existing shapes exactly — dry is ALWAYS
   # ○, weekly-warn is ALWAYS ◐, ready is ALWAYS ● — see the legend a few
@@ -656,6 +666,13 @@ _home_codex_status_readv() {
 # inside it. Measured on the maintainer's store: 4.3 ms per call, ~39 ms of a
 # 248 ms frame, for a value that cannot change between two keypresses.
 # The echoing form above stays for the non-hot callers that want the phrase too.
+#
+# "Fork-free" is aspirational for the codex branch specifically, not literal:
+# a cache hit (_home_codex_status_readv -> limit_codex_status_cached) still
+# costs a handful of forks (`find`/`stat`/`head`/`awk` to check the cache key)
+# — see P2-1 in limit_codex_status_cached's header — just no longer one
+# proportional to the rollout store's CONTENT size, which is what actually
+# broke this contract before the fix.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
   _FNOTE=""

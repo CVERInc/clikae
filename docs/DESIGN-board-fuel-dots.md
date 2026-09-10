@@ -107,24 +107,41 @@ the same "relay the vendor's own number, never compute one" rule the yellow
 BETA light above lives by, except here the vendor's number is genuinely on
 disk instead of a phantom feature waiting to happen.
 
-A text-shape parser for the RENDERED line also exists
-(`limit_codex_status_line` / `limit_codex_status_reset_epoch`,
-lib/core/limit.sh) for the two grammars codex's own status line actually
-uses — `resets HH:MM` (undated, local 24h clock, including the midnight
-rollover) and `resets HH:MM on D Mon` (dated, no year, English month table,
-resolved the same "closest real occurrence" way `limit_reset_epoch` resolves
-claude's dated phrases) — so a captured status line (a burn log, or a manual
-`$CLIKAE_LIMIT_PATTERN`-style paste) still works even where the structured
-source doesn't reach. It carries no explicit zone, unlike claude's phrases:
-codex always renders in the machine's own local wall-clock.
+Only that structured source ships. An earlier revision of this feature also
+carried a text-shape parser for the RENDERED status line (two grammars, no
+explicit zone, since codex always renders in the machine's own local
+wall-clock) meant for "a captured status line where the structured source
+doesn't reach" — a burn log, or a manual `$CLIKAE_LIMIT_PATTERN`-style paste.
+It was removed in round-1 review (2026-09-12): nothing in `lib/`, `bin/`, or
+`scripts/` ever called it, only its own tests did, so it was ~130 lines of
+permanently-untested code promising a capability no path in clikae could
+actually reach. If a real caller for a captured status line shows up later,
+it can be rebuilt against `_limit_codex_render_reset`'s epoch→phrase
+direction, which does ship (see below).
 
 🔴 **Do not assume `primary` = 5h and `secondary` = weekly by POSITION.** A
 real free-tier account on the maintainer's own machine reported
 `limit_id:"codex"` with a 30-day (`window_minutes:43200`) window living in
 `primary` and `secondary` always `null` — nothing like the 5h/weekly split a
 different plan's `/status` shows. Each side is labelled by its OWN
-`window_minutes` (`_limit_codex_window_label`: ≤360min → `5h`, ≤20160min →
+`window_minutes` (`_limit_codex_window_label`: ≤360min → `5h`, ≤10080min →
 `weekly`, else `<N>d`), never by which JSON key it arrived in.
+
+🔴 **A window's own `resets_at` in the past means it has REFILLED, not that
+it is still at its last reported percentage.** `rate_limits` is a snapshot
+written at the moment of that `token_count` event; once `resets_at` passes,
+the server has reset that window server-side, and the `used_percent` sitting
+next to it describes a quota that no longer exists. A tank that burned to
+100% at 08:00 with a 5h window resetting at 12:00 must read green/"100%
+left" again at 16:00, not the red/"0% left" its last-known event still says
+on disk — that exact case (a full tank read hours after its own reset,
+still lighting red with a reset time already hours in the past) was round-1
+review's P1-1 finding, since fixed: `_limit_codex_window_expired` treats any
+side whose `resets_at` is more than 60s behind `now` as fully refilled (0
+used / 100% left, no reset text), before the light or the rendered reset are
+computed from it. The light therefore always follows the tighter of
+whichever windows are still genuinely valid, and a past instant is never
+rendered as if it were a future one.
 
 **Light = the tighter window.** Thresholds are on percent LEFT, the same unit
 codex's own text uses: 0% left is red (can't burn now, same meaning as every
@@ -143,7 +160,18 @@ shows both windows side by side.
 phrase, written by the watch/auto capture, read by `_home_weekly_read`. Absent =
 no reading = the tank falls through to green/○.
 
-codex's proactive reading has no cache of its own — `limit_codex_status`
-re-reads its tank's rollout files directly (the same 7-day `-mmin` window
-`_limit_codex_dry` already scans), so it self-refreshes on every read with
-nothing to invalidate.
+`$CLIKAE_HOME/cache/codex/<profile>` — two lines: a cache key (the rollout
+store's own file count + newest mtime) and the raw `rate_limits` fields last
+read from it, written/read by `limit_codex_status_cached`
+(`_limit_codex_rate_limits_cached`, lib/core/limit.sh). This replaced an
+earlier "no cache of its own, self-refreshes on every read" design: that
+premise was true only on the maintainer's own small store (6 rollouts, 5 MB);
+round-1 review (2026-09-12, P2-1) measured `limit_codex_status` at ~1.5s per
+call on a synthetic 120-rollout (~62 MB) store, because it re-scanned every
+rollout file's CONTENT on every board redraw — breaking `_home_fuel_dotv`'s
+own "fork-free" contract. The cache is keyed by the store's mtime/count, not
+a TTL: a redraw with no new codex activity since the last read costs one
+`find` + one `stat`, never a re-scan of file content. Light/note/reset
+themselves are never cached — they depend on `now` (see the P1-1 note
+above) — only the raw vendor fields are, recomputed into a reading fresh on
+every call.
