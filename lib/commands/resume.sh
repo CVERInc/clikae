@@ -263,14 +263,18 @@ EOF
   # keys the tmux session on `--resume <sid>`, so resuming a different session
   # opens its own screen instead of attaching to the tank's (the 2026-08-13
   # regression) — inherited for free by going through it.
-  # CLIKAE_LAUNCH_SID: the one thing this call knows that a bare launch never
-  # can — exactly which past session it is about to attach the new tmux
-  # session to. switch.sh's tmux_set_session_id stamps it on that session at
-  # spawn, so the board can show this row's REAL title instead of guessing at
-  # "the tank's newest transcript" (2026-09 report: a bare session and a
-  # resumed one on the same tank showed the same title, because both fell back
-  # to that same guess).
-  CLIKAE_LAUNCH_SID="$sid" exec "$CLIKAE_BIN" "$engine" "$tank" -- "${rargs[@]}" "${passthru[@]}"
+  # No environment variable carries $sid across this exec: "${rargs[@]}" IS
+  # `--resume <sid>` (or the engine's equivalent), and switch.sh's
+  # adapter_sid_from_args reads it straight back out of that argv before
+  # spawning, then stamps the new tmux session with it — so the board can show
+  # this row's REAL title instead of guessing at "the tank's newest
+  # transcript" (2026-09 report: a bare session and a resumed one on the same
+  # tank showed the same title, because both fell back to that same guess). An
+  # earlier version threaded this through an exported CLIKAE_LAUNCH_SID
+  # instead, which — never unset — leaked into every session a tmux SERVER
+  # born under it later spawned, stamping unrelated bare launches with a
+  # foreign sid (R1-P1-2).
+  exec "$CLIKAE_BIN" "$engine" "$tank" -- "${rargs[@]}" "${passthru[@]}"
 }
 
 # Draw the resume menu with row index $1 highlighted, from the inherited

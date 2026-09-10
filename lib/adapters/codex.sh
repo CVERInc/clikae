@@ -153,6 +153,31 @@ adapter_resume_args() {
   printf 'resume\n%s\n' "$sid"
 }
 
+# Optional hook: the inverse of adapter_resume_args — see claude.sh's twin for
+# why switch.sh needs this (it replaces the old CLIKAE_LAUNCH_SID environment
+# variable, which leaked into every session a tmux server born under it later
+# spawned).
+#
+# adapter_new_session_args is deliberately left undefined here. `codex exec`
+# has a `--session_id`/fork option, but it names a session to FORK FROM — it
+# requires that session to already exist, which is a different lifecycle from
+# handing a brand-new interactive session a caller-chosen id before it starts.
+# codex exposed nothing usable for that at the version checked (0.153.4;
+# `codex --help` itself hung in this sandbox rather than a real terminal, so
+# this was confirmed by inspecting the binary's own strings, not a live run —
+# worth re-checking against a real `codex --help` before trusting it further).
+# A bare `clikae codex <tank>` keeps the tank-scoped guess (DESIGN-tmux.md
+# Rule 2: an engine with no equivalent flag degrades honestly rather than
+# pretending to be exact).
+adapter_sid_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "resume" ]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  return 1
+}
+
 # This dir's most recent rollout under <dir> (for relay / handoff).
 adapter_transcript_path() {
   local f; f="$(_codex_rollouts_for_cwd "$1" | head -n 1)"

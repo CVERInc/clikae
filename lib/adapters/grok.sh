@@ -173,6 +173,21 @@ adapter_resume_args() {
   printf -- '--resume\n%s\n' "$sid"
 }
 
+# Optional hook: the inverse of adapter_resume_args — see claude.sh's twin for
+# why switch.sh needs this (it replaces the old CLIKAE_LAUNCH_SID environment
+# variable, which leaked into every session a tmux server born under it later
+# spawned). No equivalent "start fresh with THIS id" flag is known for grok, so
+# adapter_new_session_args is left undefined here — a bare launch keeps the
+# tank-scoped guess.
+adapter_sid_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "--resume" ]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  return 1
+}
+
 # This dir's most recent conversation log under <dir> (for handoff / source
 # detection). chat_history.jsonl is the readable conversation; updates.jsonl is
 # the raw ACP event stream and runs an order of magnitude larger. Recency is

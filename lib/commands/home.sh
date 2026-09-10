@@ -239,16 +239,30 @@ EOF
 #
 # note carries the tmux session NAME, so opening the row attaches to THAT session
 # rather than starting anything.
+
+# _home_sid_claimed <engine> <tank> <sid> -> success if a STAMPED row already
+# claims <sid> on this tank. Checked against $_claimed, built below in
+# _home_live_rows' first pass. See R1-P1-1: without this, an unstamped row's
+# guess and a neighbouring stamped row can key on the SAME transcript, so the
+# two rows read as one duplicated title with nothing but a "?" telling them
+# apart — on the exact "one resume, one bare launch" shape the report itself
+# used as its example.
+_home_sid_claimed() {
+  printf '%s' "$_claimed" | grep -Fxq "$1/$2"$'\t'"$3" 2>/dev/null
+}
+
 _home_live_rows() {
   command -v tmux >/dev/null 2>&1 || return 0
   local _all; _all="$(live_session_names)"
   [ -n "$_all" ] || return 0
 
-  # One pass to know which (engine, tank) pairs are ambiguous — i.e. have more
-  # than one live session — before the render pass below decides, per row,
-  # whether ITS OWN fallback guess needs the "?" marker. A tank with exactly
-  # one live row is never ambiguous, however this resolves.
-  local _dupkeys="" _n _e _t
+  # One pass to know (a) which (engine, tank) pairs are ambiguous — more than
+  # one live session — and (b) which sids are already CLAIMED by a stamped row
+  # on that tank, before the render pass below decides, per row, what its own
+  # fallback guess is allowed to land on and whether it needs the "?" marker.
+  # A tank with exactly one live row is never ambiguous, however this
+  # resolves.
+  local _dupkeys="" _claimed="" _n _e _t _c0
   while IFS=$'\t' read -r _n _ _; do
     [ -n "$_n" ] || continue
     IFS=$'\t' read -r _e _t <<SPLIT
@@ -256,12 +270,14 @@ $(live_split "$_n" 2>/dev/null)
 SPLIT
     [ -n "$_e" ] && [ -n "$_t" ] || continue
     _dupkeys="$_dupkeys$_e/$_t"$'\n'
+    _c0="$(live_session_id "$_n" 2>/dev/null || true)"
+    [ -n "$_c0" ] && _claimed="$_claimed$_e/$_t"$'\t'"$_c0"$'\n'
   done <<EOF
 $_all
 EOF
 
   local name created attached engine tank dir sid title recap age wake_left
-  local guessed ambiguous
+  local guessed stale ambiguous mark
   while IFS=$'\t' read -r name created attached; do
     [ -n "$name" ] || continue
     IFS=$'\t' read -r engine tank <<SPLIT
@@ -270,32 +286,107 @@ SPLIT
     [ -n "$engine" ] && [ -n "$tank" ] || continue
     dir="$(profile_dir "$engine" "$tank")"
 
-    title=""; recap=""; sid=""; guessed=0
+    title=""; recap=""; sid=""; guessed=0; stale=0
     load_adapter "$engine" >/dev/null 2>&1 || true
 
     # Exact: this window carries its own recorded identity (see
     # tmux_set_session_id, lib/core/tmux.sh).
     sid="$(live_session_id "$name" 2>/dev/null || true)"
-    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
-      # No recorded identity — fall back to the tank's newest transcript,
-      # exactly as before this fix.
-      guessed=1
-      sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
+
+    if [ -n "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      # R1-P2-1 — STALE STAMP. The stamp is written once, at spawn, and never
+      # revisited. `/clear` (or a fork) makes the engine start a NEW
+      # transcript under a NEW id — the old one stops being written to, but
+      # the tmux option and state file still point at it. A transcript in
+      # this tank NEWER than this session's own creation time and under a
+      # DIFFERENT id than the stamp is proof the engine has moved on: prefer
+      # it, same as an unstamped row would guess, and mark it — it is a
+      # guess now, not the fact it was at spawn.
+      local _fresh _fmt _fsid _created_n
+      _fresh="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1)"
+      _fmt="${_fresh%%$'\037'*}"; _fsid="${_fresh#*$'\037'}"
+      case "$_fmt" in ''|*[!0-9]*) _fmt="" ;; esac
+      _created_n="$created"; case "$_created_n" in ''|*[!0-9]*) _created_n="" ;; esac
+      if [ -n "$_fsid" ] && [ "$_fsid" != "$sid" ] && [ -n "$_fmt" ] && [ -n "$_created_n" ] \
+         && [ "$_fmt" -gt "$_created_n" ]; then
+        sid="$_fsid"; guessed=1; stale=1
+      fi
     fi
-    if [ -n "$sid" ]; then
+
+    if [ -n "$sid" ] && [ "$guessed" -eq 0 ]; then
+      # R1-P2-2 — exact identity, but `clikae resume` cd's to the session's
+      # OWN recorded directory before exec'ing, which is routinely not
+      # wherever this board happens to be running from. adapter_session_title
+      # derives its path from $PWD (correct for the guess path below, which
+      # only ever names a transcript that IS under $PWD); a stamped sid needs
+      # the same all-projects lookup the resume picker uses —
+      # adapter_find_session + adapter_title_for_file — or an out-of-$PWD
+      # stamp renders a blank title instead of a real one.
+      local _ef=""
+      if declare -F adapter_find_session >/dev/null 2>&1; then
+        _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
+      fi
+      if [ -n "$_ef" ] && declare -F adapter_title_for_file >/dev/null 2>&1; then
+        title="$(adapter_title_for_file "$_ef" 2>/dev/null || true)"
+        recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+      else
+        # Stamped but unfindable anywhere (a wiped transcript, a foreign
+        # sid) — behave exactly as if nothing had been recorded, rather than
+        # rendering a confident blank.
+        sid=""
+      fi
+    fi
+
+    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      # No recorded identity — fall back to the tank's newest transcript, as
+      # before this fix, EXCLUDING any sid a stamped row on this same tank has
+      # already claimed (R1-P1-1): the naive "just take the newest" guess is
+      # what made a bare row and a resumed row on the same tank print the
+      # SAME title. Cheap (mtime-only, no content read) — 10 is headroom, not
+      # a real cap on how many live sessions a tank can have.
+      guessed=1
+      local _cmt _csid
+      while IFS=$'\037' read -r _cmt _csid; do
+        [ -n "$_csid" ] || continue
+        _home_sid_claimed "$engine" "$tank" "$_csid" && continue
+        sid="$_csid"
+        break
+      done <<EOF
+$(adapter_recent_sids "$dir" 10 2>/dev/null)
+EOF
+    fi
+
+    if [ -n "$sid" ] && [ -z "$title" ]; then
       if declare -F adapter_session_title >/dev/null 2>&1; then
         title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
       fi
-      recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+      [ -n "$recap" ] || recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
     fi
 
-    # Only a guess ON AN AMBIGUOUS TANK is worth flagging — the whole point is
+    # A stale stamp is worth flagging on its own — it is wrong regardless of
+    # how many other live sessions this tank has. An ordinary "no identity"
+    # guess is only worth flagging ON AN AMBIGUOUS TANK — the whole point is
     # "this title might belong to the OTHER live row on this tank", which is
     # not a sentence that means anything when there is no other row.
+    #
+    # R1-P2-3: the marker is a SENTINEL (\001) here, not the literal "?" —
+    # appended to the packed title BEFORE this field is truncated for display
+    # at up to four render sites. Appending the visible "?" here, before
+    # truncation, is what let a long title's "…" quietly eat the marker (an
+    # 80-column guess on an ambiguous tank showed no "?" at all, the exact
+    # length class docs/usage.md's own Live example uses). Each "live)" render
+    # site strips the sentinel, truncates the CLEAN title, then appends "?"
+    # after — see _home_truncv's call sites.
+    mark=0
     if [ "$guessed" -eq 1 ] && [ -n "$title" ]; then
-      ambiguous="$(printf '%s' "$_dupkeys" | grep -Fxc "$engine/$tank" 2>/dev/null || true)"
-      [ -n "$ambiguous" ] && [ "$ambiguous" -gt 1 ] && title="${title}?"
+      if [ "$stale" -eq 1 ]; then
+        mark=1
+      else
+        ambiguous="$(printf '%s' "$_dupkeys" | grep -Fxc "$engine/$tank" 2>/dev/null || true)"
+        [ -n "$ambiguous" ] && [ "$ambiguous" -gt 1 ] && mark=1
+      fi
     fi
+    [ "$mark" -eq 1 ] && title="${title}"$'\001'
 
     age="$(_human_age "$created" 2>/dev/null || true)"
     # A waiter's countdown rides in its window name, so this costs one call and
@@ -992,6 +1083,34 @@ _home_truncv() {
   _TRUNC="${s:0:$_DW_CUT}…"
 }
 
+# _home_live_ttlv <label> <maxcols> — _home_truncv for a Live row's title,
+# marker-aware: result lands in $_TRUNC, same as _home_truncv.
+#
+# _home_live_rows encodes "this title is a guess worth flagging" as a
+# trailing \001 SENTINEL on $label, not the literal "?" — because appending
+# "?" before truncation (the R1-P2-3 bug) let a long title's own "…" silently
+# eat it: at the default 80-column fallback, an ambiguous tank's guessed
+# title regularly runs past the row's ~55-column budget, and a marker glued
+# onto the end of a string that then gets cut from the end is a marker that
+# was never going to survive. So: strip the sentinel FIRST, truncate the
+# CLEAN title with one column reserved for the marker, THEN append the
+# visible "?" — after truncation, where nothing can cut it off again.
+_home_live_ttlv() {
+  local s="$1" n="$2" marked=0
+  case "$s" in
+    *$'\001') marked=1; s="${s%$'\001'}" ;;
+  esac
+  if [ "$marked" -eq 1 ]; then
+    n=$(( n - 1 ))
+    [ "$n" -ge 1 ] || n=1
+  fi
+  _home_truncv "$s" "$n"
+  if [ "$marked" -eq 1 ]; then
+    _TRUNC="${_TRUNC}?"
+  fi
+  return 0
+}
+
 # _home_lpadv <str> <width> — _home_lpad without the subshell; result in $_LPAD.
 _home_lpadv() {
   local s="$1" w="$2" pad
@@ -1383,7 +1502,10 @@ EOF
         # every live row's "preview" quoted ""). $label IS the title
         # (_home_live_rows' adapter_session_title), truncated to the same
         # budget the interactive board and the resume rows already use.
-        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        # _home_live_ttlv (not the plain _home_truncv the "resume)" case
+        # below uses): a Live title can carry a trailing guess marker that
+        # must survive truncation — see R1-P2-3.
+        local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         printf '    %b %s%s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
           "$(_home_row_eng "$cli")" \
           "$__C_DIM" "$_ttl" "$__C_RESET"
@@ -1636,10 +1758,13 @@ EOF
 $(load_adapter "$cli" >/dev/null 2>&1 && adapter_resume_args "$note" 2>/dev/null || true)
 EOF
       if [ "${#_rargs[@]}" -gt 0 ]; then
-        # See resume.sh's _resume_exec for why: $note IS the sid here, known
-        # before spawn, so switch.sh can stamp the new tmux session with it
-        # instead of the board later guessing which transcript this row is.
-        CLIKAE_LAUNCH_SID="$note" exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
+        # See resume.sh's _resume_exec for why: $note IS the sid here, and it
+        # is already IN "${_rargs[@]}" (adapter_resume_args built it) — no
+        # environment variable needed. switch.sh's adapter_sid_from_args reads
+        # it back out of that argv before spawning and stamps the new tmux
+        # session with it, instead of the board later guessing which
+        # transcript this row is.
+        exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
       else
         exec "$CLIKAE_BIN" "$cli" "$profile"
       fi
@@ -2315,7 +2440,10 @@ LIVEACT
         _live_seen="$_live_seen$cli/$profile"$'\n'
         local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD$_LIVE_SUFFIX"
         _home_row_engv "$cli"; _len="$_RENG"
-        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        # _home_live_ttlv, not the plain _home_truncv the "resume)" case
+        # below uses: a Live title can carry a trailing guess marker that
+        # must survive truncation — see R1-P2-3.
+        local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
           # The second line is where time lives, in a whole sentence. When the

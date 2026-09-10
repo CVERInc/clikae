@@ -317,3 +317,114 @@ PATHDIRS
   [[ "$block" == *'"Tank B work"'* ]] || { echo "$output"; false; }
   [[ "$block" != *"?"* ]] || { echo "unexpected guess marker across different tanks:"; echo "$output"; false; }
 }
+
+@test "live: a stamped row's sid is excluded from an unstamped row's guess on the same tank" {
+  # 2026-09-12 round-1 review, R1-P1-1: this is issue #55's ACTUAL headline
+  # shape — one resumed (stamped) session and one bare (unstamped) session on
+  # the same tank — and it was NOT covered by the two tests above, which both
+  # stamp (or both leave bare) BOTH rows. The naive fallback ("just take the
+  # tank's newest transcript") does not look at what a neighbouring row has
+  # already claimed, so before this fix the unstamped row picked the SAME
+  # transcript the stamped row already owns, and the two rows differed only by
+  # a trailing "?" — not by which conversation they actually named.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidB "Bare work"    202001010000   # older — the UNSTAMPED row's real transcript
+  _claude_transcript "$dir" sidA "Resumed work" 202601010000   # newer — stamped, and what a naive mtime guess would pick for BOTH rows
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  # $(_csess)-4242 is deliberately left unstamped — a bare launch.
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Resumed work"'* ]] || { echo "stamped row lost its exact title:"; echo "$output"; false; }
+  [[ "$block" == *'"Bare work'*     ]] || { echo "unstamped row's guess did not skip the claimed sid:"; echo "$output"; false; }
+  local first second
+  first="$(printf '%s\n' "$block" | sed -n '1p')"
+  second="$(printf '%s\n' "$block" | sed -n '2p')"
+  [ "$first" != "$second" ] || { echo "rows are identical:"; echo "$output"; false; }
+}
+
+@test "live: a stale stamp (post-/clear) downgrades to a marked guess instead of a confident wrong answer" {
+  # 2026-09-12 round-1 review, R1-P2-1: a stamp is written once, at spawn, and
+  # never revisited. `/clear` (or a fork) makes the engine start writing a NEW
+  # transcript under a NEW id — the tmux option and state file still point at
+  # the old one. main happened to get this right (it always guessed the
+  # newest transcript); the PR under review made it WORSE by presenting the
+  # now-stale stamp as an unmarked fact. The fix must be at least as correct
+  # as main: prefer the newer transcript, but — unlike main's accidental
+  # correctness — say so with "?", because it is a guess now, not the
+  # recorded fact it was at spawn.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidOld "Old before clear" 202001010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidOld
+  # Stamped on a transcript that is about to stop being the newest one — dated
+  # WELL after this test runs, so it reads as "written after the session
+  # started" regardless of the machine's real clock.
+  _claude_transcript "$dir" sidNew "What I am doing now" 203001010000
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"What I am doing now'* ]] || { echo "stale stamp was not detected — still showing the old title:"; echo "$output"; false; }
+  [[ "$block" != *'"Old before clear"'*   ]] || { echo "$output"; false; }
+}
+
+@test "live: a stamped sid outside this board's PWD project slug still renders a title, not a blank one" {
+  # 2026-09-12 round-1 review, R1-P2-2: `clikae resume <sid>` cd's to the
+  # session's OWN recorded directory before exec'ing (lib/commands/resume.sh),
+  # which is routinely a different directory than wherever the board itself is
+  # later run from. The stamped path must search across ALL projects the same
+  # way the resume picker does (adapter_find_session + adapter_title_for_file),
+  # not derive its path from $PWD — or an out-of-$PWD stamp renders the title
+  # column as a literal empty string, the one row on the board with no
+  # fallback text at all.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local otherslug="-some-other-project-dir"
+  mkdir -p "$dir/projects/$otherslug"
+  printf '{"type":"custom-title","customTitle":"%s"}\n' "Work done elsewhere" \
+    > "$dir/projects/$otherslug/sidFar.jsonl"
+  touch -t 202601010000 "$dir/projects/$otherslug/sidFar.jsonl"
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidFar
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Work done elsewhere"'* ]] || { echo "cross-project stamp rendered blank:"; echo "$output"; false; }
+  [[ "$block" != *'""'* ]] || { echo "title rendered as a literal empty string:"; echo "$output"; false; }
+}
+
+@test "live: the guess marker survives 80-column truncation instead of being cut off" {
+  # 2026-09-12 round-1 review, R1-P2-3: the marker used to be appended to the
+  # title BEFORE truncation, so a title long enough to get truncated for
+  # display (the same length class as docs/usage.md's own Live example, "…
+  # retry the callback test?") lost the "?" along with whatever else got cut —
+  # an ambiguous tank then looked exactly like an unambiguous one.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local longtitle="auth redirect handling and the callback retry test we are still chasing down"
+  _claude_transcript "$dir" sidA "$longtitle a" 202001010000
+  _claude_transcript "$dir" sidB "$longtitle b" 202601010000
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  # Neither stamped — both guess, on an ambiguous tank, with a title long
+  # enough to overflow the row's ~55-column title budget at the default
+  # 80-column (no tty, no $COLUMNS) fallback.
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'?"'* ]] || { echo "guess marker did not survive truncation:"; echo "$output"; false; }
+}

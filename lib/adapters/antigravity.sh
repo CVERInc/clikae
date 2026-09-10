@@ -39,6 +39,25 @@ adapter_resume_args() {
   printf '--conversation\n%s\n' "$sid"
 }
 
+# Optional hook: the inverse of adapter_resume_args — see claude.sh's twin for
+# why switch.sh needs this (it replaces the old CLIKAE_LAUNCH_SID environment
+# variable, which leaked into every session a tmux server born under it later
+# spawned).
+#
+# adapter_new_session_args is deliberately left undefined here: `agy --help`
+# (checked live) has no flag for handing a brand-new session a caller-chosen
+# id — `--conversation` only resumes one that already exists, and
+# `--new-project` takes a project name, not a session id. A bare `clikae agy
+# <tank>` keeps the tank-scoped guess (DESIGN-tmux.md Rule 2).
+adapter_sid_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "--conversation" ]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  return 1
+}
+
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1

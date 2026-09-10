@@ -172,6 +172,40 @@ adapter_resume_args() {
   printf -- '--resume\n%s\n' "$sid"
 }
 
+# Optional hook: given the engine argv clikae is about to run (the SAME argv
+# adapter_resume_args above builds, or one a human typed by hand), print the
+# session id it names — the inverse of adapter_resume_args. This is what lets
+# switch.sh stamp `@clikae_session_id` from argv alone, with no environment
+# variable in between (see lib/core/tmux.sh's tmux_set_session_id): whatever
+# built this argv — `clikae resume`, the board's own resume row, or someone
+# typing `clikae claude x -- --resume <sid>` by hand — is stamped the same way.
+# Returns non-zero when the argv carries no `--resume`.
+adapter_sid_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "--resume" ]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  return 1
+}
+
+# Optional hook: the CLI flags to START A FRESH SESSION with a caller-chosen id,
+# one per line (same one-line-per-argv-item contract as adapter_resume_args).
+# Claude Code accepts a v4 UUID up front (`claude --help`: "--session-id <uuid>
+# Use a specific session ID for the session"), so — unlike a resume, which only
+# knows its id because it is reopening a PAST conversation — clikae can hand a
+# brand-new conversation an id before the engine ever runs. Defining this hook
+# is what lets switch.sh give a bare "start fresh" launch exact identity too,
+# instead of the tank-scoped guess the board falls back to when no id was ever
+# recorded (see _home_live_rows, lib/commands/home.sh). codex/antigravity leave
+# this hook undefined — they expose no equivalent flag today — and a launch on
+# either still degrades to that same honest guess (DESIGN-tmux.md Rule 2).
+adapter_new_session_args() {
+  local uuid="$1"
+  [ -n "$uuid" ] || return 1
+  printf -- '--session-id\n%s\n' "$uuid"
+}
+
 # Optional hook: a one-line RECAP of a session — "where you left off + next step".
 # Claude Code writes these into the transcript as
 #   {"type":"system","subtype":"away_summary","content":"…"}

@@ -329,21 +329,33 @@ The third column is the session's title, not a status word, because `claude/x`
 does not tell you *which* piece of work that is.
 
 **Two live sessions on the same tank** (a bare one and a resumed one, say) draw
-two rows: the second is badged `#2` so they're not identical-looking duplicates,
-and each shows its OWN title when clikae knows exactly which conversation that
-window holds (a `clikae resume`'d one always does). When it does not — a bare
-"start fresh" launch never gets a session id to record until the engine is
-already running — the title falls back to the tank's most recently active
-transcript, marked with a trailing `?` so a guess never reads as a fact:
+two rows: the second is badged `#2` so they're not identical-looking
+duplicates, and each shows its OWN title, not whichever transcript happened to
+be written to most recently. For claude, that's true whether a window was
+started with `clikae resume` or started fresh: claude accepts a session id
+handed to it at launch (`--session-id <uuid>`), so clikae mints one itself
+before the engine ever runs and stamps the window with it — a bare "start
+fresh" claude session gets exact identity from the moment it exists, the same
+as a resumed one.
+
+Not every engine can be told its session id up front. codex and antigravity
+expose no equivalent flag today, so a window running either of those still
+falls back to a guess when it has no recorded identity: the tank's most
+recently active transcript that no OTHER window on the same tank has already
+claimed, marked with a trailing `?` so a guess never reads as a fact:
 
 ```
   ▸ Live
-    ● work #1 claude   "auth redirect — next: retry the callback test?"
-    ● work #2 claude   "auth redirect — next: retry the callback test?"
+    ● work #1 codex    "Transcreate the escape guides to 7 locales?"
+    ● work #2 codex    "Draft the v2 migration notes?"
 ```
 
 A tank with only one live session is never ambiguous this way and never shows
-the `?`, guess or not — there is nothing else it could be.
+the `?`, guess or not — there is nothing else it could be. And a guess is only
+ever a LAST resort: it never repeats a transcript another window on the same
+tank is already known to hold, so two windows read as two different pieces of
+work whenever there are two to tell apart — the `?` says "this one wasn't
+confirmed", not "this might be a duplicate of the row above it".
 
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a
