@@ -564,7 +564,11 @@ _race_contender() {
   local lock; lock="$(_burn_tank_lock_path codex LOCKWEDGE2)"
   mkdir -p "$(dirname "$lock")"
   ln -s "$(_dead_pid):1" "$lock"
-  ln -s "" "${lock}.reclaim"   # a malformed payload from anywhere must self-heal, same as the pid-less directory above
+  # Empty-pid payload (no digits before the colon) -- Linux's symlink(2)
+  # refuses an outright empty target (ENOENT, see `man 2 symlink`), so this
+  # uses a non-empty but still pid-less target to stay constructible on
+  # every kernel while still tripping the same malformed-payload branch.
+  ln -s ":1700000000" "${lock}.reclaim"   # a malformed payload from anywhere must self-heal, same as the pid-less directory above
 
   local t0=$SECONDS
   run _burn_tank_lock_acquire codex LOCKWEDGE2 5
@@ -580,7 +584,9 @@ _race_contender() {
   local lock; lock="$(_burn_tank_lock_path codex LOCKMX1)"
   mkdir -p "$(dirname "$lock")"
   local reclaim_link="${lock}.reclaim"
-  ln -s "" "$reclaim_link"
+  # Same non-empty pid-less payload as R4-P1-1b above -- an outright empty
+  # target is refused at the kernel level on Linux (ENOENT).
+  ln -s ":1700000000" "$reclaim_link"
   run _burn_reclaim_mutex_try "$reclaim_link"
   [ "$status" -eq 1 ] || { echo "$output"; false; }   # reaps, never claims for the caller
   [[ ! -e "$reclaim_link" ]] || { echo "malformed mutex survived the reap attempt"; false; }
@@ -705,7 +711,15 @@ _race_contender() {
   _src_burn_lock
   local lock; lock="$(_burn_tank_lock_path codex LOCKEMPTY)"
   mkdir -p "$(dirname "$lock")"
-  ln -s "" "$lock"   # durable empty target -- occupies the path forever on its own
+  # A literal empty target is what this fix is about (see the R4-P2-2
+  # comment above `_burn_tank_lock_acquire`) — `readlink` returning "" while
+  # `-L` is still true is the exact shape the old code mis-read as
+  # "vanished". Linux's symlink(2) refuses to create one at all (ENOENT for
+  # an empty oldpath, per `man 2 symlink`) — a kernel restriction, not a
+  # coreutils choice, so no tool on that kernel can construct this fixture.
+  # Skip rather than substitute a non-empty payload, which would no longer
+  # exercise the `-z "$target"`-is-true branch this test exists to pin.
+  ln -s "" "$lock" 2>/dev/null || skip "this kernel's symlink(2) refuses an empty target (ENOENT) -- a durable empty-target symlink cannot be constructed here"   # durable empty target -- occupies the path forever on its own
 
   local t0=$SECONDS
   run _burn_tank_lock_acquire codex LOCKEMPTY 5

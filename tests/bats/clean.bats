@@ -866,7 +866,10 @@ sys.exit(1 if bad else 0)
 @test "GC removes a pid-less/malformed reclaim mutex link" {
   _source_clean
   local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
-  ln -s "" "$sdir/tank-busy-codex_T3.lock.reclaim"
+  # Non-empty but pid-less payload -- Linux's symlink(2) refuses an outright
+  # empty target (ENOENT), so this stays constructible on every kernel while
+  # still tripping the same malformed-payload branch as an empty one would.
+  ln -s ":1700000000" "$sdir/tank-busy-codex_T3.lock.reclaim"
   _clean_tank_lock_gc 0
   [ ! -L "$sdir/tank-busy-codex_T3.lock.reclaim" ] || { echo "the malformed mutex survived"; false; }
 }
