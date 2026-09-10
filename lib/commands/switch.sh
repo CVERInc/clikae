@@ -194,8 +194,13 @@ KV
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
     tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # See tmux_set_session_id (lib/core/tmux.sh): only set when the caller
+    # already knew which past session it was resuming (resume.sh / home.sh's
+    # "resume" row export this before re-exec'ing in here) — a bare launch has
+    # nothing to record and this is simply a no-op for it.
+    [ -n "${CLIKAE_LAUNCH_SID:-}" ] && tmux_set_session_id "$CLIKAE_TMUX_SESS" "$CLIKAE_LAUNCH_SID"
     wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
-    
+
     local clients
     clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
@@ -215,6 +220,7 @@ KV
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
       tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+      [ -n "${CLIKAE_LAUNCH_SID:-}" ] && tmux_set_session_id "$CLIKAE_TMUX_SESS" "$CLIKAE_LAUNCH_SID"
       started_here=1
     fi
     # OUTSIDE the spawn guard, like the branch above. wake_attach_watcher returns

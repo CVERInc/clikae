@@ -328,6 +328,23 @@ session is one keypress from being back in.
 The third column is the session's title, not a status word, because `claude/x`
 does not tell you *which* piece of work that is.
 
+**Two live sessions on the same tank** (a bare one and a resumed one, say) draw
+two rows: the second is badged `#2` so they're not identical-looking duplicates,
+and each shows its OWN title when clikae knows exactly which conversation that
+window holds (a `clikae resume`'d one always does). When it does not — a bare
+"start fresh" launch never gets a session id to record until the engine is
+already running — the title falls back to the tank's most recently active
+transcript, marked with a trailing `?` so a guess never reads as a fact:
+
+```
+  ▸ Live
+    ● work #1 claude   "auth redirect — next: retry the callback test?"
+    ● work #2 claude   "auth redirect — next: retry the callback test?"
+```
+
+A tank with only one live session is never ambiguous this way and never shows
+the `?`, guess or not — there is nothing else it could be.
+
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a
 waiter is really attached, on the line after:

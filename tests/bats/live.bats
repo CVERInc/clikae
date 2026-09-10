@@ -16,10 +16,37 @@ load '../helpers'
 # and parallel runs cannot be mistaken for the fixture.
 _tank() { printf 'lv%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
 _sess() { printf 'clikae-codex-%s' "$(_tank)"; }
+# claude fixtures (below) need a real transcript on disk, and claude's adapter
+# scopes "this dir's sessions" by $PWD's slug — same transform as
+# _claude_project_slug in lib/adapters/claude.sh, kept in sync by hand since
+# this file does not load adapters.
+_csess() { printf 'clikae-claude-%s' "$(_tank)"; }
+_slug() { printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }
+
+# Write a minimal claude transcript at <dir>/projects/<slug>/<sid>.jsonl whose
+# title resolves to <title> (adapter_title_for_file matches a bare
+# customTitle line — see lib/adapters/claude.sh), stamped at <mtime>
+# ("[[CC]]YY]MMDDhhmm[.ss]", touch -t's format).
+_claude_transcript() {
+  local dir="$1" sid="$2" title="$3" mtime="$4" proj
+  proj="$dir/projects/$(_slug)"
+  mkdir -p "$proj"
+  printf '{"type":"custom-title","customTitle":"%s"}\n' "$title" > "$proj/$sid.jsonl"
+  touch -t "$mtime" "$proj/$sid.jsonl"
+}
+
+# Extract just the "▸ Live" section from a board render — the SAME title also
+# appears in "▸ Resume" (this dir's recent transcripts, plural, independent of
+# what is live), so an assertion against the whole $output can pass by reading
+# the wrong section. Mirrors the extraction the pre-existing dup-rows test
+# above already uses.
+_live_block() { printf '%s\n' "$1" | awk '/▸ Live/{f=1; next} /▸ /{f=0} f && NF'; }
 
 teardown() {
   tmux kill-session -t "$(_sess)" 2>/dev/null || true
   tmux kill-session -t "$(_sess)-4242" 2>/dev/null || true
+  tmux kill-session -t "$(_csess)" 2>/dev/null || true
+  tmux kill-session -t "$(_csess)-4242" 2>/dev/null || true
   [ -n "${TEST_HOME:-}" ] && rm -rf "$TEST_HOME"
   return 0
 }
@@ -190,4 +217,103 @@ PATHDIRS
   [ "$first" != "$second" ] || { echo "duplicate rows, indistinguishable:"; echo "$output"; false; }
   # One of the two must carry a disambiguating badge.
   [[ "$block" == *"#2"* ]] || { echo "$output"; false; }
+}
+
+@test "live: two sessions on the SAME tank each show THEIR OWN title, not the tank's newest" {
+  # This is the 2026-09-12 report: PineNote's session and KITT's main session,
+  # both on tank l, showed the SAME name — whichever transcript had the most
+  # recent activity, on BOTH rows. The resolver (_home_live_rows) was keyed by
+  # TANK ("the tank's newest transcript"), never by which session a given row
+  # actually is.
+  #
+  # Fixture: two live tmux sessions on one tank, each stamped (as
+  # tmux_set_session_id does at launch — lib/core/tmux.sh) with the session id
+  # it actually carries. The OLDER transcript belongs to the row that would
+  # otherwise win a "who is newest" contest, and the fixture still expects the
+  # OTHER row to show it — proving resolution goes by recorded identity, not
+  # by mtime. RED on main: main has no @clikae_session_id / live_session_id at
+  # all, so both rows fall back to "the tank's newest transcript" and "Alpha
+  # work" never appears in the output.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "Alpha work" 202001010000   # older
+  _claude_transcript "$dir" sidB "Beta work"  202601010000   # newer — the naive "guess"
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  tmux set-option -t "=$(_csess)-4242:" @clikae_session_id sidB
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *"Alpha work"* ]] || { echo "sidA's own title never appeared in Live:"; echo "$output"; false; }
+  [[ "$block" == *"Beta work"*  ]] || { echo "sidB's own title never appeared in Live:"; echo "$output"; false; }
+  # Neither is a guess (both rows carry recorded identity) — no "?" on either.
+  [[ "$block" != *"Alpha work?"* ]] || { echo "$output"; false; }
+  [[ "$block" != *"Beta work?"*  ]] || { echo "$output"; false; }
+}
+
+@test "live: with no recorded identity, an ambiguous tank's guessed title is marked" {
+  # Same shape as the report, but neither window was launched in a way that
+  # could record its identity (a bare "start fresh" launch, same as most real
+  # sessions) — there is genuinely nothing exact to key on. The fix's honesty
+  # requirement: say so, with a trailing "?", rather than presenting a 50/50
+  # guess as fact on both rows.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "Gamma work" 202001010000
+  _claude_transcript "$dir" sidB "Delta work" 202601010000
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+  tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
+  # Deliberately no @clikae_session_id on either — both fall back to the guess.
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'?"'* ]] || { echo "no guess marker in Live on an ambiguous tank:"; echo "$output"; false; }
+}
+
+@test "live: a single live session's title carries no guess marker" {
+  # One-session-per-tank fixture: the fallback lookup is unambiguous here (there
+  # is no OTHER live row on this tank it could be confused with), so this must
+  # render byte-identical to before the fix — no "?", same title.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" solo "Solo work" 202601010000
+
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Solo work"'* ]] || { echo "$output"; false; }
+  [[ "$block" != *'"Solo work?"'* ]] || { echo "$output"; false; }
+}
+
+@test "live: two live sessions on DIFFERENT tanks are each exact, no guess marker" {
+  # Different-tank behaviour must stay byte-identical: two live rows on the
+  # board is not by itself ambiguous — only two on the SAME tank is.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local ta tb; ta="$(_tank)a"; tb="$(_tank)b"
+  clikae init claude "$ta"
+  clikae init claude "$tb"
+  _claude_transcript "$CLIKAE_HOME/profiles/claude/$ta" sidA "Tank A work" 202601010000
+  _claude_transcript "$CLIKAE_HOME/profiles/claude/$tb" sidB "Tank B work" 202601020000
+
+  tmux new-session -d -s "clikae-claude-$ta" 'sleep 30'
+  tmux new-session -d -s "clikae-claude-$tb" 'sleep 30'
+
+  run clikae
+  tmux kill-session -t "clikae-claude-$ta" 2>/dev/null || true
+  tmux kill-session -t "clikae-claude-$tb" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"Tank A work"'* ]] || { echo "$output"; false; }
+  [[ "$block" == *'"Tank B work"'* ]] || { echo "$output"; false; }
+  [[ "$block" != *"?"* ]] || { echo "unexpected guess marker across different tanks:"; echo "$output"; false; }
 }

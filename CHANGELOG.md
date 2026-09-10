@@ -425,6 +425,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Live section named the wrong session when two ran on one tank.** Two
+  live sessions on the same tank (a bare one and a resumed one, say) each
+  showed the tank's most recently active transcript's title — identical on
+  both rows, because the title was resolved per TANK, never per WINDOW.
+  `clikae resume` and the board's own "resume" row now stamp the tmux session
+  they start with the exact id they're resuming (`@clikae_session_id`, and a
+  mirrored `~/.clikae/state/<session>.session_id`), so that row's title is
+  read back exactly rather than guessed. A session with no recorded identity
+  (any bare "start fresh" launch — the engine doesn't hand out a session id
+  until it's already running) still falls back to the tank's newest
+  transcript as before, but now only carries that guess as fact when it is
+  actually unambiguous: on a tank with two or more live sessions, an
+  unrecorded title gets a trailing `?` instead of presenting a coin flip as a
+  fact. A tank with a single live session renders byte-identical to before.
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
 - **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**

@@ -82,3 +82,30 @@ live_wake_note() {
   # `wake 13h38m` -> `13h38m`; a bare `wake` has not started counting yet.
   case "$w" in wake\ *) printf '%s' "${w#wake }" ;; esac
 }
+
+# live_session_id <session-name> -> the transcript session id THIS tmux session
+# was launched to drive, or nothing.
+#
+# Only ever set by lib/core/tmux.sh's tmux_set_session_id, and only at launch,
+# for the one case where the id is knowable before the engine starts: resuming
+# a SPECIFIC past session by id (`clikae resume`, and the board's own "resume"
+# row). A bare "start fresh" launch has nothing to record — the engine picks
+# its own id only once it is already running — so this returns nothing for
+# every such session, on purpose: the caller (_home_live_rows) falls back to
+# the tank-scoped guess and marks it as one, rather than this function
+# inventing an answer it does not have.
+#
+# Reads the tmux option first (what a live board actually queries) and falls
+# back to the mirrored state file — set at the same moment, see
+# tmux_set_session_id — for a caller with no tmux to ask, or a session whose
+# option vanished from under it.
+live_session_id() {
+  local name="$1" v
+  command -v tmux >/dev/null 2>&1 || return 0
+  v="$(tmux show-options -t "=$name:" -v '@clikae_session_id' 2>/dev/null || true)"
+  if [ -z "$v" ]; then
+    v="$(cat "$HOME/.clikae/state/${name}.session_id" 2>/dev/null || true)"
+  fi
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}

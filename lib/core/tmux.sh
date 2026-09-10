@@ -485,6 +485,37 @@ tmux_label() {
   tmux rename-window -t "=$session:" "$engine" 2>/dev/null || true
 }
 
+# tmux_set_session_id <session> <sid> — record WHICH transcript this tmux
+# session is driving, at the one moment it is knowable: a caller that resumed
+# a SPECIFIC past session already has its id in hand before spawning (see
+# resume.sh's `_resume_exec` and home.sh's `_home_launch` "resume" case, both
+# of which export it as CLIKAE_LAUNCH_SID before re-exec'ing into the switch
+# path). A bare "start fresh" launch has nothing to pass here — the engine
+# picks its own session id only once it is already running — and that is fine:
+# the board's fallback (lib/commands/home.sh's _home_live_rows) marks a title
+# it had to guess rather than pretending every row is this precise.
+#
+# Written in TWO places on purpose. The tmux option is what a live board reads
+# (cheap, no extra file); the state file is what survives a query racing a
+# session that is being torn down, and what lets anything outside tmux (a test,
+# `clikae doctor`) read the same fact without asking the tmux server. Neither
+# is load-bearing for launch itself — best-effort, like tmux_label above.
+#
+# 🔴 2026-09: the bug this exists to fix. Two live sessions on the SAME tank
+# both fell back to "the tank's newest transcript" for their title (home.sh's
+# _home_live_rows, `adapter_recent_sids "$dir" 1`), so a bare session and a
+# resumed one showed IDENTICAL titles — whichever transcript had the most
+# recent activity, on BOTH rows. The resolver was keyed by tank, never by which
+# session a given row actually is. This is the other half of the fix: give a
+# resumed row something exact to key on instead of a guess.
+tmux_set_session_id() {
+  local session="$1" sid="$2"
+  [ -n "$session" ] && [ -n "$sid" ] || return 0
+  tmux set-option -t "=$session:" @clikae_session_id "$sid" 2>/dev/null || true
+  mkdir -p "$HOME/.clikae/state" 2>/dev/null || true
+  printf '%s\n' "$sid" > "$HOME/.clikae/state/${session}.session_id" 2>/dev/null || true
+}
+
 # tmux_attach <session> <started_here> <scrollback_file>
 # Attach, replay what scrolled past, and say whether tmux would host us at all.
 # Returns 1 when tmux refuses (TERM it cannot draw on, for one) — and then puts

@@ -221,17 +221,47 @@ EOF
 # and the maintainer's own words for why this section exists were "I need to know
 # the name I gave it".
 #
-# The title comes from the tank's newest session, which is an assumption worth
-# naming: a live session is almost always the newest one on its tank, but a tank
-# with two live sessions (a bare one and a resumed one) will show the same title
-# on both rows. The alternative — mapping a tmux session back to a transcript —
-# has nothing to key on, since the engine chooses its own session id after launch.
+# The title comes from live_session_id (lib/core/live.sh) when this session
+# was launched to resume a KNOWN past one — exact, no guessing. Everything else
+# (a bare "start fresh" launch, or a session started before this existed) has
+# nothing recorded, so this falls back to the tank's newest transcript, same as
+# always. That fallback is only a guess when it is actually ambiguous — a tank
+# with two live sessions and no recorded identity for this one — and ONLY then
+# does the title get a trailing "?": a tank with a single live session keeps
+# rendering byte-identical to before, because there both the guess and the
+# recorded-identity answer are the same session either way.
+#
+# 🔴 2026-09 report: a bare session and a resumed one on the same tank showed
+# the SAME title — both fell back to "the tank's newest transcript" (whichever
+# had the most recent activity), because the resolver was keyed by TANK, never
+# by which session a given row actually is. Different tanks were never
+# affected — this is why they showed correctly.
 #
 # note carries the tmux session NAME, so opening the row attaches to THAT session
 # rather than starting anything.
 _home_live_rows() {
   command -v tmux >/dev/null 2>&1 || return 0
+  local _all; _all="$(live_session_names)"
+  [ -n "$_all" ] || return 0
+
+  # One pass to know which (engine, tank) pairs are ambiguous — i.e. have more
+  # than one live session — before the render pass below decides, per row,
+  # whether ITS OWN fallback guess needs the "?" marker. A tank with exactly
+  # one live row is never ambiguous, however this resolves.
+  local _dupkeys="" _n _e _t
+  while IFS=$'\t' read -r _n _ _; do
+    [ -n "$_n" ] || continue
+    IFS=$'\t' read -r _e _t <<SPLIT
+$(live_split "$_n" 2>/dev/null)
+SPLIT
+    [ -n "$_e" ] && [ -n "$_t" ] || continue
+    _dupkeys="$_dupkeys$_e/$_t"$'\n'
+  done <<EOF
+$_all
+EOF
+
   local name created attached engine tank dir sid title recap age wake_left
+  local guessed ambiguous
   while IFS=$'\t' read -r name created attached; do
     [ -n "$name" ] || continue
     IFS=$'\t' read -r engine tank <<SPLIT
@@ -240,16 +270,31 @@ SPLIT
     [ -n "$engine" ] && [ -n "$tank" ] || continue
     dir="$(profile_dir "$engine" "$tank")"
 
-    title=""; recap=""
+    title=""; recap=""; sid=""; guessed=0
     load_adapter "$engine" >/dev/null 2>&1 || true
-    if declare -F adapter_recent_sids >/dev/null 2>&1; then
+
+    # Exact: this window carries its own recorded identity (see
+    # tmux_set_session_id, lib/core/tmux.sh).
+    sid="$(live_session_id "$name" 2>/dev/null || true)"
+    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      # No recorded identity — fall back to the tank's newest transcript,
+      # exactly as before this fix.
+      guessed=1
       sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
-      if [ -n "$sid" ]; then
-        if declare -F adapter_session_title >/dev/null 2>&1; then
-          title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
-        fi
-        recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+    fi
+    if [ -n "$sid" ]; then
+      if declare -F adapter_session_title >/dev/null 2>&1; then
+        title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
       fi
+      recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+    fi
+
+    # Only a guess ON AN AMBIGUOUS TANK is worth flagging — the whole point is
+    # "this title might belong to the OTHER live row on this tank", which is
+    # not a sentence that means anything when there is no other row.
+    if [ "$guessed" -eq 1 ] && [ -n "$title" ]; then
+      ambiguous="$(printf '%s' "$_dupkeys" | grep -Fxc "$engine/$tank" 2>/dev/null || true)"
+      [ -n "$ambiguous" ] && [ "$ambiguous" -gt 1 ] && title="${title}?"
     fi
 
     age="$(_human_age "$created" 2>/dev/null || true)"
@@ -267,7 +312,7 @@ SPLIT
     printf 'live\037%s\037%s\037%s\037%s\037%s\036%s\036%s\037%s\n' \
       "$engine" "$tank" "$title" "$recap" "$attached" "$age" "$wake_left" "$name"
   done <<EOF
-$(live_session_names)
+$_all
 EOF
 }
 
@@ -1591,7 +1636,10 @@ EOF
 $(load_adapter "$cli" >/dev/null 2>&1 && adapter_resume_args "$note" 2>/dev/null || true)
 EOF
       if [ "${#_rargs[@]}" -gt 0 ]; then
-        exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
+        # See resume.sh's _resume_exec for why: $note IS the sid here, known
+        # before spawn, so switch.sh can stamp the new tmux session with it
+        # instead of the board later guessing which transcript this row is.
+        CLIKAE_LAUNCH_SID="$note" exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
       else
         exec "$CLIKAE_BIN" "$cli" "$profile"
       fi
