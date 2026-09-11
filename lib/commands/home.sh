@@ -222,14 +222,19 @@ EOF
 # the name I gave it".
 #
 # The title comes from live_session_id (lib/core/live.sh) when this session
-# was launched to resume a KNOWN past one — exact, no guessing. Everything else
-# (a bare "start fresh" launch, or a session started before this existed) has
-# nothing recorded, so this falls back to the tank's newest transcript, same as
-# always. That fallback is only a guess when it is actually ambiguous — a tank
-# with two live sessions and no recorded identity for this one — and ONLY then
-# does the title get a trailing "?": a tank with a single live session keeps
-# rendering byte-identical to before, because there both the guess and the
-# recorded-identity answer are the same session either way.
+# carries a recorded identity — exact, no guessing. That covers a resume of a
+# KNOWN past session, and (2026-09-12 R1 review) a bare "start fresh" launch
+# too, on any engine whose adapter defines adapter_new_session_args: clikae
+# mints the id itself before the engine ever runs (DESIGN-tmux.md Rule 2).
+# Only a session with genuinely NOTHING recorded — an engine with no such
+# hook, or one started before this existed — falls back to the tank's newest
+# transcript, same as always. That fallback is only a guess when it is
+# actually ambiguous — a tank with two live sessions and no recorded identity
+# for this one — and ONLY then does the title get a trailing "?": a tank
+# with a single live session and no ambiguity to resolve renders the SAME
+# title the guess would have found anyway, marker included or not depending
+# on whether identity was actually recorded — not byte-identical to a
+# pre-identity build in every shape (E4/E5, 2026-09-12 R4/R5 review).
 #
 # 🔴 2026-09 report: a bare session and a resumed one on the same tank showed
 # the SAME title — both fell back to "the tank's newest transcript" (whichever

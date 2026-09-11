@@ -702,3 +702,23 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   [ "$n" -ge 2 ] || { echo "$output"; false; }
   [[ "$block" == *'"Work in progress'* ]] || { echo "the exhausted-pool row did not fall back to the tank's real transcript:"; echo "$output"; false; }
 }
+
+@test "live: a bare session on a tank with NO transcripts at all renders the tank's name, never a blank title (R5-P3-2)" {
+  # 2026-09-12 R4 review (R4-P3-1) found main itself rendered a literal ""
+  # for this exact shape — a tank with a live session and nothing on disk to
+  # guess a title from — and home.sh:473's `[ -n "$title" ] || title="$tank"`
+  # is the ONLY line that closes it. Nothing tested that line directly: R5
+  # review's m6 mutation (delete just that line) left this file's other 26
+  # cases green while the board silently went back to "". No _claude_transcript
+  # call here on purpose — this tank has nothing at all to fall back to except
+  # its own name.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  clikae init claude "$(_tank)"
+  tmux new-session -d -s "$(_csess)" 'sleep 30'
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *"\"$(_tank)\""* ]] || { echo "did not fall back to the tank's own name:"; echo "$output"; false; }
+  [[ "$block" != *'""'* ]] || { echo "title rendered as a literal empty string:"; echo "$output"; false; }
+}

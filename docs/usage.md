@@ -378,7 +378,11 @@ minted at launch whose engine never got the chance to write it), or its own
 engine process has stopped running while the tmux session outlives it (a
 `wake` watcher window, opened in a later window slot to nudge a rate-limited
 session back to life, can keep a session on the board after its engine's own
-window has already closed on its own).
+window has already closed on its own, and a window left behind by
+`remain-on-exit` is caught the same way). The one gap: if you've opened a
+second window of your own inside that same session, its presence reads as
+"something's still there" and the mark won't fire — a miss, never a false
+alarm on a session that's actually fine.
 
 What does NOT count as evidence: a newer transcript merely existing
 somewhere else on the same tank. A `clikae burn`, an `--ephemeral` run, and an

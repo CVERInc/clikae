@@ -457,8 +457,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routine case after `clikae resume`, or when a `clikae burn` has written
   into the same tank+directory since — the row now shows its own session's
   title instead of the tank's newest; that difference IS the fix, so it is
-  not byte-identical there and is not meant to be (2026-09-12 R4 review,
-  R4-P2-2 — the previous wording of this paragraph claimed otherwise). A
+  not byte-identical there and is not meant to be. A
   lone session can also gain a `?` when its own stamp is independently
   stale (see below), and a tank with no transcript at all on disk now
   renders the tank's own name where an earlier version rendered a literal
@@ -506,20 +505,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session is gone, matching what it already did for orphaned `.scrollback`
   files.
 
-  **Round 4 review found `live_engine_alive` asking the wrong question**
-  (2026-09-12 R4 review, R4-P2-1): it treated tmux window index `0` as "the
-  engine's window", but that index is the tmux USER's own `base-index`
-  setting (read from their `~/.tmux.conf` at server start), never clikae's
-  to assume — on a `base-index 1` machine, every exactly-identified row's
-  engine window sits at index 1, so the old check found no window 0 on a
-  perfectly healthy session and marked it stale. It now asks by window
-  NAME instead — "is there a window that is not the `wake` watcher" — the
-  same test `tmux_sess_has_engine` (`lib/core/tmux.sh`) already uses
-  correctly elsewhere in this codebase. The comment on `home.sh`'s fallback
-  ("main never rendered a blank here") was also wrong: main DOES render a
-  literal empty title when a tank has no transcript on disk at all — the
-  fallback to the tank's own name fixes that pre-existing gap too, not just
-  the guess-pool-exhausted case it was written for (R4-P3-1).
+  Whether a session's own engine is still running is now decided by window
+  NAME and pane state, never by numeric window position: "is there a window
+  that is not the `wake` watcher and whose pane isn't dead" — the same test
+  `tmux_sess_has_engine` (`lib/core/tmux.sh`) already uses correctly
+  elsewhere in this codebase. Tmux window index `0` used to stand in for
+  "the engine's window", but that index is the tmux USER's own `base-index`
+  setting (a session option read from their `~/.tmux.conf` at server
+  start), never clikae's to assume — on a `base-index 1` machine, every
+  exactly-identified row's engine window sat at index 1, so the old check
+  found no window 0 on a perfectly healthy session and marked it stale. The
+  pane-state half is new too: a user who has turned on tmux's
+  `remain-on-exit` gets a window that lingers after its process exits, and
+  that window's `#{pane_dead}` — not its existence — is now what's checked.
+  (A live window of the user's own, opened by hand inside the same session,
+  is still read as "something's there" either way — an honest miss, never a
+  false alarm on a session that is actually fine.)
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
 - **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**
