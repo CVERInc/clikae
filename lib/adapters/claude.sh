@@ -172,6 +172,71 @@ adapter_resume_args() {
   printf -- '--resume\n%s\n' "$sid"
 }
 
+# Optional hook: given the engine argv clikae is about to run (the SAME argv
+# adapter_resume_args above builds, or one a human typed by hand), print the
+# session id it names — the inverse of adapter_resume_args — and return 0.
+#
+# 🔴 Returns 0 (printing NOTHING) for every OTHER shape that already carries
+# resume/continue semantics with no id to read back: a bare `--resume` /
+# `-r` (the resume picker — no id known yet), `-c` / `--continue` (resumes
+# whichever session claude itself judges most recent — clikae cannot know
+# which), or `--fork-session` used alongside one of the above. Only a
+# GENUINELY fresh launch — none of this — returns 1.
+#
+# Why the tri-state matters: switch.sh's identity block only calls
+# adapter_new_session_args (which appends `--session-id <uuid>`) when this
+# returns 1. claude's own rule is "`--session-id` can only be used with
+# `--continue` or `--resume` if `--fork-session` is also specified" (verified
+# live, claude 2.1.267) — so appending it unconditionally, as the previous
+# round did, made every one of `-- --continue` / `-- -c` / `-- -r <sid>` /
+# `-- --resume` refuse to start at all (R2-P1-2). A caller that only checked
+# "is _launch_sid empty" could not tell "fresh launch" apart from "resume
+# shape, id not spelled out here" — both printed nothing — so the hook itself
+# has to say which case it is, via its exit status, not just its output.
+#
+# Recognises every argv shape claude actually accepts (`--help`, 2.1.267):
+# `--resume [sid]` / `-r [sid]` / `--resume=<sid>`, `-c` / `--continue`,
+# `--fork-session`, and the user's OWN `--session-id <uuid>` / `--session-id=
+# <uuid>` (so a hand-typed `-- --session-id <uuid>` is recognised as already
+# having identity and is never handed a SECOND one).
+adapter_sid_from_args() {
+  local prev="" a hit=0 sid=""
+  for a in "$@"; do
+    if [ "$prev" = "--resume" ] || [ "$prev" = "-r" ] || [ "$prev" = "--session-id" ]; then
+      case "$a" in
+        -*) : ;;                            # next token is itself a flag: no value given
+        *)  sid="$a"; hit=1; prev="$a"; continue ;;
+      esac
+    fi
+    case "$a" in
+      --resume=*)     sid="${a#--resume=}"; hit=1 ;;
+      --session-id=*) sid="${a#--session-id=}"; hit=1 ;;
+      --resume|-r|--session-id|-c|--continue|--fork-session) hit=1 ;;
+    esac
+    prev="$a"
+  done
+  [ "$hit" -eq 1 ] || return 1
+  printf '%s' "$sid"
+  return 0
+}
+
+# Optional hook: the CLI flags to START A FRESH SESSION with a caller-chosen id,
+# one per line (same one-line-per-argv-item contract as adapter_resume_args).
+# Claude Code accepts a v4 UUID up front (`claude --help`: "--session-id <uuid>
+# Use a specific session ID for the session"), so — unlike a resume, which only
+# knows its id because it is reopening a PAST conversation — clikae can hand a
+# brand-new conversation an id before the engine ever runs. Defining this hook
+# is what lets switch.sh give a bare "start fresh" launch exact identity too,
+# instead of the tank-scoped guess the board falls back to when no id was ever
+# recorded (see _home_live_rows, lib/commands/home.sh). codex/antigravity leave
+# this hook undefined — they expose no equivalent flag today — and a launch on
+# either still degrades to that same honest guess (DESIGN-tmux.md Rule 2).
+adapter_new_session_args() {
+  local uuid="$1"
+  [ -n "$uuid" ] || return 1
+  printf -- '--session-id\n%s\n' "$uuid"
+}
+
 # Optional hook: a one-line RECAP of a session — "where you left off + next step".
 # Claude Code writes these into the transcript as
 #   {"type":"system","subtype":"away_summary","content":"…"}

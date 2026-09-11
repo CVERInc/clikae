@@ -139,16 +139,7 @@ _switch_run_tmux_wrapped() {
 
   mkdir -p "$HOME/.clikae/state"
 
-  local target_cmd scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$sess_id-$$.scrollback"
-  target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "$@")"
-  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
-  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
-  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
-  # command with no target returned 1717. The scrollback file was therefore empty,
-  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
-  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
-  # session target to its active pane and hid it completely.
-  target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
+  local scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$sess_id-$$.scrollback"
 
   # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
   # convenience layer over `clikae run`, never a dependency: a machine without it
@@ -185,6 +176,87 @@ KV
     CLIKAE_TMUX_SESS_EXISTS=0
   fi
 
+  # Deterministic identity, decided BEFORE the engine ever runs — and only when
+  # a spawn is actually about to happen (never on an attach/reuse: the session
+  # already carries whatever it was stamped with at ITS spawn, and re-stamping
+  # here was the asymmetry a prior review caught — R1-P3-2).
+  #
+  # Two ways a launch can already know its identity:
+  #   - it is a RESUME (or otherwise already carries session-picking argv):
+  #     adapter_sid_from_args reads it straight back out of "$@" — the
+  #     ORIGINAL argv, before anything below appends to it — which is what
+  #     replaces the old CLIKAE_LAUNCH_SID environment variable: that
+  #     variable was exported, never unset, and a tmux SERVER born under it
+  #     handed it to every later session on that server, stamping bare launches
+  #     with a foreign sid (R1-P1-2, DESIGN-tmux.md Rule 7).
+  #   - it is a FRESH start and the engine's adapter defines
+  #     adapter_new_session_args: hand it a uuid clikae generates itself and
+  #     tell the engine to use exactly that id (claude: `--session-id <uuid>`).
+  #     codex/antigravity define no such flag and are left exactly as
+  #     honest-guess as before (DESIGN-tmux.md Rule 2).
+  #
+  # 🔴 adapter_sid_from_args reports a TRI-STATE, not just "found a sid or
+  # not": it returns 0 (with nothing printed) for a resume/continue SHAPE
+  # that names no explicit id (a bare `--resume`/`-r` — the picker — or
+  # `-c`/`--continue`, which resumes whatever claude itself judges most
+  # recent), and only returns 1 for a genuinely fresh launch. This is load-
+  # bearing: claude itself refuses to start when `--session-id` is appended
+  # alongside `--continue`/`--resume` without `--fork-session` ("--session-id
+  # can only be used with --continue or --resume if --fork-session is also
+  # specified" — verified live, claude 2.1.267), so gating the append on
+  # "$_launch_sid is empty" alone (the previous round's bug, R2-P1-2) made
+  # `-- --continue` / `-- -c` / `-- -r <sid>` / `-- --resume` refuse to start
+  # at all — there was no way to tell "fresh, mint one" apart from "already a
+  # resume, just didn't name an id here". $_launch_has_identity is that
+  # distinction.
+  #
+  # A resumed uuid must never affect $sess_id above — it is read from the
+  # ORIGINAL "$@" and appended to a COPY, never fed back into the digest. Doing
+  # that would make every bare launch mint a new session name on every run,
+  # breaking the one guarantee this function's own comment above makes: a bare
+  # `clikae <engine> <tank>` keeps the stable name.
+  local -a _engine_args=("$@")
+  local _launch_sid="" _launch_has_identity=0 _fresh_spawn=0
+  [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ] && _fresh_spawn=1
+
+  if declare -F adapter_sid_from_args >/dev/null 2>&1; then
+    if _launch_sid="$(adapter_sid_from_args "$@" 2>/dev/null)"; then
+      _launch_has_identity=1
+    fi
+  fi
+  if [ "$_fresh_spawn" -eq 1 ] && [ "$_launch_has_identity" -eq 0 ] \
+     && declare -F adapter_new_session_args >/dev/null 2>&1; then
+    local _new_sid
+    _new_sid="$(uuidgen 2>/dev/null || true)"
+    # uuidgen ships with util-linux/macOS but is not a hard dependency of
+    # anything else here — a minimal container without it just degrades to the
+    # guess, same as an engine with no adapter_new_session_args at all.
+    if [ -z "$_new_sid" ] && command -v python3 >/dev/null 2>&1; then
+      _new_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"
+    fi
+    _new_sid="$(printf '%s' "$_new_sid" | LC_ALL=C tr 'A-Z' 'a-z')"
+    if [ -n "$_new_sid" ]; then
+      local _nsline
+      while IFS= read -r _nsline; do
+        [ -n "$_nsline" ] && _engine_args+=("$_nsline")
+      done <<EOF
+$(adapter_new_session_args "$_new_sid" 2>/dev/null || true)
+EOF
+      _launch_sid="$_new_sid"
+    fi
+  fi
+
+  local target_cmd
+  target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "${_engine_args[@]}")"
+  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
+  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
+  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
+  # command with no target returned 1717. The scrollback file was therefore empty,
+  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
+  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
+  # session target to its active pane and hid it completely.
+  target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
+
   if [ -n "$TMUX" ]; then
     local current_pane_session
     current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
@@ -194,8 +266,15 @@ KV
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
     tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # See tmux_set_session_id (lib/core/tmux.sh) and the identity block above:
+    # only stamp a session we JUST spawned, with whichever id (resumed or
+    # freshly minted) that spawn actually used — never on an attach, which
+    # already carries whatever its own spawn stamped it with.
+    if [ "$_fresh_spawn" -eq 1 ] && [ -n "$_launch_sid" ]; then
+      tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
+    fi
     wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
-    
+
     local clients
     clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
@@ -215,6 +294,7 @@ KV
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
       tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+      [ -n "$_launch_sid" ] && tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
       started_here=1
     fi
     # OUTSIDE the spawn guard, like the branch above. wake_attach_watcher returns

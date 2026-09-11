@@ -218,6 +218,60 @@ sys.stdout.write(b"".join(chunks).decode(errors="replace"))
 PYEOF
 }
 
+# _write_argv_logging_stub <path> — an engine stub for switch.bats's identity
+# tests. One user-facing launch can invoke the engine MORE THAN ONCE: switch.sh
+# spawns it inside tmux, and if the tmux server disappears out from under the
+# attach (rc=2 — see lib/commands/switch.sh's rehost comment) it retries the
+# spawn once, then falls all the way back to a DIRECT run outside tmux with the
+# ORIGINAL argv, untouched by the identity block, by design.
+#
+# On CI's Linux runners the stub engine (which just prints argv and exits) was
+# consistently faster than tmux's own attach, so the server was gone before
+# attach ever got there — the fallback fired on EVERY run, not just sometimes.
+# The old stub OVERWROTE its log file on each call, so the file only ever held
+# that fallback's argv: identity-free by design, no matter what the identity
+# block actually did. macOS was green only because attach usually won the race
+# there — a timing accident, not a guarantee (R5-P1-1, review round 5).
+#
+# So this stub APPENDS every call instead of overwriting, tagging each record
+# with whether tmux was in the environment at the time (tmux exports $TMUX for
+# everything running inside one of its panes; the direct fallback runs outside
+# tmux entirely and never has it). _argv_log_in_tmux below reads back the one
+# record that matters: the invocation the identity block actually ran on.
+_write_argv_logging_stub() {
+  cat <<'INNER_EOF' > "$1"
+#!/usr/bin/env bash
+{
+  if [ -n "${TMUX:-}" ]; then printf 'TMUX\n'; else printf 'NOTMUX\n'; fi
+  printf '%s\n' "$@"
+  printf '\x1e'
+} >> "${HOME:?}/claude-argv.log"
+INNER_EOF
+  chmod +x "$1"
+}
+
+# _argv_log_in_tmux -> the argv (one per line) of the LAST engine invocation
+# that ran INSIDE tmux. Never the FIRST: a rehost (see switch.sh's
+# CLIKAE_TMUX_REHOSTED comment) spawns a SECOND time inside tmux with a fresh
+# identity block decision of its own — including its own freshly minted
+# --session-id, if any — and only the LAST spawn's stamp survives in
+# state/*.session_id (each fresh spawn's tmux_set_session_id overwrites it).
+# Reading the first record would compare the wrong pair on a rehosted run: an
+# earlier, abandoned spawn's argv against the survivor's stamp. Never the
+# direct outside-tmux fallback either, which by design carries the original
+# argv untouched — that is what tags a record NOTMUX instead of TMUX. Prints
+# nothing (and the caller's `[ -f ... ]` guard already failed) if the engine
+# never ran at all.
+_argv_log_in_tmux() {
+  local log="$TEST_HOME/claude-argv.log"
+  [ -f "$log" ] || return 1
+  # RS must be the ACTUAL 0x1E byte ($'...'), not the 4-char string '\x1e' —
+  # awk treats a >1-char RS as a regex and that literal string never occurs in
+  # the file, so it silently falls back to "the whole file is one record" and
+  # this stops isolating anything.
+  awk -v RS=$'\x1e' '/^TMUX\n/ { last = $0 } END { if (last != "") print last }' "$log" | tail -n +2
+}
+
 # Make EVERY assertion count. bats only enforces a test's LAST command, so an
   # intermediate `[ … ]` (or command) that fails is otherwise silently ignored.
   # set -e (which persists into the test body — same shell) makes `[ … ]` and

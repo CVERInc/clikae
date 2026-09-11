@@ -836,6 +836,45 @@ sys.exit(1 if bad else 0)
   [ ! -f "$sdir/ck-claude-h-$dead.scrollback" ] || { echo "the legacy orphan survived"; false; }
 }
 
+# --- orphaned .session_id state files (R1-P3-3 / R2-P3-5) ---------------------
+#
+# 🔴 NOTHING EVER COLLECTED THESE. tmux_set_session_id writes
+# `<session>.session_id` as the fallback mirror of the `@clikae_session_id`
+# tmux option; doctor.sh's "old names" line claims orphaned state files "go on
+# the next `clikae clean`", which was not true for this file type until this.
+
+@test "GC removes a .session_id file whose tmux session is gone" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  printf '%s\n' "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" > "$sdir/clikae-claude-nosuch-$$.session_id"
+  _clean_session_id_gc 0
+  [ ! -f "$sdir/clikae-claude-nosuch-$$.session_id" ] || { echo "the orphan survived"; false; }
+}
+
+@test "GC keeps a .session_id file whose tmux session is still alive" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local sess="clikae-claude-alive-$$"
+  tmux new-session -d -s "$sess" 'sleep 30'
+  printf '%s\n' "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" > "$sdir/$sess.session_id"
+  _clean_session_id_gc 0
+  tmux kill-session -t "$sess" 2>/dev/null || true
+  [ -f "$sdir/$sess.session_id" ] || { echo "deleted a .session_id file whose session is alive"; false; }
+  rm -f "$sdir/$sess.session_id"
+}
+
+@test "GC dry run reports the orphaned .session_id and deletes nothing" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  printf '%s\n' "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" > "$sdir/clikae-claude-nosuch2-$$.session_id"
+  run _clean_session_id_gc 1
+  [[ "$output" == *"Would remove orphaned"* ]] || { echo "$output"; false; }
+  [ -f "$sdir/clikae-claude-nosuch2-$$.session_id" ] || { echo "a dry run deleted it"; false; }
+}
+
 # --- dead-holder tank locks (R4-P3-2, R3-P3-3 before it) ----------------------
 #
 # 🔴 NOTHING ELSE EVER SWEPT THESE. `_burn_tank_lock_acquire` reclaims a dead

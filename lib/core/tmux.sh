@@ -485,6 +485,47 @@ tmux_label() {
   tmux rename-window -t "=$session:" "$engine" 2>/dev/null || true
 }
 
+# tmux_set_session_id <session> <sid> — record WHICH transcript this tmux
+# session is driving, at the one moment it is knowable: a spawn (never an
+# attach/reuse — see the identity block in switch.sh's
+# `_switch_run_tmux_wrapped`) that either resumed a SPECIFIC past session (its
+# id read back out of the engine argv by adapter_sid_from_args — resume.sh's
+# `_resume_exec`, home.sh's `_home_launch` "resume" case, and a hand-typed
+# `clikae claude x -- --resume <sid>` all go through the same argv, so all
+# three are covered the same way) or started a brand-new one whose adapter can
+# be handed a caller-chosen id up front (adapter_new_session_args — claude:
+# `--session-id <uuid>`). A launch with neither has nothing to pass here — an
+# engine with no such hook still only picks its own session id once it is
+# already running — and that is fine: the board's fallback
+# (lib/commands/home.sh's _home_live_rows) marks a title it had to guess
+# rather than pretending every row is this precise.
+#
+# Written in TWO places on purpose. The tmux option is what a live board reads
+# (cheap, no extra file); the state file is what survives a query racing a
+# session that is being torn down, and what lets anything outside tmux (a test,
+# `clikae doctor`) read the same fact without asking the tmux server. Neither
+# is load-bearing for launch itself — best-effort, like tmux_label above.
+#
+# 🔴 2026-09: the bug this exists to fix. Two live sessions on the SAME tank
+# both fell back to "the tank's newest transcript" for their title (home.sh's
+# _home_live_rows, `adapter_recent_sids "$dir" 1`), so a bare session and a
+# resumed one showed IDENTICAL titles — whichever transcript had the most
+# recent activity, on BOTH rows. The resolver was keyed by tank, never by which
+# session a given row actually is. This is the other half of the fix: give a
+# resumed (or freshly-minted) row something exact to key on instead of a
+# guess. An earlier round threaded the resume id through an exported
+# CLIKAE_LAUNCH_SID instead of reading it from argv — never unset, so a tmux
+# SERVER born under it handed the variable to every later session on that
+# server, stamping unrelated bare launches with a foreign sid (2026-09-12
+# round-1 review, R1-P1-2). That variable no longer exists.
+tmux_set_session_id() {
+  local session="$1" sid="$2"
+  [ -n "$session" ] && [ -n "$sid" ] || return 0
+  tmux set-option -t "=$session:" @clikae_session_id "$sid" 2>/dev/null || true
+  mkdir -p "$HOME/.clikae/state" 2>/dev/null || true
+  printf '%s\n' "$sid" > "$HOME/.clikae/state/${session}.session_id" 2>/dev/null || true
+}
+
 # tmux_attach <session> <started_here> <scrollback_file>
 # Attach, replay what scrolled past, and say whether tmux would host us at all.
 # Returns 1 when tmux refuses (TERM it cannot draw on, for one) — and then puts

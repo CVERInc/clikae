@@ -425,6 +425,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Live section named the wrong session when two ran on one tank.** Two
+  live sessions on the same tank (a bare one and a resumed one, say) each
+  showed the tank's most recently active transcript's title — identical on
+  both rows, because the title was resolved per TANK, never per WINDOW.
+  `clikae resume`, the board's own "resume" row, and a hand-typed `clikae
+  claude x -- --resume <sid>` / `-r <sid>` now all stamp the tmux session they
+  start with the exact id they're resuming (`@clikae_session_id`, and a
+  mirrored `~/.clikae/state/<session>.session_id`), read straight out of the
+  engine's own argv rather than an environment variable. For claude, a bare
+  "start fresh" launch is stamped too: claude accepts a caller-chosen session
+  id up front (`--session-id <uuid>`), so clikae mints one and hands it to the
+  engine before it ever runs — but only when the launch's argv carries no
+  resume/continue signal of its own (a bare `-r`/`--resume` — the picker —
+  `-c`/`--continue`, `--fork-session`, or a hand-typed `--session-id`);
+  claude rejects `--session-id` alongside `--continue`/`--resume` unless
+  `--fork-session` is also given, so appending it unconditionally would make
+  every one of those real launch shapes refuse to start. codex and
+  antigravity expose no equivalent flag, so a window running either still
+  falls back to a guess when it has no recorded identity.
+
+  A tank's guess now excludes every sid ANY other live window on that tank has
+  already claimed — a real stamp, or another window's own guess, reserved in
+  session order before any row is drawn — so a stamped row and a bare
+  neighbour resolve to two DIFFERENT titles even once both have real
+  transcripts on disk, not just when the stamped one happens to still look
+  newest. A tank with a single live session renders byte-identical to before
+  whenever its title resolves the same way it always did — no recorded
+  identity, or a stamp pointing at the same transcript the old tank-newest
+  guess would have chosen. When the stamp points somewhere else — the
+  routine case after `clikae resume`, or when a `clikae burn` has written
+  into the same tank+directory since — the row now shows its own session's
+  title instead of the tank's newest; that difference IS the fix, so it is
+  not byte-identical there and is not meant to be. A
+  lone session can also gain a `?` when its own stamp is independently
+  stale (see below), and a tank with no transcript at all on disk now
+  renders the tank's own name where an earlier version rendered a literal
+  empty title — an incidental fix to a pre-existing gap (R4-P3-1), not new
+  behaviour this round set out to add. Two fully bare sessions on the same
+  tank — genuinely nothing recorded to tell them apart — still fall back to
+  a marked guess (`?`), honestly, rather than one being presented as fact. A
+  guess whose entire exclusion-aware candidate pool has already been
+  claimed by other rows on the tank now falls back to the tank's own newest
+  transcript with no exclusion (an honest, possibly-duplicate guess) — the
+  same tank-name fallback applies when there is nothing on disk at all yet,
+  rather than rendering a blank title.
+
+  A stamp that has gone stale is now detected only by evidence about that
+  EXACT session — never by what anything else on the tank is doing: its own
+  transcript file is gone (deleted, moved, or a session id minted at launch
+  whose engine never got the chance to write it), or its own engine process
+  has stopped running while the tmux session outlives it (a `wake` watcher
+  window can keep a session on the board after its engine's own window has
+  already closed on its own). An earlier version of this check instead
+  treated "a newer transcript in the stamped session's own directory that
+  nothing else on the board claims" as proof the session had moved on (meant
+  to catch `/clear`) — but that signature is identical to a `clikae burn`, an
+  `--ephemeral` run, or an already-ended neighbour writing into the same tank
+  and directory, none of which appear on the live board and so none of which
+  are ever "claimed" there either. One `clikae burn` running alongside a
+  resumed, exactly-identified session was enough to swap that session's own
+  title for the burn's. That check has been removed rather than narrowed:
+  there was no signal in it that was actually about the stamped sid. One
+  consequence is honestly documented, not hidden: `/clear` (or a fork) makes
+  the engine start writing a brand-new transcript under a brand-new id while
+  the OLD stamp just sits there, and today clikae has no reliable way to tell
+  that case apart from a busy neighbour's own transcript — the row keeps
+  showing the pre-`/clear` title until the transcript is actually gone or the
+  engine process actually stops. The `?` marker itself is applied AFTER the
+  title is truncated to fit the row, not before, so a long guessed title can
+  no longer silently swallow it. It also no longer doubles up on a title that
+  already ends in a literal `?` — one trailing `?` is the marker in that
+  case, not two. `CLIKAE_LAUNCH_SID`, the exported environment
+  variable an earlier round of this fix threaded the resumed id through, is
+  gone entirely — it was never unset, so a tmux server born under it handed
+  the variable to every session that server spawned afterwards, occasionally
+  stamping an unrelated bare launch with a foreign session id. `clikae clean`
+  now also sweeps `~/.clikae/state/<session>.session_id` files whose tmux
+  session is gone, matching what it already did for orphaned `.scrollback`
+  files.
+
+  Whether a session's own engine is still running is now decided by window
+  NAME and pane state, never by numeric window position: "is there a window
+  that is not the `wake` watcher and whose pane isn't dead" — the same test
+  `tmux_sess_has_engine` (`lib/core/tmux.sh`) already uses correctly
+  elsewhere in this codebase. Tmux window index `0` used to stand in for
+  "the engine's window", but that index is the tmux USER's own `base-index`
+  setting (a session option read from their `~/.tmux.conf` at server
+  start), never clikae's to assume — on a `base-index 1` machine, every
+  exactly-identified row's engine window sat at index 1, so the old check
+  found no window 0 on a perfectly healthy session and marked it stale. The
+  pane-state half is new too: a user who has turned on tmux's
+  `remain-on-exit` gets a window that lingers after its process exits, and
+  that window's `#{pane_dead}` — not its existence — is now what's checked.
+  (A live window of the user's own, opened by hand inside the same session,
+  is still read as "something's there" either way — an honest miss, never a
+  false alarm on a session that is actually fine.)
 - `clikae app` restores the target terminal icon on every build, including
   `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
 - **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**
