@@ -328,6 +328,94 @@ session is one keypress from being back in.
 The third column is the session's title, not a status word, because `claude/x`
 does not tell you *which* piece of work that is.
 
+**Two live sessions on the same tank** (a bare one and a resumed one, say) draw
+two rows: the second is badged `#2` so they're not identical-looking
+duplicates, and each shows its OWN title rather than both collapsing onto
+whichever transcript happened to be written to most recently. For claude,
+that's true whether a window was started with `clikae resume` (or a
+hand-typed `--resume <sid>` / `-r <sid>`) or started completely fresh: claude
+accepts a session id handed to it at launch (`--session-id <uuid>`), so clikae
+mints one itself and hands it to the engine before it ever runs, then records
+that same id against the tmux window right after spawning it —
+but only for a launch whose own argv carries no resume/continue signal of its
+own. `clikae claude x -- --continue`, `-- -c`, or a bare `-- --resume` (the
+picker) run untouched, with no `--session-id` appended, because claude itself
+refuses to start with `--session-id` alongside `--continue`/`--resume` unless
+`--fork-session` is also given.
+
+Not every engine can be told its session id up front. codex and antigravity
+expose no equivalent flag today, so a window running either of those still
+falls back to a guess when it has no recorded identity: the tank's most
+recently active transcript that no OTHER live window on the same tank has
+already claimed — a real stamp, or another window's own guess, reserved
+before any row is drawn — marked with a trailing `?` so a guess never reads as
+a fact:
+
+```
+  ▸ Live
+    ● work #1 codex    "Transcreate the escape guides to 7 locales?"
+    ● work #2 codex    "Draft the v2 migration notes?"
+```
+
+A tank with only one live session is never ambiguous by GUESSING — there is
+nothing else it could be — so a single live session only ever shows a `?`
+when its OWN stamp has gone stale (see below), never merely for being alone
+on the board. And a guess is only
+ever a LAST resort: it never repeats a transcript another window on the same
+tank is already known to hold — real or guessed — so two windows read as two
+different pieces of work whenever there are two transcripts to tell them
+apart, even when neither window carries a recorded identity at all. The `?`
+says "this one wasn't confirmed", not "this might be a duplicate of the row
+above it". What a guess still can't do is tell you WHICH window is which —
+only that they differ — so treat the pairing as a best-effort hint, not a
+guarantee, on any engine that has no way to record identity up front.
+
+A stamp can also go stale, but only for reasons specific to that exact
+session — never because of what anything ELSE on the tank is doing. clikae
+downgrades a stamp to a marked guess when either of two things is true about
+its own sid: its own transcript file is gone (deleted, moved, or a session id
+minted at launch whose engine never got the chance to write it), or its own
+engine process has stopped running while the tmux session outlives it (a
+`wake` watcher window, opened in a later window slot to nudge a rate-limited
+session back to life, can keep a session on the board after its engine's own
+window has already closed on its own, and a window left behind by
+`remain-on-exit` is caught the same way). The one gap: if you've opened a
+second window of your own inside that same session, its presence reads as
+"something's still there" and the mark won't fire — a miss, never a false
+alarm on a session that's actually fine.
+
+What does NOT count as evidence: a newer transcript merely existing
+somewhere else on the same tank. A `clikae burn`, an `--ephemeral` run, and an
+already-ended neighbour session can all leave one behind, and none of those
+say anything about whether THIS session is still good — an earlier version of
+this check treated "nothing on the board claims that newer file" as proof the
+stamp had moved on, and a `clikae burn` running alongside a perfectly healthy
+resumed session was enough to trigger it. In particular, `/clear` (or a fork)
+makes the engine start writing a brand-new transcript under a brand-new id
+while the OLD one it stamped just sits there, unrevisited — but the old file
+still exists and the engine process is usually still running, so today clikae
+has no reliable way to tell that case apart from a busy neighbour's own
+transcript. The row keeps showing the pre-`/clear` title until one of the two
+signals above actually fires.
+
+A second, narrower gap sits next to that one: a session that has JUST
+started has no transcript file on disk yet (the engine writes it after the
+first exchange, not at launch), so until that file appears it resolves the
+same way an unstamped window does — which can be the SAME title a neighbour
+on the same tank is already showing, with only the new row's `?` to tell
+them apart. This is not a regression (main shows the same duplicate, without
+even a `?`) and it closes on its own the moment the new session's own
+transcript exists, but it is the same visible symptom `/clear` produces, so
+it belongs in the same honesty: two rows CAN briefly show one title, and the
+`?` is your signal for "not yet confirmed", not "definitely wrong".
+
+Two rows can also land on the very same fallback sid rather than merely the
+same TITLE: the exclusion-aware guess only excludes a sid another row already
+resolved to, so a stamped row that fell back after its own stamp went stale
+does not reserve its fallback pick against anyone else's guess. `?` on both
+rows is the tell — main duplicates here too, so this is an honest tie, not a
+silent wrong answer.
+
 Selecting a row shows a second line under it. For a tank that has hit its limit
 that line is the vendor's own sentence, verbatim — and clikae's promise, if a
 waiter is really attached, on the line after:

@@ -44,8 +44,11 @@
 <h2 id="2-邊界條件與防呆規範-edge-cases-amp-rules">2. 邊界條件與防呆規範 (Edge Cases &amp; Rules)</h2>
 <h3 id="rule-1-全域設定與視窗佔用-global-config-amp-exclusivity">Rule 1: 全域設定與視窗佔用 (Global Config &amp; Exclusivity)</h3>
 <ul>
-<li><strong>症狀</strong>：開機後首個背景任務設定 <code>history-limit</code> 失敗導致無卷軸。（多 client 共存是刻意的設計選擇）</li>
-<li><strong>收據</strong>：
+<li>
+<p><strong>症狀</strong>：開機後首個背景任務設定 <code>history-limit</code> 失敗導致無卷軸。（多 client 共存是刻意的設計選擇）</p>
+</li>
+<li>
+<p><strong>收據</strong>：</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>$ tmux show-options -g window-size</span></span>
 <span class="line"><span>window-size latest</span></span>
 <span class="line"><span>$ tmux new-session -d -x 200 -y 50 -s s ; # 只有 Mac client（200x50）接上</span></span>
@@ -55,16 +58,24 @@
 <span class="line"><span>$ # PineNote 離開之後</span></span>
 <span class="line"><span>200x49</span></span></code></pre>
 </li>
-<li><strong>規範</strong>：
-必須將全域設定與建立 Session 串在同一個指令，確保 Server 生命週期不中斷：
+<li>
+<p><strong>規範</strong>：
+必須將全域設定與建立 Session 串在同一個指令，確保 Server 生命週期不中斷：</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">tmux</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> set-option</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -g</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> history-limit</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> 50000</span><span style="--shiki-light:#005CC5;--shiki-dark:#FF7B72"> \;</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> new-session</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -d</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -e</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "CLIKAE_TANK_NAME=</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">$tank</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -s</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "clikae-&#x3C;run_id>"</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "..."</span></span></code></pre>
-🔴 <strong>這條被違反過，而且是靜音的。</strong> <code>burn.sh</code> 用的是裸的 <code>tmux new-session -d</code>，一個前綴都沒有。因為 <code>switch</code> 之後會補上全域選項，所以只有「burn 是第一個跑的東西」那一瞬間看得到；量到的（2026-08-15，隔離 socket）：
+<p>🔴 <strong>這條被違反過，而且是靜音的。</strong> <code>burn.sh</code> 用的是裸的 <code>tmux new-session -d</code>，一個前綴都沒有。因為 <code>switch</code> 之後會補上全域選項，所以只有「burn 是第一個跑的東西」那一瞬間看得到；量到的（2026-08-15，隔離 socket）：</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>$ # 沒有既存 server，用 burn 生一顆，趁它還活著問</span></span>
 <span class="line"><span>$ tmux show-options -gv history-limit</span></span>
 <span class="line"><span>2000          # tmux 的預設，不是我們的 50000</span></span></code></pre>
-收斂到 <code>tmux_spawn_session</code> 之後回到 50000。<code>tests/bats/tmux-spawn.bats</code> 釘住它——那個測試在修之前是紅的。
+<p>收斂到 <code>tmux_spawn_session</code> 之後回到 50000。<code>tests/bats/tmux-spawn.bats</code> 釘住它——那個測試在修之前是紅的。
 ⚠️ <strong>量的時候 server 必須還活著</strong>：<code>exit-empty</code> 讓 server 隨最後一個 session 消失，而對死掉的 server 問選項會<strong>默默起一顆新的</strong>、回答 tmux 的預設值——長得跟 bug 一模一樣，不管 bug 在不在。
-互動模式時使用 <code>tmux attach -t &quot;clikae-&lt;tank&gt;&quot;</code>，不再強制使用 <code>-D</code> 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。<code>window-size latest</code> 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。</li>
+互動模式時使用 <code>tmux attach -t &quot;clikae-&lt;tank&gt;&quot;</code>，不再強制使用 <code>-D</code> 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。<code>window-size latest</code> 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。</p>
+</li>
+<li>
+<p><strong>每 session（非全域）的 clikae 選項清冊</strong>：<code>status-left</code> / <code>status-left-length</code>（<code>tmux_label</code>，視窗徽章）之外，2026-09 起新增 <code>@clikae_session_id</code>（<code>tmux_set_session_id</code>，<code>lib/core/tmux.sh</code>）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，<code>live_session_id</code>（<code>lib/core/live.sh</code>）讀回。與上面的全域選項不同，它是單一 session 作用域、<code>set-option -t &quot;=$session:&quot;</code>，不會漏到同一 server 的其他 session；但同樣只在 <code>tmux_spawn_session</code> 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 <code>~/.clikae/state/&lt;session&gt;.session_id</code> 鏡像檔。</p>
+</li>
+<li>
+<p><strong><code>base-index</code> 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0</strong>：2026-09 起 <code>live_engine_alive</code>（<code>lib/core/live.sh</code>）需要問「這個 session 的引擎視窗還在不在」，一度用 <code>tmux list-windows -F '#{window_index}'</code> 比對字面 <code>0</code>——跟這條規則本身講的道理正是同一件事（<code>history-limit</code> 那個收據）：<code>tmux_spawn_session</code> 沒有設 <code>base-index</code> 不代表它是 0，代表它繼承使用者 <code>~/.tmux.conf</code> 裡設的任何值，而 <code>set -g base-index 1</code> 是很常見的一行。在 <code>base-index 1</code> 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗<strong>名稱</strong>：是否存在一個不是 <code>wake</code> 守望者（<code>^wake( |$)</code>，<code>wake_attach_watcher</code> 開的那個）的視窗——與 <code>tmux_sess_has_engine</code>（<code>lib/core/tmux.sh</code>）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。</p>
+</li>
 </ul>
 <h3 id="rule-2-tmux-是便利層不是相依三個出口">Rule 2: tmux 是便利層，不是相依（三個出口）</h3>
 <ul>
