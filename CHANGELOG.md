@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-09-11
+
 ### Added
 
 - **codex tanks now get a real fuel light — not just a dry marker.** codex's
