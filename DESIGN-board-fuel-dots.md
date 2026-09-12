@@ -39,6 +39,7 @@ this tank?_
 | dot | state | source |
 |---|---|---|
 | 🔴 red `●` | **dry** — over limit, can't burn now | `limit_tank_dry`: transcript (`limit_profile_dry`), log (`limit_log_dry`), or a **persisted dry marker** (`dry_store`, for exec-only limits like codex) — plus a sibling on the same dry account; verbatim reset string |
+| 🟡 yellow `◐` | **reset passed · unverified** | a retained limit whose parseable reset has passed; eligible for burn, pending a successful turn |
 | 🟡 yellow `●` | **weekly-% caution** (BETA) | the vendor's own "used N% of your weekly limit", captured **verbatim + stamped** by watch/auto — never computed |
 | 🟢 green `●` | **ready** — a detectable engine with no bad news | `limit_engine_detectable` true, not dry/warned |
 | ○ (no colour) | **no reading** — no fuel signal on disk right now (e.g. codex when no limit was caught) | `limit_engine_detectable` false **and** not dry |
@@ -205,3 +206,34 @@ each file whole under `bin/clikae`'s real `pipefail` — the per-file cache
 plus the pipefail fix together bring an ACTIVE-tank redraw back down near
 the pre-cache cost of scanning just the one changed file, while an IDLE
 redraw stays at the whole-store fast path's cost.
+
+## Expired limit evidence (#75)
+
+The shared tank verdict resolves reset phrases against the original observation
+timestamp, then compares that instant with the current clock. This prevents an
+undated time from rolling forward every day. A zone suffix in the phrase,
+`(Asia/Tokyo)` and friends, is always authoritative when present — including
+for codex's `try again at 5:23 PM` grammar — because agreeing with it on the
+maintainer's machine and disagreeing on a traveller's is exactly what a zone
+suffix exists to prevent (round-1 review, #75). Only when the phrase names no
+zone at all does codex fall back to rendering in the observer's own local
+timezone. Unparseable phrases keep the existing behavior. Live output detection
+still reports a newly observed rejection as dry.
+
+An expired limit is **yellow `◐`, “reset passed · unverified”**, taking precedence
+over proactive percentage snapshots. The default dry batch excludes it, allowing
+burn's next-tank selection to retry it. The board and status request the same
+batch with cautions included; status exposes the note as `fuelNote` in JSON.
+A later successful transcript turn clears the caution — including, for codex, a
+turn observed in the transcript after an unrelated persisted marker was written
+(round-1 review, #75: falling straight through to the marker regardless of a
+transcript's own recovery could pin a tank yellow forever). That clear is
+timestamp-gated, though (round-2 review, #75): a headless `codex exec` limit
+never reaches the transcript at all, so a days-old interactive recovery must
+not erase a marker burn wrote moments ago — only a recovery observed AFTER the
+marker's own timestamp clears it; an older recovery next to a newer marker
+falls through and the marker's own TTL / `CLIKAE_DRY_MAX_RETAIN` cap governs.
+Parseable expired store evidence survives the marker TTL as unverified until
+cleared, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) — retained
+evidence is a caution, not a promise to remember forever. Unparseable store
+evidence retains the existing TTL behavior.
