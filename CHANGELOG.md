@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Expired reset evidence now shows yellow “reset passed · unverified” on the
+  home board and a matching fuel note in `clikae status`. Burn can retry these
+  tanks; a successful turn clears the caution. Unknown reset wording keeps
+  the existing dry behavior (#75).
+
 ### Added
 
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless

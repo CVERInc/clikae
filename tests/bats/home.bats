@@ -148,6 +148,8 @@ _fake_bin() {
 # --- L4: over-quota (dry) tank awareness on the board ---------------------------
 
 # Seed a transcript line under a profile's project dir.
+# Dry rendering fixtures use future observations; expiry has fixed-clock tests
+# in dry-reset-expiry.bats.
 _seed_tx() { # <profile> <jsonl-line>
   local p="$CLIKAE_HOME/profiles/claude/$1/projects/-Users-x"
   mkdir -p "$p"
@@ -157,7 +159,7 @@ _seed_tx() { # <profile> <jsonl-line>
 @test "the board badges an over-quota tank with ! and its reset time" {
   clikae init claude dry
   clikae init claude ok
-  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}'
+  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2099-06-01T10:05:00Z"}'
   _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
@@ -190,7 +192,7 @@ _seed_tx() { # <profile> <jsonl-line>
   # isApiErrorMessage:true, apiErrorStatus:429, error:rate_limit, and a
   # "·"-separated reset phrase. Locks the new wording/structure in forever.
   clikae init claude dry
-  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2026-06-02T09:44:49.962Z"}'
+  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2099-06-02T09:44:49.962Z"}'
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
@@ -201,7 +203,7 @@ _seed_tx() { # <profile> <jsonl-line>
   # Defensive: if a future Claude Code pretty-prints its JSONL (space after each
   # colon), the structural greps must still match.
   clikae init claude dry
-  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2026-06-02T09:44:49.962Z"}'
+  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2099-06-02T09:44:49.962Z"}'
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
@@ -529,8 +531,10 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   limit_engine_detectable claude
   limit_engine_detectable antigravity
-  ! limit_engine_detectable codex
-  ! limit_engine_detectable gh
+  run limit_engine_detectable codex
+  [ "$status" -eq 1 ]
+  run limit_engine_detectable gh
+  [ "$status" -eq 1 ]
 }
 
 @test "_home_fuel_dot: every state has its OWN glyph, not just its own colour" {
@@ -723,7 +727,8 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   local loc
   for loc in es-ES de-DE fr-FR pt-BR; do
-    ( source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
+    ( # shellcheck source=/dev/null
+      source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
       source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
       # T_K_SOLO/T_K_MEMORY are full sentences (82-92 cols) that used to be
       # printed on one unwrapped line via an absolute \033[24G column jump.
@@ -975,7 +980,6 @@ _agy_log() { # <line>
     "$(printf 'resume\037claude\037rtank\037a title\037\0370 5m\037sid1')" \
     "$(printf 'tank\037claude\037ttank\037acct\037\0370\037')"
 
-  local bar
   bar() { _home_pick_draw_body "$items" "$1" "" | sed $'s/\033\\[[0-9;?]*[A-Za-z]//g'; }
 
   # row 0 = live: close, no reorder

@@ -45,6 +45,8 @@ dry_store_mark() {
 # dry_store_read <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase if a
 # FRESH marker exists; 1 otherwise. A marker older than CLIKAE_DRY_TTL is stale →
 # lazily removed and reported not-dry (turn green early rather than pin red).
+# --retain-stale is internal to the shared verdict: expired parseable evidence
+# must survive the TTL as unverified until a successful run clears it.
 dry_store_read() {
   local engine="$1" tank="$2" f line stamp reset now age
   f="$(dry_store_path "$engine" "$tank")"
@@ -56,7 +58,7 @@ dry_store_read() {
   case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
   now="$(date +%s 2>/dev/null || echo 0)"
   age=$(( now - stamp ))
-  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
+  if [ "${3:-}" != --retain-stale ] && [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
     rm -f "$f" 2>/dev/null || true
     return 1
   fi

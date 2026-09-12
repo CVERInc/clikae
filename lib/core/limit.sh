@@ -336,6 +336,7 @@ EOF
   fi
 
   printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
   return 0
 }
 
@@ -408,17 +409,18 @@ EOF
   # Dry: echo the vendor's own reset phrase (captured above from the newest limit
   # line), verbatim — never parsed into a countdown.
   printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
   return 0
 }
 
-# _limit_tank_dry_self <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase
+# _limit_tank_dry_raw <engine> <tank> -> 0 + phrase and optional observation stamp
 # if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
 #   · claude  — limit_profile_dry scans the tank's transcripts (account-level
 #     WITHIN this config dir: all its recent sessions).
 #   · any engine — a persisted dry marker (dry_store), written by the live catcher
 #     (burn / supervise) for engines whose limit never lands in a scannable file.
 # Self-only: factored out so limit_tank_dry's account contagion can't recurse.
-_limit_tank_dry_self() {
+_limit_tank_dry_raw() {
   local engine="$1" tank="$2" dir reset
   dir="$(profile_dir "$engine" "$tank")"
   # A transcript signal is always preferred: it self-clears the moment the account
@@ -435,10 +437,43 @@ _limit_tank_dry_self() {
     # that; the store has its own TTL.
     [ "$engine" = "claude" ] && return 1
   fi
-  if reset="$(dry_store_read "$engine" "$tank" 2>/dev/null)"; then
-    printf '%s' "$reset"; return 0
+  if reset="$(dry_store_read "$engine" "$tank" --retain-stale 2>/dev/null)"; then
+    printf '%s\037%s' "$reset" "$(dry_store_epoch "$engine" "$tank")"; return 0
   fi
   return 1
+}
+
+# Classify retained evidence once, for both the batch board and burn selector.
+# Keep the observation timestamp: undated phrases mean the next reset AFTER
+# that observation, not after each redraw (which would roll them forward forever).
+# A successful transcript turn still removes the evidence in the raw scanner.
+LIMIT_RESET_UNVERIFIED='reset passed · unverified'
+_limit_tank_dry_self() {
+  local raw reset stamp now at anchor
+  local _LIMIT_WITH_STAMP=1
+  raw="$(_limit_tank_dry_raw "$1" "$2")" || return 1
+  reset="${raw%%$'\037'*}"; stamp="${raw#*$'\037'}"
+  now="$(date +%s)"; anchor="$now"
+  if [ "$stamp" != "$raw" ]; then
+    case "$stamp" in
+      *T*)
+        stamp="${stamp%%.*}"; stamp="${stamp%Z}"
+        anchor="$(date -u -d "${stamp}Z" +%s 2>/dev/null ||
+          date -u -j -f '%Y-%m-%dT%H:%M:%S' "$stamp" +%s 2>/dev/null)" || anchor="$now" ;;
+      ''|*[!0-9]*) ;;
+      *) anchor="$stamp" ;;
+    esac
+  fi
+  if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
+    printf '%s' "$LIMIT_RESET_UNVERIFIED"
+  else
+    # Preserve the store's existing TTL for evidence whose reset did not expire.
+    case "$stamp" in
+      ''|*[!0-9]*) ;;
+      *) dry_store_read "$1" "$2" >/dev/null || return 1 ;;
+    esac
+    printf '%s' "$reset"
+  fi
 }
 
 # _limit_tank_account <engine> <tank> -> this tank's account label (e.g. the
@@ -465,7 +500,7 @@ _limit_tank_account() {
 #      (empty label) — we never guess a shared quota we can't see.
 limit_tank_dry() {
   local engine="$1" tank="$2" reset acct sib_e sib_t _p sib_acct
-  if reset="$(_limit_tank_dry_self "$engine" "$tank")"; then
+  if reset="$(_limit_tank_dry_self "$engine" "$tank")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
     printf '%s' "$reset"; return 0
   fi
   acct="$(_limit_tank_account "$engine" "$tank")"
@@ -476,7 +511,7 @@ limit_tank_dry() {
     [ "$sib_t" = "$tank" ] && continue
     sib_acct="$(_limit_tank_account "$sib_e" "$sib_t")"
     [ -n "$sib_acct" ] && [ "$sib_acct" = "$acct" ] || continue
-    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")"; then
+    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s' "$reset"; return 0
     fi
   done <<EOF
@@ -488,13 +523,15 @@ EOF
 # limit_dry_set — the BATCH form of limit_tank_dry for the whole board. Reads a
 # profile list (engine<TAB>tank<TAB>path per line) on stdin and emits one row
 #   engine␟tank␟reset
-# per tank that is out of fuel. Same verdict as calling limit_tank_dry on each
+# per tank that is out of fuel (--include-unverified also emits reset cautions).
+# Same verdict as calling limit_tank_dry on each
 # tank, but it computes each tank's OWN signal (_limit_tank_dry_self) EXACTLY ONCE
 # and then resolves account contagion from that cache — so a board with several
 # same-account tanks (e.g. claude C+MFC) doesn't re-scan the same transcripts N
 # times (the board's last hot spot; dogfood 2026-06-29). Indexed arrays only (no
 # associative arrays — bash 3.2).
 limit_dry_set() {
+  local include_unverified="${1:-}"
   local -a _e=() _t=() _a=() _sd=() _sr=()   # engine, tank, account, self-dry(0/1), self-reset
   local cli profile path sreset
   # Pass 1 — each tank's OWN signal + account, computed ONCE.
@@ -514,19 +551,21 @@ limit_dry_set() {
   # (contagion). A sibling hit counts even when its reset phrase is empty.
   local i j n="${#_e[@]}" hit reset
   for ((i = 0; i < n; i++)); do
-    if [ "${_sd[i]}" = "1" ]; then
+    if [ "${_sd[i]}" = "1" ] && [ "${_sr[i]}" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "${_sr[i]}"
       continue
     fi
-    [ -n "${_a[i]}" ] || continue   # unknown account → never guess a shared quota
-    hit=0; reset=""
+    hit="${_sd[i]}"; reset="${_sr[i]}"
     for ((j = 0; j < n; j++)); do
+      [ -n "${_a[i]}" ] || continue
       [ "$j" -ne "$i" ] || continue
       [ "${_sd[j]}" = "1" ] || continue
       [ "${_e[j]}" = "${_e[i]}" ] || continue
       [ "${_a[j]}" = "${_a[i]}" ] || continue
-      hit=1; reset="${_sr[j]}"; break
+      hit=1; reset="${_sr[j]}"
+      [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] || break
     done
+    if [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] && [ "$include_unverified" != --include-unverified ]; then continue; fi
     [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
   done
   return 0
@@ -707,6 +746,24 @@ _limit_month_num() {
 limit_reset_epoch() {
   local phrase="$1" now="$2"
   [ -n "$phrase" ] && [ -n "$now" ] || return 1
+
+  # Codex renders reset times in the machine's local timezone.
+  local codex_re='[Tt]ry again at ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  if [[ "$phrase" =~ $codex_re ]]; then
+    local ch="${BASH_REMATCH[1]}" cm="${BASH_REMATCH[2]}" meridian="${BASH_REMATCH[3]}" cd ct
+    [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    cd="$(date -d "@$now" +%Y-%m-%d 2>/dev/null || date -r "$now" +%Y-%m-%d)"
+    ct="$(printf '%02d:%s' "$ch" "$cm")"
+    local local_zone="${TZ:-/etc/localtime}" candidate
+    candidate="$(_limit_at "$local_zone" "$cd" "$ct")" || return 1
+    if [ "$candidate" -le "$now" ]; then
+      cd="$(_limit_shift_day "$local_zone" "$cd" 1)" || return 1
+      candidate="$(_limit_at "$local_zone" "$cd" "$ct")" || return 1
+    fi
+    printf '%s' "$candidate"; return 0
+  fi
 
   # The zone is written in the phrase and is authoritative. Reading $TZ instead
   # would agree with it on the maintainer's machine and disagree on a traveller's.

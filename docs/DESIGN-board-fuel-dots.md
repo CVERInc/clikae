@@ -39,6 +39,7 @@ this tank?_
 | dot | state | source |
 |---|---|---|
 | 🔴 red `●` | **dry** — over limit, can't burn now | `limit_tank_dry`: transcript (`limit_profile_dry`), log (`limit_log_dry`), or a **persisted dry marker** (`dry_store`, for exec-only limits like codex) — plus a sibling on the same dry account; verbatim reset string |
+| 🟡 yellow `◐` | **reset passed · unverified** | a retained limit whose parseable reset has passed; eligible for burn, pending a successful turn |
 | 🟡 yellow `●` | **weekly-% caution** (BETA) | the vendor's own "used N% of your weekly limit", captured **verbatim + stamped** by watch/auto — never computed |
 | 🟢 green `●` | **ready** — a detectable engine with no bad news | `limit_engine_detectable` true, not dry/warned |
 | ○ (no colour) | **no reading** — no fuel signal on disk right now (e.g. codex when no limit was caught) | `limit_engine_detectable` false **and** not dry |
@@ -205,3 +206,20 @@ each file whole under `bin/clikae`'s real `pipefail` — the per-file cache
 plus the pipefail fix together bring an ACTIVE-tank redraw back down near
 the pre-cache cost of scanning just the one changed file, while an IDLE
 redraw stays at the whole-store fast path's cost.
+
+## Expired limit evidence (#75)
+
+The shared tank verdict resolves reset phrases against the original observation
+timestamp, then compares that instant with the current clock. This prevents an
+undated time from rolling forward every day. Codex's `try again at 5:23 PM`
+uses local time; Claude's reset phrases retain their explicit timezone.
+Unparseable phrases keep the existing behavior. Live output detection still
+reports a newly observed rejection as dry.
+
+An expired limit is **yellow `◐`, “reset passed · unverified”**, taking precedence
+over proactive percentage snapshots. The default dry batch excludes it, allowing
+burn's next-tank selection to retry it. The board and status request the same
+batch with cautions included; status exposes the note as `fuelNote` in JSON.
+A later successful transcript turn or explicit success clearing a persisted
+marker removes the caution. Parseable expired store evidence survives the marker
+TTL; unparseable store evidence retains the existing TTL behavior.

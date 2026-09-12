@@ -19,9 +19,11 @@ _src() {
 }
 
 # Seed a genuine claude limit marker (synthetic + isApiErrorMessage) under a tank.
+# Future observation keeps these account/selection fixtures dry; reset expiry
+# is covered with a fixed clock in dry-reset-expiry.bats.
 _seed_dry_tx() { # <engine> <profile>
   local p="$CLIKAE_HOME/profiles/$1/$2/projects/-Users-x"; mkdir -p "$p"
-  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}' >> "$p/s.jsonl"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2099-06-01T10:05:00Z"}' >> "$p/s.jsonl"
 }
 
 # Pin a tank's account label (the email adapter_account_label reads).

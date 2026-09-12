@@ -77,6 +77,19 @@ _status_row_for() {
   )
 }
 
+# Fuel caution comes from the same batch verdict used by home and selection.
+_status_fuel_note() {
+  [ -n "$2" ] || return 0
+  local e t note
+  while IFS=$'\037' read -r e t note; do
+    if [ "$e" = "$1" ] && [ "$t" = "$2" ]; then
+      printf '%s' "${note:-over quota}"; return 0
+    fi
+  done <<EOF
+$(list_all_profiles | limit_dry_set --include-unverified)
+EOF
+}
+
 # Render the canonical rows (on stdin) as an aligned human table.
 _status_render_table() {
   printf '%b%-12s %-12s %-26s %s%b\n' "$__C_BOLD" "ENGINE" "TANK" "ACCOUNT" "SOURCE" "$__C_RESET"
@@ -97,6 +110,9 @@ _status_render_table() {
       noadapter) active_col="?";             source_col="(no adapter)" ;;
       *)         active_col="$state";        source_col="" ;;
     esac
+    local fuel_note
+    fuel_note="$(_status_fuel_note "$cli" "$profile")"
+    [ -z "$fuel_note" ] || source_col="$source_col  · $fuel_note"
     printf '%-12s %-12s %-26s %s\n' "$cli" "$active_col" "$account_col" "$source_col"
   done
 }
@@ -108,10 +124,11 @@ _status_render_json() {
   while IFS=$'\037' read -r cli state profile account envVar envValue; do
     [ -n "$cli" ] || continue
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '\n  {"cli":%s,"state":%s,"profile":%s,"account":%s,"envVar":%s,"envValue":%s}' \
+    printf '\n  {"cli":%s,"state":%s,"profile":%s,"account":%s,"envVar":%s,"envValue":%s,"fuelNote":%s}' \
       "$(json_str "$cli")" "$(json_str "$state")" \
       "$(json_or_null "$profile")" "$(json_or_null "$account")" \
-      "$(json_or_null "$envVar")" "$(json_or_null "$envValue")"
+      "$(json_or_null "$envVar")" "$(json_or_null "$envValue")" \
+      "$(json_or_null "$(_status_fuel_note "$cli" "$profile")")"
   done
   [ "$first" -eq 1 ] && printf ']\n' || printf '\n]\n'
 }
@@ -138,7 +155,7 @@ Arguments:
 
 Options:
   --json  Emit a JSON array instead of a table — one object per engine with fields
-          {cli, state, profile, account, envVar, envValue}, where state is one of
+          {cli, state, profile, account, envVar, envValue, fuelNote}, where state is one of
           active | default | external | flag | global | noadapter (profile/account/
           envValue are null when not applicable). "global" is agy's machine-wide
           ~/.gemini symlink (envValue = its target). For the menu-bar GUI and scripts.

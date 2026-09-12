@@ -699,12 +699,12 @@ _home_dry_set() {
     # the engine said when we last caught it headless — annotate WHEN we observed
     # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
     # has no store marker (its dry is a live transcript scan), so it's never tagged.
-    if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
+    if [ -n "$reset" ] && [ "$reset" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
       reset="$reset$(dry_seen_suffix "$ep")"
     fi
     printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
   done <<EOF
-$(list_all_profiles | limit_dry_set)
+$(list_all_profiles | limit_dry_set --include-unverified)
 EOF
 
   # Started at the top of this function; here is where we wait for it.
@@ -823,7 +823,7 @@ _home_is_dryv() {
   case "$set" in *"$key"*) ;; *) return 1 ;; esac
   rest="${set#*"$key"}"
   _DRY_RESET="${rest%%$'\n'*}"
-  return 0
+  [ "$_DRY_RESET" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]
 }
 
 # The echoing form, for callers that want the phrase in a $( ). Kept so the
@@ -933,6 +933,9 @@ _home_fuel_dotv() {
   _FNOTE=""
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
+  fi
+  if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
   if _home_weekly_readv "$cli" "$profile"; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
