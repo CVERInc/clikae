@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Antigravity board rows and the resume picker prefer the conversation title
+  from the CLI's summaries database, with opening-prompt fallback when the
+  title or SQLite is unavailable (#73).
+
 ### Added
 
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless

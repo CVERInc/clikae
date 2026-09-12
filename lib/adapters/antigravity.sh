@@ -87,10 +87,9 @@ adapter_session_title() {
 # Optional hook: title straight from a transcript FILE (see claude.sh's twin).
 # The resume picker used to re-implement this extraction inline — minus the
 # whitespace-collapse below, so the same session titled differently in the
-# picker vs the home board. No customTitle-equivalent here: antigravity's
-# transcript has no user-rename event to prefer (checked 2026-07-12 alongside
-# claude.sh's customTitle fix; nothing invented — the opening request stays
-# the only title source).
+# picker vs the home board. Prefer the CLI's conversation summary title;
+# keep this lookup inside the hook so the picker's per-file cache covers it.
+# SQLite is optional: absent/unreadable summaries fall back to the transcript.
 #
 # 🔴 2026-09-06: an empty extraction used to fall through as a bare "", which
 # the home board's Live row printed as a literal `""` — the ONLY row on the
@@ -99,13 +98,24 @@ adapter_session_title() {
 # unreadable/pre-opening-message transcript still deserves SOME word in that
 # column, not silence that reads as a rendering bug.
 adapter_title_for_file() {
-  local f="$1" t
+  local f="$1" t="" sdir sid db sql_sid
   [ -n "$f" ] && [ -f "$f" ] || return 0
-  t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+  sdir="${f%/.system_generated/logs/transcript.jsonl}"
+  sid="${sdir##*/}"
+  db="${sdir%/brain/*}/conversation_summaries.db"
+  if [ -f "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    # Escape SQL string literals; read-only, short-lived connection because agy
+    # writes this database. A failed read (including a lock) uses the prompt.
+    sql_sid=${sid//\'/\'\'}
+    t="$(sqlite3 -readonly "$db" "SELECT title FROM conversation_summaries WHERE conversation_id = '$sql_sid' LIMIT 1;" 2>/dev/null)" || t=""
+  fi
+  if [ -z "$t" ]; then
+    t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
         | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-  if [[ "$t" == *"<USER_REQUEST>"* ]]; then
-    t="${t#*<USER_REQUEST>}"
-    t="${t%%</USER_REQUEST>*}"
+    if [[ "$t" == *"<USER_REQUEST>"* ]]; then
+      t="${t#*<USER_REQUEST>}"
+      t="${t%%</USER_REQUEST>*}"
+    fi
   fi
   t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
     | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
