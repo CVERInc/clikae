@@ -17,6 +17,24 @@
 # ever written)". A per-tank inline rebuild on a genuine miss is O(that one
 # tank); the thing #62 killed was O(all of them, every frame, whether or not
 # anything changed).
+#
+# 2026-09-12 round-2 fix review (P1-A/P1-B/P1-C): three of round-1's
+# freshness signals still had gaps. P1-A — the per-file staleness check
+# below only compared whole-second mtimes and threw away the size
+# `files_mtime_size` already hands back, so a write landing in the SAME
+# wall-clock second as the last publish was invisible in EITHER direction
+# (a limit landing read as fresh, a resolved limit stuck reading stale).
+# `recent/<key>` rows now carry a size column too, and both are compared at
+# nanosecond precision (`files_mtime_size`'s `%.9Y`, the same fix
+# `_reading_cache_keyv` already made — see reading_cache.sh's header).
+# P1-B — claude's fuel reading is ACCOUNT-level (`claude-usage` scans
+# `projects/` in full), but the only freshness signals were PWD-scoped, so a
+# limit landing in a different project directory never invalidated this
+# one's board. See `_claude_usage_stale` below. P1-C — codex's rollouts live
+# three levels under `sessions/` (`sessions/YYYY/MM/DD/`), so a brand new
+# session never touched `sessions/`'s own mtime; `_board_scan_root` now
+# tracks today's date directory instead (computed, never a `find` — this
+# check runs on every render).
 board_key() { local k; k="$(printf '%s' "$1" | cksum)"; printf '%s' "${k%% *}"; }
 board_root() { printf '%s/state/board/%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$(board_key "$1")"; }
 
@@ -53,15 +71,65 @@ _board_scan_root() {
   local engine="$1" dir="$2"
   case "$engine" in
     claude) printf '%s/projects/%s' "$dir" "$(_claude_project_slug "$PWD")" ;;
-    codex) _codex_sessions_dir "$dir" ;;
+    # P1-C (2026-09-12 round-2 fix review): rollouts live THREE levels under
+    # sessions/ (sessions/YYYY/MM/DD/rollout-*.jsonl — see
+    # _codex_today_scan_dir's own header), so sessions/ itself never takes a
+    # new session's mtime. Point at today's date directory instead (no
+    # `find`: computed directly from the wall clock).
+    codex) _codex_today_scan_dir "$dir" ;;
     grok) printf '%s/sessions' "$dir" ;;
     antigravity) printf '%s/antigravity-cli/brain' "$dir" ;;
   esac
 }
 
+# _claude_usage_stale <dir> <generation-path> -> success (0) when the
+# ACCOUNT-level claude-usage/fuel reading recorded in <generation-path> no
+# longer matches what is on disk. `limit_profile_dry` reads `claude-usage`
+# (board_state_refresh: `find "$dir/projects" -name '*.jsonl' -mmin -300`,
+# scanning EVERY project, not just this PWD's), so its freshness cannot be a
+# PWD-scoped signal — see board_stale's own P1-B comment for the failure
+# this closes: a limit landing in a DIFFERENT project directory never
+# touches this scope's scanroot-mtime or recent/<key>, so this board stayed
+# "fresh" (green) forever. Two signals, both O(bounded), neither a fork per
+# candidate file:
+#   1. `projects/`'s OWN mtime (not projects/<slug>) — catches a brand new
+#      project directory appearing anywhere in the account.
+#   2. the recorded (mtime, size) of each file that was inside the -mmin
+#      -300 window at the last publish, re-stat in ONE batched call — catches
+#      an append (a limit landing, or clearing) to a session in a project
+#      whose directory already existed, which does not bump `projects/`'s
+#      own mtime, only that one file's.
+# A file recorded in signal 2 having disappeared (aged out, or the fixture
+# moved it) is itself treated as stale — the usage snapshot is trusted only
+# while every file it was computed from is still exactly what it was.
+_claude_usage_stale() {
+  local dir="$1" gen="$2" root_mt saved_root_mt
+  [ -f "$gen/claude-usage-root-mtime" ] || return 0
+  root_mt="$(file_mtime "$dir/projects" 2>/dev/null)" || root_mt=""
+  saved_root_mt=""
+  IFS= read -r saved_root_mt < "$gen/claude-usage-root-mtime"
+  [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ] && return 0
+
+  [ -f "$gen/claude-usage-files" ] || return 0
+  local p m s
+  local -a upaths=() umts=() uszs=()
+  while IFS=$'\037' read -r p m s; do
+    [ -n "$p" ] || continue
+    [ -f "$p" ] || return 0   # a counted file vanished — the reading is stale.
+    upaths+=("$p"); umts+=("$m"); uszs+=("$s")
+  done < "$gen/claude-usage-files"
+  [ "${#upaths[@]}" -gt 0 ] || return 1
+  local i=0 cur_mt cur_sz
+  while IFS=' ' read -r cur_mt cur_sz; do
+    { [ "$cur_mt" = "${umts[$i]}" ] && [ "$cur_sz" = "${uszs[$i]}" ]; } || return 0
+    i=$((i + 1))
+  done < <(files_mtime_size "${upaths[@]}")
+  return 1
+}
+
 # board_stale <engine> <dir> <generation-path> -> success (0) when the
 # published generation no longer matches what is on disk for THIS scope.
-# Two O(1)-ish signals, neither a tree walk, and both compared for EQUALITY
+# O(1)-ish signals, neither a tree walk, and all compared for EQUALITY
 # against what was RECORDED at publish time — never ">" against a wall-clock
 # stamp: a fixture (or a clock skew) that dates a file into the future is a
 # legitimate, existing pattern in this repo's own tests (touch -t past the
@@ -71,12 +139,19 @@ _board_scan_root() {
 #   1. the PWD-scoped scan root's own mtime, vs `scanroot-mtime` recorded at
 #      publish — catches a session that did not exist at publish time (a new
 #      file is a new dirent, which always bumps its parent directory's mtime).
-#   2. the mtime of each of THIS scope's already-recorded recent sessions
-#      (bounded to CLIKAE_HOME_RECENT_MAX, never the whole tree), vs the mtime
-#      recorded for it in `recent/<scope>` at publish — catches an in-progress
-#      session simply growing, with no new/removed file at all (the P1-3
-#      shape: a limit landing mid-session).
-# Either mismatch means rebuild.
+#   2. (claude only) the account-level fuel reading — see
+#      `_claude_usage_stale` above. Checked BEFORE the per-scope early return
+#      below, because a scope with no recorded recent sessions must still
+#      answer for an account-level limit landing elsewhere (P1-B).
+#   3. the (mtime, size) of each of THIS scope's already-recorded recent
+#      sessions (bounded to CLIKAE_HOME_RECENT_MAX, never the whole tree), vs
+#      what was recorded for it in `recent/<scope>` at publish — catches an
+#      in-progress session simply growing, with no new/removed file at all
+#      (the P1-3 shape: a limit landing mid-session). Both fields, at the
+#      nanosecond precision `files_mtime_size` now reports (P1-A): a mtime-only,
+#      whole-second comparison went blind to any write landing in the SAME
+#      wall-clock second as the last publish, in EITHER direction.
+# Any mismatch means rebuild.
 board_stale() {
   local engine="$1" dir="$2" gen="$3" scan_root root_mt saved_root_mt key
   [ -f "$gen/updated" ] || return 0
@@ -89,6 +164,8 @@ board_stale() {
     if [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ]; then return 0; fi
   fi
 
+  if [ "$engine" = claude ] && _claude_usage_stale "$dir" "$gen"; then return 0; fi
+
   local scope key; scope="$(_board_scope_raw "$engine")"; key="$(board_key "$scope")"
   [ -f "$gen/recent/$key" ] || return 1
   # ONE stat call for every candidate (files_mtime_size, shared kernel — see
@@ -97,15 +174,22 @@ board_stale() {
   # recent files here would multiply right back into the O(files) cost #62
   # was written to kill, just moved from "every transcript" to "every recent
   # file, every read, every render".
-  local mt sid f sidkey savedsid
-  local -a rmts=() rfiles=()
+  # Row shape (P1-A): "<display-mt>\037<stale-mt>\037<size>\037<sid>". The
+  # DISPLAY mtime is whole-second — board_recent hands it straight to
+  # callers (home.sh's `_human_age` does bash integer arithmetic on it) — so
+  # it must stay exactly what it always was. The STALENESS check needs
+  # nanosecond precision AND size (see this function's own header), which
+  # live in the two fields between it and the sid.
+  local dmt mt sz sid f sidkey savedsid
+  local -a rmts=() rsizes=() rfiles=()
   local firstline=1
-  while IFS=$'\037' read -r mt sid; do
+  while IFS=$'\037' read -r dmt mt sz sid; do
     if [ "$firstline" -eq 1 ]; then
       firstline=0
       # P3-2: a board_key collision on the scope itself is a miss, not a
-      # confident wrong answer for a completely different directory.
-      { [ "$mt" = "#scope" ] && [ "$sid" = "$scope" ]; } || return 1
+      # confident wrong answer for a completely different directory. (The
+      # header row has only two fields, so `mt` holds the recorded scope here.)
+      { [ "$dmt" = "#scope" ] && [ "$mt" = "$scope" ]; } || return 1
       continue
     fi
     [ -n "$sid" ] || continue
@@ -114,12 +198,12 @@ board_stale() {
     { IFS= read -r savedsid; IFS= read -r f; } < "$gen/sids/$sidkey"
     [ "$savedsid" = "$sid" ] || continue   # P3-2: same guard on the sid index.
     [ -f "$f" ] || continue
-    rmts+=("$mt"); rfiles+=("$f")
+    rmts+=("$mt"); rsizes+=("$sz"); rfiles+=("$f")
   done < "$gen/recent/$key"
   [ "${#rfiles[@]}" -gt 0 ] || return 1
-  local i=0 cur_mt _rest
-  while IFS=' ' read -r cur_mt _rest; do
-    [ "$cur_mt" = "${rmts[$i]}" ] || return 0
+  local i=0 cur_mt cur_sz
+  while IFS=' ' read -r cur_mt cur_sz; do
+    { [ "$cur_mt" = "${rmts[$i]}" ] && [ "$cur_sz" = "${rsizes[$i]}" ]; } || return 0
     i=$((i + 1))
   done < <(files_mtime_size "${rfiles[@]}")
   return 1
@@ -178,7 +262,14 @@ board_recent() {
   # P3-2: a board_key collision on the scope is a miss, never someone else's
   # recent list — see board_stale's twin guard.
   { [ "$hmark" = "#scope" ] && [ "$hscope" = "$scope" ]; } || return 0
-  tail -n +2 "$gen/recent/$key" | head -n "$n"
+  # Rows are "<display-mt>\037<stale-mt>\037<size>\037<sid>" on disk (P1-A —
+  # the last two fields back board_stale's own comparison), but every caller
+  # (claude/codex/grok/antigravity's adapter_recent_sids, and home.sh's
+  # `_human_age` after it, which does bash integer arithmetic on the mtime)
+  # is written to the older, public "<display-mt>\037<sid>" contract. Keep
+  # only the whole-second display mtime and the sid here, once, rather than
+  # widen every adapter (and every arithmetic consumer) to a 4-field row.
+  tail -n +2 "$gen/recent/$key" | head -n "$n" | cut -d $'\037' -f1,4
 }
 board_find() {
   local engine="$1" dir="$2" sid="$3" gen f="" sf savedsid
@@ -205,6 +296,15 @@ board_find() {
 # launched a dozen times a day used to pile up a full day's worth under the
 # old `-mtime +1` rule) and by `clikae clean` (so a tank nobody has launched
 # in a while still gets swept without waiting on a day-old floor).
+#
+# P3-1 (2026-09-12 round-2 fix review): several publishes inside the same
+# wall-clock second all get whole-second mtimes, so the sort had no way to
+# tell them apart — a non-deterministic ordering that could rm the directory
+# `current` actually points at. The consequence stays bounded either way
+# (board_generation's own `[ -f "$root/current" ]` check + a rebuild covers
+# a dangling pointer), but the sort itself should still be reproducible.
+# Directory name as the tie-break: cheap, and turns "arbitrary" into
+# "deterministic" even though mktemp's XXXXXX suffix is random, not ordered.
 board_gc_generations() {
   local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd gmt
   [ -d "$root" ] || return 0
@@ -215,7 +315,7 @@ board_gc_generations() {
       [ -d "$gd" ] || continue
       gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
       printf '%s\037%s\n' "$gmt" "$gd"
-    done | sort -t$'\037' -k1,1 -rn | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
+    done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
   )
   return 0
 }
@@ -227,11 +327,16 @@ board_state_refresh() (
   case "$engine" in claude|codex|antigravity|grok) ;; *) return 0 ;; esac
   case "$n" in ''|*[!0-9]*) n=10 ;; esac
   umask 077
+  # P3-4 (2026-09-12 round-2 fix review): load_adapter now runs BEFORE
+  # mktemp -d, not after — a load failure used to leave a generation
+  # directory behind that nothing would ever point `current` at (harmless
+  # once board_gc_generations' keep-5 sweep started catching it, but there is
+  # no reason to create it at all when this call is about to bail anyway).
+  load_adapter "$engine" >/dev/null 2>&1 || return 0
   root="$(board_root "$dir")"
   mkdir -p "$root" || return 0
   gen="$(mktemp -d "$root/generation.XXXXXX")" || return 0
   mkdir -p "$gen/recent" "$gen/sids"
-  load_adapter "$engine" >/dev/null 2>&1 || return 0
   case "$engine" in
     claude) files="$(find "$dir/projects" -type f -name '*.jsonl' 2>/dev/null || true)" ;;
     codex) files="$(find "$(_codex_sessions_dir "$dir")" -type f -name 'rollout-*.jsonl' 2>/dev/null || true)" ;;
@@ -254,6 +359,20 @@ board_state_refresh() (
   if [ -n "$scan_root" ] && [ -d "$scan_root" ]; then
     file_mtime "$scan_root" > "$gen/scanroot-mtime" 2>/dev/null || true
   fi
+  # P1-A (2026-09-12 round-2 fix review): the mtime `sessions_by_mtime` sorts
+  # by is whole-second and only used for ORDER here. What board_stale
+  # actually re-checks later needs nanosecond precision AND size (see its own
+  # header) — both come from files_mtime_size, ONE batched call (positional,
+  # same order as $paths — see its own header in profile_store.sh) zipped
+  # back onto each path by index, never a fork per file.
+  local -A _fmap=()
+  if [ "${#paths[@]}" -gt 0 ]; then
+    local _fi=0 _fmt _fsz
+    while read -r _fmt _fsz; do
+      _fmap["${paths[$_fi]}"]="$_fmt"$'\037'"$_fsz"
+      _fi=$((_fi + 1))
+    done < <(files_mtime_size "${paths[@]}")
+  fi
   if [ "${#paths[@]}" -gt 0 ]; then
     while read -r mt f; do
       [ -f "$f" ] || continue
@@ -274,7 +393,15 @@ board_state_refresh() (
       # Same guard on the scope: a fresh recent/<key>.all gets the raw scope
       # as its own first line, verified back by board_recent/board_stale.
       [ -f "$gen/recent/$key.all" ] || printf '#scope\037%s\n' "$scope" > "$gen/recent/$key.all"
-      printf '%s\037%s\n' "$mt" "$sid" >> "$gen/recent/$key.all"
+      # "<display-mt>\037<stale-mt>\037<size>\037<sid>" — $mt (whole-second,
+      # sessions_by_mtime's own sort key) is the DISPLAY value board_recent
+      # hands to callers unchanged; the fine-grained pair from _fmap is
+      # board_stale's own comparison data (see its header). Falls back to
+      # $mt again and a sentinel size only if $f somehow fell out of _fmap
+      # between the two stat passes (a raced deletion) — degrades to the
+      # OLD whole-second-only staleness check for that one row, never a
+      # missing display value.
+      printf '%s\037%s\037%s\n' "$mt" "${_fmap[$f]:-$mt$'\037'0}" "$sid" >> "$gen/recent/$key.all"
     done < <(sessions_by_mtime "${paths[@]}")
   fi
   for f in "$gen"/recent/*.all; do
@@ -286,7 +413,27 @@ board_state_refresh() (
   case "$engine" in
     claude)
       files="$(find "$dir/projects" -name '*.jsonl' -mmin -300 2>/dev/null || true)"
-      _limit_claude_readings "$files" > "$gen/claude-usage" ;;
+      _limit_claude_readings "$files" > "$gen/claude-usage"
+      # P1-B (2026-09-12 round-2 fix review): claude-usage is ACCOUNT-level
+      # (every project, not just this PWD's), so its OWN freshness signals
+      # must be too — see _claude_usage_stale's header. `projects/`'s own
+      # mtime catches a brand new project directory; the (mtime, size) of
+      # each file that was inside the -mmin -300 window just now — bounded
+      # by definition, never the whole tree — catches an append (a limit
+      # landing, or clearing) to a session in a project whose directory
+      # already existed.
+      file_mtime "$dir/projects" > "$gen/claude-usage-root-mtime" 2>/dev/null || true
+      : > "$gen/claude-usage-files"
+      local -a ufiles=()
+      while IFS= read -r f; do [ -n "$f" ] && ufiles+=("$f"); done <<< "$files"
+      if [ "${#ufiles[@]}" -gt 0 ]; then
+        local _ui=0 _umt _usz
+        while read -r _umt _usz; do
+          printf '%s\037%s\037%s\n' "${ufiles[$_ui]}" "$_umt" "$_usz" >> "$gen/claude-usage-files"
+          _ui=$((_ui + 1))
+        done < <(files_mtime_size "${ufiles[@]}")
+      fi
+      ;;
     antigravity) agy_email "$dir" > "$gen/email" ;;
     codex)
       _limit_codex_rate_limits_cached "$dir" "$root/codex-cache" > "$gen/codex-usage" || true
