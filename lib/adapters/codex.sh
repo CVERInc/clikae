@@ -133,7 +133,9 @@ _codex_meta_uncached() {
 # _codex_find_rollout <dir> <sid> — the rollout file for a session id (the uuid is
 # the filename suffix), or empty.
 _codex_find_rollout() {
-  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_find codex "$1" "$2"; return $?; fi
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local f; f="$(board_find codex "$1" "$2" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   local sdir; sdir="$(_codex_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
   find "$sdir" -type f -name "rollout-*-$2.jsonl" 2>/dev/null | head -n 1
@@ -198,8 +200,10 @@ adapter_transcript_path() {
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    board_recent codex "$@"
-    return 0
+    # Snapshot first, live content-scan fallback only on a genuine miss — see
+    # claude.sh's twin comment (2026-09-12 round-1 fix review, P1-1).
+    local _bout; _bout="$(board_recent codex "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
   local dir="$1" limit="${2:-5}" f sid mt
   # codex's this-dir set is content-matched (a rollout records $PWD in its body,

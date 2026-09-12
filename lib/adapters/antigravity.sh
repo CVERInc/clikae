@@ -164,8 +164,8 @@ _antigravity_title_uncached() {
 # for one session at a time.
 adapter_recent_sids() {
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    board_recent antigravity "$@"
-    return 0
+    local _bout; _bout="$(board_recent antigravity "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
   local dir="$1" limit="${2:-5}" brain want sdir sid f cwd
   brain="$dir/antigravity-cli/brain"

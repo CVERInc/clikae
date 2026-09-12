@@ -582,8 +582,14 @@ _claude_title_uncached() {
 
 adapter_recent_sids() {
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    board_recent claude "$@"
-    return 0
+    # Snapshot first (board_generation keeps it fresh per-render on its own —
+    # see board_stale). Only fall through to the live glob below when the
+    # snapshot itself has nothing to say, never disable the glob outright:
+    # 2026-09-12 round-1 fix review, P1-1 — a board with no snapshot at all
+    # for THIS scope must still answer, and a live guess here is bounded by
+    # this one directory's own file count, not by every transcript on disk.
+    local _bout; _bout="$(board_recent claude "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
   local dir="$1" limit="${2:-5}" proj mt f
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
@@ -616,7 +622,12 @@ adapter_recent_sids() {
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1
-  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_find claude "$dir" "$sid"; return $?; fi
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first; fall through to the all-projects glob when this sid is
+    # simply not in the snapshot's sids index (2026-09-12 round-1 fix review,
+    # P1-1(b): a sid outside $PWD's own project slug still needs an answer).
+    f="$(board_find claude "$dir" "$sid" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   for f in "$dir"/projects/*/"$sid".jsonl; do
     [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
   done

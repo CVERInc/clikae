@@ -167,7 +167,9 @@ _grok_summaries_for_cwd() {
 # the session directory's name), or empty. Not scoped to $PWD: `clikae resume
 # <id>` looks a session up across directories.
 _grok_find_summary() {
-  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_find grok "$1" "$2"; return $?; fi
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local f; f="$(board_find grok "$1" "$2" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   local sdir; sdir="$(_grok_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
   find "$sdir" -maxdepth 3 -type f -name 'summary.json' -path "*/$2/summary.json" 2>/dev/null | head -n 1
@@ -221,7 +223,10 @@ EOF
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
-  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_recent grok "$@"; return 0; fi
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local _bout; _bout="$(board_recent grok "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
   local dir="$1" limit="${2:-5}" f sid mt
   # grok's this-dir set is content-matched (see _grok_summaries_for_cwd), so the
   # FILE LIST comes from there; sessions_by_mtime (shared kernel) then stats+sorts

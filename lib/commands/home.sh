@@ -316,7 +316,13 @@ EOF
   local _guessmap="" _gn _ge _gt _gc0 _gcr _gat
   while IFS=$'\037' read -r _gn _ge _gt _gc0 _gcr _gat; do
     [ -n "$_gn" ] || continue
-    [ "${_CLIKAE_BOARD:-0}" != 1 ] || continue
+    # 2026-09-12 round-1 fix review, P1-1: this used to skip the whole guess
+    # pass in board mode, leaving `title="$tank"` (below) as the only outcome
+    # for every unstamped live row on a board build. adapter_recent_sids now
+    # answers from the snapshot first and only falls through to a live,
+    # per-directory scan when the snapshot itself has nothing — bounded by
+    # THIS tank's own file count either way, never every transcript on disk —
+    # so there is no cost reason left to disable it here.
     [ -n "$_gc0" ] && continue   # a real stamp — already in $_claimed from pass 1
     load_adapter "$_ge" >/dev/null 2>&1 || true
     declare -F adapter_recent_sids >/dev/null 2>&1 || continue
@@ -412,7 +418,7 @@ EOF
       fi
     fi
 
-    if [ "${_CLIKAE_BOARD:-0}" != 1 ] && [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
       # No recorded identity — the tank-scoped guess pass 2 already computed
       # for THIS exact row (R1-P1-1: excluding every sid a stamped OR
       # already-guessed row on this same tank has claimed), looked up by
@@ -469,7 +475,7 @@ EOF
     # guess.
     if [ -z "$title" ]; then
       guessed=1
-      if [ "${_CLIKAE_BOARD:-0}" != 1 ] && [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
         sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
       fi
       if [ -n "$sid" ] && declare -F adapter_session_title >/dev/null 2>&1; then
