@@ -35,6 +35,8 @@ home; clikae finds the tank and resumes it there.
                             session is carried there (a real cross-tank resume,
                             not a fresh start). Press `c` in the picker to free
                             disk space (opens `clikae clean`, then comes back).
+  clikae resume --all       include headless "burn" sessions in the picker
+                            (they are hidden by default to avoid clutter).
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
   clikae resume ask-tank [always|dry-only]
                             show or set whether resuming from the home board
@@ -58,8 +60,10 @@ _resume_split() {
   _rs_engine="${tmp%%$'\x1f'*}"; tmp="${tmp#*$'\x1f'}"
   _rs_tank="${tmp%%$'\x1f'*}";   tmp="${tmp#*$'\x1f'}"
   _rs_sid="${tmp%%$'\x1f'*}";    tmp="${tmp#*$'\x1f'}"
-  _rs_f="${tmp%%$'\x1f'*}"
-  _rs_mt="${tmp##*$'\x1f'}"
+  _rs_f="${tmp%%$'\x1f'*}";      tmp="${tmp#*$'\x1f'}"
+  _rs_mt="${tmp%%$'\x1f'*}"
+  _rs_is_burn="${tmp##*$'\x1f'}"
+  [ "$_rs_is_burn" = "$_rs_mt" ] && _rs_is_burn=0
 }
 
 # _resume_session_fields <path> — derive _rs_engine/_rs_tank/_rs_sid from a raw
@@ -325,7 +329,7 @@ _resume_pick_draw_body() {
   # localized key labels are correct and de/es/fr legitimately need the room
   # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a Toggle --all · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
   printf '\n'
 
@@ -339,6 +343,7 @@ _resume_pick_draw_body() {
     _resume_split "${sessions[s_idx]}"
     engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
     label="${cached_title[s_idx]}"
+    [ "$_rs_is_burn" = "1" ] && label="[burn] $label"
     rage="${cached_age[s_idx]}"
 
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -474,7 +479,7 @@ _resume_pick() {
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
-  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0
+  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0 trigger_all=0
 
   # Keys arrive pre-decoded by tui_read_key (lib/core/tui.sh) as symbolic names
   # — the byte-level ESC state machine that used to live here (and regressed
@@ -491,6 +496,7 @@ _resume_pick() {
       q|esc)            exit_loop=1 ;;
       /)                trigger_filter=1 ;;
       c)                trigger_clean=1 ;;
+      a)                trigger_all=1 ;;
       # `?` opens help on the board, so a user arrives here having just been
       # taught it — and it was dead: not bound, no feedback, byte-identical to an
       # unbound key. This picker also implements g/G, 1-9 and PgUp/PgDn without
@@ -555,6 +561,7 @@ _resume_pick() {
     trigger_select=0
     trigger_clean=0
     trigger_help=0
+    trigger_all=0
 
     _handle_key "$TUI_KEY"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
@@ -562,6 +569,16 @@ _resume_pick() {
 
     if [ "$exit_loop" -eq 1 ]; then
       break
+    fi
+
+    if [ "$trigger_all" -eq 1 ]; then
+      if [ "${CLIKAE_RESUME_ALL:-0}" -eq 1 ]; then
+        export CLIKAE_RESUME_ALL=0
+      else
+        export CLIKAE_RESUME_ALL=1
+      fi
+      _RESUME_PICK_AGAIN=1
+      return 0
     fi
 
     if [ "$trigger_clean" -eq 1 ]; then
@@ -594,6 +611,7 @@ _resume_pick() {
       _home_help_row "1-9"           "$T_K_JUMP"
       _home_help_row "⏎ Enter"       "$T_RESUME"
       _home_help_row "/"             "$T_K_FILTER"
+      _home_help_row "a"             "Toggle burn sessions"
       _home_help_row "c"             "$T_K_CLEAN"
       _home_help_row "q / Esc"       "$T_K_QUIT"
       printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
@@ -713,6 +731,17 @@ _resume_picker() {
     fi
 
     # 2. Build indexed array in Bash (zero process spawn)
+    local -A is_burn=()
+    if [ -d "$CLIKAE_HOME/state/burn-sessions" ]; then
+      local bfile bsid
+      for bfile in "$CLIKAE_HOME"/state/burn-sessions/*/*; do
+        [ -f "$bfile" ] || continue
+        while IFS=$'\t' read -r bsid _ _; do
+          [ -n "$bsid" ] && is_burn["$bsid"]=1
+        done < "$bfile"
+      done
+    fi
+
     local -a sessions=()
     local -a cached_title=()
     local -a cached_age=()
@@ -722,7 +751,11 @@ _resume_picker() {
     while read -r mt f; do
       [ -n "$f" ] || continue
       _resume_session_fields "$f"
-      sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt")
+      local is_b="${is_burn[$_rs_sid]:-0}"
+      if [ "$is_b" -eq 1 ] && [ "${CLIKAE_RESUME_ALL:-0}" -eq 0 ]; then
+        continue
+      fi
+      sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt"$'\x1f'"$is_b")
     done <<EOF
 $files
 EOF
@@ -792,6 +825,7 @@ cmd_resume() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _resume_help; return 0 ;;
+      --all)     export CLIKAE_RESUME_ALL=1; shift ;;
       --)        shift; passthru=("$@"); break ;;
       -*)        log_fail "Unknown flag: $1  (clikae resume [session-id] [-- args])" ;;
       *)         [ -z "$sid" ] || log_fail "Too many arguments. Usage: clikae resume [session-id]"

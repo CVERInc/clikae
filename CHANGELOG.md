@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again after a cross-engine reroute), and `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`
   is exported unless already set. A lane that delegated to a background agent
   used to be terminated after 600 s with nothing on disk.
+- `clikae resume` and the home board's picker now hide headless one-shot sessions (`clikae burn`) by default, so the session picker isn't cluttered with "ghost" transcripts. Use `clikae resume --all` or press `a` in the interactive picker to reveal them (labelled as `[burn]`). (#74)
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
   permission mode while preserving the default argv. codex and agy have no
   equivalent flag and keep their existing flags, reporting the degradation for
