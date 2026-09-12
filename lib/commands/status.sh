@@ -78,6 +78,10 @@ _status_row_for() {
 }
 
 # Fuel caution comes from the same batch verdict used by home and selection.
+# Takes the dry set as $3 (computed ONCE by the caller, R1-P2-1) rather than
+# re-running list_all_profiles | limit_dry_set per row — that scan re-reads
+# every tank's transcripts, so calling it once per rendered row turned an
+# N-tank board into an O(n²) scan (12 tanks: 42ms -> 1.6s; see REPORT-dry75-fix1).
 _status_fuel_note() {
   [ -n "$2" ] || return 0
   local e t note
@@ -86,13 +90,14 @@ _status_fuel_note() {
       printf '%s' "${note:-over quota}"; return 0
     fi
   done <<EOF
-$(list_all_profiles | limit_dry_set --include-unverified)
+$3
 EOF
 }
 
 # Render the canonical rows (on stdin) as an aligned human table.
 _status_render_table() {
   printf '%b%-12s %-12s %-26s %s%b\n' "$__C_BOLD" "ENGINE" "TANK" "ACCOUNT" "SOURCE" "$__C_RESET"
+  local dry; dry="$(list_all_profiles | limit_dry_set --include-unverified)"
   local cli state profile account envVar envValue active_col account_col source_col
   while IFS=$'\037' read -r cli state profile account envVar envValue; do
     [ -n "$cli" ] || continue
@@ -111,7 +116,7 @@ _status_render_table() {
       *)         active_col="$state";        source_col="" ;;
     esac
     local fuel_note
-    fuel_note="$(_status_fuel_note "$cli" "$profile")"
+    fuel_note="$(_status_fuel_note "$cli" "$profile" "$dry")"
     [ -z "$fuel_note" ] || source_col="$source_col  · $fuel_note"
     printf '%-12s %-12s %-26s %s\n' "$cli" "$active_col" "$account_col" "$source_col"
   done
@@ -119,6 +124,7 @@ _status_render_table() {
 
 # Render the canonical rows (on stdin) as a JSON array.
 _status_render_json() {
+  local dry; dry="$(list_all_profiles | limit_dry_set --include-unverified)"
   local cli state profile account envVar envValue first=1
   printf '['
   while IFS=$'\037' read -r cli state profile account envVar envValue; do
@@ -128,7 +134,7 @@ _status_render_json() {
       "$(json_str "$cli")" "$(json_str "$state")" \
       "$(json_or_null "$profile")" "$(json_or_null "$account")" \
       "$(json_or_null "$envVar")" "$(json_or_null "$envValue")" \
-      "$(json_or_null "$(_status_fuel_note "$cli" "$profile")")"
+      "$(json_or_null "$(_status_fuel_note "$cli" "$profile" "$dry")")"
   done
   [ "$first" -eq 1 ] && printf ']\n' || printf '\n]\n'
 }
