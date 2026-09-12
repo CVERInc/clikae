@@ -332,7 +332,12 @@ EOF
   if [ -n "$maxS" ]; then
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+    # rc=2, not 1: this is POSITIVE evidence of recovery (a real turn after the
+    # limit), not merely "nothing found here". _limit_tank_dry_raw tells the two
+    # apart (R1-P1-2) — rc=1 still falls to dry_store for codex (a headless run
+    # may have hit a limit this transcript never saw), but rc=2 must not, or a
+    # stale store marker outlives the very recovery that should have cleared it.
+    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 2
   fi
 
   printf '%s' "$reset"
@@ -421,14 +426,15 @@ EOF
 #     (burn / supervise) for engines whose limit never lands in a scannable file.
 # Self-only: factored out so limit_tank_dry's account contagion can't recurse.
 _limit_tank_dry_raw() {
-  local engine="$1" tank="$2" dir reset
+  local engine="$1" tank="$2" dir reset pd_rc
   dir="$(profile_dir "$engine" "$tank")"
   # A transcript signal is always preferred: it self-clears the moment the account
   # succeeds again, so it can never claim a tank is dry after it has recovered.
   # claude and codex both persist their limit (codex's was long believed
   # exec-stdout-only — see _limit_codex_dry for the evidence that it isn't).
   if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
-    if reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; then
+    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; pd_rc=$?
+    if [ "$pd_rc" -eq 0 ]; then
       printf '%s' "$reset"; return 0
     fi
     # claude stops here on purpose: NEVER consult dry_store for it, or a stale 6h
@@ -436,6 +442,17 @@ _limit_tank_dry_raw() {
     # can hit the limit in a shape the rollout doesn't carry, and burn persists
     # that; the store has its own TTL.
     [ "$engine" = "claude" ] && return 1
+    # rc=2 is POSITIVE evidence the account recovered (a real turn after the
+    # limit), not just "this scanner found nothing". R1-P1-2: falling through
+    # to the store here let a real recovery sit next to an unrelated stale
+    # marker (e.g. from an earlier headless run) and the marker would never
+    # clear — the interactive transcript's own success IS the successful turn
+    # dry_store_clear exists for, so use it instead of only relying on burn's
+    # exec-stdout path or the TTL below.
+    if [ "$pd_rc" -eq 2 ]; then
+      dry_store_clear "$engine" "$tank"
+      return 1
+    fi
   fi
   if reset="$(dry_store_read "$engine" "$tank" --retain-stale 2>/dev/null)"; then
     printf '%s\037%s' "$reset" "$(dry_store_epoch "$engine" "$tank")"; return 0
@@ -556,15 +573,16 @@ limit_dry_set() {
       continue
     fi
     hit="${_sd[i]}"; reset="${_sr[i]}"
-    for ((j = 0; j < n; j++)); do
-      [ -n "${_a[i]}" ] || continue
-      [ "$j" -ne "$i" ] || continue
-      [ "${_sd[j]}" = "1" ] || continue
-      [ "${_e[j]}" = "${_e[i]}" ] || continue
-      [ "${_a[j]}" = "${_a[i]}" ] || continue
-      hit=1; reset="${_sr[j]}"
-      [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] || break
-    done
+    if [ -n "${_a[i]}" ]; then   # unknown account -> never guess a shared quota
+      for ((j = 0; j < n; j++)); do
+        [ "$j" -ne "$i" ] || continue
+        [ "${_sd[j]}" = "1" ] || continue
+        [ "${_e[j]}" = "${_e[i]}" ] || continue
+        [ "${_a[j]}" = "${_a[i]}" ] || continue
+        hit=1; reset="${_sr[j]}"
+        [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] || break
+      done
+    fi
     if [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] && [ "$include_unverified" != --include-unverified ]; then continue; fi
     [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
   done
@@ -747,28 +765,52 @@ limit_reset_epoch() {
   local phrase="$1" now="$2"
   [ -n "$phrase" ] && [ -n "$now" ] || return 1
 
-  # Codex renders reset times in the machine's local timezone.
-  local codex_re='[Tt]ry again at ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
-  if [[ "$phrase" =~ $codex_re ]]; then
-    local ch="${BASH_REMATCH[1]}" cm="${BASH_REMATCH[2]}" meridian="${BASH_REMATCH[3]}" cd ct
+  # The zone is written in the phrase and is authoritative. Reading $TZ instead
+  # would agree with it on the maintainer's machine and disagree on a traveller's.
+  # Extracted once up top because BOTH grammars below (codex's and claude's)
+  # need it: a zone suffix, when present, wins over any fallback.
+  local tz
+  tz="$(printf '%s' "$phrase" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_+-]+|UTC|GMT)\).*/\1/p')"
+
+  # Codex's two known reset shapes (undated "H:MM AM/PM" and dated "Mon Dst,
+  # YYYY H:MM AM/PM"; see limit_codex_reset). Neither is confirmed to ever carry
+  # a zone suffix — codex has so far only been observed rendering in the
+  # machine's OWN local timezone — but if the phrase names one anyway, R1-P1-1
+  # says that MUST win for the same reason it wins below: agreeing with the
+  # phrase on the maintainer's machine and disagreeing on a traveller's is
+  # exactly the bug a zone suffix exists to prevent. Only fall back to the
+  # observer's ambient zone when the phrase names none.
+  local codex_zone="${tz:-${TZ:-/etc/localtime}}"
+  local codex_dated_re='[Tt]ry again at ([A-Z][a-z][a-z]) ([0-9]{1,2})(st|nd|rd|th)?,? ([0-9]{4})[,]? ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  local codex_plain_re='[Tt]ry again at ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  if [[ "$phrase" =~ $codex_dated_re ]]; then
+    local cmon="${BASH_REMATCH[1]}" cday="${BASH_REMATCH[2]}" cyr="${BASH_REMATCH[4]}" \
+          ch="${BASH_REMATCH[5]}" cm="${BASH_REMATCH[6]}" meridian="${BASH_REMATCH[7]}"
+    local mnum; mnum="$(_limit_month_num "$cmon")"
+    [ -n "$mnum" ] && [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    local d0 ct candidate
+    d0="$(printf '%04d-%s-%02d' "$((10#$cyr))" "$mnum" "$((10#$cday))")"
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    candidate="$(_limit_at "$codex_zone" "$d0" "$ct")" || return 1
+    printf '%s' "$candidate"; return 0
+  fi
+  if [[ "$phrase" =~ $codex_plain_re ]]; then
+    local ch="${BASH_REMATCH[1]}" cm="${BASH_REMATCH[2]}" meridian="${BASH_REMATCH[3]}" cd ct candidate
     [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
     ch=$((10#$ch % 12))
     case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
-    cd="$(date -d "@$now" +%Y-%m-%d 2>/dev/null || date -r "$now" +%Y-%m-%d)"
-    ct="$(printf '%02d:%s' "$ch" "$cm")"
-    local local_zone="${TZ:-/etc/localtime}" candidate
-    candidate="$(_limit_at "$local_zone" "$cd" "$ct")" || return 1
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    cd="$(_limit_local "$codex_zone" "$now" '%Y-%m-%d')" || return 1
+    candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
     if [ "$candidate" -le "$now" ]; then
-      cd="$(_limit_shift_day "$local_zone" "$cd" 1)" || return 1
-      candidate="$(_limit_at "$local_zone" "$cd" "$ct")" || return 1
+      cd="$(_limit_shift_day "$codex_zone" "$cd" 1)" || return 1
+      candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
     fi
     printf '%s' "$candidate"; return 0
   fi
 
-  # The zone is written in the phrase and is authoritative. Reading $TZ instead
-  # would agree with it on the maintainer's machine and disagree on a traveller's.
-  local tz
-  tz="$(printf '%s' "$phrase" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_+-]+|UTC|GMT)\).*/\1/p')"
   [ -n "$tz" ] || return 1
 
   local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})[[:space:]]+at[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'

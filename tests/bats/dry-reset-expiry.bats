@@ -98,7 +98,10 @@ _limit_fixture() {
   _boot_expiry
   source "$CLIKAE_LIB/commands/status.sh"
   _limit_fixture '11:50 AM'
-  run _status_fuel_note codex expired
+  # R1-P2-1: the dry set is now computed ONCE by the caller and passed in,
+  # not re-scanned inside _status_fuel_note — see status.sh.
+  local dry; dry="$(list_all_profiles | limit_dry_set --include-unverified)"
+  run _status_fuel_note codex expired "$dry"
   [ "$status" -eq 0 ]
   [ "$output" = 'reset passed · unverified' ]
 }
@@ -135,4 +138,69 @@ _limit_fixture() {
   run _burn_next_same_engine codex '' '' CODEX_HOME 1
   [ "$status" -eq 0 ]
   [ "$output" = expired ]
+}
+
+# --- R1-P1-2: a retained marker is not immortal -------------------------------
+#
+# Round 1 gave dry_store_read a --retain-stale flag so expired-but-parseable
+# evidence could survive its normal 6h TTL as "unverified" until a successful
+# run cleared it — but codex's OWN raw scanner (_limit_codex_dry) fell through
+# to that retained store REGARDLESS of whether the transcript itself already
+# showed a real recovery, so a real success sitting right there in the rollout
+# never reached dry_store_clear. Two independent exits now bound it:
+#   1. a real transcript turn observed AFTER the limit clears the store marker
+#      too (not just the transcript's own verdict) — even a marker an unrelated
+#      headless run left behind.
+#   2. CLIKAE_DRY_MAX_RETAIN is a hard, unconditional ceiling for the case
+#      nothing is ever observed to clear it explicitly.
+
+@test "a real transcript recovery clears an unrelated stale store marker too" {
+  _boot_expiry
+  _limit_fixture '11:50 AM'
+  # A store marker an EARLIER, unrelated headless run left behind — different
+  # reset text, so it is not just re-deriving the transcript's own phrase.
+  local marker; marker="$(dry_store_path codex expired)"
+  mkdir -p "${marker%/*}"
+  printf '%s\tresets 1:00am (UTC)\n' "$((fixed_now - 1200))" > "$marker"
+  # A real turn AFTER the limit — genuine transcript recovery.
+  printf '{"timestamp":"%s","payload":{"type":"agent_message","message":"done"}}\n' \
+    "$(_limit_local UTC "$fixed_now" '%Y-%m-%dT%H:%M:%SZ')" >> "$rollout"
+  run _limit_tank_dry_self codex expired
+  [ "$status" -eq 1 ]
+  [ ! -e "$marker" ]
+}
+
+@test "a codex tank with ONLY a retained store marker still hits CLIKAE_DRY_MAX_RETAIN" {
+  # No rollout evidence at all here (unlike the test above) — codex's raw
+  # scanner finds nothing and falls through to the store, same as a headless
+  # `codex exec` limit nothing else ever observes a recovery for. The store's
+  # own hard cap is the only thing that can ever turn this tank green again.
+  _boot_expiry
+  CLIKAE_DRY_MAX_RETAIN=$((3 * 86400))
+  local marker stamp; marker="$(dry_store_path codex expired)"; stamp="$fixed_now"
+  mkdir -p "${marker%/*}"
+  printf '%s\tresets 12:10pm (UTC)\n' "$stamp" > "$marker"
+  fixed_now=$((stamp + CLIKAE_DRY_MAX_RETAIN - 1))
+  run _limit_tank_dry_self codex expired
+  [ "$status" -eq 0 ]
+  [ "$output" = 'reset passed · unverified' ]
+  fixed_now=$((stamp + CLIKAE_DRY_MAX_RETAIN))
+  run _limit_tank_dry_self codex expired
+  [ "$status" -eq 1 ]
+  [ ! -e "$marker" ]
+}
+
+@test "a retained third-party marker with no engine dry_self path also hits the cap" {
+  # Same as above but through an engine with no transcript source at all (grok)
+  # — the cap lives in dry_store_read itself, not in codex's transcript branch,
+  # so it must hold for every engine that only ever has a persisted marker.
+  _boot_expiry
+  CLIKAE_DRY_MAX_RETAIN=$((3 * 86400))
+  local marker; marker="$(dry_store_path grok work)"
+  mkdir -p "${marker%/*}"
+  printf '%s\tresets 11:50am (UTC)\n' "$((fixed_now - 1200))" > "$marker"
+  fixed_now=$((fixed_now + CLIKAE_DRY_MAX_RETAIN))
+  run _limit_tank_dry_self grok work
+  [ "$status" -eq 1 ]
+  [ ! -e "$marker" ]
 }
