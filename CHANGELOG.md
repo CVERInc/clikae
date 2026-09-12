@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Antigravity board rows and the resume picker prefer the conversation title
-  from the CLI's summaries database, with opening-prompt fallback when the
-  title or SQLite is unavailable (#73).
+  from the CLI's summaries database (`conversation_summaries.db`), read via
+  the optional `sqlite3` CLI, with opening-prompt fallback when the title or
+  `sqlite3` is unavailable (#73).
 - Expired reset evidence now shows yellow “reset passed · unverified” on the
   home board and a matching fuel note in `clikae status`. Burn can retry these
   tanks; a successful turn clears the caution, and retained evidence is never

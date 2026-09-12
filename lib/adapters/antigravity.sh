@@ -106,8 +106,17 @@ adapter_title_for_file() {
   if [ -f "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
     # Escape SQL string literals; read-only, short-lived connection because agy
     # writes this database. A failed read (including a lock) uses the prompt.
+    # ORDER BY picks the newest row if conversation_id isn't unique. Note:
+    # -readonly only guarantees the .db file itself is never opened for
+    # writing — in WAL mode sqlite3 still opens/creates the -wal/-shm siblings
+    # O_RDWR (standard SQLite behavior); a failed open there falls back the
+    # same as any other unreadable summary.
     sql_sid=${sid//\'/\'\'}
-    t="$(sqlite3 -readonly "$db" "SELECT title FROM conversation_summaries WHERE conversation_id = '$sql_sid' LIMIT 1;" 2>/dev/null)" || t=""
+    t="$(sqlite3 -readonly "$db" "SELECT title FROM conversation_summaries WHERE conversation_id = '$sql_sid' ORDER BY last_modified_time DESC LIMIT 1;" 2>/dev/null)" || t=""
+    # This title is already plain text, never JSON — only collapse whitespace.
+    # Running it through the transcript's JSON-unescape below would mangle a
+    # real backslash sequence (e.g. a Windows path) into garbage.
+    t="$(printf '%s' "$t" | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
   fi
   if [ -z "$t" ]; then
     t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
@@ -116,9 +125,9 @@ adapter_title_for_file() {
       t="${t#*<USER_REQUEST>}"
       t="${t%%</USER_REQUEST>*}"
     fi
+    t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+      | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
   fi
-  t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
-    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
   [ -n "$t" ] || t="(no preview)"
   printf '%s' "$t"
 }

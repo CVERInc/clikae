@@ -93,10 +93,11 @@ seed_agy_session() {
 seed_agy_summaries() {
   command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 required for fixture database"
   sqlite3 "$PROFILE/antigravity-cli/conversation_summaries.db" "
-    CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT);
-    INSERT INTO conversation_summaries VALUES ('ag-title', '  Discord   權限' || char(10) || char(9) || '設定建議  ');
-    INSERT INTO conversation_summaries VALUES ('ag-empty', '');
-    INSERT INTO conversation_summaries VALUES ('ag-quote''id', 'Quoted ID title');
+    CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, last_modified_time INTEGER);
+    INSERT INTO conversation_summaries VALUES ('ag-title', '  Discord   權限' || char(10) || char(9) || '設定建議  ', 1);
+    INSERT INTO conversation_summaries VALUES ('ag-empty', '', 1);
+    INSERT INTO conversation_summaries VALUES ('ag-ws', '   ', 1);
+    INSERT INTO conversation_summaries VALUES ('ag-quote''id', 'Quoted ID title', 1);
   "
 }
 
@@ -138,7 +139,12 @@ assert_agy_title() {
   [ ! -e "$PROFILE/antigravity-cli/conversation_summaries.db" ]
 }
 
-@test "antigravity no sqlite3 on PATH falls back without an error" {
+# This exercises the fallback path when sqlite3 is entirely absent, not the
+# `command -v sqlite3` gate specifically: `2>/dev/null` + `|| t=""` on the
+# sqlite3 call already swallow a "command not found" the same way, so with no
+# sqlite3 anywhere on PATH the gate's presence or absence is unobservable from
+# output alone (removing it costs an extra failed fork, nothing else).
+@test "antigravity falls back cleanly when sqlite3 is entirely unavailable" {
   _setup_agy
   seed_agy_session ag-title "$WORK" "opening prompt"
   seed_agy_summaries
@@ -169,4 +175,59 @@ assert_agy_title() {
   seed_agy_session ag-title "$WORK" "opening prompt"
   printf 'not a database\n' > "$PROFILE/antigravity-cli/conversation_summaries.db"
   assert_agy_title ag-title "opening prompt"
+}
+
+@test "antigravity whitespace-only summary title falls back to opening prompt" {
+  _setup_agy
+  seed_agy_session ag-ws "$WORK" "opening prompt"
+  seed_agy_summaries
+  assert_agy_title ag-ws "opening prompt"
+}
+
+@test "antigravity summary title with backslashes and quotes round-trips byte-identical" {
+  _setup_agy
+  seed_agy_session ag-esc "$WORK" "opening prompt"
+  command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 required for fixture database"
+  sqlite3 "$PROFILE/antigravity-cli/conversation_summaries.db" "
+    CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, last_modified_time INTEGER);
+    INSERT INTO conversation_summaries VALUES ('ag-esc', 'Fix C:\temp\notes.txt say \\\"hi\\\" and \n keep it', 1);
+  "
+  assert_agy_title ag-esc 'Fix C:\temp\notes.txt say \"hi\" and \n keep it'
+}
+
+@test "antigravity summary lookup with duplicate conversation_id picks the newest row" {
+  _setup_agy
+  seed_agy_session ag-dup "$WORK" "opening prompt"
+  command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 required for fixture database"
+  sqlite3 "$PROFILE/antigravity-cli/conversation_summaries.db" "
+    CREATE TABLE conversation_summaries (conversation_id TEXT, title TEXT, last_modified_time INTEGER);
+    INSERT INTO conversation_summaries VALUES ('ag-dup', 'OLD TITLE', 1);
+    INSERT INTO conversation_summaries VALUES ('ag-dup', 'NEW TITLE', 2);
+  "
+  assert_agy_title ag-dup "NEW TITLE"
+}
+
+@test "antigravity summary lookup always passes -readonly to sqlite3 (mutation guard)" {
+  _setup_agy
+  seed_agy_session ag-title "$WORK" "opening prompt"
+  seed_agy_summaries
+  local real_sqlite3
+  real_sqlite3="$(command -v sqlite3)" || skip "sqlite3 required for fixture database"
+  local stub_bin="$TEST_HOME/stub-bin" argv_log="$TEST_HOME/sqlite3.argv"
+  mkdir -p "$stub_bin"
+  {
+    printf '#!/bin/sh\n'
+    printf 'printf "%%s\\n" "$*" >> "%s"\n' "$argv_log"
+    printf 'exec "%s" "$@"\n' "$real_sqlite3"
+  } > "$stub_bin/sqlite3"
+  chmod +x "$stub_bin/sqlite3"
+  run env PATH="$stub_bin:$PATH" /bin/bash -c '
+    source "$1"
+    adapter_title_for_file "$2"
+  ' bash "$CLIKAE_TEST_ROOT/lib/adapters/antigravity.sh" "$BRAIN/ag-title/.system_generated/logs/transcript.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Discord 權限 設定建議" ]
+  [ -f "$argv_log" ]
+  run grep -- -readonly "$argv_log"
+  [ "$status" -eq 0 ]
 }
