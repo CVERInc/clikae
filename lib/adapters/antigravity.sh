@@ -66,6 +66,16 @@ adapter_find_session() {
 }
 
 adapter_session_cwd() {
+  local brain sid
+  brain="${1%/.system_generated/*}"; sid="${brain##*/}"; brain="${brain%/*}"
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run "agy-cwd-$sid" "$brain/history.jsonl" _agy_cwd_uncached "$@"
+  else
+    _agy_cwd_uncached "$@"
+  fi
+}
+
+_agy_cwd_uncached() {
   local f="$1"
   [ -f "$f" ] || return 0
   local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
@@ -98,6 +108,14 @@ adapter_session_title() {
 # unreadable/pre-opening-message transcript still deserves SOME word in that
 # column, not silence that reads as a rendering bug.
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run antigravity-title "$1" _antigravity_title_uncached "$@"
+  else
+    _antigravity_title_uncached "$@"
+  fi
+}
+
+_antigravity_title_uncached() {
   local f="$1" t="" sdir sid db sql_sid
   [ -n "$f" ] && [ -f "$f" ] || return 0
   sdir="${f%/.system_generated/logs/transcript.jsonl}"
@@ -145,6 +163,10 @@ adapter_title_for_file() {
 # by reading that back per candidate, same as adapter_session_cwd already does
 # for one session at a time.
 adapter_recent_sids() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    board_recent antigravity "$@"
+    return 0
+  fi
   local dir="$1" limit="${2:-5}" brain want sdir sid f cwd
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0

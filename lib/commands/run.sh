@@ -42,5 +42,11 @@ EOF
 
   soul_prelaunch "$cli" "$profile" "$d"   # member tank → fan this dir into its Soul
   fleet_mcp_prelaunch "$cli" "$profile" "$d"   # non-solo tank → fan in the shared MCP list
-  adapter_run "$d" "$@"
+  # agy owns its boundaries after its global account switch.
+  if [ "$cli" != antigravity ]; then board_state_refresh "$cli" "$d" >/dev/null 2>&1 || true; fi
+  local rc=0
+  ( adapter_run "$d" "$@" ) || rc=$?
+  # agy owns its boundaries after its global account switch.
+  if [ "$cli" != antigravity ]; then board_state_refresh "$cli" "$d" >/dev/null 2>&1 || true; fi
+  return "$rc"
 }

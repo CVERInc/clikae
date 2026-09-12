@@ -296,34 +296,17 @@ _limit_codex_dry() {
   local sess_root="$dir/sessions"
   [ -d "$sess_root" ] || return 1
 
-  local files
-  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
-  [ -n "$files" ] || return 1
-
-  local out maxL maxS reset
-  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] && transcript_tail "$f"
-    done | awk '
-      function ts(s,   t) {
-        if (match(s, /"timestamp": *"[^"]*"/)) {
-          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
-          return t
-        }
-        return ""
-      }
-      /"codex_error_info": *"usage_limit_exceeded"/ {
-        t = ts($0)
-        if (t != "" && (maxL == "" || t > maxL)) {
-          maxL = t; reset = ""
-          if (match($0, /try again at [^".]*/)) reset = substr($0, RSTART, RLENGTH)
-        }
-        next
-      }
-      /"type": *"agent_message"/ {
-        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
-      }
-      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
-    ')"
+  local out maxL maxS reset files updated
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    updated="$(board_read "$dir" updated)"
+    case "$updated" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$(($(date +%s) - updated))" -lt 604800 ] || return 1
+    out="$(board_read "$dir" codex-dry)"
+  else
+    files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+    [ -n "$files" ] || return 1
+    out="$(_limit_codex_readings "$files")"
+  fi
   IFS=$'\037' read -r maxL maxS reset <<EOF
 $out
 EOF
@@ -363,8 +346,11 @@ limit_profile_dry() {
   # Only sessions touched in the last ~5h (the rolling session window): a limit
   # older than that has reset, and scanning stale transcripts just costs time.
   local files
-  files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
-  [ -n "$files" ] || return 1
+  files=""
+  if [ "${_CLIKAE_BOARD:-0}" != 1 ]; then
+    files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
+    [ -n "$files" ] || return 1
+  fi
 
   # Find, in ONE awk pass over the bounded tails, three things at once:
   #   maxL  — newest GENUINE-limit timestamp (synthetic + isApiErrorMessage)
@@ -378,29 +364,15 @@ limit_profile_dry() {
   # pretty-printed JSONL can't silently break detection. Reads only the TAIL of
   # each (100+ MB) transcript — the newest limit/success are the most-recent lines.
   local out maxL maxS reset
-  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] && transcript_tail "$f"
-    done | awk '
-      function ts(s,   t) {
-        if (match(s, /"timestamp": *"[^"]*"/)) {
-          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
-          return t
-        }
-        return ""
-      }
-      /"model": *"<synthetic>"/ && /"isApiErrorMessage": *true/ {
-        t = ts($0)
-        if (t != "" && (maxL == "" || t > maxL)) {
-          maxL = t; reset = ""
-          if (match($0, /[Rr]esets [^"]*/)) reset = substr($0, RSTART, RLENGTH)
-        }
-        next
-      }
-      /"type": *"assistant"/ && $0 !~ /"model": *"<synthetic>"/ {
-        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
-      }
-      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
-    ')"
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local updated
+    updated="$(board_read "$dir" updated)"
+    case "$updated" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$(($(date +%s) - updated))" -lt 18000 ] || return 1
+    out="$(board_read "$dir" claude-usage)"
+  else
+    out="$(_limit_claude_readings "$files")"
+  fi
   # \037 (Unit Separator), NOT a tab: tab is IFS-whitespace, so `read` would
   # COLLAPSE the empty maxS field between two tabs and shift reset into maxS
   # (the exact footgun status.sh's delimiter comment warns about).
@@ -651,6 +623,14 @@ limit_dry_set() {
 LIMIT_AGY_DRY_RE='Individual quota reached|exhausted your capacity on this model'
 
 limit_log_dry() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run agy-usage "$1" _limit_log_dry_uncached "$@"
+  else
+    _limit_log_dry_uncached "$@"
+  fi
+}
+
+_limit_log_dry_uncached() {
   local logf="$1"
   [ -n "$logf" ] && [ -e "$logf" ] || return 1
   grep -qaE "$LIMIT_AGY_DRY_RE" "$logf" 2>/dev/null || return 1
@@ -1397,8 +1377,9 @@ _limit_codex_rate_limits_1file() {
 # one small read, matching this codebase's own "fork-free" cache philosophy
 # (docs/DESIGN-board-fuel-dots.md's Cache section).
 _limit_codex_rate_limits_1file_cached() {
-  local f="$1" cache_dir="$2" key="$3" cache_f cached_key cached_fields tmp
+  local f="$1" cache_dir="$2" key="${3:-}" cache_f cached_key cached_fields tmp
   [ -n "$key" ] || key="$(_limit_codex_file_state "$f")"
+  key="$f:$key"
   cache_f="$cache_dir/${f##*/}"
   if [ -f "$cache_f" ]; then
     { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache_f" 2>/dev/null
@@ -1408,7 +1389,7 @@ _limit_codex_rate_limits_1file_cached() {
     fi
   fi
   mkdir -p "$cache_dir" 2>/dev/null
-  tmp="$cache_f.tmp.$$"
+  tmp="$(mktemp "$cache_f.XXXXXX" 2>/dev/null)" || tmp=""
   local fields
   if fields="$(_limit_codex_rate_limits_1file "$f" 2>/dev/null)"; then
     { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
@@ -1486,7 +1467,8 @@ EOF
   done
 
   mkdir -p "$(dirname "$cache")" 2>/dev/null
-  local tmp="$cache.tmp.$$"
+  local tmp
+  tmp="$(mktemp "$cache.XXXXXX" 2>/dev/null)" || tmp=""
   if [ -n "$pu" ] || [ -n "$su" ]; then
     local fields; fields="$(printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr")"
     { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
@@ -1506,9 +1488,90 @@ EOF
 # _home_fuel_dotv/_home_codex_status_readv call — see P2-1 above.
 limit_codex_status_cached() {
   local dir="$1" now="$2" cache="$3" fields pu pw pr su sw sr
-  fields="$(_limit_codex_rate_limits_cached "$dir" "$cache" 2>/dev/null)" || return 1
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    fields="$(board_read "$dir" codex-usage)"
+    [ -n "$fields" ] || return 1
+  else
+    fields="$(_limit_codex_rate_limits_cached "$dir" "$cache" 2>/dev/null)" || return 1
+  fi
   IFS=$'\037' read -r pu pw pr su sw sr <<EOF
 $fields
 EOF
   _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+}
+
+# Raw timestamp/reset readings preserve the original bounded-tail parser.
+_limit_claude_reading() {
+  transcript_tail "$1" | awk '
+
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      /"model": *"<synthetic>"/ && /"isApiErrorMessage": *true/ {
+        t = ts($0)
+        if (t != "" && (maxL == "" || t > maxL)) {
+          maxL = t; reset = ""
+          if (match($0, /[Rr]esets [^"]*/)) reset = substr($0, RSTART, RLENGTH)
+        }
+        next
+      }
+      /"type": *"assistant"/ && $0 !~ /"model": *"<synthetic>"/ {
+        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+      }
+      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
+
+  '
+}
+
+_limit_claude_readings() {
+  _limit_readings claude-usage _limit_claude_reading "$1"
+}
+
+_limit_readings() {
+  local kind="$1" parser="$2" reading_files="$3" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if declare -F reading_cache_run >/dev/null; then
+      reading_cache_run "$kind" "$f" "$parser" "$f"
+    else
+      "$parser" "$f"
+    fi
+    printf '\n'
+  done <<< "$reading_files" | awk -F '\037' '
+    $1 > l { l=$1; r=$3 }
+    $2 > s { s=$2 }
+    END { printf "%s\037%s\037%s\n", l, s, r }
+  '
+}
+
+_limit_codex_reading() {
+  transcript_tail "$1" | awk '
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      /"codex_error_info": *"usage_limit_exceeded"/ {
+        t = ts($0)
+        if (t != "" && (maxL == "" || t > maxL)) {
+          maxL = t; reset = ""
+          if (match($0, /try again at [^".]*/)) reset = substr($0, RSTART, RLENGTH)
+        }
+        next
+      }
+      /"type": *"agent_message"/ {
+        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+      }
+      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
+    '
+}
+
+_limit_codex_readings() {
+  _limit_readings codex-dry _limit_codex_reading "$1"
 }

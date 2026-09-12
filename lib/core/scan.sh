@@ -69,6 +69,14 @@ CLIKAE_AGY_LOG_HEAD_BYTES="${CLIKAE_AGY_LOG_HEAD_BYTES:-262144}"   # 256 KiB
 # -a because agy writes NUL bytes into these; without it grep calls the file
 # binary and prints nothing at all.
 _agy_email_scan() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run agy-email "$1" _agy_email_uncached "$@"
+  else
+    _agy_email_uncached "$@"
+  fi
+}
+
+_agy_email_uncached() {
   local hit
   hit="$(head -c "$CLIKAE_AGY_LOG_HEAD_BYTES" "$1" 2>/dev/null \
            | grep -aohE 'email=[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
@@ -78,6 +86,12 @@ _agy_email_scan() {
 }
 
 agy_email() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local current="$1/antigravity-cli/cli.log" email=""
+    [ ! -f "$current" ] || email="$(_agy_email_scan "$current")"
+    if [ -n "$email" ]; then printf '%s' "$email"; else board_read "$1" email; fi
+    return 0
+  fi
   local d="$1/antigravity-cli/log" f hit
   # On a real install `log` is a DIRECTORY of one file per launch. Accept a plain
   # file too — the old `grep -r` took either without noticing the difference, and

@@ -316,6 +316,7 @@ EOF
   local _guessmap="" _gn _ge _gt _gc0 _gcr _gat
   while IFS=$'\037' read -r _gn _ge _gt _gc0 _gcr _gat; do
     [ -n "$_gn" ] || continue
+    [ "${_CLIKAE_BOARD:-0}" != 1 ] || continue
     [ -n "$_gc0" ] && continue   # a real stamp — already in $_claimed from pass 1
     load_adapter "$_ge" >/dev/null 2>&1 || true
     declare -F adapter_recent_sids >/dev/null 2>&1 || continue
@@ -411,7 +412,7 @@ EOF
       fi
     fi
 
-    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+    if [ "${_CLIKAE_BOARD:-0}" != 1 ] && [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
       # No recorded identity — the tank-scoped guess pass 2 already computed
       # for THIS exact row (R1-P1-1: excluding every sid a stamped OR
       # already-guessed row on this same tank has claimed), looked up by
@@ -468,7 +469,7 @@ EOF
     # guess.
     if [ -z "$title" ]; then
       guessed=1
-      if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      if [ "${_CLIKAE_BOARD:-0}" != 1 ] && [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
         sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
       fi
       if [ -n "$sid" ] && declare -F adapter_session_title >/dev/null 2>&1; then
@@ -533,22 +534,7 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
-  # The resume list is section 4 — the LAST thing emitted — and it shares nothing
-  # with the sections above it: one walks this directory's recent transcripts, the
-  # others walk the tank store. It is also almost exactly as expensive as all of
-  # them together, so start it now, in the background, and collect it at the end.
-  # The output order is unchanged; only the waiting is.
-  local _rf="" _rpid=""
-  # A DIFFERENT NAMESPACE from the tmux session prefix, despite sharing the
-  # word: these are scratch files under $TMPDIR that live for one frame, and
-  # nothing looks them up by name. Renamed with the sessions only so the two
-  # do not read as unrelated conventions; there is no compatibility to keep.
-  _rf="$(mktemp "${TMPDIR:-/tmp}/clikae-recent.XXXXXX" 2>/dev/null)" || _rf=""
-  if [ -n "$_rf" ]; then
-    _home_recent_rows >"$_rf" 2>/dev/null &
-    _rpid=$!
-  fi
-
+  local _section_start=""
   # Frame-scoped caches: the shell rc read once instead of per tank row, and the
   # per-ENGINE "which tank is active" answer computed once per engine instead of
   # once per row. Both are rebuilt on every call, so nothing goes stale between
@@ -560,7 +546,12 @@ _home_items() {
   # most immediate thing on the page: a live session is one keypress from being
   # back in, where a resume row is a relaunch. Usually 0-3 rows, so it does not
   # push the rest of the board down.
+  _home_clock
+  _section_start="$_HOME_MS"
   _home_live_rows
+  _home_timing live "$_section_start"
+  _home_clock
+  _section_start="$_HOME_MS"
 
   # 1) Tanks — every profile.
   # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
@@ -648,15 +639,11 @@ EOF
     )
   done
 
-  # 4) Resume list — this dir's most recent resumable sessions, if any. Started at
-  # the top of this function; here is where we finally wait for it.
-  if [ -n "$_rf" ]; then
-    _home_reap "$_rpid"
-    cat "$_rf" 2>/dev/null || true
-    rm -f "$_rf"
-  else
-    _home_recent_rows          # no writable temp dir — do it the plain way
-  fi
+  _home_timing tanks "$_section_start"
+  _home_clock
+  _section_start="$_HOME_MS"
+  _home_recent_rows
+  _home_timing recent "$_section_start"
 }
 
 # Which tanks/targets are currently over quota? Emit one row per DRY thing:
@@ -747,19 +734,6 @@ _home_dry_targets() {
   done
 }
 
-# _home_refresh -> recompute BOTH board inputs into the caller's $items/$dry.
-#
-# Every refresh site used to run these back to back, but the two share nothing:
-# _home_items walks the order and the live sessions, _home_dry_set scans fuel.
-# Running them in series just adds the two I/O bills together. So start the fuel
-# scan in the background and let it overlap the (longer) item build — the board
-# then waits for the SLOWER of the two, not for their sum. Callers must already
-# have `items` and `dry` in scope; bash scoping is dynamic, so a plain assignment
-# here lands in the caller's locals.
-#
-# The handoff is a mktemp file, not a pipe: _home_dry_set's output can outgrow a
-# pipe buffer once many tanks are dry, and a blocked writer would deadlock the
-# board against its own `wait`. If mktemp fails we simply fall back to serial.
 # _home_reap <pid> — wait for one background scan, properly.
 #
 # A non-zero status must not abort the board under `set -e`, and a job that has
@@ -779,24 +753,27 @@ _home_reap() {
   done
 }
 
+# Timing has no clock subprocess or stderr effect unless explicitly enabled.
+_home_clock() {
+  _HOME_MS=0
+  [ "${CLIKAE_HOME_TIMING:-}" = 1 ] || return 0
+  _HOME_MS="$(perl -MTime::HiRes=time -e 'printf "%.0f", time()*1000')"
+}
+_home_timing() {
+  [ "${CLIKAE_HOME_TIMING:-}" = 1 ] || return 0
+  _home_clock
+  printf 'clikae home %s: %s ms\n' "$1" "$((_HOME_MS - $2))" >&2
+}
+# Consume boundary snapshots; never discover transcripts on a frame.
+# Callers supply dynamically scoped items/dry locals.
 _home_refresh() {
-  local _df _tf _dpid _tpid
-  _df="$(mktemp "${TMPDIR:-/tmp}/clikae-dry.XXXXXX" 2>/dev/null)"   || _df=""
-  _tf="$(mktemp "${TMPDIR:-/tmp}/clikae-tot.XXXXXX" 2>/dev/null)"   || _tf=""
-  if [ -z "$_df" ] || [ -z "$_tf" ]; then
-    # No writable temp dir — do it the old serial way rather than recursing.
-    [ -n "$_df" ] && rm -f "$_df"
-    [ -n "$_tf" ] && rm -f "$_tf"
-    items="$(_home_items)"; dry="$(_home_dry_set)"; _HOME_TOTAL_SESSIONS=""
-    return 0
-  fi
-  _home_dry_set        >"$_df" 2>/dev/null &  _dpid=$!
-  _home_total_sessions_scan >"$_tf" 2>/dev/null &  _tpid=$!
+  local _CLIKAE_BOARD=1 _start
   items="$(_home_items)"
-  _home_reap "$_dpid"; _home_reap "$_tpid"
-  dry="$(cat "$_df" 2>/dev/null || true)"
-  _HOME_TOTAL_SESSIONS="$(cat "$_tf" 2>/dev/null || true)"
-  rm -f "$_df" "$_tf"
+  _home_clock; _start="$_HOME_MS"
+  dry="$(_home_dry_set || true)"
+  _HOME_TOTAL_SESSIONS=0
+  if declare -F board_total >/dev/null; then _HOME_TOTAL_SESSIONS="$(board_total)"; fi
+  _home_timing fuel "$_start"
 }
 
 # Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
@@ -924,10 +901,8 @@ _home_codex_status_readv() {
 #
 # "Fork-free" is aspirational for the codex branch specifically, not literal:
 # a cache hit (_home_codex_status_readv -> limit_codex_status_cached) still
-# costs a handful of forks (`find`/`stat`/`head`/`awk` to check the cache key)
-# — see P2-1 in limit_codex_status_cached's header — just no longer one
-# proportional to the rollout store's CONTENT size, which is what actually
-# broke this contract before the fix.
+# reads a small boundary snapshot and renders time-dependent reset phrases.
+# It never enumerates the rollout store while the board is active.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
   _FNOTE=""
@@ -2435,7 +2410,7 @@ _home_total_sessions_scan() {
 # for callers that never went through a refresh (the unit tests).
 _home_total_sessions() {
   [ -n "${_HOME_TOTAL_SESSIONS:-}" ] && { printf '%s' "$_HOME_TOTAL_SESSIONS"; return 0; }
-  _home_total_sessions_scan
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_total; else _home_total_sessions_scan; fi
 }
 
 # <start> and <end> bound which ROW INDICES are drawn; empty means all of them,
@@ -3221,6 +3196,7 @@ EOF
     return 0
   fi
 
+  local _CLIKAE_BOARD=1
   local items dry; _home_refresh
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then

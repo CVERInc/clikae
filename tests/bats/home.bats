@@ -4,6 +4,15 @@
 
 load '../helpers'
 
+_home_publish_fixture() (
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/reading_cache.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/board_state.sh"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/$1"
+)
+
 @test "bare clikae with no profiles shows the welcome + first step" {
   run clikae
   [ "$status" -eq 0 ]
@@ -154,6 +163,7 @@ _seed_tx() { # <profile> <jsonl-line>
   local p="$CLIKAE_HOME/profiles/claude/$1/projects/-Users-x"
   mkdir -p "$p"
   printf '%s\n' "$2" >> "$p/s.jsonl"
+  _home_publish_fixture "$1"
 }
 
 # ISO-8601 UTC timestamp <N> minutes before the REAL clock (these tests run
@@ -297,6 +307,7 @@ _agy_log() { # <line>
     printf '{"type":"ai-title","aiTitle":"Resume me please","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
   } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   # Headline present (en-US per the pinned test locale), titled by Claude's
@@ -327,6 +338,7 @@ _agy_log() { # <line>
   sleep 1
   printf '{"type":"ai-title","aiTitle":"Newer session","sessionId":"b"}\n' > "$d/bbb00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Newer session"* ]] || false
@@ -345,6 +357,7 @@ _agy_log() { # <line>
     printf '{"type":"system","subtype":"away_summary","content":"Fixed the parser; next add tests. (disable recaps in /config)"}\n'
   } > "$d/ccc00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Has a recap"* ]] || false
@@ -533,6 +546,7 @@ _agy_log() { # <line>
   local long; long="$(printf 'X%.0s' $(seq 1 200))"
   printf '{"type":"ai-title","aiTitle":"%s","sessionId":"a"}\n' "$long" > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"…"* ]] || false                  # truncated

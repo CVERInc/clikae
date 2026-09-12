@@ -114,6 +114,14 @@ _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
 # (first line). Never abort the caller under `set -eo pipefail`.
 _codex_meta_field() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run "codex-meta-$2" "$1" _codex_meta_uncached "$@"
+  else
+    _codex_meta_uncached "$@"
+  fi
+}
+
+_codex_meta_uncached() {
   local first_line=""
   read -r first_line < "$1" 2>/dev/null || true
   if [[ "$first_line" == *'"'"$2"'"'* ]]; then
@@ -125,6 +133,7 @@ _codex_meta_field() {
 # _codex_find_rollout <dir> <sid> — the rollout file for a session id (the uuid is
 # the filename suffix), or empty.
 _codex_find_rollout() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_find codex "$1" "$2"; return $?; fi
   local sdir; sdir="$(_codex_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
   find "$sdir" -type f -name "rollout-*-$2.jsonl" 2>/dev/null | head -n 1
@@ -188,6 +197,10 @@ adapter_transcript_path() {
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    board_recent codex "$@"
+    return 0
+  fi
   local dir="$1" limit="${2:-5}" f sid mt
   # codex's this-dir set is content-matched (a rollout records $PWD in its body,
   # not its path — see _codex_rollouts_for_cwd), so the FILE LIST comes from there;
@@ -230,6 +243,14 @@ adapter_session_title() {
 # event to prefer (checked 2026-07-12 alongside claude.sh's customTitle fix;
 # nothing invented — first user_message stays the only title source).
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run codex-title "$1" _codex_title_uncached "$@"
+  else
+    _codex_title_uncached "$@"
+  fi
+}
+
+_codex_title_uncached() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 

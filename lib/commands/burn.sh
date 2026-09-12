@@ -2398,6 +2398,7 @@ cmd_burn() {
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
     
+    board_state_refresh "$cli" "$dir" >/dev/null 2>&1 || true
     art_pre="$(_clikae_mtime "$artifact")"
     rc=0
     if command -v tmux >/dev/null 2>&1; then
@@ -2563,6 +2564,7 @@ KV
     # fine: a signal past that tail was invisible to both dry and infra
     # detection). Use the untruncated variant here; only the display tail
     # still bounds itself. See _burn_redact_full's comment.
+    board_state_refresh "$cli" "$dir" >/dev/null 2>&1 || true
     local out_for_class; out_for_class="$(_burn_redact_full "$out")"
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
