@@ -335,9 +335,15 @@ EOF
     # rc=2, not 1: this is POSITIVE evidence of recovery (a real turn after the
     # limit), not merely "nothing found here". _limit_tank_dry_raw tells the two
     # apart (R1-P1-2) — rc=1 still falls to dry_store for codex (a headless run
-    # may have hit a limit this transcript never saw), but rc=2 must not, or a
-    # stale store marker outlives the very recovery that should have cleared it.
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 2
+    # may have hit a limit this transcript never saw). rc=2 echoes maxS (the
+    # recovery's own timestamp) when asked, so the caller can weigh it against
+    # a persisted marker's OWN timestamp (R2-P1-3): this transcript recovering
+    # days ago must not outrank a headless marker burn wrote moments ago — only
+    # a recovery NEWER than the marker is grounds to clear it.
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
   fi
 
   printf '%s' "$reset"
@@ -418,6 +424,25 @@ EOF
   return 0
 }
 
+# _limit_iso_epoch <stamp> <fallback> -> epoch seconds for a transcript's
+# ISO-8601 timestamp (e.g. "2026-08-23T20:26:00.000Z") or a bare epoch already;
+# <fallback> is returned for anything else (an unparseable stamp, or a shape
+# neither GNU nor BSD `date` understands). Shared by the store-observation
+# anchor (_limit_tank_dry_self) and the transcript-recovery-vs-marker compare
+# (R2-P1-3) so both read a codex/claude transcript timestamp the same way.
+_limit_iso_epoch() {
+  local stamp="$1" fallback="$2"
+  case "$stamp" in
+    *T*)
+      stamp="${stamp%%.*}"; stamp="${stamp%Z}"
+      date -u -d "${stamp}Z" +%s 2>/dev/null ||
+        date -u -j -f '%Y-%m-%dT%H:%M:%S' "$stamp" +%s 2>/dev/null ||
+        printf '%s' "$fallback" ;;
+    ''|*[!0-9]*) printf '%s' "$fallback" ;;
+    *) printf '%s' "$stamp" ;;
+  esac
+}
+
 # _limit_tank_dry_raw <engine> <tank> -> 0 + phrase and optional observation stamp
 # if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
 #   · claude  — limit_profile_dry scans the tank's transcripts (account-level
@@ -449,9 +474,29 @@ _limit_tank_dry_raw() {
     # clear — the interactive transcript's own success IS the successful turn
     # dry_store_clear exists for, so use it instead of only relying on burn's
     # exec-stdout path or the TTL below.
+    #
+    # R2-P1-3: but only when that recovery is NEWER than the marker's own
+    # timestamp. A headless `codex exec` limit never reaches the transcript
+    # (see burn.sh's dry_store_mark call) — "transcript shows a recovery" and
+    # "the marker says dry again" are independent facts, and a recovery from
+    # days ago must not erase a marker burn wrote moments ago. Unconditionally
+    # trusting rc=2 let exactly that happen: the marker's own TTL / the 7-day
+    # CLIKAE_DRY_MAX_RETAIN cap is what should govern instead, so fall through
+    # to the store branch below rather than clearing.
     if [ "$pd_rc" -eq 2 ]; then
-      dry_store_clear "$engine" "$tank"
-      return 1
+      local _mk _recovery_epoch
+      _mk="$(dry_store_epoch "$engine" "$tank" 2>/dev/null || echo 0)"
+      if [ -z "$_mk" ] || [ "$_mk" = 0 ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      _recovery_epoch="$(_limit_iso_epoch "$reset" 0)"
+      if [ "$_recovery_epoch" -gt "$_mk" ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      # else: the marker outdates the observed recovery — fall through, its
+      # own TTL / CLIKAE_DRY_MAX_RETAIN cap governs like any other marker.
     fi
   fi
   if reset="$(dry_store_read "$engine" "$tank" --retain-stale 2>/dev/null)"; then
@@ -471,16 +516,7 @@ _limit_tank_dry_self() {
   raw="$(_limit_tank_dry_raw "$1" "$2")" || return 1
   reset="${raw%%$'\037'*}"; stamp="${raw#*$'\037'}"
   now="$(date +%s)"; anchor="$now"
-  if [ "$stamp" != "$raw" ]; then
-    case "$stamp" in
-      *T*)
-        stamp="${stamp%%.*}"; stamp="${stamp%Z}"
-        anchor="$(date -u -d "${stamp}Z" +%s 2>/dev/null ||
-          date -u -j -f '%Y-%m-%dT%H:%M:%S' "$stamp" +%s 2>/dev/null)" || anchor="$now" ;;
-      ''|*[!0-9]*) ;;
-      *) anchor="$stamp" ;;
-    esac
-  fi
+  [ "$stamp" != "$raw" ] && anchor="$(_limit_iso_epoch "$stamp" "$now")"
   if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
     printf '%s' "$LIMIT_RESET_UNVERIFIED"
   else

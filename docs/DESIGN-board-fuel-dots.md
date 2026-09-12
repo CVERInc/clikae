@@ -225,10 +225,15 @@ over proactive percentage snapshots. The default dry batch excludes it, allowing
 burn's next-tank selection to retry it. The board and status request the same
 batch with cautions included; status exposes the note as `fuelNote` in JSON.
 A later successful transcript turn clears the caution — including, for codex, a
-turn observed in the transcript AFTER an unrelated persisted marker was written,
-which also clears that marker (round-1 review, #75: falling straight through to
-the marker regardless of a transcript's own recovery could pin a tank yellow
-forever). Parseable expired store evidence survives the marker TTL as unverified
-until that happens, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) —
-retained evidence is a caution, not a promise to remember forever. Unparseable
-store evidence retains the existing TTL behavior.
+turn observed in the transcript after an unrelated persisted marker was written
+(round-1 review, #75: falling straight through to the marker regardless of a
+transcript's own recovery could pin a tank yellow forever). That clear is
+timestamp-gated, though (round-2 review, #75): a headless `codex exec` limit
+never reaches the transcript at all, so a days-old interactive recovery must
+not erase a marker burn wrote moments ago — only a recovery observed AFTER the
+marker's own timestamp clears it; an older recovery next to a newer marker
+falls through and the marker's own TTL / `CLIKAE_DRY_MAX_RETAIN` cap governs.
+Parseable expired store evidence survives the marker TTL as unverified until
+cleared, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) — retained
+evidence is a caution, not a promise to remember forever. Unparseable store
+evidence retains the existing TTL behavior.

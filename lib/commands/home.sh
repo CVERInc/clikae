@@ -2588,14 +2588,22 @@ LIVEACT
           # that IS shown on the Tank row (via _home_fuel_dotv, just above)
           # would silently vanish on the Live row (R1-P3-5). $_FNOTE already
           # holds it from that same _home_fuel_dotv call above.
-          local _lphrase; _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          #
+          # _lhard tracks whether the row is genuinely dry (red, can't be
+          # dispatched into) vs. merely carrying a borrowed UNVERIFIED caution
+          # (yellow, still enterable) — R2-P3-1: a yellow tank is still usable,
+          # so suppressing its age/enter hint the same way a red one's is
+          # suppressed silently hid an action the user could actually take.
+          local _lphrase _lhard=0
+          _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          [ -n "$_lphrase" ] && _lhard=1
           [ -n "$_lphrase" ] || [ "$_FNOTE" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || _lphrase="$_FNOTE"
           if [ -n "$_lphrase" ]; then
             printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
           fi
           if [ -n "$_lwake" ]; then
             printf '        %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
-          elif [ -z "$_lphrase" ]; then
+          elif [ "$_lhard" -eq 0 ]; then
             printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
         else

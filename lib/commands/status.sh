@@ -83,6 +83,11 @@ _status_row_for() {
 # every tank's transcripts, so calling it once per rendered row turned an
 # N-tank board into an O(n²) scan (12 tanks: 42ms -> 1.6s; see REPORT-dry75-fix1).
 _status_fuel_note() {
+  # R2-P3-5: a missing 3rd arg (the precomputed dry set) used to fall through
+  # to an empty heredoc and return "" — indistinguishable from "this tank has
+  # no caution" — so a future caller that forgot it would silently degrade to
+  # "always fine" instead of erroring. Guard the arg count explicitly.
+  [ "$#" -ge 3 ] || return 0
   [ -n "$2" ] || return 0
   local e t note
   while IFS=$'\037' read -r e t note; do

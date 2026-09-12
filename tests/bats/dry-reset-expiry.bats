@@ -106,6 +106,17 @@ _limit_fixture() {
   [ "$output" = 'reset passed · unverified' ]
 }
 
+@test "R2-P3-5: status fuel note called with a missing 3rd arg says nothing, not 'fine'" {
+  _boot_expiry
+  source "$CLIKAE_LIB/commands/status.sh"
+  _limit_fixture '11:50 AM'
+  # Missing dry-set arg entirely (a future renderer forgetting it) must not be
+  # indistinguishable from "this tank has no caution" — guarded by arg count.
+  run _status_fuel_note codex expired
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "undated reset remains expired the next day" {
   _boot_expiry
   _limit_fixture '11:50 AM'
@@ -166,6 +177,50 @@ _limit_fixture() {
   printf '{"timestamp":"%s","payload":{"type":"agent_message","message":"done"}}\n' \
     "$(_limit_local UTC "$fixed_now" '%Y-%m-%dT%H:%M:%SZ')" >> "$rollout"
   run _limit_tank_dry_self codex expired
+  [ "$status" -eq 1 ]
+  [ ! -e "$marker" ]
+}
+
+# --- R2-P1-3: only a recovery NEWER than the marker may clear it --------------
+#
+# The test above only covers the recovery being the NEWER of the two. Round 2
+# added the rc=2 exit unconditionally, so ANY transcript recovery cleared ANY
+# stale marker regardless of which was newer — but a headless `codex exec`
+# limit never reaches the transcript at all (burn.sh's dry_store_mark is its
+# only record), so a days-old interactive recovery and a marker burn wrote
+# moments ago are independent facts. Timestamp order must be the tiebreaker.
+
+@test "a headless marker newer than a stale transcript recovery survives" {
+  _boot_expiry
+  # An interactive limit + recovery from days ago — real, but ancient.
+  printf '{"timestamp":"%s","payload":{"codex_error_info":"usage_limit_exceeded","message":"try again at 1:00 AM (UTC)"}}\n' \
+    "$(_limit_local UTC "$((fixed_now - 4 * 86400))" '%Y-%m-%dT%H:%M:%SZ')" > "$rollout"
+  printf '{"timestamp":"%s","payload":{"type":"agent_message","message":"done"}}\n' \
+    "$(_limit_local UTC "$((fixed_now - 3 * 86400))" '%Y-%m-%dT%H:%M:%SZ')" >> "$rollout"
+  # burn just wrote a FRESH headless marker, right now, for a DIFFERENT limit.
+  dry_store_mark codex expired 'try again at 11:50 PM (UTC)'
+  local marker; marker="$(dry_store_path codex expired)"
+  run limit_tank_dry codex expired
+  [ "$status" -eq 0 ]
+  [ "$output" = 'try again at 11:50 PM (UTC)' ]
+  [ -e "$marker" ]
+  # burn's own selection set must still carry this tank as dry.
+  local set; set="$(list_all_profiles | limit_dry_set)"
+  run _home_is_dryv "$set" codex expired
+  [ "$status" -eq 0 ]
+}
+
+@test "a transcript recovery newer than the marker still clears it" {
+  _boot_expiry
+  printf '{"timestamp":"%s","payload":{"codex_error_info":"usage_limit_exceeded","message":"try again at 1:00 AM (UTC)"}}\n' \
+    "$(_limit_local UTC "$((fixed_now - 4 * 86400))" '%Y-%m-%dT%H:%M:%SZ')" > "$rollout"
+  # This time the marker PREDATES the recovery below.
+  local marker; marker="$(dry_store_path codex expired)"
+  mkdir -p "${marker%/*}"
+  printf '%s\ttry again at 11:50 PM (UTC)\n' "$((fixed_now - 5 * 86400))" > "$marker"
+  printf '{"timestamp":"%s","payload":{"type":"agent_message","message":"done"}}\n' \
+    "$(_limit_local UTC "$fixed_now" '%Y-%m-%dT%H:%M:%SZ')" >> "$rollout"
+  run limit_tank_dry codex expired
   [ "$status" -eq 1 ]
   [ ! -e "$marker" ]
 }
