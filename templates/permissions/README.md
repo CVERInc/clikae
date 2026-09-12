@@ -18,7 +18,9 @@ returns 1 for missing rules or unreadable/invalid settings. Extra tank rules
 are not drift and are never removed. Existing order is retained; missing rules
 are appended in sorted order. A compliant file is not rewritten. A changed
 existing file is backed up as `settings.json.clikae.bak.*`, then replaced via
-a same-directory temporary file and rename. Symlinked settings are skipped.
+a same-directory temporary file and rename — atomic against a concurrent
+reader, not against a mid-write power loss (no fsync). Symlinked settings
+are skipped.
 An allow rule that would exactly shadow a deny rule (the identical string in
 both lists) is refused instead of written.
 
