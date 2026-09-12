@@ -282,12 +282,21 @@ _agy_log() { # <line>
   [[ "$output" != *"over quota"* ]] || false   # clean log → not badged dry
 }
 
-@test "bare clikae changes nothing on disk (read-only)" {
+@test "bare clikae changes nothing on disk (read-only), aside from its own board cache" {
+  # 2026-09-12 round-1 fix review, P1-2: a render now self-heals a MISSING or
+  # stale per-tank board snapshot inline (lib/core/board_state.sh's
+  # board_generation) rather than leaving Resume empty forever for a tank that
+  # never passed through a session boundary. That is a deliberate write to
+  # clikae's OWN derived cache under state/board (and state/readings, the
+  # per-file reading cache) — it is exactly the durable-across-invocations
+  # snapshot the whole feature is. The invariant this test protects is that a
+  # bare render never touches the SOURCE data (profiles/transcripts/config),
+  # which still holds; the cache dirs are excluded on purpose, not weakened.
   clikae init claude work
-  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  before="$(find "$CLIKAE_HOME" -not -path "$CLIKAE_HOME/state*" 2>/dev/null | sort)"
   run clikae
   [ "$status" -eq 0 ]
-  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  after="$(find "$CLIKAE_HOME" -not -path "$CLIKAE_HOME/state*" 2>/dev/null | sort)"
   [ "$before" = "$after" ]
 }
 

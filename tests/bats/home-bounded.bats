@@ -134,23 +134,55 @@ _board_shims() {
   [ "$(cat "$TEST_HOME/parses")" = xx ]
 }
 
-@test "home: missing state never triggers discovery and first boundary publishes sessions" {
+@test "home: missing state self-heals inline once, then reads are bounded again" {
+  # 2026-09-12 round-1 fix review, P1-2: a board with NO snapshot at all for
+  # this tank (never launched through a session boundary — `clikae alias` /
+  # `env` / a `.app` bundle never call board_state_refresh) used to render an
+  # empty Resume section forever, silently, with no way to self-correct. Now
+  # board_generation (lib/core/board_state.sh) rebuilds the ONE missing tank
+  # inline the first time anything reads it — so the render must show the
+  # fixture immediately, at the cost of exactly one discovery pass for that
+  # one tank — and every render after that is bounded again, with no further
+  # discovery, because the rebuild it just did is what the second render
+  # reads back.
   _board_fixture 10
   rm -rf "$CLIKAE_HOME/state/board"
+  # A SOFT find shim for this first render: it must still discover the real
+  # fixture (unlike _board_shims' hard-failing find below, which exists to
+  # prove the OPPOSITE — that a second render does not discover anything).
+  export BOARD_IO_LOG="$TEST_HOME/io.log"
+  mkdir -p "$TEST_HOME/io-bin"
+  { printf '#!/bin/bash\nprintf "%%s\\n" "find $*" >> "$BOARD_IO_LOG"\n'
+    printf 'exec %q "$@"\n' "$(command -v find)"; } > "$TEST_HOME/io-bin/find"
+  chmod +x "$TEST_HOME/io-bin/find"
+  export PATH="$TEST_HOME/io-bin:$PATH"
+  : > "$BOARD_IO_LOG"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Fixture"* ]] || false
+  grep -q '^find ' "$BOARD_IO_LOG" || false
+  PATH="${PATH#*:}"
+  # Now the strict shim: a SECOND render must read back what the first one
+  # just self-healed, with no further discovery at all.
   _board_shims
   : > "$BOARD_IO_LOG"
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *"Fixture"* ]] || false
-  ! grep -q FIND "$BOARD_IO_LOG" || false
-  PATH="${PATH#*:}"
-  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/work"
-  run clikae
-  [ "$status" -eq 0 ]
   [[ "$output" == *"Fixture"* ]] || false
+  ! grep -q FIND "$BOARD_IO_LOG" || false
 }
 
-@test "home: live rows read only the stamped transcript, never unstamped candidates" {
+@test "home: live rows read the stamped row exactly, and guess the unstamped row from one candidate" {
+  # 2026-09-12 round-1 fix review, P1-1: this test used to assert that an
+  # UNSTAMPED row in board mode reads NOTHING and just shows the tank's own
+  # name — which was true only because board mode disabled the whole guess
+  # pass outright (home.sh used to gate it off with `_CLIKAE_BOARD`). That is
+  # the exact defect live.bats' own "single live session's title carries no
+  # guess marker" / "two live sessions… no guess marker" family exists to
+  # forbid: an unstamped row must still get its best-available guess, the
+  # same way it always did outside board mode. What must stay true here is
+  # only the COST shape — the guess reads at most the ONE transcript it
+  # settles on, never a scan of every other session on the tank.
   _board_fixture 10
   source "$CLIKAE_LIB/commands/home.sh"
   # Function fixtures only: no tmux client or server is invoked.
@@ -165,11 +197,25 @@ _board_shims() {
   run _home_live_rows
   [ "$status" -eq 0 ]
   [[ "$output" == *"Fixture 3"* ]] || false
-  ! grep -E '(head|tail).*session-[012456789]\.jsonl' "$BOARD_IO_LOG" || false
+  # Content reads only (head -n 100 / tail -c 524288, how title/recap parsing
+  # bounds its read) — a freshness check's own metadata stat legitimately
+  # names every recent candidate in one batched call (files_mtime_size), and
+  # that is not a content read.
+  local touched
+  touched="$(grep -E '^(head -n 100|tail -c 524288)' "$BOARD_IO_LOG" \
+    | grep -oE 'session-[0-9]+\.jsonl' | sed 's/\.jsonl$//' | sort -u | grep -vx session-3 | wc -l | tr -d ' ')"
+  [ "$touched" -le 1 ]
   ! grep -q FIND "$BOARD_IO_LOG" || false
 }
 
-@test "run: start and end publish state and preserve the engine exit status" {
+@test "run: launch keeps exec semantics — no board refresh, engine exit status preserved" {
+  # 2026-09-12 round-1 fix review, P2-1/P2-2: cmd_run used to wrap adapter_run
+  # in a subshell so a board_state_refresh could run before AND after —
+  # holding clikae resident as the session's parent for as long as the engine
+  # ran, and paying a full tank scan synchronously on every launch and every
+  # exit. board_generation now self-heals a stale snapshot inline at render
+  # time, so cmd_run has nothing left to buy by calling board_state_refresh
+  # itself, and this must be the tail call adapter_run's own `exec` rides on.
   _board_source
   source "$CLIKAE_LIB/commands/run.sh"
   load_adapter() { :; }
@@ -181,7 +227,7 @@ _board_shims() {
   board_state_refresh() { printf boundary >> "$TEST_HOME/calls"; }
   run cmd_run claude test
   [ "$status" -eq 7 ]
-  [ "$(cat "$TEST_HOME/calls")" = boundaryengineboundary ]
+  [ "$(cat "$TEST_HOME/calls")" = engine ]
 }
 
 @test "home: codex quota errors survive snapshots and a later success clears them" {
