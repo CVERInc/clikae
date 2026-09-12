@@ -257,7 +257,13 @@ _board_shims() {
   printf '{"timestamp":"2026-09-12T00:01:00Z","type":"agent_message"}\n' >> "$f"
   board_state_refresh codex "$dir"
   run limit_profile_dry codex "$dir"
-  [ "$status" -eq 1 ]
+  # round-3 fix review, P1-1: #79 gave _limit_codex_dry a THIRD return code —
+  # rc=2, not rc=1 — for exactly this shape (a real turn newer than the
+  # newest limit): rc=1 just means "nothing found here" (fall through to
+  # dry_store), while rc=2 is POSITIVE evidence of recovery that
+  # _limit_tank_dry_raw weighs against a persisted marker's own timestamp
+  # (R2-P1-3). The badge still clears; it clears via rc=2, not rc=1.
+  [ "$status" -eq 2 ]
 }
 
 @test "home: grok recent and live lookup use snapshots without discovery" {

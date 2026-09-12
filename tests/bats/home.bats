@@ -289,14 +289,19 @@ _agy_log() { # <line>
   # never passed through a session boundary. That is a deliberate write to
   # clikae's OWN derived cache under state/board (and state/readings, the
   # per-file reading cache) — it is exactly the durable-across-invocations
-  # snapshot the whole feature is. The invariant this test protects is that a
-  # bare render never touches the SOURCE data (profiles/transcripts/config),
-  # which still holds; the cache dirs are excluded on purpose, not weakened.
+  # snapshot the whole feature is.
+  #
+  # Ruling (round-3 fix review, P1-1): a bare render MAY write its own
+  # derived cache under $CLIKAE_HOME/state/ — never under any tank's profile
+  # dir. So this test asserts the boundary exactly: profiles/ (the tank's
+  # SOURCE data — transcripts/config) is byte-for-byte untouched; state/ is
+  # excluded from the comparison because it is allowed, not required, to
+  # change.
   clikae init claude work
-  before="$(find "$CLIKAE_HOME" -not -path "$CLIKAE_HOME/state*" 2>/dev/null | sort)"
+  before="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   run clikae
   [ "$status" -eq 0 ]
-  after="$(find "$CLIKAE_HOME" -not -path "$CLIKAE_HOME/state*" 2>/dev/null | sort)"
+  after="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   [ "$before" = "$after" ]
 }
 
