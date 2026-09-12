@@ -1,11 +1,31 @@
 # shellcheck shell=bash
 # Per-file parsed readings. Identity includes the path, size and mtime; empty
 # results and unsuccessful readings are cached too. Never cache rendered ages.
+
+# _reading_cache_keyv <file> -> "<size>:<mtime-with-subsecond-precision>", one
+# `stat` call. Sub-second precision (not just whole seconds) because an
+# append-only transcript always grows in size and so is safe either way, but a
+# same-size overwrite within the same wall-clock second is not — this repo
+# already has a test for exactly that shape on the OLDER, single-purpose codex
+# cache (limit_codex_status_cached's "SAME wall-clock second" case). GNU's
+# fractional-seconds modifier / BSD's `F` sub-format, DETECTED via
+# _clikae_statv — never `stat -c … || stat -f …` (see _clikae_statv's own
+# red-flagged history in profile_store.sh: on a GNU machine, `-f` means
+# --file-system, not "try the BSD flag").
+_reading_cache_keyv() {
+  _clikae_statv
+  if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
+    stat -L -c '%s:%.9Y' "$1" 2>/dev/null
+  else
+    stat -L -f '%z:%Fm' "$1" 2>/dev/null
+  fi
+}
+
 reading_cache_run() {
   local kind="$1" f="$2"; shift 2
   local key id root cache saved rc value tmp
   [ -f "$f" ] || { "$@"; return $?; }
-  key="$(stat -L -c '%s:%Y' "$f" 2>/dev/null || stat -L -f '%z:%m' "$f" 2>/dev/null)" || { "$@"; return $?; }
+  key="$(_reading_cache_keyv "$f")" || { "$@"; return $?; }
   key="$f:$key"
   id="$(printf '%s' "$kind:$f" | cksum)"; id="${id%% *}"
   root="${CLIKAE_HOME:-$HOME/.clikae}/state/readings"
