@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
+  permission mode while preserving the default argv. codex and agy have no
+  equivalent flag and keep their existing flags, reporting the degradation for
+  either value now (not just `auto`). grok ships its own `--permission-mode`
+  but clikae does not map `--permission` onto it, so a grok burn always runs
+  under grok's fixed mode — round-1 review caught `--permission acceptEdits`
+  running silently on grok under a different mode (`bypassPermissions`); it
+  now says so (#60).
+
 ## [0.29.0] — 2026-09-11
 
 ### Added

@@ -172,6 +172,7 @@ load_adapter() {
   # in one process, and a hook b doesn't define must NOT be inherited from a.
   unset -f adapter_meta_name adapter_meta_cli_binary adapter_meta_env_var \
            adapter_meta_strategy adapter_meta_description \
+           adapter_meta_permission_modes \
            adapter_export_env adapter_run adapter_init \
            adapter_relay adapter_transcript_path adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \

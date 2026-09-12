@@ -10,6 +10,15 @@ adapter_meta_description() { echo "Anthropic Claude Code CLI (credentials + sett
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @anthropic-ai/claude-code"; }
 
+# Optional hook (#60 round-1 review): declares this adapter maps `clikae
+# burn`'s --permission onto its own headless permission flag, and which modes
+# it accepts. burn.sh checks for this function's PRESENCE, not its cli_binary
+# name — an adapter that doesn't define it gets a truthful degradation line
+# instead of silently keeping a fixed mode under the name of a mode it never
+# actually ran (see grok, which has no --permission mapping despite shipping
+# its own --permission-mode).
+adapter_meta_permission_modes() { echo "acceptEdits auto"; }
+
 # Per-tank CLAUDE_CONFIG_DIR isolation is meant for IDENTITY state (auth token,
 # transcript history, keychain slot) — it was never meant to also isolate
 # ASSETS the user hand-authors once and expects everywhere (personal skills,
@@ -95,7 +104,15 @@ adapter_burn_flags() {
   # succeed. That is the boundary doing its job — and burn judges by artifact, so
   # it reports "no artifact" rather than a silent wrong success. Real burns are
   # unaffected: the same bash-and-write task finished in 20s against 15s.
-  printf -- '-p\0%s\0--permission-mode\0acceptEdits\0' "$prompt"
+  #
+  # --permission (#60) picks the mode within that same boundary: acceptEdits
+  # approves file edits but still stops on shell commands print mode can't
+  # answer; auto lets Claude's classifier approve those too. Neither bypasses
+  # the --add-dir boundary above — that is still only --dangerously-skip-permissions.
+  # burn_permission is a cmd_burn local, inherited here via bash dynamic
+  # scoping through _burn_compose; direct callers of this hook keep the
+  # historical acceptEdits default.
+  printf -- '-p\0%s\0--permission-mode\0%s\0' "$prompt" "${burn_permission:-acceptEdits}"
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 

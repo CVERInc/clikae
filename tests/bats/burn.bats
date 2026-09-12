@@ -40,6 +40,38 @@ _stub_gh() {
   PATH="$bin:$PATH"; export PATH
 }
 
+# Stub `claude` and `grok` the same way _stub_codex stubs codex: log the full
+# argv (one line per invocation) to $STUB_ARGV_LOG when set, and create
+# $STUB_ARTIFACT so burn's own success check (the artifact, never the exit
+# code) has something to find. Round-1 review (P2-1): these run the REAL
+# `clikae burn <engine> …` entry point, not a stubbed validate_name — so a
+# regression in the wiring between the parsed --permission and the composed
+# engine argv (production call site, lib/commands/burn.sh's _burn_compose
+# call) shows up here, not just in the lighter _permission_argv harness below.
+_stub_claude() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/claude" <<'STUB'
+#!/usr/bin/env bash
+[ -n "$STUB_ARGV_LOG" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$bin/claude"
+  PATH="$bin:$PATH"; export PATH
+}
+
+_stub_grok() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/grok" <<'STUB'
+#!/usr/bin/env bash
+[ -n "$STUB_ARGV_LOG" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$bin/grok"
+  PATH="$bin:$PATH"; export PATH
+}
+
 @test "burn completes on a live tank and verifies by the artifact" {
   _stub_codex
   clikae init codex T1
@@ -530,6 +562,24 @@ STUB
   load_adapter gh
   ! declare -F adapter_burn_flags >/dev/null # gh must NOT have inherited it
   ! declare -F adapter_audit_flags >/dev/null
+}
+
+# P1-1 (2026-09-12 round-2 review): adapter_meta_permission_modes (claude.sh,
+# #60's --permission gate) was added to claude but never to adapter_loader's
+# unset list — a codex/grok load right after claude's kept "seeing" claude's
+# hook via declare -F, so burn.sh:508's capability gate (permission_set=1 AND
+# no adapter_meta_permission_modes) silently believed the new engine mapped
+# --permission when it never defined the hook at all. Same shape as the
+# leak-guard above, scoped to the one hook this PR introduced.
+@test "adapter_meta_permission_modes does NOT leak across adapters (leak-guard)" {
+  _src_burn
+  load_adapter claude
+  declare -F adapter_meta_permission_modes >/dev/null   # claude HAS it
+  load_adapter codex
+  ! declare -F adapter_meta_permission_modes >/dev/null # codex must NOT have inherited it
+  load_adapter claude
+  load_adapter grok
+  ! declare -F adapter_meta_permission_modes >/dev/null # grok must NOT have inherited it
 }
 
 @test "burn: --prompt with a trailing -- appends the extra argv after the generated flags" {
@@ -1955,4 +2005,248 @@ STUB
   [ -d "${run_dirs[0]}" ]
   [ "$(stat -c '%a' "${run_dirs[0]}" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}")" = 700 ]
   [ "$(stat -c '%a' "${run_dirs[0]}/prompt.txt" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}/prompt.txt")" = 600 ]
+}
+
+# Stop at validation, after real option parsing, and compose with the real
+# adapter. This tests CLI-to-adapter wiring without starting a burn transport.
+_permission_argv() (
+  _src_burn
+  # cmd_burn supplies these locals through Bash dynamic scope.
+  # shellcheck disable=SC2154
+  validate_name() {
+    load_adapter "$cli"
+    _burn_compose "$prompt" "${#cmd[@]}" "${cmd[@]}" -- "${add_dirs[@]}"
+    printf '%s\0' "${BURN_ARGV[@]}" > "$permission_argv_file"
+    exit 0
+  }
+  cmd_burn "$@"
+)
+
+@test "burn #60: default composed argv is byte-identical to explicit acceptEdits" {
+  local prompt=$'build with spaces\nand a newline'
+  local permission_argv_file="$TEST_HOME/default.argv"
+  _permission_argv claude T1 --artifact out --prompt "$prompt" --add-dir '/workspace with spaces' -- --verbose
+  permission_argv_file="$TEST_HOME/explicit.argv"
+  _permission_argv claude T1 --artifact out --permission acceptEdits --prompt "$prompt" --add-dir '/workspace with spaces' -- --verbose
+  printf '%s\0' -p "$prompt" --permission-mode acceptEdits --add-dir '/workspace with spaces' --verbose > "$TEST_HOME/expected.argv"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/explicit.argv"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/expected.argv"
+}
+
+@test "burn #60: claude auto composes the selected permission mode" {
+  local permission_argv_file="$TEST_HOME/auto.argv"
+  _permission_argv claude T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace
+  printf '%s\0' -p 'build and review' --permission-mode auto --add-dir /workspace > "$TEST_HOME/expected.argv"
+  cmp "$TEST_HOME/auto.argv" "$TEST_HOME/expected.argv"
+}
+
+@test "burn #60: codex auto degrades once on stderr with unchanged argv" {
+  local permission_argv_file="$TEST_HOME/default.argv"
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  permission_argv_file="$TEST_HOME/auto.argv"
+  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/auto.argv"
+  [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
+  grep -F 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/warning"
+}
+
+@test "burn #60: invalid or missing permission is refused with one usage line" {
+  local value
+  for value in bypassPermissions AUTO ''; do
+    run clikae burn claude T1 --permission "$value"
+    [ "$status" -ne 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+    [[ "$output" == *'--permission must be acceptEdits or auto'* ]] || false
+  done
+  run clikae burn claude T1 --permission
+  [ "$status" -ne 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" == *'--permission must be acceptEdits or auto'* ]] || false
+}
+
+# --- P2-1 (round-1 review): the four tests above stop at a stubbed
+# validate_name, which calls _burn_compose ITSELF — before cmd_burn's own real
+# call site (lib/commands/burn.sh's _burn_compose call) ever runs. That proves
+# the parse-layer local is right and adapter_burn_flags honours it, but not
+# that cmd_burn's production wiring actually carries it through. These two run
+# the real `clikae burn claude … --prompt` entry point end to end with a
+# stubbed `claude` binary (mirroring codex's STUB_ARGV_LOG convention above).
+@test "burn #60 (production path): default composes acceptEdits exactly once" {
+  _stub_claude
+  clikae init claude T1
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" run clikae burn claude T1 --artifact "$A" --prompt 'build and review' --add-dir /workspace
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [ "$(grep -o -- '--permission-mode acceptEdits' "$L" | wc -l | tr -d ' ')" = 1 ]
+  ! grep -q -- '--permission-mode auto' "$L"
+}
+
+@test "burn #60 (production path): --permission auto composes auto exactly once" {
+  _stub_claude
+  clikae init claude T1
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" run clikae burn claude T1 --artifact "$A" --permission auto --prompt 'build and review' --add-dir /workspace
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [ "$(grep -o -- '--permission-mode auto' "$L" | wc -l | tr -d ' ')" = 1 ]
+  ! grep -q -- '--permission-mode acceptEdits' "$L"
+}
+
+@test "burn #60: codex acceptEdits (explicit) also degrades once on stderr with unchanged argv" {
+  local permission_argv_file="$TEST_HOME/default.argv"
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  permission_argv_file="$TEST_HOME/accept.argv"
+  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/accept.argv"
+  [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
+  grep -F 'codex has no equivalent for --permission acceptEdits; keeping its existing burn flags.' "$TEST_HOME/warning"
+}
+
+# --- P2-2 (round-1 review): grok ships its OWN --permission-mode (always
+# bypassPermissions, lib/adapters/grok.sh), so it must not be lumped in with
+# "no equivalent" engines like codex, and --permission acceptEdits must not be
+# silent on it (silence used to read as "you got acceptEdits").
+@test "burn #60: grok — both acceptEdits and auto degrade truthfully, argv unchanged" {
+  _stub_grok
+  clikae init grok T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/default.log" \
+    clikae burn grok T1 --artifact "$A" --prompt 'build and review' --add-dir /workspace >/dev/null 2>/dev/null
+  [ -f "$A" ]; rm -f "$A"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/accept.log" \
+    clikae burn grok T1 --artifact "$A" --permission acceptEdits --prompt 'build and review' --add-dir /workspace \
+    >/dev/null 2>"$TEST_HOME/accept.err"
+  [ -f "$A" ]; rm -f "$A"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/auto.log" \
+    clikae burn grok T1 --artifact "$A" --permission auto --prompt 'build and review' --add-dir /workspace \
+    >/dev/null 2>"$TEST_HOME/auto.err"
+  [ -f "$A" ]
+
+  cmp "$TEST_HOME/default.log" "$TEST_HOME/accept.log"
+  cmp "$TEST_HOME/default.log" "$TEST_HOME/auto.log"
+  [ "$(wc -l < "$TEST_HOME/accept.err" | tr -d ' ')" = 1 ]
+  [ "$(wc -l < "$TEST_HOME/auto.err" | tr -d ' ')" = 1 ]
+  grep -F 'clikae does not map --permission for grok' "$TEST_HOME/accept.err"
+  grep -F 'clikae does not map --permission for grok' "$TEST_HOME/auto.err"
+  # and it must NOT reuse codex's "has no equivalent" wording — that phrasing
+  # reads as "grok has no permission modes at all", which is false: it has one,
+  # clikae just doesn't map onto it.
+  ! grep -F 'has no equivalent' "$TEST_HOME/accept.err"
+}
+
+# --- P3-1 (round-1 review): agy's degradation path had zero tests. The stub's
+# --log-file value is a per-run random tmp path (_stub_agy_burn's own doc
+# comment above), so argv comparison normalizes that one token out.
+@test "burn #60: agy — both acceptEdits and auto degrade once, argv unchanged apart from --log-file" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local A="$BATS_TEST_TMPDIR/out.md"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/default.log" \
+    clikae burn agy default --artifact "$A" --prompt "do the thing" >/dev/null 2>/dev/null
+  [ -f "$A" ]; rm -f "$A"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/accept.log" \
+    clikae burn agy default --artifact "$A" --permission acceptEdits --prompt "do the thing" \
+    >/dev/null 2>"$TEST_HOME/accept.err"
+  [ -f "$A" ]; rm -f "$A"
+
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$TEST_HOME/auto.log" \
+    clikae burn agy default --artifact "$A" --permission auto --prompt "do the thing" \
+    >/dev/null 2>"$TEST_HOME/auto.err"
+  [ -f "$A" ]
+
+  sed -E 's/--log-file [^ ]+/--log-file X/' "$TEST_HOME/default.log" > "$TEST_HOME/default.norm"
+  sed -E 's/--log-file [^ ]+/--log-file X/' "$TEST_HOME/accept.log"  > "$TEST_HOME/accept.norm"
+  sed -E 's/--log-file [^ ]+/--log-file X/' "$TEST_HOME/auto.log"    > "$TEST_HOME/auto.norm"
+  cmp "$TEST_HOME/default.norm" "$TEST_HOME/accept.norm"
+  cmp "$TEST_HOME/default.norm" "$TEST_HOME/auto.norm"
+
+  [ "$(wc -l < "$TEST_HOME/accept.err" | tr -d ' ')" = 1 ]
+  [ "$(wc -l < "$TEST_HOME/auto.err" | tr -d ' ')" = 1 ]
+  grep -F 'agy has no equivalent for --permission acceptEdits; keeping its existing burn flags.' "$TEST_HOME/accept.err"
+  grep -F 'agy has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/auto.err"
+}
+
+# --- P3-2 (round-1 review): the raw-argv advisory used to sit after the whole
+# lock/status-file section; it only needs prompt_set, which is settled long
+# before that. Proven by an invalid tank name: validate_name (right after the
+# advisory now) fails before $HOME/.clikae/logs is ever created, so if the
+# advisory still prints here, it printed before any state existed.
+@test "burn #60: raw-argv --permission advisory fires before validate_name / any state work" {
+  run clikae burn codex 'bad name' --artifact /tmp/x --permission auto -- run /tmp/x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'--permission does not modify raw engine argv; set the engine permission flag after --.'* ]] || false
+  [ ! -d "$CLIKAE_HOME/logs" ]
+}
+
+# --- P3-6 (round-1 review): prompt mode composes --permission-mode itself; a
+# raw --permission-mode / --dangerously-skip-permissions riding in after `--`
+# (the documented #24 escape hatch) can now collide with or override it
+# silently. clikae warns once and does NOT touch argv — both flags must still
+# appear in what's actually sent to the engine.
+@test "burn #60: a duplicate engine permission flag after -- warns once, argv untouched" {
+  _stub_claude
+  clikae init claude T1
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/argv.log" E="$TEST_HOME/warn.err"
+  # --no-reroute: skip the one-time "different accounts" carry notice (unrelated
+  # to this test, and it would otherwise land in $E and break the line count).
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" \
+    clikae burn claude T1 --artifact "$A" --no-reroute --prompt 'build and review' -- --permission-mode bypassPermissions \
+    >/dev/null 2>"$E"
+  [ -f "$A" ]
+  [ "$(grep -o -- '--permission-mode' "$L" | wc -l | tr -d ' ')" = 2 ]
+  [ "$(wc -l < "$E" | tr -d ' ')" = 1 ]
+  grep -F 'raw argv after -- includes --permission-mode or --dangerously-skip-permissions' "$E"
+}
+
+# --- P1-1 (2026-09-12 round-2 review): the production reroute path itself —
+# claude/T1 genuinely dry, --to codex/T2, --permission auto. This is the ONLY
+# shape in this file that calls load_adapter twice (claude, then codex) inside
+# ONE process via the real `clikae burn` reroute loop (burn.sh:2554-2564), so
+# it is the only test that can catch adapter_meta_permission_modes leaking
+# from claude onto codex and making burn.sh:508's `! declare -F
+# adapter_meta_permission_modes` gate lie (codex looks like it maps
+# --permission when it never defined the hook). Every OTHER --permission test
+# above calls `clikae burn <one engine>` exactly once per process — a fresh
+# `load_adapter` from a clean shell — so the leak can never surface there.
+@test "burn #60 P1-1 (round-2 review): cross-engine --to reroute does not leak claude's permission-mode capability onto codex" {
+  _stub_codex
+  # A claude stub that always reports the vendor's hard usage-limit line (the
+  # exact wording limit_output_dry's claude branch requires), so this burn is
+  # forced down the dry -> reroute path every time, deterministically.
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+exit 0
+STUB
+  chmod +x "$bin/claude"
+  PATH="$bin:$PATH"; export PATH
+
+  clikae init claude T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/carry-notice-shown"   # one-time cross-account note is unrelated to this test
+
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/codex.argv" E="$TEST_HOME/warn.err"
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" \
+    clikae burn claude T1 --artifact "$A" --to codex/T2 --permission auto --prompt 'x' \
+    >/dev/null 2>"$E"
+  [ -f "$A" ]   # codex/T2 actually ran and produced the artifact
+
+  # The capability gate must fire for codex: codex never defines
+  # adapter_meta_permission_modes, so --permission auto must degrade truthfully
+  # on it — exactly once, the SAME wording the single-engine codex test above
+  # (burn #60: codex auto degrades once on stderr with unchanged argv) uses.
+  [ "$(grep -Fc 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$E" | tr -d ' ')" = 1 ]
+
+  # And codex's actual argv must never carry --permission-mode — proving the
+  # gate's truthful warning is backed by truthful argv, not just backed by
+  # inherited claude state that happens to also block it once.
+  ! grep -q -- '--permission-mode' "$L"
 }

@@ -26,6 +26,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
+                   [--permission <acceptEdits|auto>]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -55,6 +56,11 @@ Give the task in one of two ways:
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
+  --permission <mode> claude-only: acceptEdits (default) or auto. Other engines
+                      have no mapping and print one degradation line, keeping
+                      their existing fixed mode — see docs/orchestration.md.
+                      Applies to composed prompt argv; raw commands after --
+                      stay verbatim.
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.
@@ -490,6 +496,22 @@ _burn_compose() {
   shift   # drop the literal "--" separator
   BURN_ARGV=()
   local line
+  # P2-1/P2-2 (2026-09-12 round-1 review): gate on whether an adapter DECLARES
+  # a --permission mapping (adapter_meta_permission_modes, claude-only today),
+  # not on its binary name — and gate on whether the caller ASKED for a mode
+  # ($permission_set), not on which mode. An explicit acceptEdits on an unmapped
+  # engine used to be silent, which read as "you got what you asked for" even
+  # though the engine's own fixed mode may differ (grok always runs
+  # --permission-mode bypassPermissions, never acceptEdits). cli/burn_permission/
+  # permission_set are cmd_burn locals, inherited here via bash dynamic scoping,
+  # same convention as adapter_burn_flags' own burn_permission read below.
+  if [ "${permission_set:-0}" -eq 1 ] && ! declare -F adapter_meta_permission_modes >/dev/null; then
+    if [ "$cli" = grok ]; then
+      log_warn "clikae does not map --permission for grok; the grok burn runs with the adapter's fixed permission mode."
+    else
+      log_warn "$cli has no equivalent for --permission ${burn_permission:-acceptEdits}; keeping its existing burn flags."
+    fi
+  fi
   # NUL-delimited read so a multi-line prompt survives as a single argv item.
   while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
   BURN_ARGV+=("${post[@]}")
@@ -1791,6 +1813,7 @@ _burn_tank_lock_release() {
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
+  local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s=""
   local -a cmd=() add_dirs=()
@@ -1800,6 +1823,13 @@ cmd_burn() {
       --artifact)   shift; [ $# -gt 0 ] || log_fail "--artifact needs a path"; artifact="$1"; shift ;;
       --to)         shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
+      --permission)
+        shift
+        case "${1:-}" in
+          acceptEdits|auto) burn_permission="$1"; permission_set=1; shift ;;
+          *) log_fail "--permission must be acceptEdits or auto" ;;
+        esac
+        ;;
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
@@ -1861,6 +1891,30 @@ cmd_burn() {
     [ "${#add_dirs[@]}" -ge 1 ] || add_dirs=("$(dirname "$artifact")")
   else
     [ "${#cmd[@]}" -ge 1 ] || log_fail "Give a task: --prompt-file <f> / --prompt <str>, or the explicit -- <cmd...> form."
+  fi
+  # P3-2 (2026-09-12 round-1 review): this only needs prompt_set, which is
+  # settled right above — no reason to wait for the lock/state-file section
+  # further down. Same discipline as --permission's own value validation: a
+  # warning that's already true doesn't need to wait for state to exist.
+  if [ "$prompt_set" -eq 0 ] && [ "$permission_set" -eq 1 ]; then
+    log_warn "--permission does not modify raw engine argv; set the engine permission flag after --."
+  fi
+  # P3-6 (2026-09-12 round-1 review): the opposite gap — prompt mode composes
+  # --permission-mode itself, and #24's escape hatch (extra argv after --,
+  # appended verbatim after the generated flags) can duplicate or override it
+  # silently. Warn without touching argv: -- stays a power-user escape hatch,
+  # unchanged (docs/orchestration.md already says extra args still follow the
+  # generated flags).
+  if [ "$prompt_set" -eq 1 ]; then
+    local _burn_dupe_permission_flag=0 _burn_post_arg
+    for _burn_post_arg in "${cmd[@]}"; do
+      case "$_burn_post_arg" in
+        --permission-mode|--dangerously-skip-permissions) _burn_dupe_permission_flag=1; break ;;
+      esac
+    done
+    if [ "$_burn_dupe_permission_flag" -eq 1 ]; then
+      log_warn "raw argv after -- includes --permission-mode or --dangerously-skip-permissions; clikae's own --permission-mode is composed first and the two may collide."
+    fi
   fi
   validate_name cli "$cli"
   validate_name profile "$tank"
@@ -2031,6 +2085,14 @@ cmd_burn() {
       # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
       # there is no adapter to compose, so `--prompt` still carries the task and
       # these ride alongside it. They used to be parsed and then silently dropped.
+      # P3-1/P3-4 (2026-09-12 round-1 review): fire for an EXPLICIT acceptEdits
+      # too, not just auto — agy has no permission mapping at all, so either
+      # value is equally unmet; name it via $status_engine (already normalized
+      # to "agy" above, #40) rather than a third hardcoded spelling of the same
+      # engine.
+      if [ "$permission_set" -eq 1 ]; then
+        log_warn "$status_engine has no equivalent for --permission $burn_permission; keeping its existing burn flags."
+      fi
       _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
