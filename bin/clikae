@@ -66,6 +66,10 @@ source "$CLIKAE_LIB/core/duration.sh"
 source "$CLIKAE_LIB/core/update_check.sh"
 # shellcheck source=../lib/core/limit.sh
 source "$CLIKAE_LIB/core/limit.sh"
+# shellcheck source=../lib/core/reading_cache.sh
+source "$CLIKAE_LIB/core/reading_cache.sh"
+# shellcheck source=../lib/core/board_state.sh
+source "$CLIKAE_LIB/core/board_state.sh"
 # shellcheck source=../lib/core/history.sh
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh

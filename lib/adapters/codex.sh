@@ -111,9 +111,67 @@ adapter_account_label() {
 
 _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 
+# _codex_newest_chain <sessions-dir> -> one path per line: sessions/ itself,
+# then the lexically-newest existing YYYY dir under it, then the newest MM
+# under THAT, then the newest DD under THAT — stopping at the first level
+# that does not exist. Used ONLY as board_stale's freshness signal for codex
+# (see board_state.sh's `_board_scan_root`): a new rollout always
+# creates/touches ITS day directory, but sessions/ itself sits three levels
+# above and so never moves for it (P1-C). No `find` here on purpose — this
+# runs on EVERY render via board_stale, and this repo's own test suite
+# (home-bounded.bats' `_board_shims`) hard-fails any `find` call on a warm
+# render; a bounded glob at each of 3 levels (at most a handful of years,
+# 12 months, 31 days) is not that.
+#
+# round-3 fix review, P2-1: the previous version (`_codex_today_scan_dir`)
+# derived y/m/d from the OBSERVER's own `date`, not from what is actually on
+# disk. That is only correct when the observer's local "today" agrees with
+# whatever clock wrote the newest rollout's date directory — true by default
+# (codex uses the machine's own local time), false the moment clikae runs
+# under an explicit `TZ=`, across a timezone during travel, or from a
+# CI/cron invocation pinned to UTC while the interactive session that wrote
+# the rollout ran in local time. When the two disagree, the old code walked
+# up from a COMPUTED leaf that doesn't exist to a directory that does — but
+# that directory could be a sibling of where the real newest rollout landed,
+# whose own mtime a NEW rollout inside an EXISTING sibling day dir never
+# touches (only that day dir's own mtime moves). The board then never
+# rebuilds and a brand new session — and the limit it carries — is
+# permanently invisible.
+#
+# Reading the actual newest chain off disk instead needs no clock at all:
+# whichever level the account is CURRENTLY writing to is, by construction,
+# the lexically-greatest entry at its level (zero-padded YYYY/MM/DD sort
+# correctly as strings). board_state.sh records every level THIS returns,
+# so a new rollout inside an existing day always bumps a directory this
+# check is already watching, and a brand new day/month/year directory bumps
+# its own newly-created parent, which is also on the list.
+_codex_newest_chain() {
+  local sess="$1"
+  [ -d "$sess" ] || { printf '%s\n' "$sess"; return 0; }
+  printf '%s\n' "$sess"
+  local y="" m="" d="" p
+  for p in "$sess"/*/; do [ -d "$p" ] && y="${p%/}"; done
+  [ -n "$y" ] || return 0
+  printf '%s\n' "$y"
+  for p in "$y"/*/; do [ -d "$p" ] && m="${p%/}"; done
+  [ -n "$m" ] || return 0
+  printf '%s\n' "$m"
+  for p in "$m"/*/; do [ -d "$p" ] && d="${p%/}"; done
+  [ -n "$d" ] || return 0
+  printf '%s\n' "$d"
+}
+
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
 # (first line). Never abort the caller under `set -eo pipefail`.
 _codex_meta_field() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run "codex-meta-$2" "$1" _codex_meta_uncached "$@"
+  else
+    _codex_meta_uncached "$@"
+  fi
+}
+
+_codex_meta_uncached() {
   local first_line=""
   read -r first_line < "$1" 2>/dev/null || true
   if [[ "$first_line" == *'"'"$2"'"'* ]]; then
@@ -125,6 +183,9 @@ _codex_meta_field() {
 # _codex_find_rollout <dir> <sid> — the rollout file for a session id (the uuid is
 # the filename suffix), or empty.
 _codex_find_rollout() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local f; f="$(board_find codex "$1" "$2" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   local sdir; sdir="$(_codex_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
   find "$sdir" -type f -name "rollout-*-$2.jsonl" 2>/dev/null | head -n 1
@@ -188,6 +249,12 @@ adapter_transcript_path() {
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first, live content-scan fallback only on a genuine miss — see
+    # claude.sh's twin comment (2026-09-12 round-1 fix review, P1-1).
+    local _bout; _bout="$(board_recent codex "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
   local dir="$1" limit="${2:-5}" f sid mt
   # codex's this-dir set is content-matched (a rollout records $PWD in its body,
   # not its path — see _codex_rollouts_for_cwd), so the FILE LIST comes from there;
@@ -230,6 +297,14 @@ adapter_session_title() {
 # event to prefer (checked 2026-07-12 alongside claude.sh's customTitle fix;
 # nothing invented — first user_message stays the only title source).
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run codex-title "$1" _codex_title_uncached "$@"
+  else
+    _codex_title_uncached "$@"
+  fi
+}
+
+_codex_title_uncached() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 

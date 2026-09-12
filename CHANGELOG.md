@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running silently on grok under a different mode (`bypassPermissions`); it
   now says so (#60).
 
+### Changed
+
+- Home board transcript discovery and usage census now run at session boundaries,
+  with atomic per-file reading caches and bounded recent-session snapshots, and
+  self-heal inline at render time when a tank's snapshot is missing or stale
+  (a launch that never passed through a session boundary — `clikae alias`,
+  `clikae env`, a `.app` bundle — no longer leaves Resume permanently empty or
+  fuel readings frozen). `CLIKAE_HOME_TIMING=1` reports section timings on
+  stderr. `clikae clean` now also sweeps old board snapshot generations and
+  orphaned reading-cache entries.
+
 ## [0.29.0] — 2026-09-11
 
 ### Added

@@ -266,6 +266,15 @@ adapter_session_recap() {
   [ -n "$sid" ] || return 0
   f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   [ -f "$f" ] || return 0
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run claude-recap "$f" _claude_recap_uncached "$f"
+  else
+    _claude_recap_uncached "$f"
+  fi
+}
+
+_claude_recap_uncached() {
+  local f="$1"
   transcript_tail "$f" | grep '"subtype":"away_summary"' | tail -n 1 \
     | grep -oE '"content":"([^"\\]|\\.)*"' | head -n 1 \
     | sed -E 's/^"content":"//; s/"$//' \
@@ -458,6 +467,14 @@ adapter_session_title() {
 # lost everything past `Fix the `). Self-contained: it sources no core lib (the
 # adapter unit tests exercise it standalone), so the only fork is one `tail -c`.
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run claude-title "$1" _claude_title_uncached "$@"
+  else
+    _claude_title_uncached "$@"
+  fi
+}
+
+_claude_title_uncached() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
 
@@ -564,6 +581,16 @@ adapter_title_for_file() {
 }
 
 adapter_recent_sids() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first (board_generation keeps it fresh per-render on its own —
+    # see board_stale). Only fall through to the live glob below when the
+    # snapshot itself has nothing to say, never disable the glob outright:
+    # 2026-09-12 round-1 fix review, P1-1 — a board with no snapshot at all
+    # for THIS scope must still answer, and a live guess here is bounded by
+    # this one directory's own file count, not by every transcript on disk.
+    local _bout; _bout="$(board_recent claude "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
   local dir="$1" limit="${2:-5}" proj mt f
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 0
@@ -595,6 +622,12 @@ adapter_recent_sids() {
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first; fall through to the all-projects glob when this sid is
+    # simply not in the snapshot's sids index (2026-09-12 round-1 fix review,
+    # P1-1(b): a sid outside $PWD's own project slug still needs an answer).
+    f="$(board_find claude "$dir" "$sid" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   for f in "$dir"/projects/*/"$sid".jsonl; do
     [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
   done

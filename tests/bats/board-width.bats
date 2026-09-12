@@ -78,6 +78,13 @@ _seed_wide_specimen() {
     printf '{"type":"ai-title","aiTitle":"Refactor the payment reconciliation pipeline","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
   } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
   cd "$work" || return 1
+  # The static board consumes the session-boundary snapshot. Keep its Resume
+  # specimen visible there as well as in the direct interactive helper below.
+  source "$CLIKAE_LIB/core/reading_cache.sh"
+  source "$CLIKAE_LIB/core/board_state.sh"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/payments-production"
+  run clikae
+  [[ "$output" == *Refactor* ]] || false
 }
 
 @test "board: no row overflows the terminal, at any width a real terminal has" {

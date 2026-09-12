@@ -4,6 +4,15 @@
 
 load '../helpers'
 
+_home_publish_fixture() (
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/reading_cache.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/board_state.sh"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/$1"
+)
+
 @test "bare clikae with no profiles shows the welcome + first step" {
   run clikae
   [ "$status" -eq 0 ]
@@ -154,6 +163,7 @@ _seed_tx() { # <profile> <jsonl-line>
   local p="$CLIKAE_HOME/profiles/claude/$1/projects/-Users-x"
   mkdir -p "$p"
   printf '%s\n' "$2" >> "$p/s.jsonl"
+  _home_publish_fixture "$1"
 }
 
 # ISO-8601 UTC timestamp <N> minutes before the REAL clock (these tests run
@@ -272,12 +282,26 @@ _agy_log() { # <line>
   [[ "$output" != *"over quota"* ]] || false   # clean log → not badged dry
 }
 
-@test "bare clikae changes nothing on disk (read-only)" {
+@test "bare clikae changes nothing on disk (read-only), aside from its own board cache" {
+  # 2026-09-12 round-1 fix review, P1-2: a render now self-heals a MISSING or
+  # stale per-tank board snapshot inline (lib/core/board_state.sh's
+  # board_generation) rather than leaving Resume empty forever for a tank that
+  # never passed through a session boundary. That is a deliberate write to
+  # clikae's OWN derived cache under state/board (and state/readings, the
+  # per-file reading cache) — it is exactly the durable-across-invocations
+  # snapshot the whole feature is.
+  #
+  # Ruling (round-3 fix review, P1-1): a bare render MAY write its own
+  # derived cache under $CLIKAE_HOME/state/ — never under any tank's profile
+  # dir. So this test asserts the boundary exactly: profiles/ (the tank's
+  # SOURCE data — transcripts/config) is byte-for-byte untouched; state/ is
+  # excluded from the comparison because it is allowed, not required, to
+  # change.
   clikae init claude work
-  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  before="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   run clikae
   [ "$status" -eq 0 ]
-  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  after="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   [ "$before" = "$after" ]
 }
 
@@ -297,6 +321,7 @@ _agy_log() { # <line>
     printf '{"type":"ai-title","aiTitle":"Resume me please","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
   } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   # Headline present (en-US per the pinned test locale), titled by Claude's
@@ -327,6 +352,7 @@ _agy_log() { # <line>
   sleep 1
   printf '{"type":"ai-title","aiTitle":"Newer session","sessionId":"b"}\n' > "$d/bbb00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Newer session"* ]] || false
@@ -345,6 +371,7 @@ _agy_log() { # <line>
     printf '{"type":"system","subtype":"away_summary","content":"Fixed the parser; next add tests. (disable recaps in /config)"}\n'
   } > "$d/ccc00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Has a recap"* ]] || false
@@ -533,6 +560,7 @@ _agy_log() { # <line>
   local long; long="$(printf 'X%.0s' $(seq 1 200))"
   printf '{"type":"ai-title","aiTitle":"%s","sessionId":"a"}\n' "$long" > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"…"* ]] || false                  # truncated

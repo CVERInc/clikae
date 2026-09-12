@@ -341,6 +341,11 @@ _agy_switch() {
     case "$a" in -p|--prompt) is_dispatch=1; break ;; esac
   done
   [ "$is_dispatch" = "1" ] && export CLIKAE_DISPATCH=1
+  # 2026-09-12 round-1 fix review, P2-1/P2-2: see run.sh's twin comment — no
+  # more subshell-and-refresh-after; board_generation self-heals a stale
+  # snapshot inline at render time, so a boundary call here has nothing left
+  # to buy, and this stays a real `exec` (clikae is not a resident parent for
+  # the rest of the session).
   exec agy "$@"
 }
 

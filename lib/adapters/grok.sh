@@ -130,6 +130,14 @@ _grok_sessions_dir() { printf '%s\n' "$1/sessions"; }
 # matching "request_id" / "current_model_id". Never aborts the caller under
 # `set -eo pipefail`.
 _grok_json_str() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run "grok-$2" "$1" _grok_json_str_uncached "$@"
+  else
+    _grok_json_str_uncached "$@"
+  fi
+}
+
+_grok_json_str_uncached() {
   local f="$1" key="$2" re
   [ -f "$f" ] || return 0
   re="\"$key\"[[:space:]]*:[[:space:]]*\"(\\\\.|[^\"\\\\])*\""
@@ -159,6 +167,9 @@ _grok_summaries_for_cwd() {
 # the session directory's name), or empty. Not scoped to $PWD: `clikae resume
 # <id>` looks a session up across directories.
 _grok_find_summary() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local f; f="$(board_find grok "$1" "$2" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   local sdir; sdir="$(_grok_sessions_dir "$1")"
   [ -d "$sdir" ] || return 0
   find "$sdir" -maxdepth 3 -type f -name 'summary.json' -path "*/$2/summary.json" 2>/dev/null | head -n 1
@@ -212,6 +223,10 @@ EOF
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local _bout; _bout="$(board_recent grok "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
   local dir="$1" limit="${2:-5}" f sid mt
   # grok's this-dir set is content-matched (see _grok_summaries_for_cwd), so the
   # FILE LIST comes from there; sessions_by_mtime (shared kernel) then stats+sorts
