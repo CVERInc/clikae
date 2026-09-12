@@ -76,11 +76,42 @@ load '../helpers'
 
 @test "settings rejects unsupported engines missing tanks and conflicting flags" {
   run clikae settings apply codex
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"No permissions template for engine: codex"* ]] || false
   run clikae settings apply claude absent
   [ "$status" -ne 0 ]
+  [[ "$output" == *"Tank does not exist: claude/absent"* ]] || false
   run clikae settings apply --check --dry-run
   [ "$status" -ne 0 ]
+}
+
+@test "settings apply without jq fails clearly and does not write" {
+  local stripped="/usr/bin:/bin"
+  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
+  clikae init claude work
+  local f="$CLIKAE_HOME/profiles/claude/work/settings.json"
+  cp "$f" "$TEST_HOME/before"
+  run env PATH="$stripped" "$CLIKAE_BIN" settings apply claude work
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"requires jq"* ]] || false
+  cmp "$f" "$TEST_HOME/before"
+}
+
+@test "an allow rule that exactly matches a deny rule is refused, not written" {
+  local d="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$d"
+  printf '%s\n' '{"permissions":{"allow":["Bash(sudo *)"]}}' > "$d/settings.json"
+  cp "$d/settings.json" "$TEST_HOME/before"
+  run clikae settings apply claude work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refused"*"shadow"*"Bash(sudo *)"* ]] || false
+  cmp "$d/settings.json" "$TEST_HOME/before"
+}
+
+@test "settings apply with no tanks of the engine says so and exits 0" {
+  run clikae settings apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No claude tanks found."* ]] || false
 }
 
 @test "doctor permissions helper reports each drifted tank and stays read-only" {
@@ -92,11 +123,11 @@ load '../helpers'
   [ ! -e "$d/settings.json" ]
 }
 
-@test "targeted apply leaves other tanks alone and expands Linux username" {
+@test "targeted apply leaves other tanks alone and expands \$HOME" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/a" "$CLIKAE_HOME/profiles/claude/b"
   clikae settings apply claude a
   [ ! -e "$CLIKAE_HOME/profiles/claude/b/settings.json" ]
-  jq -e --arg rule "Bash(/home/$(id -un)/*)" '.permissions.allow | index($rule) != null' "$CLIKAE_HOME/profiles/claude/a/settings.json"
+  jq -e --arg rule "Bash($HOME/*)" '.permissions.allow | index($rule) != null' "$CLIKAE_HOME/profiles/claude/a/settings.json"
 }
 
 @test "symlinked settings are skipped without changing the target" {

@@ -238,3 +238,14 @@ EOF
   [ "$(printf '%s\n' "$output" | grep -c 'claude/drifted: permissions drift')" -eq 1 ]
   cmp "$f" "$TEST_HOME/before"
 }
+
+@test "doctor names a missing permissions template instead of blaming settings.json" {
+  clikae init claude a --no-template
+  local prefix="$BATS_TEST_TMPDIR/tap"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  run "$prefix/bin/clikae" doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude: permissions template missing (installation incomplete)"* ]] || false
+  [[ "$output" != *"invalid JSON"* ]] || false
+}
