@@ -111,6 +111,36 @@ adapter_account_label() {
 
 _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 
+# _codex_today_scan_dir <dir> -> the deepest EXISTING directory on today's
+# sessions/YYYY/MM/DD path. Used ONLY as board_stale's freshness signal for
+# codex (see board_state.sh's `_board_scan_root`): a new rollout always
+# creates/touches ITS day directory, but sessions/ itself sits three levels
+# above and so never moves for it (P1-C). No `find` here on purpose — this
+# runs on EVERY render via board_stale, and this repo's own test suite
+# (home-bounded.bats' `_board_shims`) hard-fails any `find` call on a warm
+# render. A brand new session's file always lands under TODAY's date, so
+# today's path can be COMPUTED (one `date` fork, zero discovery) rather than
+# searched for:
+#   - today's DD dir exists -> use it (catches a new session on a day that
+#     already has one; creating that file bumps the DD dir's own mtime).
+#   - it does not (first session of a new day) -> the DD dir ITSELF is about
+#     to be created, which bumps ITS PARENT's mtime instead, so walk up to
+#     the deepest ancestor that already exists (MM, then YYYY, then
+#     sessions/ itself) — the same directory whichever creation is about to
+#     touch.
+_codex_today_scan_dir() {
+  local sess; sess="$(_codex_sessions_dir "$1")"
+  local y m d
+  read -r y m d < <(date +'%Y %m %d' 2>/dev/null)
+  local p
+  if [ -n "$y" ] && [ -n "$m" ] && [ -n "$d" ]; then
+    for p in "$sess/$y/$m/$d" "$sess/$y/$m" "$sess/$y"; do
+      [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+    done
+  fi
+  printf '%s' "$sess"
+}
+
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
 # (first line). Never abort the caller under `set -eo pipefail`.
 _codex_meta_field() {
