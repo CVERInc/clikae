@@ -14,6 +14,8 @@ load '../helpers'
 # If $STUB_ARGV_LOG is set, every invocation appends its full argv (one line) there
 # so a test can assert the generated flag shape.
 _stub_codex() {
+  # Generated Codex burns require a real git cwd (#66).
+  git init -q "$BATS_TEST_TMPDIR"
   local bin="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$bin"
   cat > "$bin/codex" <<'STUB'
@@ -2249,4 +2251,84 @@ STUB
   # gate's truthful warning is backed by truthful argv, not just backed by
   # inherited claude state that happens to also block it once.
   ! grep -q -- '--permission-mode' "$L"
+}
+
+@test "burn #66: non-git cwd refuses before creating any clikae state" {
+  rm -rf "$HOME/.clikae"  # undo shared setup; this refusal must create nothing
+  local plain="$HOME/plain directory"
+  mkdir -p "$plain"
+  run clikae burn codex T1 --json --artifact "$plain/out" --prompt x --add-dir "$plain"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$plain"* ]] || false
+  [[ "$output" == *"put the repository first"* ]] || false
+  [[ "$output" == *"--codex-skip-git-check"* ]] || false
+  [ "${#lines[@]}" -eq 1 ]
+  [ ! -e "$HOME/.clikae" ]
+}
+
+@test "burn #66: git cwd keeps generated argv byte-identical" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf 'exec -C %s -s workspace-write x\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$STUB_ARGV_LOG"
+}
+
+@test "burn #66: explicit opt-in adds skip-git-repo-check exactly once" {
+  _stub_burn_transport
+  clikae init codex T1
+  local plain="$HOME/plain"
+  mkdir -p "$plain"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  export STUB_ARTIFACT="$plain/out"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$plain" --codex-skip-git-check
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf 'exec --skip-git-repo-check -C %s -s workspace-write x\n' "$plain" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$STUB_ARGV_LOG"
+}
+
+@test "burn #66: fast failure JSON reason uses trimmed stderr first line" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'ordinary stdout\n'
+printf '  launch refused by engine  \nsecond stderr line\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"reason":"launch refused by engine"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"ok":false'* ]] || false
+  [[ "$output" == *'rc=7'* ]] || false
+}
+
+@test "burn #66: default artifact parent is checked before --fresh can delete it" {
+  rm -rf "$HOME/.clikae"
+  local plain="$HOME/plain"
+  mkdir -p "$plain"
+  printf 'keep me' > "$plain/out"
+  run clikae burn codex T1 --artifact "$plain/out" --prompt x --fresh
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$plain"* ]] || false
+  [ "$(cat "$plain/out")" = 'keep me' ]
+  [ ! -e "$HOME/.clikae" ]
+}
+
+@test "burn #66: stderr reason is capped at 200 characters even with engine rc zero" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '  %0250d  \nsecond line\n' 0 >&2
+exit 0
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local expected; expected="$(printf '%0200d' 0)"
+  [[ "$output" == *"\"reason\":\"$expected\""* ]] || { echo "$output"; false; }
+  [[ "$output" == *'rc=0'* ]] || false
 }

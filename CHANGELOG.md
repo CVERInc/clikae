@@ -438,6 +438,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Codex burns reject a non-git cwd before creating state (#66).** Put the
+  repository first in `--add-dir`, or opt in with `--codex-skip-git-check`.
+  Fast engine failures with stderr now report its trimmed first line (up to
+  200 characters) as the JSON reason.
+
 - **The Live section named the wrong session when two ran on one tank.** Two
   live sessions on the same tank (a bare one and a resumed one, say) each
   showed the tank's most recently active transcript's title — identical on
