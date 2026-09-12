@@ -76,7 +76,7 @@ Give the task in one of two ways:
                       never the exit code", and with rerouting the tank that did
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
-                         reset, rerouted_from[], elapsed_s, run_id}
+                         reset, rerouted_from[], elapsed_s, run_id, left_behind[]}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -104,6 +104,9 @@ Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail
 tool-host failure -> retry the same tank, then reason: infra (exit 1);
 no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
 on every tank).
+
+Without a fresh artifact, report left-behind Git work and up to 10 recent files
+per repository in cwd/--add-dir roots; show a push hint, never push.
 
 Every burn writes ONE machine-readable status file, updated at every
 transition, so a cockpit never has to grep a log for "ran dry" or "[ FAIL ]"
@@ -724,6 +727,7 @@ _agy_burn() {
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
       _burn_status_write fail false "$status_engine" "$cur" "$artifact" "clikae could not write the artifact" ""
+      _burn_result false agy "$cur" "$artifact" "clikae could not write the artifact"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
     else
@@ -764,6 +768,7 @@ _agy_burn() {
     done < <(_agy_tank_names)
     if [ -z "$nxt" ]; then
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
+      _burn_result false agy "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
       log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
     fi
     agy_tried+=("$nxt")
@@ -771,6 +776,71 @@ _agy_burn() {
     cur="$nxt"
     log_info "Rerouting (dry) → agy/$cur"
   done
+}
+
+# Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
+# .git may be a directory OR a worktree/submodule pointer file.
+_burn_left_behind() {
+  local root marker repo seen="" branch ahead dirty file mtime files count entry
+  local -a repos=() roots=("$PWD" "${add_dirs[@]}")
+  local GIT_OPTIONAL_LOCKS=0
+  export GIT_OPTIONAL_LOCKS
+  left_behind='[]'
+  command -v git >/dev/null 2>&1 || return 0
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    while IFS= read -r -d '' marker; do
+      repo="$(git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || continue
+      case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+      seen="${seen}"$'\n'"${repo}"$'\n'
+      repos+=("$repo")
+    done < <(
+      printf '%s\0' "$root"
+      while IFS= read -r -d '' marker; do
+        printf '%s\0' "${marker%/.git}"
+      done < <(find "$root" -maxdepth 3 \( -name node_modules -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
+    )
+  done
+  local entries="" hint="" scan
+  for repo in "${repos[@]}"; do
+    branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)"
+    ahead="$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
+    dirty="$(git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    files=""; count=0; seen=""
+    for root in "${roots[@]}"; do
+      [ -d "$root" ] || continue
+      root="$(cd "$root" && pwd -P)" || continue
+      case "$root/" in
+        "$repo/"*) scan="$root" ;;
+        *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;
+      esac
+      while IFS= read -r -d '' file; do
+        case "$seen" in *$'\n'"$file"$'\n'*) continue ;; esac
+        mtime="$(_clikae_mtime "$file")"
+        [ "${mtime:-0}" -ge "${started_at:-0}" ] 2>/dev/null || continue
+        seen="${seen}"$'\n'"${file}"$'\n'
+        [ "$count" -eq 0 ] || files="$files,"
+        files="$files$(json_str "$file")"
+        count=$((count + 1))
+        [ "$count" -lt 10 ] || break
+      done < <(find "$scan" \( -name .git -o -name node_modules \) -prune -o -type f -print0 2>/dev/null)
+      [ "$count" -lt 10 ] || break
+    done
+    if [ "$ahead" = - ] || [ "$ahead" = 0 ]; then
+      [ "$dirty" -gt 0 ] || [ "$count" -gt 0 ] || continue
+    fi
+    log_info "left behind: $repo $branch ahead $ahead dirty $dirty"
+    [ "$count" -eq 0 ] || log_info "  files: [$files]"
+    if [ -z "$hint" ] && [ "$ahead" != - ] && [ "$ahead" -gt 0 ]; then
+      printf -v hint '  hint: git -C %q push' "$repo"
+    fi
+    entry="$(printf '{"repo":%s,"branch":%s,"ahead":%s,"dirty":%s,"files":[%s]}' \
+      "$(json_str "$repo")" "$(json_str "$branch")" \
+      "$(if [ "$ahead" = - ]; then json_str -; else printf '%s' "$ahead"; fi)" "$dirty" "$files")"
+    entries="${entries}${entries:+,}${entry}"
+  done
+  [ -z "$hint" ] || log_info "$hint"
+  left_behind="[$entries]"
 }
 
 # _burn_result <ok> <engine> <tank> <artifact> <reason> [reset-phrase]
@@ -789,6 +859,8 @@ _agy_burn() {
 # artifact's own measurement travels with the verdict rather than being a second
 # call the caller has to remember to make.
 _burn_result() {
+  local left_behind='[]'
+  [ "$1" != false ] || _burn_left_behind
   [ "${as_json:-0}" -eq 1 ] || return 0
   local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
   local bytes=null
@@ -797,11 +869,11 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
     "$(_burn_tried_json "${tried:-}")" "$((SECONDS - ${t0:-SECONDS}))" \
-    "$(json_or_null "${run_id:-}")" >&4
+    "$(json_or_null "${run_id:-}")" "$left_behind" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
