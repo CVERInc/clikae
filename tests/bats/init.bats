@@ -59,6 +59,49 @@ load '../helpers'
   [ -d "$CLIKAE_HOME/profiles/claude/work-acct" ]
 }
 
+@test "init applies the claude permissions template by default" {
+  run clikae init claude work
+  [ "$status" -eq 0 ]
+  [ -f "$CLIKAE_HOME/profiles/claude/work/settings.json" ]
+  [[ "$output" == *"advisory, not a sandbox"* ]] || false
+}
+
+@test "init --no-template skips the claude permissions template" {
+  run clikae init claude work --no-template
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/work/settings.json" ]
+  [[ "$output" == *"Skipping permissions template"* ]] || false
+}
+
+@test "CLIKAE_NO_PERMISSIONS_TEMPLATE=1 skips the claude permissions template" {
+  run env CLIKAE_NO_PERMISSIONS_TEMPLATE=1 "$CLIKAE_BIN" init claude work
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/work/settings.json" ]
+}
+
+@test "init still creates a claude tank when jq is missing, and says so" {
+  local stripped="/usr/bin:/bin"
+  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
+  run env PATH="$stripped" "$CLIKAE_BIN" init claude work
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/work/settings.json" ]
+  [[ "$output" == *"requires jq"* ]] || false
+}
+
+@test "init still creates a claude tank when the template is missing, and says so" {
+  local prefix="$BATS_TEST_TMPDIR/tap"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  run "$prefix/bin/clikae" init claude work
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/work/settings.json" ]
+  [[ "$output" == *"No permissions template for engine: claude; skipping"* ]] || false
+}
+
 @test "init seeds an env-file adapter's config file (kubectl)" {
   run clikae init kubectl dev
   [ "$status" -eq 0 ]

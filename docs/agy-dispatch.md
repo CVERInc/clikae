@@ -64,6 +64,8 @@ burn already had the output in hand for its error tail. **So clikae writes the
 artifact from agy's stdout**, and says so on the row — you must never be left
 believing agy wrote a file it is not allowed to write.
 
+Claude tank settings have a separate, explicit [permissions template command](grammar.md#tank-settings). It does not apply to agy.
+
 Two things deliberately NOT done:
 
 - **Adding an allow-rule to your agy `settings.json`.** That is clikae widening

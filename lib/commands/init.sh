@@ -2,13 +2,14 @@
 # lib/commands/init.sh — `clikae init <engine> <tank> [--alias]`
 
 cmd_init() {
-  local with_alias=0 cli="" profile=""
+  local with_alias=0 cli="" profile="" no_template=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --alias) with_alias=1; shift ;;
+      --no-template) no_template=1; shift ;;
       -h|--help)
         cat <<'EOF'
-Usage: clikae init <engine> <tank> [--alias]
+Usage: clikae init <engine> <tank> [--alias] [--no-template]
 
 Create a new tank (account/config) for an engine.
 
@@ -17,8 +18,10 @@ Arguments:
   <tank>     Tank name. A-Z a-z 0-9 . _ - allowed.
 
 Options:
-  --alias    Also add a shell alias to your shell rc:
-               <engine>-<tank>   (e.g. claude-work)
+  --alias        Also add a shell alias to your shell rc:
+                   <engine>-<tank>   (e.g. claude-work)
+  --no-template  Skip applying the permissions template to a new claude tank.
+                 Same effect as CLIKAE_NO_PERMISSIONS_TEMPLATE=1.
 
 Example:
   clikae init claude work --alias       # then:  clikae claude work
@@ -63,6 +66,29 @@ EOF
 
   if declare -F adapter_init >/dev/null; then
     adapter_init "$d"
+  fi
+
+  if [ "$cli" = claude ]; then
+    if [ "$no_template" -eq 1 ] || [ "${CLIKAE_NO_PERMISSIONS_TEMPLATE:-0}" = 1 ]; then
+      log_info "Skipping permissions template (--no-template / CLIKAE_NO_PERMISSIONS_TEMPLATE=1)"
+    else
+      # shellcheck source=./settings.sh
+      source "$CLIKAE_LIB/commands/settings.sh"
+      # rc 2 (no template for this engine) and rc 3 (jq missing) are
+      # already reported by cmd_settings itself; a template is a value-add,
+      # not a precondition for a tank to exist, so init keeps going either
+      # way. Any other failure is a real bug and should still surface.
+      # `|| _settings_rc=$?`, not a bare call: bin/clikae runs under `set -e`,
+      # so an unguarded nonzero return here would abort the whole process
+      # before this case statement ever got to see it.
+      local _settings_rc=0
+      cmd_settings apply claude "$profile" || _settings_rc=$?
+      case "$_settings_rc" in
+        0|2|3) ;;
+        *) return 1 ;;
+      esac
+      [ "$_settings_rc" -ne 0 ] || log_info "Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip."
+    fi
   fi
 
   # A new tank joins the machine's default Soul group, if one was ever set.
