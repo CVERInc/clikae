@@ -564,6 +564,24 @@ STUB
   ! declare -F adapter_audit_flags >/dev/null
 }
 
+# P1-1 (2026-09-12 round-2 review): adapter_meta_permission_modes (claude.sh,
+# #60's --permission gate) was added to claude but never to adapter_loader's
+# unset list — a codex/grok load right after claude's kept "seeing" claude's
+# hook via declare -F, so burn.sh:508's capability gate (permission_set=1 AND
+# no adapter_meta_permission_modes) silently believed the new engine mapped
+# --permission when it never defined the hook at all. Same shape as the
+# leak-guard above, scoped to the one hook this PR introduced.
+@test "adapter_meta_permission_modes does NOT leak across adapters (leak-guard)" {
+  _src_burn
+  load_adapter claude
+  declare -F adapter_meta_permission_modes >/dev/null   # claude HAS it
+  load_adapter codex
+  ! declare -F adapter_meta_permission_modes >/dev/null # codex must NOT have inherited it
+  load_adapter claude
+  load_adapter grok
+  ! declare -F adapter_meta_permission_modes >/dev/null # grok must NOT have inherited it
+}
+
 @test "burn: --prompt with a trailing -- appends the extra argv after the generated flags" {
   # Documented escape-hatch combo. Pin the behaviour so it's not a silent surprise:
   # generated flags first, post-`--` argv appended verbatim.
@@ -2185,4 +2203,50 @@ _permission_argv() (
   [ "$(grep -o -- '--permission-mode' "$L" | wc -l | tr -d ' ')" = 2 ]
   [ "$(wc -l < "$E" | tr -d ' ')" = 1 ]
   grep -F 'raw argv after -- includes --permission-mode or --dangerously-skip-permissions' "$E"
+}
+
+# --- P1-1 (2026-09-12 round-2 review): the production reroute path itself —
+# claude/T1 genuinely dry, --to codex/T2, --permission auto. This is the ONLY
+# shape in this file that calls load_adapter twice (claude, then codex) inside
+# ONE process via the real `clikae burn` reroute loop (burn.sh:2554-2564), so
+# it is the only test that can catch adapter_meta_permission_modes leaking
+# from claude onto codex and making burn.sh:508's `! declare -F
+# adapter_meta_permission_modes` gate lie (codex looks like it maps
+# --permission when it never defined the hook). Every OTHER --permission test
+# above calls `clikae burn <one engine>` exactly once per process — a fresh
+# `load_adapter` from a clean shell — so the leak can never surface there.
+@test "burn #60 P1-1 (round-2 review): cross-engine --to reroute does not leak claude's permission-mode capability onto codex" {
+  _stub_codex
+  # A claude stub that always reports the vendor's hard usage-limit line (the
+  # exact wording limit_output_dry's claude branch requires), so this burn is
+  # forced down the dry -> reroute path every time, deterministically.
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+exit 0
+STUB
+  chmod +x "$bin/claude"
+  PATH="$bin:$PATH"; export PATH
+
+  clikae init claude T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/carry-notice-shown"   # one-time cross-account note is unrelated to this test
+
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/codex.argv" E="$TEST_HOME/warn.err"
+  STUB_ARTIFACT="$A" STUB_ARGV_LOG="$L" \
+    clikae burn claude T1 --artifact "$A" --to codex/T2 --permission auto --prompt 'x' \
+    >/dev/null 2>"$E"
+  [ -f "$A" ]   # codex/T2 actually ran and produced the artifact
+
+  # The capability gate must fire for codex: codex never defines
+  # adapter_meta_permission_modes, so --permission auto must degrade truthfully
+  # on it — exactly once, the SAME wording the single-engine codex test above
+  # (burn #60: codex auto degrades once on stderr with unchanged argv) uses.
+  [ "$(grep -Fc 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$E" | tr -d ' ')" = 1 ]
+
+  # And codex's actual argv must never carry --permission-mode — proving the
+  # gate's truthful warning is backed by truthful argv, not just backed by
+  # inherited claude state that happens to also block it once.
+  ! grep -q -- '--permission-mode' "$L"
 }
