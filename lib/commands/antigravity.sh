@@ -315,7 +315,6 @@ _agy_switch() {
     log_done "agy is now on tank: $name"
     log_dim "agy is global — switched all terminals to $name."
   fi
-  board_state_refresh antigravity "$slots/$name" >/dev/null 2>&1 || true
   # Launching the interactive UI needs a real terminal. With no TTY and nothing
   # to pass through, `clikae agy <tank>` is being used as "just switch" — which
   # works and is genuinely useful in a script — so stop here rather than exec a
@@ -342,10 +341,12 @@ _agy_switch() {
     case "$a" in -p|--prompt) is_dispatch=1; break ;; esac
   done
   [ "$is_dispatch" = "1" ] && export CLIKAE_DISPATCH=1
-  local rc=0
-  ( exec agy "$@" ) || rc=$?
-  board_state_refresh antigravity "$slots/$name" >/dev/null 2>&1 || true
-  return "$rc"
+  # 2026-09-12 round-1 fix review, P2-1/P2-2: see run.sh's twin comment — no
+  # more subshell-and-refresh-after; board_generation self-heals a stale
+  # snapshot inline at render time, so a boundary call here has nothing left
+  # to buy, and this stays a real `exec` (clikae is not a resident parent for
+  # the rest of the session).
+  exec agy "$@"
 }
 
 # `clikae agy --release`: restore a normal single-account ~/.gemini from the

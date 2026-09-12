@@ -42,11 +42,15 @@ EOF
 
   soul_prelaunch "$cli" "$profile" "$d"   # member tank → fan this dir into its Soul
   fleet_mcp_prelaunch "$cli" "$profile" "$d"   # non-solo tank → fan in the shared MCP list
-  # agy owns its boundaries after its global account switch.
-  if [ "$cli" != antigravity ]; then board_state_refresh "$cli" "$d" >/dev/null 2>&1 || true; fi
-  local rc=0
-  ( adapter_run "$d" "$@" ) || rc=$?
-  # agy owns its boundaries after its global account switch.
-  if [ "$cli" != antigravity ]; then board_state_refresh "$cli" "$d" >/dev/null 2>&1 || true; fi
-  return "$rc"
+  # 2026-09-12 round-1 fix review, P2-1/P2-2: this used to wrap adapter_run in
+  # a subshell so a board_state_refresh could run AFTER the engine exited —
+  # which meant clikae stayed a resident parent for the whole session (no more
+  # bare `exec`: different signal delivery, `$PPID`, and a `128+N` exit code
+  # instead of WIFSIGNALED) and paid a full tank scan synchronously on EVERY
+  # launch and EVERY exit, on the machine issue #62 was filed against. Neither
+  # refresh is needed anymore: board_generation (lib/core/board_state.sh) now
+  # rebuilds a stale tank inline, right when a render actually reads it, so
+  # there is nothing left for a boundary call here to buy. adapter_run ends in
+  # `exec`, so this is the tail call — nothing after it ever runs.
+  adapter_run "$d" "$@"
 }
