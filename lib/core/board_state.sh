@@ -35,6 +35,16 @@
 # session never touched `sessions/`'s own mtime; `_board_scan_root` now
 # tracks today's date directory instead (computed, never a `find` — this
 # check runs on every render).
+#
+# 2026-09-12 round-3 fix review: P1-B and P1-C each left one more gap. P1-2 —
+# a brand new FILE inside an EXISTING project directory moved neither
+# `projects/`'s own mtime nor any per-file record (it didn't exist yet at
+# the last publish) — see `_claude_usage_stale`'s header for the fix (track
+# each project directory's own mtime too). P2-1 — round-2's "today's date
+# directory" was computed from the OBSERVER's clock, which silently
+# disagrees with whatever clock wrote the newest rollout the moment clikae
+# runs under a different `TZ` than usual — see `_codex_newest_chain`'s
+# header (codex.sh) for reading the actual newest chain off disk instead.
 board_key() { local k; k="$(printf '%s' "$1" | cksum)"; printf '%s' "${k%% *}"; }
 board_root() { printf '%s/state/board/%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$(board_key "$1")"; }
 
@@ -60,25 +70,25 @@ _board_scope_key() {
   board_key "$(_board_scope_raw "$1")"
 }
 
-# _board_scan_root <engine> <dir> -> the ONE directory whose own mtime proves
-# (or disproves) "nothing new appeared since the last publish" for THIS PWD.
-# Claude lays sessions out one subdirectory per project slug, so scoping to
-# just that subdirectory means a sibling project's activity never forces a
-# rebuild here. The other three engines record cwd IN the file, not in the
-# path, so there is no PWD-scoped subdirectory to point at — the engine's
-# whole session root is the best available O(1) signal.
+# _board_scan_root <engine> <dir> -> one directory PER LINE whose own mtime
+# proves (or disproves) "nothing new appeared since the last publish" for
+# THIS PWD. Claude lays sessions out one subdirectory per project slug, so
+# scoping to just that subdirectory means a sibling project's activity never
+# forces a rebuild here. The other three engines record cwd IN the file, not
+# in the path, so there is no PWD-scoped subdirectory to point at — the
+# engine's whole session root is the best available O(1) signal. codex is
+# the one engine that needs MORE than one line — see `_codex_newest_chain`'s
+# header (round-3 fix review, P2-1): rollouts live three levels under
+# sessions/, so a new day/month/year directory bumps a DIFFERENT ancestor's
+# mtime depending on which of those already existed at publish time, and
+# there is no clock-based way to know which one that will be.
 _board_scan_root() {
   local engine="$1" dir="$2"
   case "$engine" in
-    claude) printf '%s/projects/%s' "$dir" "$(_claude_project_slug "$PWD")" ;;
-    # P1-C (2026-09-12 round-2 fix review): rollouts live THREE levels under
-    # sessions/ (sessions/YYYY/MM/DD/rollout-*.jsonl — see
-    # _codex_today_scan_dir's own header), so sessions/ itself never takes a
-    # new session's mtime. Point at today's date directory instead (no
-    # `find`: computed directly from the wall clock).
-    codex) _codex_today_scan_dir "$dir" ;;
-    grok) printf '%s/sessions' "$dir" ;;
-    antigravity) printf '%s/antigravity-cli/brain' "$dir" ;;
+    claude) printf '%s/projects/%s\n' "$dir" "$(_claude_project_slug "$PWD")" ;;
+    codex) _codex_newest_chain "$(_codex_sessions_dir "$dir")" ;;
+    grok) printf '%s/sessions\n' "$dir" ;;
+    antigravity) printf '%s/antigravity-cli/brain\n' "$dir" ;;
   esac
 }
 
@@ -168,9 +178,11 @@ _claude_usage_stale() {
 # current year, to force a deterministic "newest" without racing other
 # fixtures' timestamps), and ">" against `updated` would read every such file
 # as permanently stale, forever re-triggering a rebuild each read.
-#   1. the PWD-scoped scan root's own mtime, vs `scanroot-mtime` recorded at
-#      publish — catches a session that did not exist at publish time (a new
-#      file is a new dirent, which always bumps its parent directory's mtime).
+#   1. the PWD-scoped scan root's own mtime(s), vs `scanroot-mtime` recorded
+#      at publish — catches a session that did not exist at publish time (a
+#      new file is a new dirent, which always bumps its parent directory's
+#      mtime). One path for claude/grok/antigravity; codex's is a whole
+#      chain (see `_codex_newest_chain`'s header, round-3 fix review P2-1).
 #   2. (claude only) the account-level fuel reading — see
 #      `_claude_usage_stale` above. Checked BEFORE the per-scope early return
 #      below, because a scope with no recorded recent sessions must still
@@ -185,15 +197,28 @@ _claude_usage_stale() {
 #      wall-clock second as the last publish, in EITHER direction.
 # Any mismatch means rebuild.
 board_stale() {
-  local engine="$1" dir="$2" gen="$3" scan_root root_mt saved_root_mt key
+  local engine="$1" dir="$2" gen="$3" key
   [ -f "$gen/updated" ] || return 0
 
-  scan_root="$(_board_scan_root "$engine" "$dir" 2>/dev/null || true)"
-  if [ -n "$scan_root" ] && [ -d "$scan_root" ]; then
-    root_mt="$(file_mtime "$scan_root" 2>/dev/null)" || root_mt=""
-    saved_root_mt=""
-    [ -f "$gen/scanroot-mtime" ] && IFS= read -r saved_root_mt < "$gen/scanroot-mtime"
-    if [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ]; then return 0; fi
+  # A codex tank's chain (`_board_scan_root`) can be several lines; re-stat
+  # every RECORDED path in one batched call — never a fork per level — and
+  # compare against the mtime published alongside it. A recorded path that
+  # vanished (a fixture rewrite, or a directory recycled) is itself stale.
+  if [ -f "$gen/scanroot-mtime" ]; then
+    local _srp _srm
+    local -a _sr_paths=() _sr_mts=()
+    while IFS=$'\037' read -r _srp _srm; do
+      [ -n "$_srp" ] || continue
+      [ -d "$_srp" ] || return 0
+      _sr_paths+=("$_srp"); _sr_mts+=("$_srm")
+    done < "$gen/scanroot-mtime"
+    if [ "${#_sr_paths[@]}" -gt 0 ]; then
+      local _si=0 _smt _ssz
+      while read -r _smt _ssz; do
+        [ "$_smt" = "${_sr_mts[$_si]}" ] || return 0
+        _si=$((_si + 1))
+      done < <(files_mtime_size "${_sr_paths[@]}")
+    fi
   fi
 
   if [ "$engine" = claude ] && _claude_usage_stale "$dir" "$gen"; then return 0; fi
@@ -386,10 +411,19 @@ board_state_refresh() (
   date +%s > "$gen/updated"
   # Recorded for board_stale's equality check, never compared with ">" — see
   # its own header for why (a future-dated fixture/clock skew must not read
-  # as permanently stale).
-  local scan_root; scan_root="$(_board_scan_root "$engine" "$dir" 2>/dev/null || true)"
-  if [ -n "$scan_root" ] && [ -d "$scan_root" ]; then
-    file_mtime "$scan_root" > "$gen/scanroot-mtime" 2>/dev/null || true
+  # as permanently stale). `_board_scan_root` can be several lines for codex
+  # (see its own header) — batch every existing one into the SAME
+  # files_mtime_size call, one fork total, not one per level.
+  local -a scan_roots=()
+  while IFS= read -r p; do [ -n "$p" ] && [ -d "$p" ] && scan_roots+=("$p"); done \
+    < <(_board_scan_root "$engine" "$dir" 2>/dev/null)
+  : > "$gen/scanroot-mtime"
+  if [ "${#scan_roots[@]}" -gt 0 ]; then
+    local _si=0 _smt _ssz
+    while read -r _smt _ssz; do
+      printf '%s\037%s\n' "${scan_roots[$_si]}" "$_smt" >> "$gen/scanroot-mtime"
+      _si=$((_si + 1))
+    done < <(files_mtime_size "${scan_roots[@]}")
   fi
   # P1-A (2026-09-12 round-2 fix review): the mtime `sessions_by_mtime` sorts
   # by is whole-second and only used for ORDER here. What board_stale

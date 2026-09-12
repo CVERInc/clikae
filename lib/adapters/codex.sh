@@ -111,34 +111,54 @@ adapter_account_label() {
 
 _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 
-# _codex_today_scan_dir <dir> -> the deepest EXISTING directory on today's
-# sessions/YYYY/MM/DD path. Used ONLY as board_stale's freshness signal for
-# codex (see board_state.sh's `_board_scan_root`): a new rollout always
+# _codex_newest_chain <sessions-dir> -> one path per line: sessions/ itself,
+# then the lexically-newest existing YYYY dir under it, then the newest MM
+# under THAT, then the newest DD under THAT — stopping at the first level
+# that does not exist. Used ONLY as board_stale's freshness signal for codex
+# (see board_state.sh's `_board_scan_root`): a new rollout always
 # creates/touches ITS day directory, but sessions/ itself sits three levels
 # above and so never moves for it (P1-C). No `find` here on purpose — this
 # runs on EVERY render via board_stale, and this repo's own test suite
 # (home-bounded.bats' `_board_shims`) hard-fails any `find` call on a warm
-# render. A brand new session's file always lands under TODAY's date, so
-# today's path can be COMPUTED (one `date` fork, zero discovery) rather than
-# searched for:
-#   - today's DD dir exists -> use it (catches a new session on a day that
-#     already has one; creating that file bumps the DD dir's own mtime).
-#   - it does not (first session of a new day) -> the DD dir ITSELF is about
-#     to be created, which bumps ITS PARENT's mtime instead, so walk up to
-#     the deepest ancestor that already exists (MM, then YYYY, then
-#     sessions/ itself) — the same directory whichever creation is about to
-#     touch.
-_codex_today_scan_dir() {
-  local sess; sess="$(_codex_sessions_dir "$1")"
-  local y m d
-  read -r y m d < <(date +'%Y %m %d' 2>/dev/null)
-  local p
-  if [ -n "$y" ] && [ -n "$m" ] && [ -n "$d" ]; then
-    for p in "$sess/$y/$m/$d" "$sess/$y/$m" "$sess/$y"; do
-      [ -d "$p" ] && { printf '%s' "$p"; return 0; }
-    done
-  fi
-  printf '%s' "$sess"
+# render; a bounded glob at each of 3 levels (at most a handful of years,
+# 12 months, 31 days) is not that.
+#
+# round-3 fix review, P2-1: the previous version (`_codex_today_scan_dir`)
+# derived y/m/d from the OBSERVER's own `date`, not from what is actually on
+# disk. That is only correct when the observer's local "today" agrees with
+# whatever clock wrote the newest rollout's date directory — true by default
+# (codex uses the machine's own local time), false the moment clikae runs
+# under an explicit `TZ=`, across a timezone during travel, or from a
+# CI/cron invocation pinned to UTC while the interactive session that wrote
+# the rollout ran in local time. When the two disagree, the old code walked
+# up from a COMPUTED leaf that doesn't exist to a directory that does — but
+# that directory could be a sibling of where the real newest rollout landed,
+# whose own mtime a NEW rollout inside an EXISTING sibling day dir never
+# touches (only that day dir's own mtime moves). The board then never
+# rebuilds and a brand new session — and the limit it carries — is
+# permanently invisible.
+#
+# Reading the actual newest chain off disk instead needs no clock at all:
+# whichever level the account is CURRENTLY writing to is, by construction,
+# the lexically-greatest entry at its level (zero-padded YYYY/MM/DD sort
+# correctly as strings). board_state.sh records every level THIS returns,
+# so a new rollout inside an existing day always bumps a directory this
+# check is already watching, and a brand new day/month/year directory bumps
+# its own newly-created parent, which is also on the list.
+_codex_newest_chain() {
+  local sess="$1"
+  [ -d "$sess" ] || { printf '%s\n' "$sess"; return 0; }
+  printf '%s\n' "$sess"
+  local y="" m="" d="" p
+  for p in "$sess"/*/; do [ -d "$p" ] && y="${p%/}"; done
+  [ -n "$y" ] || return 0
+  printf '%s\n' "$y"
+  for p in "$y"/*/; do [ -d "$p" ] && m="${p%/}"; done
+  [ -n "$m" ] || return 0
+  printf '%s\n' "$m"
+  for p in "$m"/*/; do [ -d "$p" ] && d="${p%/}"; done
+  [ -n "$d" ] || return 0
+  printf '%s\n' "$d"
 }
 
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
