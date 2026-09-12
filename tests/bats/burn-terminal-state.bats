@@ -20,6 +20,8 @@
 load '../helpers'
 
 _stub_codex() {
+  # Generated Codex burns require a real git cwd (#66).
+  git init -q "$BATS_TEST_TMPDIR"
   local bin="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$bin"
   cat > "$bin/codex" <<'STUB'
@@ -32,6 +34,8 @@ STUB
 }
 
 _stub_codex_slow() {
+  # Generated Codex burns require a real git cwd (#66).
+  git init -q "$BATS_TEST_TMPDIR"
   local bin="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$bin"
   cat > "$bin/codex" <<'STUB'
