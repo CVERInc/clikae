@@ -664,7 +664,7 @@ EOF
 # Backed by lib/core/limit.sh, which scans transcripts/logs — so compute this ONCE
 # per board render, never per keypress. Two sources:
 #   · every tank   — limit_tank_dry: claude via transcript, codex via the persisted
-#                    dry_store (burn writes it; its limit is exec-stdout-only), and
+#                    dry_store (burn writes it; exec limits can arrive on stdout or stderr), and
 #                    ACCOUNT CONTAGION so a sibling on the same dry account (e.g.
 #                    claude/MFC the moment claude/L hits its limit) reads dry too.
 #   · log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
