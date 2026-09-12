@@ -127,7 +127,7 @@ limit_codex_reset() {
 # the claude branch below for the shared rationale.
 limit_codex_output_dry() {
   local out="$1" reset
-  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
+  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
   reset="$(limit_codex_reset "$out")"
   [ -n "$reset" ] || return 1
   printf '%s' "$reset"

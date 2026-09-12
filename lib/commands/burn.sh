@@ -2564,6 +2564,11 @@ KV
     # detection). Use the untruncated variant here; only the display tail
     # still bounds itself. See _burn_redact_full's comment.
     local out_for_class; out_for_class="$(_burn_redact_full "$out")"
+    # JSON stdout can omit a limit reported only on stderr (#81). Redact the
+    # same prompt echoes before giving stderr to the same classifier.
+    if [ "$cli" = codex ] && [ -s "$stderr_file" ]; then
+      out_for_class="$out_for_class"$'\n'"$(_burn_redact_full "$(cat "$stderr_file")")"
+    fi
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry
@@ -2658,7 +2663,7 @@ KV
 
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
-      # this stdout and would otherwise vanish. Only for engines whose dry state is
+      # captured output and would otherwise vanish. Only for engines whose dry state is
       # NOT already scannable from disk (claude=transcript, agy=log self-clear);
       # writing a store marker for those would mask their real recovery.
       limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$reset"

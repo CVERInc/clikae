@@ -272,3 +272,23 @@ _codex_reply_line() {
   run limit_line_is_real claude "$line" "" 0
   [ "$status" -ne 0 ]
 }
+
+@test "codex #81: ERROR stderr report parses dated ordinal reset in observer zone" {
+  _src_limit
+  local line reset
+  line="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  reset="$(limit_codex_output_dry "$line")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+  TZ=Asia/Tokyo run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789233180" ]
+}
+
+@test "codex #81: ERROR prefix does not admit quoted limit prose" {
+  _src_limit
+  run limit_codex_output_dry "ERROR: See docs for You've hit your usage limit. try again at 2:13 AM."
+  [ "$status" -ne 0 ]
+}

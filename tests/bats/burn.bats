@@ -563,7 +563,8 @@ STUB
   declare -F adapter_burn_flags >/dev/null   # claude HAS it
   declare -F adapter_audit_flags >/dev/null
   load_adapter gh
-  ! declare -F adapter_burn_flags >/dev/null # gh must NOT have inherited it
+  run declare -F adapter_burn_flags # gh must NOT have inherited it
+  [ "$status" -ne 0 ]
   ! declare -F adapter_audit_flags >/dev/null
 }
 
@@ -2513,7 +2514,8 @@ STUB
   export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=1234
   run clikae burn claude t1 --artifact "$A" -- -p "raw prompt" --allowedTools "Bash,Agent"
   [ "$status" -eq 0 ]
-  ! grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  run grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  [ "$status" -ne 0 ]
   grep -q -- "--allowedTools Bash,Agent" "$BATS_TEST_TMPDIR/argv.log"
   grep -q "^BG_WAIT=1234$" "$BATS_TEST_TMPDIR/env.log"
 }
@@ -2526,4 +2528,47 @@ STUB
   run clikae burn codex T1 --artifact "$A" --prompt "do it"
   [ "$status" -eq 0 ]
   ! grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+}
+
+_stub_codex_stderr81() {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$STUB_STDERR81" >&2
+exit 0
+STUB
+}
+
+@test "burn #81: stderr-only codex limit exits zero but reports dry and stores reset" {
+  _stub_codex_stderr81
+  export STUB_STDERR81
+  STUB_STDERR81="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  [[ "$output" != *'no fresh artifact and no limit'* ]] || false
+  [[ "$output" == *'Dry, and --no-reroute is set. Stopping.'* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+}
+
+@test "burn #81: ordinary codex stderr preserves the no-artifact failure" {
+  _stub_codex_stderr81
+  export STUB_STDERR81="ERROR: could not open input file"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'produced no fresh artifact and shows no limit'* ]] || false
+  [[ "$output" == *'"reason":"ERROR: could not open input file"'* || "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  [[ "$output" == *'"reset":null'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }

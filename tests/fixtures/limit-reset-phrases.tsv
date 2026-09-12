@@ -219,3 +219,6 @@
 # this test pins TZ=UTC around the whole corpus loop for that reason.
 1784808000	try again at Aug 23rd, 2026 8:26 PM	1787516760
 1789200000	try again at 6:00 PM	1789236000
+
+# Issue #81: exact stderr report; observer zone (corpus TZ=UTC).
+1789200000	ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 13th, 2026 2:13 AM.	1789265580
