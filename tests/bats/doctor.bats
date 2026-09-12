@@ -53,6 +53,7 @@ _seed_daemon_log() {
   local tank="$1"; shift
   local d="$CLIKAE_HOME/profiles/claude/$tank"
   mkdir -p "$d"
+  clikae settings apply claude "$tank" >/dev/null
   local l; : > "$d/daemon.log"
   for l in "$@"; do printf '%s\n' "$l" >> "$d/daemon.log"; done
 }
@@ -225,4 +226,15 @@ $output
 EOF
   # Without this the loop could match nothing and pass in silence.
   [ "$seen" -ge 2 ] || { echo "found $seen label lines to check"; printf '%s\n' "$output"; false; }
+}
+
+@test "doctor reports permissions drift once per tank" {
+  clikae init claude drifted
+  local f="$CLIKAE_HOME/profiles/claude/drifted/settings.json"
+  printf '{}\n' > "$f"
+  cp "$f" "$TEST_HOME/before"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'claude/drifted: permissions drift')" -eq 1 ]
+  cmp "$f" "$TEST_HOME/before"
 }

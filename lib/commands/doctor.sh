@@ -269,6 +269,13 @@ EOF
   echo ""
   _doctor_legacy_prefix
   _doctor_memory
+  # shellcheck source=./settings.sh
+  source "$CLIKAE_LIB/commands/settings.sh"
+  local settings_dir
+  for settings_dir in "$(profiles_root)/claude"/*; do
+    [ -d "$settings_dir" ] || continue
+    _settings_tank claude "${settings_dir##*/}" doctor "$CLIKAE_ROOT/templates/permissions/claude.json" || true
+  done
 
   _doctor_keychain
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a

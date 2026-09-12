@@ -39,6 +39,7 @@ Make & manage tanks:
   git-id <engine> <tank>           set a tank's git commit identity (--name --email)
   memory <share|isolate|status>    share one markdown "brain" across your tanks (claude·codex·agy)
   solo <engine> <tank>             make a tank standalone (out of relay/burn/share)
+  settings apply [engine] [tank]  merge permissions template (--check or --dry-run)
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
 
 Keep burning when a tank runs dry:

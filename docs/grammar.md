@@ -67,6 +67,18 @@ core functions. Users see exactly one word: *tank*.
 
 ## 3. The grammar (verbs)
 
+### Tank settings
+
+`clikae settings apply [engine] [tank] [--check|--dry-run]` merges the versioned
+permissions template into `$CLIKAE_HOME/profiles/<engine>/<tank>/settings.json`.
+Engine defaults to `claude`; omit tank for every tank of that engine. Allow and
+deny rules are unions: extra rules and every other key are preserved. A second
+apply leaves compliant files byte-identical. Changed files are backed up and
+replaced atomically. Invalid JSON or permission shapes are skipped with nonzero
+status. `--check` lists drift and exits 1 without writing; `--dry-run` previews
+additions. New Claude tanks receive the template during init, and doctor reports
+one line per drifted tank. See [the seed documentation](../templates/permissions/README.md).
+
 ### 3.1 Switching — the elided verb
 
 | You type | Means | Replaces |

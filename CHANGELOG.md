@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Versioned Claude permissions template and `clikae settings apply` with union
+  merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
+  template; doctor reports missing rules per tank (#76).
+
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
   permission mode while preserving the default argv. codex and agy have no
   equivalent flag and keep their existing flags, reporting the degradation for

@@ -65,6 +65,12 @@ EOF
     adapter_init "$d"
   fi
 
+  if [ "$cli" = claude ]; then
+    # shellcheck source=./settings.sh
+    source "$CLIKAE_LIB/commands/settings.sh"
+    cmd_settings apply claude "$profile" || return 1
+  fi
+
   # A new tank joins the machine's default Soul group, if one was ever set.
   # The board shows FLEET vs SOLO and nothing else, so a tank that quietly has no
   # brain is indistinguishable from one that does — which is how a person ends up

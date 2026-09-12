@@ -27,7 +27,7 @@ class Clikae < Formula
   head "https://github.com/CVERInc/clikae.git", branch: "main"
 
   def install
-    libexec.install "bin", "lib"
+    libexec.install "bin", "lib", "templates"
     libexec.install "assets" if File.directory?("assets") # welcome-screen logo (logo.txt)
     (bin/"clikae").write <<~SH
       #!/usr/bin/env bash
