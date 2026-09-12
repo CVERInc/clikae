@@ -90,18 +90,33 @@ _board_scan_root() {
 # PWD-scoped signal — see board_stale's own P1-B comment for the failure
 # this closes: a limit landing in a DIFFERENT project directory never
 # touches this scope's scanroot-mtime or recent/<key>, so this board stayed
-# "fresh" (green) forever. Two signals, both O(bounded), neither a fork per
+# "fresh" (green) forever. Three signals, all O(bounded), none a fork per
 # candidate file:
 #   1. `projects/`'s OWN mtime (not projects/<slug>) — catches a brand new
 #      project directory appearing anywhere in the account.
-#   2. the recorded (mtime, size) of each file that was inside the -mmin
+#   2. (2026-09-12 round-3 fix review, P1-2) each EXISTING `projects/<slug>`
+#      directory's own mtime — bounded by the project count, not the file
+#      count. Signal 1 only fires when a project directory is itself
+#      created/removed; it stays put when a brand new FILE lands inside an
+#      ALREADY-existing project directory, and that file was never inside
+#      the -mmin -300 window at the LAST publish (it did not exist yet), so
+#      signal 3 has no record to re-stat either. Creating a file DOES move
+#      its parent directory's own mtime (a dirent add), so that is the
+#      signal that catches it.
+#   3. the recorded (mtime, size) of each file that was inside the -mmin
 #      -300 window at the last publish, re-stat in ONE batched call — catches
 #      an append (a limit landing, or clearing) to a session in a project
 #      whose directory already existed, which does not bump `projects/`'s
 #      own mtime, only that one file's.
-# A file recorded in signal 2 having disappeared (aged out, or the fixture
-# moved it) is itself treated as stale — the usage snapshot is trusted only
-# while every file it was computed from is still exactly what it was.
+# A file or directory recorded in signal 2/3 having disappeared (aged out,
+# or the fixture moved it) is itself treated as stale — the usage snapshot
+# is trusted only while every path it was computed from is still exactly
+# what it was. An EMPTY signal-3 set at publish time (round-3 fix review:
+# PROBE B4 — an append to an OLD file, already excluded from the -mmin -300
+# window, pulls it back in without moving any directory's mtime) used to
+# read as "nothing to compare against, call it fresh" — permanently, since
+# nothing short of a brand new project directory or file could ever
+# invalidate it again. Zero evidence is not evidence of freshness: rebuild.
 _claude_usage_stale() {
   local dir="$1" gen="$2" root_mt saved_root_mt
   [ -f "$gen/claude-usage-root-mtime" ] || return 0
@@ -109,6 +124,23 @@ _claude_usage_stale() {
   saved_root_mt=""
   IFS= read -r saved_root_mt < "$gen/claude-usage-root-mtime"
   [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ] && return 0
+
+  if [ -f "$gen/claude-usage-projdirs" ]; then
+    local pd pm
+    local -a pdirs=() pmts=()
+    while IFS=$'\037' read -r pd pm; do
+      [ -n "$pd" ] || continue
+      [ -d "$pd" ] || return 0   # a counted project directory vanished.
+      pdirs+=("$pd"); pmts+=("$pm")
+    done < "$gen/claude-usage-projdirs"
+    if [ "${#pdirs[@]}" -gt 0 ]; then
+      local _pi=0 _pmt _psz
+      while read -r _pmt _psz; do
+        [ "$_pmt" = "${pmts[$_pi]}" ] || return 0
+        _pi=$((_pi + 1))
+      done < <(files_mtime_size "${pdirs[@]}")
+    fi
+  fi
 
   [ -f "$gen/claude-usage-files" ] || return 0
   local p m s
@@ -118,7 +150,7 @@ _claude_usage_stale() {
     [ -f "$p" ] || return 0   # a counted file vanished — the reading is stale.
     upaths+=("$p"); umts+=("$m"); uszs+=("$s")
   done < "$gen/claude-usage-files"
-  [ "${#upaths[@]}" -gt 0 ] || return 1
+  [ "${#upaths[@]}" -gt 0 ] || return 0
   local i=0 cur_mt cur_sz
   while IFS=' ' read -r cur_mt cur_sz; do
     { [ "$cur_mt" = "${umts[$i]}" ] && [ "$cur_sz" = "${uszs[$i]}" ]; } || return 0
@@ -422,16 +454,32 @@ board_state_refresh() (
       # by definition, never the whole tree — catches an append (a limit
       # landing, or clearing) to a session in a project whose directory
       # already existed.
+      #
+      # P1-2 (2026-09-12 round-3 fix review): neither of the above sees a
+      # brand new FILE inside an EXISTING project directory — see
+      # _claude_usage_stale's header. Record each existing project
+      # directory's own mtime too, bounded by the project count, folded into
+      # the SAME files_mtime_size call as the files above (one fork, not
+      # two).
       file_mtime "$dir/projects" > "$gen/claude-usage-root-mtime" 2>/dev/null || true
       : > "$gen/claude-usage-files"
-      local -a ufiles=()
+      : > "$gen/claude-usage-projdirs"
+      local -a ufiles=() updirs=()
       while IFS= read -r f; do [ -n "$f" ] && ufiles+=("$f"); done <<< "$files"
-      if [ "${#ufiles[@]}" -gt 0 ]; then
+      for f in "$dir"/projects/*/; do
+        [ -d "$f" ] || continue
+        updirs+=("${f%/}")
+      done
+      if [ "${#ufiles[@]}" -gt 0 ] || [ "${#updirs[@]}" -gt 0 ]; then
         local _ui=0 _umt _usz
         while read -r _umt _usz; do
-          printf '%s\037%s\037%s\n' "${ufiles[$_ui]}" "$_umt" "$_usz" >> "$gen/claude-usage-files"
+          if [ "$_ui" -lt "${#ufiles[@]}" ]; then
+            printf '%s\037%s\037%s\n' "${ufiles[$_ui]}" "$_umt" "$_usz" >> "$gen/claude-usage-files"
+          else
+            printf '%s\037%s\n' "${updirs[$((_ui - ${#ufiles[@]}))]}" "$_umt" >> "$gen/claude-usage-projdirs"
+          fi
           _ui=$((_ui + 1))
-        done < <(files_mtime_size "${ufiles[@]}")
+        done < <(files_mtime_size "${ufiles[@]}" "${updirs[@]}")
       fi
       ;;
     antigravity) agy_email "$dir" > "$gen/email" ;;
