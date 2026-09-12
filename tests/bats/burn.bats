@@ -1956,3 +1956,60 @@ STUB
   [ "$(stat -c '%a' "${run_dirs[0]}" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}")" = 700 ]
   [ "$(stat -c '%a' "${run_dirs[0]}/prompt.txt" 2>/dev/null || stat -f '%Lp' "${run_dirs[0]}/prompt.txt")" = 600 ]
 }
+
+# Stop at validation, after real option parsing, and compose with the real
+# adapter. This tests CLI-to-adapter wiring without starting a burn transport.
+_permission_argv() (
+  _src_burn
+  # cmd_burn supplies these locals through Bash dynamic scope.
+  # shellcheck disable=SC2154
+  validate_name() {
+    load_adapter "$cli"
+    _burn_compose "$prompt" "${#cmd[@]}" "${cmd[@]}" -- "${add_dirs[@]}"
+    printf '%s\0' "${BURN_ARGV[@]}" > "$permission_argv_file"
+    exit 0
+  }
+  cmd_burn "$@"
+)
+
+@test "burn #60: default composed argv is byte-identical to explicit acceptEdits" {
+  local prompt=$'build with spaces\nand a newline'
+  local permission_argv_file="$TEST_HOME/default.argv"
+  _permission_argv claude T1 --artifact out --prompt "$prompt" --add-dir '/workspace with spaces' -- --verbose
+  permission_argv_file="$TEST_HOME/explicit.argv"
+  _permission_argv claude T1 --artifact out --permission acceptEdits --prompt "$prompt" --add-dir '/workspace with spaces' -- --verbose
+  printf '%s\0' -p "$prompt" --permission-mode acceptEdits --add-dir '/workspace with spaces' --verbose > "$TEST_HOME/expected.argv"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/explicit.argv"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/expected.argv"
+}
+
+@test "burn #60: claude auto composes the selected permission mode" {
+  local permission_argv_file="$TEST_HOME/auto.argv"
+  _permission_argv claude T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace
+  printf '%s\0' -p 'build and review' --permission-mode auto --add-dir /workspace > "$TEST_HOME/expected.argv"
+  cmp "$TEST_HOME/auto.argv" "$TEST_HOME/expected.argv"
+}
+
+@test "burn #60: codex auto degrades once on stderr with unchanged argv" {
+  local permission_argv_file="$TEST_HOME/default.argv"
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  permission_argv_file="$TEST_HOME/auto.argv"
+  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  cmp "$TEST_HOME/default.argv" "$TEST_HOME/auto.argv"
+  [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
+  grep -F 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/warning"
+}
+
+@test "burn #60: invalid or missing permission is refused with one usage line" {
+  local value
+  for value in bypassPermissions AUTO ''; do
+    run clikae burn claude T1 --permission "$value"
+    [ "$status" -ne 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+    [[ "$output" == *'--permission must be acceptEdits or auto'* ]] || false
+  done
+  run clikae burn claude T1 --permission
+  [ "$status" -ne 0 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "$output" == *'--permission must be acceptEdits or auto'* ]] || false
+}

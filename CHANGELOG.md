@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
+  permission mode while preserving the default argv. Engines without an
+  equivalent retain their flags and report the degradation for `auto` (#60).
+
 ## [0.29.0] — 2026-09-11
 
 ### Added

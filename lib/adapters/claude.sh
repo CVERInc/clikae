@@ -95,7 +95,15 @@ adapter_burn_flags() {
   # succeed. That is the boundary doing its job — and burn judges by artifact, so
   # it reports "no artifact" rather than a silent wrong success. Real burns are
   # unaffected: the same bash-and-write task finished in 20s against 15s.
-  printf -- '-p\0%s\0--permission-mode\0acceptEdits\0' "$prompt"
+  #
+  # --permission (#60) picks the mode within that same boundary: acceptEdits
+  # approves file edits but still stops on shell commands print mode can't
+  # answer; auto lets Claude's classifier approve those too. Neither bypasses
+  # the --add-dir boundary above — that is still only --dangerously-skip-permissions.
+  # burn_permission is a cmd_burn local, inherited here via bash dynamic
+  # scoping through _burn_compose; direct callers of this hook keep the
+  # historical acceptEdits default.
+  printf -- '-p\0%s\0--permission-mode\0%s\0' "$prompt" "${burn_permission:-acceptEdits}"
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 

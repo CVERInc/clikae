@@ -41,6 +41,27 @@ state lives*, it never sits in the middle of a request and never grades output.
   leg, inherits that tank's git identity — see §6). A leg is a single shot; if it
   must survive a dry tank, use `burn` instead.
 
+### Permission modes for headless lanes
+
+`clikae burn claude <tank> --permission auto --prompt-file task.md --artifact out.md`
+selects Claude's `--permission-mode auto`. The default remains `acceptEdits`,
+with identical engine argv whether the default is explicit or omitted.
+
+`acceptEdits` approves file edits, but does not approve every shell command.
+In a print-mode run, commands that need approval cannot prompt interactively and
+may be denied. Build/review lanes that need to run those commands need `auto`
+unless suitable allow rules already exist. Auto uses Claude's permission
+classifier; it does not bypass all permission checks or guarantee approval.
+
+An orchestrating Claude session's own classifier may refuse to launch an
+auto-mode engine until an allow rule for `clikae burn` exists in that session's
+settings. The child mode does not override the parent session's permissions.
+
+Engines without an equivalent mode print one degradation line to stderr for
+`--permission auto` and keep their existing flags. Raw commands after `--`
+remain verbatim; set engine permissions there. With `--prompt` or `--prompt-file`,
+extra arguments after `--` still follow the generated flags.
+
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
 agy's login is one **global** Keychain entry, so there's no per-shell env to

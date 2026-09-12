@@ -26,6 +26,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
+                   [--permission <acceptEdits|auto>]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -45,6 +46,8 @@ Give the task in one of two ways:
 
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
+  --permission <mode> Claude permission mode: acceptEdits (default) or auto.
+                      Applies to composed prompt argv; raw commands stay verbatim.
   --add-dir <dir>     a directory the engine may write in. Defaults to the
                       artifact's parent. Repeatable. (codex uses the first as its cwd.)
   --artifact <path>   checked at engine exit. Success = it appears, or (if
@@ -490,6 +493,9 @@ _burn_compose() {
   shift   # drop the literal "--" separator
   BURN_ARGV=()
   local line
+  if [ "${burn_permission:-acceptEdits}" = auto ] && [ "$(adapter_meta_cli_binary)" != claude ]; then
+    log_warn "$(adapter_meta_cli_binary) has no equivalent for --permission auto; keeping its existing burn flags." >&2
+  fi
   # NUL-delimited read so a multi-line prompt survives as a single argv item.
   while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
   BURN_ARGV+=("${post[@]}")
@@ -1791,6 +1797,7 @@ _burn_tank_lock_release() {
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0
+  local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s=""
   local -a cmd=() add_dirs=()
@@ -1800,6 +1807,13 @@ cmd_burn() {
       --artifact)   shift; [ $# -gt 0 ] || log_fail "--artifact needs a path"; artifact="$1"; shift ;;
       --to)         shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
+      --permission)
+        shift
+        case "${1:-}" in
+          acceptEdits|auto) burn_permission="$1"; permission_set=1; shift ;;
+          *) log_fail "--permission must be acceptEdits or auto" ;;
+        esac
+        ;;
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
@@ -2031,6 +2045,9 @@ cmd_burn() {
       # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
       # there is no adapter to compose, so `--prompt` still carries the task and
       # these ride alongside it. They used to be parsed and then silently dropped.
+      if [ "$burn_permission" = auto ]; then
+        log_warn "agy has no equivalent for --permission auto; keeping its existing burn flags." >&2
+      fi
       _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
@@ -2038,6 +2055,9 @@ cmd_burn() {
   esac
   # Keep the verbatim post-`--` argv aside; in --prompt mode it's appended after
   # the engine's generated flags (an escape hatch for extra per-engine args).
+  if [ "$prompt_set" -eq 0 ] && [ "$permission_set" -eq 1 ]; then
+    log_warn "--permission does not modify raw engine argv; set the engine permission flag after --." >&2
+  fi
   local -a post_cmd=("${cmd[@]}")
   load_adapter "$cli"
   local binary; binary="$(adapter_meta_cli_binary)"
