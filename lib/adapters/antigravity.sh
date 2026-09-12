@@ -130,6 +130,22 @@ adapter_recent_sids() {
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
+  local cache="$dir/antigravity-cli/cache/last_conversations.json"
+  if [ -f "$cache" ]; then
+    local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
+    sid="$(grep -E '"'"$want_esc"'"[[:space:]]*:[[:space:]]*"[^"]+"' "$cache" 2>/dev/null \
+      | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/".*//' || true)"
+    if [ -n "$sid" ]; then
+      f="$brain/$sid/.system_generated/logs/transcript.jsonl"
+      if [ -f "$f" ]; then
+        local mt
+        mt="$(_clikae_mtime "$f" 2>/dev/null || echo "?")"
+        printf '%s\037%s\n' "$mt" "$sid"
+        return 0
+      fi
+    fi
+  fi
+
   local -a afiles=()
   for sdir in "$brain"/*/; do
     [ -d "$sdir" ] || continue

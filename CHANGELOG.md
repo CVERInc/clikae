@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `clikae resume` and the home board's picker now hide headless one-shot sessions (`clikae burn`) by default, so the session picker isn't cluttered with "ghost" transcripts. Use `clikae resume --all` or press `a` in the interactive picker to reveal them (labelled as `[burn]`). (#74)
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
   permission mode while preserving the default argv. codex and agy have no
   equivalent flag and keep their existing flags, reporting the degradation for
