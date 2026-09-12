@@ -2583,7 +2583,13 @@ LIVEACT
           # commitment, so the second line appears ONLY when a waiter is really
           # counting. Saying it otherwise would be claiming a feature that is
           # not attached.
+          # _home_is_dry deliberately reports 1 (nothing to print) for an
+          # UNVERIFIED tank — see its own _home_is_dryv check — so a caution
+          # that IS shown on the Tank row (via _home_fuel_dotv, just above)
+          # would silently vanish on the Live row (R1-P3-5). $_FNOTE already
+          # holds it from that same _home_fuel_dotv call above.
           local _lphrase; _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          [ -n "$_lphrase" ] || [ "$_FNOTE" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || _lphrase="$_FNOTE"
           if [ -n "$_lphrase" ]; then
             printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
           fi
