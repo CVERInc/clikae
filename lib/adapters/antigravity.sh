@@ -66,10 +66,18 @@ adapter_find_session() {
 }
 
 adapter_session_cwd() {
-  local brain sid
-  brain="${1%/.system_generated/*}"; sid="${brain##*/}"; brain="${brain%/*}"
+  local f="$1"
   if declare -F reading_cache_run >/dev/null; then
-    reading_cache_run "agy-cwd-$sid" "$brain/history.jsonl" _agy_cwd_uncached "$@"
+    # P2-A (2026-09-12 round-2 fix review): the cache identity used to be
+    # the SHARED history.jsonl, not this one session's own transcript — so
+    # any write to history.jsonl (e.g. one new agy session anywhere)
+    # invalidated EVERY other session's cached cwd at once. On a synthetic
+    # 500-session tank that turned "one new session" into a 500-entry cache
+    # stampede and a ~10s board_state_refresh (measured: round-2 review's
+    # P2-A, perf3.log). Keying on $f itself means an unrelated session's
+    # cache entry survives a write elsewhere; only the one session whose OWN
+    # transcript actually changed re-derives its cwd.
+    reading_cache_run "agy-cwd" "$f" _agy_cwd_uncached "$@"
   else
     _agy_cwd_uncached "$@"
   fi
