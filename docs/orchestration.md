@@ -120,7 +120,13 @@ a real paid engine; the recipe is how you stop wasting it.
    `--prompt-file <f>` (or `--prompt`) + `--add-dir <dir>` and clikae fills in each
    engine's headless-write dialect for you (`claude`'s `-p …
    --permission-mode acceptEdits --add-dir`, `codex`'s `exec -C … -s
-   workspace-write`) — both **scoped to the roots you name**. claude's recipe
+   workspace-write`). For codex, the first `--add-dir` (default: the artifact's
+   parent) must be inside a git work tree; use `--codex-skip-git-check` to opt
+   in to `--skip-git-repo-check` for a non-git directory. This is checked
+   whenever the argv is composed for codex — including a dry tank's reroute
+   INTO codex from another engine, not just a run started as `clikae burn
+   codex` — so it can't be skipped by naming a different engine first. Both
+   are **scoped to the roots you name**. claude's recipe
    used `--dangerously-skip-permissions` until 2026-08-16, which bypasses the
    permission system entirely: measured, it wrote outside the directories it was
    given while the docs said "this directory". Hand-writing `-- -p '…'` is the #1 way to ship a job that
@@ -236,6 +242,11 @@ object can't give it:
   "reset_at": null          // epoch second `--wait-for-reset` is sleeping to, only during `waiting-reset`
 }
 ```
+
+For adapter-driven task failures observed within five seconds of launch,
+`reason` uses the first stderr line, trimmed and limited to 200 bytes (UTF-8 safe), when
+stderr is non-empty. Empty stderr and longer runs retain the generic task-failure reason;
+artifact, quota, and infrastructure classification still take precedence.
 
 **Written at every transition:** run start, each reroute hop (`state:
 running`, `tank` and `rerouted_from` updated), a tank going dry (`state: dry`

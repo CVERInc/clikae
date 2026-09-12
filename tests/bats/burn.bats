@@ -14,6 +14,8 @@ load '../helpers'
 # If $STUB_ARGV_LOG is set, every invocation appends its full argv (one line) there
 # so a test can assert the generated flag shape.
 _stub_codex() {
+  # Generated Codex burns require a real git cwd (#66).
+  git init -q "$BATS_TEST_TMPDIR"
   local bin="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$bin"
   cat > "$bin/codex" <<'STUB'
@@ -2041,10 +2043,15 @@ _permission_argv() (
 }
 
 @test "burn #60: codex auto degrades once on stderr with unchanged argv" {
+  # #66 round-1's codex git-cwd check now fires before validate_name (the
+  # stub _permission_argv installs), so add_dirs[0] must be a real git work
+  # tree here — a bare literal path like the claude test above uses would
+  # fail that check before ever reaching the --permission composition logic.
+  local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/auto.argv"
-  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/auto.argv"
   [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
   grep -F 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/warning"
@@ -2094,10 +2101,13 @@ _permission_argv() (
 }
 
 @test "burn #60: codex acceptEdits (explicit) also degrades once on stderr with unchanged argv" {
+  # Same reason as the auto-degrade test above: add_dirs[0] must be a real
+  # git work tree for the #66 round-1 codex git-cwd check to pass.
+  local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/accept.argv"
-  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/accept.argv"
   [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
   grep -F 'codex has no equivalent for --permission acceptEdits; keeping its existing burn flags.' "$TEST_HOME/warning"
@@ -2249,4 +2259,215 @@ STUB
   # gate's truthful warning is backed by truthful argv, not just backed by
   # inherited claude state that happens to also block it once.
   ! grep -q -- '--permission-mode' "$L"
+}
+
+@test "burn #66: non-git cwd refuses before creating any clikae state" {
+  rm -rf "$HOME/.clikae"  # undo shared setup; this refusal must create nothing
+  local plain="$HOME/plain directory"
+  mkdir -p "$plain"
+  run clikae burn codex T1 --json --artifact "$plain/out" --prompt x --add-dir "$plain"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$plain"* ]] || false
+  [[ "$output" == *"put the repository first"* ]] || false
+  [[ "$output" == *"--codex-skip-git-check"* ]] || false
+  [ "${#lines[@]}" -eq 1 ]
+  [ ! -e "$HOME/.clikae" ]
+}
+
+@test "burn #66: git cwd keeps generated argv byte-identical" {
+  _stub_burn_transport
+  clikae init codex T1
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf 'exec -C %s -s workspace-write x\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$STUB_ARGV_LOG"
+}
+
+@test "burn #66: explicit opt-in adds skip-git-repo-check exactly once" {
+  _stub_burn_transport
+  clikae init codex T1
+  local plain="$HOME/plain"
+  mkdir -p "$plain"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  export STUB_ARTIFACT="$plain/out"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$plain" --codex-skip-git-check
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf 'exec --skip-git-repo-check -C %s -s workspace-write x\n' "$plain" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$STUB_ARGV_LOG"
+}
+
+@test "burn #66: fast failure JSON reason uses trimmed stderr first line" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'ordinary stdout\n'
+printf '  launch refused by engine  \nsecond stderr line\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"reason":"launch refused by engine"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"ok":false'* ]] || false
+  [[ "$output" == *'rc=7'* ]] || false
+}
+
+@test "burn #66: default artifact parent is checked before --fresh can delete it" {
+  rm -rf "$HOME/.clikae"
+  local plain="$HOME/plain"
+  mkdir -p "$plain"
+  printf 'keep me' > "$plain/out"
+  run clikae burn codex T1 --artifact "$plain/out" --prompt x --fresh
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$plain"* ]] || false
+  [ "$(cat "$plain/out")" = 'keep me' ]
+  [ ! -e "$HOME/.clikae" ]
+}
+
+@test "burn #66: stderr reason is capped at 200 bytes even with engine rc zero" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '  %0250d  \nsecond line\n' 0 >&2
+exit 0
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local expected; expected="$(printf '%0200d' 0)"
+  [[ "$output" == *"\"reason\":\"$expected\""* ]] || { echo "$output"; false; }
+  [[ "$output" == *'rc=0'* ]] || false
+}
+
+# --- P3-3 (round-2 review): _burn_sanitize_reason used to `tr -s ' '` the
+# WHOLE result, squeezing any run of 2+ spaces down to one — including runs
+# an engine legitimately printed on purpose (aligning a diagnostic), with no
+# control byte or ANSI sequence involved at all. Only the substitution that
+# turns a raw control byte into a space needs to stay JSON-safe; a genuine
+# double space in an otherwise-clean stderr line is not this function's to
+# collapse.
+@test "burn #66: stderr reason keeps legitimate consecutive spaces (P3-3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'error:  file    not found  (rc=3)\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"reason":"error:  file    not found  (rc=3)"'* ]] || { echo "$output"; false; }
+}
+
+# --- #66 round-1 review fixes ---
+
+@test "burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your usage limit · resets in 1h\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  clikae init codex L2
+  local plain="$HOME/plain_nongit"
+  mkdir -p "$plain"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/codex-argv.log"
+  run clikae burn claude L1 --json --artifact "$plain/out" --prompt x --add-dir "$plain" --to codex/L2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is not inside a git work tree"* ]] || { echo "$output"; false; }
+  [ ! -e "$STUB_ARGV_LOG" ]   # codex itself must never have run
+}
+
+@test "burn #66 round-1 P1-1 control: reroute into codex still proceeds when the cwd IS a git work tree" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your usage limit · resets in 1h\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  clikae init codex L2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"   # _stub_codex already git-init'd this dir
+  run clikae burn claude L1 --json --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$BATS_TEST_TMPDIR" --to codex/L2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn #66 round-1 P2-1: ANSI/control chars in stderr sanitize into valid JSON" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'ordinary stdout\n'
+printf '\033[31mbad\tthing "quoted" \\ end\033[0m\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local json_line; json_line="$(printf '%s\n' "$output" | grep '^{')"
+  [ -n "$json_line" ] || { echo "$output"; false; }
+  printf '%s' "$json_line" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["reason"] == "bad thing \"quoted\" \\ end", d["reason"]
+'
+}
+
+@test "burn #66 round-1 P2-2: 200-byte cap does not split a multibyte char under C locale" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 300 ]; do printf '\xe9\xbe\x8d' >&2; i=$((i + 1)); done
+printf '\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  LC_ALL=C LANG=C LC_CTYPE=C run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local json_line; json_line="$(printf '%s\n' "$output" | grep '^{')"
+  [ -n "$json_line" ] || { echo "$output"; false; }
+  printf '%s' "$json_line" | python3 -c 'import json,sys; json.load(sys.stdin)'
+  printf '%s' "$json_line" \
+    | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["reason"])' \
+    | iconv -f UTF-8 -t UTF-8 >/dev/null
+}
+
+@test "burn #66 round-1 P3-1: --codex-skip-git-check on a non-codex engine warns, does not fail" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf 'done' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude L1 --artifact "$STUB_ARTIFACT" --prompt x --codex-skip-git-check
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--codex-skip-git-check has no effect"* ]] || false
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn #66 round-1 P3-1 control: raw argv form also warns the flag has no effect" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" --codex-skip-git-check -- run "$A"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--codex-skip-git-check has no effect"* ]] || false
+  [ -f "$A" ]
+}
+
+@test "burn #66 round-1 P3-2: a nonexistent --add-dir says so, not 'not a git work tree'" {
+  rm -rf "$HOME/.clikae"
+  local missing="$HOME/does/not/exist_at_all"
+  run clikae burn codex T1 --json --artifact "$missing/out" --prompt x --add-dir "$missing"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not exist"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"is not inside a git work tree"* ]] || { echo "$output"; false; }
+  [ ! -e "$HOME/.clikae" ]
 }

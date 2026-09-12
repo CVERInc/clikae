@@ -438,6 +438,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Codex burns reject a non-git cwd before creating state (#66).** Put the
+  repository first in `--add-dir`, or opt in with `--codex-skip-git-check`.
+  The check now also re-fires when a dry tank's reroute lands on codex from a
+  different engine — it used to run only against the engine named on the
+  command line, so a reroute INTO codex skipped it entirely and let codex
+  itself reject the cwd a tank later (round-1 review, P1-1). A cwd that
+  doesn't exist at all now says so, instead of the git message (P3-2), and
+  `--codex-skip-git-check` on a non-codex engine or a raw-argv command now
+  warns that it has no effect there rather than staying silent (P3-1).
+  Fast engine failures with stderr now report its trimmed first line (up to
+  200 bytes, UTF-8 safe) as the JSON reason — sanitized so ANSI color codes
+  and other control bytes can't produce invalid JSON, and truncated on a
+  whole UTF-8 character boundary regardless of the caller's locale (round-1
+  review, P2-1/P2-2). The sanitizer only replaces control bytes and strips
+  ANSI escapes now; it no longer collapses legitimate runs of spaces in an
+  otherwise-clean stderr line (round-2 review, P3-3).
+
 - **The Live section named the wrong session when two ran on one tank.** Two
   live sessions on the same tank (a bare one and a resumed one, say) each
   showed the tank's most recently active transcript's title — identical on

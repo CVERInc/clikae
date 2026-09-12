@@ -47,7 +47,9 @@ Give the task in one of two ways:
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
   --add-dir <dir>     a directory the engine may write in. Defaults to the
-                      artifact's parent. Repeatable. (codex uses the first as its cwd.)
+                      artifact's parent. Repeatable. (codex uses the first as its cwd;
+                      it must be a git work tree, or use --codex-skip-git-check.)
+  --codex-skip-git-check  opt in to codex --skip-git-repo-check for generated commands.
   --artifact <path>   checked at engine exit. Success = it appears, or (if
                       it already existed) its timestamp changes — a STALE file from
                       a previous run is NOT counted as success.
@@ -108,8 +110,8 @@ Examples:
   clikae burn claude L --artifact out/core.test.cjs \
       --prompt-file task.txt --add-dir "$PWD"      # the easy way
   clikae burn codex M --artifact /tmp/out.md \
-      --prompt-file task.txt --add-dir /tmp        # same task, different engine, no flag changes
-  clikae burn codex M --artifact /tmp/out.md -- exec -C /tmp -s workspace-write \
+      --prompt-file task.txt --add-dir "$PWD"      # put the git repository first
+  clikae burn codex M --artifact /tmp/out.md -- exec -C /tmp --skip-git-repo-check -s workspace-write \
       "read /tmp/in.txt, write /tmp/out.md"        # the power-user way (raw argv)
 
 burn is the headless sibling of the interactive switch: pre-stage inputs to /tmp
@@ -514,6 +516,13 @@ _burn_compose() {
   fi
   # NUL-delimited read so a multi-line prompt survives as a single argv item.
   while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
+  if [ "$cli" = codex ] && [ "${codex_skip_git_check:-0}" -eq 1 ]; then
+    local has_skip=0
+    for line in "${post[@]}"; do
+      [ "$line" != --skip-git-repo-check ] || has_skip=1
+    done
+    [ "$has_skip" -eq 1 ] || BURN_ARGV=("${BURN_ARGV[0]}" --skip-git-repo-check "${BURN_ARGV[@]:1}")
+  fi
   BURN_ARGV+=("${post[@]}")
 }
 
@@ -1810,9 +1819,112 @@ _burn_tank_lock_release() {
   return 0
 }
 
+# Preserve combined output while retaining stderr alone for launch diagnostics.
+_burn_capture_stderr() {
+  local capture_rc=0
+  # fd 3 saves stdout before the pipe connects only stderr to tee.
+  { "$@" 2>&1 1>&3; } | tee "$stderr_file" >&2
+  capture_rc=${PIPESTATUS[0]}
+  return "$capture_rc"
+} 3>&1
+
+# _burn_check_codex_git_cwd — refuse to compose a codex argv whose cwd isn't a
+# git work tree. Reads $cli/$prompt_set/$codex_skip_git_check/$add_dirs from
+# the caller (cmd_burn's locals — same pattern _burn_result etc. already use).
+#
+# #66 round-1 P1-1: this used to be inlined once, at cmd_burn's entry, and
+# only ever ran against the engine NAMED ON THE COMMAND LINE. A dry tank's
+# cross-engine reroute (~2525 below) overwrites that same $cli variable and
+# recomposes the argv for the new engine — so a reroute INTO codex from
+# another engine skipped this check entirely and let codex itself reject the
+# non-git cwd a run and a tank later, after the earlier engine's state
+# (log dir, status.json, lock) had already been created. Called again at the
+# reroute site, right before the new engine's argv is composed, so landing on
+# codex is checked exactly where landing on codex first was.
+_burn_check_codex_git_cwd() {
+  [ "$cli" = codex ] || return 0
+  [ "$prompt_set" -eq 1 ] || return 0
+  [ "$codex_skip_git_check" -eq 0 ] || return 0
+  local dir="${add_dirs[0]}"
+  # #66 round-1 P3-2: `git -C <missing dir> rev-parse` also prints "not
+  # inside a git work tree" (its own stderr, discarded below) for a cwd that
+  # doesn't exist at all — name the actual cause instead of the wrong one.
+  [ -d "$dir" ] || log_fail "codex cwd '$dir' does not exist."
+  if [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
+    log_fail "codex cwd '$dir' is not inside a git work tree; put the repository first in --add-dir, or pass --codex-skip-git-check."
+  fi
+}
+
+# _burn_sanitize_reason <raw-line> — make an engine's own stderr safe to carry
+# as a JSON string value.
+#
+# #66 round-1 P2-1: json_str (lib/core/json.sh) only escapes the seven C
+# control chars JSON gives dedicated shorthand for (\t \n \r \b \f " \) — any
+# OTHER byte in U+0000-U+001F, most commonly a bare ESC (0x1B) from an ANSI
+# color code, passed straight through into the `--json` output verbatim.
+# RFC 8259 requires every one of those to be escaped; a raw one makes the
+# whole object invalid JSON for a strict parser, which is worse than the
+# prose burn --json exists to replace (a strict parser can't even start
+# reading it). Strip ANSI CSI sequences outright (the common, recoverable
+# case: color codes an engine prints whether or not stdout is a tty), then
+# turn every remaining control byte into a space — trading "illegal JSON"
+# for "ugly reason text", never the other way round.
+#
+# P3-3 (2026-09-12 round-2 review): this used to also `tr -s ' '` the
+# result, squeezing every run of spaces down to one — including runs the
+# engine's own message legitimately printed, which had nothing to do with
+# a replaced control byte. Only the control-byte substitution needs to
+# stay safe for JSON; a real "two spaces" in the stderr line is not this
+# function's problem to fix.
+_burn_sanitize_reason() {
+  local s="$1"
+  s="$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g')"
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037' ' ')"
+  printf '%s' "$s"
+}
+
+# _burn_truncate_utf8 <str> <max-bytes> — cut <str> to at most <max-bytes>
+# bytes without splitting a multibyte UTF-8 character.
+#
+# #66 round-1 P2-2: the original `${stderr_first:0:200}` truncates by
+# CHARACTER count only when the shell's own locale is UTF-8-aware. Under
+# C/POSIX — bash 3.2's default when LANG/LC_ALL/LC_CTYPE are unset, a real
+# state for an unattended/containerized caller, which is exactly who invokes
+# `clikae burn --json` — it degrades to raw BYTES, so a multibyte character
+# sitting across the 200-byte boundary gets sliced in half, writing invalid
+# UTF-8 into the JSON output. `local LC_ALL=C` forces byte semantics
+# EXPLICITLY, in THIS function only, regardless of the caller's environment,
+# so the cut point is deterministic; then back off any lead byte at the tail
+# whose continuation bytes didn't make it into the cut.
+_burn_truncate_utf8() {
+  local LC_ALL=C
+  local s="$1" max="$2" len
+  len=${#s}
+  [ "$len" -le "$max" ] && { printf '%s' "$s"; return; }
+  local cut="${s:0:max}"
+  local clen=${#cut} k pos c ord cont_needed=-1
+  local look=4; [ "$clen" -lt "$look" ] && look=$clen
+  for ((k = 1; k <= look; k++)); do
+    pos=$((clen - k))
+    c="${cut:pos:1}"
+    ord="$(printf '%d' "'$c")"
+    [ "$ord" -lt 0 ] && ord=$((ord + 256))
+    if [ "$ord" -ge 240 ]; then cont_needed=3; break
+    elif [ "$ord" -ge 224 ]; then cont_needed=2; break
+    elif [ "$ord" -ge 192 ]; then cont_needed=1; break
+    elif [ "$ord" -ge 128 ]; then continue
+    else cont_needed=-1; break
+    fi
+  done
+  if [ "$cont_needed" -ge 0 ] && [ $((k - 1)) -lt "$cont_needed" ]; then
+    cut="${cut:0:pos}"
+  fi
+  printf '%s' "$cut"
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
-  local prompt="" prompt_file="" prompt_set=0
+  local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s=""
@@ -1836,6 +1948,7 @@ cmd_burn() {
       --infra-retries) shift; [ $# -gt 0 ] || log_fail "--infra-retries needs a count"; infra_retries="$1"; shift ;;
       --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
       --wait-for-reset) shift; [ $# -gt 0 ] || log_fail "--wait-for-reset needs a duration (e.g. 30m)"; wait_for_reset_raw="$1"; shift ;;
+      --codex-skip-git-check) codex_skip_git_check=1; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
@@ -1916,6 +2029,17 @@ cmd_burn() {
       log_warn "raw argv after -- includes --permission-mode or --dangerously-skip-permissions; clikae's own --permission-mode is composed first and the two may collide."
     fi
   fi
+  # #66 round-1 P3-1: the flag is parsed unconditionally but only ever does
+  # anything for a codex run composed from --prompt/--prompt-file (raw argv
+  # owns its own cwd/git-check policy, documented in --help). Silently
+  # swallowing it elsewhere reads as "I turned on a protection" when nothing
+  # happened — say so instead of staying quiet.
+  if [ "$codex_skip_git_check" -eq 1 ] && { [ "$cli" != codex ] || [ "$prompt_set" -ne 1 ]; }; then
+    log_warn "--codex-skip-git-check has no effect here: it only applies to a codex run started with --prompt/--prompt-file."
+  fi
+  # Validate the cwd we compose, before carry notices, logs, status or locks.
+  # Raw argv owns its own cwd and git-check policy.
+  _burn_check_codex_git_cwd
   validate_name cli "$cli"
   validate_name profile "$tank"
   # Fall-through armed (the default) means a dry tank re-fires this task on the
@@ -2213,6 +2337,7 @@ cmd_burn() {
     local run_id="${cli}-${cur}-burn-$$"
     [ "$infra_attempt" -eq 0 ] || run_id="${run_id}-retry${infra_attempt}"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
+    local stderr_file="$run_dir/${run_id}.stderr" attempt_started=$SECONDS
     local state_file="$HOME/.clikae/state/${run_id}_exit"
     local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
     local artifact_fresh=0 artifact_bytes_snapshot=null
@@ -2271,7 +2396,8 @@ cmd_burn() {
       } >> "$wrapper_script"
 
       {
-        declare -f _clikae_mtime _burn_size _burn_snapshot
+        declare -f _clikae_mtime _burn_size _burn_snapshot _burn_capture_stderr
+        printf 'stderr_file=%q\n' "$stderr_file"
         printf 'artifact=%q\nart_pre=%q\nevidence_file=%q\n' "$artifact" "$art_pre" "$evidence_file"
       } >> "$wrapper_script"
       cat <<EOF >> "$wrapper_script"
@@ -2289,7 +2415,7 @@ trap 'echo \$? > "$state_file"; exit' EXIT
 # outcome was still judged by the artifact, but the diagnostic rc was a lie.
 set -o pipefail
 ( engine_rc=0
-  $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
   _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
   exit "\$engine_rc"
 ) 2>&1 | tee "$log_file"
@@ -2327,7 +2453,7 @@ EOF
 $(adapter_export_env "$dir")
 KV
           engine_rc=0
-          "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
           _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
           exit "$engine_rc"
         )" || rc=$?
@@ -2346,7 +2472,7 @@ KV
 $(adapter_export_env "$dir")
 KV
         engine_rc=0
-        "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
         _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
         exit "$engine_rc"
       )" || rc=$?
@@ -2514,8 +2640,14 @@ KV
       return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
-      _burn_status_write fail false "$cli" "$cur" "$artifact" "no fresh artifact and no limit" ""
-      _burn_result false "$cli" "$cur" "$artifact" "no fresh artifact and no limit"
+      local failure_reason="no fresh artifact and no limit" stderr_first=""
+      if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
+        stderr_first="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$stderr_file")"
+        stderr_first="$(_burn_sanitize_reason "$stderr_first")"
+        failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+      fi
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
+      _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
       _burn_output_tail "$out"
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
       return 1
@@ -2561,6 +2693,10 @@ KV
         # prompt is engine-agnostic). Without a recipe for the new engine, stop.
         declare -F adapter_burn_flags >/dev/null \
           || log_fail "Cross-engine reroute → $nx_cli, which has no headless-write recipe (no adapter_burn_flags)."
+        # #66 round-1 P1-1: re-check here, now that $cli IS $nx_cli — a
+        # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
+        # exactly like the entry check did, so it needs the same refusal.
+        _burn_check_codex_git_cwd
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
