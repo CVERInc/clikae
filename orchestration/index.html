@@ -129,7 +129,12 @@ that into a failure.</p>
 <li>
 <p><strong>Give the task the easy way — don't hand-roll the engine flags.</strong> Use
 <code>--prompt-file &lt;f&gt;</code> (or <code>--prompt</code>) + <code>--add-dir &lt;dir&gt;</code> and clikae fills in each
-engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --permission-mode acceptEdits --add-dir</code>, <code>codex</code>'s <code>exec -C … -s workspace-write</code>) — both <strong>scoped to the roots you name</strong>. claude's recipe
+engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --permission-mode acceptEdits --add-dir</code>, <code>codex</code>'s <code>exec -C … -s workspace-write</code>). For codex, the first <code>--add-dir</code> (default: the artifact's
+parent) must be inside a git work tree; use <code>--codex-skip-git-check</code> to opt
+in to <code>--skip-git-repo-check</code> for a non-git directory. This is checked
+whenever the argv is composed for codex — including a dry tank's reroute
+INTO codex from another engine, not just a run started as <code>clikae burn codex</code> — so it can't be skipped by naming a different engine first. Both
+are <strong>scoped to the roots you name</strong>. claude's recipe
 used <code>--dangerously-skip-permissions</code> until 2026-08-16, which bypasses the
 permission system entirely: measured, it wrote outside the directories it was
 given while the docs said &quot;this directory&quot;. Hand-writing <code>-- -p '…'</code> is the #1 way to ship a job that
@@ -232,6 +237,10 @@ object can't give it:</p>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "log"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"/Users/…/.clikae/logs/codex-T1-burn-28186.log"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,  </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// this attempt's own capture log, or null</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "reset_at"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">          // epoch second `--wait-for-reset` is sleeping to, only during `waiting-reset`</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">}</span></span></code></pre>
+<p>For adapter-driven task failures observed within five seconds of launch,
+<code>reason</code> uses the first stderr line, trimmed and limited to 200 bytes (UTF-8 safe), when
+stderr is non-empty. Empty stderr and longer runs retain the generic task-failure reason;
+artifact, quota, and infrastructure classification still take precedence.</p>
 <p><strong>Written at every transition:</strong> run start, each reroute hop (<code>state: running</code>, <code>tank</code> and <code>rerouted_from</code> updated), a tank going dry (<code>state: dry</code>
 — transient if a reroute follows, terminal if <code>--no-reroute</code> or the reserve is
 exhausted), an infra retry (<code>state: infra</code>, transient while retries remain),
