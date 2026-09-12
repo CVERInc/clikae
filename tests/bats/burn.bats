@@ -55,6 +55,7 @@ _stub_claude() {
   cat > "$bin/claude" <<'STUB'
 #!/usr/bin/env bash
 [ -n "$STUB_ARGV_LOG" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+[ -n "$STUB_ENV_LOG" ] && printf 'BG_WAIT=%s\n' "${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS-unset}" >> "$STUB_ENV_LOG"
 [ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
 exit 0
 STUB
@@ -2470,4 +2471,59 @@ STUB
   [[ "$output" == *"does not exist"* ]] || { echo "$output"; false; }
   [[ "$output" != *"is not inside a git work tree"* ]] || { echo "$output"; false; }
   [ ! -e "$HOME/.clikae" ]
+}
+
+# ── headless guards: no sub-agents, no background-wait kill (2026-09-13) ─────
+# A claude lane that reaches for the Agent tool hands the task to a background
+# sub-agent and ends its turn; `claude -p` then terminates the whole run after
+# its background wait ceiling with nothing on disk (reefbox, #78 fix lane, 651 s).
+# burn now appends `--disallowedTools Agent,Task` to every print-mode claude argv
+# that carries no tools flag of its own, and exports
+# CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 unless the operator set it.
+
+@test "burn (claude, --prompt): appends --disallowedTools Agent,Task and exports the bg-wait ceiling" {
+  _stub_claude
+  clikae init claude t1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log" STUB_ENV_LOG="$BATS_TEST_TMPDIR/env.log"
+  unset CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS
+  run clikae burn claude t1 --artifact "$A" --prompt "do it"
+  [ "$status" -eq 0 ]
+  grep -q -- "--permission-mode acceptEdits .*--disallowedTools Agent,Task" "$BATS_TEST_TMPDIR/argv.log"
+  grep -q "^BG_WAIT=0$" "$BATS_TEST_TMPDIR/env.log"
+}
+
+@test "burn (claude, raw -- -p): the guards apply to the power-user form too" {
+  _stub_claude
+  clikae init claude t1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log" STUB_ENV_LOG="$BATS_TEST_TMPDIR/env.log"
+  unset CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS
+  run clikae burn claude t1 --artifact "$A" -- -p "raw prompt" --permission-mode acceptEdits
+  [ "$status" -eq 0 ]
+  grep -q -- "-p raw prompt --permission-mode acceptEdits --disallowedTools Agent,Task" "$BATS_TEST_TMPDIR/argv.log"
+  grep -q "^BG_WAIT=0$" "$BATS_TEST_TMPDIR/env.log"
+}
+
+@test "burn (claude): an operator-supplied tools flag switches the argv guard off; a set ceiling is kept" {
+  _stub_claude
+  clikae init claude t1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log" STUB_ENV_LOG="$BATS_TEST_TMPDIR/env.log"
+  export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=1234
+  run clikae burn claude t1 --artifact "$A" -- -p "raw prompt" --allowedTools "Bash,Agent"
+  [ "$status" -eq 0 ]
+  ! grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  grep -q -- "--allowedTools Bash,Agent" "$BATS_TEST_TMPDIR/argv.log"
+  grep -q "^BG_WAIT=1234$" "$BATS_TEST_TMPDIR/env.log"
+}
+
+@test "burn (codex): the claude guards do not leak into another engine's argv" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --artifact "$A" --prompt "do it"
+  [ "$status" -eq 0 ]
+  ! grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
 }
