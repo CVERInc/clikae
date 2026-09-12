@@ -96,6 +96,51 @@ _agy_cwd_uncached() {
   printf '%s\n' "$cwd"
 }
 
+# Optional hook: BULK sid -> workspace index for the WHOLE account, one line
+# per session as "<sid>\037<workspace>", built from a SINGLE pass over
+# history.jsonl. round-3 fix review, P2-2: `board_state_refresh`'s rebuild
+# loop calls a per-session cwd lookup for EVERY agy session in the account on
+# a genuine miss — never PWD-scoped, since antigravity records cwd IN the
+# file, not in the path (see adapter_recent_sids's header). Even a WARM
+# `adapter_session_cwd` cache hit still pays a stat + a cksum + a subshell
+# read per session (reading_cache.sh's own reading_cache_run); multiplied by
+# a synthetic 500-session tank that measured as a ~5s FIXED cost — the round-2
+# fix (P2-A) killed the cache-key STORM, but not this per-session fork
+# overhead. A single awk pass over history.jsonl is the same total I/O
+# (round-2's fix already made per-session reads warm-cache cheap; this
+# removes the per-session FORKS around them, not more I/O) with the lookup
+# itself becoming a plain bash associative-array read once the caller has
+# this index — zero forks per session. Callers without this hook (or a
+# minimal stub adapter in a test) keep using `adapter_session_cwd` one file
+# at a time; this hook is a bulk-mode acceleration, not a new source of
+# truth. First occurrence per sid wins, matching `_agy_cwd_uncached`'s own
+# `head -n 1` semantics for a session recorded more than once.
+adapter_session_cwd_index() {
+  local dir="$1"
+  local hf="$dir/antigravity-cli/brain/history.jsonl"
+  [ -f "$hf" ] || return 0
+  awk '
+    {
+      sid = ""
+      if (match($0, /"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/.*"sessionId"[[:space:]]*:[[:space:]]*"/, "", s); sub(/"$/, "", s)
+        sid = s
+      }
+      if (sid == "" || (sid in seen)) next
+      ws = ""
+      if (match($0, /"workspace"[[:space:]]*:[[:space:]]*"[^"]*"/)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/.*"workspace"[[:space:]]*:[[:space:]]*"/, "", s); sub(/"$/, "", s)
+        ws = s
+      }
+      if (ws == "") next
+      seen[sid] = 1
+      printf "%s\037%s\n", sid, ws
+    }
+  ' "$hf" 2>/dev/null
+}
+
 adapter_session_title() {
   local dir="$1" sid="$2"
   [ -n "$sid" ] || return 0
@@ -179,12 +224,22 @@ adapter_recent_sids() {
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
+  # P2-2 (2026-09-12 round-3 fix review): one bulk index read instead of one
+  # reading_cache_run + fork pipeline PER session — see
+  # adapter_session_cwd_index's header.
+  local -A _ws=()
+  local _asid _aws
+  while IFS=$'\037' read -r _asid _aws; do
+    [ -n "$_asid" ] || continue
+    _ws["$_asid"]="$_aws"
+  done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
   local -a afiles=()
   for sdir in "$brain"/*/; do
     [ -d "$sdir" ] || continue
     f="${sdir}.system_generated/logs/transcript.jsonl"
     [ -f "$f" ] || continue
-    cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
+    sid="${sdir%/}"; sid="${sid##*/}"
+    if [ -n "${_ws[$sid]+x}" ]; then cwd="${_ws[$sid]}"; else cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"; fi
     [ "${cwd%/}" = "$want" ] || continue
     afiles+=("$f")
   done

@@ -408,6 +408,22 @@ board_state_refresh() (
     paths+=("$f")
   done <<< "$files"
   printf '%s\n' "$count" > "$gen/count"
+  # P2-2 (2026-09-12 round-3 fix review): antigravity's cwd lives IN the
+  # file, not the path (see _board_scan_root's header), so this loop below
+  # scans the WHOLE account's sessions, never just this PWD's — and used to
+  # pay one reading_cache_run + fork pipeline PER session for that (measured
+  # ~5s fixed on a synthetic 500-session tank). One bulk index read replaces
+  # that with plain associative-array lookups — see
+  # adapter_session_cwd_index's header (antigravity.sh) for why this is safe
+  # (same source of truth, same "first occurrence wins" semantics).
+  local -A _agy_ws=()
+  if [ "$engine" = antigravity ] && declare -F adapter_session_cwd_index >/dev/null; then
+    local _asid _aws
+    while IFS=$'\037' read -r _asid _aws; do
+      [ -n "$_asid" ] || continue
+      _agy_ws["$_asid"]="$_aws"
+    done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
+  fi
   date +%s > "$gen/updated"
   # Recorded for board_stale's equality check, never compared with ">" — see
   # its own header for why (a future-dated fixture/clock skew must not read
@@ -446,7 +462,14 @@ board_state_refresh() (
         claude) sid="${f##*/}"; sid="${sid%.jsonl}"; scope="${f%/*}"; scope="${scope##*/}" ;;
         codex) sid="$(_codex_meta_field "$f" id)"; scope="$(_codex_meta_field "$f" cwd)" ;;
         grok) sid="$(_grok_json_str "$f" id)"; scope="$(_grok_json_str "$f" cwd)" ;;
-        antigravity) sid="${f%/.system_generated/*}"; sid="${sid##*/}"; scope="$(adapter_session_cwd "$f")" ;;
+        antigravity)
+          sid="${f%/.system_generated/*}"; sid="${sid##*/}"
+          if [ -n "${_agy_ws[$sid]+x}" ]; then
+            scope="${_agy_ws[$sid]}"
+          else
+            scope="$(adapter_session_cwd "$f")"
+          fi
+          ;;
       esac
       [ -n "$sid" ] || continue
       key="$(board_key "$sid")"
