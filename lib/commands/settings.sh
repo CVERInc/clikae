@@ -14,7 +14,9 @@ _settings_tank() (
     return 1
   fi
   [ -e "$file" ] || input=/dev/null
-  if ! result="$(jq -n --arg linux_home "/home/$(id -un)/*" --slurpfile template "$template" --slurpfile current "$input" '
+  # $HOME, not a hardcoded /home/<user>: this template also ships to macOS via
+  # Homebrew, where $HOME is /Users/<user> and there is no /home at all.
+  if ! result="$(jq -n --arg user_home "$HOME/*" --slurpfile template "$template" --slurpfile current "$input" '
     def rules: type == "array" and all(.[]; type == "string");
     def valid:
       type == "object" and
@@ -28,13 +30,20 @@ _settings_tank() (
        (($current | length) == 1 and ($current[0] | valid | not))
       then error("invalid settings") else . end |
     ($current[0] // {}) as $old |
-    (($template[0].permissions.allow // [] | map(if . == "Bash(/home/<user>/*)" then "Bash(" + $linux_home + ")" else . end)) - ($old.permissions.allow // []) | unique) as $a |
+    (($template[0].permissions.allow // [] | map(if . == "Bash(/home/<user>/*)" then "Bash(" + $user_home + ")" else . end)) - ($old.permissions.allow // []) | unique) as $a |
     (($template[0].permissions.deny // []) - ($old.permissions.deny // []) | unique) as $d |
-    {allow: ($a | length), deny: ($d | length),
-     settings: ($old | .permissions.allow = ((.permissions.allow // []) + $a) |
-                       .permissions.deny = ((.permissions.deny // []) + $d))}
+    ($old | .permissions.allow = ((.permissions.allow // []) + $a) |
+           .permissions.deny = ((.permissions.deny // []) + $d)) as $merged |
+    (($merged.permissions.allow // []) as $A | ($merged.permissions.deny // []) as $D | $A - ($A - $D)) as $shadow |
+    {allow: ($a | length), deny: ($d | length), shadow: $shadow, settings: $merged}
   ' 2>/dev/null)" || { [ "$input" != /dev/null ] && [ ! -s "$file" ]; }; then
     printf '%s/%s: skipped — invalid JSON or permissions shape in settings.json/template\n' "$engine" "$tank"
+    return 1
+  fi
+  local shadow
+  shadow="$(printf '%s' "$result" | jq -r '.shadow | join(", ")')"
+  if [ -n "$shadow" ]; then
+    printf '%s/%s: refused — allow rule(s) shadow a deny rule: %s\n' "$engine" "$tank" "$shadow"
     return 1
   fi
   allow="$(printf '%s' "$result" | jq -r .allow)"
@@ -50,18 +59,19 @@ _settings_tank() (
   if [ "$mode" = apply ]; then
     trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
     trap 'exit 1' HUP INT TERM
-    tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
-    # Keep a recoverable copy before replacing existing user data.
+    tmp="$(mktemp "${file}.tmp.XXXXXX")" || { printf '%s/%s: failed to create a temp file\n' "$engine" "$tank"; return 1; }
     if [ -f "$file" ]; then
-      cp -p "$file" "$tmp" || return 1
+      # Seed the temp file's owner/mode from the live file; the actual backup
+      # is the separate copy made below, right before the live file is touched.
+      cp -p "$file" "$tmp" || { printf '%s/%s: failed to prepare the temp file\n' "$engine" "$tank"; return 1; }
     fi
-    printf '%s' "$result" | jq '.settings' > "$tmp" || return 1
+    printf '%s' "$result" | jq '.settings' > "$tmp" || { printf '%s/%s: failed to write the temp file\n' "$engine" "$tank"; return 1; }
     if [ -f "$file" ]; then
       local backup
-      backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || return 1
-      cp -p "$file" "$backup" || return 1
+      backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || { printf '%s/%s: failed to create a backup file\n' "$engine" "$tank"; return 1; }
+      cp -p "$file" "$backup" || { printf '%s/%s: failed to back up settings.json\n' "$engine" "$tank"; return 1; }
     fi
-    mv -f "$tmp" "$file" || return 1
+    mv -f "$tmp" "$file" || { printf '%s/%s: failed to replace settings.json\n' "$engine" "$tank"; return 1; }
     tmp=""
   fi
   printf '%s/%s: +%s allow / +%s deny%s\n' "$engine" "$tank" "$allow" "$deny" "$( [ "$mode" != dry-run ] || printf ' (dry-run)' )"
@@ -102,16 +112,19 @@ HELP
   validate_name cli "$engine"
   [ -z "$tank" ] || validate_name profile "$tank"
   template="$CLIKAE_ROOT/templates/permissions/$engine.json"
-  [ -f "$template" ] || { log_err "No permissions template for engine: $engine"; return 1; }
-  command -v jq >/dev/null 2>&1 || { log_err 'settings apply requires jq'; return 1; }
+  [ -f "$template" ] || { log_warn "No permissions template for engine: $engine; skipping"; return 2; }
+  command -v jq >/dev/null 2>&1 || { log_err 'settings apply requires jq; permissions template not applied'; return 3; }
   if [ -n "$tank" ]; then
     profile_exists "$engine" "$tank" || { log_err "Tank does not exist: $engine/$tank"; return 1; }
     _settings_tank "$engine" "$tank" "$mode" "$template"
     return $?
   fi
+  local found=0
   for d in "$(profiles_root)/$engine"/*; do
     [ -d "$d" ] || continue
+    found=1
     _settings_tank "$engine" "${d##*/}" "$mode" "$template" || rc=1
   done
+  [ "$found" -eq 1 ] || printf 'No %s tanks found.\n' "$engine"
   return "$rc"
 }
