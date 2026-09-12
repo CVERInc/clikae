@@ -131,7 +131,8 @@ adapter_recent_sids() {
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
-  if [ -f "$cache" ]; then
+  # Burn needs the newest transcript even before the CLI refreshes its cache.
+  if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
     local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
     sid="$(grep -E '"'"$want_esc"'"[[:space:]]*:[[:space:]]*"[^"]+"' "$cache" 2>/dev/null \
       | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/".*//' || true)"

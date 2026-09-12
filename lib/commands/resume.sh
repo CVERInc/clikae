@@ -64,6 +64,7 @@ _resume_split() {
   _rs_mt="${tmp%%$'\x1f'*}"
   _rs_is_burn="${tmp##*$'\x1f'}"
   [ "$_rs_is_burn" = "$_rs_mt" ] && _rs_is_burn=0
+  return 0
 }
 
 # _resume_session_fields <path> — derive _rs_engine/_rs_tank/_rs_sid from a raw
@@ -731,13 +732,17 @@ _resume_picker() {
     fi
 
     # 2. Build indexed array in Bash (zero process spawn)
-    local -A is_burn=()
+    # Bash 3.2 (macOS) has no associative arrays. Keep validated ids newline
+    # delimited; partial/corrupt records must not hide human conversations.
+    local burn_sids="" bfile record bsid
+    local burn_record_re=$'^[^\t]+\t[^\t]+\t[0-9]+$'
     if [ -d "$CLIKAE_HOME/state/burn-sessions" ]; then
-      local bfile bsid
       for bfile in "$CLIKAE_HOME"/state/burn-sessions/*/*; do
         [ -f "$bfile" ] || continue
-        while IFS=$'\t' read -r bsid _ _; do
-          [ -n "$bsid" ] && is_burn["$bsid"]=1
+        while IFS= read -r record; do
+          [[ "$record" =~ $burn_record_re ]] || continue
+          bsid="${record%%$'\t'*}"
+          burn_sids+="$bsid"$'\n'
         done < "$bfile"
       done
     fi
@@ -751,7 +756,10 @@ _resume_picker() {
     while read -r mt f; do
       [ -n "$f" ] || continue
       _resume_session_fields "$f"
-      local is_b="${is_burn[$_rs_sid]:-0}"
+      local is_b=0
+      case $'\n'"$burn_sids" in
+        *$'\n'"$_rs_sid"$'\n'*) is_b=1 ;;
+      esac
       if [ "$is_b" -eq 1 ] && [ "${CLIKAE_RESUME_ALL:-0}" -eq 0 ]; then
         continue
       fi
@@ -777,6 +785,7 @@ EOF
         _resume_split "${sessions[idx]}"
         engine_t="$_rs_engine"; tank_t="$_rs_tank"; sid_t="$_rs_sid"
         label_t="${cached_title[idx]}"
+        [ "$_rs_is_burn" = "1" ] && label_t="[burn] $label_t"
         rage_t="${cached_age[idx]}"
         _lazy_parse_cwd "$idx"
         cwd_t="${cached_cwd[idx]}"

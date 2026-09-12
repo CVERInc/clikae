@@ -612,25 +612,6 @@ _agy_burn() {
     attempt_epoch="$(date +%s)"
     local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
     local artifact_fresh=0 artifact_bytes_snapshot=null
-    local attempt_epoch
-    attempt_epoch="$(date +%s)"
-    local launch_sid=""
-    local -a _attempt_cmd=("${_attempt_cmd[@]}")
-    if declare -F adapter_new_session_args >/dev/null 2>&1; then
-      launch_sid="$(uuidgen 2>/dev/null || true)"
-      if [ -z "$launch_sid" ] && command -v python3 >/dev/null 2>&1; then
-        launch_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"
-      fi
-      launch_sid="$(printf '%s' "$launch_sid" | LC_ALL=C tr 'A-Z' 'a-z')"
-      if [ -n "$launch_sid" ]; then
-        local _nsline
-        while IFS= read -r _nsline; do
-          [ -n "$_nsline" ] && _attempt_cmd+=("$_nsline")
-        done <<_NS_EOF
-$(adapter_new_session_args "$launch_sid" 2>/dev/null || true)
-_NS_EOF
-      fi
-    fi
     art_pre="$(_clikae_mtime "$artifact")"
     local out; out="$(
       "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
@@ -643,7 +624,7 @@ _NS_EOF
     load_adapter "antigravity" 2>/dev/null || true
     if declare -F adapter_recent_sids >/dev/null 2>&1; then
       local recent
-      recent="$(adapter_recent_sids "$(_agy_slots)/$cur" 1 2>/dev/null || true)"
+      recent="$(adapter_recent_sids "$(_agy_slots)/$cur" 1 disk 2>/dev/null || true)"
       if [ -n "$recent" ]; then
         local r_epoch="${recent%%$'\037'*}"
         local r_sid="${recent##*$'\037'}"
@@ -653,7 +634,7 @@ _NS_EOF
       fi
     fi
     if [ -n "$sid_to_record" ]; then
-      local sidecar_file="$HOME/.clikae/state/burn-sessions/agy/$cur"
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/agy/$cur"
       mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
       printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
     fi
@@ -2061,7 +2042,7 @@ cmd_burn() {
   # generated flags).
   if [ "$prompt_set" -eq 1 ]; then
     local _burn_dupe_permission_flag=0 _burn_post_arg
-    for _burn_post_arg in "${_attempt_cmd[@]}"; do
+    for _burn_post_arg in "${cmd[@]}"; do
       case "$_burn_post_arg" in
         --permission-mode|--dangerously-skip-permissions) _burn_dupe_permission_flag=1; break ;;
       esac
@@ -2104,7 +2085,7 @@ cmd_burn() {
     # Raw argv has no portable prompt position; retain it as one argument per
     # line rather than guessing an engine-specific option grammar.
     saved_prompt="$run_dir/command.txt"
-    (umask 077; printf '%s\n' "${_attempt_cmd[@]}" > "$saved_prompt")
+    (umask 077; printf '%s\n' "${cmd[@]}" > "$saved_prompt")
     task_preview="${cmd[*]}"; task_preview="${task_preview:0:120}"
   fi
   task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
@@ -2475,7 +2456,7 @@ trap 'echo \$? > "$state_file"; exit' EXIT
 # outcome was still judged by the artifact, but the diagnostic rc was a lie.
 set -o pipefail
 ( engine_rc=0
-  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${_attempt_cmd[@]}") </dev/null || engine_rc=\$?
   _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
   exit "\$engine_rc"
 ) 2>&1 | tee "$log_file"
@@ -2513,7 +2494,7 @@ EOF
 $(adapter_export_env "$dir")
 KV
           engine_rc=0
-          _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
           _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
           exit "$engine_rc"
         )" || rc=$?
@@ -2532,7 +2513,7 @@ KV
 $(adapter_export_env "$dir")
 KV
         engine_rc=0
-        _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
         _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
         exit "$engine_rc"
       )" || rc=$?
@@ -2559,7 +2540,7 @@ KV
       fi
     fi
     if [ -n "$sid_to_record" ]; then
-      local sidecar_file="$HOME/.clikae/state/burn-sessions/$cli/$cur"
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/$cli/$cur"
       mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
       printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
     fi
