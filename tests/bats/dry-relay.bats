@@ -18,12 +18,20 @@ _src() {
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
 }
 
+# ISO-8601 UTC timestamp <N> minutes before the REAL clock — see R1-P2-3's note
+# in home.bats's _iso_ago: a fixed far-future anchor made these fixtures
+# unfalsifiable against the anchor-based expiry logic, not just "dry".
+_iso_ago() { # <minutes>
+  date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ
+}
+
 # Seed a genuine claude limit marker (synthetic + isApiErrorMessage) under a tank.
-# Future observation keeps these account/selection fixtures dry; reset expiry
-# is covered with a fixed clock in dry-reset-expiry.bats.
+# Recent-past observation (now-10min) keeps these account/selection fixtures
+# dry (the "resets 11pm" phrase is still hours away); reset expiry itself is
+# covered with a fixed clock in dry-reset-expiry.bats.
 _seed_dry_tx() { # <engine> <profile>
   local p="$CLIKAE_HOME/profiles/$1/$2/projects/-Users-x"; mkdir -p "$p"
-  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2099-06-01T10:05:00Z"}' >> "$p/s.jsonl"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"'"$(_iso_ago 10)"'"}' >> "$p/s.jsonl"
 }
 
 # Pin a tank's account label (the email adapter_account_label reads).

@@ -156,10 +156,21 @@ _seed_tx() { # <profile> <jsonl-line>
   printf '%s\n' "$2" >> "$p/s.jsonl"
 }
 
+# ISO-8601 UTC timestamp <N> minutes before the REAL clock (these tests run
+# `clikae` for real, with no faked `date`; fixed-clock expiry cases live in
+# dry-reset-expiry.bats instead). R1-P2-3: these fixtures used to anchor at a
+# fixed 2099 timestamp — 73 years in the future no real transcript will ever
+# carry — which made the anchor+reset resolve so far ahead of the ACTUAL clock
+# that the new expiry logic these fixtures exist to render around could never
+# fire, whatever it did. now-10min is a real "just observed" anchor instead.
+_iso_ago() { # <minutes>
+  date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ
+}
+
 @test "the board badges an over-quota tank with ! and its reset time" {
   clikae init claude dry
   clikae init claude ok
-  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2099-06-01T10:05:00Z"}'
+  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"'"$(_iso_ago 10)"'"}'
   _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
@@ -192,7 +203,7 @@ _seed_tx() { # <profile> <jsonl-line>
   # isApiErrorMessage:true, apiErrorStatus:429, error:rate_limit, and a
   # "·"-separated reset phrase. Locks the new wording/structure in forever.
   clikae init claude dry
-  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2099-06-02T09:44:49.962Z"}'
+  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"'"$(_iso_ago 10)"'"}'
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
@@ -203,7 +214,7 @@ _seed_tx() { # <profile> <jsonl-line>
   # Defensive: if a future Claude Code pretty-prints its JSONL (space after each
   # colon), the structural greps must still match.
   clikae init claude dry
-  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2099-06-02T09:44:49.962Z"}'
+  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "'"$(_iso_ago 10)"'"}'
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
