@@ -130,7 +130,13 @@ _board_scan_root() {
 _claude_usage_stale() {
   local dir="$1" gen="$2" root_mt saved_root_mt
   [ -f "$gen/claude-usage-root-mtime" ] || return 0
-  root_mt="$(file_mtime "$dir/projects" 2>/dev/null)" || root_mt=""
+  # P3-1 (2026-09-12 round-3 fix review): P1-A upgraded every FILE mtime
+  # comparison to nanosecond precision; this DIRECTORY one was still whole
+  # seconds via `file_mtime`, so a project directory created in the SAME
+  # wall-clock second as the last publish was invisible to signal 1 in
+  # either direction. `files_mtime_size` is the same nanosecond stat this
+  # file's other two signals already use — just keep its mtime field.
+  root_mt="$(files_mtime_size "$dir/projects" 2>/dev/null)"; root_mt="${root_mt%% *}"
   saved_root_mt=""
   IFS= read -r saved_root_mt < "$gen/claude-usage-root-mtime"
   [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ] && return 0
@@ -518,7 +524,12 @@ board_state_refresh() (
       # directory's own mtime too, bounded by the project count, folded into
       # the SAME files_mtime_size call as the files above (one fork, not
       # two).
-      file_mtime "$dir/projects" > "$gen/claude-usage-root-mtime" 2>/dev/null || true
+      # P3-1: nanosecond precision, matching _claude_usage_stale's own check
+      # (see its header) — a whole-second `file_mtime` here went blind to a
+      # project directory created in the SAME wall-clock second as this
+      # publish.
+      { local _rmt; _rmt="$(files_mtime_size "$dir/projects" 2>/dev/null)"; printf '%s\n' "${_rmt%% *}"; } \
+        > "$gen/claude-usage-root-mtime" 2>/dev/null || true
       : > "$gen/claude-usage-files"
       : > "$gen/claude-usage-projdirs"
       local -a ufiles=() updirs=()

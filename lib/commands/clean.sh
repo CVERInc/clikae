@@ -1347,11 +1347,20 @@ _clean_board_gc() {
         rm -rf "$gd" && n=$((n + 1))
       fi
     done < <(
+      # P3-4 (2026-09-12 round-3 fix review): match board_gc_generations'
+      # tie-break exactly (lib/core/board_state.sh) — the directory name as a
+      # secondary sort key, since several publishes inside the same
+      # wall-clock second all get the same whole-second mtime here (this GC
+      # path isn't in board_gc_generations' hot path, so it stays on
+      # file_mtime; only the SORT needs to agree with it). Without the
+      # matching tie-break, this GC and board_gc_generations could rank the
+      # same set of generations differently and disagree on which one keep-N
+      # protects — including `current`'s own target.
       for gd in "$tdir"/generation.*; do
         [ -d "$gd" ] || continue
         gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
         printf '%s\037%s\n' "$gmt" "$gd"
-      done | sort -t$'\037' -k1,1 -rn | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
+      done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
     )
   done
   [ "$n" -gt 0 ] && log_info "GC: removed $n old board snapshot generation(s)."
