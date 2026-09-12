@@ -87,10 +87,9 @@ adapter_session_title() {
 # Optional hook: title straight from a transcript FILE (see claude.sh's twin).
 # The resume picker used to re-implement this extraction inline — minus the
 # whitespace-collapse below, so the same session titled differently in the
-# picker vs the home board. No customTitle-equivalent here: antigravity's
-# transcript has no user-rename event to prefer (checked 2026-07-12 alongside
-# claude.sh's customTitle fix; nothing invented — the opening request stays
-# the only title source).
+# picker vs the home board. Prefer the CLI's conversation summary title;
+# keep this lookup inside the hook so the picker's per-file cache covers it.
+# SQLite is optional: absent/unreadable summaries fall back to the transcript.
 #
 # 🔴 2026-09-06: an empty extraction used to fall through as a bare "", which
 # the home board's Live row printed as a literal `""` — the ONLY row on the
@@ -99,16 +98,36 @@ adapter_session_title() {
 # unreadable/pre-opening-message transcript still deserves SOME word in that
 # column, not silence that reads as a rendering bug.
 adapter_title_for_file() {
-  local f="$1" t
+  local f="$1" t="" sdir sid db sql_sid
   [ -n "$f" ] && [ -f "$f" ] || return 0
-  t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
-        | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-  if [[ "$t" == *"<USER_REQUEST>"* ]]; then
-    t="${t#*<USER_REQUEST>}"
-    t="${t%%</USER_REQUEST>*}"
+  sdir="${f%/.system_generated/logs/transcript.jsonl}"
+  sid="${sdir##*/}"
+  db="${sdir%/brain/*}/conversation_summaries.db"
+  if [ -f "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    # Escape SQL string literals; read-only, short-lived connection because agy
+    # writes this database. A failed read (including a lock) uses the prompt.
+    # ORDER BY picks the newest row if conversation_id isn't unique. Note:
+    # -readonly only guarantees the .db file itself is never opened for
+    # writing — in WAL mode sqlite3 still opens/creates the -wal/-shm siblings
+    # O_RDWR (standard SQLite behavior); a failed open there falls back the
+    # same as any other unreadable summary.
+    sql_sid=${sid//\'/\'\'}
+    t="$(sqlite3 -readonly "$db" "SELECT title FROM conversation_summaries WHERE conversation_id = '$sql_sid' ORDER BY last_modified_time DESC LIMIT 1;" 2>/dev/null)" || t=""
+    # This title is already plain text, never JSON — only collapse whitespace.
+    # Running it through the transcript's JSON-unescape below would mangle a
+    # real backslash sequence (e.g. a Windows path) into garbage.
+    t="$(printf '%s' "$t" | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
   fi
-  t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
-    | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
+  if [ -z "$t" ]; then
+    t="$(head -n 1 "$f" 2>/dev/null | grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' | head -n 1 \
+        | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+    if [[ "$t" == *"<USER_REQUEST>"* ]]; then
+      t="${t#*<USER_REQUEST>}"
+      t="${t%%</USER_REQUEST>*}"
+    fi
+    t="$(printf '%s' "$t" | sed -E 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g' \
+      | tr '\t\n' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
+  fi
   [ -n "$t" ] || t="(no preview)"
   printf '%s' "$t"
 }

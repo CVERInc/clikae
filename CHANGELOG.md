@@ -7,12 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Antigravity board rows and the resume picker prefer the conversation title
+  from the CLI's summaries database (`conversation_summaries.db`), read via
+  the optional `sqlite3` CLI, with opening-prompt fallback when the title or
+  `sqlite3` is unavailable (#73).
+- Expired reset evidence now shows yellow “reset passed · unverified” on the
+  home board and a matching fuel note in `clikae status`. Burn can retry these
+  tanks; a successful turn clears the caution, and retained evidence is never
+  kept longer than 7 days regardless. A reset phrase's own timezone (including
+  codex's) is always honored over the observer's; unknown reset wording keeps
+  the existing dry behavior (#75).
+- `clikae status`'s fuel-note lookup no longer re-scans every tank's
+  transcripts once per rendered row (was O(n²) on tank count; #75 round 1).
+
 ### Added
 
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
-  template; doctor reports missing rules per tank (#76).
-
+  template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
+  set; doctor reports missing rules per tank. A missing template or missing
+  `jq` degrades instead of failing `init` (#76).
+- `clikae burn` guards every headless claude run against sub-agent delegation:
+  `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
+  tools flag of its own (both the composed recipe and the raw `--` form, and
+  again after a cross-engine reroute), and `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`
+  is exported unless already set. A lane that delegated to a background agent
+  used to be terminated after 600 s with nothing on disk.
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
   permission mode while preserving the default argv. codex and agy have no
   equivalent flag and keep their existing flags, reporting the degradation for

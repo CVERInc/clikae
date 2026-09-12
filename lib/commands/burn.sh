@@ -43,6 +43,10 @@ Give the task in one of two ways:
     alongside --prompt, not a whole command. Headless dispatch usually wants:
       -- --dangerously-skip-permissions     let agy write (print mode auto-denies)
       -- -c                                 continue the previous conversation
+  Either way, a claude run gets two guards: `--disallowedTools Agent,Task` (a
+    headless lane must not delegate to a sub-agent — `claude -p` kills the run,
+    sub-agent included, after its background wait ceiling) unless you pass your
+    own tools flag, and CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 unless you set it.
 
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
@@ -490,6 +494,42 @@ _burn_snapshot() {
 # per engine so a cross-engine reroute regenerates the flags for the NEW engine
 # (fixing the old "ship claude's -p flags to codex" unsoundness). Newline-per-item
 # read keeps a multi-line prompt with spaces intact.
+# _burn_claude_headless_guards — make a headless claude run unable to wander off
+# into a sub-agent and unable to be killed for waiting on one. Two mechanical
+# guards, applied to BOTH prompt forms (the composed recipe and the raw `--`
+# argv) and again after a cross-engine reroute lands on claude:
+#
+#   · `--disallowedTools Agent,Task` is appended when the argv is a print run
+#     (`-p`/`--print`) and the caller gave no tools flag of their own. A lane
+#     that reaches for the Agent tool delegates the whole task to a background
+#     sub-agent, ends its own turn with "I'll be notified", and `claude -p`
+#     then terminates the process — sub-agent included — after its background
+#     wait ceiling. Measured 2026-09-13 (clikae #78 fix lane on reefbox): 651 s,
+#     nothing on disk. 2026-09-10 had the same shape. A brief that says "no
+#     sub-agents" is a reminder; this is the guard.
+#   · `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` is exported unless the operator
+#     set it: if a run still spawns background work, print mode waits for it
+#     instead of terminating at 600 s. The env reaches the engine through the
+#     wrapper's `compgen -e` export block (tmux path) and the inherited
+#     environment (fallback path) alike.
+#
+# Only claude: codex's sandbox and agy have no Agent tool. Operators who really
+# want sub-agents pass their own `--allowedTools`/`--disallowedTools`, which
+# switches the argv guard off; the env default is harmless either way.
+_burn_claude_headless_guards() {
+  [ "$cli" = claude ] || return 0
+  export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS="${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-0}"
+  local a is_print=0 has_tools=0
+  for a in "${cmd[@]}"; do
+    case "$a" in
+      -p|--print) is_print=1 ;;
+      --disallowedTools|--disallowed-tools|--allowedTools|--allowed-tools) has_tools=1 ;;
+    esac
+  done
+  [ "$is_print" -eq 1 ] && [ "$has_tools" -eq 0 ] || return 0
+  cmd+=(--disallowedTools "Agent,Task")
+}
+
 _burn_compose() {
   local prompt="$1"; shift
   local n="$1"; shift
@@ -2240,6 +2280,7 @@ cmd_burn() {
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
   fi
+  _burn_claude_headless_guards
 
   # #2 (tugtile dogfood): snapshot the artifact so a STALE file from a prior run
   # isn't mistaken for success. --fresh clears it; otherwise warn + judge by mtime.
@@ -2699,6 +2740,7 @@ KV
         _burn_check_codex_git_cwd
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
+        _burn_claude_headless_guards
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
       else
         log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."

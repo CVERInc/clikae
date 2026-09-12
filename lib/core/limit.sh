@@ -332,10 +332,22 @@ EOF
   if [ -n "$maxS" ]; then
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+    # rc=2, not 1: this is POSITIVE evidence of recovery (a real turn after the
+    # limit), not merely "nothing found here". _limit_tank_dry_raw tells the two
+    # apart (R1-P1-2) — rc=1 still falls to dry_store for codex (a headless run
+    # may have hit a limit this transcript never saw). rc=2 echoes maxS (the
+    # recovery's own timestamp) when asked, so the caller can weigh it against
+    # a persisted marker's OWN timestamp (R2-P1-3): this transcript recovering
+    # days ago must not outrank a headless marker burn wrote moments ago — only
+    # a recovery NEWER than the marker is grounds to clear it.
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
   fi
 
   printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
   return 0
 }
 
@@ -408,25 +420,46 @@ EOF
   # Dry: echo the vendor's own reset phrase (captured above from the newest limit
   # line), verbatim — never parsed into a countdown.
   printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
   return 0
 }
 
-# _limit_tank_dry_self <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase
+# _limit_iso_epoch <stamp> <fallback> -> epoch seconds for a transcript's
+# ISO-8601 timestamp (e.g. "2026-08-23T20:26:00.000Z") or a bare epoch already;
+# <fallback> is returned for anything else (an unparseable stamp, or a shape
+# neither GNU nor BSD `date` understands). Shared by the store-observation
+# anchor (_limit_tank_dry_self) and the transcript-recovery-vs-marker compare
+# (R2-P1-3) so both read a codex/claude transcript timestamp the same way.
+_limit_iso_epoch() {
+  local stamp="$1" fallback="$2"
+  case "$stamp" in
+    *T*)
+      stamp="${stamp%%.*}"; stamp="${stamp%Z}"
+      date -u -d "${stamp}Z" +%s 2>/dev/null ||
+        date -u -j -f '%Y-%m-%dT%H:%M:%S' "$stamp" +%s 2>/dev/null ||
+        printf '%s' "$fallback" ;;
+    ''|*[!0-9]*) printf '%s' "$fallback" ;;
+    *) printf '%s' "$stamp" ;;
+  esac
+}
+
+# _limit_tank_dry_raw <engine> <tank> -> 0 + phrase and optional observation stamp
 # if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
 #   · claude  — limit_profile_dry scans the tank's transcripts (account-level
 #     WITHIN this config dir: all its recent sessions).
 #   · any engine — a persisted dry marker (dry_store), written by the live catcher
 #     (burn / supervise) for engines whose limit never lands in a scannable file.
 # Self-only: factored out so limit_tank_dry's account contagion can't recurse.
-_limit_tank_dry_self() {
-  local engine="$1" tank="$2" dir reset
+_limit_tank_dry_raw() {
+  local engine="$1" tank="$2" dir reset pd_rc
   dir="$(profile_dir "$engine" "$tank")"
   # A transcript signal is always preferred: it self-clears the moment the account
   # succeeds again, so it can never claim a tank is dry after it has recovered.
   # claude and codex both persist their limit (codex's was long believed
   # exec-stdout-only — see _limit_codex_dry for the evidence that it isn't).
   if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
-    if reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; then
+    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; pd_rc=$?
+    if [ "$pd_rc" -eq 0 ]; then
       printf '%s' "$reset"; return 0
     fi
     # claude stops here on purpose: NEVER consult dry_store for it, or a stale 6h
@@ -434,11 +467,66 @@ _limit_tank_dry_self() {
     # can hit the limit in a shape the rollout doesn't carry, and burn persists
     # that; the store has its own TTL.
     [ "$engine" = "claude" ] && return 1
+    # rc=2 is POSITIVE evidence the account recovered (a real turn after the
+    # limit), not just "this scanner found nothing". R1-P1-2: falling through
+    # to the store here let a real recovery sit next to an unrelated stale
+    # marker (e.g. from an earlier headless run) and the marker would never
+    # clear — the interactive transcript's own success IS the successful turn
+    # dry_store_clear exists for, so use it instead of only relying on burn's
+    # exec-stdout path or the TTL below.
+    #
+    # R2-P1-3: but only when that recovery is NEWER than the marker's own
+    # timestamp. A headless `codex exec` limit never reaches the transcript
+    # (see burn.sh's dry_store_mark call) — "transcript shows a recovery" and
+    # "the marker says dry again" are independent facts, and a recovery from
+    # days ago must not erase a marker burn wrote moments ago. Unconditionally
+    # trusting rc=2 let exactly that happen: the marker's own TTL / the 7-day
+    # CLIKAE_DRY_MAX_RETAIN cap is what should govern instead, so fall through
+    # to the store branch below rather than clearing.
+    if [ "$pd_rc" -eq 2 ]; then
+      local _mk _recovery_epoch
+      _mk="$(dry_store_epoch "$engine" "$tank" 2>/dev/null || echo 0)"
+      if [ -z "$_mk" ] || [ "$_mk" = 0 ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      _recovery_epoch="$(_limit_iso_epoch "$reset" 0)"
+      if [ "$_recovery_epoch" -gt "$_mk" ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      # else: the marker outdates the observed recovery — fall through, its
+      # own TTL / CLIKAE_DRY_MAX_RETAIN cap governs like any other marker.
+    fi
   fi
-  if reset="$(dry_store_read "$engine" "$tank" 2>/dev/null)"; then
-    printf '%s' "$reset"; return 0
+  if reset="$(dry_store_read "$engine" "$tank" --retain-stale 2>/dev/null)"; then
+    printf '%s\037%s' "$reset" "$(dry_store_epoch "$engine" "$tank")"; return 0
   fi
   return 1
+}
+
+# Classify retained evidence once, for both the batch board and burn selector.
+# Keep the observation timestamp: undated phrases mean the next reset AFTER
+# that observation, not after each redraw (which would roll them forward forever).
+# A successful transcript turn still removes the evidence in the raw scanner.
+LIMIT_RESET_UNVERIFIED='reset passed · unverified'
+_limit_tank_dry_self() {
+  local raw reset stamp now at anchor
+  local _LIMIT_WITH_STAMP=1
+  raw="$(_limit_tank_dry_raw "$1" "$2")" || return 1
+  reset="${raw%%$'\037'*}"; stamp="${raw#*$'\037'}"
+  now="$(date +%s)"; anchor="$now"
+  [ "$stamp" != "$raw" ] && anchor="$(_limit_iso_epoch "$stamp" "$now")"
+  if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
+    printf '%s' "$LIMIT_RESET_UNVERIFIED"
+  else
+    # Preserve the store's existing TTL for evidence whose reset did not expire.
+    case "$stamp" in
+      ''|*[!0-9]*) ;;
+      *) dry_store_read "$1" "$2" >/dev/null || return 1 ;;
+    esac
+    printf '%s' "$reset"
+  fi
 }
 
 # _limit_tank_account <engine> <tank> -> this tank's account label (e.g. the
@@ -465,7 +553,7 @@ _limit_tank_account() {
 #      (empty label) — we never guess a shared quota we can't see.
 limit_tank_dry() {
   local engine="$1" tank="$2" reset acct sib_e sib_t _p sib_acct
-  if reset="$(_limit_tank_dry_self "$engine" "$tank")"; then
+  if reset="$(_limit_tank_dry_self "$engine" "$tank")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
     printf '%s' "$reset"; return 0
   fi
   acct="$(_limit_tank_account "$engine" "$tank")"
@@ -476,7 +564,7 @@ limit_tank_dry() {
     [ "$sib_t" = "$tank" ] && continue
     sib_acct="$(_limit_tank_account "$sib_e" "$sib_t")"
     [ -n "$sib_acct" ] && [ "$sib_acct" = "$acct" ] || continue
-    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")"; then
+    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s' "$reset"; return 0
     fi
   done <<EOF
@@ -488,13 +576,15 @@ EOF
 # limit_dry_set — the BATCH form of limit_tank_dry for the whole board. Reads a
 # profile list (engine<TAB>tank<TAB>path per line) on stdin and emits one row
 #   engine␟tank␟reset
-# per tank that is out of fuel. Same verdict as calling limit_tank_dry on each
+# per tank that is out of fuel (--include-unverified also emits reset cautions).
+# Same verdict as calling limit_tank_dry on each
 # tank, but it computes each tank's OWN signal (_limit_tank_dry_self) EXACTLY ONCE
 # and then resolves account contagion from that cache — so a board with several
 # same-account tanks (e.g. claude C+MFC) doesn't re-scan the same transcripts N
 # times (the board's last hot spot; dogfood 2026-06-29). Indexed arrays only (no
 # associative arrays — bash 3.2).
 limit_dry_set() {
+  local include_unverified="${1:-}"
   local -a _e=() _t=() _a=() _sd=() _sr=()   # engine, tank, account, self-dry(0/1), self-reset
   local cli profile path sreset
   # Pass 1 — each tank's OWN signal + account, computed ONCE.
@@ -514,19 +604,22 @@ limit_dry_set() {
   # (contagion). A sibling hit counts even when its reset phrase is empty.
   local i j n="${#_e[@]}" hit reset
   for ((i = 0; i < n; i++)); do
-    if [ "${_sd[i]}" = "1" ]; then
+    if [ "${_sd[i]}" = "1" ] && [ "${_sr[i]}" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "${_sr[i]}"
       continue
     fi
-    [ -n "${_a[i]}" ] || continue   # unknown account → never guess a shared quota
-    hit=0; reset=""
-    for ((j = 0; j < n; j++)); do
-      [ "$j" -ne "$i" ] || continue
-      [ "${_sd[j]}" = "1" ] || continue
-      [ "${_e[j]}" = "${_e[i]}" ] || continue
-      [ "${_a[j]}" = "${_a[i]}" ] || continue
-      hit=1; reset="${_sr[j]}"; break
-    done
+    hit="${_sd[i]}"; reset="${_sr[i]}"
+    if [ -n "${_a[i]}" ]; then   # unknown account -> never guess a shared quota
+      for ((j = 0; j < n; j++)); do
+        [ "$j" -ne "$i" ] || continue
+        [ "${_sd[j]}" = "1" ] || continue
+        [ "${_e[j]}" = "${_e[i]}" ] || continue
+        [ "${_a[j]}" = "${_a[i]}" ] || continue
+        hit=1; reset="${_sr[j]}"
+        [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] || break
+      done
+    fi
+    if [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] && [ "$include_unverified" != --include-unverified ]; then continue; fi
     [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
   done
   return 0
@@ -710,8 +803,50 @@ limit_reset_epoch() {
 
   # The zone is written in the phrase and is authoritative. Reading $TZ instead
   # would agree with it on the maintainer's machine and disagree on a traveller's.
+  # Extracted once up top because BOTH grammars below (codex's and claude's)
+  # need it: a zone suffix, when present, wins over any fallback.
   local tz
   tz="$(printf '%s' "$phrase" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_+-]+|UTC|GMT)\).*/\1/p')"
+
+  # Codex's two known reset shapes (undated "H:MM AM/PM" and dated "Mon Dst,
+  # YYYY H:MM AM/PM"; see limit_codex_reset). Neither is confirmed to ever carry
+  # a zone suffix — codex has so far only been observed rendering in the
+  # machine's OWN local timezone — but if the phrase names one anyway, R1-P1-1
+  # says that MUST win for the same reason it wins below: agreeing with the
+  # phrase on the maintainer's machine and disagreeing on a traveller's is
+  # exactly the bug a zone suffix exists to prevent. Only fall back to the
+  # observer's ambient zone when the phrase names none.
+  local codex_zone="${tz:-${TZ:-/etc/localtime}}"
+  local codex_dated_re='[Tt]ry again at ([A-Z][a-z][a-z]) ([0-9]{1,2})(st|nd|rd|th)?,? ([0-9]{4})[,]? ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  local codex_plain_re='[Tt]ry again at ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  if [[ "$phrase" =~ $codex_dated_re ]]; then
+    local cmon="${BASH_REMATCH[1]}" cday="${BASH_REMATCH[2]}" cyr="${BASH_REMATCH[4]}" \
+          ch="${BASH_REMATCH[5]}" cm="${BASH_REMATCH[6]}" meridian="${BASH_REMATCH[7]}"
+    local mnum; mnum="$(_limit_month_num "$cmon")"
+    [ -n "$mnum" ] && [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    local d0 ct candidate
+    d0="$(printf '%04d-%s-%02d' "$((10#$cyr))" "$mnum" "$((10#$cday))")"
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    candidate="$(_limit_at "$codex_zone" "$d0" "$ct")" || return 1
+    printf '%s' "$candidate"; return 0
+  fi
+  if [[ "$phrase" =~ $codex_plain_re ]]; then
+    local ch="${BASH_REMATCH[1]}" cm="${BASH_REMATCH[2]}" meridian="${BASH_REMATCH[3]}" cd ct candidate
+    [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    cd="$(_limit_local "$codex_zone" "$now" '%Y-%m-%d')" || return 1
+    candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
+    if [ "$candidate" -le "$now" ]; then
+      cd="$(_limit_shift_day "$codex_zone" "$cd" 1)" || return 1
+      candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
+    fi
+    printf '%s' "$candidate"; return 0
+  fi
+
   [ -n "$tz" ] || return 1
 
   local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})[[:space:]]+at[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'

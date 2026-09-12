@@ -12,16 +12,29 @@
 # This is that record: the "dry-until window" limit.sh gestured at but never built.
 #
 # Honest by construction: the vendor's reset phrase is stored VERBATIM (never
-# parsed into a countdown), and a marker self-clears two ways — a successful run
-# clears it explicitly, and a conservative TTL ages it out. So a stale marker can
-# never pin a tank red forever; better to turn green early and let the user retry
-# than to fake a red. Best-effort throughout: a badge is a nicety, not a promise,
-# so write/read failures degrade to "not dry" rather than abort the caller.
+# parsed into a countdown), and a marker self-clears several ways — an explicit
+# success clears it (dry_store_clear, and — R1-P1-2 — a codex transcript turn
+# observed AFTER the limit, see _limit_tank_dry_raw), a conservative TTL ages an
+# unretained one out, and CLIKAE_DRY_MAX_RETAIN is the hard ceiling for a
+# --retain-stale marker nothing ever explicitly clears. So a stale marker can
+# never pin a tank red (or yellow) forever; better to turn green early and let
+# the user retry than to fake a red. Best-effort throughout: a badge is a
+# nicety, not a promise, so write/read failures degrade to "not dry" rather
+# than abort the caller.
 
 # CLIKAE_DRY_TTL — how long a dry marker is trusted before it's treated as stale.
 # codex's usage window is ~5h; 6h is a touch generous so we don't clear a tank
 # that's still genuinely limited. Overridable (tests pin it small).
 : "${CLIKAE_DRY_TTL:=21600}"   # 6h, in seconds
+
+# CLIKAE_DRY_MAX_RETAIN — the hard ceiling on --retain-stale (R1-P1-2). A retained
+# marker is meant to survive the TTL as UNVERIFIED evidence only until the next
+# observed turn clears it (see _limit_tank_dry_raw); if no turn is ever observed
+# — an interactive codex used entirely outside clikae, say — that would keep a
+# tank pinned yellow forever. This is the second, unconditional exit: past this
+# age the marker is gone even with --retain-stale, same as main's plain TTL.
+# Overridable (tests pin it small).
+: "${CLIKAE_DRY_MAX_RETAIN:=604800}"   # 7d, in seconds
 
 # dry_store_path <engine> <tank> -> the marker file for this tank.
 dry_store_path() { printf '%s/dry/%s/%s\n' "$CLIKAE_HOME" "$1" "$2"; }
@@ -45,6 +58,10 @@ dry_store_mark() {
 # dry_store_read <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase if a
 # FRESH marker exists; 1 otherwise. A marker older than CLIKAE_DRY_TTL is stale →
 # lazily removed and reported not-dry (turn green early rather than pin red).
+# --retain-stale is internal to the shared verdict: expired parseable evidence
+# must survive the TTL as unverified until a successful run clears it — but even
+# retained, a marker older than CLIKAE_DRY_MAX_RETAIN is unconditionally gone
+# (R1-P1-2): --retain-stale is not a promise to keep evidence forever.
 dry_store_read() {
   local engine="$1" tank="$2" f line stamp reset now age
   f="$(dry_store_path "$engine" "$tank")"
@@ -56,7 +73,11 @@ dry_store_read() {
   case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
   now="$(date +%s 2>/dev/null || echo 0)"
   age=$(( now - stamp ))
-  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
+  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
+    rm -f "$f" 2>/dev/null || true
+    return 1
+  fi
+  if [ "${3:-}" != --retain-stale ] && [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
     rm -f "$f" 2>/dev/null || true
     return 1
   fi
