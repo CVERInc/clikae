@@ -89,7 +89,7 @@ agy_email() {
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
     local current="$1/antigravity-cli/cli.log" email=""
     [ ! -f "$current" ] || email="$(_agy_email_scan "$current")"
-    if [ -n "$email" ]; then printf '%s' "$email"; else board_read "$1" email; fi
+    if [ -n "$email" ]; then printf '%s' "$email"; else board_read antigravity "$1" email; fi
     return 0
   fi
   local d="$1/antigravity-cli/log" f hit

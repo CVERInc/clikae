@@ -298,10 +298,15 @@ _limit_codex_dry() {
 
   local out maxL maxS reset files updated
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    updated="$(board_read "$dir" updated)"
+    # board_read's own board_generation call keeps this fresh as of THIS
+    # render (see board_stale, lib/core/board_state.sh) — no separate age
+    # gate here; an arbitrary "snapshot published within the last N seconds"
+    # window was never a proxy for "the underlying data is still accurate",
+    # and freezing a dry verdict mid-window is exactly the bug that caused
+    # (2026-09-12 round-1 fix review, P1-3).
+    updated="$(board_read codex "$dir" updated)"
     case "$updated" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$(($(date +%s) - updated))" -lt 604800 ] || return 1
-    out="$(board_read "$dir" codex-dry)"
+    out="$(board_read codex "$dir" codex-dry)"
   else
     files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
     [ -n "$files" ] || return 1
@@ -365,11 +370,12 @@ limit_profile_dry() {
   # each (100+ MB) transcript — the newest limit/success are the most-recent lines.
   local out maxL maxS reset
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # See _limit_codex_dry's twin comment: board_read is kept fresh per-render
+    # by board_generation itself now, so no separate age gate belongs here.
     local updated
-    updated="$(board_read "$dir" updated)"
+    updated="$(board_read claude "$dir" updated)"
     case "$updated" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$(($(date +%s) - updated))" -lt 18000 ] || return 1
-    out="$(board_read "$dir" claude-usage)"
+    out="$(board_read claude "$dir" claude-usage)"
   else
     out="$(_limit_claude_readings "$files")"
   fi
@@ -1392,13 +1398,17 @@ _limit_codex_rate_limits_1file_cached() {
   tmp="$(mktemp "$cache_f.XXXXXX" 2>/dev/null)" || tmp=""
   local fields
   if fields="$(_limit_codex_rate_limits_1file "$f" 2>/dev/null)"; then
-    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
-      && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    if [ -n "$tmp" ]; then
+      { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    fi
     printf '%s' "$fields"
     return 0
   fi
-  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
-    && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  if [ -n "$tmp" ]; then
+    { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
   return 1
 }
 
@@ -1471,13 +1481,17 @@ EOF
   tmp="$(mktemp "$cache.XXXXXX" 2>/dev/null)" || tmp=""
   if [ -n "$pu" ] || [ -n "$su" ]; then
     local fields; fields="$(printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr")"
-    { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
-      && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    if [ -n "$tmp" ]; then
+      { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    fi
     printf '%s' "$fields"
     return 0
   fi
-  { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
-    && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  if [ -n "$tmp" ]; then
+    { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
   return 1
 }
 
@@ -1489,7 +1503,7 @@ EOF
 limit_codex_status_cached() {
   local dir="$1" now="$2" cache="$3" fields pu pw pr su sw sr
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    fields="$(board_read "$dir" codex-usage)"
+    fields="$(board_read codex "$dir" codex-usage)"
     [ -n "$fields" ] || return 1
   else
     fields="$(_limit_codex_rate_limits_cached "$dir" "$cache" 2>/dev/null)" || return 1
