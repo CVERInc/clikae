@@ -2397,8 +2397,13 @@ cmd_burn() {
     
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
-    
-    board_state_refresh "$cli" "$dir" >/dev/null 2>&1 || true
+
+    # P2-B (2026-09-12 round-2 fix review): removed — same reasoning as
+    # run.sh's own P2-1/P2-2 comment. board_generation (board_state.sh) now
+    # rebuilds a stale tank inline, right when a render actually reads it, so
+    # a boundary call here bought nothing but a synchronous full tank scan
+    # (claude ~0.7s, agy 4.7-10s on the review's synthetic store) on EVERY
+    # burn attempt.
     art_pre="$(_clikae_mtime "$artifact")"
     rc=0
     if command -v tmux >/dev/null 2>&1; then
@@ -2564,7 +2569,10 @@ KV
     # fine: a signal past that tail was invisible to both dry and infra
     # detection). Use the untruncated variant here; only the display tail
     # still bounds itself. See _burn_redact_full's comment.
-    board_state_refresh "$cli" "$dir" >/dev/null 2>&1 || true
+    #
+    # P2-B (2026-09-12 round-2 fix review): the second of two full-rebuild
+    # calls this file made per attempt, removed for the same reason as the
+    # one above — see its comment.
     local out_for_class; out_for_class="$(_burn_redact_full "$out")"
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
