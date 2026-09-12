@@ -211,15 +211,24 @@ redraw stays at the whole-store fast path's cost.
 
 The shared tank verdict resolves reset phrases against the original observation
 timestamp, then compares that instant with the current clock. This prevents an
-undated time from rolling forward every day. Codex's `try again at 5:23 PM`
-uses local time; Claude's reset phrases retain their explicit timezone.
-Unparseable phrases keep the existing behavior. Live output detection still
-reports a newly observed rejection as dry.
+undated time from rolling forward every day. A zone suffix in the phrase,
+`(Asia/Tokyo)` and friends, is always authoritative when present — including
+for codex's `try again at 5:23 PM` grammar — because agreeing with it on the
+maintainer's machine and disagreeing on a traveller's is exactly what a zone
+suffix exists to prevent (round-1 review, #75). Only when the phrase names no
+zone at all does codex fall back to rendering in the observer's own local
+timezone. Unparseable phrases keep the existing behavior. Live output detection
+still reports a newly observed rejection as dry.
 
 An expired limit is **yellow `◐`, “reset passed · unverified”**, taking precedence
 over proactive percentage snapshots. The default dry batch excludes it, allowing
 burn's next-tank selection to retry it. The board and status request the same
 batch with cautions included; status exposes the note as `fuelNote` in JSON.
-A later successful transcript turn or explicit success clearing a persisted
-marker removes the caution. Parseable expired store evidence survives the marker
-TTL; unparseable store evidence retains the existing TTL behavior.
+A later successful transcript turn clears the caution — including, for codex, a
+turn observed in the transcript AFTER an unrelated persisted marker was written,
+which also clears that marker (round-1 review, #75: falling straight through to
+the marker regardless of a transcript's own recovery could pin a tank yellow
+forever). Parseable expired store evidence survives the marker TTL as unverified
+until that happens, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) —
+retained evidence is a caution, not a promise to remember forever. Unparseable
+store evidence retains the existing TTL behavior.
