@@ -59,7 +59,14 @@ _board_shims() {
   [[ "$output" == *"Fixture"* ]] || false
   small="$(wc -l < "$BOARD_IO_LOG" | tr -d ' ')"
   # Counts include pipeline-only head/tail calls and both BSD/GNU stat probes.
-  [ "$small" -le 160 ]
+  # 2026-09-12 round-2 fix review, P1-B: claude's account-level fuel reading
+  # now carries two more bounded signals (projects/'s own mtime, plus one
+  # batched files_mtime_size over the -mmin -300 file set) — still O(one
+  # freshness check per render SECTION), never O(transcripts), but real
+  # renders pay it per section (board_generation's cache does not survive a
+  # command-substitution subshell boundary), which is where the ceiling
+  # actually moved from 160 to 180 (measured: 165 on this store).
+  [ "$small" -le 180 ]
   ! grep -q FIND "$BOARD_IO_LOG" || false
   : > "$BOARD_IO_LOG"
   run clikae
@@ -76,7 +83,7 @@ _board_shims() {
   large="$(wc -l < "$BOARD_IO_LOG" | tr -d ' ')"
   echo "bounded IO: 100=$small 1000=$large" >&3
   [ "$large" -eq "$small" ]
-  [ "$large" -le 160 ]
+  [ "$large" -le 180 ]
   ! grep -q FIND "$BOARD_IO_LOG" || false
   : > "$BOARD_IO_LOG"
   run clikae
