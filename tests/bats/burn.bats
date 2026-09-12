@@ -3077,3 +3077,113 @@ STUB
   [[ "$reason_field" == *'engine exited rc=9, output redacted'* ]] || { echo "$reason_field"; false; }
   [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
 }
+
+# Keep the scan away from the source checkout and the stub/config directories.
+_left84_setup() {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return
+}
+
+_left84_repo() {
+  export STUB_LEFT_REPO="$TEST_HOME/repos/work space"
+  git init -q "$STUB_LEFT_REPO"
+  git -C "$STUB_LEFT_REPO" config user.name 'Burn test'
+  git -C "$STUB_LEFT_REPO" config user.email 'burn@example.invalid'
+  git -C "$STUB_LEFT_REPO" commit -qm initial --allow-empty
+  git -C "$STUB_LEFT_REPO" branch baseline
+  git -C "$STUB_LEFT_REPO" branch --set-upstream-to=baseline >/dev/null
+}
+
+@test "burn #84: committed work without artifact is reported and deduplicated in JSON" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 1 dirty 0"* ]] || false
+  [[ "$output" == *"hint: git -C "*" push"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, os, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["repo"] == os.path.realpath(os.environ["STUB_LEFT_REPO"])
+assert r["branch"] and r["ahead"] == 1 and r["dirty"] == 0
+assert r["files"] == [r["repo"] + "/saved.txt"], r
+'
+}
+
+@test "burn #84: clean unchanged repository leaves no block and an empty array" {
+  _left84_setup
+  _left84_repo
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+@test "burn #84: non-git add-dir is skipped silently" {
+  _left84_setup
+  printf 'plain\n' > "$TEST_HOME/scan/plain"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/scan" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  [[ "$output" != *"fatal:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+@test "burn #84: dry failure reports dirty work with no upstream and caps recent files" {
+  _left84_setup
+  _left84_repo
+  git -C "$STUB_LEFT_REPO" branch --unset-upstream
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+mkdir -p "$STUB_LEFT_REPO/node_modules"
+printf ignored > "$STUB_LEFT_REPO/node_modules/ignored"
+for i in {1..12}; do printf work > "$STUB_LEFT_REPO/file$i"; done
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+STUB
+  run clikae burn codex T1 --json --no-reroute --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead - dirty 13"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json,sys
+r = json.load(sys.stdin)["left_behind"][0]
+assert r["ahead"] == "-" and r["dirty"] == 13
+assert len(r["files"]) == 10
+assert all("/.git/" not in f and "/node_modules/" not in f for f in r["files"])
+'
+}
+
+@test "burn #84: timeout without artifact reports cwd work" {
+  _left84_setup
+  _left84_repo
+  cd "$STUB_LEFT_REPO"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf work > "$STUB_LEFT_REPO/partial"
+sleep 3
+STUB
+  run clikae burn codex T1 --json --timeout 1 --artifact "$TEST_HOME/missing" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 0 dirty 1"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert len(json.load(sys.stdin)["left_behind"]) == 1'
+}
+
+@test "burn #84: successful artifact leaves JSON array empty despite existing work" {
+  _left84_setup
+  _left84_repo
+  printf work > "$STUB_LEFT_REPO/partial"
+  local artifact="$TEST_HOME/result"
+  run clikae burn codex T1 --json --artifact "$artifact" --add-dir "$STUB_LEFT_REPO" -- run "$artifact"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}

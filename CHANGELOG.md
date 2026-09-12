@@ -241,6 +241,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to read history, swipe down toward live output, and tap to leave copy-mode.
   `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
   (default 2). Desktop wheel and drag bindings are unchanged.
+- Failed `clikae burn` runs report Git work left behind in cwd/`--add-dir`
+  repositories, recent files, and a push hint; `--json` includes `left_behind`
+  without pushing or changing repository state (#84).
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
