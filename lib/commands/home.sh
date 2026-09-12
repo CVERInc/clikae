@@ -699,12 +699,12 @@ _home_dry_set() {
     # the engine said when we last caught it headless — annotate WHEN we observed
     # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
     # has no store marker (its dry is a live transcript scan), so it's never tagged.
-    if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
+    if [ -n "$reset" ] && [ "$reset" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
       reset="$reset$(dry_seen_suffix "$ep")"
     fi
     printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
   done <<EOF
-$(list_all_profiles | limit_dry_set)
+$(list_all_profiles | limit_dry_set --include-unverified)
 EOF
 
   # Started at the top of this function; here is where we wait for it.
@@ -823,7 +823,7 @@ _home_is_dryv() {
   case "$set" in *"$key"*) ;; *) return 1 ;; esac
   rest="${set#*"$key"}"
   _DRY_RESET="${rest%%$'\n'*}"
-  return 0
+  [ "$_DRY_RESET" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]
 }
 
 # The echoing form, for callers that want the phrase in a $( ). Kept so the
@@ -933,6 +933,9 @@ _home_fuel_dotv() {
   _FNOTE=""
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
+  fi
+  if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
   if _home_weekly_readv "$cli" "$profile"; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
@@ -2580,13 +2583,27 @@ LIVEACT
           # commitment, so the second line appears ONLY when a waiter is really
           # counting. Saying it otherwise would be claiming a feature that is
           # not attached.
-          local _lphrase; _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          # _home_is_dry deliberately reports 1 (nothing to print) for an
+          # UNVERIFIED tank — see its own _home_is_dryv check — so a caution
+          # that IS shown on the Tank row (via _home_fuel_dotv, just above)
+          # would silently vanish on the Live row (R1-P3-5). $_FNOTE already
+          # holds it from that same _home_fuel_dotv call above.
+          #
+          # _lhard tracks whether the row is genuinely dry (red, can't be
+          # dispatched into) vs. merely carrying a borrowed UNVERIFIED caution
+          # (yellow, still enterable) — R2-P3-1: a yellow tank is still usable,
+          # so suppressing its age/enter hint the same way a red one's is
+          # suppressed silently hid an action the user could actually take.
+          local _lphrase _lhard=0
+          _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          [ -n "$_lphrase" ] && _lhard=1
+          [ -n "$_lphrase" ] || [ "$_FNOTE" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || _lphrase="$_FNOTE"
           if [ -n "$_lphrase" ]; then
             printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
           fi
           if [ -n "$_lwake" ]; then
             printf '        %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
-          elif [ -z "$_lphrase" ]; then
+          elif [ "$_lhard" -eq 0 ]; then
             printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
         else
