@@ -201,3 +201,21 @@
 1786460098	resets 2:10am (Asia/Tokyo)	1786468200
 1786460312	resets 2:10am (Asia/Tokyo)	1786468200
 1786460531	resets 2:10am (Asia/Tokyo)	1786468200
+
+# --- codex rows (R1-P2-2) --------------------------------------------------
+# NOT harvested like the rows above — this project has no real codex traffic
+# to harvest from yet (see REPORT-dry75-fix1.md's "我沒驗證什麼"). These two are
+# the phrase shapes limit.sh:281 and its docs (DESIGN-board-fuel-dots.md) and
+# tests/bats/limit.bats:35/168 already record as REAL, dogfooded codex output:
+#   try again at Aug 23rd, 2026 8:26 PM    (dated, no year omitted, no zone)
+#   try again at 6:00 PM                   (undated, no zone)
+# Round 1 of #75 added the codex branch to limit_reset_epoch but only the
+# undated shape actually matched its regex — the dated shape (the one codex
+# uses once a limit runs longer than a day, which is also the one this
+# corpus's own claude rows show is completely unremarkable) silently stayed
+# unparseable, so a codex tank whose limit crossed a day boundary never
+# expired at all. expected_epoch computed the same way as above (python
+# zoneinfo), anchored in UTC because neither shape carries a zone suffix and
+# this test pins TZ=UTC around the whole corpus loop for that reason.
+1784808000	try again at Aug 23rd, 2026 8:26 PM	1787516760
+1789200000	try again at 6:00 PM	1789236000

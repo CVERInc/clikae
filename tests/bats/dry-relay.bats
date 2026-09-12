@@ -18,10 +18,39 @@ _src() {
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
 }
 
+# ISO-8601 UTC timestamp <N> minutes before the REAL clock — see R1-P2-3's note
+# in home.bats's _iso_ago: a fixed far-future anchor made these fixtures
+# unfalsifiable against the anchor-based expiry logic, not just "dry".
+_iso_ago() { # <minutes>
+  date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ
+}
+
+# "H(:MM)am/pm" the way vendor reset text renders it, computed <hours> ahead of
+# the REAL clock in <zone>. R2-P2-1: a hardcoded absolute wall-clock hour here
+# (`11pm`) with a now-10min anchor failed deterministically in the ten minutes
+# before that wall-clock hour every day — anchoring the phrase to the clock too
+# means the reset is always <hours> ahead of whenever the suite actually runs.
+_phrase_ahead() { # <hours> <zone>
+  local h="$1" tz="$2" ep hour minute suffix h12
+  ep=$(( $(date -u +%s) + h * 3600 ))
+  hour="$(TZ="$tz" date -d "@$ep" +%H 2>/dev/null || TZ="$tz" date -r "$ep" +%H)"
+  minute="$(TZ="$tz" date -d "@$ep" +%M 2>/dev/null || TZ="$tz" date -r "$ep" +%M)"
+  hour=$((10#$hour)); minute=$((10#$minute))
+  suffix=am; [ "$hour" -ge 12 ] && suffix=pm
+  h12=$(( hour % 12 )); [ "$h12" -eq 0 ] && h12=12
+  if [ "$minute" -eq 0 ]; then printf '%d%s' "$h12" "$suffix"
+  else printf '%d:%02d%s' "$h12" "$minute" "$suffix"; fi
+}
+
 # Seed a genuine claude limit marker (synthetic + isApiErrorMessage) under a tank.
+# Recent-past observation (now-10min) keeps these account/selection fixtures
+# dry (the reset phrase is still hours away); reset expiry itself is covered
+# with a fixed clock in dry-reset-expiry.bats. Sets $_DRY_PHRASE to the exact
+# text seeded, for tests that assert on it verbatim.
 _seed_dry_tx() { # <engine> <profile>
   local p="$CLIKAE_HOME/profiles/$1/$2/projects/-Users-x"; mkdir -p "$p"
-  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}' >> "$p/s.jsonl"
+  _DRY_PHRASE="$(_phrase_ahead 6 Asia/Tokyo)"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets '"$_DRY_PHRASE"' (Asia/Tokyo)"}]},"timestamp":"'"$(_iso_ago 10)"'"}' >> "$p/s.jsonl"
 }
 
 # Pin a tank's account label (the email adapter_account_label reads).
@@ -86,7 +115,7 @@ _seed_email() { # <engine> <profile> <email>
   # ...and MFC inherits it (same login, one shared quota) even with no marker.
   run limit_tank_dry claude MFC
   [ "$status" -eq 0 ]
-  [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"resets $_DRY_PHRASE (Asia/Tokyo)"* ]] || false
 }
 
 @test "limit_tank_dry: a tank on a DIFFERENT account is NOT contaged" {

@@ -36,6 +36,12 @@ PY
 
 @test "reset: every real phrase in the corpus resolves to the expected instant" {
   _src_limit
+  # Every claude row here is zoned (Asia/Tokyo), so ambient TZ never mattered to
+  # them — but R1-P2-2 added two codex rows that carry NO zone at all (codex's
+  # documented behavior), so THEIR expected_epoch is only correct under one
+  # ambient zone. Pin it so the corpus is deterministic on every machine/CI,
+  # not just wherever this was authored.
+  TZ=UTC
   local fixture="$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv"
   [ -s "$fixture" ] || false
   local now phrase want got rows=0 bad=0 firstbad=""
@@ -182,4 +188,93 @@ PY
   a="$(limit_reset_epoch 'resets 5pm (Asia/Tokyo)' "$now")"
   b="$(limit_reset_epoch "hit your weekly limit · resets 5pm (Asia/Tokyo)" "$now")"
   [ "$a" = "$b" ]
+}
+
+# --- R1-P1-1: codex's zone suffix, when present, is authoritative -------------
+# Round 1 put the codex "try again at H:MM AM/PM" branch FIRST and always read
+# $TZ/etc/localtime, never checking for a zone suffix in the phrase at all — so
+# an observer east or west of whichever zone the phrase actually named got a
+# DIFFERENT (wrong) answer than the phrase's own zone would give. These three
+# pin the fix: the verdict must be the SAME absolute instant no matter which
+# side of the vendor's zone the observer is standing on.
+
+@test "reset: codex zone suffix wins over an observer EAST of the vendor zone" {
+  _src_limit
+  local now want got
+  now="$(_at UTC '2026-09-12 07:00:00')"
+  want="$(_at Europe/Berlin '2026-09-12 18:00:00')"
+  got="$(TZ=Asia/Tokyo limit_reset_epoch 'try again at 6:00 PM (Europe/Berlin)' "$now")"
+  [ "$got" = "$want" ]
+}
+
+@test "reset: codex zone suffix wins over an observer WEST of the vendor zone" {
+  _src_limit
+  local now want got
+  now="$(_at UTC '2026-09-12 07:00:00')"
+  want="$(_at Europe/Berlin '2026-09-12 18:00:00')"
+  got="$(TZ=America/Los_Angeles limit_reset_epoch 'try again at 6:00 PM (Europe/Berlin)' "$now")"
+  [ "$got" = "$want" ]
+}
+
+@test "reset: codex zone suffix across midnight resolves identically for any observer" {
+  _src_limit
+  local now want got_east got_west
+  now="$(_at Europe/Berlin '2026-09-12 23:50:00')"
+  want="$(_at Europe/Berlin '2026-09-13 00:10:00')"
+  got_east="$(TZ=Asia/Tokyo limit_reset_epoch 'try again at 12:10 AM (Europe/Berlin)' "$now")"
+  got_west="$(TZ=America/Los_Angeles limit_reset_epoch 'try again at 12:10 AM (Europe/Berlin)' "$now")"
+  [ "$got_east" = "$want" ]
+  [ "$got_west" = "$want" ]
+}
+
+@test "reset: codex with NO zone suffix falls back to the observer's own \$TZ (kills M8)" {
+  # The control for the three above: when the phrase names no zone at all,
+  # codex's documented behavior (limit.sh's own comment) is "renders in the
+  # machine's local timezone" — so THIS case must still track $TZ. A mutant
+  # that hardcodes the fallback to UTC passes every zone-suffix test above
+  # (they never reach the fallback) but changes this one.
+  _src_limit
+  local now want got
+  now="$(_at Asia/Tokyo '2026-09-12 08:00:00')"
+  want="$(_at Asia/Tokyo '2026-09-12 18:00:00')"
+  got="$(TZ=Asia/Tokyo limit_reset_epoch 'try again at 6:00 PM' "$now")"
+  [ "$got" = "$want" ]
+}
+
+@test "reset: codex's PM hour actually converts to 24h (kills the dropped +12 mutant)" {
+  # A mutant that deletes the PM->+12 shift still often lands on "the future"
+  # by accident (the undated rollover adds a day), which is how this survived
+  # round 1's whole mutation run at 289/289 green. Assert the exact instant,
+  # not just "still in the future", so a wrong-but-future answer fails too.
+  _src_limit
+  local now want got
+  now="$(_at UTC '2026-09-12 08:00:00')"
+  want="$(_at UTC '2026-09-12 18:00:00')"
+  got="$(TZ=UTC limit_reset_epoch 'try again at 6:00 PM' "$now")"
+  [ "$got" = "$want" ]
+}
+
+# --- R1-P2-2: codex's dated grammar (the one the docs actually record) --------
+
+@test "reset: codex's dated 'Mon Dst, YYYY H:MM AM/PM' shape parses" {
+  # limit.sh:281's own confirmed rollout quote and tests/bats/limit.bats:35/168's
+  # dogfooded fixture use exactly this shape — round 1's codex regex required a
+  # digit right after "try again at " and never matched it, so a codex limit
+  # that ran past a day boundary (the ONLY case codex writes a date at all)
+  # never expired (#75 unfixed for that shape).
+  _src_limit
+  local now want got
+  now="$(_at UTC '2026-07-23 12:00:00')"
+  want="$(_at UTC '2026-08-23 20:26:00')"
+  got="$(TZ=UTC limit_reset_epoch 'try again at Aug 23rd, 2026 8:26 PM' "$now")"
+  [ "$got" = "$want" ]
+}
+
+@test "reset: codex's dated shape still parses a year after the fact (was UNPARSEABLE)" {
+  _src_limit
+  local now want got
+  now="$(_at UTC '2027-07-23 12:00:00')"
+  want="$(_at UTC '2026-08-23 20:26:00')"
+  got="$(TZ=UTC limit_reset_epoch 'try again at Aug 23rd, 2026 8:26 PM' "$now")"
+  [ "$got" = "$want" ]
 }

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Expired reset evidence now shows yellow “reset passed · unverified” on the
+  home board and a matching fuel note in `clikae status`. Burn can retry these
+  tanks; a successful turn clears the caution, and retained evidence is never
+  kept longer than 7 days regardless. A reset phrase's own timezone (including
+  codex's) is always honored over the observer's; unknown reset wording keeps
+  the existing dry behavior (#75).
+- `clikae status`'s fuel-note lookup no longer re-scans every tank's
+  transcripts once per rendered row (was O(n²) on tank count; #75 round 1).
+
 ### Added
 
 - `clikae burn` guards every headless claude run against sub-agent delegation:
