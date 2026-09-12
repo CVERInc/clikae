@@ -1867,13 +1867,19 @@ _burn_check_codex_git_cwd() {
 # prose burn --json exists to replace (a strict parser can't even start
 # reading it). Strip ANSI CSI sequences outright (the common, recoverable
 # case: color codes an engine prints whether or not stdout is a tty), then
-# turn every remaining control byte into a space and collapse the result —
-# trading "illegal JSON" for "ugly reason text", never the other way round.
+# turn every remaining control byte into a space — trading "illegal JSON"
+# for "ugly reason text", never the other way round.
+#
+# P3-3 (2026-09-12 round-2 review): this used to also `tr -s ' '` the
+# result, squeezing every run of spaces down to one — including runs the
+# engine's own message legitimately printed, which had nothing to do with
+# a replaced control byte. Only the control-byte substitution needs to
+# stay safe for JSON; a real "two spaces" in the stderr line is not this
+# function's problem to fix.
 _burn_sanitize_reason() {
   local s="$1"
   s="$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g')"
   s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037' ' ')"
-  s="$(printf '%s' "$s" | tr -s ' ')"
   printf '%s' "$s"
 }
 

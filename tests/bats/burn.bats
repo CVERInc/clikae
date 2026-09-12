@@ -2043,10 +2043,15 @@ _permission_argv() (
 }
 
 @test "burn #60: codex auto degrades once on stderr with unchanged argv" {
+  # #66 round-1's codex git-cwd check now fires before validate_name (the
+  # stub _permission_argv installs), so add_dirs[0] must be a real git work
+  # tree here — a bare literal path like the claude test above uses would
+  # fail that check before ever reaching the --permission composition logic.
+  local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/auto.argv"
-  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/auto.argv"
   [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
   grep -F 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/warning"
@@ -2096,10 +2101,13 @@ _permission_argv() (
 }
 
 @test "burn #60: codex acceptEdits (explicit) also degrades once on stderr with unchanged argv" {
+  # Same reason as the auto-degrade test above: add_dirs[0] must be a real
+  # git work tree for the #66 round-1 codex git-cwd check to pass.
+  local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir /workspace
+  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/accept.argv"
-  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir /workspace 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/accept.argv"
   [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
   grep -F 'codex has no equivalent for --permission acceptEdits; keeping its existing burn flags.' "$TEST_HOME/warning"
@@ -2318,7 +2326,7 @@ STUB
   [ ! -e "$HOME/.clikae" ]
 }
 
-@test "burn #66: stderr reason is capped at 200 characters even with engine rc zero" {
+@test "burn #66: stderr reason is capped at 200 bytes even with engine rc zero" {
   _stub_burn_transport
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
 #!/usr/bin/env bash
@@ -2331,6 +2339,26 @@ STUB
   local expected; expected="$(printf '%0200d' 0)"
   [[ "$output" == *"\"reason\":\"$expected\""* ]] || { echo "$output"; false; }
   [[ "$output" == *'rc=0'* ]] || false
+}
+
+# --- P3-3 (round-2 review): _burn_sanitize_reason used to `tr -s ' '` the
+# WHOLE result, squeezing any run of 2+ spaces down to one — including runs
+# an engine legitimately printed on purpose (aligning a diagnostic), with no
+# control byte or ANSI sequence involved at all. Only the substitution that
+# turns a raw control byte into a space needs to stay JSON-safe; a genuine
+# double space in an otherwise-clean stderr line is not this function's to
+# collapse.
+@test "burn #66: stderr reason keeps legitimate consecutive spaces (P3-3)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'error:  file    not found  (rc=3)\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"reason":"error:  file    not found  (rc=3)"'* ]] || { echo "$output"; false; }
 }
 
 # --- #66 round-1 review fixes ---

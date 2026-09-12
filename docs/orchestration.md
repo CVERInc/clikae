@@ -244,8 +244,8 @@ object can't give it:
 ```
 
 For adapter-driven task failures observed within five seconds of launch,
-`reason` uses the first stderr line, trimmed and limited to 200 characters, when stderr is
-non-empty. Empty stderr and longer runs retain the generic task-failure reason;
+`reason` uses the first stderr line, trimmed and limited to 200 bytes (UTF-8 safe), when
+stderr is non-empty. Empty stderr and longer runs retain the generic task-failure reason;
 artifact, quota, and infrastructure classification still take precedence.
 
 **Written at every transition:** run start, each reroute hop (`state:

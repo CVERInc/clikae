@@ -448,10 +448,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--codex-skip-git-check` on a non-codex engine or a raw-argv command now
   warns that it has no effect there rather than staying silent (P3-1).
   Fast engine failures with stderr now report its trimmed first line (up to
-  200 characters) as the JSON reason — sanitized so ANSI color codes and
-  other control bytes can't produce invalid JSON, and truncated on a whole
-  UTF-8 character boundary regardless of the caller's locale (round-1
-  review, P2-1/P2-2).
+  200 bytes, UTF-8 safe) as the JSON reason — sanitized so ANSI color codes
+  and other control bytes can't produce invalid JSON, and truncated on a
+  whole UTF-8 character boundary regardless of the caller's locale (round-1
+  review, P2-1/P2-2). The sanitizer only replaces control bytes and strips
+  ANSI escapes now; it no longer collapses legitimate runs of spaces in an
+  otherwise-clean stderr line (round-2 review, P3-3).
 
 - **The Live section named the wrong session when two ran on one tank.** Two
   live sessions on the same tank (a bare one and a resumed one, say) each
