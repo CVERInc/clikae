@@ -10,6 +10,15 @@ adapter_meta_description() { echo "Anthropic Claude Code CLI (credentials + sett
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @anthropic-ai/claude-code"; }
 
+# Optional hook (#60 round-1 review): declares this adapter maps `clikae
+# burn`'s --permission onto its own headless permission flag, and which modes
+# it accepts. burn.sh checks for this function's PRESENCE, not its cli_binary
+# name — an adapter that doesn't define it gets a truthful degradation line
+# instead of silently keeping a fixed mode under the name of a mode it never
+# actually ran (see grok, which has no --permission mapping despite shipping
+# its own --permission-mode).
+adapter_meta_permission_modes() { echo "acceptEdits auto"; }
+
 # Per-tank CLAUDE_CONFIG_DIR isolation is meant for IDENTITY state (auth token,
 # transcript history, keychain slot) — it was never meant to also isolate
 # ASSETS the user hand-authors once and expects everywhere (personal skills,

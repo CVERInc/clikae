@@ -57,10 +57,20 @@ An orchestrating Claude session's own classifier may refuse to launch an
 auto-mode engine until an allow rule for `clikae burn` exists in that session's
 settings. The child mode does not override the parent session's permissions.
 
-Engines without an equivalent mode print one degradation line to stderr for
-`--permission auto` and keep their existing flags. Raw commands after `--`
-remain verbatim; set engine permissions there. With `--prompt` or `--prompt-file`,
-extra arguments after `--` still follow the generated flags.
+Engines without a `--permission` mapping print one degradation line to stderr
+for either value (`acceptEdits` or `auto`) and keep their existing flags —
+codex and agy have no permission-mode flag of their own; grok has its own
+`--permission-mode`, but clikae does not map `--permission` onto it, so a
+grok burn always runs with grok's fixed mode regardless of which value you
+asked for (previously `acceptEdits` was silent on grok, which read as "you
+got acceptEdits" when the engine actually ran under `bypassPermissions`).
+
+Raw commands after `--` remain verbatim; set engine permissions there. With
+`--prompt` or `--prompt-file`, extra arguments after `--` still follow the
+generated flags — if that trailing argv contains `--permission-mode` or
+`--dangerously-skip-permissions`, clikae warns once (without altering argv),
+since it can collide with or override the `--permission-mode` clikae just
+composed.
 
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
