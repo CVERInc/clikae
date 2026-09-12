@@ -2332,3 +2332,114 @@ STUB
   [[ "$output" == *"\"reason\":\"$expected\""* ]] || { echo "$output"; false; }
   [[ "$output" == *'rc=0'* ]] || false
 }
+
+# --- #66 round-1 review fixes ---
+
+@test "burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your usage limit · resets in 1h\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  clikae init codex L2
+  local plain="$HOME/plain_nongit"
+  mkdir -p "$plain"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/codex-argv.log"
+  run clikae burn claude L1 --json --artifact "$plain/out" --prompt x --add-dir "$plain" --to codex/L2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is not inside a git work tree"* ]] || { echo "$output"; false; }
+  [ ! -e "$STUB_ARGV_LOG" ]   # codex itself must never have run
+}
+
+@test "burn #66 round-1 P1-1 control: reroute into codex still proceeds when the cwd IS a git work tree" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf "You've hit your usage limit · resets in 1h\n"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  clikae init codex L2
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"   # _stub_codex already git-init'd this dir
+  run clikae burn claude L1 --json --artifact "$STUB_ARTIFACT" --prompt x --add-dir "$BATS_TEST_TMPDIR" --to codex/L2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn #66 round-1 P2-1: ANSI/control chars in stderr sanitize into valid JSON" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'ordinary stdout\n'
+printf '\033[31mbad\tthing "quoted" \\ end\033[0m\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local json_line; json_line="$(printf '%s\n' "$output" | grep '^{')"
+  [ -n "$json_line" ] || { echo "$output"; false; }
+  printf '%s' "$json_line" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["reason"] == "bad thing \"quoted\" \\ end", d["reason"]
+'
+}
+
+@test "burn #66 round-1 P2-2: 200-byte cap does not split a multibyte char under C locale" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 300 ]; do printf '\xe9\xbe\x8d' >&2; i=$((i + 1)); done
+printf '\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  LC_ALL=C LANG=C LC_CTYPE=C run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" -- noop
+  [ "$status" -eq 1 ]
+  local json_line; json_line="$(printf '%s\n' "$output" | grep '^{')"
+  [ -n "$json_line" ] || { echo "$output"; false; }
+  printf '%s' "$json_line" | python3 -c 'import json,sys; json.load(sys.stdin)'
+  printf '%s' "$json_line" \
+    | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["reason"])' \
+    | iconv -f UTF-8 -t UTF-8 >/dev/null
+}
+
+@test "burn #66 round-1 P3-1: --codex-skip-git-check on a non-codex engine warns, does not fail" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf 'done' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  clikae init claude L1
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out"
+  run clikae burn claude L1 --artifact "$STUB_ARTIFACT" --prompt x --codex-skip-git-check
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--codex-skip-git-check has no effect"* ]] || false
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn #66 round-1 P3-1 control: raw argv form also warns the flag has no effect" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" --codex-skip-git-check -- run "$A"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--codex-skip-git-check has no effect"* ]] || false
+  [ -f "$A" ]
+}
+
+@test "burn #66 round-1 P3-2: a nonexistent --add-dir says so, not 'not a git work tree'" {
+  rm -rf "$HOME/.clikae"
+  local missing="$HOME/does/not/exist_at_all"
+  run clikae burn codex T1 --json --artifact "$missing/out" --prompt x --add-dir "$missing"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not exist"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"is not inside a git work tree"* ]] || { echo "$output"; false; }
+  [ ! -e "$HOME/.clikae" ]
+}

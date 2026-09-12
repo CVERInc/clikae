@@ -122,8 +122,11 @@ a real paid engine; the recipe is how you stop wasting it.
    --permission-mode acceptEdits --add-dir`, `codex`'s `exec -C … -s
    workspace-write`). For codex, the first `--add-dir` (default: the artifact's
    parent) must be inside a git work tree; use `--codex-skip-git-check` to opt
-   in to `--skip-git-repo-check` for a non-git directory. Both are
-   **scoped to the roots you name**. claude's recipe
+   in to `--skip-git-repo-check` for a non-git directory. This is checked
+   whenever the argv is composed for codex — including a dry tank's reroute
+   INTO codex from another engine, not just a run started as `clikae burn
+   codex` — so it can't be skipped by naming a different engine first. Both
+   are **scoped to the roots you name**. claude's recipe
    used `--dangerously-skip-permissions` until 2026-08-16, which bypasses the
    permission system entirely: measured, it wrote outside the directories it was
    given while the docs said "this directory". Hand-writing `-- -p '…'` is the #1 way to ship a job that

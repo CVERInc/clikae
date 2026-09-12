@@ -1828,6 +1828,94 @@ _burn_capture_stderr() {
   return "$capture_rc"
 } 3>&1
 
+# _burn_check_codex_git_cwd — refuse to compose a codex argv whose cwd isn't a
+# git work tree. Reads $cli/$prompt_set/$codex_skip_git_check/$add_dirs from
+# the caller (cmd_burn's locals — same pattern _burn_result etc. already use).
+#
+# #66 round-1 P1-1: this used to be inlined once, at cmd_burn's entry, and
+# only ever ran against the engine NAMED ON THE COMMAND LINE. A dry tank's
+# cross-engine reroute (~2525 below) overwrites that same $cli variable and
+# recomposes the argv for the new engine — so a reroute INTO codex from
+# another engine skipped this check entirely and let codex itself reject the
+# non-git cwd a run and a tank later, after the earlier engine's state
+# (log dir, status.json, lock) had already been created. Called again at the
+# reroute site, right before the new engine's argv is composed, so landing on
+# codex is checked exactly where landing on codex first was.
+_burn_check_codex_git_cwd() {
+  [ "$cli" = codex ] || return 0
+  [ "$prompt_set" -eq 1 ] || return 0
+  [ "$codex_skip_git_check" -eq 0 ] || return 0
+  local dir="${add_dirs[0]}"
+  # #66 round-1 P3-2: `git -C <missing dir> rev-parse` also prints "not
+  # inside a git work tree" (its own stderr, discarded below) for a cwd that
+  # doesn't exist at all — name the actual cause instead of the wrong one.
+  [ -d "$dir" ] || log_fail "codex cwd '$dir' does not exist."
+  if [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
+    log_fail "codex cwd '$dir' is not inside a git work tree; put the repository first in --add-dir, or pass --codex-skip-git-check."
+  fi
+}
+
+# _burn_sanitize_reason <raw-line> — make an engine's own stderr safe to carry
+# as a JSON string value.
+#
+# #66 round-1 P2-1: json_str (lib/core/json.sh) only escapes the seven C
+# control chars JSON gives dedicated shorthand for (\t \n \r \b \f " \) — any
+# OTHER byte in U+0000-U+001F, most commonly a bare ESC (0x1B) from an ANSI
+# color code, passed straight through into the `--json` output verbatim.
+# RFC 8259 requires every one of those to be escaped; a raw one makes the
+# whole object invalid JSON for a strict parser, which is worse than the
+# prose burn --json exists to replace (a strict parser can't even start
+# reading it). Strip ANSI CSI sequences outright (the common, recoverable
+# case: color codes an engine prints whether or not stdout is a tty), then
+# turn every remaining control byte into a space and collapse the result —
+# trading "illegal JSON" for "ugly reason text", never the other way round.
+_burn_sanitize_reason() {
+  local s="$1"
+  s="$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g')"
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037' ' ')"
+  s="$(printf '%s' "$s" | tr -s ' ')"
+  printf '%s' "$s"
+}
+
+# _burn_truncate_utf8 <str> <max-bytes> — cut <str> to at most <max-bytes>
+# bytes without splitting a multibyte UTF-8 character.
+#
+# #66 round-1 P2-2: the original `${stderr_first:0:200}` truncates by
+# CHARACTER count only when the shell's own locale is UTF-8-aware. Under
+# C/POSIX — bash 3.2's default when LANG/LC_ALL/LC_CTYPE are unset, a real
+# state for an unattended/containerized caller, which is exactly who invokes
+# `clikae burn --json` — it degrades to raw BYTES, so a multibyte character
+# sitting across the 200-byte boundary gets sliced in half, writing invalid
+# UTF-8 into the JSON output. `local LC_ALL=C` forces byte semantics
+# EXPLICITLY, in THIS function only, regardless of the caller's environment,
+# so the cut point is deterministic; then back off any lead byte at the tail
+# whose continuation bytes didn't make it into the cut.
+_burn_truncate_utf8() {
+  local LC_ALL=C
+  local s="$1" max="$2" len
+  len=${#s}
+  [ "$len" -le "$max" ] && { printf '%s' "$s"; return; }
+  local cut="${s:0:max}"
+  local clen=${#cut} k pos c ord cont_needed=-1
+  local look=4; [ "$clen" -lt "$look" ] && look=$clen
+  for ((k = 1; k <= look; k++)); do
+    pos=$((clen - k))
+    c="${cut:pos:1}"
+    ord="$(printf '%d' "'$c")"
+    [ "$ord" -lt 0 ] && ord=$((ord + 256))
+    if [ "$ord" -ge 240 ]; then cont_needed=3; break
+    elif [ "$ord" -ge 224 ]; then cont_needed=2; break
+    elif [ "$ord" -ge 192 ]; then cont_needed=1; break
+    elif [ "$ord" -ge 128 ]; then continue
+    else cont_needed=-1; break
+    fi
+  done
+  if [ "$cont_needed" -ge 0 ] && [ $((k - 1)) -lt "$cont_needed" ]; then
+    cut="${cut:0:pos}"
+  fi
+  printf '%s' "$cut"
+}
+
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
   local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
@@ -1935,13 +2023,17 @@ cmd_burn() {
       log_warn "raw argv after -- includes --permission-mode or --dangerously-skip-permissions; clikae's own --permission-mode is composed first and the two may collide."
     fi
   fi
+  # #66 round-1 P3-1: the flag is parsed unconditionally but only ever does
+  # anything for a codex run composed from --prompt/--prompt-file (raw argv
+  # owns its own cwd/git-check policy, documented in --help). Silently
+  # swallowing it elsewhere reads as "I turned on a protection" when nothing
+  # happened — say so instead of staying quiet.
+  if [ "$codex_skip_git_check" -eq 1 ] && { [ "$cli" != codex ] || [ "$prompt_set" -ne 1 ]; }; then
+    log_warn "--codex-skip-git-check has no effect here: it only applies to a codex run started with --prompt/--prompt-file."
+  fi
   # Validate the cwd we compose, before carry notices, logs, status or locks.
   # Raw argv owns its own cwd and git-check policy.
-  if [ "$cli" = codex ] && [ "$prompt_set" -eq 1 ] && [ "$codex_skip_git_check" -eq 0 ]; then
-    if [ "$(git -C "${add_dirs[0]}" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
-      log_fail "codex cwd '${add_dirs[0]}' is not inside a git work tree; put the repository first in --add-dir, or pass --codex-skip-git-check."
-    fi
-  fi
+  _burn_check_codex_git_cwd
   validate_name cli "$cli"
   validate_name profile "$tank"
   # Fall-through armed (the default) means a dry tank re-fires this task on the
@@ -2545,7 +2637,8 @@ KV
       local failure_reason="no fresh artifact and no limit" stderr_first=""
       if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
         stderr_first="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$stderr_file")"
-        failure_reason="${stderr_first:0:200}"
+        stderr_first="$(_burn_sanitize_reason "$stderr_first")"
+        failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
       fi
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
       _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
@@ -2594,6 +2687,10 @@ KV
         # prompt is engine-agnostic). Without a recipe for the new engine, stop.
         declare -F adapter_burn_flags >/dev/null \
           || log_fail "Cross-engine reroute → $nx_cli, which has no headless-write recipe (no adapter_burn_flags)."
+        # #66 round-1 P1-1: re-check here, now that $cli IS $nx_cli — a
+        # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
+        # exactly like the entry check did, so it needs the same refusal.
+        _burn_check_codex_git_cwd
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
