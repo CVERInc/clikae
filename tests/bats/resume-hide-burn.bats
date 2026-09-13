@@ -230,3 +230,84 @@ _agy_fixture() {
   [ "$status" -eq 0 ]
   [[ "$output" != *'[burn]'* ]] || false
 }
+
+# --- #74 round-1 P1-2/P2-3: sidecar attribution must be PROVEN (a before/after
+# transcript-set diff), not guessed (the old "newest mtime >= attempt start"
+# heuristic, which happily attributed a human's own concurrent session to the
+# lane that never touched it). Zero transcripts -> no ghost sid on a
+# dry/failed run either. ------------------------------------------------------
+
+@test "agy burn writes no sidecar line when the run produces zero transcripts" {
+  _fixture
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  cat > "$TEST_HOME/bin/agy" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --log-file ]; then : > "$2"; break; fi
+  shift
+done
+printf 'done\n' > "$STUB_ARTIFACT"   # artifact written, but NO transcript at all
+STUB
+  chmod +x "$TEST_HOME/bin/agy"
+  _burn agy default
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+}
+
+@test "agy burn records nothing (not the wrong one) when it can't tell its own new session apart from a concurrent one" {
+  _fixture
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local other_sid="99999999-9999-4999-8999-999999999999"
+  cat > "$TEST_HOME/bin/agy" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = --log-file ]; then : > "\$2"; break; fi
+  shift
+done
+base="\$HOME/.gemini/antigravity-cli"
+mkdir -p "\$base/brain/$STUB_SID/.system_generated/logs" "\$base/brain/$other_sid/.system_generated/logs"
+printf '{"content":"lane task"}\n' > "\$base/brain/$STUB_SID/.system_generated/logs/transcript.jsonl"
+printf '{"content":"a human, same cwd, same instant"}\n' > "\$base/brain/$other_sid/.system_generated/logs/transcript.jsonl"
+printf '{"conversation_id":"%s","workspace":"%s"}\n' "$STUB_SID" "\$PWD" >> "\$base/brain/history.jsonl"
+printf '{"conversation_id":"%s","workspace":"%s"}\n' "$other_sid" "\$PWD" >> "\$base/brain/history.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/agy"
+  run clikae burn agy default --prompt 'Write the artifact' --add-dir "$PWD" --artifact "$STUB_ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not attribute session"* ]] || false
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+}
+
+@test "codex burn writes no sidecar line when the run produces zero transcripts" {
+  _fixture
+  clikae init codex T1
+  cat > "$TEST_HOME/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+printf 'done\n' > "$STUB_ARTIFACT"   # artifact written, but NO rollout at all
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  _burn codex T1
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
+}
+
+@test "codex burn picks the ONE new rollout whose recorded cwd is this run's, among several" {
+  _fixture
+  clikae init codex T1
+  local elsewhere_sid="88888888-8888-4888-8888-888888888888"
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"/somewhere/else"}}\n' "$elsewhere_sid" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$elsewhere_sid.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  _burn codex T1
+  _assert_sidecar codex T1 "$STUB_SID"
+}

@@ -648,11 +648,22 @@ _agy_burn() {
       esac
     fi
     local run_id="agy-${cur}-burn-$$"
-    local attempt_epoch
-    attempt_epoch="$(date +%s)"
     local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
     local artifact_fresh=0 artifact_bytes_snapshot=null
     art_pre="$(_clikae_mtime "$artifact")"
+    # #74 round-1 P1-2: a BEFORE snapshot, not a mtime cutoff. The old
+    # "newest transcript with mtime >= attempt start" heuristic had nothing
+    # tying it to THIS run's own process — a human's concurrent session in the
+    # same tank has a newer mtime too, and got its transcript recorded (and
+    # then hidden) as if it were the lane's. A file that didn't exist before
+    # launch and does after is proof; a mtime comparison is a guess.
+    load_adapter "antigravity" 2>/dev/null || true
+    local -a _agy_pre_snap=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_pre_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+    fi
     local out; out="$(
       "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
       _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
@@ -661,17 +672,46 @@ _agy_burn() {
     rm -f "$evidence_file"
 
     local sid_to_record=""
-    load_adapter "antigravity" 2>/dev/null || true
-    if declare -F adapter_recent_sids >/dev/null 2>&1; then
-      local recent
-      recent="$(adapter_recent_sids "$(_agy_slots)/$cur" 1 disk 2>/dev/null || true)"
-      if [ -n "$recent" ]; then
-        local r_epoch="${recent%%$'\037'*}"
-        local r_sid="${recent##*$'\037'}"
-        if [ -n "$r_epoch" ] && [ "$r_epoch" != "?" ] && [ "$r_epoch" -ge "$attempt_epoch" ]; then
-          sid_to_record="$r_sid"
-        fi
-      fi
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _agy_post_snap=() _agy_new=()
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_post_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+      local _agy_pf _agy_bf _agy_is_new
+      for _agy_pf in "${_agy_post_snap[@]}"; do
+        _agy_is_new=1
+        for _agy_bf in "${_agy_pre_snap[@]}"; do
+          [ "$_agy_pf" = "$_agy_bf" ] && { _agy_is_new=0; break; }
+        done
+        [ "$_agy_is_new" -eq 1 ] && _agy_new+=("$_agy_pf")
+      done
+      # exactly one new transcript -> proven attribution. Zero -> a dry/failed
+      # run made nothing to hide (no ghost sid, P2-3). More than one -> only
+      # trust the count if cwd narrows it back to exactly one; otherwise this
+      # run's own session cannot be told apart from someone else's concurrent
+      # one, and recording ANY of them risks hiding a human's conversation —
+      # "never hide what is not proven" outranks "always record something".
+      case "${#_agy_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          local -a _agy_cwd_match=()
+          local _agy_cf _agy_ccwd
+          for _agy_cf in "${_agy_new[@]}"; do
+            _agy_ccwd="$(adapter_session_cwd "$_agy_cf" 2>/dev/null || true)"
+            [ "${_agy_ccwd%/}" = "${PWD%/}" ] && _agy_cwd_match+=("$_agy_cf")
+          done
+          if [ "${#_agy_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_agy_new[@]} candidates)"
+          fi
+          ;;
+      esac
     fi
     if [ -n "$sid_to_record" ]; then
       local sidecar_file="$CLIKAE_HOME/state/burn-sessions/agy/$cur"
@@ -2419,9 +2459,7 @@ cmd_burn() {
     
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
-    
-    local attempt_epoch
-    attempt_epoch="$(date +%s)"
+
     local launch_sid=""
     local -a _attempt_cmd=("${cmd[@]}")
     if declare -F adapter_new_session_args >/dev/null 2>&1; then
@@ -2438,6 +2476,19 @@ cmd_burn() {
 $(adapter_new_session_args "$launch_sid" 2>/dev/null || true)
 _NS_EOF
       fi
+    fi
+    # #74 round-1 P1-2: a BEFORE snapshot of every transcript this profile
+    # already has, so codex's post-run attribution (below) can tell "the file
+    # THIS run created" from "the file a human's concurrent session created" —
+    # see antigravity's twin a few hundred lines up for the full rationale.
+    # Only codex defines adapter_all_transcripts (claude doesn't need this: it
+    # already knows $launch_sid before the engine ever runs), so this is a
+    # no-op — no snapshot taken, nothing to diff — on the claude path.
+    local -a _snap_pre=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_pre+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
     fi
     art_pre="$(_clikae_mtime "$artifact")"
     rc=0
@@ -2568,17 +2619,57 @@ KV
     fi
     rm -f "$state_file" "$evidence_file"
 
+    # #74 round-1 P1-2/P2-3: "proven", not "most recent". claude already KNOWS
+    # its sid (launch_sid, told to the engine via --session-id before it ever
+    # ran) — only record it if a transcript for that exact id actually exists,
+    # so a run the engine refused to start (P1-3's clash, or any other
+    # failure) never writes a ghost line. codex has no equivalent flag, so it
+    # falls back to the before/after snapshot diff (see the codex/antigravity
+    # adapter_all_transcripts hooks): candidates = transcripts that exist now
+    # and didn't before launch. Exactly one -> proven. Zero -> nothing to
+    # record. More than one -> only trust it if the recorded cwd narrows it
+    # back to exactly one; otherwise this run's own session can't be told
+    # apart from a human's concurrent one, and "never hide what is not
+    # proven" outranks "always record something".
     local sid_to_record="$launch_sid"
-    if [ -z "$sid_to_record" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
-      local recent
-      recent="$(adapter_recent_sids "$dir" 1 2>/dev/null || true)"
-      if [ -n "$recent" ]; then
-        local r_epoch="${recent%%$'\037'*}"
-        local r_sid="${recent##*$'\037'}"
-        if [ -n "$r_epoch" ] && [ "$r_epoch" != "?" ] && [ "$r_epoch" -ge "$attempt_epoch" ]; then
-          sid_to_record="$r_sid"
-        fi
-      fi
+    if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1 \
+       && ! adapter_find_session "$dir" "$sid_to_record" >/dev/null 2>&1; then
+      sid_to_record=""
+    fi
+    if [ -z "$sid_to_record" ] && declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _snap_post=() _snap_new=()
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_post+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
+      local _snap_pf _snap_bf _snap_is_new
+      for _snap_pf in "${_snap_post[@]}"; do
+        _snap_is_new=1
+        for _snap_bf in "${_snap_pre[@]}"; do
+          [ "$_snap_pf" = "$_snap_bf" ] && { _snap_is_new=0; break; }
+        done
+        [ "$_snap_is_new" -eq 1 ] && _snap_new+=("$_snap_pf")
+      done
+      case "${#_snap_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          local -a _snap_cwd_match=()
+          local _snap_cf _snap_ccwd
+          for _snap_cf in "${_snap_new[@]}"; do
+            _snap_ccwd="$(adapter_session_cwd "$_snap_cf" 2>/dev/null || true)"
+            [ "${_snap_ccwd%/}" = "${PWD%/}" ] && _snap_cwd_match+=("$_snap_cf")
+          done
+          if [ "${#_snap_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_snap_new[@]} candidates)"
+          fi
+          ;;
+      esac
     fi
     if [ -n "$sid_to_record" ]; then
       local sidecar_file="$CLIKAE_HOME/state/burn-sessions/$cli/$cur"
