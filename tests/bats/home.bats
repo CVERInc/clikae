@@ -335,6 +335,34 @@ _agy_log() { # <line>
   [[ "$output" == *"Newer session"*"Older session"* ]] || false
 }
 
+# #74 round-1 P2-5: the board's Continue list is a SEPARATE query from
+# `clikae resume`'s picker (this dir's newest across engines, not the whole
+# store) and had no burn filter at all — a lane's one-shot session, being by
+# definition the newest thing in the dir it just ran in, kept showing up on
+# the board's first screen even with resume's own hiding "fixed".
+@test "the continue list hides a burn session by default, and a real session takes its slot" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"Human session","sessionId":"human0000"}\n' \
+    > "$d/human0000-0000-0000-0000-000000000000.jsonl"
+  sleep 1
+  printf '{"type":"ai-title","aiTitle":"Lane one-shot","sessionId":"burn0000"}\n' \
+    > "$d/burn0000-0000-0000-0000-000000000000.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'burn0000-0000-0000-0000-000000000000\trun-1\t1700000000\n' \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Human session"* ]] || false
+  [[ "$output" != *"Lane one-shot"* ]] || false
+  CLIKAE_RESUME_ALL=1 run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lane one-shot"* ]] || false
+}
+
 @test "a session's recap is shown under its continue row, hint stripped" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"

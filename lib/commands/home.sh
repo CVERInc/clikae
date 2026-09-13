@@ -216,6 +216,28 @@ INNER
 $(list_adapters)
 EOF
   [ -n "$acc" ] || return 0
+  # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
+  # `clikae resume`'s picker uses (_burn_sids_file, home.sh) — the board's own
+  # "R" key already forwards to `clikae resume` (one filter, not two), but
+  # this Continue list is a SEPARATE query (this dir's newest across engines,
+  # not the whole-store picker) and had no filter at all. Burn sessions are
+  # by definition the newest thing on a tank that just ran one, so without
+  # this the board's first screen kept showing lane one-shots even after #74
+  # "fixed" resume — the PR's own claim ("resume AND the home board hide
+  # sidecar sessions by default") was true for one of the two surfaces.
+  # Filtered BEFORE the rank+cut below, or a hidden row would just leave a
+  # gap instead of letting a real session take its slot.
+  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
+    local _burn_sids_f; _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
+    if [ -n "$_burn_sids_f" ]; then
+      acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
+        BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+        !($4 in skip)
+      ')"
+      rm -f "$_burn_sids_f"
+      [ -n "$acc" ] || return 0
+    fi
+  fi
   # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
   # title + recap (the only content greps — bounded to the few rows actually shown).
   printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
