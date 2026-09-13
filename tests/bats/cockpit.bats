@@ -128,6 +128,31 @@ _guard_installed() {
   [[ "$output" == *"No cockpit set"* ]] || false
 }
 
+@test "moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)" {
+  # The move-path twin of "--off sweeps past a broken tank" below. Round 1
+  # fixed `--off`'s sweep but left `_cockpit_move` calling
+  # `_cockpit_hook_remove` unguarded -- under `bin/clikae`'s `set -eo
+  # pipefail`, a broken old-tank settings.json used to abort the WHOLE move:
+  # rc=1, one stdout line about the OLD tank, nothing installed on the NEW
+  # one, state untouched.
+  clikae init claude aaa
+  clikae init claude mmm
+  clikae cockpit claude aaa
+  # Corrupt aaa's settings.json AFTER install (same shape as the --off test
+  # below): invalid JSON, so _cockpit_hook_remove fails.
+  printf '{"hooks":{"PreToolUse":[{"_clikae":"cockpit-guard" THIS IS NOT VALID JSON\n' \
+    > "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run clikae cockpit claude mmm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/aaa"* ]] || false
+  [[ "$output" == *"--off"* ]] || false
+  # The role still moved: mmm is armed and recorded as the cockpit, despite
+  # aaa's guard being stuck (fail-safe, same as --off -- aaa's own guard was
+  # never DELETED, just never successfully removed).
+  _guard_installed "$CLIKAE_HOME/profiles/claude/mmm/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/mmm" ]
+}
+
 @test "--off with nothing set is an idempotent no-op" {
   run clikae cockpit --off
   [ "$status" -eq 0 ]

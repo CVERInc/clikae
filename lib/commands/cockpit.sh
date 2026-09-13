@@ -222,8 +222,18 @@ _cockpit_move() {
     return 0
   fi
 
+  # #63 P2-2 (round-2 review): this used to be a bare `_cockpit_hook_remove`
+  # call. `bin/clikae` runs under `set -eo pipefail`, so ANY failure here (a
+  # hand-edited settings.json with invalid JSON, a symlinked settings.json —
+  # the exact shapes `--off`'s own P1-3 fix already learned to sweep past)
+  # aborted the whole move before it ever reached `_cockpit_hook_install`
+  # below: the operator asked to move the role, got one stdout line naming
+  # the OLD tank's problem, rc=1, and the role hadn't moved at all — no new
+  # guard, no state write, no hint what to do next. Same lesson as `--off`:
+  # collect the failure, warn, and keep going. rc=1 is reserved for the one
+  # failure that actually matters here — the NEW tank couldn't be armed.
   if [ -n "$cur_engine" ] && profile_exists "$cur_engine" "$cur_tank"; then
-    _cockpit_hook_remove "$cur_engine" "$cur_tank"
+    _cockpit_hook_remove "$cur_engine" "$cur_tank" || log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it."
   elif [ -n "$cur_engine" ]; then
     log_warn "cockpit: recorded cockpit $cur_engine/$cur_tank no longer exists; dropping the record."
   fi
