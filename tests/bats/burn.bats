@@ -3216,3 +3216,33 @@ rows = [r for r in obj["left_behind"] if r["repo"].endswith("/repos/work space")
 assert rows == [] or rows[0]["dirty"] in (0, None), rows
 '
 }
+
+# P2-1 (round-1 review): the old code capped "recent files" at readdir
+# order, not mtime — reproduced with f01..f30 (20ms apart) it reported 9 of
+# the 10 newest wrong and dropped the actual newest file entirely. Explicit
+# future-offset mtimes (now+1s .. now+30s) here instead of real sleeps: each
+# of the 30 files gets its own distinguishable second, all of them
+# unambiguously newer than the sentinel touched at run start.
+@test "burn #84 P2-1: recent files are the newest ten by mtime, not directory order" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+now="$(date +%s)"
+for i in $(seq -w 1 30); do
+  f="$STUB_LEFT_REPO/f$i"
+  printf '%s' "$i" > "$f"
+  touch -d "@$((now + 10#$i))" "$f"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+row = next(r for r in rows if r["repo"].endswith("/repos/work space"))
+files = [f.rsplit("/", 1)[1] for f in row["files"]]
+expect = [f"f{n:02d}" for n in range(30, 20, -1)]
+assert files == expect, files
+'
+}

@@ -969,7 +969,7 @@ _burn_lb_git() { command git -c core.fsmonitor=false -c core.hooksPath=/dev/null
 # `_burn_result`'s `|| left_behind='[]'` fallback exists for the SUBSHELL
 # dying unexpectedly, not for this function returning non-zero on purpose.
 _burn_left_behind() {
-  local root marker repo seen="" branch ahead dirty file mtime files count entry
+  local root marker repo seen="" branch ahead dirty files count entry
   local -a repos=() roots=("$PWD" "${add_dirs[@]}")
   local GIT_OPTIONAL_LOCKS=0
   export GIT_OPTIONAL_LOCKS
@@ -998,6 +998,22 @@ _burn_left_behind() {
     # aborted right here, before `_burn_result`'s printf ever ran.
     dirty="$(_burn_lb_git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
     [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
+    # P2-1/P2-2 (round-1 review): the old version forked _clikae_mtime (a
+    # `stat`, or two on macOS) PER FILE under an unbounded `find`, and never
+    # sorted — "ten files" meant "whichever ten readdir happened to visit
+    # first", the newest file often not among them at all (measured: 9 of 10
+    # wrong, the actual newest entirely absent). ONE `find -newer <sentinel>`
+    # (touched at run start — see cmd_burn) does the "since this run began"
+    # filter with zero forks when nothing qualifies (the common case: a
+    # failed run usually touched little); `-exec stat … {} +` batches the
+    # mtime read for whatever DOES qualify into O(1) forks, not O(files);
+    # `sort -rn` makes "newest ten" actually mean newest ten. Same platform
+    # probe every other `stat` caller in this repo already shares
+    # (_clikae_statv/_CLIKAE_STAT_FMT) — not a third one.
+    _clikae_statv
+    local stat_flag='-c'
+    [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
+    local statline mname
     files=""; count=0; seen=""
     for root in "${roots[@]}"; do
       [ -d "$root" ] || continue
@@ -1006,16 +1022,24 @@ _burn_left_behind() {
         "$repo/"*) scan="$root" ;;
         *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;
       esac
-      while IFS= read -r -d '' file; do
-        case "$seen" in *$'\n'"$file"$'\n'*) continue ;; esac
-        mtime="$(_clikae_mtime "$file")"
-        [ "${mtime:-0}" -ge "${started_at:-0}" ] 2>/dev/null || continue
-        seen="${seen}"$'\n'"${file}"$'\n'
+      while IFS= read -r statline; do
+        [ -n "$statline" ] || continue
+        mname="${statline#* }"
+        case "$seen" in *$'\n'"$mname"$'\n'*) continue ;; esac
+        seen="${seen}"$'\n'"${mname}"$'\n'
         [ "$count" -eq 0 ] || files="$files,"
-        files="$files$(json_str "$file")"
+        files="$files$(json_str "$mname")"
         count=$((count + 1))
         [ "$count" -lt 10 ] || break
-      done < <(find "$scan" \( -name .git -o -name node_modules \) -prune -o -type f -print0 2>/dev/null)
+      done < <(
+        find "$scan" \
+          \( -name .git -o -name node_modules -o -name .venv -o -name target \
+             -o -name dist -o -name build -o -name .cache -o -name .next \
+             -o -name out -o -name coverage \) -prune \
+          -o -type f -newer "${started_at_sentinel:-/dev/null}" \
+             -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + 2>/dev/null \
+        | sort -rn
+      )
       [ "$count" -lt 10 ] || break
     done
     if [ "$ahead" = - ] || [ "$ahead" = 0 ]; then
@@ -2419,6 +2443,13 @@ cmd_burn() {
   # above), one thing to find.
   local burn_id="burn-$$" started_at
   started_at="$(date +%s 2>/dev/null || echo 0)"
+  # P2-1/P2-2 (round-1 review): a `find -newer` sentinel, touched right here
+  # at run start, replaces comparing every scanned file's mtime against
+  # `$started_at` with `date`/`stat` per file (which was the O(files) fork
+  # cost — see _burn_left_behind's own comment). `$run_dir` already exists
+  # (0700, private, swept) by this point, so the sentinel lives there.
+  local started_at_sentinel="$run_dir/.burn-started"
+  : > "$started_at_sentinel" 2>/dev/null || true
 
   # #40: agy is always reported as "agy" (never its "antigravity" alias) in
   # both _burn_result and _agy_burn's own log lines — match that here so a
