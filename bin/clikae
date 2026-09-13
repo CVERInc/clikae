@@ -89,6 +89,17 @@ source "$CLIKAE_LIB/core/state_version.sh"
 # state is current or absent; read-only safe — see lib/core/state_version.sh).
 state_version_check
 
+# #61 round-2 P1-1: the ONE-TIME inclusive tank-adoption sweep (see
+# lib/core/profile_store.sh) — "the first command run against a store with
+# no adoption flag" means literally the first, not just the first one that
+# happens to list tanks. Without this here, `clikae init` (which creates its
+# OWN tank directly and never walks the store) could be a real upgrade's
+# first command and leave the flag unwritten, so a stray directory created
+# between then and the first `doctor`/`tanks`/board call would still fall
+# inside the adoption window. A no-op single `[ -f ]` stat once the flag
+# exists, for every command including ones that never touch a tank.
+_tank_adoption_ensure
+
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
 #   2. an installed engine (an adapter) -> the BARE SWITCH, `clikae <engine>
