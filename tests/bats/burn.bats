@@ -3557,6 +3557,16 @@ HOOK
     chmod +x "$hooks_dir/$h"
   done
   git -C "$STUB_LEFT_REPO" config core.hooksPath .git/hooks
+  # P3-1 (round-2 review): a mutation test (drop `-c core.hooksPath=/dev/null`
+  # and rerun) found only `core.fsmonitor` below actually fires under
+  # mutation — none of the seven named hooks in this loop do, because the
+  # four read-only git subcommands `_burn_lb_git` ever calls
+  # (rev-parse/symbolic-ref/rev-list/status) don't invoke a NAMED hook to
+  # begin with. Left in as defense-in-depth (a future call site here that
+  # DOES trigger one is still covered), but its seven `not fired` assertions
+  # are honestly air, not evidence — the fire test below the fsmonitor block
+  # is the only one of the eight with independently confirmed teeth.
+  #
   # P3-4's actual repro: `core.fsmonitor` set to an arbitrary executable
   # PATH (not the named `fsmonitor-watchman` hook above — git treats these
   # as two different mechanisms; only `core.fsmonitor=true` invokes the
@@ -3582,10 +3592,16 @@ HOOK
   done
 }
 
-# The negative control the review itself ran: WITHOUT GIT_OPTIONAL_LOCKS,
-# the SAME git status call rewrites .git/index (inode changes) — proving
-# the ruler above is sensitive to a real write, not merely blind to one.
-@test "burn #84 P2-6 negative control: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index" {
+# P3-2 (round-2 review): this proves the MEASURING METHOD works (git really
+# does rewrite .git/index on this machine when nothing stops it) — it does
+# NOT exercise `_burn_left_behind`, `clikae burn`, or any production call
+# site (it's a hand-written `git -C … status --porcelain` in the test body).
+# "negative control" implied it was testing the production read-only guard
+# under mutation; renamed to say what it actually is. The read-only claim's
+# real mutation coverage is `:2844`'s "GIT_OPTIONAL_LOCKS"/"core.fsmonitor"
+# drops (see the round-2 review's own mutation table) — this test is
+# evidence that those mutations mean something, not the guard itself.
+@test "burn #84 P2-6 ruler sanity: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index" {
   _left84_setup
   _left84_repo
   # _left84_repo's own commit is --allow-empty (no tracked files), so
@@ -3638,7 +3654,16 @@ STUB
 # count as "dirty" in BOTH its own row and the superproject's — but the
 # superproject's push never carries the submodule's changes, so attributing
 # them to it overstates what pushing the superproject would salvage.
-@test "burn #84 P3-5: a submodule's own dirty state is not double-counted into the superproject's" {
+# P3-5 (round-2 review, unresolved until now): the SAME contradiction was
+# still open one level down — `--ignore-submodules=all` made `dirty` honest
+# but the superproject's `files` list still walked straight into the
+# submodule and listed its files anyway (self-contradicting: "dirty:0,
+# files:[…/sub/…]" in the same row). A file written into the submodule
+# DURING the run must show up under the submodule's OWN row, never
+# re-listed under the superproject's — the same innermost-repo file pruning
+# P2-3 added for nested repos (they're the same mechanism: a `.git`
+# boundary inside the tree being scanned).
+@test "burn #84 P3-5: a submodule's own dirty state and files are not double-counted into the superproject's" {
   _left84_setup
   _left84_repo
   local sub="$TEST_HOME/repos/subrepo"
@@ -3648,6 +3673,10 @@ STUB
   git -c protocol.file.allow=always -C "$STUB_LEFT_REPO" submodule add -q "$sub" sub
   git -C "$STUB_LEFT_REPO" commit -qm "add submodule"
   printf changed > "$STUB_LEFT_REPO/sub/s.txt"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf newsub > "$STUB_LEFT_REPO/sub/new-in-sub.txt"
+STUB
   run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   [ "$status" -eq 1 ]
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
@@ -3656,5 +3685,9 @@ rows = json.load(sys.stdin)["left_behind"]
 super_row = next(r for r in rows if r["repo"].rstrip("/").endswith("work space"))
 assert super_row["dirty"] == 0, super_row
 assert super_row["ahead"] == 1, super_row
+assert not any("new-in-sub.txt" in f for f in super_row["files"]), super_row
+sub_row = next((r for r in rows if r["repo"].rstrip("/").endswith("/sub")), None)
+assert sub_row is not None, [r["repo"] for r in rows]
+assert any("new-in-sub.txt" in f for f in sub_row["files"]), sub_row
 '
 }

@@ -1174,6 +1174,17 @@ _burn_left_behind() {
         repo_timeout=1
         continue
       fi
+      # P3-3 (round-2 review, documented not fixed): each batched stat
+      # record is newline-delimited (`sort -rn` needs lines), so a filename
+      # containing a literal newline byte splits across two `read`s here —
+      # the first half gets reported as a file path that doesn't exist, the
+      # second half is silently dropped. A NUL-delimited pipeline (stat
+      # --printf/-z, `sort -z`) would fix it but isn't proven portable to
+      # BSD stat/sort (no macOS box to verify against, and this is the exact
+      # kind of untested-on-macOS change this review round exists to catch)
+      # — left as a documented gap rather than an unverified cross-platform
+      # rewrite. Repo names with embedded newlines are unaffected (verified,
+      # round-1): only this per-file batch is exposed.
       while IFS= read -r statline; do
         [ -n "$statline" ] || continue
         mline="${statline%% *}"; mname="${statline#* }"

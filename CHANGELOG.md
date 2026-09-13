@@ -243,7 +243,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default 2). Desktop wheel and drag bindings are unchanged.
 - Failed `clikae burn` runs report Git work left behind in cwd/`--add-dir`
   repositories, recent files, and a push hint; `--json` includes `left_behind`
-  without pushing or changing repository state (#84).
+  without pushing or changing repository state (#84). Round-2 review of #87:
+  every git call in the scan (not just its file-list `find`) is now bounded,
+  plus a 10s global scan budget; the 25-repo cap ranks unpushed commits
+  ahead of file mtime and its push hint prints even past the cap; nested
+  repos at any depth are discovered and files attribute to the innermost
+  repo; `--json` gains `left_behind_truncated`.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
