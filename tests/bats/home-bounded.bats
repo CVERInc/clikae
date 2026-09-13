@@ -34,7 +34,18 @@ _board_shims() {
   local tool real
   export BOARD_IO_LOG="$TEST_HOME/io.log"
   mkdir -p "$TEST_HOME/io-bin"
-  for tool in head tail stat; do
+  # round-5 fix review design decision: a render's ENTIRE staleness signal is
+  # now one `find` (list every transcript this tank has) plus one batched
+  # `stat` (their mtime/size) — never file CONTENT. `find`/`stat` are logged,
+  # like `head`/`tail`, not hard-failed: the old hard-failing `find` shim
+  # here asserted "a render never lists the tree at all", which was true of
+  # rounds 1-4's bounded, per-signal approximations and is no longer the
+  # design (see board_state.sh's own header for why that approximation was
+  # abandoned). What must still hold, and is now the header this file's
+  # tests assert instead: `find`+`stat` stay BOUNDED (one pass per tank, not
+  # one per transcript), and NEITHER `head` NOR `tail` ever touches a
+  # `.jsonl`/rollout/transcript file on a warm read.
+  for tool in head tail stat find; do
     real="$(command -v "$tool")"
     {
       printf '#!/bin/bash\nprintf "%%s\\n" "%s $*" >> "$BOARD_IO_LOG"\n' "$tool"
@@ -42,10 +53,6 @@ _board_shims() {
     } > "$TEST_HOME/io-bin/$tool"
     chmod +x "$TEST_HOME/io-bin/$tool"
   done
-  # A render must never discover transcripts. Make any find invocation fail
-  # loudly as well as recording it (a swallowed error must still fail the test).
-  printf '#!/bin/bash\necho FIND >> "$BOARD_IO_LOG"\nexit 99\n' > "$TEST_HOME/io-bin/find"
-  chmod +x "$TEST_HOME/io-bin/find"
   export PATH="$TEST_HOME/io-bin:$PATH"
 }
 
@@ -58,16 +65,15 @@ _board_shims() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Fixture"* ]] || false
   small="$(wc -l < "$BOARD_IO_LOG" | tr -d ' ')"
-  # Counts include pipeline-only head/tail calls and both BSD/GNU stat probes.
-  # 2026-09-12 round-2 fix review, P1-B: claude's account-level fuel reading
-  # now carries two more bounded signals (projects/'s own mtime, plus one
-  # batched files_mtime_size over the -mmin -300 file set) — still O(one
-  # freshness check per render SECTION), never O(transcripts), but real
-  # renders pay it per section (board_generation's cache does not survive a
-  # command-substitution subshell boundary), which is where the ceiling
-  # actually moved from 160 to 180 (measured: 165 on this store).
+  # round-5 fix review design decision: staleness is now one `find` (list
+  # every transcript this tank has) plus one batched `stat` (their
+  # mtime/size), per TANK, not per section — `_home_refresh` primes
+  # `board_generation` once for every tank before any section's `$( )`
+  # subshell exists, and every subshell inherits that already-warm memo (see
+  # `_home_refresh`'s own header). So the call count here does not grow with
+  # section count OR transcript count, only tank count — still O(1) forks for
+  # this one-tank fixture, whether it holds 100 or 1000 transcripts.
   [ "$small" -le 180 ]
-  ! grep -q FIND "$BOARD_IO_LOG" || false
   : > "$BOARD_IO_LOG"
   run clikae
   [ "$status" -eq 0 ]
@@ -84,7 +90,6 @@ _board_shims() {
   echo "bounded IO: 100=$small 1000=$large" >&3
   [ "$large" -eq "$small" ]
   [ "$large" -le 180 ]
-  ! grep -q FIND "$BOARD_IO_LOG" || false
   : > "$BOARD_IO_LOG"
   run clikae
   [ "$status" -eq 0 ]
@@ -141,7 +146,7 @@ _board_shims() {
   [ "$(cat "$TEST_HOME/parses")" = xx ]
 }
 
-@test "home: missing state self-heals inline once, then reads are bounded again" {
+@test "home: missing state self-heals inline once, then reads are bounded (list+stat, never content) again" {
   # 2026-09-12 round-1 fix review, P1-2: a board with NO snapshot at all for
   # this tank (never launched through a session boundary — `clikae alias` /
   # `env` / a `.app` bundle never call board_state_refresh) used to render an
@@ -149,14 +154,18 @@ _board_shims() {
   # board_generation (lib/core/board_state.sh) rebuilds the ONE missing tank
   # inline the first time anything reads it — so the render must show the
   # fixture immediately, at the cost of exactly one discovery pass for that
-  # one tank — and every render after that is bounded again, with no further
-  # discovery, because the rebuild it just did is what the second render
-  # reads back.
+  # one tank.
+  #
+  # round-5 fix review design decision: every render after that ALSO lists +
+  # stats this one tank's transcripts once — that is the entire staleness
+  # signal now (see board_state.sh's own header) — but never opens/parses
+  # any of them, so the SECOND render's cost is bounded to one find + one
+  # stat, not the "zero discovery at all" this test asserted before that
+  # redesign.
   _board_fixture 10
   rm -rf "$CLIKAE_HOME/state/board"
   # A SOFT find shim for this first render: it must still discover the real
-  # fixture (unlike _board_shims' hard-failing find below, which exists to
-  # prove the OPPOSITE — that a second render does not discover anything).
+  # fixture (same shim `_board_shims` below now uses too — see its header).
   export BOARD_IO_LOG="$TEST_HOME/io.log"
   mkdir -p "$TEST_HOME/io-bin"
   { printf '#!/bin/bash\nprintf "%%s\\n" "find $*" >> "$BOARD_IO_LOG"\n'
@@ -169,14 +178,15 @@ _board_shims() {
   [[ "$output" == *"Fixture"* ]] || false
   grep -q '^find ' "$BOARD_IO_LOG" || false
   PATH="${PATH#*:}"
-  # Now the strict shim: a SECOND render must read back what the first one
-  # just self-healed, with no further discovery at all.
+  # Now the logging shim: a SECOND render reads back what the first one just
+  # self-healed. It re-lists and re-stats this one tank (bounded — see this
+  # test's own header) but must never re-read any transcript's CONTENT.
   _board_shims
   : > "$BOARD_IO_LOG"
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Fixture"* ]] || false
-  ! grep -q FIND "$BOARD_IO_LOG" || false
+  ! grep -E '^(head|tail).*\.jsonl' "$BOARD_IO_LOG" || false
 }
 
 @test "home: live rows read the stamped row exactly, and guess the unstamped row from one candidate" {
@@ -212,7 +222,6 @@ _board_shims() {
   touched="$(grep -E '^(head -n 100|tail -c 524288)' "$BOARD_IO_LOG" \
     | grep -oE 'session-[0-9]+\.jsonl' | sed 's/\.jsonl$//' | sort -u | grep -vx session-3 | wc -l | tr -d ' ')"
   [ "$touched" -le 1 ]
-  ! grep -q FIND "$BOARD_IO_LOG" || false
 }
 
 @test "run: launch keeps exec semantics — no board refresh, engine exit status preserved" {
@@ -251,7 +260,6 @@ _board_shims() {
   run limit_profile_dry codex "$dir"
   [ "$status" -eq 0 ]
   [ "$output" = 'try again at tomorrow' ]
-  ! grep -q FIND "$BOARD_IO_LOG" || false
   ! grep -E '^(head|tail).*\.jsonl' "$BOARD_IO_LOG" || false
   PATH="${PATH#*:}"
   printf '{"timestamp":"2026-09-12T00:01:00Z","type":"agent_message"}\n' >> "$f"
@@ -266,7 +274,7 @@ _board_shims() {
   [ "$status" -eq 2 ]
 }
 
-@test "home: grok recent and live lookup use snapshots without discovery" {
+@test "home: grok recent and live lookup use snapshots without a content read" {
   _board_source
   local dir="$TEST_HOME/grok" f
   mkdir -p "$dir/sessions/group/session"
@@ -282,7 +290,7 @@ _board_shims() {
   [[ "$output" == *$'\037session' ]] || false
   [ "$(adapter_find_session "$dir" session)" = "$f" ]
   [ "$(adapter_session_title "$dir" session)" = 'Grok fixture' ]
-  ! grep -q FIND "$BOARD_IO_LOG" || false
+  ! grep -E '^(head|tail).*summary\.json' "$BOARD_IO_LOG" || false
   : > "$BOARD_IO_LOG"
   [ "$(adapter_session_title "$dir" session)" = 'Grok fixture' ]
   ! grep -E '^(head|tail)' "$BOARD_IO_LOG" || false
@@ -301,4 +309,110 @@ _board_shims() {
   [ "${#lines[@]}" -eq 2 ]
   [[ "${lines[0]}" == *$'\037session-0' ]] || false
   [[ "$output" != *agent-new* ]] || false
+}
+
+# --- round-5 fix review receipts -------------------------------------------
+# Each of these reproduces one of round 5's findings against the OLD, bounded
+# per-signal staleness code and must go green under the new one-fingerprint
+# design (board_state.sh's own header). Left in the suite so none of the four
+# regresses again.
+
+@test "home: a codex limit appended to a running rollout is visible from a different cwd (round-5 P1)" {
+  _board_source
+  local dir="$TEST_HOME/codex" f
+  mkdir -p "$dir/sessions" "$TEST_HOME/work-a" "$TEST_HOME/somewhere-else"
+  f="$dir/sessions/rollout-test.jsonl"
+  printf '{"type":"session_meta","payload":{"id":"test","cwd":"%s"}}\n' "$TEST_HOME/work-a" > "$f"
+  printf '{"timestamp":"2026-09-12T00:00:00Z","type":"agent_message"}\n' >> "$f"
+  board_state_refresh codex "$dir"
+  local _CLIKAE_BOARD=1
+  run limit_profile_dry codex "$dir"
+  [ "$status" -ne 0 ]
+  # The limit lands via an APPEND to the SAME rollout — the shape the real
+  # codex TUI uses (limit.sh's own header), never a new file. An append
+  # touches no directory's mtime, only this one file's.
+  printf '{"timestamp":"2026-09-12T00:01:00Z","codex_error_info":"usage_limit_exceeded","message":"try again at tomorrow."}\n' >> "$f"
+  # Render from a cwd that is neither the rollout's own recorded cwd nor
+  # $dir itself — round-5's P1: codex's only per-render freshness signal
+  # used to be keyed to the OBSERVER's $PWD (a day-dir chain), so a render
+  # from anywhere else never saw this append at all.
+  cd "$TEST_HOME/somewhere-else" || return 1
+  run limit_profile_dry codex "$dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'try again at tomorrow' ]
+}
+
+@test "home: a claude limit appended to the 11th-newest session in its project is visible (round-5 P2-2)" {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  local slug dir i stamp
+  slug="$(_claude_project_slug "$PWD")"
+  dir="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$dir/projects/$slug"
+  # 11 real sessions, session-0 newest down to session-10 oldest — round-4's
+  # per-project top-10 recorded set would have watched session-0..session-9
+  # only, dropping session-10 (the 11th) entirely.
+  for ((i = 0; i < 11; i++)); do
+    printf '{"type":"ai-title","aiTitle":"Fixture %s"}\n' "$i" > "$dir/projects/$slug/session-$i.jsonl"
+    stamp="$(date -v-${i}H '+%Y%m%d%H%M' 2>/dev/null || date -d "$i hours ago" '+%Y%m%d%H%M')"
+    touch -t "$stamp" "$dir/projects/$slug/session-$i.jsonl"
+  done
+  board_state_refresh claude "$dir"
+  local _CLIKAE_BOARD=1
+  run limit_profile_dry claude "$dir"
+  [ "$status" -ne 0 ]
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 11pm"}]},"timestamp":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$dir/projects/$slug/session-10.jsonl"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 11pm"* ]] || false
+}
+
+@test "home: a claude limit landing only in an already-existing agent-*.jsonl is visible (round-5 P2-2)" {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  local slug dir
+  slug="$(_claude_project_slug "$PWD")"
+  dir="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$dir/projects/$slug"
+  printf '{"type":"ai-title","aiTitle":"Fixture 0"}\n' > "$dir/projects/$slug/session-0.jsonl"
+  # A subagent transcript that already exists at publish time — round-4's
+  # topK signal never considered agent-*.jsonl a candidate at all (filtered
+  # out before top-K even saw it), so an APPEND to it moved neither a
+  # directory mtime nor any recorded file.
+  printf '{"type":"assistant","timestamp":"2026-09-12T00:00:00Z"}\n' > "$dir/projects/$slug/agent-sub.jsonl"
+  board_state_refresh claude "$dir"
+  local _CLIKAE_BOARD=1
+  run limit_profile_dry claude "$dir"
+  [ "$status" -ne 0 ]
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 11pm"}]},"timestamp":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$dir/projects/$slug/agent-sub.jsonl"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 11pm"* ]] || false
+}
+
+@test "home: _home_refresh in one long-lived process does not reuse a stale generation on its next refresh (round-5 P2-1)" {
+  _board_fixture 10
+  source "$CLIKAE_LIB/commands/home.sh"
+  # shellcheck disable=SC2034  # dynamically consumed by _home_refresh itself
+  local items dry dir slug before after
+  dir="$CLIKAE_HOME/profiles/claude/work"
+  slug="$(_claude_project_slug "$PWD")"
+  _home_refresh
+  before="$(board_recent claude "$dir" 20)"
+  [[ "$before" != *session-new* ]] || false
+  # A brand new session, as if the user just launched one from the TUI and
+  # came back to the picker — no new PROCESS starts, so a stale in-process
+  # memo (round-5 P2-1) would hide it from the very next refresh.
+  printf '{"type":"ai-title","aiTitle":"Fixture NEW"}\n' > "$dir/projects/$slug/session-new.jsonl"
+  _home_refresh
+  after="$(board_recent claude "$dir" 20)"
+  [[ "$after" == *session-new* ]] || false
 }
