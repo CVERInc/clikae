@@ -479,6 +479,24 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [ ! -f "$CLIKAE_HOME/state/watch-github/CVERInc.cursor" ]
 }
 
+@test "watch github --once: the mentions query is skipped once the org query is rate-limited (P3-9)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 'gh: HTTP 403: API rate limit exceeded (https://api.github.com/search/issues)'
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [ ! -f "$GH_STUB_DIR/mentions.calls" ]
+}
+
+@test "watch github --once: a 5xx backs off with HONEST wording, not a rate-limit claim (P3-7)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 'gh: HTTP 503: Service unavailable (https://api.github.com/search/issues)'
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"back"* ]] || false
+  [[ "$output" == *"having problems"* ]] || false
+  [[ "$output" != *"rate-limited"* ]] || false
+}
+
 @test "watch github --once: a permanent 403 (missing scope) retries once, then exits 1 without a back-off line (P2-6)" {
   _gh_stub_install
   # No "rate limit" wording — a genuine scope/SAML denial, exactly what
@@ -567,6 +585,7 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   _gh_stub_install
   local lock="$CLIKAE_HOME/state/watch-github/CVERInc.lock"
   mkdir -p "$lock"
+  printf '99999\n' > "$lock/pid"   # P3-8: the (long-dead) holder's own pid
   # Backdate it well past the 300s staleness window — simulating a poll
   # that crashed mid-run and never released it.
   local past
@@ -575,6 +594,10 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"0 new event(s)"* ]] || false
+  # P3-8: reclaiming a stale lock is no longer silent — a line, with the
+  # dead holder's own pid, not just "something happened".
+  [[ "$output" == *"stale poll lock (pid 99999,"* ]] || false
+  [[ "$output" == *"reclaimed"* ]] || false
   # Released normally after the reclaimed poll finished — not left behind.
   [ ! -d "$lock" ]
 }
@@ -628,6 +651,31 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   _gh_stub_install
   run clikae watch github --org CVERInc --interval 30m --once
   [ "$status" -eq 0 ]
+}
+
+@test "watch github: --since '' is rejected, not silently ignored (P3-15)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --since '' --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--since"* ]] || false
+  [[ "$output" == *"empty"* ]] || false
+}
+
+@test "watch github: --since garbage is rejected with a clear message" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --since 'yesterday' --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--since"* ]] || false
+  [[ "$output" == *"ISO8601"* ]] || false
+}
+
+@test "watch github: a valid --since is accepted and reaches the query (positive control)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z --once
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$GH_STUB_DIR/org.1.sent_query")" == *"updated:>=2026-09-01T00:00:00Z"* ]] || false
 }
 
 # --- P2-8: regression coverage for what the stub never validated before ----
@@ -785,6 +833,108 @@ _wgt_epoch_iso() { # <epoch> -> ISO8601 Z, GNU first then BSD
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
   [[ "$output" == *"github CVERInc/reef#100 opened by alice: First issue"* ]] || false
+}
+
+@test "watch github --once: the status file's artifact is THIS poll's own events, not the accumulated log (P3-11)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  local status_file
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  local artifact
+  artifact="$(grep -oE '"artifact":"[^"]*"' "$status_file" | sed -E 's/.*"([^"]*)"$/\1/')"
+  # NOT the durable, accumulated log.
+  [ "$artifact" != "$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl" ]
+  [ -f "$artifact" ]
+  [ "$(wc -l < "$artifact")" -eq 1 ]
+  grep -q '"number":100' "$artifact"
+
+  # A SECOND poll's own artifact must not repeat the first poll's event.
+  _gh_stub_page org 2 \
+    "$(_row 101 2026-09-07T04:40:00Z bob reef https://x/101 0 "Second issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  local status_file2 artifact2
+  status_file2="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' -newer "$status_file" | head -n1)"
+  artifact2="$(grep -oE '"artifact":"[^"]*"' "$status_file2" | sed -E 's/.*"([^"]*)"$/\1/')"
+  [ "$(wc -l < "$artifact2")" -eq 1 ]
+  grep -q '"number":101' "$artifact2"
+  ! grep -q '"number":100' "$artifact2"
+}
+
+@test "watch github --once: two runs in the same second get DIFFERENT directories, not a silent overwrite (P3-10)" {
+  _gh_stub_install
+  # A real wall-clock race (two --once calls landing in the same second) is
+  # exactly what this covers, but polling the REAL clock for it would make
+  # the test itself flaky at a second boundary — pin `date +%s` instead, real
+  # `date` for everything else (ISO8601 formatting, mtime math, …).
+  local real_date; real_date="$(command -v date)"
+  cat > "$TEST_HOME/.testbin/date" <<STUB
+#!/usr/bin/env bash
+if [ "\$#" -eq 1 ] && [ "\$1" = "+%s" ]; then printf '1700000000\n'; exit 0; fi
+exec "$real_date" "\$@"
+STUB
+  chmod +x "$TEST_HOME/.testbin/date"
+
+  mkdir -p "$HOME/.clikae/logs/watch-github-CVERInc-1700000000"
+  printf '{"ok":true}\n' > "$HOME/.clikae/logs/watch-github-CVERInc-1700000000/status.json"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # The pre-existing same-second directory is untouched...
+  grep -qxF '{"ok":true}' "$HOME/.clikae/logs/watch-github-CVERInc-1700000000/status.json"
+  # ...and this poll's own write landed in a DIFFERENT, counter-suffixed one.
+  [ -f "$HOME/.clikae/logs/watch-github-CVERInc-1700000000-2/status.json" ]
+  grep -q '"run_id":"watch-github-CVERInc-1700000000-2"' \
+    "$HOME/.clikae/logs/watch-github-CVERInc-1700000000-2/status.json"
+}
+
+@test "watch github --once: run directories rotate, keeping the newest 200 (P3-10)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" i past
+  mkdir -p "$base"
+  for i in $(seq 1 205); do
+    mkdir -p "$base/watch-github-CVERInc-fake$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-fake$i"   # the DIRECTORY's own mtime — that's what rotation sorts on
+  done
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  local n; n="$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-*' | wc -l)"
+  [ "$n" -eq 200 ]
+  # The OLDEST fake ones (lowest i, backdated furthest) are gone...
+  [ ! -d "$base/watch-github-CVERInc-fake1" ]
+  # ...the newest fake ones, and this poll's own real run, survive.
+  [ -d "$base/watch-github-CVERInc-fake205" ]
+}
+
+@test "watch github --once: the durable events.jsonl rotates at 10MB (P3-12)" {
+  _gh_stub_install
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  mkdir -p "$(dirname "$events")"
+  # ~12.1MB of padding (1,100,000 x 11-byte lines) — comfortably past the cap.
+  yes '0123456789' | head -n 1100000 > "$events"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  local sz; sz="$(wc -c < "$events")"
+  [ "$sz" -le "$((10 * 1024 * 1024))" ]
+  # The newest line — this poll's own event, appended before rotation ran —
+  # survived; rotation trims the OLD end, not the new one.
+  tail -n1 "$events" | grep -q '"number":100'
 }
 
 @test "watch: still dispatches to the engine path for a non-github first argument" {

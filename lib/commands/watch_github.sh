@@ -158,7 +158,7 @@ _wg_lock_dir()    { printf '%s/%s.lock\n' "$(_wg_state_dir)" "$1"; }
 # check (reusing lib/core/profile_store.sh's own file_mtime, which already
 # solves the GNU/BSD `stat` footgun once) is honest here, not a shortcut.
 _wg_lock_acquire() {
-  local org="$1" timeout="${2:-30}" dir waited=0 age mtime
+  local org="$1" timeout="${2:-30}" dir waited=0 age mtime old_pid
   dir="$(_wg_lock_dir "$org")"
   mkdir -p "$(_wg_state_dir)" 2>/dev/null || true
   while ! mkdir "$dir" 2>/dev/null; do
@@ -169,7 +169,13 @@ _wg_lock_acquire() {
         *)
           age=$(( $(date +%s 2>/dev/null || echo 0) - mtime ))
           if [ "$age" -gt 300 ]; then
-            rmdir "$dir" 2>/dev/null || true   # stale — a crashed poll never released it; reclaim and retry
+            # P3-8 (2026-09-13 fix-round-2 review): reclaiming used to be
+            # silent — 0 lines printed, 0 files recording who held it. Read
+            # the holder's pid (written below) BEFORE removing it, and say so.
+            old_pid="$(cat "$dir/pid" 2>/dev/null || printf 'unknown')"
+            rm -f "$dir/pid" 2>/dev/null || true
+            rmdir "$dir" 2>/dev/null || true
+            log_warn "github:$org — stale poll lock (pid $old_pid, ${age}s old) reclaimed."
             continue
           fi
           ;;
@@ -179,10 +185,15 @@ _wg_lock_acquire() {
     sleep 1
     waited=$((waited + 1))
   done
+  printf '%s\n' "$$" > "$dir/pid" 2>/dev/null || true
   return 0
 }
 
-_wg_lock_release() { rmdir "$(_wg_lock_dir "$1")" 2>/dev/null || true; }
+_wg_lock_release() {
+  local dir; dir="$(_wg_lock_dir "$1")"
+  rm -f "$dir/pid" 2>/dev/null || true
+  rmdir "$dir" 2>/dev/null || true
+}
 
 # --- time helpers -----------------------------------------------------------
 
@@ -517,15 +528,20 @@ _wg_process() {
       fi
     fi
 
-    local line
+    local line json_rec
     line="$(printf 'github %s/%s#%s %s by %s: %s' "$org" "$repo" "$number" "$kind" "$actor" "$title")"
     log_done "$line"
 
-    printf '{"kind":%s,"org":%s,"repo":%s,"number":%s,"login":%s,"title":%s,"updated_at":%s,"html_url":%s,"is_pr":%s,"line":%s}\n' \
+    json_rec="$(printf '{"kind":%s,"org":%s,"repo":%s,"number":%s,"login":%s,"title":%s,"updated_at":%s,"html_url":%s,"is_pr":%s,"line":%s}' \
       "$(json_str "$kind")" "$(json_str "$org")" "$(json_str "$repo")" "$number" \
       "$(json_str "$actor")" "$(json_str "$title")" "$(json_str "$updated")" \
       "$(json_str "$html_url")" "$([ "$is_pr" = "1" ] && printf true || printf false)" \
-      "$(json_str "$line")" >> "$events_file"
+      "$(json_str "$line")")"
+    printf '%s\n' "$json_rec" >> "$events_file"
+    # P3-11 (2026-09-13 fix-round-2 review): fed to _wg_status_write's own
+    # per-poll artifact file — `artifact` must point at THIS poll's events,
+    # not the whole accumulated log (see _wg_status_write's comment).
+    __WG_EVENT_JSON_LINES="${__WG_EVENT_JSON_LINES:+$__WG_EVENT_JSON_LINES$'\n'}$json_rec"
 
     printf '%s\n' "$key" >> "$seen_file"
     __WG_EVENTS=$((__WG_EVENTS + 1))
@@ -552,35 +568,90 @@ _wg_build_summary() {
   printf '%s\n+%d' "$head" "$((n - cap))"
 }
 
-# _wg_status_write <org> <events_file> <summary> -> write ONE burn-status-
-# SHAPED file to $HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json —
-# burn_status_dir's OWN layout (lib/core/burn_status.sh), not a parallel one
-# under $CLIKAE_HOME/state (P2-3, 2026-09-13 fix-round-2 review: the old
-# runs/<epoch>.json location was invisible to `clikae wait` no matter what
-# you passed it — the run_id this file itself wrote wasn't one
-# burn_status_resolve's patterns recognised, an existing-but-unresolved path
-# wasn't tried verbatim, and a not-yet-existing one couldn't be "waited on
-# to appear" either; a cockpit's only option was a hand-rolled `until [ -e
-# ... ]` poll of the runs/ directory — the exact thing #41 exists to
-# replace). Writing here means the run_id THIS FILE prints
+# _wg_status_write <org> <poll_json_lines> <summary> -> write ONE burn-
+# status-SHAPED file to $HOME/.clikae/logs/watch-github-<org>-<epoch>[-N]/
+# status.json — burn_status_dir's OWN layout (lib/core/burn_status.sh), not
+# a parallel one under $CLIKAE_HOME/state (P2-3, 2026-09-13 fix-round-2
+# review: the old runs/<epoch>.json location was invisible to `clikae wait`
+# no matter what you passed it — the run_id this file itself wrote wasn't
+# one burn_status_resolve's patterns recognised, an existing-but-unresolved
+# path wasn't tried verbatim, and a not-yet-existing one couldn't be "waited
+# on to appear" either; a cockpit's only option was a hand-rolled
+# `until [ -e ... ]` poll of the runs/ directory — the exact thing #41
+# exists to replace). Writing here means the run_id THIS FILE prints
 # (`watch-github-<org>-<epoch>`) is also the one `clikae wait` resolves, via
 # burn_status_resolve's own "anything else -> literal run-directory name"
 # fallback — no change needed there. `clikae wait --latest <prefix>` (see
-# wait.sh) covers the epoch a caller can't know in advance. Same field set/
-# escaping as burn's own status.json plus `summary`; write-then-rename so
-# `clikae wait` (polling every second) never reads a half-written file.
+# wait.sh) covers the epoch a caller can't know in advance.
+#
+# `-N` (P3-10): two polls landing in the same second (cron and a manual
+# --once overlapping) would otherwise collide on the SAME directory name —
+# a counter suffix makes every run's own directory unique instead of the
+# second one silently overwriting the first. Rotated to the newest 200
+# afterward (_wg_runs_rotate) — this directory has no other GC.
+#
+# `artifact` (P3-11): THIS poll's own events, written to
+# <run_dir>/events.jsonl — not $CLIKAE_HOME/logs/watch-github-<org>/
+# events.jsonl, the ACCUMULATED durable log (still written by _wg_process
+# directly; unrelated to this file). A consumer reading `artifact` off a
+# wake should see what just happened, not the org's entire history.
+#
+# Same field set/escaping as burn's own status.json plus `summary`; write-
+# then-rename so `clikae wait` (polling every second) never reads a
+# half-written file.
 _wg_status_write() {
-  local org="$1" events_file="$2" summary="$3" now run_id run_dir
+  local org="$1" poll_json_lines="$2" summary="$3" now run_id run_dir n=1
   now="$(date +%s 2>/dev/null || echo 0)"
   run_id="watch-github-$org-$now"
+  while [ -d "$(burn_status_dir "$run_id")" ]; do
+    n=$((n + 1))
+    run_id="watch-github-$org-$now-$n"
+  done
   run_dir="$(burn_status_dir "$run_id")"
   mkdir -p "$run_dir" 2>/dev/null || return 0
+  [ -n "$poll_json_lines" ] && printf '%s\n' "$poll_json_lines" > "$run_dir/events.jsonl" 2>/dev/null
   {
     printf '{"ok":true,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null,"summary":%s}\n' \
-      "$(json_str "github")" "$(json_str "$org")" "$(json_str "$events_file")" \
+      "$(json_str "github")" "$(json_str "$org")" "$(json_str "$run_dir/events.jsonl")" \
       "$(json_str "github-events")" "$(json_str "$run_id")" \
       "$(json_str "done")" "$now" "$now" "$$" "$(json_str "$summary")"
   } > "$run_dir/status.json.tmp" 2>/dev/null && mv -f "$run_dir/status.json.tmp" "$run_dir/status.json" 2>/dev/null || true
+  _wg_runs_rotate "$org"
+}
+
+# _wg_runs_rotate <org> -> keep only the newest 200 watch-github-<org>-*
+# run directories under $HOME/.clikae/logs (P3-10) — this directory has no
+# other retention/GC, unlike burn's own (lib/commands/burn.sh's
+# CLIKAE_BURN_LOG_RETENTION_DAYS sweep, which only ever globs `burn-*`).
+# Sorted by mtime (not name — no assumption about epoch digit width).
+_wg_runs_rotate() {
+  local org="$1" base="$HOME/.clikae/logs" d keep=200 i=0
+  [ -d "$base" ] || return 0
+  while IFS= read -r d; do
+    i=$((i + 1))
+    if [ "$i" -gt "$keep" ]; then rm -rf "$d" 2>/dev/null; fi
+  done < <(
+    for d in "$base/watch-github-$org-"*; do
+      [ -d "$d" ] || continue
+      printf '%s\t%s\n' "$(file_mtime "$d" 2>/dev/null || echo 0)" "$d"
+    done | sort -rn | cut -f2-
+  )
+  return 0
+}
+
+# _wg_events_rotate <file> -> keep the durable events.jsonl (P3-12) under
+# 10MB — the newest tail, byte-bounded then trimmed to a whole line so the
+# survivor is still valid one-JSON-object-per-line. Same shape as the
+# seen-file cap just above: mktemp+mv, never a fixed .tmp name.
+_wg_events_rotate() {
+  local f="$1" max=$((10 * 1024 * 1024)) sz tmp
+  [ -f "$f" ] || return 0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  [ "$sz" -gt "$max" ] || return 0
+  tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null)" || return 0
+  tail -c "$max" "$f" 2>/dev/null | tail -n +2 > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$f" 2>/dev/null
+  return 0
 }
 
 # --- one poll ---------------------------------------------------------------
@@ -618,7 +689,14 @@ _wg_poll_one_query() {
       case "$__WG_LAST_KIND" in
         rate-limit)
           __WG_BACKOFF=1
-          log_warn "GitHub search rate-limited on the $kind_query query — backing off. ($__WG_LAST_REASON)"
+          # P3-7 (2026-09-13 fix-round-2 review): _wg_classify_error folds a
+          # bare 5xx into "rate-limit" too (backing off is the right MOVE for
+          # both), but "rate-limited" is a false claim about a 500/503 — say
+          # which actually happened.
+          case "$__WG_LAST_REASON" in
+            *'HTTP 5'[0-9][0-9]*) log_warn "GitHub is having problems on the $kind_query query — backing off. ($__WG_LAST_REASON)" ;;
+            *) log_warn "GitHub search rate-limited on the $kind_query query — backing off. ($__WG_LAST_REASON)" ;;
+          esac
           ;;
         permanent)
           if [ "${__WG_PERMANENT:-0}" -ne 1 ]; then
@@ -684,6 +762,7 @@ _wg_poll() {
   __WG_PERMANENT_REASON=""
   __WG_MAX_UPDATED=""
   __WG_SUMMARY_LINES=""
+  __WG_EVENT_JSON_LINES=""
   __WG_TRUNCATED=0
   __WG_TRUNCATED_OLDEST=""
   # P2-4: the per-poll activity-lookup budget (_wg_lookup_and_count) — shared
@@ -724,6 +803,10 @@ _wg_poll() {
     # the identical way (same auth, same org) — no point spending the
     # request or the retry on it.
     [ "$__WG_PERMANENT" -eq 1 ] && break
+    # P3-9 (2026-09-13 fix-round-2 review): the org query coming back
+    # rate-limited means mentions would hit the SAME limit — sending it
+    # anyway was one more request into an endpoint already saying "stop".
+    [ "$kind_query" = "mentions" ] && [ "$__WG_BACKOFF" -eq 1 ] && break
     _wg_poll_one_query "$kind_query" "$org" "$since" "$seen_file" "$events_file"
   done
 
@@ -740,6 +823,13 @@ _wg_poll() {
       tail -n 5000 "$seen_file" > "$seen_tmp" 2>/dev/null && \
       mv -f "$seen_tmp" "$seen_file" 2>/dev/null
   fi
+
+  # P3-12 (2026-09-13 fix-round-2 review): the durable events.jsonl had no
+  # cap at all (unlike the seen-file, above) — an org active enough to need
+  # this feature grows it forever. Rotated at 10MB, keeping the newest tail;
+  # `tail -n +2` drops whatever partial line a byte-boundary `tail -c` cut
+  # into, so the file that survives is still one JSON object per line.
+  _wg_events_rotate "$events_file"
 
   # Never advance past an event a failed page might have contained. The new
   # cursor lags 300s behind the max updated_at actually seen this poll —
@@ -762,7 +852,7 @@ _wg_poll() {
   # per poll that found something, so `clikae wait` has a terminal state to
   # read. Never on a zero-event poll (nothing for a cockpit to wake up FOR).
   if [ "$__WG_EVENTS" -ge 1 ]; then
-    _wg_status_write "$org" "$events_file" "$(_wg_build_summary "$__WG_SUMMARY_LINES" "$__WG_EVENTS")"
+    _wg_status_write "$org" "$__WG_EVENT_JSON_LINES" "$(_wg_build_summary "$__WG_SUMMARY_LINES" "$__WG_EVENTS")"
   fi
 
   _wg_lock_release "$org"
@@ -850,7 +940,7 @@ _wg_infer_org() {
 }
 
 cmd_watch_github() {
-  local org="" interval_dur="10m" once=0 since_flag=""
+  local org="" interval_dur="10m" once=0 since_flag="" since_given=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help)   _watch_github_help; return 0 ;;
@@ -858,13 +948,17 @@ cmd_watch_github() {
       --interval)  shift; [ $# -gt 0 ] || log_fail "--interval needs a duration"; interval_dur="$1"; shift ;;
       --once)      once=1; shift ;;
       --since)     shift; [ $# -gt 0 ] || log_fail "--since needs an ISO8601 timestamp, e.g. 2026-09-01T00:00:00Z"
-                   since_flag="$1"; shift ;;
+                   since_flag="$1"; since_given=1; shift ;;
       -*)          log_fail "Unknown flag: $1  (try: clikae watch github --help)" ;;
       *)           log_fail "Unexpected argument: $1  (try: clikae watch github --help)" ;;
     esac
   done
 
-  if [ -n "$since_flag" ]; then
+  # P3-15 (2026-09-13 fix-round-2 review): `--since ''` used to be silently
+  # ACCEPTED and ignored (falling through to the 24h default) — indistinguishable
+  # from never passing the flag at all. `$since_given` tells the two apart.
+  if [ "$since_given" -eq 1 ]; then
+    [ -n "$since_flag" ] || log_fail "--since: empty value  (e.g. 2026-09-01T00:00:00Z)"
     # P1-3 (2026-09-13 fix-round-1 review): only ever used for a COLD start
     # (no persisted cursor yet) — see _wg_poll's since_override. Validated
     # the same way an updated_at from GitHub itself is parsed
