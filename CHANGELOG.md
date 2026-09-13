@@ -216,9 +216,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `clikae handoff` reads each engine's own transcript shape via a new optional
   `adapter_handoff_extract` adapter hook (claude, codex, grok implement it;
   an adapter without one falls back to the previous claude-shaped grep, so
-  third-party adapters keep working). codex's rollout wraps a turn as a
+  third-party adapters keep working). codex's rollout records a turn as
+  either an `event_msg` (payload.type `user_message`/`agent_message`) or a
   "response item" with an array `content`, and grok's `chat_history.jsonl`
-  has no `role` key at all — both matched zero lines under the old
+  has no `role` key at all — none of those matched under the old
   claude-only extraction, so a dry codex/grok tank's brief carried metadata
   only. Also fixes a `set -eo pipefail` bug where a raw brief's metadata line
   (`sessionId`, `gitBranch`, …) silently killed the whole command on any

@@ -250,8 +250,8 @@ adapter_transcript_path() {
 _CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
 _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 
-# Optional hook (#33, P1-1 + P2-2 fixes from the round-1 review; round-2
-# review P2-1/P2-2 folded in): the transcript SHAPE belongs to the adapter.
+# Optional hook (#33; round-1 P1-1/P2-2/P3-1 and round-2 P2-1/P2-2/P3-2/P3-3
+# review fixes folded in): the transcript SHAPE belongs to the adapter.
 # Prints one line per MESSAGE of <role> ("user"/"assistant") — several text
 # parts in one message join with a space onto one line, unlike claude.sh's
 # twin, which prints one line per text BLOCK instead (round-1 review P3-1;
@@ -259,9 +259,10 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 # last — used by `clikae handoff`'s digest (lib/core/handoff.sh,
 # _handoff_extract).
 #
-# Round-2 review P2-1: a codex rollout can record the SAME turn in two
-# different ways depending on how the session ran, and this hook reads the
-# UNION of both rather than betting on one:
+# A codex rollout can record the SAME turn in two different ways depending
+# on how the session ran, and this hook reads the UNION of both rather than
+# betting on one (round-2 review P2-1 for the assistant side; the user side
+# already did this in round-1, for the injected-context reason below):
 #
 #   Shape A — event_msg (the UI event stream; limit.sh's whole codex family
 #   — :281, :322, :1160, :1183 — reads ONLY this shape, "confirmed against a
@@ -275,10 +276,18 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 #     {"type":"response_item","payload":{"type":"message","role":"user",
 #       "content":[{"type":"input_text","text":"…"}]}}
 #
-# `role` IS present in shape B, but `content` is an ARRAY of typed parts, so
-# the claude-shaped `"role":"…","content":"…"` string anchor matches
-# neither role — that was the original #33 bug (`grep -ac
-# '"role":"user","content":"' <rollout>` = 0).
+# `content` in shape B is an ARRAY of typed parts, so the claude-shaped
+# `"role":"…","content":"…"` string anchor matches neither role — that was
+# the original #33 bug. Round-2 review P3-3: the value scan below only pulls
+# a part's "text" when it is immediately preceded by ITS OWN "type" field
+# naming the part kind this role writes ("output_text" for assistant,
+# "input_text" for user) — matching the field order in the shape shown
+# above, the only order this repo has ever seen (no real rollout was
+# available to confirm another order exists; see "what we didn't verify"
+# below). A bare `"text": *"` key scan also lights up on a DIFFERENT part in
+# the same array that merely happens to carry its own "text" key (a
+# reasoning part, an image part's alt text, …), which would leak non-reply
+# content into a brief meant for another vendor.
 #
 # USER shape B ALSO carries MACHINE-INJECTED context, not just what the
 # human typed, e.g.
@@ -304,88 +313,79 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 # `substr()` lifts it in one shot, leaving nothing for mawk's string-concat
 # cost to multiply. This is the same "value body" idiom claude.sh's
 # assistant branch already uses via `grep -aoE`, just expressed for awk's
-# `match()`. The fixed anchor/key patterns stay literal strings either side
-# of a single, non-nested ` *` — no ReDoS risk, and no need for the
-# index()/substr()-without-regex workaround a nested-star `[[ =~ ]]`
-# pattern would need (see adapter_title_for_file above for why THAT trap
-# matters for bash's own regex engine).
+# `match()`. The fixed anchor/key patterns (event_re, role_re, part_keyre)
+# stay literal strings either side of a single, non-nested ` *`/`, *` — no
+# ReDoS risk, and no need for the index()/substr()-without-regex workaround
+# a nested-star `[[ =~ ]]` pattern would need (see adapter_title_for_file
+# above for why THAT trap matters for bash's own regex engine).
 #
 # Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
 # has always unescaped, never \uXXXX (parity first; see handoff.sh's own
 # comment on this — a \uXXXX decoder is a follow-up, not a regression, since
 # grep/sed/awk alone can't safely decode one without jq/python).
 #
-# Silent failure is not allowed (round-1 review P1-1): a real-tank miss on a
-# whitespace-bearing rollout must be VISIBLE, not indistinguishable from "this
-# transcript genuinely has no <role> turns" — so a zero-match result prints
-# ONE line to stderr. handoff.sh's _handoff_extract no longer swallows a
-# hook's stderr (see its own comment), so this reaches the user.
+# Silent failure is not allowed (round-1 review P1-1) — but round-2 review
+# P3-2: a role with genuinely no turns yet (a brand-new tank the model
+# hasn't replied to) is NOT a shape mismatch, and firing the same stderr
+# line for both trained a reader to ignore it. So the diagnostic now fires
+# only when SCANNED (a line structurally shaped like this role's turn, by
+# EITHER shape's anchor) is > 0 while MATCHED (a value actually pulled out
+# of one) stays 0 — that combination can only mean the anchors are looking
+# at the wrong keys, not "there's nothing here yet" — and it says how many
+# lines it saw, so the reader isn't left guessing which. Zero scanned lines
+# stays silent. handoff.sh's _handoff_extract no longer swallows a hook's
+# stderr (see its own comment), so a real diagnostic still reaches the user.
 adapter_handoff_extract() {
   local t="$1" role="$2"
   [ -n "$t" ] && [ -f "$t" ] || return 0
   case "$role" in user|assistant) ;; *) return 0 ;; esac
-  local out
+  local event_re part_type out
   if [ "$role" = user ]; then
-    out="$(awk -v type_re="$_CODEX_USER_MESSAGE_TYPE_RE" '
-      $0 ~ type_re {
-        rest = $0; keyre = "\"message\": *\""
-        if (match(rest, keyre)) {
-          rest = substr(rest, RSTART + RLENGTH)
-          if (match(rest, /^([^"\\]|\\.)*/)) {
-            seg = substr(rest, 1, RLENGTH)
-            if (seg != "") print seg
-          }
-        }
-        next
-      }
-      $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"user"/ {
-        rest = $0; keyre = "\"text\": *\""; res = ""
-        while (match(rest, keyre)) {
-          rest = substr(rest, RSTART + RLENGTH)
-          if (!match(rest, /^([^"\\]|\\.)*/)) break
-          seg = substr(rest, 1, RLENGTH)
-          res = (res == "" ? seg : res " " seg)
-          rest = substr(rest, RLENGTH + 2)
-        }
-        if (res != "") print res
-      }
-    ' "$t" 2>/dev/null \
-      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-      | grep -avE '^[[:space:]]*<(environment_context|user_instructions)' \
-      | grep -av '^[[:space:]]*$' || true)"
+    event_re="$_CODEX_USER_MESSAGE_TYPE_RE"; part_type="input_text"
   else
-    out="$(awk -v agent_re="$_CODEX_AGENT_MESSAGE_TYPE_RE" '
-      $0 ~ agent_re {
-        rest = $0; keyre = "\"message\": *\""
-        if (match(rest, keyre)) {
-          rest = substr(rest, RSTART + RLENGTH)
-          if (match(rest, /^([^"\\]|\\.)*/)) {
-            seg = substr(rest, 1, RLENGTH)
-            if (seg != "") print seg
-          }
-        }
-        next
-      }
-      $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"assistant"/ {
-        rest = $0; keyre = "\"text\": *\""; res = ""
-        while (match(rest, keyre)) {
-          rest = substr(rest, RSTART + RLENGTH)
-          if (!match(rest, /^([^"\\]|\\.)*/)) break
+    event_re="$_CODEX_AGENT_MESSAGE_TYPE_RE"; part_type="output_text"
+  fi
+  out="$(awk -v role="$role" -v event_re="$event_re" -v part_type="$part_type" '
+    BEGIN {
+      role_re = "\"role\": *\"" role "\""
+      part_keyre = "\"type\": *\"" part_type "\", *\"text\": *\""
+      scanned = 0; matched = 0
+    }
+    $0 ~ event_re {
+      scanned++
+      rest = $0; keyre = "\"message\": *\""
+      if (match(rest, keyre)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (match(rest, /^([^"\\]|\\.)*/)) {
           seg = substr(rest, 1, RLENGTH)
-          res = (res == "" ? seg : res " " seg)
-          rest = substr(rest, RLENGTH + 2)
+          if (seg != "") { print seg; matched++ }
         }
-        if (res != "") print res
       }
-    ' "$t" 2>/dev/null \
-      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-      | grep -av '^[[:space:]]*$' || true)"
-  fi
-  if [ -z "$out" ]; then
-    printf 'handoff: codex extractor matched 0 %s lines in %s\n' "$role" "$t" >&2
-    return 0
-  fi
-  printf '%s\n' "$out"
+      next
+    }
+    $0 ~ /"type": *"response_item"/ && $0 ~ role_re {
+      scanned++
+      rest = $0; res = ""
+      while (match(rest, part_keyre)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (!match(rest, /^([^"\\]|\\.)*/)) break
+        seg = substr(rest, 1, RLENGTH)
+        res = (res == "" ? seg : res " " seg)
+        rest = substr(rest, RLENGTH + 2)
+      }
+      if (res != "") { print res; matched++ }
+    }
+    END {
+      if (scanned > 0 && matched == 0) {
+        printf "handoff: codex extractor scanned %d %s lines, matched 0\n", scanned, role > "/dev/stderr"
+      }
+    }
+  ' "$t" \
+    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+    | grep -avE '^[[:space:]]*<(environment_context|user_instructions)' \
+    | grep -av '^[[:space:]]*$' || true)"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest

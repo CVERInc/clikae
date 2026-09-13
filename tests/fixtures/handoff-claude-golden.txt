@@ -1,6 +1,7 @@
 ## Recent user prompts (oldest first)
 - first real prompt
 - second real prompt with 中文 too
+- third real prompt with a quote "hi" and a newline here
 
 ## Recent assistant notes (oldest first)
 - working on it, quote: he said "hi"

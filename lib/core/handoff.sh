@@ -177,7 +177,11 @@ _handoff_raw_brief() {
   if [ -n "$prompts" ]; then
     printf '%s\n' "$prompts" | sed 's/^/- /'
   else
-    echo "_(no plain-text prompts found in the last $CLIKAE_HANDOFF_LINES lines)_"
+    # Round-2 #33 review P3-4: this used to claim a "last $CLIKAE_HANDOFF_LINES
+    # lines" window that _handoff_recent_prompts doesn't actually apply — the
+    # whole transcript is scanned (see its own comment above), so the message
+    # said something the code hadn't done since before this window even existed.
+    echo "_(no plain-text prompts found in this transcript)_"
   fi
 }
 

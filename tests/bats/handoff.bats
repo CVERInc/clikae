@@ -345,6 +345,79 @@ _seed_codex_injected_transcript() {
   [[ "$output" != *"cwd=/x"* ]] || false
 }
 
+_seed_codex_agent_message_transcript() {
+  # Round-2 review P2-1: the repo-documented event_msg/agent_message shape
+  # (the SAME shape lib/core/limit.sh's whole codex family reads,
+  # "confirmed against a real rollout" — limit.sh:322) with NO response_item
+  # lines at all, proving the assistant branch reads this shape on its own,
+  # not only as a side effect of also matching response_item.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/13"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"please fix the parser"}}'
+    echo '{"timestamp":"2026-09-13T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I changed lib/foo.sh and ran the tests; two still fail."}}'
+    echo '{"timestamp":"2026-09-13T00:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{}}}'
+    echo '{"timestamp":"2026-09-13T00:00:04.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Done: all green now."}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-2 review P2-1: codex assistant notes read the repo-documented event_msg/agent_message shape (the same shape lib/core/limit.sh trusts), not only response_item" {
+  clikae init codex work3
+  local work="$TEST_HOME/work-codex-agentmsg"; mkdir -p "$work"
+  _seed_codex_agent_message_transcript work3 "$work" "66666666-1111-1111-1111-111111111111"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work3" run clikae handoff codex work3 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"I changed lib/foo.sh and ran the tests; two still fail."* ]] || false
+  [[ "$output" == *"Done: all green now."* ]] || false
+}
+
+@test "#33 round-2 review P3-3: a non-text content part's own \"text\" key doesn't leak into the digest" {
+  clikae init codex work4
+  local work="$TEST_HOME/work-codex-reasoning"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work4/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="99999999-1111-1111-1111-111111111111"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"reasoning","text":"INTERNAL-REASONING-LEAK"},{"type":"output_text","text":"visible codex answer"}]}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work4" run clikae handoff codex work4 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"visible codex answer"* ]] || false
+  [[ "$output" != *"INTERNAL-REASONING-LEAK"* ]] || false
+}
+
+@test "#33 round-2 review P3-2: a brand-new tank the model hasn't replied to stays silent (no loud diagnostic), unlike a real shape mismatch" {
+  clikae init codex work5
+  local work="$TEST_HOME/work-codex-newtank"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work5/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="88888888-1111-1111-1111-111111111111"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt, no reply yet"}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work5" run clikae handoff codex work5 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"first prompt, no reply yet"* ]] || false
+  [[ "$output" != *"matched 0"* ]] || false
+}
+
+@test "#33 round-2 review P3-2: a genuine shape mismatch (structurally an assistant turn, no extractable text) still fires the loud diagnostic" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/mismatch.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"weird_part","nottext":"nope"}]}}' > "$t"
+  run adapter_handoff_extract "$t" assistant
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scanned 1 assistant lines, matched 0"* ]] || false
+}
+
 _seed_grok_transcript() {
   local profile="$1" dir="$2" sid="$3"
   local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
@@ -408,6 +481,20 @@ _seed_grok_whitespace_transcript() {
   [[ "$output" == *"spaced grok note"* ]] || false
 }
 
+@test "#33 round-2 review P3-3: grok — a non-text content part's own \"text\" key (e.g. an image's alt text) doesn't leak into the digest" {
+  clikae init grok work6
+  local work="$TEST_HOME/work-grok-imageleak"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/grok/work6/sessions/group1/aaaaaaaa-1111-1111-1111-111111111111"
+  mkdir -p "$d"
+  printf '{"info": {"id": "aaaaaaaa-1111-1111-1111-111111111111", "cwd": "%s"}, "generated_title": "test"}\n' "$work" > "$d/summary.json"
+  echo '{"type":"assistant","content":[{"type":"image","text":"ALT-TEXT-LEAK"},{"type":"text","text":"visible grok answer"}]}' > "$d/chat_history.jsonl"
+  cd "$work"
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work6" run clikae handoff grok work6 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"visible grok answer"* ]] || false
+  [[ "$output" != *"ALT-TEXT-LEAK"* ]] || false
+}
+
 @test "#33 handoff on codex survives a 20 kB single-line transcript (no truncation crash/hang)" {
   clikae init codex work
   local work="$TEST_HOME/work-codex-20k"; mkdir -p "$work"
@@ -424,6 +511,40 @@ _seed_grok_whitespace_transcript() {
   cd "$work"
   CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
   [ "$status" -eq 0 ]
+}
+
+@test "#33 round-2 review P2-2: codex handoff extracts a 1 MB single-line transcript in roughly linear time (no O(n^2) hang on mawk)" {
+  # The O(n^2) regression this guards against (character-by-character
+  # `seg = seg c` accumulation, measured 95.9s @ 1.6 MB on mawk in the
+  # round-2 review) does NOT reproduce on gawk, which is what `awk` resolves
+  # to on a dev box with both installed — the exact "my machine is not a
+  # neutral place to measure" trap the review hit first. Force mawk as
+  # `awk` here so this test can actually catch the regression it names.
+  command -v mawk >/dev/null 2>&1 || skip "mawk not installed on this host"
+  clikae init codex work
+  local work="$TEST_HOME/work-codex-1m"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="77777777-7777-7777-7777-777777777777"
+  local pad; pad="$(head -c 1000000 /dev/zero | tr '\0' 'x')"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"START-MARKER-'"$pad"'-END-MARKER"}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  local awkdir="$TEST_HOME/mawk-bin"
+  mkdir -p "$awkdir"
+  ln -sf "$(command -v mawk)" "$awkdir/awk"
+  # The fixed extractor takes well under a second on mawk at this size
+  # (measured ~0.4s); 15s leaves >30x headroom for a loaded CI box while
+  # still catching an O(n^2) regression, which would take well over a
+  # minute at 1 MB.
+  local t0=$SECONDS
+  PATH="$awkdir:$PATH" CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"START-MARKER-"* ]] || false
+  [ "$elapsed" -lt 15 ] || { echo "took ${elapsed}s -- O(n^2) regression?"; false; }
 }
 
 @test "#33 an engine with no adapter_handoff_extract hook falls back to the claude-shaped extraction" {
@@ -483,7 +604,17 @@ _seed_grok_whitespace_transcript() {
     echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/clear</command-name>"},"timestamp":"2026-05-31T01:00:01.000Z"}'
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working on it, quote: he said \"hi\""}]},"timestamp":"2026-05-31T01:00:02.000Z"}'
     echo '{"type":"user","toolUseResult":true,"message":{"role":"user","content":[{"type":"tool_result","content":"SHOULD NOT APPEAR file dump"}]},"timestamp":"2026-05-31T01:00:03.000Z"}'
+    # Round-2 review P3-1: the three lines below are the reviewer's own named
+    # additions — the frozen fixture above happened to make 8 of claude.sh's
+    # 12 pipeline stages deletable with the golden test staying green (every
+    # filter deletion left SOME other filter, or the anchor itself, already
+    # excluding that same line). Each new line below is the ONE thing that
+    # would leak if that one specific filter were the only thing standing in
+    # its way, so mutating any one of these filter lines now goes red.
+    echo '{"type":"user","isSidechain":true,"message":{"role":"user","content":"SHOULD NOT APPEAR sidechain turn"},"timestamp":"2026-05-31T01:00:04.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"<local-command-stdout>SHOULD NOT APPEAR local command output</local-command-stdout>"},"timestamp":"2026-05-31T01:00:05.000Z"}'
     echo '{"type":"user","message":{"role":"user","content":"second real prompt with 中文 too"},"timestamp":"2026-05-31T01:05:00.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"third real prompt with a quote \"hi\" and a newline\nhere"},"timestamp":"2026-05-31T01:05:01.000Z"}'
   } > "$t"
   # _handoff_clean_tail is the FULL digest pipeline (both roles, header lines
   # included) — the same function handoff_render feeds a summarizer, so this
