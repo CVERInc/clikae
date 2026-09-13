@@ -325,3 +325,14 @@ adapter_all_transcripts() {
   find "$1/sessions" -type f -name 'rollout-*.jsonl' 2>/dev/null
 }
 
+# Same raw two-window status evidence used by limit_codex_status.
+adapter_usage() {
+  local fields pu _pw pr su _sw sr
+  fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r pu _pw pr su _sw sr <<< "$fields"
+  jq -cn --arg pu "$pu" --arg su "$su" --arg pr "$pr" --arg sr "$sr" '
+    def pct: try tonumber catch null;
+    def stamp: try (tonumber | todateiso8601) catch null;
+    {window_pct:($pu|pct),weekly_pct:($su|pct),
+     window_resets_at:($pr|stamp),weekly_resets_at:($sr|stamp),source:"vendor"}'
+}

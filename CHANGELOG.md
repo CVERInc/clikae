@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to read history, swipe down toward live output, and tap to leave copy-mode.
   `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
   (default 2). Desktop wheel and drag bindings are unchanged.
+- `clikae usage [engine] [tank] [--json] [--fresh]` reports Claude OAuth and
+  Codex status usage windows, cached for 120 seconds (`CLIKAE_USAGE_TTL`).
+  The board shows cached vendor percentages; burn prefers eligible reserves
+  with more headroom. Unavailable readings retain transcript fallbacks (#72).
+
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

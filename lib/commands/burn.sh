@@ -412,6 +412,7 @@ _burn_output_tail() {
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
   local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
+  local best="" best_peak=101 fields _up _uw peak fallback=""
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -438,10 +439,19 @@ _burn_next_same_engine() {
       log_warn "skipping $cli/$t — another burn is already running on it (#40; --allow-active to override)."
       continue
     fi
-    printf '%s\n' "$t"; return 0
+    [ -n "$fallback" ] || fallback="$t"
+    if declare -F usage_read >/dev/null; then
+      usage_read "$cli" "$t" >/dev/null
+      if fields="$(usage_cached_fields "$cli" "$t")"; then
+        IFS=$'\t' read -r _up _uw peak <<< "$fields"
+        peak="${peak%%.*}"
+        if [ "$peak" -lt "$best_peak" ]; then best="$t"; best_peak="$peak"; fi
+      fi
+    fi
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
+  printf '%s\n' "${best:-$fallback}"
 }
 
 # _burn_timeout_bin -> echo `timeout` or `gtimeout` if one is on PATH; otherwise echo
@@ -2398,6 +2408,23 @@ cmd_burn() {
   local t0=$SECONDS
 
   local cur="$tank" tried="" dried_accts="" reset out rc
+  # Respect --no-reroute and explicit solo launches. Reserve selection retains
+  # the live-session, busy-burn, solo, and shared-account guards above.
+  if [ "$reroute" = 1 ] && ! tank_is_solo "$cli" "$tank" && declare -F usage_read >/dev/null; then
+    local preferred current_fields candidate_fields _cp _cw current_peak _pp _pw preferred_peak
+    usage_read "$cli" "$tank" >/dev/null
+    preferred="$(_burn_next_same_engine "$cli" "" "" "$envvar" "$allow_active")"
+    if [ -n "$preferred" ] && [ "$preferred" != "$tank" ] &&
+       current_fields="$(usage_cached_fields "$cli" "$tank")" &&
+       candidate_fields="$(usage_cached_fields "$cli" "$preferred")"; then
+      IFS=$'\t' read -r _cp _cw current_peak <<< "$current_fields"
+      IFS=$'\t' read -r _pp _pw preferred_peak <<< "$candidate_fields"
+      if [ "${preferred_peak%%.*}" -lt "${current_peak%%.*}" ]; then
+        log_info "Usage headroom: selecting $cli/$preferred before launch."
+        cur="$preferred"
+      fi
+    fi
+  fi
   while :; do
     validate_name profile "$cur"
     local dir

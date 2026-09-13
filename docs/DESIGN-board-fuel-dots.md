@@ -237,3 +237,38 @@ Parseable expired store evidence survives the marker TTL as unverified until
 cleared, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) — retained
 evidence is a caution, not a promise to remember forever. Unparseable store
 evidence retains the existing TTL behavior.
+
+
+## Vendor usage cache (#72)
+
+Run `clikae usage [engine] [tank] [--json]` to read usage. JSON output is one
+object per tank: `engine`, `tank`, `window_pct`, `weekly_pct`,
+`window_resets_at`, `weekly_resets_at`, and `source`. Percentages are used
+quota (0–100); unavailable fields are null and unavailable readings have
+`source: "unknown"`. The optional adapter hook is `adapter_usage <config-dir>`.
+Claude reads OAuth usage; Codex uses the same local status evidence as
+`limit_codex_status`; Antigravity currently returns unknown. Parsing requires
+jq; without it readings are unknown.
+
+Readings live at `$CLIKAE_HOME/state/usage/<engine>/<tank>.json`, including
+`cached_at` epoch seconds. TTL defaults to 120 seconds; `CLIKAE_USAGE_TTL`
+overrides it and `--fresh` bypasses it. Errors are cached too. Writes are
+atomic. The board only reads this cache, so redraws never make network calls.
+Run usage to populate or refresh it; burn also refreshes eligible candidates.
+Concurrent cache misses can each fetch; there is no background refresh.
+
+For a current vendor reading, the higher used percentage determines the dot:
+90% or more red, 60% or more yellow, otherwise green. The note shows both
+window and weekly percentages. Missing, expired, or unknown readings fall
+through to the existing transcript logic, including `reset passed · unverified`.
+Burn ranks eligible same-engine reserves by lowest maximum utilization,
+retaining live-session, busy-burn, solo, and dried-account exclusions. Initial
+selection changes only with known readings for both tanks and rerouting enabled.
+Unknown usage keeps the existing transcript-based launch and reroute behavior.
+
+Claude calls the OAuth usage endpoint only when usage is requested or burn
+checks candidates. It reads the tank credential file or tank-specific macOS
+Keychain service. The bearer token is passed solely through curl configuration
+on stdin, with shell tracing disabled, never through argv or an exported
+variable. Curl defaults are disabled and timeouts bound failures; HTTP errors
+and network failures become unknown without printing response bodies.

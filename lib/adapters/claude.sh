@@ -745,3 +745,31 @@ adapter_migrate_credentials() {
   secret=""
   return 0
 }
+
+# Optional usage hook. Secrets exist only in this subshell and curl's stdin.
+adapter_usage() (
+  set +x
+  set +a
+  local dir="$1" service token response
+  export -n token response
+  token="$(
+    if [ -f "$dir/.credentials.json" ]; then
+      jq -er '.claudeAiOauth.accessToken // empty' "$dir/.credentials.json" 2>/dev/null
+    elif [[ "${OSTYPE:-}" == darwin* ]]; then
+      service="$(_claude_keychain_service "$dir")" || exit 1
+      security find-generic-password -s "$service" -w 2>/dev/null |
+        jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+    fi
+  )" || return 1
+  # Restrict to bearer-token characters; reject curl-config injection.
+  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) return 1 ;; esac
+  response="$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
+    curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
+      https://api.anthropic.com/api/oauth/usage 2>/dev/null)" || return 1
+  token=""
+  printf '%s' "$response" | jq -ce '
+    select(.five_hour.utilization|type == "number") |
+    select(.seven_day.utilization|type == "number") |
+    {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
+     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}'
+)

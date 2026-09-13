@@ -992,6 +992,16 @@ _home_codex_status_readv() {
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
   _FNOTE=""
+  local usage_fields up uw peak
+  if declare -F usage_cached_fields >/dev/null && usage_fields="$(usage_cached_fields "$cli" "$profile")"; then
+    IFS=$'\t' read -r up uw peak <<< "$usage_fields"
+    _FNOTE="window ${up}% · weekly ${uw}%"
+    peak="${peak%%.*}"
+    if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
+    elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
+    else _FDOT="${__C_GREEN}●$__C_RESET"; fi
+    return 0
+  fi
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
   fi
