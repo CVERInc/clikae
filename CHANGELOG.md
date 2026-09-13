@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The home board's first (cold) render on a large tank is fast again: 5,000
+  transcripts went from 35.6 s to well under 1 s, which is what #62's
+  acceptance text asks for. The cost was never the tree walk — it was about
+  four forks per FILE (two `cksum`s to name an entry, plus a rate-limit parse
+  for every file inside the engine's window). The entry name is now computed
+  without a process; claude's session id comes from the filename and codex's
+  and grok's from ONE batched bounded read instead of one parse per file; and
+  the rate-limit scan is bounded to the newest `CLIKAE_HOME_RECENT_MAX` files
+  per project directory rather than every file in the window (#62).
 - A tank with no transcripts at all — every freshly `clikae init`'d tank, and
   the first screen a new user sees — is no longer permanently stale. The
   publisher and the freshness check computed the snapshot fingerprint from two

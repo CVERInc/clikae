@@ -694,3 +694,118 @@ _b8_tank() {
   done
 }
 
+@test "board (P2-2): the cold build's entry key is the SAME rule in bash and in awk" {
+  # The cold build writes `sids/<name>` from awk and every reader computes
+  # <name> in bash. Two spellings of one rule is how this file's own
+  # fingerprint drifted (see _board_fingerprint_rows), so they are pinned
+  # against each other here rather than trusted to stay in step.
+  _board_source
+  local s out awkout
+  local long="$(printf 'a%.0s' $(seq 1 140))"
+  for s in "plain-sid" \
+           "0199a1b2-c3d4-7e8f-9012-3456789abcde" \
+           "/home/someone/a project/with spaces" \
+           "unicode-éè" \
+           "." ".." "" \
+           "$long" \
+           "sl/ash:colon;semi|pipe*star?q" ; do
+    _board_entry_key "$s"
+    out="$_board_entry_key_out"
+    awkout="$(printf '%s' "$s" | awk '
+      function ekey(x,   t, n) {
+        t = x
+        gsub(/[^A-Za-z0-9._-]/, "_", t)
+        if (t == "" || t == "." || t == "..") t = "_" t "_"
+        n = length(t)
+        if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
+        return t
+      }
+      { print ekey($0) }
+      END { if (NR == 0) print ekey("") }
+    ')"
+    [ "$out" = "$awkout" ] || { echo "bash=[$out] awk=[$awkout] for [$s]"; false; }
+  done
+  # and it can never escape the entry directory
+  _board_entry_key "../../etc/passwd"
+  [[ "$_board_entry_key_out" != */* ]] || false
+}
+
+@test "board (P2-2): a cold build parses only the BOUNDED reading set, never every file" {
+  # Round-7 P2-2: 35.6 s at 5,000 files on an idle host, against #62's own
+  # acceptance text ("under 1 s cold"). Two costs: ~2 `board_key` forks per
+  # file, and a rate-limit parse for every file inside the window. This pins
+  # the second one — the first is a timing property, measured in the round-8
+  # report, not assertable here.
+  _b8_tank
+  local i
+  for ((i = 0; i < 40; i++)); do
+    printf '{"type":"assistant","timestamp":"2026-09-13T00:00:00Z"}\n' > "$B8_PROJ/session-$i.jsonl"
+  done
+  # log every transcript the rate-limit parser actually opens
+  cat > "$TEST_HOME/parsed2.log" </dev/null
+  _limit_claude_reading() { printf '%s\n' "$1" >> "$TEST_HOME/parsed2.log"; printf '\037\037\n'; }
+  rm -rf "$CLIKAE_HOME/state/board" "$CLIKAE_HOME/state/readings"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  local n
+  n="$(wc -l < "$TEST_HOME/parsed2.log" | tr -d ' ')"
+  # CLIKAE_HOME_RECENT_MAX defaults to 10, one project directory here
+  [ "$n" -le 10 ] || { echo "cold parsed $n files"; false; }
+  [ "$n" -gt 0 ]
+  local root gen
+  root="$(board_root "$B8_TANK")"
+  gen="$root/$(cat "$root/current")"
+  [ "$(wc -l < "$gen/readings-bounded" | tr -d ' ')" -eq "$n" ]
+  # every session still resolves, all 40 of them, with no per-file parse
+  [ "$(wc -l < "$gen/manifest" | tr -d ' ')" -eq 40 ]
+  [ -n "$(board_find claude "$B8_TANK" session-39)" ]
+}
+
+@test "board (P2-2): the batched bounded read agrees with the per-file parser (codex, grok)" {
+  # `_board_cold_sidscope` reads the first 512 bytes of many files in one
+  # `head`; `_board_engine_sidscope` reads one file properly. The cold build
+  # trusts the first. This asserts they answer the same thing — including on
+  # a codex meta line longer than the 512-byte bound, which only the
+  # per-file fallback inside _board_cold_sidscope can resolve.
+  clikae init codex cx >/dev/null
+  clikae init grok gk >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter codex >/dev/null 2>&1 || true
+  load_adapter grok >/dev/null 2>&1 || true
+  local cd_="$CLIKAE_HOME/profiles/codex/cx" gd_="$CLIKAE_HOME/profiles/grok/gk"
+  local sd="$cd_/sessions/2026/09/13" i pad
+  mkdir -p "$sd"
+  for i in 0 1 2; do
+    printf '{"id":"1111111%s-0000-0000-0000-000000000000","cwd":"%s/sub %s"}\n' \
+      "$i" "$TEST_HOME/work" "$i" > "$sd/rollout-2026-09-13T10-00-0$i-1111111$i-0000-0000-0000-000000000000.jsonl"
+  done
+  pad="$(head -c 600 /dev/zero | tr '\0' 'x')"
+  printf '{"pad":"%s","id":"22222222-0000-0000-0000-000000000000","cwd":"%s"}\n' \
+    "$pad" "$TEST_HOME/work" > "$sd/rollout-2026-09-13T11-00-00-22222222-0000-0000-0000-000000000000.jsonl"
+  for i in 0 1; do
+    mkdir -p "$gd_/sessions/g$i/aaaaaaa$i"
+    printf '{\n  "request_id": "zz",\n  "id": "aaaaaaa%s",\n  "cwd": "%s/gr \\"q\\" %s"\n}\n' \
+      "$i" "$TEST_HOME/work" "$i" > "$gd_/sessions/g$i/aaaaaaa$i/summary.json"
+  done
+  local pair eng d rows p ss
+  for pair in "codex $cd_" "grok $gd_"; do
+    set -- $pair; eng="$1"; d="$2"
+    rows="$TEST_HOME/rows.$eng"
+    _board_stat_rows "$eng" "$d" > "$rows"
+    _board_cold_sidscope "$eng" "$d" "$rows" | LC_ALL=C sort > "$TEST_HOME/batched.$eng"
+    : > "$TEST_HOME/perfile.$eng"
+    while IFS=$'\037' read -r _ _ p; do
+      [ -n "$p" ] || continue
+      ss="$(_board_engine_sidscope "$eng" "$p")"
+      [ -n "$ss" ] || continue
+      printf '%s\037%s\n' "$p" "$ss" >> "$TEST_HOME/perfile.$eng"
+    done < "$rows"
+    LC_ALL=C sort -o "$TEST_HOME/perfile.$eng" "$TEST_HOME/perfile.$eng"
+    diff "$TEST_HOME/batched.$eng" "$TEST_HOME/perfile.$eng" \
+      || { echo "$eng: batched != per-file"; false; }
+    [ -s "$TEST_HOME/batched.$eng" ]
+  done
+}
+
