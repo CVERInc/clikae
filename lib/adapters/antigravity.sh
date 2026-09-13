@@ -109,8 +109,11 @@ _agy_cwd_uncached() {
 # overhead. A single awk pass over history.jsonl is the same total I/O
 # (round-2's fix already made per-session reads warm-cache cheap; this
 # removes the per-session FORKS around them, not more I/O) with the lookup
-# itself becoming a plain bash associative-array read once the caller has
-# this index — zero forks per session. Callers without this hook (or a
+# itself becoming a plain bash read once the caller has this index (fix7:
+# `_agy_ws_load`/`_agy_ws_lookup` below, plain globals — see
+# `_agy_ws_varname`'s own header for why bash 3.2's lack of associative
+# arrays doesn't cost the zero-forks-per-session property this hook exists
+# for) — zero forks per session either way. Callers without this hook (or a
 # minimal stub adapter in a test) keep using `adapter_session_cwd` one file
 # at a time; this hook is a bulk-mode acceleration, not a new source of
 # truth. First occurrence per sid wins, matching `_agy_cwd_uncached`'s own
@@ -139,6 +142,60 @@ adapter_session_cwd_index() {
       printf "%s\037%s\n", sid, ws
     }
   ' "$hf" 2>/dev/null
+}
+
+# _agy_ws_varname <sid> -> sets $_agy_ws_var_out to the global variable name
+# that holds this sid's cached "<sid>\037<workspace>" record. fix7: bash 3.2
+# has no associative arrays (4.0+ only), so the bulk index this file's
+# `adapter_session_cwd_index` output used to get loaded into (a `local -A`
+# in board_state.sh and, separately, one in `adapter_recent_sids` below)
+# becomes plain globals keyed by a sanitized name — same idea as
+# `board_generation`'s own memo in board_state.sh (see its header for why
+# this is NOT `board_key`/cksum-based: a fork here would run once per FILE
+# in a cold build, reintroducing the per-session fork cost this file's
+# round-3 fix review P2-2 removed). Lives HERE, not in board_state.sh: an
+# earlier draft of the fix7 port put these three functions in
+# board_state.sh, and tests/bats/adapters/antigravity.bats — which sources
+# THIS file directly, never board_state.sh — immediately hit "_agy_ws_load:
+# command not found" (CI run 34754505915's successor). This file must stay
+# usable on its own, the same self-containment `adapter_session_cwd_index`
+# above already has; board_state.sh's own call sites guard every use with
+# `declare -F` for exactly this reason.
+_agy_ws_varname() {
+  _agy_ws_var_out="_AGY_WS_${1//[^A-Za-z0-9_]/_}"
+}
+
+# _agy_ws_load <dir> -> populates one global per antigravity session id this
+# tank's history.jsonl carries a workspace for. ONE fork total
+# (`adapter_session_cwd_index` above, itself one `awk` pass over
+# history.jsonl — round-3 fix review P2-2's bulk index) no matter how many
+# sessions exist; this loop and every `_agy_ws_lookup` below are pure bash,
+# zero forks — the invariant P2-2's own review demanded stays true after
+# this port: O(1) forks per RENDER, never O(sessions).
+_agy_ws_load() {
+  local dir="$1" _asid _aws
+  while IFS=$'\037' read -r _asid _aws; do
+    [ -n "$_asid" ] || continue
+    _agy_ws_varname "$_asid"
+    printf -v "$_agy_ws_var_out" '%s\037%s' "$_asid" "$_aws"
+  done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
+}
+
+# _agy_ws_lookup <sid> -> sets $_agy_ws_lookup_out to this sid's cached
+# workspace, or "" on a miss (never loaded by `_agy_ws_load`, or a
+# sanitized-name collision with a different sid — verified via the sid
+# written back alongside the value, same guard board_recent/board_find
+# (board_state.sh) use for their own hashed keys, applied here to a
+# sanitized-name key instead).
+_agy_ws_lookup() {
+  local sid="$1" val vsid vws
+  _agy_ws_lookup_out=""
+  _agy_ws_varname "$sid"
+  eval "val=\"\${$_agy_ws_var_out:-}\""
+  [ -n "$val" ] || return 0
+  IFS=$'\037' read -r vsid vws <<< "$val"
+  [ "$vsid" = "$sid" ] || return 0
+  _agy_ws_lookup_out="$vws"
 }
 
 adapter_session_title() {
@@ -228,8 +285,8 @@ adapter_recent_sids() {
   # reading_cache_run + fork pipeline PER session — see
   # adapter_session_cwd_index's header. fix7: the per-session index this used
   # to hold in a `local -A _ws` (bash 4+) now lives in the plain globals
-  # `_agy_ws_load`/`_agy_ws_lookup` (board_state.sh) build and read — bash 3.2
-  # has no associative arrays; see `_agy_ws_varname`'s own header for why a
+  # `_agy_ws_load`/`_agy_ws_lookup` above build and read — bash 3.2 has no
+  # associative arrays; see `_agy_ws_varname`'s own header for why a
   # fork-free, sanitized-name lookup is what keeps this at O(1) forks per
   # RENDER rather than one per session.
   _agy_ws_load "$dir"

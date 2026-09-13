@@ -17,11 +17,17 @@
 # check, no bash-4-only fast path, one code path for 3.2 and 5.x alike:
 #   - `board_generation`'s memo → plain globals keyed by a sanitized
 #     (engine,dir) name, indirect-read via `eval` (see its own header).
-#   - `_agy_ws`/`_ws` (antigravity's bulk cwd index) → the same scheme,
-#     factored into `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` so
-#     board_state.sh and antigravity.sh share ONE naming convention (see
-#     `_agy_ws_varname`'s own header) — still O(1) forks per RENDER, not per
-#     session (P2-2's own invariant, re-verified this round).
+#   - `_agy_ws`/`_ws` (antigravity's bulk cwd index) → the same scheme, as
+#     `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` — living in
+#     lib/adapters/antigravity.sh (see `_agy_ws_varname`'s own header there),
+#     not here: an EARLIER draft of this port defined them in this file, and
+#     tests/bats/adapters/antigravity.bats — which sources antigravity.sh
+#     WITHOUT this file — immediately hit "_agy_ws_load: command not found"
+#     (CI run 34760883667, `bats (ubuntu-latest)`). Moved to where
+#     `adapter_session_cwd_index` already lives, and every call site here
+#     guarded with `declare -F`, same as every other adapter-hook call in
+#     this file — still O(1) forks per RENDER, not per session (P2-2's own
+#     invariant, re-verified this round).
 #   - the cold-build classifier's five per-path maps (`cur_mtime`, `cur_size`,
 #     `sid_of`, `scope_of`, `reading_of`) → parallel INDEXED arrays keyed by
 #     the file's position in `stat_rows`, not by path — bash 3.2 has always
@@ -424,53 +430,6 @@ _board_purge_recent_row() {
     > "$base.tmp" && mv -f "$base.tmp" "$base"
 }
 
-# _agy_ws_varname <sid> -> sets $_agy_ws_var_out to the global variable name
-# that holds this sid's cached "<sid>\037<workspace>" record. fix7: bash 3.2
-# has no associative arrays, so `_agy_ws`/`_ws` (an antigravity cwd index,
-# formerly `local -A`) become plain globals keyed by a sanitized name — same
-# idea as `board_generation`'s own memo above (see its header for why this is
-# NOT `board_key`/cksum-based: a fork here would run once per FILE in a cold
-# build, reintroducing the per-session fork cost round-3 fix review's P2-2
-# removed). Shared by `_board_engine_sidscope` below and antigravity.sh's
-# `adapter_recent_sids` — the ONE naming scheme, so the two callers can never
-# drift onto two different variables for the same sid.
-_agy_ws_varname() {
-  _agy_ws_var_out="_AGY_WS_${1//[^A-Za-z0-9_]/_}"
-}
-
-# _agy_ws_load <dir> -> populates one global per antigravity session id this
-# tank's history.jsonl carries a workspace for. ONE fork total
-# (`adapter_session_cwd_index`, itself one `awk` pass over history.jsonl —
-# round-3 fix review P2-2's bulk index) no matter how many sessions exist;
-# this loop and every `_agy_ws_lookup` below are pure bash, zero forks — the
-# invariant round-6/P2-2's own review demanded stays true after this port:
-# O(1) forks per RENDER, never O(sessions).
-_agy_ws_load() {
-  local dir="$1" _asid _aws
-  declare -F adapter_session_cwd_index >/dev/null 2>&1 || return 0
-  while IFS=$'\037' read -r _asid _aws; do
-    [ -n "$_asid" ] || continue
-    _agy_ws_varname "$_asid"
-    printf -v "$_agy_ws_var_out" '%s\037%s' "$_asid" "$_aws"
-  done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
-}
-
-# _agy_ws_lookup <sid> -> sets $_agy_ws_lookup_out to this sid's cached
-# workspace, or "" on a miss (never loaded by `_agy_ws_load`, or a
-# sanitized-name collision with a different sid — verified via the sid
-# written back alongside the value, same guard board_recent/board_find use
-# for their own hashed keys, applied here to a sanitized-name key instead).
-_agy_ws_lookup() {
-  local sid="$1" val vsid vws
-  _agy_ws_lookup_out=""
-  _agy_ws_varname "$sid"
-  eval "val=\"\${$_agy_ws_var_out:-}\""
-  [ -n "$val" ] || return 0
-  IFS=$'\037' read -r vsid vws <<< "$val"
-  [ "$vsid" = "$sid" ] || return 0
-  _agy_ws_lookup_out="$vws"
-}
-
 # _board_engine_sidscope <engine> <path> -> echoes "<sid>\037<scope>" for a
 # non-agent transcript, nothing for a path that yields no sid (agy adapter
 # hook missing, malformed meta, …). The ONE place that spells out how each
@@ -478,8 +437,14 @@ _agy_ws_lookup() {
 # `board_state_refresh` calls this only for a file it has already decided
 # needs a fresh parse (new, changed, or a cold build), never for one it can
 # carry forward unchanged (round-6 fix review P1-2). Antigravity's branch
-# expects `_agy_ws_load` to have already run for this tank (board_state_refresh
-# does so before either of its per-file loops).
+# expects `_agy_ws_load` (lib/adapters/antigravity.sh — see its own header)
+# to have already run for this tank (board_state_refresh does so before
+# either of its per-file loops) — guarded by `declare -F`, same as every
+# other adapter-hook call in this file (e.g. `adapter_session_cwd_index`
+# below): this file must stay usable when an adapter hasn't been loaded, not
+# just when antigravity specifically hasn't (round-3 fix review's own
+# `adapter_session_cwd_index` guard already established this; fix7's
+# `_agy_ws_lookup` is one more hook of the same kind, not a new dependency).
 _board_engine_sidscope() {
   local engine="$1" f="$2" sid="" scope=""
   case "$engine" in
@@ -488,7 +453,8 @@ _board_engine_sidscope() {
     grok) sid="$(_grok_json_str "$f" id)"; scope="$(_grok_json_str "$f" cwd)" ;;
     antigravity)
       sid="${f%/.system_generated/*}"; sid="${sid##*/}"
-      _agy_ws_lookup "$sid"
+      _agy_ws_lookup_out=""
+      declare -F _agy_ws_lookup >/dev/null 2>&1 && _agy_ws_lookup "$sid"
       if [ -n "$_agy_ws_lookup_out" ]; then
         scope="$_agy_ws_lookup_out"
       else
@@ -558,10 +524,16 @@ board_state_refresh() (
   # reading_cache_run + fork pipeline PER session for that (measured ~5s
   # fixed on a synthetic 500-session tank). One bulk index read replaces
   # that with plain-global lookups (fix7: bash 3.2 has no associative
-  # arrays — see `_agy_ws_varname`'s own header) — see
-  # adapter_session_cwd_index's header (antigravity.sh) for why this is safe
-  # (same source of truth, same "first occurrence wins" semantics).
-  [ "$engine" != antigravity ] || _agy_ws_load "$dir"
+  # arrays — `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` now live in
+  # lib/adapters/antigravity.sh — see `_agy_ws_varname`'s own header — not
+  # here: this file must stay usable when antigravity's adapter hasn't been
+  # loaded, same as the `declare -F adapter_session_cwd_index` guard already
+  # did before this fork existed) — see adapter_session_cwd_index's header
+  # (antigravity.sh) for why this is safe (same source of truth, same
+  # "first occurrence wins" semantics).
+  if [ "$engine" = antigravity ] && declare -F _agy_ws_load >/dev/null 2>&1; then
+    _agy_ws_load "$dir"
+  fi
 
   if [ -z "$oldgen" ]; then
     # Cold build (or a fully-invalidated generation): every file is new, so
