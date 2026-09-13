@@ -970,12 +970,27 @@ _burn_lb_git() { command git -c core.fsmonitor=false -c core.hooksPath=/dev/null
 # dying unexpectedly, not for this function returning non-zero on purpose.
 _burn_left_behind() {
   local root marker repo seen="" branch ahead dirty files count entry
-  local -a repos=() roots=("$PWD" "${add_dirs[@]}")
+  local -a repos=() roots=()
   local GIT_OPTIONAL_LOCKS=0
   export GIT_OPTIONAL_LOCKS
   command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
-  for root in "${roots[@]}"; do
+  # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
+  # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
+  # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
+  # silently scanned nothing — `find` doesn't follow a symlink given as its
+  # own start point without `-H`/`-L`. The file-list scan below already
+  # resolved every root with `cd "$root" && pwd -P` (mirroring this at the
+  # repo-discovery loop closes the actual gap the review found); resolving
+  # ONCE here, for both loops, also drops what used to be a redundant
+  # `$(cd "$root" && pwd -P)` subshell fork PER REPO in the file-scan loop
+  # below — the roots don't change per repo, so re-resolving them there was
+  # pure waste (part of the 200-repo/50k-file fixture's wall time).
+  for root in "$PWD" "${add_dirs[@]}"; do
     [ -d "$root" ] || continue
+    root="$(cd "$root" && pwd -P)" || continue
+    roots+=("$root")
+  done
+  for root in "${roots[@]}"; do
     while IFS= read -r -d '' marker; do
       repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || continue
       case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
@@ -1040,8 +1055,6 @@ _burn_left_behind() {
     files=""; count=0; seen=""
     local repo_ts=0 repo_timeout=0 scan_out rc_scan
     for root in "${roots[@]}"; do
-      [ -d "$root" ] || continue
-      root="$(cd "$root" && pwd -P)" || continue
       case "$root/" in
         "$repo/"*) scan="$root" ;;
         *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;

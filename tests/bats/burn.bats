@@ -3318,3 +3318,31 @@ STUB
   local diff=$((json_elapsed - status_elapsed)); [ "${diff#-}" -le 1 ]
   [[ "$output" == *"elapsed=${json_elapsed}s"* ]] || false
 }
+
+# P2-4 (round-1 review): `find` never follows a symlink given as its own
+# start point without -H/-L. `--add-dir` pointed at a symlink to a directory
+# FULL of repos (this machine has ~/tools -> ~/Developer/cver-tools; macOS's
+# $TMPDIR itself is a symlink, so any --add-dir "$TMPDIR/…" hit this)
+# silently found nothing — the review's own repro. Resolving each root with
+# `cd "$root" && pwd -P` before repo discovery (mirroring what the file
+# scan already did) fixes it.
+@test "burn #84 P2-4: an --add-dir that is a symlink to a directory of repos is still scanned" {
+  _left84_setup
+  _left84_repo
+  ln -s "$TEST_HOME/repos" "$TEST_HOME/repos-link"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos-link" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 1 dirty 0"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["ahead"] == 1, rows
+'
+}
