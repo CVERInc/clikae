@@ -774,19 +774,20 @@ _home_timing() {
 # Callers supply dynamically scoped items/dry locals.
 #
 # P1-1/P2-1 (2026-09-13 round-4 fix review): `board_generation`'s memo
-# (`_BOARD_GEN_CACHE`, board_state.sh) is a plain associative array in THIS
-# process — it does not survive a `$( )` command substitution, which forks a
-# CHILD process that can read whatever the array already holds but can never
-# write anything back to the parent. Every section below forks at least one
-# of its own: `_home_items`' live/tanks/recent rows each call
-# `adapter_recent_sids`/`board_recent` from inside their OWN `$( )`, and
-# `_home_dry_set`/`board_total` are each a further, sibling one. Naively,
-# that is one board_stale freshness check — and, on a genuine miss, one full
-# per-tank rebuild (a `find` over every transcript that tank has) — PER
-# SECTION, PER TANK, every single render (measured: 3 claude tanks, idle
-# fuel window, 24 `find` calls a frame — 3 tanks × 2 finds × 4 sections).
-# A `$( )` subshell is a fork(): it inherits whatever this process's
-# variables already hold AT FORK TIME. Priming `_BOARD_GEN_CACHE` here,
+# (board_state.sh — plain globals as of fix7, an associative array before it;
+# either way, state private to THIS process) does not survive a `$( )`
+# command substitution, which forks a CHILD process that can read whatever
+# the memo already holds but can never write anything back to the parent.
+# Every section below forks at least one of its own: `_home_items`'
+# live/tanks/recent rows each call `adapter_recent_sids`/`board_recent` from
+# inside their OWN `$( )`, and `_home_dry_set`/`board_total` are each a
+# further, sibling one. Naively, that is one board_stale freshness check —
+# and, on a genuine miss, one full per-tank rebuild (a `find` over every
+# transcript that tank has) — PER SECTION, PER TANK, every single render
+# (measured: 3 claude tanks, idle fuel window, 24 `find` calls a frame — 3
+# tanks × 2 finds × 4 sections). A `$( )` subshell is a fork(): it inherits
+# whatever this process's variables already hold AT FORK TIME. Priming the
+# memo here,
 # before any of those subshells exist, means every one of them is born with
 # an already-warm cache and never asks board_stale (or `find`) a second time
 # for the same tank — one board_generation call per tank for the WHOLE
@@ -796,8 +797,8 @@ _home_timing() {
 # four named sections below would make that section's number stand in for
 # the whole render's cost, not its own share of it.
 #
-# round-5 fix review, P2-1: `_BOARD_GEN_CACHE` is declared `-g` (global) —
-# see board_state.sh's own header for why — so it OUTLIVES a single
+# round-5 fix review, P2-1: `board_generation`'s memo is global — see
+# board_state.sh's own header for why — so it OUTLIVES a single
 # `_home_refresh` call in a long-lived process (the interactive TUI's
 # `_home_pick`, which calls `_home_refresh` again after every `c`/`m`/`n`/
 # `a`/`d`/`l`), not just a `$( )` subshell. Priming it (above) without first
@@ -808,9 +809,14 @@ _home_timing() {
 # invisible until the process exited and a new one started. Clearing here,
 # right before priming, makes every refresh ask fresh, exactly as if this
 # were the first one.
+#
+# fix7: the memo stopped being one associative array you can reset with a
+# single `_BOARD_GEN_CACHE=()` (bash 3.2 has none — see board_state.sh's own
+# header on `board_generation`) — `_board_gen_cache_clear` is the equivalent
+# for the plain-globals-keyed-by-sanitized-name replacement.
 _home_refresh() {
   local _CLIKAE_BOARD=1 _start
-  declare -F board_generation >/dev/null 2>&1 && _BOARD_GEN_CACHE=()
+  declare -F _board_gen_cache_clear >/dev/null 2>&1 && _board_gen_cache_clear
   if declare -F board_generation >/dev/null 2>&1 && declare -F list_all_profiles >/dev/null 2>&1; then
     local _pe _pt _pd
     while IFS=$'\t' read -r _pe _pt _pd; do

@@ -226,20 +226,21 @@ adapter_recent_sids() {
   want="${PWD%/}"
   # P2-2 (2026-09-12 round-3 fix review): one bulk index read instead of one
   # reading_cache_run + fork pipeline PER session — see
-  # adapter_session_cwd_index's header.
-  local -A _ws=()
-  local _asid _aws
-  while IFS=$'\037' read -r _asid _aws; do
-    [ -n "$_asid" ] || continue
-    _ws["$_asid"]="$_aws"
-  done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
+  # adapter_session_cwd_index's header. fix7: the per-session index this used
+  # to hold in a `local -A _ws` (bash 4+) now lives in the plain globals
+  # `_agy_ws_load`/`_agy_ws_lookup` (board_state.sh) build and read — bash 3.2
+  # has no associative arrays; see `_agy_ws_varname`'s own header for why a
+  # fork-free, sanitized-name lookup is what keeps this at O(1) forks per
+  # RENDER rather than one per session.
+  _agy_ws_load "$dir"
   local -a afiles=()
   for sdir in "$brain"/*/; do
     [ -d "$sdir" ] || continue
     f="${sdir}.system_generated/logs/transcript.jsonl"
     [ -f "$f" ] || continue
     sid="${sdir%/}"; sid="${sid##*/}"
-    if [ -n "${_ws[$sid]+x}" ]; then cwd="${_ws[$sid]}"; else cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"; fi
+    _agy_ws_lookup "$sid"
+    if [ -n "$_agy_ws_lookup_out" ]; then cwd="$_agy_ws_lookup_out"; else cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"; fi
     [ "${cwd%/}" = "$want" ] || continue
     afiles+=("$f")
   done

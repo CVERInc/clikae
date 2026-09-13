@@ -3,6 +3,35 @@
 # per-tank generations through an atomically replaced pointer. A missing index
 # is an unknown reading, never permission to PARSE a transcript tree on a frame.
 #
+# 2026-09-13 fix7 (PR #78 CI, all three macOS jobs, every run since this
+# branch's first commit): `declare -gA _BOARD_GEN_CACHE` below (round-5's
+# memo) ran at SOURCE time, and macOS ships bash 3.2 — no `declare -g`
+# (4.2+), no associative arrays (`-A`, 4.0+). The file failed to source at
+# all (`lib/core/board_state.sh: line 205: declare: -g: invalid option`),
+# `clikae version` exited 2, ~1,000 bats red before a single one ran. Three
+# more `local -A` sites in this file and one in lib/adapters/antigravity.sh
+# (added by round-3's P2-2 bulk-index fix and round-6's incremental
+# classifier — both correct in DESIGN, both bash-4-only in
+# IMPLEMENTATION) had the same problem, just not yet exercised on the
+# CI job that would have caught them first. PORTED, not shimmed — no version
+# check, no bash-4-only fast path, one code path for 3.2 and 5.x alike:
+#   - `board_generation`'s memo → plain globals keyed by a sanitized
+#     (engine,dir) name, indirect-read via `eval` (see its own header).
+#   - `_agy_ws`/`_ws` (antigravity's bulk cwd index) → the same scheme,
+#     factored into `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` so
+#     board_state.sh and antigravity.sh share ONE naming convention (see
+#     `_agy_ws_varname`'s own header) — still O(1) forks per RENDER, not per
+#     session (P2-2's own invariant, re-verified this round).
+#   - the cold-build classifier's five per-path maps (`cur_mtime`, `cur_size`,
+#     `sid_of`, `scope_of`, `reading_of`) → parallel INDEXED arrays keyed by
+#     the file's position in `stat_rows`, not by path — bash 3.2 has always
+#     had indexed arrays; nothing there needed a hash to begin with. The
+#     INCREMENTAL classifier already used a single `awk` join with no bash
+#     maps at all (round-6) and needed no change.
+# tests/bats/compat.bats now source-scans for `declare -[gAn]`/`local
+# -[An]`/`typeset -[An]` so a bash-4+ construct in lib/ or bin/clikae fails
+# locally before it ever reaches a macOS CI job again.
+#
 # 2026-09-13 round-6 fix review — the round-5 whole-tank fingerprint below is
 # still the entire staleness signal (see board_stale's own header); round-6
 # fixed two costs in how it was COMPUTED and ACTED ON, not what it means:
@@ -194,23 +223,68 @@ board_stale() {
 # stale. Memoized per (engine,dir) for the lifetime of this process: a single
 # render reads count/updated/claude-usage/… from the same tank several times
 # over, and the freshness check itself must not be paid more than once.
-# -g: several tests source this file from INSIDE a helper function
-# (_board_source), where a plain `declare -A` would scope the array to that
-# function and vanish the moment it returns — leaving board_generation, called
-# later from global scope, referencing an unset variable. Bash then treats the
-# bare name as a plain (indexed) array by default, and an indexed subscript is
-# an ARITHMETIC context: `${_BOARD_GEN_CACHE[$cachekey]}` with a cachekey like
-# "codex<RS>/tmp/…" becomes "invalid arithmetic operator" the first time this
-# runs from outside that sourcing function.
-declare -gA _BOARD_GEN_CACHE
+#
+# fix7 (PR #78 CI, all three macOS jobs, since this branch's first commit):
+# this memo used to be `declare -gA _BOARD_GEN_CACHE`. macOS ships bash 3.2,
+# which has neither `declare -g` (4.2+) nor associative arrays (`-A`, 4.0+),
+# and `declare -gA` runs at SOURCE time — the file failed to source at all
+# (`lib/core/board_state.sh: line 205: declare: -g: invalid option`), exit 2
+# before board_generation is ever called. Ported to the i18n.sh pattern (see
+# that file's own header): plain globals, one per (engine,dir) pair, keyed by
+# sanitizing the cachekey into a valid bash identifier and read back through
+# indirect (`eval`) expansion — `${var//[^A-Za-z0-9_]/_}` is plain bash
+# parameter expansion, no fork, no bash-4 dependency. `board_key` (a `cksum`
+# fork) is deliberately NOT used to name the slot: board_generation runs
+# several times per render (see "Memoized" above), and a fork on every call
+# just to pick a cache slot would tax the exact path this memo exists to keep
+# cheap.
+#
+# A cachekey sanitized this way is not guaranteed collision-free (two
+# different (engine,dir) pairs could fold to the same identifier), so the
+# original cachekey is written back alongside the generation path and
+# compared on every read — a mismatch is treated as a miss and recomputed,
+# never someone else's generation. Same guard board_recent/board_find already
+# use for their own hashed (cksum) keys, applied here to a sanitized-name key
+# instead. A cachekey never looked up before reads as "" via indirect
+# expansion of an unset variable, indistinguishable from a genuinely-cached
+# empty (board_stale-failed) result — so a miss is recorded as the sentinel
+# `__NONE__` (a real generation path always starts with board_root's prefix,
+# never equals that literal) rather than "".
+#
+# `_BOARD_GEN_CACHE_KEYS` tracks which sanitized names are live so
+# `_board_gen_cache_clear` (called by `_home_refresh`, see home.sh's own
+# header on why a long-lived process must clear this every refresh) can unset
+# them without enumerating the whole environment — the indexed-array
+# equivalent of the old `_BOARD_GEN_CACHE=()` single-assignment reset. Left
+# unguarded (not `[ set ] ||`) like `_CLIKAE_I18N_DIR` in i18n.sh: a plain
+# top-level assignment is global no matter where this file is sourced FROM
+# (only `declare`/`local` scope to the calling function; see the array's own
+# old comment on why `-g` existed at all), so re-sourcing this file simply
+# starts the memo cold again — the same thing re-running `declare -gA` with no
+# `=()` would NOT have done, but nothing depends on a stale process-lifetime
+# cache surviving a fresh `source`.
+_BOARD_GEN_CACHE_KEYS=()
+_board_gen_cache_clear() {
+  local k
+  for k in "${_BOARD_GEN_CACHE_KEYS[@]}"; do
+    unset "_BOARD_GEN_CACHE_$k" "_BOARD_GEN_CACHE_KEY_$k" 2>/dev/null
+  done
+  _BOARD_GEN_CACHE_KEYS=()
+}
 board_generation() {
-  local engine="$1" dir="$2" cachekey root gen=""
+  local engine="$1" dir="$2" cachekey root gen="" san varg vark gval cval
   cachekey="$engine"$'\036'"$dir"
-  if [ -n "${_BOARD_GEN_CACHE[$cachekey]+x}" ]; then
-    gen="${_BOARD_GEN_CACHE[$cachekey]}"
-    [ -n "$gen" ] || return 1
-    printf '%s' "$gen"
-    return 0
+  san="${cachekey//[^A-Za-z0-9_]/_}"
+  varg="_BOARD_GEN_CACHE_$san"
+  vark="_BOARD_GEN_CACHE_KEY_$san"
+  eval "gval=\"\${$varg:-}\""
+  if [ -n "$gval" ]; then
+    eval "cval=\"\${$vark:-}\""
+    if [ "$cval" = "$cachekey" ]; then
+      [ "$gval" != __NONE__ ] || return 1
+      printf '%s' "$gval"
+      return 0
+    fi
   fi
   load_adapter "$engine" >/dev/null 2>&1 || true
   root="$(board_root "$dir")"
@@ -222,7 +296,9 @@ board_generation() {
     [ -f "$root/current" ] && IFS= read -r gen2 < "$root/current"
     case "$gen2" in generation.*) gen="$root/$gen2" ;; esac
   fi
-  _BOARD_GEN_CACHE["$cachekey"]="$gen"
+  printf -v "$varg" '%s' "${gen:-__NONE__}"
+  printf -v "$vark" '%s' "$cachekey"
+  _BOARD_GEN_CACHE_KEYS+=("$san")
   [ -n "$gen" ] || return 1
   printf '%s' "$gen"
 }
@@ -348,13 +424,62 @@ _board_purge_recent_row() {
     > "$base.tmp" && mv -f "$base.tmp" "$base"
 }
 
-# _board_engine_sidscope <engine> <path> <-A _agy_ws nameref-by-convention> ->
-# echoes "<sid>\037<scope>" for a non-agent transcript, nothing for a path
-# that yields no sid (agy adapter hook missing, malformed meta, …). The ONE
-# place that spells out how each engine's sid/scope come out of a PATH or a
-# file's own CONTENT — `board_state_refresh` calls this only for a file it
-# has already decided needs a fresh parse (new, changed, or a cold build),
-# never for one it can carry forward unchanged (round-6 fix review P1-2).
+# _agy_ws_varname <sid> -> sets $_agy_ws_var_out to the global variable name
+# that holds this sid's cached "<sid>\037<workspace>" record. fix7: bash 3.2
+# has no associative arrays, so `_agy_ws`/`_ws` (an antigravity cwd index,
+# formerly `local -A`) become plain globals keyed by a sanitized name — same
+# idea as `board_generation`'s own memo above (see its header for why this is
+# NOT `board_key`/cksum-based: a fork here would run once per FILE in a cold
+# build, reintroducing the per-session fork cost round-3 fix review's P2-2
+# removed). Shared by `_board_engine_sidscope` below and antigravity.sh's
+# `adapter_recent_sids` — the ONE naming scheme, so the two callers can never
+# drift onto two different variables for the same sid.
+_agy_ws_varname() {
+  _agy_ws_var_out="_AGY_WS_${1//[^A-Za-z0-9_]/_}"
+}
+
+# _agy_ws_load <dir> -> populates one global per antigravity session id this
+# tank's history.jsonl carries a workspace for. ONE fork total
+# (`adapter_session_cwd_index`, itself one `awk` pass over history.jsonl —
+# round-3 fix review P2-2's bulk index) no matter how many sessions exist;
+# this loop and every `_agy_ws_lookup` below are pure bash, zero forks — the
+# invariant round-6/P2-2's own review demanded stays true after this port:
+# O(1) forks per RENDER, never O(sessions).
+_agy_ws_load() {
+  local dir="$1" _asid _aws
+  declare -F adapter_session_cwd_index >/dev/null 2>&1 || return 0
+  while IFS=$'\037' read -r _asid _aws; do
+    [ -n "$_asid" ] || continue
+    _agy_ws_varname "$_asid"
+    printf -v "$_agy_ws_var_out" '%s\037%s' "$_asid" "$_aws"
+  done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
+}
+
+# _agy_ws_lookup <sid> -> sets $_agy_ws_lookup_out to this sid's cached
+# workspace, or "" on a miss (never loaded by `_agy_ws_load`, or a
+# sanitized-name collision with a different sid — verified via the sid
+# written back alongside the value, same guard board_recent/board_find use
+# for their own hashed keys, applied here to a sanitized-name key instead).
+_agy_ws_lookup() {
+  local sid="$1" val vsid vws
+  _agy_ws_lookup_out=""
+  _agy_ws_varname "$sid"
+  eval "val=\"\${$_agy_ws_var_out:-}\""
+  [ -n "$val" ] || return 0
+  IFS=$'\037' read -r vsid vws <<< "$val"
+  [ "$vsid" = "$sid" ] || return 0
+  _agy_ws_lookup_out="$vws"
+}
+
+# _board_engine_sidscope <engine> <path> -> echoes "<sid>\037<scope>" for a
+# non-agent transcript, nothing for a path that yields no sid (agy adapter
+# hook missing, malformed meta, …). The ONE place that spells out how each
+# engine's sid/scope come out of a PATH or a file's own CONTENT —
+# `board_state_refresh` calls this only for a file it has already decided
+# needs a fresh parse (new, changed, or a cold build), never for one it can
+# carry forward unchanged (round-6 fix review P1-2). Antigravity's branch
+# expects `_agy_ws_load` to have already run for this tank (board_state_refresh
+# does so before either of its per-file loops).
 _board_engine_sidscope() {
   local engine="$1" f="$2" sid="" scope=""
   case "$engine" in
@@ -363,8 +488,9 @@ _board_engine_sidscope() {
     grok) sid="$(_grok_json_str "$f" id)"; scope="$(_grok_json_str "$f" cwd)" ;;
     antigravity)
       sid="${f%/.system_generated/*}"; sid="${sid##*/}"
-      if [ -n "${_agy_ws[$sid]+x}" ]; then
-        scope="${_agy_ws[$sid]}"
+      _agy_ws_lookup "$sid"
+      if [ -n "$_agy_ws_lookup_out" ]; then
+        scope="$_agy_ws_lookup_out"
       else
         scope="$(adapter_session_cwd "$f")"
       fi
@@ -431,17 +557,11 @@ board_state_refresh() (
   # account's sessions, never just this PWD's — and used to pay one
   # reading_cache_run + fork pipeline PER session for that (measured ~5s
   # fixed on a synthetic 500-session tank). One bulk index read replaces
-  # that with plain associative-array lookups — see
+  # that with plain-global lookups (fix7: bash 3.2 has no associative
+  # arrays — see `_agy_ws_varname`'s own header) — see
   # adapter_session_cwd_index's header (antigravity.sh) for why this is safe
   # (same source of truth, same "first occurrence wins" semantics).
-  local -A _agy_ws=()
-  if [ "$engine" = antigravity ] && declare -F adapter_session_cwd_index >/dev/null; then
-    local _asid _aws
-    while IFS=$'\037' read -r _asid _aws; do
-      [ -n "$_asid" ] || continue
-      _agy_ws["$_asid"]="$_aws"
-    done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
-  fi
+  [ "$engine" != antigravity ] || _agy_ws_load "$dir"
 
   if [ -z "$oldgen" ]; then
     # Cold build (or a fully-invalidated generation): every file is new, so
@@ -453,31 +573,39 @@ board_state_refresh() (
     # "${paths[@]}"` call: that call's own argv is exactly the P1-1 ARG_MAX
     # exposure this round fixed for the fingerprint, and a cold build is the
     # shape most likely to have a huge `paths` count in the first place.
-    local -a all_files=() paths=() manifest_lines=() reading_lines=()
-    local -A cur_mtime=() cur_size=() sid_of=() scope_of=() reading_of=()
-    local mtv szv fpv age mtsec val sidscope
+    # fix7: the per-file maps this pass used to key by PATH (`cur_mtime`,
+    # `cur_size`, `sid_of`, `scope_of`, `reading_of` — all `local -A`, bash
+    # 4+) are gone; bash 3.2 has no associative arrays. Ported to parallel
+    # INDEXED arrays (bash 3.2 has always had those) keyed by the file's
+    # position in `stat_rows`, never by path — `${all_mtime[idx]}` is a plain
+    # integer-subscript array read, not a hash lookup, so nothing here needed
+    # `declare -A` to begin with.
+    local -a all_path=() all_mtime=() all_size=() all_sid=() all_scope=()
+    local -a all_reading=() path_idx=() manifest_lines=() reading_lines=()
+    local mtv szv fpv age mtsec val sidscope idx i=0 j
     while IFS=$'\037' read -r mtv szv fpv; do
       [ -n "$fpv" ] || continue
       count=$((count + 1))
-      all_files+=("$fpv")
-      cur_mtime["$fpv"]="$mtv"; cur_size["$fpv"]="$szv"
-      case "${fpv##*/}" in agent-*) ;; *) paths+=("$fpv") ;; esac
+      all_path[i]="$fpv"; all_mtime[i]="$mtv"; all_size[i]="$szv"
+      case "${fpv##*/}" in agent-*) ;; *) path_idx+=("$i") ;; esac
+      i=$((i + 1))
     done <<< "$stat_rows"
     printf '%s\n' "$count" > "$gen/count"
-    if [ "${#paths[@]}" -gt 0 ]; then
-      while read -r mt f; do
+    if [ "${#path_idx[@]}" -gt 0 ]; then
+      while read -r mt idx; do
+        f="${all_path[idx]}"
         [ -f "$f" ] || continue
         sidscope="$(_board_engine_sidscope "$engine" "$f")"
         [ -n "$sidscope" ] || continue
         sid="${sidscope%%$'\037'*}"; scope="${sidscope#*$'\037'}"
-        sid_of["$f"]="$sid"; scope_of["$f"]="$scope"
+        all_sid[idx]="$sid"; all_scope[idx]="$scope"
         key="$(board_key "$sid")"
         printf '%s\n%s\n' "$sid" "$f" > "$gen/sids/$key"
         key="$(board_key "$scope")"
         [ -f "$gen/recent/$key.all" ] || printf '#scope\037%s\n' "$scope" > "$gen/recent/$key.all"
         printf '%s\037%s\n' "$mt" "$sid" >> "$gen/recent/$key.all"
       done < <(
-        for f in "${paths[@]}"; do printf '%s %s\n' "${cur_mtime[$f]%%.*}" "$f"; done \
+        for idx in "${path_idx[@]}"; do printf '%s %s\n' "${all_mtime[idx]%%.*}" "$idx"; done \
           | LC_ALL=C sort -k1,1rn
       )
       for f in "$gen"/recent/*.all; do
@@ -487,16 +615,17 @@ board_state_refresh() (
       done
     fi
     if [ -n "$window" ]; then
-      for f in "${all_files[@]}"; do
-        mtsec="${cur_mtime[$f]%%.*}"
+      for ((j = 0; j < i; j++)); do
+        mtsec="${all_mtime[j]%%.*}"
         age=$((reading_now - mtsec))
         [ "$age" -lt "$window" ] || continue
+        f="${all_path[j]}"
         if declare -F reading_cache_run >/dev/null; then
           val="$(reading_cache_run "$kind" "$f" "$parser" "$f")"
         else
           val="$("$parser" "$f")"
         fi
-        reading_of["$f"]="$val"
+        all_reading[j]="$val"
         reading_lines+=("$val")
       done
       printf '%s\n' "${reading_lines[@]}" | awk -F $'\037' '
@@ -505,8 +634,8 @@ board_state_refresh() (
         END { printf "%s\037%s\037%s\n", l, s, r }
       ' > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
     fi
-    for f in "${all_files[@]}"; do
-      manifest_lines+=("${cur_mtime[$f]}"$'\036'"${cur_size[$f]}"$'\036'"${sid_of[$f]-}"$'\036'"${scope_of[$f]-}"$'\036'"${reading_of[$f]-}"$'\036'"$f")
+    for ((j = 0; j < i; j++)); do
+      manifest_lines+=("${all_mtime[j]}"$'\036'"${all_size[j]}"$'\036'"${all_sid[j]-}"$'\036'"${all_scope[j]-}"$'\036'"${all_reading[j]-}"$'\036'"${all_path[j]}")
     done
     [ "${#manifest_lines[@]}" -eq 0 ] || printf '%s\n' "${manifest_lines[@]}" > "$gen/manifest"
   else
