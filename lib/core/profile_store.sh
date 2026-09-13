@@ -440,18 +440,22 @@ EOF
 # fingerprint is not a tank (#61's `zzempty` reproduction) — `list_all_profiles`
 # simply skips it, and `doctor` names it.
 #
-# The print goes to `printf … >&2`, NOT log_info (which is stdout) — this
+# The print goes to `printf … >&2`, NOT log_done (which is stdout) — this
 # runs INSIDE list_all_profiles, whose stdout is the tab-separated data
 # contract every caller (`clikae tanks`, burn's reroute picker, `to`,
 # `resume`) parses; a narration line on that stream would corrupt every one
 # of them. One line, once — after the write, tank_dir_is_tank short-circuits
 # true on every later call and this function is never reached again for the
-# same directory.
+# same directory. Badge is `DONE`, not `INFO`: signet's badge vocabulary
+# (packages/cli/SPEC.md) is a CLOSED set — PASS/DONE/WARN/CRIT/FAIL/HELD,
+# no `INFO` — and this line changed the state (wrote the marker), which is
+# exactly `log_done`'s own rule for which badge a line earns
+# (lib/core/log.sh's comment above log_done/log_info).
 _tank_adopt_if_legacy() {
   local cli="$1" dir="$2"
   _tank_fingerprint_match "$cli" "$dir" || return 1
   tank_marker_write "$cli" "$dir"
-  printf '[ INFO ] adopted %s/%s\n' "$cli" "${dir##*/}" >&2
+  printf '[ DONE ] adopted %s/%s\n' "$cli" "${dir##*/}" >&2
   return 0
 }
 

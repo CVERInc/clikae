@@ -40,7 +40,15 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     root = tempfile.mkdtemp(prefix='clikae-pty-')
     _SANDBOXES.append(root)
     for engine, tank in tanks:
-        os.makedirs(os.path.join(root, '.clikae', 'profiles', engine, tank), exist_ok=True)
+        d = os.path.join(root, '.clikae', 'profiles', engine, tank)
+        os.makedirs(d, exist_ok=True)
+        # #61 round-1 P1-3: a tank is now a directory clikae MADE or ADOPTED,
+        # never a name shape — a real `clikae init` stamps a `.clikae-tank`
+        # marker at creation, so this fixture (which skips `clikae init` for
+        # speed) does the same, or every board/prompt screen here sees "No
+        # tanks yet" instead of the fixture it just built.
+        with open(os.path.join(d, '.clikae-tank'), 'w') as f:
+            f.write(engine + '\n')
     # Answer the wake question up front. A launch asks once, on a terminal, and
     # this harness IS a terminal — so without this every launched-engine check
     # would sit at that prompt and report the engine's output as missing, which
