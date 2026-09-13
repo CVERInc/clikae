@@ -170,6 +170,31 @@ release() {
   [ ! -s "$TOUCH_ACTIONS" ]
 }
 
+@test "touch: @clikae_touch_scroll off is recognized case-insensitively" {
+  # P3-1 (2026-09 R2 review): OFF/OFf/off must all disable, silently and
+  # consistently — a human at `Ctrl-b :` cannot be expected to hit the exact
+  # case the case-arm happened to be written in. bash 3.2 has no ${var,,}.
+  local v
+  for v in off OFF Off oFf 0 no NO No false FALSE False; do
+    : > "$TOUCH_ACTIONS"
+    export TOUCH_ENABLED="$v"
+    release 16 %7 ''
+    [ ! -s "$TOUCH_ACTIONS" ]
+  done
+}
+
+@test "touch: values that only resemble 'off' still scroll" {
+  # Case-folding must not become substring matching: only the exact tokens
+  # (case-insensitively) disable; anything else keeps translating.
+  local v
+  for v in on 1 yes true offline nooo ' off' 'off '; do
+    : > "$TOUCH_ACTIONS"
+    export TOUCH_ENABLED="$v"
+    release 16 %7 ''
+    [ -s "$TOUCH_ACTIONS" ]
+  done
+}
+
 @test "touch: missing or malformed coordinates do nothing" {
   export TOUCH_Y1=''
   release 16 %7 ''

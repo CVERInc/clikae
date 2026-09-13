@@ -40,7 +40,13 @@ _touch_opt() {
 }
 
 enabled=$(_touch_opt @clikae_touch_scroll)
-case "$enabled" in off|0|no|false) exit 0 ;; esac
+# P3-1 (2026-09 R2 review): case-fold before matching. `Ctrl-b :` is hand-typed,
+# and `OFF`/`Off`/`FALSE` used to scroll right on past this case list, silently
+# — a human cannot be expected to hit the exact case an arm happened to be
+# written in. bash 3.2 has no ${var,,}; `tr` is POSIX and needs no bashism.
+case "$(printf '%s' "$enabled" | tr '[:upper:]' '[:lower:]')" in
+  off|0|no|false) exit 0 ;;
+esac
 y1=$(tmux show-options -pqv -t "$TS_PANE_ID" @clikae_touch_y 2>/dev/null)
 # 🔴 Use it once. UNSET immediately after reading, before any validation or
 # branch below, so a stale @clikae_touch_y is not a bug to avoid causing but a
