@@ -60,6 +60,8 @@ T_K_QUIT="quit"
 T_K_FILTER="filter"
 T_K_CLEANUP="cleanup"
 T_K_CLEAN="clean up session data — free disk space"
+T_K_TOGGLE_ALL="Toggle --all"
+T_K_TOGGLE_BURN="toggle burn sessions"
 # `clikae clean` section headings (T_CLEAN_SECT_OLD/_MIN are printf formats)
 T_CLEAN_SECT_REDUNDANT="Redundant (safe)"
 T_CLEAN_SECT_OLD="Untouched for %s+ days"

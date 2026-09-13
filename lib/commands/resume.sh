@@ -340,7 +340,7 @@ _resume_pick_draw_body() {
   # localized key labels are correct and de/es/fr legitimately need the room
   # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a Toggle --all · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a $T_K_TOGGLE_ALL · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
   printf '\n'
 
@@ -635,7 +635,7 @@ _resume_pick() {
       _home_help_row "1-9"           "$T_K_JUMP"
       _home_help_row "⏎ Enter"       "$T_RESUME"
       _home_help_row "/"             "$T_K_FILTER"
-      _home_help_row "a"             "Toggle burn sessions"
+      _home_help_row "a"             "$T_K_TOGGLE_BURN"
       _home_help_row "c"             "$T_K_CLEAN"
       _home_help_row "q / Esc"       "$T_K_QUIT"
       printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
