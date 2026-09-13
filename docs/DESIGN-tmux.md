@@ -416,3 +416,26 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   真正改不了的是**已經在跑的 session**：那個引擎的環境在它啟動時就固定了，attach 回去不會刷新——那正是 Rule 4（SSH socket 用穩定 symlink）存在的理由，也是 `roam.bats` 那句註解在講的情況。兩者不是同一件事，把它們混為一談就會像我一樣去修一個不存在的 bug。
 
   所以剩下的差異只是**「傳什麼」**：burn 傳整份（無人值守需要人類當時的 key／proxy），switch 傳 3 個（其餘由 client 環境自然帶過去）。這是刻意的，不是漂移。
+
+### Rule 10: tmux guard shim（inherited $TMUX 不可被裸命令殺掉，CVERInc/clikae#97）
+
+- **症狀**：一個從 clikae 啟動、因而繼承了 `$TMUX` 的行程，跑了一個**沒指名 socket／session** 的毀滅性 tmux 指令，殺掉的是繼承來的那顆 server，不是它以為自己在隔離的那個。
+- **收據**（兩起，同一個形狀）：
+  ```
+  2026-09-10  一個 reviewer 下了裸的 `tmux kill-server`（沒有 -L），
+              打掉了 operator 真正的 server。
+
+  2026-09-13  一條 fix lane 跑 TMUX_TMPDIR="$T" tmux kill-server，
+              以為 TMUX_TMPDIR 隔離了自己。Socket 優先序是
+              -S > -L > $TMUX > TMUX_TMPDIR，而 $TMUX（從座艙繼承）
+              有設，所以打中的是座艙——連同 14 條正在跑的 lane，
+              一起死掉。同一條 lane 從自己的逐字稿被 resume 之後，
+              31 分鐘內用同一個形狀又做了一次。
+  ```
+  兩次同一個形狀，不是意外：`TMUX_TMPDIR` 從來不隔離「已經繼承 `$TMUX`」的行程，因為 tmux 的 client 一律先問 `$TMUX`。
+- **規範**：
+  1. `lib/shims/tmux`（bash 3.2）只在 `$TMUX` 有設的時候開火，只擋兩個動詞：沒帶 `-S`/`-L` 的 `kill-server`（會殺掉整顆繼承來的 server）、沒帶 `-t` 的 `kill-session`（會殺掉繼承來的**當前** session）。rc 86，訊息點名那個 socket 和合法寫法。`$TMUX` 沒設時（一個人在乾淨的 shell 裡）什麼都不擋——這不是「更安全的 tmux」，是「只在會撞到別人 server 的那個形狀上開火」。
+  2. 它找真正的 tmux 是**走 PATH、跳過自己的目錄**（用檔案 identity 比對，不是硬寫 `/usr/bin/tmux`），所以裝在哪個前綴都對，也不會遞迴到自己。
+  3. 裝法跟 Rule 4 的 `SSH_AUTH_SOCK` 同一招：`tmux_spawn_session`（`lib/core/tmux.sh`）疊好 `$PATH`（shim 目錄疊在最前面，冪等）之後，用明講的 `-e PATH=…` 交給 `new-session`——**不是**指望 tmux 把呼叫端的環境整包抄過去。🔴 這是量出來的，不是假設的：`tmux(1)` 的「GLOBAL AND SESSION ENVIRONMENT」白紙黑字寫著新行程的環境＝**server 出生時凍住的全域表**疊上**session 表**（只有 `-e`／`set-environment`／`update-environment` 會動它），`PATH` 兩邊都不在預設清單裡。直接量過（隔離 socket，不牽扯 clikae）：對一顆**已經在跑**的 server 開第二個 session，第二個 session 的**真實行程**真的拿到了下指令那個 client 當下的 `$PATH`（沒有任何 `-e`）——但同一次測試換一個沒被列出的自訂變數，就是拿不到。這個不一致沒道理拿來給一個安全用途的 guard 當地基，所以老實走 `-e`。副作用（也是好處）：`-e` 寫的值 `tmux show-environment -t` 讀得到——`clikae doctor` 的 `_doctor_tmux_guard` 就是靠這個；前面那條「client 環境會滲透過去」的隱性管道對 `show-environment` 是隱形的。同一步也疊一次自己行程的 `$PATH`（冪等，圖的是這個函式接下來自己呼叫的每一個 `tmux` 也順便走 guard）。四個呼叫端（switch ×2、burn、relay/antigravity）都經過這一個建構子，全部免費拿到。
+  4. `clikae doctor`（`_doctor_tmux_guard`）讀每個活著的 clikae session 自己的 `tmux show-environment -t PATH`，回報 shim 目錄不在最前面的——**有裝跟裝在第一位是兩件事**，這個守衛只在第一位時才是真的。舊 session（守衛上線前就 spawn 的）不會自己補上：要重開那個 tank。
+  5. reefbox 上暫時的 host-level guard（`~/.local/bin/tmux`，同一套邏輯，寫死 `/usr/bin/tmux`）在這個 shim 上線後退役。

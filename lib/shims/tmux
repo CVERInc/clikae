@@ -1,0 +1,101 @@
+#!/bin/bash
+# lib/shims/tmux — clikae's tmux guard (CVERInc/clikae#97).
+#
+# WHY. Twice this month a process that had INHERITED $TMUX from a live tmux
+# server ran a destructive verb naming no socket, and it hit the inherited
+# server instead of whatever it thought it was isolating:
+#
+#   2026-09-10  a reviewer's bare `tmux kill-server` (no -L) took down the
+#               operator's real server.
+#   2026-09-13  a fix lane ran `TMUX_TMPDIR="$T" tmux kill-server`, believing
+#               TMUX_TMPDIR isolated it. Socket precedence is
+#               -S > -L > $TMUX > TMUX_TMPDIR, and $TMUX (inherited from the
+#               cockpit) was set — so it killed the cockpit and 14 running
+#               lanes. The lane was resumed from its own transcript and did
+#               it again 31 minutes later, same shape.
+#
+# clikae prepends this shim's directory to PATH in the launch environment of
+# every session it starts (lib/core/tmux.sh, tmux_spawn_session — the one
+# place a session is created). A sub-agent, a bats run, or any script that
+# session goes on to run inherits it for free — nothing to install, nothing
+# for a human to remember.
+#
+# WHAT IT REFUSES. Only a verb that is destructive to the WHOLE inherited
+# server or to the CURRENT session on it, and only when $TMUX says a server is
+# actually inherited:
+#
+#   kill-server   with no -S and no -L   — would kill the socket named in $TMUX
+#   kill-session  with no -t             — would kill the CURRENT session on it
+#
+# A human at a plain shell has no $TMUX, so nothing here ever refuses them —
+# this only fires for a process that is already INSIDE a tmux session, which
+# is exactly the shape both incidents were. -S / -L / -t name a socket or
+# session explicitly and always pass through unexamined: naming your target
+# is the whole ask, and everything else this shim does not recognise is none
+# of its business — it execs straight through.
+#
+# bash 3.2 (clikae's floor): no arrays, no [[ ]], no ${var,,}, no process
+# substitution, no `local` (this is a script, not a sourced function).
+
+set -u
+
+# Resolve the real tmux by walking PATH and skipping every entry that IS this
+# file, by identity (`-ef`: same device+inode — survives symlinks and however
+# $0 got spelled) rather than a hardcoded /usr/bin/tmux or a directory-string
+# comparison. This is the same technique tests/stubs/tmux-guard already proved
+# for the same reason: no subshell per PATH entry (a `cd`/`pwd -P` per
+# candidate measured ~21ms added to every tmux call — enough to break a
+# timing-sensitive test), and it can never exec itself even if the shim's own
+# directory appears on PATH more than once (a nested spawn re-prepending it).
+_real_tmux=""
+_ifs_save="$IFS"
+IFS=:
+for _d in $PATH; do
+  IFS="$_ifs_save"
+  [ -n "$_d" ] || continue
+  [ -x "$_d/tmux" ] || continue
+  [ "$_d/tmux" -ef "$0" ] && continue
+  _real_tmux="$_d/tmux"
+  break
+done
+IFS="$_ifs_save"
+
+if [ -z "$_real_tmux" ]; then
+  printf 'tmux-guard: no real tmux found on PATH past this shim\n' >&2
+  exit 127
+fi
+
+if [ -n "${TMUX:-}" ]; then
+  _sock="${TMUX%%,*}"
+  _has_sock=0
+  _has_target=0
+  _verb=""
+  for _a in "$@"; do
+    case "$_a" in
+      -S|-S*|-L|-L*) _has_sock=1 ;;
+      -t|-t*)        _has_target=1 ;;
+    esac
+  done
+  for _a in "$@"; do
+    case "$_a" in
+      -*) continue ;;
+      *)  _verb="$_a"; break ;;
+    esac
+  done
+  case "$_verb" in
+    kill-server)
+      if [ "$_has_sock" -eq 0 ]; then
+        printf 'tmux-guard: refusing bare `tmux kill-server` — $TMUX names a socket (%s) and this would kill its whole server. Name yours: tmux -S <path> kill-server\n' "$_sock" >&2
+        exit 86
+      fi
+      ;;
+    kill-session)
+      if [ "$_has_target" -eq 0 ]; then
+        printf 'tmux-guard: refusing bare `tmux kill-session` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_sock" >&2
+        exit 86
+      fi
+      ;;
+  esac
+fi
+
+exec "$_real_tmux" "$@"

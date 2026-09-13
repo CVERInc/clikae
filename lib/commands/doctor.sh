@@ -182,6 +182,40 @@ _doctor_legacy_prefix() {
   return 0
 }
 
+# _doctor_tmux_guard -> say something ONLY when a live clikae session's PATH
+# does not start with the tmux guard shim directory (CVERInc/clikae#97,
+# lib/shims/tmux — refuses a bare kill-server/kill-session while $TMUX is
+# inherited, rc 86).
+#
+# 🔴 FIRST, not just present. `tmux_spawn_session` (lib/core/tmux.sh, Rule 10)
+# is the only place that prepends it, and a session captures its creating
+# client's PATH once, at birth (DESIGN-tmux Rule 8) — nothing repaints it
+# later. So a session started before the guard shipped, or one whose spawn
+# path drifted around Rule 10, is silently unprotected for its whole life; the
+# only way to know is to ask THAT session what its PATH actually is, read back
+# from tmux's own per-session environment table (`show-environment -t`), not
+# from this process's.
+_doctor_tmux_guard() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local shim_dir="$CLIKAE_LIB/shims"
+  local sess created attached sess_path missing=""
+  while IFS=$'\t' read -r sess created attached; do
+    [ -n "$sess" ] || continue
+    : "$created" "$attached"
+    sess_path="$(tmux show-environment -t "=$sess" PATH 2>/dev/null | sed -n 's/^PATH=//p')"
+    case "$sess_path" in
+      "$shim_dir:"*|"$shim_dir") continue ;;
+      *) missing="$missing $sess" ;;
+    esac
+  done <<EOF
+$(live_session_names 2>/dev/null || true)
+EOF
+  [ -n "$missing" ] || return 0
+  printf '  %-16s %s\n' "tmux guard" "not first on PATH:$missing"
+  log_dim "                   (started before the guard, or outside tmux_spawn_session — reattach won't fix it, restart the tank to pick it up)"
+  return 0
+}
+
 # _doctor_memory -> say something ONLY when a Soul store cannot be read.
 #
 # 🔴 WHY DOCTOR AND NOT JUST THE LAUNCH WARNING. memory_access_warn fires when a
@@ -268,6 +302,7 @@ EOF
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
   _doctor_legacy_prefix
+  _doctor_tmux_guard
   _doctor_memory
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"

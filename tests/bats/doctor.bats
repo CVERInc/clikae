@@ -249,3 +249,47 @@ EOF
   [[ "$output" == *"claude: permissions template missing (installation incomplete)"* ]] || false
   [[ "$output" != *"invalid JSON"* ]] || false
 }
+
+# --- tmux guard shim reporting (CVERInc/clikae#97) -----------------------------
+# The guard (lib/shims/tmux) only protects a session that has it FIRST on
+# PATH — tmux_spawn_session (Rule 10, lib/core/tmux.sh) is the only place that
+# arranges that, and a session's PATH is fixed at birth (DESIGN-tmux Rule 8),
+# so a session spawned some other way, or before the guard shipped, stays
+# unprotected for its whole life. doctor is the only place that can say so,
+# reading each live session's OWN tmux-tracked PATH back with
+# `show-environment`, never this process's.
+
+_tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
+
+@test "doctor reports a live session whose PATH does not start with the guard shim" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -e "PATH=/usr/bin:/bin" -s "$sess" 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tmux guard"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$sess"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor stays silent when the live session's PATH starts with the guard shim" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -e "PATH=$CLIKAE_LIB/shims:/usr/bin:/bin" -s "$sess" 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tmux guard"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor changes nothing on disk when checking the tmux guard (read-only)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -e "PATH=/usr/bin:/bin" -s "$sess" 'sleep 60'
+  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  run clikae doctor
+  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ "$before" = "$after" ]
+}

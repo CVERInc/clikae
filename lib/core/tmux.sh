@@ -251,6 +251,8 @@ _tmux_ssh_agent_link() {
 #           long-running session without git credentials.
 #   Rule 5  Session names are whitelisted rather than quoted around.
 #   Rule 7  What the server inherited at birth is written down (see above).
+#   Rule 10 The tmux guard shim goes first on PATH before the session is
+#           created, so the session — and everything it forks — inherits it.
 #
 # Returns 2 on a rejected name, 1 if tmux refused, 0 on success.
 tmux_spawn_session() {
@@ -275,6 +277,34 @@ tmux_spawn_session() {
   [ -n "$session" ] && [ -n "$cmd" ] || return 2
   # Rule 5 — do not rely on shell quoting to survive a hostile name.
   case "$session" in *[!a-zA-Z0-9_-]*) return 2 ;; esac
+
+  # Rule 10 — the tmux guard shim (CVERInc/clikae#97, lib/shims/tmux) goes
+  # first on PATH for the new session, the same way Rule 4 hands SSH_AUTH_SOCK
+  # to it: an explicit `-e`, not a hope that tmux copies our environment.
+  #
+  # 🔴 MEASURED, NOT ASSUMED. `tmux(1)`'s own "GLOBAL AND SESSION ENVIRONMENT"
+  # section is explicit: a new process's environment is the GLOBAL table
+  # (frozen at server BIRTH) merged with the SESSION table (only touched by
+  # `-e`/`set-environment`/`update-environment`) — PATH is in neither by
+  # default. Checked directly (throwaway -S server, no clikae involved): a
+  # plain `tmux new-session` DOES hand the spawning client's live $PATH to the
+  # pane's real process even on an EXISTING server, but an arbitrary
+  # unlisted variable does not — an inconsistency this file has no business
+  # depending on for a guard. `-e` is what Rule 4 already uses for exactly
+  # this reason, and it is also the only form `tmux show-environment -t`
+  # (what `doctor`'s `_doctor_tmux_guard` reads back) can ever see: PATH
+  # reaching a pane through the undocumented path above is invisible to it.
+  #
+  # Also mutate THIS process's own $PATH, idempotently: harmless, and it
+  # means every tmux call this function goes on to make (including the
+  # chain below) already resolves `tmux` through the guard too.
+  local _shim_dir="$CLIKAE_LIB/shims"
+  case "$PATH" in
+    "$_shim_dir:"*) : ;;
+    *) PATH="$_shim_dir:$PATH" ;;
+  esac
+  export PATH
+  env_args+=("-e" "PATH=$PATH")
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
   local _agent_sock=""

@@ -84,6 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under grok's fixed mode — round-1 review caught `--permission acceptEdits`
   running silently on grok under a different mode (`bypassPermissions`); it
   now says so (#60).
+- tmux guard shim: `lib/shims/tmux` refuses a bare `kill-server` (no `-S`/`-L`)
+  or `kill-session` (no `-t`) while `$TMUX` is inherited — the shape that took
+  down a live server twice (2026-09-10, 2026-09-13) — rc 86, naming the socket
+  and the legal form; never refuses anything when `$TMUX` is unset. clikae
+  prepends the shim's directory to `PATH` in the one place a session is
+  created (`tmux_spawn_session`, `lib/core/tmux.sh`), so every session clikae
+  launches (and everything that session forks) inherits it for free — no copy,
+  no settings.json. `clikae doctor` reports a live session whose `PATH` does
+  not start with the shim directory (#97).
 
 ## [0.29.0] — 2026-09-11
 
