@@ -113,9 +113,10 @@ _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 
 # _codex_newest_chain <sessions-dir> -> one path per line: sessions/ itself,
 # then the lexically-newest existing YYYY dir under it, then the newest MM
-# under THAT, then the newest DD under THAT — stopping at the first level
-# that does not exist. Used ONLY as board_stale's freshness signal for codex
-# (see board_state.sh's `_board_scan_root`): a new rollout always
+# under THAT, then EVERY DD directory under that MM (round-4 fix review,
+# P2-2 — see below) — stopping at the first level that does not exist. Used
+# ONLY as board_stale's freshness signal for codex (see board_state.sh's
+# `_board_scan_root`): a new rollout always
 # creates/touches ITS day directory, but sessions/ itself sits three levels
 # above and so never moves for it (P1-C). No `find` here on purpose — this
 # runs on EVERY render via board_stale, and this repo's own test suite
@@ -145,20 +146,36 @@ _codex_sessions_dir() { printf '%s\n' "$1/sessions"; }
 # so a new rollout inside an existing day always bumps a directory this
 # check is already watching, and a brand new day/month/year directory bumps
 # its own newly-created parent, which is also on the list.
+#
+# round-4 fix review, P2-2: watching only the lexically-newest DD assumed a
+# new rollout always lands in that one — true only while codex's own clock
+# moves strictly forward. A clock set back, a cross-timezone rewrite of
+# local time, or a CODEX_HOME synced/restored from another machine can all
+# leave an OLDER day directory as the one that gets written to next, while a
+# newer, still-empty DD already exists as its sibling — the exact same
+# "computed leaf disagrees with the actual one" shape P2-1 fixed for the
+# month/year levels, one level down. A DD directory count is bounded by the
+# calendar (at most 31 per month), so recording every one of them under the
+# newest MM — not just the newest — closes this at the same "one stat call"
+# cost: a write to ANY of them bumps a directory already on the list.
 _codex_newest_chain() {
   local sess="$1"
   [ -d "$sess" ] || { printf '%s\n' "$sess"; return 0; }
   printf '%s\n' "$sess"
-  local y="" m="" d="" p
+  local y="" m="" p
   for p in "$sess"/*/; do [ -d "$p" ] && y="${p%/}"; done
   [ -n "$y" ] || return 0
   printf '%s\n' "$y"
   for p in "$y"/*/; do [ -d "$p" ] && m="${p%/}"; done
   [ -n "$m" ] || return 0
   printf '%s\n' "$m"
-  for p in "$m"/*/; do [ -d "$p" ] && d="${p%/}"; done
-  [ -n "$d" ] || return 0
-  printf '%s\n' "$d"
+  local d found=0
+  for d in "$m"/*/; do
+    [ -d "$d" ] || continue
+    found=1
+    printf '%s\n' "${d%/}"
+  done
+  [ "$found" -eq 1 ] || return 0
 }
 
 # _codex_meta_field <file> <field> — pull a string field from the session_meta
