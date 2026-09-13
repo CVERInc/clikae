@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer with one `tr -d '\r'` and reads the matched line back out with
   `sed -n`, never a bash array or a per-line loop.
 
+  Also restored: leading whitespace/tab tolerance ahead of the three named
+  transport prefixes (`origin/main` allowed this; round-2's anchor rewrite
+  dropped it, a coverage regression for an indented or tab-prefixed vendor
+  line — the exact class of transport noise #81 was filed against,
+  recurring in a new shape).
+
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or

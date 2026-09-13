@@ -295,9 +295,19 @@ _limit_codex_anchor_line() {
 # bought by POSITION is now bought by PRECISION instead (the anchor above):
 # scan the WHOLE captured reply, every line, and lean on the anchor being
 # narrow rather than on the line being near the end.
+# P2-1 (round-3 fix review, this PR): `^` was followed directly by the three
+# named prefixes below with no whitespace allowance at all — origin/main's
+# noise class (`[^A-Za-z0-9>#"'.-]{0,12}`) accepted leading spaces and tabs,
+# and real transports routinely indent a wrapped/quoted error block, so this
+# was a coverage regression vs main for anyone whose transport does that
+# (#81's own original symptom, recurring in a new shape). Leading space/tab
+# is not markdown or free prose — it is transport noise itself — so restore
+# tolerance for it specifically (POSIX `[[:space:]]`, bounded so a whole
+# indented paragraph still cannot masquerade as a one-line transport
+# prefix), ahead of the three named prefixes, same as before.
 limit_codex_output_dry() {
   local out="$1" reset matched
-  local anchor="^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2}) )?(\[[A-Za-z0-9_.:-]+\] )?(ERROR: )?([Yy]ou've|[Yy]ou’ve|[Yy]ou have)( [a-z]+){0,2} hit your (usage|session) limit"
+  local anchor="^[[:space:]]{0,8}([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2}) )?(\[[A-Za-z0-9_.:-]+\] )?(ERROR: )?([Yy]ou've|[Yy]ou’ve|[Yy]ou have)( [a-z]+){0,2} hit your (usage|session) limit"
   matched="$(_limit_codex_anchor_line "$anchor" "$out")" || return 1
   reset="$(limit_codex_reset "$matched")"
   [ -n "$reset" ] || return 1

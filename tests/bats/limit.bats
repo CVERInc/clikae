@@ -405,3 +405,34 @@ _codex_reply_line() {
   [ "$status" -eq 0 ]
   [[ "$output" == "try again at Sep 13th, 2026 2:13 AM" ]] || { echo "$output" | od -c; false; }
 }
+
+# --- P2-1 (round-3 fix review, this PR): the anchor's `^` was followed
+# directly by the three named prefixes with no whitespace allowance at all
+# — origin/main's noise class accepted leading space/tab, and a real
+# transport routinely indents a wrapped/quoted error block, so this was a
+# coverage regression vs main (#81's own symptom, recurring). Restored as a
+# bounded `[[:space:]]{0,8}` ahead of the three prefixes.
+
+@test "codex output_dry: leading spaces/tab ahead of a bare vendor sentence still fire dry (P2-1 r3)" {
+  _src_limit
+  local line
+  for line in \
+    "   You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "$(printf '\tYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.')" \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -eq 0 ] || { echo "wrongly not-dry: $line"; false; }
+  done
+}
+
+@test "codex output_dry: leading space ahead of ERROR: still fires dry (P2-1 r3)" {
+  _src_limit
+  run limit_codex_output_dry "  ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: an over-long indent (16 spaces) is still rejected — bounded, not a generic noise class (P2-1 r3 control)" {
+  _src_limit
+  run limit_codex_output_dry "$(printf '%16sYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.' '')"
+  [ "$status" -ne 0 ]
+}
