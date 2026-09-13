@@ -76,13 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds (`CLIKAE_USAGE_TTL`); `source` is `"vendor"`, `"transcript"`, or
   `"unknown"`. The board shows cached percentages; the tank a burn is told
   to launch is always the one that runs, never silently substituted —
-  headroom preference only orders which tank a *dry* burn reroutes to next,
-  and burn never calls the vendor to decide (it reads whatever usage
-  reading is already on disk). Unavailable readings retain transcript
-  fallbacks (#72; round-1 review: named-tank launch, no vendor calls off
-  burn's hot path, honest codex `source`, board redraw fork removed;
-  round-2 review: burn now refreshes the tank it just ran on at run end and
-  each reroute candidate before ranking, the board shows a stale-but-recent
+  headroom preference only orders which tank a *dry* burn reroutes to next.
+  The board never calls the vendor itself; burn does, but only off its own
+  hot path — once for the tank it just ran, at run end, and once per
+  candidate right before choosing a reroute target on a dry tank, never
+  before launching. Unavailable readings retain transcript fallbacks (#72;
+  round-1 review: named-tank launch, honest codex `source`, board redraw
+  fork removed; round-2 review: the two burn-time refreshes above (nothing
+  had ever refreshed the cache before), the board shows a stale-but-recent
   reading with its age instead of hiding it, a reset instant already past
   reads as 0% used rather than a stale percentage, and intra-tier ordering
   is window_pct first, weekly_pct only the tie-break).
