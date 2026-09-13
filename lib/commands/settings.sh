@@ -11,6 +11,15 @@
 # hand-rolls its own jq-and-redirect with none of this safety.
 _settings_write_file() (
   local file="$1" content="$2" label="$3" tmp=""
+  # #63 P2-4: refuse to write nothing. `$content` is always built by a caller
+  # as `"$(… | jq …)"` — if that jq dies mid-pipeline (OOM, disk full, killed
+  # mid-upgrade), command substitution swallows its exit code AND turns the
+  # empty stdout into an empty string, and the old code below happily wrote
+  # `printf '%s\n' ""` — one bare newline — over a live settings.json,
+  # rc=0, no error, backup made but the operator told nothing broke. This is
+  # the one place in the whole write path that can catch it: every caller
+  # funnels through here.
+  [ -n "$content" ] || { printf '%s: refusing to write empty content\n' "$label" >&2; return 1; }
   trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
   trap 'exit 1' HUP INT TERM
   tmp="$(mktemp "${file}.tmp.XXXXXX")" || { printf '%s: failed to create a temp file\n' "$label"; return 1; }
@@ -28,10 +37,28 @@ _settings_write_file() (
     local backup
     backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || { printf '%s: failed to create a backup file\n' "$label"; return 1; }
     cp -p "$file" "$backup" || { printf '%s: failed to back up settings.json\n' "$label"; return 1; }
+    _settings_prune_backups "$file"
   fi
   mv -f "$tmp" "$file" || { printf '%s: failed to replace settings.json\n' "$label"; return 1; }
   tmp=""
 )
+
+# _settings_prune_backups <file> -> #63 P3-11: keep only the newest 5
+# `<file>.clikae.bak.*` backups for this settings.json. `clikae cockpit`
+# moving the role is a routine, repeated action (unlike #85's apply, which
+# runs rarely) — nothing else was ever capping this, so the backup count
+# grows without bound in a profile that moves cockpit often.
+_settings_prune_backups() {
+  local file="$1" bak i=0
+  # bash 3.2: no mapfile/readarray. `ls -t` is newest-first; a glob with no
+  # matches expands to nothing under nullglob, or the literal pattern
+  # otherwise — either way `ls -t` on a non-existent path just fails quietly
+  # (stderr discarded) and the loop body never runs.
+  while IFS= read -r bak; do
+    i=$((i + 1))
+    [ "$i" -gt 5 ] && rm -f "$bak" 2>/dev/null
+  done < <(ls -t "${file}.clikae.bak."* 2>/dev/null)
+}
 
 # Merge only missing template permissions; compliant files are never rewritten.
 _settings_tank() (
@@ -99,7 +126,14 @@ _settings_tank() (
     return 1
   fi
   if [ "$mode" = apply ]; then
-    _settings_write_file "$file" "$(printf '%s' "$result" | jq '.settings')" "$engine/$tank" || return 1
+    # #63 P2-4: check the jq substitution's own exit status before handing
+    # its output to the writer (see _settings_write_file's matching guard).
+    local settings_out
+    settings_out="$(printf '%s' "$result" | jq '.settings')" || {
+      printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
+      return 1
+    }
+    _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
   fi
   printf '%s/%s: +%s allow / +%s deny%s\n' "$engine" "$tank" "$allow" "$deny" "$( [ "$mode" != dry-run ] || printf ' (dry-run)' )"
 )
