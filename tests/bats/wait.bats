@@ -243,3 +243,32 @@ STUB
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *'"state":"done"'* ]] || false
 }
+
+# --- P2-3 (2026-09-13 fix-round-2 review): `clikae wait --latest <prefix>` —
+# a caller who knows a run's PREFIX (e.g. `watch-github-CVERInc`) but not the
+# epoch suffix a not-yet-finished poll will pick.
+
+@test "wait --latest: resolves to the NEWEST matching run directory by mtime" {
+  _mkstatus watch-github-T-100 done true github T
+  local past
+  past="$(date -u -d '-10 minutes' +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-10M +%Y%m%d%H%M.%S)"
+  touch -t "$past" "$CLIKAE_HOME/logs/watch-github-T-100/status.json"
+
+  _mkstatus watch-github-T-200 done true github T
+  run clikae wait --latest watch-github-T
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-T-200"'* ]] || false
+}
+
+@test "wait --latest: no match refuses with a clear message" {
+  run clikae wait --latest watch-github-nonexistent
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no status file matches"* ]] || false
+}
+
+@test "wait --latest: mixes with a plain target under --all" {
+  _mkstatus burn-1 done true
+  _mkstatus watch-github-T-300 done true github T
+  run clikae wait burn-1 --latest watch-github-T --all
+  [ "$status" -eq 0 ]
+}

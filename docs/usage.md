@@ -371,9 +371,12 @@ self-exclusion means instead). It's also appended,
 as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
 durable trail, and — the actual wake — every poll that finds at least one
 new event writes a burn-status-shaped file to
-`$CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json`, so
-`clikae wait <that file>` (the same reader a cockpit already blocks on for
-`clikae burn`) returns 0 and prints the events — that's what a cron job or
+`$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json` — burn's own
+directory layout, not a lookalike location `clikae wait` can't resolve — so
+`clikae wait watch-github-<org>-<epoch>` (the run_id printed inside the
+file) or `clikae wait --latest watch-github-<org>` (a cockpit that doesn't
+know the epoch yet) returns 0 and prints the events, the same reader a
+cockpit already blocks on for `clikae burn` — that's what a cron job or
 Stop hook calling `--once` actually has to consume, not the JSONL log.
 
 The cursor (the newest update seen, lagged 300s to absorb GitHub search's

@@ -13,9 +13,32 @@ source "$CLIKAE_LIB/core/burn_status.sh"
 # shellcheck source=../core/duration.sh
 source "$CLIKAE_LIB/core/duration.sh"
 
+# _wait_resolve_latest <prefix> -> the status.json path of the NEWEST
+# (by mtime, not by name — no assumption about epoch digit width) run
+# directory under $HOME/.clikae/logs matching <prefix>*, or 1 if none has a
+# status.json yet (P2-3, 2026-09-13 fix-round-2 review: a cockpit knows a
+# watch-github run's PREFIX — `watch-github-<org>` — but not the epoch
+# suffix a not-yet-run poll will pick; this is the "no epoch needed" entry
+# point burn_status_resolve's own literal/`burn-*`/pid forms don't cover).
+_wait_resolve_latest() {
+  local prefix="$1" base="$HOME/.clikae/logs" d f m best="" best_m=-1
+  [ -n "$prefix" ] && [ -d "$base" ] || return 1
+  for d in "$base/$prefix"*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    m="$(file_mtime "$f")"
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    if [ "$m" -gt "$best_m" ]; then best="$f"; best_m="$m"; fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}
+
 _wait_help() {
   cat <<'EOF'
 Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
+       clikae wait --latest <prefix> [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
 fail, infra, or stale (a `running`/`waiting-reset` row whose recorded pid is
@@ -35,6 +58,12 @@ refusing.
 
   --any        stop as soon as ONE target reaches a terminal state (default).
   --all        wait for EVERY named target to reach a terminal state.
+  --latest <prefix>  resolve to the NEWEST run directory under
+                    $HOME/.clikae/logs whose name starts with <prefix> that
+                    already has a status.json — for a caller who knows the
+                    prefix (e.g. `watch-github-CVERInc`) but not the epoch
+                    suffix a not-yet-finished poll will pick. May be given
+                    more than once, and mixed with plain targets.
   --timeout <dur>   give up after this long — a bare integer of seconds, or
                     with a trailing s/m/h/d (e.g. 90, 90s, 20m, 2h); unbounded
                     if omitted.
@@ -54,6 +83,8 @@ Examples:
   clikae wait "burn-$!" --timeout 20m && echo "L finished"
 
   clikae wait burn-111 burn-222 burn-333 --all --timeout 30m
+
+  clikae wait --latest watch-github-CVERInc --timeout 20m
 EOF
 }
 
@@ -65,6 +96,10 @@ cmd_wait() {
       -h|--help)  _wait_help; return 0 ;;
       --any)      mode="any"; shift ;;
       --all)      mode="all"; shift ;;
+      --latest)   shift; [ $# -gt 0 ] || log_fail "--latest needs a prefix"
+                  local _lp; _lp="$(_wait_resolve_latest "$1")" \
+                    || log_fail "no status file matches: $1*  (try: clikae wait --help)"
+                  targets+=("$_lp"); shift ;;
       --timeout)  shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
       -*)         log_fail "Unknown flag: $1  (try: clikae wait --help)" ;;
       *)          targets+=("$1"); shift ;;

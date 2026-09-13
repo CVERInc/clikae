@@ -50,13 +50,17 @@
 #      THIS is what this file replicates, literally: every poll that finds
 #      >=1 new event writes ONE burn-status-SHAPED file — same `state`
 #      field, same flat single-line JSON via lib/core/json.sh's escaping —
-#      under $CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json
-#      (_wg_status_write below), with `state:"done"`, `reason:"github-
-#      events"`, `artifact:` pointing at this poll's events file, and
-#      `summary:` one line per event (capped, see _wg_build_summary).
-#      `clikae wait <that file>` returns 0 and PRINTS the summary — a
-#      cockpit (or a Stop hook, or a person) blocks on it exactly the way it
-#      already blocks on a burn. The durable
+#      to $HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json
+#      (_wg_status_write below; P2-3, 2026-09-13 fix-round-2 review — burn's
+#      OWN directory layout, `burn_status_dir`, not a parallel location
+#      under $CLIKAE_HOME/state that `clikae wait` never recognised — see
+#      _wg_status_write's own comment for the full story), with
+#      `state:"done"`, `reason:"github-events"`, `artifact:` pointing at
+#      this poll's events file, and `summary:` one line per event (capped,
+#      see _wg_build_summary). `clikae wait watch-github-<org>-<epoch>` (or
+#      `clikae wait --latest watch-github-<org>` — see wait.sh) returns 0
+#      and PRINTS the summary — a cockpit (or a Stop hook, or a person)
+#      blocks on it exactly the way it already blocks on a burn. The durable
 #      $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl log below is kept
 #      too (a full history a cron job can grep after the fact), but it is
 #      NOT the reader — nothing in this repo ever parsed it as one. An
@@ -132,9 +136,6 @@ _wg_log_dir()   { printf '%s/logs/watch-github-%s\n' "$CLIKAE_HOME" "$1"; }
 _wg_cursor_file() { printf '%s/%s.cursor\n' "$(_wg_state_dir)" "$1"; }
 _wg_seen_file()   { printf '%s/%s.seen\n'   "$(_wg_state_dir)" "$1"; }
 _wg_events_file() { printf '%s/events.jsonl\n' "$(_wg_log_dir "$1")"; }
-# _wg_runs_dir <org> -> where the burn-status-shaped file `clikae wait` reads
-# lives for this org (P1-1, see the WHAT "WAKE" MEANS HERE note above).
-_wg_runs_dir()    { printf '%s/%s/runs\n' "$(_wg_state_dir)" "$1"; }
 # _wg_lock_dir <org> -> the mkdir-lock guarding one poll's read-poll-write
 # section for this org (P2-11). See _wg_lock_acquire/_wg_lock_release below.
 _wg_lock_dir()    { printf '%s/%s.lock\n' "$(_wg_state_dir)" "$1"; }
@@ -552,26 +553,34 @@ _wg_build_summary() {
 }
 
 # _wg_status_write <org> <events_file> <summary> -> write ONE burn-status-
-# SHAPED file under $CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json
-# so `clikae wait <that file>` — the reader that already exists, see the
-# WHAT "WAKE" MEANS HERE note at the top of this file — returns 0 and prints
-# `summary`. Superset of burn's own status.json field set (same `state`,
-# same escaping via lib/core/json.sh) plus `summary`, which burn's own
-# status.json has no use for. Write-then-rename, same as burn.sh's own
-# _burn_status_write, so `clikae wait` (polling every second) never reads a
-# half-written file.
+# SHAPED file to $HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json —
+# burn_status_dir's OWN layout (lib/core/burn_status.sh), not a parallel one
+# under $CLIKAE_HOME/state (P2-3, 2026-09-13 fix-round-2 review: the old
+# runs/<epoch>.json location was invisible to `clikae wait` no matter what
+# you passed it — the run_id this file itself wrote wasn't one
+# burn_status_resolve's patterns recognised, an existing-but-unresolved path
+# wasn't tried verbatim, and a not-yet-existing one couldn't be "waited on
+# to appear" either; a cockpit's only option was a hand-rolled `until [ -e
+# ... ]` poll of the runs/ directory — the exact thing #41 exists to
+# replace). Writing here means the run_id THIS FILE prints
+# (`watch-github-<org>-<epoch>`) is also the one `clikae wait` resolves, via
+# burn_status_resolve's own "anything else -> literal run-directory name"
+# fallback — no change needed there. `clikae wait --latest <prefix>` (see
+# wait.sh) covers the epoch a caller can't know in advance. Same field set/
+# escaping as burn's own status.json plus `summary`; write-then-rename so
+# `clikae wait` (polling every second) never reads a half-written file.
 _wg_status_write() {
-  local org="$1" events_file="$2" summary="$3" run_dir now f
-  run_dir="$(_wg_runs_dir "$org")"
-  mkdir -p "$run_dir" 2>/dev/null || return 0
+  local org="$1" events_file="$2" summary="$3" now run_id run_dir
   now="$(date +%s 2>/dev/null || echo 0)"
-  f="$run_dir/$now.json"
+  run_id="watch-github-$org-$now"
+  run_dir="$(burn_status_dir "$run_id")"
+  mkdir -p "$run_dir" 2>/dev/null || return 0
   {
     printf '{"ok":true,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null,"summary":%s}\n' \
       "$(json_str "github")" "$(json_str "$org")" "$(json_str "$events_file")" \
-      "$(json_str "github-events")" "$(json_str "watch-github-$org-$now")" \
+      "$(json_str "github-events")" "$(json_str "$run_id")" \
       "$(json_str "done")" "$now" "$now" "$$" "$(json_str "$summary")"
-  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+  } > "$run_dir/status.json.tmp" 2>/dev/null && mv -f "$run_dir/status.json.tmp" "$run_dir/status.json" 2>/dev/null || true
 }
 
 # --- one poll ---------------------------------------------------------------
@@ -776,10 +785,12 @@ $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl — durable, so a cron job or
 a Stop hook calling --once has something to read even with nobody watching.
 
 The actual wake: every poll that finds >=1 new event writes ONE status file
-(the same shape `clikae burn` writes, same reader) to
-$CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json — so
-`clikae wait <that file>` returns 0 and prints the events, exactly like
-waiting on a burn. A cursor (the newest updated_at seen) persists at
+(the same shape, same DIRECTORY LAYOUT, `clikae burn` writes) to
+$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json — so
+`clikae wait watch-github-<org>-<epoch>` (the run_id this file itself
+prints) or `clikae wait --latest watch-github-<org>` (no epoch needed)
+returns 0 and prints the events, exactly like waiting on a burn. A cursor
+(the newest updated_at seen) persists at
 $CLIKAE_HOME/state/watch-github/<org>.cursor; a small seen-file next to it
 de-dupes (repo, issue number, updated_at) triples.
 

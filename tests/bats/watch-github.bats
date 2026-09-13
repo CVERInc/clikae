@@ -197,14 +197,20 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [ "$(wc -l < "$events")" -eq 2 ]
 
   # P1-1 (2026-09-13 fix-round-1 review): the actual wake — a burn-status-
-  # shaped file under runs/, and `clikae wait` on it (the reader that
-  # already exists) returns 0 and prints the summary. This IS the
-  # end-to-end proof the brief demanded: not "a file got written", but "the
-  # existing reader accepts it and reports success".
-  local runs_dir="$CLIKAE_HOME/state/watch-github/CVERInc/runs"
-  [ -d "$runs_dir" ]
+  # shaped file, and `clikae wait` on it (the reader that already exists)
+  # returns 0 and prints the summary. This IS the end-to-end proof the
+  # brief demanded: not "a file got written", but "the existing reader
+  # accepts it and reports success".
+  #
+  # P2-3 (2026-09-13 fix-round-2 review): it lives at burn_status_dir's OWN
+  # layout now ($HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json —
+  # under $CLIKAE_HOME/logs, since these tests run with $CLIKAE_HOME =
+  # $HOME/.clikae), not a parallel state/ location `clikae wait` never
+  # recognised. Proven two ways: by PATH (as before) AND by the run_id THIS
+  # FILE ITSELF prints — round 1's file claimed a run_id nothing could
+  # resolve; this one must actually work.
   local status_file
-  status_file="$(find "$runs_dir" -name '*.json' | head -n1)"
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
   [ -n "$status_file" ]
   [ -f "$status_file" ]
   run clikae wait "$status_file"
@@ -212,6 +218,11 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [[ "$output" == *'"state":"done"'* ]] || false
   [[ "$output" == *"github CVERInc/reef#100 opened by alice: First issue"* ]] || false
   [[ "$output" == *"github CVERInc/reef#101 opened by bob: Second one"* ]] || false
+
+  local run_id; run_id="$(basename "$(dirname "$status_file")")"
+  run clikae wait "$run_id"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
 }
 
 @test "watch github --once: second run with the same page emits 0 (de-dup)" {
@@ -757,6 +768,23 @@ _wgt_epoch_iso() { # <epoch> -> ISO8601 Z, GNU first then BSD
   [ "$status" -eq 0 ]
   [[ "$output" == *"github CVERInc/reef#1400 opened by bob: page six issue"* ]] || false
   [[ "$(cat "$GH_STUB_DIR/org.6.sent_query")" == *"updated:>=${expect_cursor}"* ]] || false
+}
+
+# --- P2-3 (2026-09-13 fix-round-2 review): end to end, `clikae wait --latest
+# watch-github-<org>` against the REAL writer, no epoch known in advance —
+# the whole point of the fix (a cockpit can only know the prefix).
+
+@test "watch github --once: clikae wait --latest resolves the run a cockpit never saw the epoch for (P2-3)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  run clikae wait --latest watch-github-CVERInc
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+  [[ "$output" == *"github CVERInc/reef#100 opened by alice: First issue"* ]] || false
 }
 
 @test "watch: still dispatches to the engine path for a non-github first argument" {
