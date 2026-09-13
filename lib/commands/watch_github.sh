@@ -82,13 +82,19 @@
 #
 # DEDUP KEY. The issue text says "(number, updated_at, comment id)"; there is
 # no comment id available from search/issues within the request budget, so
-# the key actually used is (number, updated_at) — in practice equivalent,
-# since any new comment/edit bumps updated_at to a value not seen before.
+# the key actually used is (repo, number, updated_at) — in practice
+# equivalent to adding a comment id, since any new comment/edit bumps
+# updated_at to a value not seen before. The `repo` is load-bearing (P1-4,
+# 2026-09-13 fix-round-1 review): the seen-file is per-ORG, and every repo
+# in an org restarts issue numbering at #1 — a bare (number, updated_at) key
+# let repo-B's brand-new #12 read as a "comment" on repo-A's #12, and would
+# silently DROP repo-B's #12 outright on any updated_at collision.
 #
-# CURSOR MONOTONICITY / BACKLOG. Requesting `sort=updated -f order=asc` (free
-# — same request, no extra call) means page 1 is always the OLDEST unread
-# items first, so the cursor advances through a backlog across polls instead
-# of jumping to the newest result and stranding everything before it.
+# CURSOR MONOTONICITY / BACKLOG. `sort=updated -f order=desc` + pagination
+# (P2-7, 2026-09-13 fix-round-1 review) means page 1 is always the NEWEST
+# items first, so a cold start (or a poll that fell behind) surfaces today's
+# events immediately instead of crawling forward from the org's oldest
+# history — see _wg_poll_one_query.
 #
 # ⚠️ KNOWN GAP, not fixed here because it is a locked design decision (the
 # brief's DESIGN DECISION (a), from the dispatcher): `-author:<self>` in the
@@ -227,14 +233,20 @@ _wg_process() {
       [ "$login" != "$__WG_SELF" ] || continue
       kind="mention"
     else
-      if grep -qE "^${number}\\|" "$seen_file" 2>/dev/null; then
+      # P1-4 (2026-09-13 fix-round-1 review): the seen-file is PER-ORG, and
+      # every repo in an org restarts issue numbering at #1 — a bare
+      # `${number}` match here used to read repo-B's brand-new #12 as a
+      # "comment" on repo-A's #12, and the dedup key below (before the
+      # `repo|` prefix was added) would silently DROP repo-B's #12 entirely
+      # whenever the two happened to share an updated_at second.
+      if grep -qE "^${repo}\\|${number}\\|" "$seen_file" 2>/dev/null; then
         kind="comment"
       else
         kind="opened"
       fi
     fi
 
-    local key="${number}|${updated}"
+    local key="${repo}|${number}|${updated}"
     grep -qxF "$key" "$seen_file" 2>/dev/null && continue   # already handled
 
     local line

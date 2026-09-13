@@ -191,6 +191,42 @@ _row() { # number updated login repo html_url is_pr title
   [[ "$output" == *"#100 comment by alice"* ]] || false
 }
 
+@test "watch github --once: same number, two DIFFERENT repos, same poll — neither is dropped (P1-4)" {
+  _gh_stub_install
+  # reef#12 and mixfairy#12, same updated_at — the exact collision E3 in the
+  # 2026-09-13 fix-round-1 review reproduced: a bare (number, updated_at)
+  # dedup key silently swallowed the second row.
+  _gh_stub_page org 1 \
+    "$(_row 12 2026-09-07T04:00:00Z alice reef     https://x/reef/12     0 "reef twelve")" \
+    "$(_row 12 2026-09-07T04:00:00Z bob   mixfairy https://x/mixfairy/12 0 "mixfairy twelve")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#12 opened by alice: reef twelve"* ]] || false
+  [[ "$output" == *"github CVERInc/mixfairy#12 opened by bob: mixfairy twelve"* ]] || false
+  [[ "$output" == *"2 new event(s)"* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 2 ]
+}
+
+@test "watch github --once: a brand-new issue in a DIFFERENT repo reusing a seen number reads 'opened', not 'comment' (P1-4)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 12 2026-09-07T04:00:00Z alice reef https://x/reef/12 0 "reef twelve")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#12 opened by alice"* ]] || false
+
+  # A completely different repo's brand-new #12 — must NOT read as a comment
+  # on reef#12 just because the bare issue number was already in the seen
+  # file (the exact E2 misclassification from the same review).
+  _gh_stub_page org 2 \
+    "$(_row 12 2026-09-07T05:00:00Z carol mixfairy https://x/mixfairy/12 0 "mixfairy twelve")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/mixfairy#12 opened by carol: mixfairy twelve"* ]] || false
+  [[ "$output" != *"comment"* ]] || false
+}
+
 @test "watch github --once: a 403 body means no cursor advance and a back-off line" {
   _gh_stub_install
   _gh_stub_fail org 1 1 'gh: HTTP 403: API rate limit exceeded (https://api.github.com/search/issues)'
