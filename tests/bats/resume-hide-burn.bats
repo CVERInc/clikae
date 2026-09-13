@@ -503,3 +503,19 @@ STUB
   [ -s "$STUB_ARTIFACT" ]
   _assert_sidecar claude T1 "$existing_sid"
 }
+
+# #74 round-2 P3-5 (structural): _burn_sids_file's temp file has its OWN
+# lifetime (created once per picker pass) — it must be removed whether or
+# not there turned out to be any candidates to match it against. The old
+# shape nested the `rm -f` inside the SAME `if` that gated the match loop on
+# ${#_rf_sid[@]} -gt 0, so a zero-candidate pass (unreachable today: `files`
+# empty exits earlier) would never clean it up. Not exercisable end-to-end
+# (the unreachable path is exactly the point), so this pins the CODE SHAPE
+# instead — the same technique clean.bats' own structural mutation-check
+# tests already use for a shape that can't be driven from the outside.
+@test "#74 round-2 P3-5 (structural): the sidecar temp file is removed independent of the candidate count" {
+  run grep -qE 'if \[ -n "\$burn_sids_file" \] && \[ "\$\{#_rf_sid\[@\]\}" -gt 0 \]' "$CLIKAE_LIB/commands/resume.sh"
+  [ "$status" -ne 0 ]
+  run grep -qF 'rm -f "$burn_sids_file"' "$CLIKAE_LIB/commands/resume.sh"
+  [ "$status" -eq 0 ]
+}

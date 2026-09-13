@@ -779,12 +779,19 @@ EOF
     local idx
     for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do _is_burn[idx]=0; done
     local burn_sids_file; burn_sids_file="$(_burn_sids_file 2>/dev/null || true)"
-    if [ -n "$burn_sids_file" ] && [ "${#_rf_sid[@]}" -gt 0 ]; then
-      local _ln _rest
-      while IFS=: read -r _ln _rest; do
-        [ -n "$_ln" ] || continue
-        _is_burn[$((_ln - 1))]=1
-      done < <(printf '%s\n' "${_rf_sid[@]}" | grep -n -F -x -f "$burn_sids_file" 2>/dev/null || true)
+    if [ -n "$burn_sids_file" ]; then
+      if [ "${#_rf_sid[@]}" -gt 0 ]; then
+        local _ln _rest
+        while IFS=: read -r _ln _rest; do
+          [ -n "$_ln" ] || continue
+          _is_burn[$((_ln - 1))]=1
+        done < <(printf '%s\n' "${_rf_sid[@]}" | grep -n -F -x -f "$burn_sids_file" 2>/dev/null || true)
+      fi
+      # #74 round-2 P3-5: this used to sit inside the ${#_rf_sid[@]} -gt 0
+      # branch — on the zero-candidate path (unreachable today: `files` empty
+      # exits earlier, at :743) _burn_sids_file's temp file would never be
+      # removed. Its own lifetime (created above) doesn't depend on there
+      # being any candidates to match it against.
       rm -f "$burn_sids_file"
     fi
 
