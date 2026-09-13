@@ -602,9 +602,11 @@ clikae burn codex M --artifact /tmp/out.md --to codex/H -- exec … "<task>"   #
 clikae burn codex M --artifact /tmp/out.md --timeout 300 -- exec … "<task>"  # bound a long run
 ```
 
-Outcomes: artifact present → done; dry on every reachable tank → fail; ran but
-produced no artifact and showed no limit → a real **task failure** (not rerouted —
-it would fail the same everywhere). `--no-reroute` runs once and stops on a dry tank.
+Outcomes: artifact present → done; every reachable tank dry or skipped → fail
+with `reason: no-tank-available` and a distinct exit code (2 — distinguishable
+from a task failure); ran but produced no artifact and showed no limit → a real
+**task failure** (not rerouted — it would fail the same everywhere). `--no-reroute`
+runs once and stops on a dry tank.
 
 `burn` is the single-task unit — **batch/parallelism stays your orchestrator's
 job** (fan several `burn`s out, review the artifacts). Make tasks idempotent and

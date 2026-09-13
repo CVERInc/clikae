@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since nothing was redacted — the tool crashed. #99 itself (the
   underlying `Argument list too long`) is still open, tracked separately.
 
+- `list_all_profiles` (the one enumerator `clikae tanks`, `burn`'s reroute, and
+  `to`/`resume`'s `next_tank` all read) now requires a candidate's engine to be
+  one an adapter or target actually recognises, and rejects dotdirs and
+  lock/sidecar-suffixed names — a stray `hello.lock` sitting beside real tanks
+  could be rerouted onto and burned a few minutes failing to log in, reported
+  as an indistinguishable generic task failure. `burn`'s own agy reroute
+  walker (`_agy_tank_names`) now routes through the same enumerator instead of
+  globbing its slots directory a second time. Reroute exhaustion (every
+  reachable tank dry or skipped) is now its own `reason: no-tank-available`
+  with a distinct exit code (2) and `reset` set to the earliest parseable
+  reset across the whole walk, both in prose and in `--json` (#61).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or

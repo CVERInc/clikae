@@ -333,6 +333,43 @@ soul_left_set() {
 }
 soul_left_clear() { rm -f "$(soul_left_file "$1" "$2")" 2>/dev/null || true; }
 
+# tank_engine_known <cli> -> 0 if <cli> is an engine clikae actually knows how
+# to run — an adapter file under lib/adapters/, or a launch-only target under
+# lib/targets/ (clikae_is_target) — else 1. A directory under profiles_root()
+# whose name is neither is not an engine clikae recognises; nothing under it
+# can be a tank, no matter how many subdirectories it holds. This is the
+# "engine's adapter recognises it" half of #61's fix — the profile-store
+# walk used to accept ANY subdirectory of profiles_root() as a CLI.
+tank_engine_known() {
+  local cli="$1"
+  [ -f "$CLIKAE_LIB/adapters/$cli.sh" ] && return 0
+  clikae_is_target "$cli"
+}
+
+# tank_dir_is_tank <name> -> 0 if a directory named <name>, found directly
+# inside a known engine's profiles dir, is a real tank rather than a lock
+# file, sidecar, or dotdir that happens to (or would, if it existed) sit next
+# to real tanks. Directory-ness and "resolves to something that exists" are
+# already guaranteed by the caller's own "*/ " glob (a plain file or a
+# dangling symlink never matches it) — this is the SHAPE test on the NAME
+# itself, so it holds even for a directory (not just a file) someone names
+# like a lock/sidecar.
+#
+# #61: a stray `hello.lock` sitting beside real tank dirs was picked up as a
+# reroute target and burned a few minutes failing to log in before reporting
+# a generic "task failure" — indistinguishable, from the caller's `--json`,
+# from the task itself having failed. `list_all_profiles` is the ONE place
+# that decides what a tank is (clikae tanks / burn's reroute / to's and
+# resume's next_tank all read it) — this is that filter, so nobody downstream
+# writes a second one next to it.
+tank_dir_is_tank() {
+  case "$1" in
+    .*) return 1 ;;                                             # dotdir sidecar
+    *.lock|*.lck|*.tmp|*.bak|*.swp|*.orig|*.reclaim|*~) return 1 ;;  # lock/sidecar suffix
+  esac
+  return 0
+}
+
 # List every profile as "<cli> <profile> <path>" lines, sorted.
 list_all_profiles() {
   local root
@@ -342,9 +379,11 @@ list_all_profiles() {
   for cli_dir in "$root"/*/; do
     [ -d "$cli_dir" ] || continue
     cli="${cli_dir%/}"; cli="${cli##*/}"
+    tank_engine_known "$cli" || continue
     for profile_path in "$cli_dir"*/; do
       [ -d "$profile_path" ] || continue
       profile="${profile_path%/}"; profile="${profile##*/}"
+      tank_dir_is_tank "$profile" || continue
       printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
     done
   done | sort

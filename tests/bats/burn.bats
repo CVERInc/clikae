@@ -801,7 +801,57 @@ STUB
     > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null || true
   run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['reason'])" "$BATS_TEST_TMPDIR/j.txt"
   [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
-  [[ "$output" == "False every reachable tank is dry" ]] || { echo "got: $output"; false; }
+  [[ "$output" == "False no-tank-available" ]] || { echo "got: $output"; false; }
+}
+
+# --- #61: a stray lock file/sidecar/dotdir/dangling symlink in the profiles
+# dir must never be mistaken for a reroute target, and exhausting the real
+# reserve must say so distinctly (reason "no-tank-available", not a task
+# failure) — both in prose and in --json, with a documented, distinguishable
+# exit code. Fixture mirrors the issue exactly: x/ (dry), hello/ (skipped —
+# a real process holds CODEX_HOME on it, simulating an interactive session),
+# hello.lock (a FILE), ghost (a dangling symlink), .cache (a dotdir).
+@test "burn --json: reroute never names a lock file, dangling symlink, or dotdir; exhaustion is no-tank-available (#61)" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _stub_codex
+  clikae init codex x
+  clikae init codex hello
+  : > "$CLIKAE_HOME/profiles/codex/x/.dry"
+
+  # hello: SKIPPED because an interactive session holds it. live_dir_users
+  # scans same-uid processes for one whose CODEX_HOME points at this tank's
+  # dir (lib/core/proc.sh) — a real background process is the honest way to
+  # produce that signal for an end-to-end `clikae burn` run (no tmux, no real
+  # server: a plain `sleep`, killed before this test returns).
+  env CODEX_HOME="$CLIKAE_HOME/profiles/codex/hello" sleep 60 &
+  local live_pid=$!
+
+  : > "$CLIKAE_HOME/profiles/codex/hello.lock"
+  ln -s /nonexistent "$CLIKAE_HOME/profiles/codex/ghost"
+  mkdir -p "$CLIKAE_HOME/profiles/codex/.cache"
+
+  local A="$BATS_TEST_TMPDIR/out.md" rc=0
+  clikae burn codex x --artifact "$A" --json -- run "$A" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/err.txt" || rc=$?
+
+  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
+
+  [ "$rc" -eq 2 ] || { echo "rc=$rc"; cat "$BATS_TEST_TMPDIR/err.txt"; false; }
+  [ ! -e "$A" ]
+
+  run jq -e '.ok == false and .reason == "no-tank-available"' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  # reset is x's own — the only tank that actually went dry (hello was
+  # skipped, never judged dry; the fixture's non-tanks were never candidates).
+  run jq -e '.reset | test("Jul 7th, 2026")' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  run jq -e '.tank == "hello.lock" or .tank == "ghost" or .tank == ".cache"' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 1 ] || { echo "reroute named a non-tank: $(cat "$BATS_TEST_TMPDIR/j.txt")"; false; }
+
+  grep -qF "hello.lock" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned hello.lock"; false; }
+  grep -qF "codex/ghost" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned ghost"; false; }
+  grep -qF "codex/.cache" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned .cache"; false; }
+  true
 }
 
 @test "burn without --json prints no JSON at all" {
