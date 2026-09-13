@@ -15,18 +15,19 @@
 #
 # Refuses only Agent (subagent) spawns whose model is missing, or whose model
 # is opus/sonnet AND whose prompt reads as a build/review lane. The prompt
-# heuristic is a TRIPWIRE, not a classifier: it is the issue's own narrow
-# phrases (worktree, a git commit/push, REVIEWER/adversarial review, a test
-# run) OR'd with a widened set of bare imperative verbs (commit, push, "open
-# a PR", review, grade, run tests, make CI) plus a length tripwire (prompt
-# over 1,500 chars on opus/sonnet refuses regardless of content). Round-1
-# review measured this against a 14-item corpus: it does not separate "reads
-# as a build/review lane" from "merely mentions one of these words" — see
-# docs/usage.md's cockpit section for the measured hit rate and the specific
-# misses in both directions. `--allow-agents`/CLIKAE_COCKPIT_ALLOW_AGENTS is
-# the real door; this tripwire is cheap insurance, not a permission gate.
-# Everything else — haiku, fable, any model with a prompt that doesn't match,
-# and every OTHER tool — is untouched.
+# heuristic is a TRIPWIRE, not a
+# classifier: it is the issue's own narrow phrases (worktree, a git
+# commit/push, REVIEWER/adversarial review, a test run) OR'd with a widened
+# set of bare imperative verbs (commit, push, "open a PR", review, grade, run
+# tests, make CI) plus a length tripwire (prompt over 1,500 CHARACTERS on
+# opus/sonnet refuses regardless of content). Round-1 review measured this
+# against a 14-item corpus: it does not separate "reads as a build/review
+# lane" from "merely mentions one of these words" — see docs/usage.md's
+# cockpit section for the measured hit rate and the specific misses in both
+# directions. `--allow-agents`/CLIKAE_COCKPIT_ALLOW_AGENTS is the real door;
+# this tripwire is cheap insurance, not a permission gate. Everything else —
+# haiku, fable, any model with a prompt that doesn't match, and every OTHER
+# tool — is untouched.
 #
 # FAIL OPEN, same tier as scripts/harness-pretool-hook.sh: this runs on every
 # single Agent call, so a broken guard must never brick the session. Any parse
@@ -44,24 +45,76 @@
 # written by `clikae cockpit --allow-agents <dur>` (state/cockpit-allow) — a
 # guard nobody can lift gets deleted instead of obeyed.
 #
-# PERFORMANCE: measured well under 50ms on Linux/GNU-grep for a compact
-# payload with a prompt up to a few KB (no jq, no subshell-heavy JSON parsing
-# — lib/core/json.sh's grep field extractor); measured ~90-100ms for the same
-# shape on GitHub's macos-latest runner (BSD grep, bash 3.2, slower CI
-# hardware) — a real platform floor, not flakiness (tests/bats/cockpit-
-# guard.bats's own timing test bound reflects this, not a strict 50ms). That
-# budget is NOT flat with prompt size either way: the value-scanning regex is
-# O(prompt length), measured ~54ms at 50kB and ~167ms at 200kB on the fast
-# host before this was bounded (#63 P2-7). Since the hook runs on EVERY Agent
-# call, `prompt` is capped to its first 8 KiB before the heuristic match runs
-# — a 200kB prompt now finishes in the same ballpark as a small one on both
-# platforms. `model`/`tool_name` are NOT capped (they are short values found
-# by a fast literal search regardless of where they sit in the payload).
-
+# #63 P1-1/P2-1 fix2 (round-2 review, REVIEW-cockpit63-r2.md): round 1 capped
+# cost by slicing the RAW PAYLOAD to a fixed 8 KiB BYTE window before ever
+# calling the field extractor — `head -c 8192` in front of `prompt`, `tail -c
+# 8192` in front of `model`. Two bugs came from that, both silent:
+#   1. A cut that lands mid multi-byte UTF-8 character (routine on a Chinese-
+#      or mixed-script prompt, measured 42% of slide positions on a real
+#      zh+en brief) leaves invalid UTF-8 at the boundary; `json_field_str`'s
+#      `[^"\\]` class can't match through it, so the WHOLE "prompt" pair goes
+#      unmatched — `prompt=""`. That zeroes BOTH the heuristic (nothing to
+#      match) AND the length tripwire (`${#prompt}` = 0) at once, with zero
+#      stderr — the one guardrail that was supposed to hold "no content match
+#      needed" independent of content parsing.
+#   2. `tail -c 8192` for `model` silently MISSES it on any payload shape
+#      where `model` sits before a huge `prompt` in `tool_input` (the
+#      original comment reasoned this was merely a low-probability miss —
+#      backwards: the observed failure mode is `model=""`, which hits the
+#      unconditional "carried no model" refusal — every model, haiku
+#      included, wrongly BLOCKED, for the wrong stated reason).
+# Neither field is pre-sliced anymore. `tool_name`, `model`, and `prompt` are
+# all read with `json_field_str` straight off the FULL `$payload` — cost is
+# bounded only by however big the payload actually is (measured 200 kB and
+# 1 MB in REPORT-cockpit63-fix2.md; a huge prompt is no longer free, and this
+# docstring says so plainly rather than repeating the round-1 "well under
+# 50ms" claim past the point it stopped being true). `prompt`'s DECODED,
+# UNTRUNCATED length feeds the length tripwire; only a COPY truncated to its
+# first 8,192 CHARACTERS (not bytes — sliced after decoding, under the locale
+# pinned below, so the cut always lands on a character boundary) is handed to
+# the keyword heuristic, which never needed more than that to begin with.
+#
+# LOCALE: pinned to C.UTF-8 (falling back to en_US.UTF-8, then a documented-
+# degraded C) right below, specifically so `${#prompt}` and the character
+# slice above count/cut the SAME WAY regardless of the caller's own
+# environment — the round-2 review's single clearest repro of the bug above
+# was `LC_ALL=C` passing while the operator's ordinary `en_US.UTF-8` shell
+# refused correctly: same bytes, same script, different verdict, entirely by
+# accident of environment. See _ckpt_pick_locale below for what "documented
+# degradation" means when neither UTF-8 locale is installed.
 set -uo pipefail
 
 allow() { [ -n "${1:-}" ] && printf '%s\n' "$1" >&2; exit 0; }
 trap 'allow "cockpit-guard: internal error — allowing (fail-open)"' ERR
+
+# _ckpt_pick_locale -> echoes the first of C.UTF-8 / en_US.UTF-8 that
+# `locale -a` actually lists, or fails. Checked against the installed list
+# rather than blindly exported: `setlocale()` returns failure and leaves the
+# CURRENT locale untouched when asked for one that isn't installed — it does
+# NOT fall back to "C" on its own — so a blind `export LC_ALL=C.UTF-8` on a
+# host that lacks it would silently keep whatever locale the CALLER exported,
+# which is exactly the non-determinism this pin exists to remove. Falling
+# back to the literal `C` locale (below, not in this function) when neither
+# candidate is installed is a DOCUMENTED degradation, not a silent one: under
+# plain `C`, `${#prompt}`/character-slicing count/cut by BYTE, so a multi-
+# byte prompt can once again be cut mid-character — but only in the direction
+# that makes the length tripwire fire MORE readily (byte count >= character
+# count for UTF-8), never the direction that silently lets a real build/
+# review lane through unexamined.
+_ckpt_pick_locale() {
+  local have want norm
+  have="$(locale -a 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '.-')"
+  for want in C.UTF-8 en_US.UTF-8; do
+    norm="$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]' | tr -d '.-')"
+    if printf '%s\n' "$have" | grep -qx "$norm"; then
+      printf '%s' "$want"
+      return 0
+    fi
+  done
+  return 1
+}
+LC_ALL="$(_ckpt_pick_locale 2>/dev/null)" || LC_ALL=C
+export LC_ALL
 
 _ckpt_self_dir() {
   local src="${BASH_SOURCE[0]}"
@@ -82,25 +135,12 @@ CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}"
 payload="$(cat 2>/dev/null)" || true
 [ -n "$payload" ] || allow "cockpit-guard: empty payload — allowing"
 
-# #63 P2-7: everything up through the tool_input presence check works off a
-# bounded PREFIX, not the full payload — `tool_name`/`tool_input` are always
-# near the front (docstring: "session_id, tool_name, tool_input, …"), so
-# there's no reason to pay the full payload's length for them. `head -c` on
-# a pipe short-circuits once satisfied, so this is cheap even at 200kB.
-_ckpt_head="$(printf '%s' "$payload" | head -c 8192)" || true
-# `|| true` above and below: with `pipefail` (set at the top), `head -c`
-# closing the pipe as soon as it has its 8192 bytes sends `printf` SIGPIPE
-# on a payload bigger than that — a normal, expected early-close, but under
-# pipefail it makes the WHOLE assignment "fail" and trip the ERR trap (fail-
-# open, silently, on every large payload) even though $_ckpt_head itself
-# came out fine.
-
-# rc=1 here means json_field_str found no `"tool_name"` pair at all — a
-# payload shape this guard has never seen, not just "some other tool ran"
-# (that case is the ordinary `tool_name != Agent` branch below, and stays
-# silent). #63 P1-2: distinguish the two rather than treating both as a
+# rc=1 here means json_field_str found no `"tool_name"` pair anywhere in the
+# full payload — a shape this guard has never seen, not just "some other
+# tool ran" (that case is the ordinary `tool_name != Agent` branch below, and
+# stays silent). #63 P1-2: distinguish the two rather than treating both as a
 # plain, silent exit 0 — a payload this malformed is worth one stderr line.
-if ! tool_name="$(json_field_str "$_ckpt_head" tool_name 2>/dev/null)"; then
+if ! tool_name="$(json_field_str "$payload" tool_name 2>/dev/null)"; then
   allow "cockpit-guard: payload has no tool_name field — allowing"
 fi
 [ "$tool_name" = "Agent" ] || exit 0   # matcher is "Agent" already; belt & suspenders
@@ -125,10 +165,9 @@ fi
 # refusal case below ("a bare in-session spawn"). But `json_field_str` gives
 # rc=1 for BOTH "field absent" and "JSON too broken to find the field in" —
 # it is a flat regex scan, not a parser, so it cannot tell those apart on its
-# own. Rule out the second case first, with two cheap, purpose-built checks,
-# both O(1)-ish and pure bash (no subprocess — this runs on every Agent
-# call), NOT a general well-formedness proof (see json.sh's own docstring on
-# what this extractor is and isn't):
+# own. Rule out the second case first, with two cheap, purpose-built checks
+# over the full payload, NOT a general well-formedness proof (see json.sh's
+# own docstring on what this extractor is and isn't):
 #   1. no `"tool_input"` substring anywhere -> the key is missing outright.
 #   2. the payload's last non-whitespace character isn't `}` -> something (a
 #      truncated write, a hook timeout mid-flush) cut the JSON off before it
@@ -136,7 +175,7 @@ fi
 #      that legitimately ends elsewhere (rare, and only in the fail-OPEN
 #      direction — never a wrongful block) is the accepted cost of a cheap
 #      check over an exact one.
-if ! printf '%s' "$_ckpt_head" | grep -q '"tool_input"'; then
+if ! printf '%s' "$payload" | grep -q '"tool_input"'; then
   allow "cockpit-guard: payload has no tool_input field — allowing"
 fi
 # Last character must be `}`. No trim needed first: `payload="$(cat)"` above
@@ -150,24 +189,22 @@ if [ "${payload:$((${#payload}-1)):1}" != "}" ]; then
   allow "cockpit-guard: tool_input payload looks truncated or malformed — allowing"
 fi
 
-# `model` is read from the LAST 8 KiB of the payload, not the front and not
-# the full thing. The real captured shape (tests/fixtures/cockpit-guard/) has
-# tool_input's keys in the order description, prompt, model — `model` comes
-# AFTER `prompt`, so on a huge prompt it sits near the very end, not the
-# front (measured: extracting it from the FULL 200kB payload alone cost
-# ~34ms of this hook's ~50ms budget, dominated by grep scanning past the
-# whole prompt just to reach the literal it's searching for). A `tail -c`
-# window this size comfortably contains `,"model":"…"}}` regardless of how
-# long the prompt is; it would miss a payload shape where `model` precedes a
-# huge `prompt` instead — not the shape any real capture has shown so far.
-_ckpt_tail="$(printf '%s' "$payload" | tail -c 8192)" || true
-model="$(json_field_str "$_ckpt_tail" model 2>/dev/null || true)"
-# `prompt` is read from at most the first 8 KiB of the payload (#63 P2-7) —
-# reusing $_ckpt_head rather than re-slicing — with a synthetic closing quote
-# appended so a value that got cut mid-string still parses as a (truncated)
-# match instead of failing to match at all: the extractor's pattern requires
-# a closing quote to match anything.
-prompt="$(json_field_str "${_ckpt_head}\"" prompt 2>/dev/null || true)"
+# `model` and `prompt` are both read straight off the FULL `$payload` now —
+# #63 P2-1/P1-1 fix2, see the docstring at the top of this file for why the
+# old `tail -c 8192` / `head -c 8192` windows were wrong, not just slow.
+model="$(json_field_str "$payload" model 2>/dev/null || true)"
+prompt="$(json_field_str "$payload" prompt 2>/dev/null || true)"
+# The UNTRUNCATED, decoded length — this is what the length tripwire below
+# checks. Computed BEFORE the heuristic-input copy is truncated, so a huge
+# prompt can never zero out the one check that exists specifically to catch
+# "too long to bother reading closely", regardless of content.
+prompt_len_full="${#prompt}"
+# The heuristic only ever needs the first 8,192 CHARACTERS of the prompt.
+# Slicing the DECODED string (this line) rather than the raw JSON bytes
+# (round 1's bug) cannot land mid-character: under the locale pinned above,
+# `${prompt:0:8192}` always advances by whole characters, so a CJK prompt
+# truncates exactly like an ASCII one — no silent, boundary-dependent miss.
+prompt="${prompt:0:8192}"
 
 # _ckpt_refuse [model] [reason] -> print the refusal (reason + reserve + the
 # burn shape) to stderr and exit 2. Best-effort enrichment (the reserve
@@ -178,7 +215,7 @@ _ckpt_refuse() {
   if [ -z "${1:-}" ]; then
     why="the Agent tool call carried no model (a bare in-session spawn)"
   elif [ "${2:-}" = "long" ]; then
-    why="a $1-model Agent spawn whose prompt is over the 1,500-char length tripwire"
+    why="a $1-model Agent spawn whose prompt is over the 1,500-character length tripwire"
   else
     why="a $1-model Agent spawn whose prompt reads as a build/review lane"
   fi
@@ -227,9 +264,11 @@ _CKPT_HEURISTIC='worktree|git commit|git push|REVIEWER|adversarial review|bats |
 model_lc="$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')"
 case "$model_lc" in
   opus|sonnet)
-    # Length tripwire: independent of any keyword. A prompt this long on a
-    # build-capable model is refused regardless of content.
-    if [ "${#prompt}" -gt 1500 ]; then
+    # Length tripwire: independent of any keyword, and independent of the
+    # 8,192-character heuristic cap above — this reads $prompt_len_full, the
+    # UNTRUNCATED count, specifically so a prompt long enough to BE the
+    # tripwire's whole reason to exist can never be the thing that defeats it.
+    if [ "$prompt_len_full" -gt 1500 ]; then
       _ckpt_refuse "$model" long
     fi
     if printf '%s' "$prompt" | grep -qiE "$_CKPT_HEURISTIC"; then
