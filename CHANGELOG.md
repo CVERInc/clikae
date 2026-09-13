@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and grok's from ONE batched bounded read instead of one parse per file; and
   the rate-limit scan is bounded to the newest `CLIKAE_HOME_RECENT_MAX` files
   per project directory rather than every file in the window (#62).
+- A render that rebuilds a tank's board snapshot walks and stats that tank
+  once, not twice: the freshness check hands its stat rows to the rebuild it
+  triggers instead of both collecting their own (26 ms of a 127 ms rebuild at
+  5,000 transcripts).
 - A session id or project path containing non-ASCII characters (a Chinese or
   accented directory name) no longer drops out of `clikae resume` on macOS.
   The board snapshot's entry name was computed by two different engines whose

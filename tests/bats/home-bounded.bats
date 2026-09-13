@@ -878,3 +878,44 @@ _b8_tank() {
     [[ "$output" == *blocked* ]] || { echo "walk error was swallowed: $output"; false; }
   fi
 }
+
+@test "board: a rebuilding render walks the tank ONCE, not once to check and once to rebuild" {
+  # `board_generation` asks `board_stale` (one `find` + one batched `stat` over
+  # every transcript) and then calls `board_state_refresh`, which used to walk
+  # and stat the whole tank again. At 5,000 transcripts that second walk is
+  # 26 ms of a 127 ms rebuild, paid on every render that changes anything.
+  # board_stale now hands its rows over.
+  _b8_tank
+  local i
+  for i in 0 1 2 3 4; do
+    printf '{"type":"ai-title","aiTitle":"T%s"}\n' "$i" > "$B8_PROJ/session-$i.jsonl"
+  done
+  board_state_refresh claude "$B8_TANK"
+  _board_gen_cache_clear
+
+  # count `find` invocations across a render that DOES rebuild
+  export BOARD_IO_LOG="$TEST_HOME/walk.log"
+  mkdir -p "$TEST_HOME/walk-bin"
+  { printf '#!/bin/bash\nprintf "find\\n" >> "$BOARD_IO_LOG"\n'
+    printf 'exec %q "$@"\n' "$(command -v find)"; } > "$TEST_HOME/walk-bin/find"
+  chmod +x "$TEST_HOME/walk-bin/find"
+  local saved_path="$PATH"
+  PATH="$TEST_HOME/walk-bin:$PATH"
+  printf '{"type":"ai-title","aiTitle":"CHANGED"}\n' >> "$B8_PROJ/session-2.jsonl"
+  : > "$BOARD_IO_LOG"
+  board_generation claude "$B8_TANK" >/dev/null
+  PATH="$saved_path"
+  local walks
+  walks="$(wc -l < "$BOARD_IO_LOG" | tr -d ' ')"
+  [ "$walks" -eq 1 ] || { echo "rebuilding render walked the tank $walks times"; false; }
+
+  # and the generation it published is correct + fresh
+  local root gen
+  root="$(board_root "$B8_TANK")"
+  gen="$root/$(cat "$root/current")"
+  [ "$(cat "$gen/transcripts-fp")" = "$(_board_transcript_fingerprint claude "$B8_TANK")" ]
+  run board_stale claude "$B8_TANK" "$gen"
+  [ "$status" -ne 0 ]
+  [ -n "$(board_find claude "$B8_TANK" session-2)" ]
+  [ -n "$(board_find claude "$B8_TANK" session-0)" ]
+}
