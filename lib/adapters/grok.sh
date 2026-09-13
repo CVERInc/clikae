@@ -219,13 +219,13 @@ EOF
   printf '%s\n' "$t"
 }
 
-# Optional hook (#33, P1-1 fix from the round-1 review): the transcript SHAPE
-# belongs to the adapter. Prints one line per MESSAGE of <role>
-# ("user"/"assistant") — several text parts in one message join with a space
-# onto one line, unlike claude.sh's twin, which prints one line per text
-# BLOCK instead (round-1 review P3-1; docs/adding-an-adapter.md spells out
-# the difference) — text only, newest last — used by `clikae handoff`'s
-# digest (lib/core/handoff.sh, _handoff_extract).
+# Optional hook (#33, round-1 P1-1 fix; round-2 P2-2 review fix folded in):
+# the transcript SHAPE belongs to the adapter. Prints one line per MESSAGE
+# of <role> ("user"/"assistant") — several text parts in one message join
+# with a space onto one line, unlike claude.sh's twin, which prints one
+# line per text BLOCK instead (round-1 review P3-1; docs/adding-an-adapter.md
+# spells out the difference) — text only, newest last — used by `clikae
+# handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
 #
 # grok's chat_history.jsonl has NO `role` key at all — the message kind IS
 # the top-level `type`:
@@ -236,9 +236,16 @@ EOF
 # of typed parts on top of that — the same two-part gap codex has, different
 # keys.
 #
-# Same awk shape as codex.sh's twin (one pass, index()/substr() for the VALUE
-# scan — no regex there, so a pathological line can't hang it) and the same
-# escape parity note: only \n \t \" \\ are unescaped, matching the claude
+# Round-2 review P2-2: the previous version built each matched value with a
+# character-by-character `seg = seg c` loop — O(1) per character on gawk,
+# but O(line length) PER CHARACTER on mawk (Debian/Ubuntu's DEFAULT `awk` on
+# a base image) and busybox awk, i.e. O(n²) overall (see codex.sh's twin of
+# this function for the measured numbers — same loop, same fix).
+# `match(rest, /^([^"\\]|\\.)*/)` finds the WHOLE value (escapes included)
+# in ONE call — RLENGTH is the value's length, so `substr()` lifts it in one
+# shot, leaving nothing for mawk's string-concat cost to multiply.
+#
+# Same escape parity note: only \n \t \" \\ are unescaped, matching the claude
 # path; \uXXXX is left as a documented follow-up, not decoded here either.
 #
 # Whitespace (round-1 review P1-1): the anchor/key patterns below tolerate a
@@ -267,18 +274,12 @@ adapter_handoff_extract() {
     $0 !~ type_re { next }
     {
       rest = $0; keyre = "\"text\": *\""; res = ""
-      while (1) {
-        if (!match(rest, keyre)) break
+      while (match(rest, keyre)) {
         rest = substr(rest, RSTART + RLENGTH)
-        seg = ""; i = 1; n = length(rest)
-        while (i <= n) {
-          c = substr(rest, i, 1)
-          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
-          if (c == "\"") { i++; break }
-          seg = seg c; i++
-        }
+        if (!match(rest, /^([^"\\]|\\.)*/)) break
+        seg = substr(rest, 1, RLENGTH)
         res = (res == "" ? seg : res " " seg)
-        rest = substr(rest, i)
+        rest = substr(rest, RLENGTH + 2)
       }
       if (res != "") print res
     }

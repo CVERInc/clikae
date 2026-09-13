@@ -251,7 +251,7 @@ _CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
 _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 
 # Optional hook (#33, P1-1 + P2-2 fixes from the round-1 review; round-2
-# review P2-1 folded in): the transcript SHAPE belongs to the adapter.
+# review P2-1/P2-2 folded in): the transcript SHAPE belongs to the adapter.
 # Prints one line per MESSAGE of <role> ("user"/"assistant") — several text
 # parts in one message join with a space onto one line, unlike claude.sh's
 # twin, which prints one line per text BLOCK instead (round-1 review P3-1;
@@ -260,8 +260,8 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 # _handoff_extract).
 #
 # Round-2 review P2-1: a codex rollout can record the SAME turn in two
-# different ways depending on how the session ran, and this hook now reads
-# the UNION of both rather than betting on one:
+# different ways depending on how the session ran, and this hook reads the
+# UNION of both rather than betting on one:
 #
 #   Shape A — event_msg (the UI event stream; limit.sh's whole codex family
 #   — :281, :322, :1160, :1183 — reads ONLY this shape, "confirmed against a
@@ -293,16 +293,22 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 # review P2-2) — belt-and-suspenders, the same spirit as claude's own four
 # filters for role:user noise.
 #
-# awk, one pass over the whole file (no bash-4+ line-slurping builtin
-# needed), using index()/substr() for the VALUE scan rather than a regex:
-# the nested-star pattern that hangs bash's own `[[ =~ ]]` on a long line
-# (see adapter_title_for_file above) is exactly the trap a JSON-string
-# scanner has to avoid, and index()/substr() can't backtrack. match() is
-# still used for the fixed anchor/key patterns — safe, since each is a
-# literal string either side of a single, non-nested ` *` (no ReDoS risk).
-# A "text"/"message" value's own escaped quote (`\"`) is honoured while
-# hunting for the CLOSING quote, so a value containing one is never
-# truncated.
+# awk, ONE pass over the whole file. Round-2 review P2-2: the previous
+# version built each matched value with a character-by-character
+# `seg = seg c` loop — O(1) per character on gawk, but O(line length) PER
+# CHARACTER on mawk (Debian/Ubuntu's DEFAULT `awk` on a base image) and
+# busybox awk, i.e. O(n²) overall: measured 95.9s for one 1.6 MB line on
+# mawk vs 0.33s on gawk for the same input (400 kB was already 4.3s on mawk,
+# 48s on busybox awk). `match(rest, /^([^"\\]|\\.)*/)` finds the WHOLE value
+# (escapes included) in ONE call — RLENGTH is the value's length, so
+# `substr()` lifts it in one shot, leaving nothing for mawk's string-concat
+# cost to multiply. This is the same "value body" idiom claude.sh's
+# assistant branch already uses via `grep -aoE`, just expressed for awk's
+# `match()`. The fixed anchor/key patterns stay literal strings either side
+# of a single, non-nested ` *` — no ReDoS risk, and no need for the
+# index()/substr()-without-regex workaround a nested-star `[[ =~ ]]`
+# pattern would need (see adapter_title_for_file above for why THAT trap
+# matters for bash's own regex engine).
 #
 # Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
 # has always unescaped, never \uXXXX (parity first; see handoff.sh's own
@@ -323,32 +329,23 @@ adapter_handoff_extract() {
     out="$(awk -v type_re="$_CODEX_USER_MESSAGE_TYPE_RE" '
       $0 ~ type_re {
         rest = $0; keyre = "\"message\": *\""
-        if (!match(rest, keyre)) next
-        rest = substr(rest, RSTART + RLENGTH)
-        seg = ""; i = 1; n = length(rest)
-        while (i <= n) {
-          c = substr(rest, i, 1)
-          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
-          if (c == "\"") { i++; break }
-          seg = seg c; i++
+        if (match(rest, keyre)) {
+          rest = substr(rest, RSTART + RLENGTH)
+          if (match(rest, /^([^"\\]|\\.)*/)) {
+            seg = substr(rest, 1, RLENGTH)
+            if (seg != "") print seg
+          }
         }
-        if (seg != "") print seg
         next
       }
       $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"user"/ {
         rest = $0; keyre = "\"text\": *\""; res = ""
-        while (1) {
-          if (!match(rest, keyre)) break
+        while (match(rest, keyre)) {
           rest = substr(rest, RSTART + RLENGTH)
-          seg = ""; i = 1; n = length(rest)
-          while (i <= n) {
-            c = substr(rest, i, 1)
-            if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
-            if (c == "\"") { i++; break }
-            seg = seg c; i++
-          }
+          if (!match(rest, /^([^"\\]|\\.)*/)) break
+          seg = substr(rest, 1, RLENGTH)
           res = (res == "" ? seg : res " " seg)
-          rest = substr(rest, i)
+          rest = substr(rest, RLENGTH + 2)
         }
         if (res != "") print res
       }
@@ -360,32 +357,23 @@ adapter_handoff_extract() {
     out="$(awk -v agent_re="$_CODEX_AGENT_MESSAGE_TYPE_RE" '
       $0 ~ agent_re {
         rest = $0; keyre = "\"message\": *\""
-        if (!match(rest, keyre)) next
-        rest = substr(rest, RSTART + RLENGTH)
-        seg = ""; i = 1; n = length(rest)
-        while (i <= n) {
-          c = substr(rest, i, 1)
-          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
-          if (c == "\"") { i++; break }
-          seg = seg c; i++
+        if (match(rest, keyre)) {
+          rest = substr(rest, RSTART + RLENGTH)
+          if (match(rest, /^([^"\\]|\\.)*/)) {
+            seg = substr(rest, 1, RLENGTH)
+            if (seg != "") print seg
+          }
         }
-        if (seg != "") print seg
         next
       }
       $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"assistant"/ {
         rest = $0; keyre = "\"text\": *\""; res = ""
-        while (1) {
-          if (!match(rest, keyre)) break
+        while (match(rest, keyre)) {
           rest = substr(rest, RSTART + RLENGTH)
-          seg = ""; i = 1; n = length(rest)
-          while (i <= n) {
-            c = substr(rest, i, 1)
-            if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
-            if (c == "\"") { i++; break }
-            seg = seg c; i++
-          }
+          if (!match(rest, /^([^"\\]|\\.)*/)) break
+          seg = substr(rest, 1, RLENGTH)
           res = (res == "" ? seg : res " " seg)
-          rest = substr(rest, i)
+          rest = substr(rest, RLENGTH + 2)
         }
         if (res != "") print res
       }
