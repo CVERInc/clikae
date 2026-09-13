@@ -1118,9 +1118,16 @@ _burn_left_behind() {
     if [ -z "$hint" ] && [ "$ahead" != - ] && [ "$ahead" -gt 0 ]; then
       printf -v hint '  hint: git -C %q push' "$repo"
     fi
+    # P3-3 (round-1 review): "ahead" used to be a JSON string "-" when there
+    # is no upstream to compare against, and a bare integer otherwise —
+    # multityped in a machine-readable field, which is exactly the field a
+    # dispatcher script is most likely to do `if ahead > 0` on. JSON's own
+    # "I don't know" is `null`, not a sentinel string; a consumer that reads
+    # a number now gets a number or null, never a string that happens to
+    # parse as neither.
     entry="$(printf '{"repo":%s,"branch":%s,"ahead":%s,"dirty":%s,"files":[%s]}' \
       "$(json_str "$repo")" "$(json_str "$branch")" \
-      "$(if [ "$ahead" = - ]; then json_str -; else printf '%s' "$ahead"; fi)" "$dirty" "$files")"
+      "$(if [ "$ahead" = - ]; then printf 'null'; else printf '%s' "$ahead"; fi)" "$dirty" "$files")"
     entries="${entries}${entries:+,}${entry}"
     shown=$((shown + 1))
   done

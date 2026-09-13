@@ -3156,7 +3156,7 @@ STUB
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
 import json,sys
 r = json.load(sys.stdin)["left_behind"][0]
-assert r["ahead"] == "-" and r["dirty"] == 13
+assert r["ahead"] is None and r["dirty"] == 13
 assert len(r["files"]) == 10
 assert all("/.git/" not in f and "/node_modules/" not in f for f in r["files"])
 '
@@ -3345,4 +3345,38 @@ rows = json.load(sys.stdin)["left_behind"]
 assert len(rows) == 1, rows
 assert rows[0]["ahead"] == 1, rows
 '
+}
+
+# P3-3/criteria (round-1 review): "ahead" used to be a multityped JSON field
+# (string "-" or a bare integer) — this asserts the fix (an int or JSON
+# null, never a sentinel string) on the qualifying side: ahead>0 alone, with
+# a KNOWN upstream and nothing else touched, still gets reported.
+@test "burn #84 P3-3: ahead>0 alone (known upstream, nothing else changed) qualifies" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+git -C "$STUB_LEFT_REPO" commit -q --allow-empty -m "ahead only"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["ahead"] == 1 and rows[0]["dirty"] == 0, rows
+'
+}
+
+# Same criterion, the non-qualifying side: "ahead" with NO known upstream is
+# "-" (JSON null), and that alone — no dirty state, no post-start files —
+# must not be enough to report the repo.
+@test "burn #84 P3-3: ahead with no known upstream, clean, no new files does not qualify" {
+  _left84_setup
+  _left84_repo
+  git -C "$STUB_LEFT_REPO" branch --unset-upstream
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
 }
