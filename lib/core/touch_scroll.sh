@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# Translate a click-pair swipe. Args: release row, pane id, pane_in_mode.
+# Translate a click-pair swipe. Args: release row, pane id, pane_mode.
 # Invoked by tmux run-shell; no clikae state or engine initialization needed.
-y2=${1:-}; TS_PANE_ID=${2:-}; inmode=${3:-0}
-case "$inmode" in ''|*[!0-9]*) inmode=0 ;; esac
+y2=${1:-}; TS_PANE_ID=${2:-}; mode=${3:-}
+# P2-1 (2026-09 R2 review). mode is #{pane_mode} — the mode NAME, not a stacked
+# layer count — and this helper only ever acts in the two mode NAMES it knows
+# how to talk to: '' (no mode; a live pane, the swipe-in case) and the two
+# copy-key-table modes it binds, copy-mode/view-mode. Every other mode name
+# (tree-mode, clock-mode, choose-mode, choose-mode-vi, ...) has no `send-keys
+# -X` command table at all, so exit before making any tmux call rather than
+# after one fails — see lib/core/tmux.sh's touch-scroll comment for what the
+# old failure actually looked like on screen.
+case "$mode" in
+  ''|copy-mode|view-mode) ;;
+  *) exit 0 ;;
+esac
 # TS_PANE_ID is #{pane_id} from the binding (`%3`): an ID, already exact. tmux
 # 3.4 rejects `=%3` (can't find pane), so the exact-target lint names this
 # variable as an exception instead of the `=` prefix it wants for names.
@@ -51,15 +62,17 @@ if [ "$distance" -ge 2 ]; then
   multiplier=$((10#$multiplier))
   [ "$multiplier" -gt 0 ] || multiplier=2
   lines=$((distance * multiplier))
-  # #{pane_in_mode} is a COUNT of stacked mode layers, not a boolean: a
-  # run-shell that produces output stacks its own view-mode over an existing
-  # copy-mode, so a pane already in copy-mode can read inmode=2 (P2-2, 2026-09
-  # R1 review). `= 1` was false for that count and re-entered copy-mode on top
-  # of itself; `-gt 0` treats any nonzero depth as "already in a mode".
-  [ "$inmode" -gt 0 ] || tmux copy-mode -t "$TS_PANE_ID" || exit 0
+  # already_in_mode: mode was narrowed to ''/copy-mode/view-mode above, so
+  # non-empty here means copy-mode or view-mode — the P2-2 stacked-view-mode
+  # case (a run-shell that prints output stacks its own view-mode over an
+  # existing copy-mode) now arrives as mode=view-mode, still caught here, not
+  # as a count that a literal `= 1` could miss.
+  case "$mode" in
+    '') tmux copy-mode -t "$TS_PANE_ID" 2>/dev/null || exit 0 ;;
+  esac
   direction=scroll-down
   [ "$dy" -le 0 ] || direction=scroll-up
-  tmux send-keys -t "$TS_PANE_ID" -X -N "$lines" "$direction"
-elif [ "$inmode" -gt 0 ]; then
-  tmux send-keys -t "$TS_PANE_ID" -X cancel
+  tmux send-keys -t "$TS_PANE_ID" -X -N "$lines" "$direction" 2>/dev/null || true
+elif [ -n "$mode" ]; then
+  tmux send-keys -t "$TS_PANE_ID" -X cancel 2>/dev/null || true
 fi

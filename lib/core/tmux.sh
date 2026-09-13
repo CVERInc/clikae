@@ -494,12 +494,24 @@ tmux_spawn_session() {
   # picker) are deliberately LEFT UNBOUND here, not mirrored a third time. A
   # tap there is a SELECTION, not a swipe-cancel — that is a different design
   # than "leave copy-mode", and inventing one is out of scope for this fix.
-  # Measured: today a tap in choose-tree still reaches this helper via root's
-  # fallback (no choose-mode override exists to catch it first) and stacks a
-  # view-mode layer over the picker (`#{pane_in_mode}` 1 -> 2) rather than
-  # selecting. That gap is unresolved and known, not silently accepted.
+  # A tap there — and in clock-mode (`Ctrl-b t`) — used to still reach this
+  # helper via root's fallback (no choose-mode/clock-mode override exists to
+  # catch it first) and appear to stack a view-mode layer over the picker
+  # (`#{pane_in_mode}` 1 -> 2). Measured (2026-09 R2 review, P2-1): that
+  # "layer" was never a real mode transition — tree-mode and clock-mode have
+  # no `send-keys -X` command table, so the helper's `send-keys -X` call
+  # failed with tmux's own `not in a mode`, and because touch_scroll.sh's two
+  # send-keys calls were the only ones in the file not silenced, run-shell
+  # rendered that stderr text as a view-mode box on top of the picker/clock —
+  # a stacked error message, not a stacked mode. touch_scroll.sh now reads
+  # #{pane_mode} (the mode NAME tmux is actually in, not the stack depth) and
+  # only acts on '' (no mode), copy-mode, and view-mode; tree-mode, clock-mode,
+  # choose-mode/choose-mode-vi, and any other mode name all exit before making
+  # a tmux call, so the picker and the clock are left exactly as tmux's own
+  # default leaves them. Selecting a tree-mode row on tap is still out of
+  # scope for this fix — the gap is now a silent no-op, not an error overlay.
   local touch_helper
-  touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_in_mode}"
+  touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_mode}"
   # 🔴 THE FLOOR. `set-option -p` / `-pu` (pane-scoped options, used by every
   # binding below) needs tmux >= 3.1 (added CHANGES-3.0-to-3.1); the
   # copy-mode-vi key table needs only >= 2.4 (CHANGES-2.3-to-2.4) — 3.1 is the
