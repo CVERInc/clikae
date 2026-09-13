@@ -119,6 +119,23 @@ _row() { # number updated login repo html_url is_pr title
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
   [ -f "$events" ]
   [ "$(wc -l < "$events")" -eq 2 ]
+
+  # P1-1 (2026-09-13 fix-round-1 review): the actual wake — a burn-status-
+  # shaped file under runs/, and `clikae wait` on it (the reader that
+  # already exists) returns 0 and prints the summary. This IS the
+  # end-to-end proof the brief demanded: not "a file got written", but "the
+  # existing reader accepts it and reports success".
+  local runs_dir="$CLIKAE_HOME/state/watch-github/CVERInc/runs"
+  [ -d "$runs_dir" ]
+  local status_file
+  status_file="$(find "$runs_dir" -name '*.json' | head -n1)"
+  [ -n "$status_file" ]
+  [ -f "$status_file" ]
+  run clikae wait "$status_file"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+  [[ "$output" == *"github CVERInc/reef#100 opened by alice: First issue"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#101 opened by bob: Second one"* ]] || false
 }
 
 @test "watch github --once: second run with the same page emits 0 (de-dup)" {

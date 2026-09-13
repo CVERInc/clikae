@@ -18,36 +18,43 @@
 # the engine-watching flag set, so it is parsed here, not threaded through
 # cmd_watch's loop.
 #
-# WHAT "WAKE" MEANS HERE — read before assuming this types into a tmux pane.
-# There is no generic wake bus in this codebase, and no `clikae go` command
-# (grepped; none exists). Two real, DIFFERENT mechanisms already carry the
-# word "wake":
+# WHAT "WAKE" MEANS HERE — read before assuming this types into a tmux pane,
+# and before re-adding the false claim this file used to carry (P1-1/P1-2,
+# 2026-09-13 fix-round-1 review — read that review before touching this
+# again). There is no generic wake bus in this codebase, and no `clikae go`
+# command (grepped; none exists). Two real, DIFFERENT mechanisms carry the
+# word "wake", and this file uses exactly one of them:
 #   1. lib/core/wake.sh's wake_send/wake_sit: literally TYPES text (the
 #      literal string "go", by default) into a live tmux pane to resume a
-#      rate-limited session. That machinery creates its own tmux window
-#      (wake_attach) — explicitly NOT wanted here (see cmd_watch_github's
-#      --help: "no daemon, no tmux window of its own"; #77 is removing
-#      tmux-window-per-feature from the status line). So this file does not
-#      call wake_attach/wake_sit. It DOES reuse wake_human_left for the
-#      interval-progress line, which is the one piece of that machinery that
-#      has nothing to do with typing into a pane.
+#      RATE-LIMITED session. `clikae burn` never calls this on completion —
+#      grepped, burn.sh has zero references to wake_attach/wake_send/
+#      wake_sit anywhere near _burn_status_write. A finished burn is not a
+#      rate-limited one, so there is nothing here to replicate. This file
+#      calls neither.
 #   2. `clikae burn`/`clikae wait` (#41/#37): a cockpit "receives" a finished
-#      burn by blocking, in its OWN foreground command, on a status file that
-#      gets written at every transition — never by something reaching into a
-#      live session. That pull model is what a cockpit can actually rely on
-#      headlessly (via cron or a Stop hook calling `--once`), so it is the
-#      one this follows: every new event is appended, durably, to a small
-#      flat-JSON log under $CLIKAE_HOME/logs — the same top-level directory
-#      burn's own status.json lives under — parseable with burn_status.sh's
-#      OWN burn_status_field/burn_status_str (the exact functions `clikae
-#      wait` reads status.json with), not a hand-rolled parser. That is "the
-#      same function the burn/wait wake path uses" in the only sense that is
-#      actually true of this codebase. burn.sh's own _burn_status_write is
-#      NOT reused directly — its schema is fixed to a single tank/artifact
-#      run, keyed by pid, and has no field for "which repo, which login"; a
-#      github event needs its own shape, so it gets its own writer using the
-#      same escaping (lib/core/json.sh, already shared by every --json
-#      command) and the same flat single-line-JSON convention.
+#      burn by blocking, in its OWN foreground command, on a status file
+#      (`status.json`) burn writes at every transition — the READER already
+#      exists (`clikae wait <run_id|status-file>`, lib/commands/wait.sh,
+#      sourcing lib/core/burn_status.sh's burn_status_str/burn_status_state),
+#      and burn's entire "wake" IS that write, nothing more
+#      (`_burn_status_write` in burn.sh — no tmux call anywhere near it). So
+#      THIS is what this file replicates, literally: every poll that finds
+#      >=1 new event writes ONE burn-status-SHAPED file — same `state`
+#      field, same flat single-line JSON via lib/core/json.sh's escaping —
+#      under $CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json
+#      (_wg_status_write below), with `state:"done"`, `reason:"github-
+#      events"`, `artifact:` pointing at this poll's events file, and
+#      `summary:` one line per event (capped, see _wg_build_summary).
+#      `clikae wait <that file>` returns 0 and PRINTS the summary — a
+#      cockpit (or a Stop hook, or a person) blocks on it exactly the way it
+#      already blocks on a burn. The durable
+#      $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl log below is kept
+#      too (a full history a cron job can grep after the fact), but it is
+#      NOT the reader — nothing in this repo ever parsed it as one. An
+#      earlier version of this comment claimed events.jsonl was "parseable
+#      with burn_status.sh's OWN burn_status_field/burn_status_str"; grepped,
+#      that was never true (zero call sites) — deleted, not fixed, because
+#      the real reader is the status file above, not events.jsonl itself.
 # A live foreground run (no --once) ALSO prints each wake line as it happens,
 # the same way `clikae watch <engine>` prints "Looks like … hit its limit."
 # live to whoever is watching that pane — the interactive half of "wake".
@@ -100,6 +107,9 @@ _wg_log_dir()   { printf '%s/logs/watch-github-%s\n' "$CLIKAE_HOME" "$1"; }
 _wg_cursor_file() { printf '%s/%s.cursor\n' "$(_wg_state_dir)" "$1"; }
 _wg_seen_file()   { printf '%s/%s.seen\n'   "$(_wg_state_dir)" "$1"; }
 _wg_events_file() { printf '%s/events.jsonl\n' "$(_wg_log_dir "$1")"; }
+# _wg_runs_dir <org> -> where the burn-status-shaped file `clikae wait` reads
+# lives for this org (P1-1, see the WHAT "WAKE" MEANS HERE note above).
+_wg_runs_dir()    { printf '%s/%s/runs\n' "$(_wg_state_dir)" "$1"; }
 
 # --- queries --------------------------------------------------------------
 
@@ -198,12 +208,53 @@ _wg_process() {
 
     printf '%s\n' "$key" >> "$seen_file"
     __WG_EVENTS=$((__WG_EVENTS + 1))
+    # P1-1 (2026-09-13 fix-round-1 review): fed to _wg_status_write's
+    # `summary` field, which is the whole reason `clikae wait` on that file
+    # has anything to print — see _wg_build_summary below for the cap.
+    __WG_SUMMARY_LINES="${__WG_SUMMARY_LINES:+$__WG_SUMMARY_LINES$'\n'}$line"
     if [ -z "$__WG_MAX_UPDATED" ] || [[ "$updated" > "$__WG_MAX_UPDATED" ]]; then
       __WG_MAX_UPDATED="$updated"
     fi
   done <<EOF
 $tsv
 EOF
+}
+
+# _wg_build_summary <lines> <n> -> <lines> (newline-joined) verbatim if <n> is
+# <= 10; otherwise the first 10 lines plus a `+N` line for the rest — the cap
+# the brief's design decision (1) names, so a status file's `summary` field
+# never grows unbounded on a very busy poll.
+_wg_build_summary() {
+  local lines="$1" n="$2" cap=10
+  if [ "$n" -le "$cap" ]; then
+    printf '%s' "$lines"
+    return 0
+  fi
+  local head; head="$(printf '%s\n' "$lines" | head -n "$cap")"
+  printf '%s\n+%d' "$head" "$((n - cap))"
+}
+
+# _wg_status_write <org> <events_file> <summary> -> write ONE burn-status-
+# SHAPED file under $CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json
+# so `clikae wait <that file>` — the reader that already exists, see the
+# WHAT "WAKE" MEANS HERE note at the top of this file — returns 0 and prints
+# `summary`. Superset of burn's own status.json field set (same `state`,
+# same escaping via lib/core/json.sh) plus `summary`, which burn's own
+# status.json has no use for. Write-then-rename, same as burn.sh's own
+# _burn_status_write, so `clikae wait` (polling every second) never reads a
+# half-written file.
+_wg_status_write() {
+  local org="$1" events_file="$2" summary="$3" run_dir now f
+  run_dir="$(_wg_runs_dir "$org")"
+  mkdir -p "$run_dir" 2>/dev/null || return 0
+  now="$(date +%s 2>/dev/null || echo 0)"
+  f="$run_dir/$now.json"
+  {
+    printf '{"ok":true,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null,"summary":%s}\n' \
+      "$(json_str "github")" "$(json_str "$org")" "$(json_str "$events_file")" \
+      "$(json_str "github-events")" "$(json_str "watch-github-$org-$now")" \
+      "$(json_str "done")" "$now" "$now" "$$" "$(json_str "$summary")"
+  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
 }
 
 # --- one poll ---------------------------------------------------------------
@@ -217,6 +268,7 @@ _wg_poll() {
   __WG_EVENTS=0
   __WG_BACKOFF=0
   __WG_MAX_UPDATED=""
+  __WG_SUMMARY_LINES=""
   local ok=1
 
   mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
@@ -268,6 +320,13 @@ _wg_poll() {
   if [ "$ok" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
     printf '%s\n' "$__WG_MAX_UPDATED" > "$cursor_file"
   fi
+
+  # P1-1 (2026-09-13 fix-round-1 review): the wake itself — one status file
+  # per poll that found something, so `clikae wait` has a terminal state to
+  # read. Never on a zero-event poll (nothing for a cockpit to wake up FOR).
+  if [ "$__WG_EVENTS" -ge 1 ]; then
+    _wg_status_write "$org" "$events_file" "$(_wg_build_summary "$__WG_SUMMARY_LINES" "$__WG_EVENTS")"
+  fi
 }
 
 # --- the command --------------------------------------------------------------
@@ -284,9 +343,14 @@ Poll GitHub's search API for issues/PRs opened by others, replies, and
 Printed live (a foreground run) and appended, as flat JSON, to
 $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl — durable, so a cron job or
 a Stop hook calling --once has something to read even with nobody watching.
-A cursor (the newest updated_at seen) persists at
+
+The actual wake: every poll that finds >=1 new event writes ONE status file
+(the same shape `clikae burn` writes, same reader) to
+$CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json — so
+`clikae wait <that file>` returns 0 and prints the events, exactly like
+waiting on a burn. A cursor (the newest updated_at seen) persists at
 $CLIKAE_HOME/state/watch-github/<org>.cursor; a small seen-file next to it
-(capped at the last 500) de-dupes (issue number, updated_at) pairs.
+de-dupes (repo, issue number, updated_at) triples.
 
   --org <org>       GitHub org to watch. Default: inferred from this
                      directory's GitHub remote (`gh repo view`).
