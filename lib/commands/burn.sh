@@ -829,7 +829,7 @@ _agy_burn() {
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
       _burn_result true agy "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
     elif printf '%s' "$out" | grep -qi "no output produced"; then
       # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
@@ -865,13 +865,13 @@ _agy_burn() {
         _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "clikae captured stdout into the artifact" ""
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
-        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
       _burn_status_write fail false "$status_engine" "$cur" "$artifact" "clikae could not write the artifact" ""
       _burn_result false agy "$cur" "$artifact" "clikae could not write the artifact"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     else
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
@@ -879,7 +879,7 @@ _agy_burn() {
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       _burn_output_tail "$out"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 
@@ -1137,6 +1137,19 @@ _burn_left_behind() {
 # call the caller has to remember to make.
 _burn_result() {
   local left_behind='[]'
+  # P2-3 (round-1 review): pinned HERE, before the scan below ever runs —
+  # `_burn_left_behind` can itself take real wall-clock time (P2-2's 97.6s
+  # worst case, pre-fix), and `$SECONDS` keeps ticking through all of it. The
+  # old code read `$((SECONDS - t0))` fresh at printf time, AFTER the scan,
+  # so a slow scan silently became part of "how long did this burn take" —
+  # measured: elapsed_s: 97 here vs status.json's (unaffected, since it's
+  # written a statement earlier, before any scan) elapsed_s: 0 for the SAME
+  # run. Not `local`: the caller's own `summary:` log_info line (cmd_burn /
+  # _agy_burn, always the very next statement after this function returns)
+  # reads it back by the same dynamic-scoping convention this file already
+  # uses for run_dir/t0/tried/etc., so --json and the human summary agree
+  # with each other and with status.json's own (already correct) number.
+  burn_elapsed_s=$((SECONDS - ${t0:-SECONDS}))
   # P1 (round-1 review): `_burn_left_behind` runs inside `$(...)` — a real
   # subshell — so a failure it doesn't already guard against only kills
   # that subshell; `|| left_behind='[]'` catches a non-zero exit (dead
@@ -1169,7 +1182,7 @@ _burn_result() {
   printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
-    "$(_burn_tried_json "${tried:-}")" "$((SECONDS - ${t0:-SECONDS}))" \
+    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
     "$(json_or_null "${run_id:-}")" "$left_behind" >&4
 }
 
@@ -3258,7 +3271,7 @@ KV
       log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
       _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
     fi
 
@@ -3372,7 +3385,7 @@ KV
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
       _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
       _burn_output_tail "$out"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 

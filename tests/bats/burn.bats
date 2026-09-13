@@ -3286,3 +3286,35 @@ expect = [f"r{n:02d}" for n in range(30, 5, -1)]
 assert names == expect, names
 '
 }
+
+# P2-3 (round-1 review): the old code read `elapsed_s` fresh (SECONDS - t0)
+# AFTER _burn_left_behind ran, so a slow scan silently inflated it —
+# measured 97s vs status.json's (unaffected: written a statement earlier,
+# before any scan) 0s for the SAME run. A `find` shim that sleeps 1s makes
+# the scan slow enough here to be measurable at 1-second $SECONDS
+# granularity — a fast scan can't distinguish fixed from broken.
+@test "burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<'STUB'
+#!/usr/bin/env bash
+sleep 1
+exec /usr/bin/find "$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  local json_elapsed status_elapsed status_file
+  json_elapsed="$(printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; print(json.load(sys.stdin)["elapsed_s"])')"
+  status_file="$(find "$TEST_HOME/.clikae/logs" -name status.json | head -1)"
+  [ -n "$status_file" ]
+  status_elapsed="$(python3 -c "import json; print(json.load(open('$status_file'))['elapsed_s'])")"
+  # The scan alone (repo discovery + the file-list find, each shimmed to
+  # sleep 1s) costs >=2s; a pre-fix elapsed_s would show that. Both numbers
+  # here should still read close to 0 (whatever cmd_burn did before the
+  # scan even started) and agree with each other and with the summary line.
+  [ "$json_elapsed" -lt 2 ]
+  [ "$status_elapsed" -lt 2 ]
+  local diff=$((json_elapsed - status_elapsed)); [ "${diff#-}" -le 1 ]
+  [[ "$output" == *"elapsed=${json_elapsed}s"* ]] || false
+}
