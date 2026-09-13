@@ -850,7 +850,15 @@ _agy_burn() {
       log_info "Dry, and --no-reroute is set. Stopping."
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
-      return 1
+      # #61 round-1 P2-5: this used to `return 1` — the SAME rc a real task
+      # failure gets, even though the status file right above it already
+      # says `state: dry`. `reason` was the only discriminator any consumer
+      # had, and clikae wait's own rc doesn't read `reason` (see docs/
+      # orchestration.md). rc now agrees with the state it just wrote: both
+      # ways a burn can stop on a dry tank without reroute exhausting the
+      # reserve — --no-reroute here, and a fully exhausted walk below — are
+      # $CLIKAE_BURN_RC_NO_TANK; only a REAL task failure keeps rc 1.
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     }
     # P2-2 (2026-09-09 round-1 review): this picker never called
     # burn_tank_busy — the ONE engine where that matters most, since agy's
@@ -3120,7 +3128,10 @@ KV
       log_info "Dry, and --no-reroute is set. Stopping."
       _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
-      return 1
+      # #61 round-1 P2-5: see _agy_burn's identical comment above this one's
+      # twin — rc now matches the `state: dry` this just wrote (both dry
+      # shapes are $CLIKAE_BURN_RC_NO_TANK; only a real task failure is 1).
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     }
     tried="$tried $cli/$cur"
     local nxt=""

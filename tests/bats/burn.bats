@@ -141,6 +141,39 @@ STUB
   [[ "$output" != *"codex/T2"* ]] || false
 }
 
+# --- #61 P2-5 (round-1 review): rc alone used to conflate "stopped on a dry
+# tank because --no-reroute says so" with a REAL task failure — both were rc
+# 1, exactly the ambiguity #61 opened against reroute exhaustion. The status
+# file already wrote `state: dry` for --no-reroute's stop (unchanged by this
+# PR), but the process's own rc disagreed with what it had just written to
+# disk. Fixed: BOTH shapes a burn can stop dry without exhausting the whole
+# reserve — --no-reroute here, and reroute exhaustion in the sibling test
+# below — are $CLIKAE_BURN_RC_NO_TANK (2); only a genuine task failure stays
+# 1. `reason` (not rc) is what still tells the two dry shapes apart — see
+# docs/orchestration.md.
+@test "burn #61 P2-5: --no-reroute's dry stop and a real task failure use DIFFERENT rc (2 vs 1)" {
+  _stub_codex
+  clikae init codex dry1
+  clikae init codex fail1
+  : > "$CLIKAE_HOME/profiles/codex/dry1/.dry"
+
+  run clikae burn codex dry1 --artifact "$BATS_TEST_TMPDIR/d.md" --no-reroute -- run "$BATS_TEST_TMPDIR/d.md"
+  [ "$status" -eq 2 ] || { echo "--no-reroute dry: got rc=$status, want 2"; echo "$output"; false; }
+
+  run clikae burn codex fail1 --artifact "$BATS_TEST_TMPDIR/f.md" --no-reroute -- noop
+  [ "$status" -eq 1 ] || { echo "real task failure: got rc=$status, want 1"; echo "$output"; false; }
+}
+
+@test "burn #61 P2-5: reroute exhaustion (no-tank-available) is the SAME rc as --no-reroute's dry stop" {
+  _stub_codex
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  : > "$CLIKAE_HOME/profiles/codex/T2/.dry"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "got rc=$status, want 2 (CLIKAE_BURN_RC_NO_TANK)"; echo "$output"; false; }
+}
+
 # --- agy burn: since the 2026-07-05 Keychain-carry restore, a tank switch is
 # non-interactive, so burn can auto-hop agy tanks on dry (sequential — agy still
 # can't run two tanks in parallel, unlike other engines that's fine for burn's
@@ -207,6 +240,16 @@ STUB
   [[ "$output" == *"ran dry"* ]] || false
   [[ "$output" == *"Done on agy/work"* ]] || false
   [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]   # actually switched, not just retried
+}
+
+@test "burn #61 P2-5: agy --no-reroute's dry stop is also rc 2, same as codex's" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"
+  run clikae burn agy default --artifact "$BATS_TEST_TMPDIR/out.md" --no-reroute --prompt "do the thing"
+  [ "$status" -eq 2 ] || { echo "got rc=$status, want 2 (CLIKAE_BURN_RC_NO_TANK)"; echo "$output"; false; }
 }
 
 @test "burn agy fails when every tank is dry" {
