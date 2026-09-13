@@ -49,6 +49,12 @@ STUB
   cat > "$TEST_HOME/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+# Real codex's -C changes ITS OWN cwd before it does anything else — a
+# session's recorded "cwd" is wherever -C pointed, not the caller's $PWD.
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -C ]; then cd "$2" || exit 1; break; fi
+  shift
+done
 mkdir -p "$CODEX_HOME/sessions/2026/09/13"
 printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "$PWD" > "$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
 printf 'done\n' > "$STUB_ARTIFACT"
@@ -310,6 +316,73 @@ STUB
   chmod +x "$TEST_HOME/bin/codex"
   _burn codex T1
   _assert_sidecar codex T1 "$STUB_SID"
+}
+
+# --- #74 round-2 P1-1: the tie-break used to compare each candidate's
+# recorded cwd against $PWD — this SHELL's cwd, not the cwd codex actually
+# ran in (-C, which defaults to dirname("$artifact")). Any --artifact outside
+# $PWD (or an explicit --add-dir) made burn's OWN session stop matching here,
+# leaving a concurrent human session in $PWD as the sole "match" — recorded
+# and hidden. -------------------------------------------------------------
+
+@test "#74 round-2 P1-1: codex burn attributes to its own -C launch dir, not the caller's \$PWD, and never hides a concurrent human session there" {
+  _fixture
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/repo"
+  (cd "$TEST_HOME/repo" && git init -q .)
+  local artifact="$TEST_HOME/repo/result"
+  export STUB_ARTIFACT="$artifact"   # the stub writes wherever THIS points, not --artifact
+  # Two transcripts appear DURING the run (both "new" against the before
+  # snapshot): burn's own, whose recorded cwd is codex's -C launch dir
+  # (dirname("$artifact") here, since no --add-dir was given); and a
+  # concurrent human's, whose recorded cwd is the CALLER's $PWD ($TEST_HOME/work).
+  # Old code compared each candidate's cwd against THIS SHELL's $PWD, so it
+  # picked the human's and never burn's own.
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+orig_pwd="\$PWD"
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = -C ]; then cd "\$2" || exit 1; break; fi
+  shift
+done
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$HUMAN_SID" "\$orig_pwd" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$HUMAN_SID.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --prompt 'Write the artifact' --artifact "$artifact"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$artifact" ]
+  _assert_sidecar codex T1 "$STUB_SID"
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$STUB_SID"* ]] || false
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+  run clikae resume
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+  [[ "$output" != *"$STUB_SID"* ]] || false
+}
+
+@test "#74 round-2 P1-1: with an explicit --add-dir \"\$PWD\" the two-candidate tie still records nothing" {
+  _fixture
+  clikae init codex T1
+  local other_sid="77777777-7777-4777-8777-777777777777"
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$other_sid" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$other_sid.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --prompt 'Write the artifact' --add-dir "$PWD" --artifact "$STUB_ARTIFACT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"could not attribute session"* ]] || false
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
 }
 
 # --- #74 round-1 P1-3: burn used to append --session-id unconditionally, even

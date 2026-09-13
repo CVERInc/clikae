@@ -567,7 +567,7 @@ _burn_compose() {
 }
 
 # _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
-#           <wait_for_reset_s> <allow_active> <n_extra> <extra-agy-flags...> <add_dirs...>
+#           <wait_for_reset_s> <allow_active> <launch_cwd> <n_extra> <extra-agy-flags...> <add_dirs...>
 # The extras are whatever followed `--` on the command line. agy has no adapter,
 # so clikae cannot compose its flags for you; what it CAN do is stop dropping the
 # ones you asked for. Two that headless dispatch actually needs:
@@ -588,7 +588,8 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" n_extra="$9"; shift 9
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" launch_cwd="$9"; shift 9
+  local n_extra="$1"; shift
   local -a extra=()
   while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
@@ -703,7 +704,7 @@ _agy_burn() {
           local _agy_cf _agy_ccwd
           for _agy_cf in "${_agy_new[@]}"; do
             _agy_ccwd="$(adapter_session_cwd "$_agy_cf" 2>/dev/null || true)"
-            [ "${_agy_ccwd%/}" = "${PWD%/}" ] && _agy_cwd_match+=("$_agy_cf")
+            [ "${_agy_ccwd%/}" = "${launch_cwd%/}" ] && _agy_cwd_match+=("$_agy_cf")
           done
           if [ "${#_agy_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
             sid_to_record="$(adapter_sid_canonical "${_agy_cwd_match[0]}" 2>/dev/null || true)"
@@ -2030,6 +2031,11 @@ cmd_burn() {
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s=""
+  # #74 round-2 P1-1: the cwd the engine actually runs in, not the cwd of
+  # THIS shell. Defaults to $PWD (raw '-- <cmd...>' mode never overrides the
+  # engine's cwd), reset to add_dirs[0] at each _burn_compose call below —
+  # that argv IS what tells codex's `-C` where to run (adapter_burn_flags).
+  local _burn_launch_cwd="$PWD"
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -2319,7 +2325,7 @@ cmd_burn() {
       if [ "$permission_set" -eq 1 ]; then
         log_warn "$status_engine has no equivalent for --permission $burn_permission; keeping its existing burn flags."
       fi
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" \
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" "$_burn_launch_cwd" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
@@ -2339,6 +2345,7 @@ cmd_burn() {
       _burn_status_write fail false "$cli" "$tank" "$artifact" "$cli has no headless-write recipe (no adapter_burn_flags)" ""
       log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
     fi
+    _burn_launch_cwd="${add_dirs[0]}"
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
   fi
@@ -2674,11 +2681,18 @@ KV
           fi
           ;;
         *)
+          # #74 round-2 P1-1: compare against the cwd the ENGINE was launched
+          # in (_burn_launch_cwd — codex's own -C), not this shell's $PWD.
+          # codex always runs with -C add_dirs[0], which defaults to
+          # dirname("$artifact") — the moment that differs from $PWD (any
+          # --add-dir, or an artifact outside the caller's cwd), burn's OWN
+          # session stopped matching here and a concurrent human session in
+          # $PWD became the sole "match" instead, getting recorded and hidden.
           local -a _snap_cwd_match=()
           local _snap_cf _snap_ccwd
           for _snap_cf in "${_snap_new[@]}"; do
             _snap_ccwd="$(adapter_session_cwd "$_snap_cf" 2>/dev/null || true)"
-            [ "${_snap_ccwd%/}" = "${PWD%/}" ] && _snap_cwd_match+=("$_snap_cf")
+            [ "${_snap_ccwd%/}" = "${_burn_launch_cwd%/}" ] && _snap_cwd_match+=("$_snap_cf")
           done
           if [ "${#_snap_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
             sid_to_record="$(adapter_sid_canonical "${_snap_cwd_match[0]}" 2>/dev/null || true)"
@@ -2905,6 +2919,7 @@ KV
         # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
         # exactly like the entry check did, so it needs the same refusal.
         _burn_check_codex_git_cwd
+        _burn_launch_cwd="${add_dirs[0]}"
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
         _burn_claude_headless_guards
