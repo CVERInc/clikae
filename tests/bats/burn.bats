@@ -1370,7 +1370,7 @@ STUB
   run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
-  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" != *'"reason":"no-tank-available"'* ]] || false   # #61 round-1 P2-4: this used to compare against a retired string (main renamed it to no-tank-available long before this PR) that could never appear, so the assertion was unconditionally true no matter what burn did
   [[ "$output" == *'"rerouted_from":[]'* ]] || false
 }
 
@@ -1464,7 +1464,7 @@ STUB
   run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
-  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" != *'"reason":"no-tank-available"'* ]] || false   # #61 round-1 P2-4: this used to compare against a retired string (main renamed it to no-tank-available long before this PR) that could never appear, so the assertion was unconditionally true no matter what burn did
   run dry_store_read codex T1
   [ "$status" -ne 0 ]                         # no false marker written
 }
