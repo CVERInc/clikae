@@ -3380,3 +3380,75 @@ assert rows[0]["ahead"] == 1 and rows[0]["dirty"] == 0, rows
   [[ "$output" != *"left behind:"* ]] || false
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
 }
+
+# P2-6 (round-1 review): the PR's own headline claim ("Read-only: nothing is
+# pushed or modified") had zero bats coverage — the six existing #84 tests
+# cover shapes, not the read-only guarantee itself. This is the reviewer's
+# own ruler, as a test: a `.git`-wide `find -newer` sentinel (touched, then
+# a 1s sleep so the sentinel sorts strictly before anything the scan might
+# write, regardless of this filesystem's own mtime resolution) proves
+# nothing under `.git` changed, and a sentinel-writing hook installed under
+# every hook name from the review (including the ones `core.fsmonitor`/
+# `core.hooksPath` on the command line — P3-4/decision 1 — are specifically
+# there to defeat) proves none of them fired.
+@test "burn #84 P2-6: the left-behind scan is provably read-only — .git untouched, no hook fires" {
+  _left84_setup
+  _left84_repo
+  local hooks_dir="$STUB_LEFT_REPO/.git/hooks" sentinel_dir="$BATS_TEST_TMPDIR/hook-sentinels"
+  mkdir -p "$hooks_dir" "$sentinel_dir"
+  local h
+  for h in pre-commit post-commit post-index-change pre-auto-gc reference-transaction post-checkout fsmonitor-watchman; do
+    cat > "$hooks_dir/$h" <<HOOK
+#!/usr/bin/env bash
+: > "$sentinel_dir/$h.fired"
+exit 0
+HOOK
+    chmod +x "$hooks_dir/$h"
+  done
+  git -C "$STUB_LEFT_REPO" config core.hooksPath .git/hooks
+  # P3-4's actual repro: `core.fsmonitor` set to an arbitrary executable
+  # PATH (not the named `fsmonitor-watchman` hook above — git treats these
+  # as two different mechanisms; only `core.fsmonitor=true` invokes the
+  # named hook, so it needed its own sentinel).
+  local fsmon="$BATS_TEST_TMPDIR/fsmonitor-hook"
+  cat > "$fsmon" <<HOOK
+#!/usr/bin/env bash
+: > "$sentinel_dir/core.fsmonitor.fired"
+printf '1\n'
+HOOK
+  chmod +x "$fsmon"
+  git -C "$STUB_LEFT_REPO" config core.fsmonitor "$fsmon"
+  local snap="$BATS_TEST_TMPDIR/git-snapshot-sentinel"
+  : > "$snap"
+  sleep 1
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  local newer; newer="$(find "$STUB_LEFT_REPO/.git" -newer "$snap" 2>/dev/null)"
+  [ -z "$newer" ] || { echo "changed under .git: $newer"; return 1; }
+  [ ! -e "$sentinel_dir/core.fsmonitor.fired" ] || { echo "core.fsmonitor hook fired"; return 1; }
+  for h in pre-commit post-commit post-index-change pre-auto-gc reference-transaction post-checkout fsmonitor-watchman; do
+    [ ! -e "$sentinel_dir/$h.fired" ] || { echo "hook fired: $h"; return 1; }
+  done
+}
+
+# The negative control the review itself ran: WITHOUT GIT_OPTIONAL_LOCKS,
+# the SAME git status call rewrites .git/index (inode changes) — proving
+# the ruler above is sensitive to a real write, not merely blind to one.
+@test "burn #84 P2-6 negative control: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index" {
+  _left84_setup
+  _left84_repo
+  # _left84_repo's own commit is --allow-empty (no tracked files), so
+  # there's nothing for git's lazy stat-cache refresh to find stale — a
+  # tracked file, re-touched (same content, new mtime) after its commit, is
+  # what actually makes `git status` want to rewrite the index.
+  printf tracked > "$STUB_LEFT_REPO/tracked.txt"
+  git -C "$STUB_LEFT_REPO" add tracked.txt
+  git -C "$STUB_LEFT_REPO" commit -qm tracked
+  sleep 1
+  touch "$STUB_LEFT_REPO/tracked.txt"
+  local before after
+  before="$(stat -c '%i' "$STUB_LEFT_REPO/.git/index" 2>/dev/null || stat -f '%i' "$STUB_LEFT_REPO/.git/index")"
+  ( unset GIT_OPTIONAL_LOCKS; git -C "$STUB_LEFT_REPO" status --porcelain >/dev/null )
+  after="$(stat -c '%i' "$STUB_LEFT_REPO/.git/index" 2>/dev/null || stat -f '%i' "$STUB_LEFT_REPO/.git/index")"
+  [ "$before" != "$after" ]
+}
