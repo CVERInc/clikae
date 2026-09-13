@@ -20,9 +20,11 @@ are appended in sorted order. A compliant file is not rewritten. A changed
 existing file is backed up as `settings.json.clikae.bak.*`, then replaced via
 a same-directory temporary file and rename — atomic against a concurrent
 reader, not against a mid-write power loss (no fsync). Symlinked settings
-are skipped.
-An allow rule that would exactly shadow a deny rule (the identical string in
-both lists) is refused instead of written.
+are skipped. Claude evaluates deny before allow, so the same rule string in
+both lists is not a bypass — deny still wins — and is applied as-is, not
+refused. `Bash(cmd:*)` and `Bash(cmd *)` are the same rule to Claude; an
+existing tank with the colon spelling is recognized as already covering the
+template's space-spelled rule and is not given a duplicate.
 
 This seed includes broad shell and file access for headless Linux work. It does
 not set `defaultMode` or configure macOS auto-mode classification. Edit the

@@ -1,6 +1,17 @@
 #!/usr/bin/env bats
 load '../helpers'
 
+@test "the claude permissions template is valid, shaped JSON with no exact-duplicate rules" {
+  # `init` only tolerates rc 2 (no template) / rc 3 (no jq) from `settings
+  # apply`; any other failure -- including a template that fails cmd_settings'
+  # own shape check -- surfaces as a half-created tank (P76 R2 P3-B). This
+  # guards the one trigger for that left standing once P2-1 was removed.
+  local f="$CLIKAE_ROOT/templates/permissions/claude.json"
+  jq -e 'type == "object" and (.permissions.allow | type == "array" and all(.[]; type == "string")) and (.permissions.deny | type == "array" and all(.[]; type == "string"))' "$f"
+  jq -e '.permissions.allow | length == (unique | length)' "$f"
+  jq -e '.permissions.deny | length == (unique | length)' "$f"
+}
+
 @test "settings unions both lists and preserves other keys and backup" {
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
@@ -86,26 +97,31 @@ load '../helpers'
 }
 
 @test "settings apply without jq fails clearly and does not write" {
-  local stripped="/usr/bin:/bin"
-  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
+  local nojq="$BATS_TEST_TMPDIR/nojq"
+  path_without_jq "$nojq"
+  PATH="$nojq" command -v jq >/dev/null 2>&1 && skip "jq is on PATH even without /usr/bin and /bin"
   clikae init claude work
   local f="$CLIKAE_HOME/profiles/claude/work/settings.json"
   cp "$f" "$TEST_HOME/before"
-  run env PATH="$stripped" "$CLIKAE_BIN" settings apply claude work
+  run env PATH="$nojq" "$CLIKAE_BIN" settings apply claude work
   [ "$status" -eq 3 ]
   [[ "$output" == *"requires jq"* ]] || false
   cmp "$f" "$TEST_HOME/before"
 }
 
-@test "an allow rule that exactly matches a deny rule is refused, not written" {
+@test "an allow rule that matches a deny rule by the same string is applied, not refused" {
+  # Claude evaluates deny before allow, so an identical string in both lists
+  # is not a bypass: deny still wins. Refusing to write it here bought
+  # nothing and left the tank worse off in the one case it fired on for real
+  # (a tank that had already allowed Bash(sudo *) kept sudo allowed and
+  # unopposed, instead of picking up the template's matching deny rule).
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
   printf '%s\n' '{"permissions":{"allow":["Bash(sudo *)"]}}' > "$d/settings.json"
-  cp "$d/settings.json" "$TEST_HOME/before"
   run clikae settings apply claude work
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"refused"*"shadow"*"Bash(sudo *)"* ]] || false
-  cmp "$d/settings.json" "$TEST_HOME/before"
+  [ "$status" -eq 0 ]
+  jq -e '.permissions.allow | index("Bash(sudo *)") != null' "$d/settings.json"
+  jq -e '.permissions.deny | index("Bash(sudo *)") != null' "$d/settings.json"
 }
 
 @test "settings apply with no tanks of the engine says so and exits 0" {
@@ -128,6 +144,23 @@ load '../helpers'
   clikae settings apply claude a
   [ ! -e "$CLIKAE_HOME/profiles/claude/b/settings.json" ]
   jq -e --arg rule "Bash($HOME/*)" '.permissions.allow | index($rule) != null' "$CLIKAE_HOME/profiles/claude/a/settings.json"
+}
+
+@test "\$HOME/* expands the same whether or not the caller's HOME has a trailing slash" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/a"
+  clikae settings apply claude a
+  run env HOME="$HOME/" "$CLIKAE_BIN" settings apply claude a --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/a: unchanged"* ]] || false
+}
+
+@test "a colon-spelled allow rule is recognized as equivalent to the template's space-spelled rule" {
+  local d="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$d"
+  printf '%s\n' '{"permissions":{"allow":["Bash(ls:*)"]}}' > "$d/settings.json"
+  run clikae settings apply claude work
+  [ "$status" -eq 0 ]
+  jq -e '[.permissions.allow[] | select(. == "Bash(ls *)" or . == "Bash(ls:*)")] | length == 1' "$d/settings.json"
 }
 
 @test "symlinked settings are skipped without changing the target" {

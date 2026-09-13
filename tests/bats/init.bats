@@ -82,9 +82,10 @@ load '../helpers'
 }
 
 @test "init still creates a claude tank when jq is missing, and says so" {
-  local stripped="/usr/bin:/bin"
-  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
-  run env PATH="$stripped" "$CLIKAE_BIN" init claude work
+  local nojq="$BATS_TEST_TMPDIR/nojq"
+  path_without_jq "$nojq"
+  PATH="$nojq" command -v jq >/dev/null 2>&1 && skip "jq is on PATH even without /usr/bin and /bin"
+  run env PATH="$nojq" "$CLIKAE_BIN" init claude work
   [ "$status" -eq 0 ]
   [ -d "$CLIKAE_HOME/profiles/claude/work" ]
   [ ! -e "$CLIKAE_HOME/profiles/claude/work/settings.json" ]

@@ -302,3 +302,19 @@ rc_backup_count() {
   n=$(find "$TEST_HOME" -maxdepth 1 -name '.zshrc.clikae.bak.*' 2>/dev/null | wc -l)
   echo "$((n))"
 }
+
+# Build a PATH entry at $1 that symlinks every /usr/bin and /bin executable
+# EXCEPT jq. A plain PATH=/usr/bin:/bin still finds jq on hosts (including
+# both CI runners) that install it there, which made every "jq is missing"
+# test skip everywhere instead of ever actually running (P76 round-2 P3-A).
+path_without_jq() {
+  local dir="$1" f b
+  mkdir -p "$dir"
+  for f in /usr/bin/* /bin/*; do
+    [ -e "$f" ] || continue
+    b="${f##*/}"
+    [ "$b" = jq ] && continue
+    [ -e "$dir/$b" ] && continue
+    ln -s "$f" "$dir/$b" 2>/dev/null || true
+  done
+}

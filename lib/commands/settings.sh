@@ -16,7 +16,9 @@ _settings_tank() (
   [ -e "$file" ] || input=/dev/null
   # $HOME, not a hardcoded /home/<user>: this template also ships to macOS via
   # Homebrew, where $HOME is /Users/<user> and there is no /home at all.
-  if ! result="$(jq -n --arg user_home "$HOME/*" --slurpfile template "$template" --slurpfile current "$input" '
+  # ${HOME%/} strips a trailing slash so a caller with HOME=/x/ vs HOME=/x
+  # expands to the same rule string instead of drifting forever (P76 R2 P3-C).
+  if ! result="$(jq -n --arg user_home "${HOME%/}/*" --slurpfile template "$template" --slurpfile current "$input" '
     def rules: type == "array" and all(.[]; type == "string");
     def valid:
       type == "object" and
@@ -29,21 +31,27 @@ _settings_tank() (
     if ($current | length) > 1 or
        (($current | length) == 1 and ($current[0] | valid | not))
       then error("invalid settings") else . end |
+    # Claude treats "Bash(cmd:*)" and "Bash(cmd *)" as the same rule; normalize
+    # to the space spelling before diffing so an existing colon-spelled rule
+    # does not get duplicated by the template space-spelled rule (P76 R2 P3-6).
+    def norm_bash:
+      if type == "string" and test("^Bash\\(.+:\\*\\)$")
+      then sub("^Bash\\((?<c>.+):\\*\\)$"; "Bash(\(.c) *)")
+      else . end;
     ($current[0] // {}) as $old |
-    (($template[0].permissions.allow // [] | map(if . == "Bash(/home/<user>/*)" then "Bash(" + $user_home + ")" else . end)) - ($old.permissions.allow // []) | unique) as $a |
-    (($template[0].permissions.deny // []) - ($old.permissions.deny // []) | unique) as $d |
+    ($old.permissions.allow // [] | map(norm_bash)) as $old_a_norm |
+    ($old.permissions.deny // [] | map(norm_bash)) as $old_d_norm |
+    (($template[0].permissions.allow // [] | map(if . == "Bash(/home/<user>/*)" then "Bash(" + $user_home + ")" else . end)) as $tmpl_a |
+      $tmpl_a | unique_by(norm_bash) |
+      map(select((norm_bash) as $n | ($old_a_norm | index($n)) == null))) as $a |
+    (($template[0].permissions.deny // []) as $tmpl_d |
+      $tmpl_d | unique_by(norm_bash) |
+      map(select((norm_bash) as $n | ($old_d_norm | index($n)) == null))) as $d |
     ($old | .permissions.allow = ((.permissions.allow // []) + $a) |
            .permissions.deny = ((.permissions.deny // []) + $d)) as $merged |
-    (($merged.permissions.allow // []) as $A | ($merged.permissions.deny // []) as $D | $A - ($A - $D)) as $shadow |
-    {allow: ($a | length), deny: ($d | length), shadow: $shadow, settings: $merged}
+    {allow: ($a | length), deny: ($d | length), settings: $merged}
   ' 2>/dev/null)" || { [ "$input" != /dev/null ] && [ ! -s "$file" ]; }; then
     printf '%s/%s: skipped — invalid JSON or permissions shape in settings.json/template\n' "$engine" "$tank"
-    return 1
-  fi
-  local shadow
-  shadow="$(printf '%s' "$result" | jq -r '.shadow | join(", ")')"
-  if [ -n "$shadow" ]; then
-    printf '%s/%s: refused — allow rule(s) shadow a deny rule: %s\n' "$engine" "$tank" "$shadow"
     return 1
   fi
   allow="$(printf '%s' "$result" | jq -r .allow)"
