@@ -136,11 +136,67 @@ limit_codex_reset() {
 # falls in the TAIL of the reply (the last 20 lines) — the caller only
 # reaches this function once the artifact check has already failed, so "no
 # artifact" is a given here; this adds the position half of that guard.
+#
+# _limit_codex_anchor_line <anchor-regex> <text> -> echo the ONE line (or
+# TWO-line join) that satisfies <anchor-regex>; empty + return 1 if none
+# does.
+#
+# P2-3 (#81 round-1 fix review): limit_codex_output_dry used to hand the
+# WHOLE reply to limit_codex_reset, which takes grep's first "resets …" /
+# "try again at …" / "reset at …" match ANYWHERE in the buffer — so an
+# unrelated sentence earlier in stdout (a task's own prose, e.g. "the
+# schedule resets Monday morning, so try again at 9:00 PM if unsure.")
+# became the marker instead of the genuine vendor phrase that anchored
+# this as dry in the first place, and that decoy text rarely parses as an
+# epoch (#75's "reset already passed" logic then never fires — the tank
+# stays red until the marker's own TTL). Isolate the specific line the
+# anchor matched and hand THAT to limit_codex_reset, never the buffer.
+#
+# A genuine vendor sentence can also be WRAPPED across two physical lines
+# by the terminal/pty ("… try again at Sep 13th, 2026 2:13\nAM.") — grep
+# matches per line, so the anchor (short, and first on the line) still
+# fires on line one alone, but a reset extracted from that one line loses
+# "AM." and fails to parse as an epoch. If the matched line doesn't already
+# end in terminal punctuation, glue the next line onto it before handing
+# it to limit_codex_reset — the common case (an unwrapped, already-
+# terminated line) never touches its neighbour.
+_limit_codex_anchor_line() {
+  local re="$1" buf="$2"
+  local -a lines=()
+  local line
+  while IFS= read -r line; do lines+=("$line"); done <<< "$buf"
+  local n=${#lines[@]} i joined
+  for ((i = 0; i < n; i++)); do
+    if grep -qaiE "$re" <<< "${lines[$i]}"; then
+      joined="${lines[$i]}"
+      case "$joined" in
+        *[.\!?]) : ;;
+        *) [ $((i + 1)) -lt "$n" ] && joined="$joined ${lines[$((i + 1))]}" ;;
+      esac
+      printf '%s' "$joined"
+      return 0
+    fi
+    if [ "$i" -gt 0 ]; then
+      case "${lines[$((i - 1))]}" in
+        *[.\!?]) : ;;
+        *)
+          joined="${lines[$((i - 1))]} ${lines[$i]}"
+          if grep -qaiE "$re" <<< "$joined"; then
+            printf '%s' "$joined"
+            return 0
+          fi
+          ;;
+      esac
+    fi
+  done
+  return 1
+}
 limit_codex_output_dry() {
-  local out="$1" reset tail
+  local out="$1" reset tail matched
+  local anchor="^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit"
   tail="$(tail -n 20 <<< "$out")"
-  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$tail" || return 1
-  reset="$(limit_codex_reset "$out")"
+  matched="$(_limit_codex_anchor_line "$anchor" "$tail")" || return 1
+  reset="$(limit_codex_reset "$matched")"
   [ -n "$reset" ] || return 1
   printf '%s' "$reset"
   return 0

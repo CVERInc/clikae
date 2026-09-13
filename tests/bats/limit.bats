@@ -292,3 +292,29 @@ _codex_reply_line() {
   run limit_codex_output_dry "ERROR: See docs for You've hit your usage limit. try again at 2:13 AM."
   [ "$status" -ne 0 ]
 }
+
+# --- P2-3 (#81 round-1 fix review): the reset phrase used to come from
+# grep's first hit ANYWHERE in the buffer, not the line that anchored the
+# dry verdict — so an earlier, unrelated "resets …"/"try again at …" in the
+# engine's own prose won the marker over the genuine vendor line.
+
+@test "codex reset: a prose decoy earlier in the buffer does not win over the anchored line's own reset (P2-3)" {
+  _src_limit
+  local out
+  out=$'the schedule resets Monday morning, so try again at 9:00 PM if unsure.\nERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+  [[ "$output" != *"Monday morning"* ]] || false
+}
+
+@test "codex reset: a sentence wrapped across two lines still yields the full, parseable reset (P2-3)" {
+  _src_limit
+  local out reset
+  out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  reset="$(limit_codex_output_dry "$out")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+}
