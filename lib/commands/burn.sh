@@ -2408,23 +2408,13 @@ cmd_burn() {
   local t0=$SECONDS
 
   local cur="$tank" tried="" dried_accts="" reset out rc
-  # Respect --no-reroute and explicit solo launches. Reserve selection retains
-  # the live-session, busy-burn, solo, and shared-account guards above.
-  if [ "$reroute" = 1 ] && ! tank_is_solo "$cli" "$tank" && declare -F usage_read >/dev/null; then
-    local preferred current_fields candidate_fields _cp _cw current_peak _pp _pw preferred_peak
-    usage_read "$cli" "$tank" >/dev/null
-    preferred="$(_burn_next_same_engine "$cli" "" "" "$envvar" "$allow_active")"
-    if [ -n "$preferred" ] && [ "$preferred" != "$tank" ] &&
-       current_fields="$(usage_cached_fields "$cli" "$tank")" &&
-       candidate_fields="$(usage_cached_fields "$cli" "$preferred")"; then
-      IFS=$'\t' read -r _cp _cw current_peak <<< "$current_fields"
-      IFS=$'\t' read -r _pp _pw preferred_peak <<< "$candidate_fields"
-      if [ "${preferred_peak%%.*}" -lt "${current_peak%%.*}" ]; then
-        log_info "Usage headroom: selecting $cli/$preferred before launch."
-        cur="$preferred"
-      fi
-    fi
-  fi
+  # The named tank is the launch target, always (P1-2/P1-3/P1-4, round-1 review).
+  # There used to be a headroom swap here that picked a DIFFERENT tank than the
+  # one the caller named — before the first attempt, outside `$tried`, and
+  # blind to `--to`. Headroom preference now lives in exactly one place:
+  # _burn_next_same_engine's candidate ordering below, which only runs once
+  # `$cur` itself has gone dry (or --to names an explicit next hop, which
+  # always wins outright over any ordering).
   while :; do
     validate_name profile "$cur"
     local dir
