@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 load '../helpers'
+bats_require_minimum_version 1.5.0   # for `run --separate-stderr`
 
 usage_fixture() {
   clikae init claude work
@@ -106,6 +107,7 @@ STUB
 @test "P2-6a: same-account tanks rank as one, using the worst shared reading" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
   source "$CLIKAE_LIB/core/profile_store.sh"
   source "$CLIKAE_LIB/core/adapter_loader.sh"
   source "$CLIKAE_LIB/core/limit.sh"
@@ -132,6 +134,7 @@ STUB
 @test "P2-6b: a same-account sibling is never chosen as the next (consecutive) hop" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
   source "$CLIKAE_LIB/core/profile_store.sh"
   source "$CLIKAE_LIB/core/adapter_loader.sh"
   source "$CLIKAE_LIB/core/limit.sh"
@@ -151,7 +154,13 @@ STUB
   printf '{"emailAddress":"hop@acct"}\n' > "$CLIKAE_HOME/profiles/claude/ppp/.claude.json"
   printf '{"emailAddress":"hop@acct"}\n' > "$CLIKAE_HOME/profiles/claude/qqq/.claude.json"
   write_usage ppp 30; write_usage qqq 5; write_usage rrr 60
-  run _burn_next_same_engine claude ' claude/ppp' '' '' 1
+  # --separate-stderr: this scenario DOES skip a candidate (qqq), which
+  # log_warn's advisory goes to stderr for — bats' `run` merges stdout+
+  # stderr into $output by default, which would make an exact-match
+  # assertion fail on a legitimate log line, not a real bug. Real callers
+  # capture this function via `$(...)`, which only ever sees stdout (see
+  # the function's own header comment); separate-stderr here matches that.
+  run --separate-stderr _burn_next_same_engine claude ' claude/ppp' '' '' 1
   [ "$status" -eq 0 ]
   [ "$output" = rrr ]
 }
@@ -168,9 +177,18 @@ STUB
   for pct in 59 60 90; do
     case "$pct" in 59) expected=G● ;; 60) expected=Y◐ ;; 90) expected=R○ ;; esac
     jq -cn --argjson pct "$pct" --argjson now "$(date +%s)" '{window_pct:$pct,weekly_pct:0,source:"vendor",cached_at:$now}' > "$CLIKAE_HOME/state/usage/claude/work.json"
+    # P2-1 (round-1 review): _home_fuel_dotv now memoizes per (dry,cli,tank)
+    # WITHIN one redraw (reset only by _home_fuel_memo_reset, called once at
+    # the top of each real redraw) — correct in production, where nothing
+    # rewrites a usage cache file mid-redraw, but this loop rewrites the
+    # SAME tank's cache file between calls to simulate the cache changing
+    # over time. Reset the memo each iteration so it reads the fresh file,
+    # exactly as a real caller would after a new redraw begins.
+    _home_fuel_memo_reset
     _home_fuel_dotv '' claude work
     [ "$_FDOT" = "$expected" ]
   done
+  _home_fuel_memo_reset
   CLIKAE_USAGE_TTL=0 _home_fuel_dotv '' claude work
   [ "$_FNOTE" = 'reset passed · unverified' ]
   [ "$_FDOT" = Y◐ ]
