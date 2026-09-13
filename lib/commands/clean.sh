@@ -970,6 +970,15 @@ _clean_burn_sidecar_gc() {
       local -a live=()
       local _ln _sid dropped_stale=0
       for _ln in "${lines[@]}"; do
+        # #74 round-2 P3-4: a line failing home.sh's OWN "valid sidecar line"
+        # definition (_burn_sidecar_line_valid, shared — not a second copy of
+        # the rule) is already dead to the reader; it must be just as dead
+        # here, or a hand-corrupted line sits forever, counted "live" and
+        # occupying one of CLIKAE_BURN_SIDECAR_CAP's slots.
+        if ! _burn_sidecar_line_valid "$_ln"; then
+          dropped_stale=$((dropped_stale + 1))
+          continue
+        fi
         _sid="${_ln%%$'\t'*}"
         # #74 round-2 P2-2: read adapter_find_session's OUTPUT, not its exit
         # code — codex/grok both return 0 on a miss (empty stdout), so the

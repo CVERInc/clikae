@@ -1729,3 +1729,35 @@ _pin_clean_tank_lock_gc_removals() {
   # The known engine's sidecar still got its normal GC pass, unaffected.
   grep -qF "$live_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
 }
+
+# #74 round-2 P3-4: home.sh's _burn_sids_file (the picker's READ side) and
+# clean.sh's GC used two DIFFERENT definitions of "valid sidecar line" — a
+# hand-corrupted line (trailing tab, non-numeric epoch, two fields) was dead
+# to the reader (never hid a session) but ALIVE to the GC (kept forever,
+# occupying one of CLIKAE_BURN_SIDECAR_CAP's slots). Now both read
+# _burn_sidecar_line_valid, home.sh's own definition.
+@test "#74 round-2 P3-4: _clean_burn_sidecar_gc drops a malformed line even when its first field names a real, live transcript" {
+  _source_clean
+  clikae init claude T1
+  local live_sid="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" other_sid="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  # $other_sid ALSO has a real, live transcript — so the naive "everything
+  # before the first tab" extraction (the old GC's only check) finds it and
+  # calls the line "live". The line itself is malformed (missing 3rd field),
+  # so home.sh's own reader already treats it as garbage; the GC must too.
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$other_sid.jsonl"
+  {
+    printf '%s\trun-1\t1700000000\n' "$live_sid"
+    printf '%s\trun-2\n' "$other_sid"
+  } > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ -f "$f" ]
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$other_sid" "$f"
+}

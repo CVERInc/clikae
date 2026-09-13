@@ -161,14 +161,22 @@ CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
 # which is what actually fixes the asymptotics; this function only owns the
 # store read so both callers read it exactly the same way. Caller removes the
 # file when done.
+# #74 round-2 P3-4: the ONE definition of "valid sidecar line", shared with
+# clean.sh's GC — a line failing this must be dead to BOTH: never hides a
+# session here, never counted "live" (occupying a CLIKAE_BURN_SIDECAR_CAP
+# slot forever) there. Mirrors resume.sh's old per-line regex exactly
+# ($'^[^\t]+\t[^\t]+\t[0-9]+$') — a partial/corrupt record must never hide a
+# real (human) session.
+_BURN_SIDECAR_VALID_AWK='NF==3 && $1!="" && $2!="" && $3 ~ /^[0-9]+$/'
+_burn_sidecar_line_valid() {
+  printf '%s' "$1" | awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{f=1} END{exit(!f)}'
+}
+
 _burn_sids_file() {
   local base="$CLIKAE_HOME/state/burn-sessions" out
   [ -d "$base" ] || return 1
   out="$(mktemp "${TMPDIR:-/tmp}/clikae-burn-sids.XXXXXX")" || return 1
-  # NF==3 + all three fields checked mirrors resume.sh's old per-line regex
-  # exactly ($'^[^\t]+\t[^\t]+\t[0-9]+$') — a partial/corrupt record must
-  # never hide a real (human) session.
-  awk -F'\t' 'NF==3 && $1!="" && $2!="" && $3 ~ /^[0-9]+$/ {print $1}' "$base"/*/* 2>/dev/null \
+  awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"' {print $1}' "$base"/*/* 2>/dev/null \
     | LC_ALL=C sort -u > "$out"
   if [ -s "$out" ]; then
     printf '%s\n' "$out"
