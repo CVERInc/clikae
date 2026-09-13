@@ -225,13 +225,16 @@ STUB
 
 # --- #33: per-engine transcript shapes (adapter_handoff_extract) -----------
 #
-# codex wraps a turn as a "response item" (OpenAI Responses API shape):
-# `role` is present but `content` is an ARRAY of typed parts, not a string —
-# the claude-shaped `"role":"user","content":"` anchor never matches it.
-# grok's chat_history.jsonl has no `role` key at all: the message kind IS
-# the top-level `type` ("user"/"assistant"), with the same array-of-parts
-# `content`. Both fixtures also carry one garbage line (malformed JSON) to
-# prove a bad line is skipped, not fatal.
+# codex's ASSISTANT turns wrap as a "response item" (OpenAI Responses API
+# shape): `role` is present but `content` is an ARRAY of typed parts, not a
+# string — the claude-shaped `"role":"user","content":"` anchor never
+# matches it. codex's USER turns are event_msg/user_message (round-1 review
+# P2-2 — see codex.sh's own comment: a response_item/role:user turn is
+# machine-injected context, not something the human typed; a separate test
+# below covers that filtering). grok's chat_history.jsonl has no `role` key
+# at all: the message kind IS the top-level `type` ("user"/"assistant"),
+# with the same array-of-parts `content`. Both fixtures also carry one
+# garbage line (malformed JSON) to prove a bad line is skipped, not fatal.
 
 _seed_codex_transcript() {
   local profile="$1" dir="$2" sid="$3"
@@ -239,15 +242,15 @@ _seed_codex_transcript() {
   mkdir -p "$d"
   {
     echo '{"timestamp":"2026-09-10T12:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
-    echo '{"timestamp":"2026-09-10T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex first real prompt"}]}}'
+    echo '{"timestamp":"2026-09-10T12:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"codex first real prompt"}}'
     echo '{"timestamp":"2026-09-10T12:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex working note"}]}}'
     echo 'THIS LINE IS NOT JSON AT ALL {{{ garbage SHOULD-NOT-APPEAR'
-    echo '{"timestamp":"2026-09-10T12:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex second real prompt"}]}}'
+    echo '{"timestamp":"2026-09-10T12:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"codex second real prompt"}}'
     echo '{"timestamp":"2026-09-10T12:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex last assistant note"}]}}'
   } > "$d/rollout-2026-09-10T12-00-00-$sid.jsonl"
 }
 
-@test "#33 handoff on codex extracts prompts+notes from the response_item shape (malformed line skipped, not fatal)" {
+@test "#33 handoff on codex extracts prompts (user_message) + notes (response_item) (malformed line skipped, not fatal)" {
   clikae init codex work
   local work="$TEST_HOME/work-codex"; mkdir -p "$work"
   _seed_codex_transcript work "$work" "11111111-1111-1111-1111-111111111111"
@@ -273,6 +276,73 @@ _seed_codex_transcript() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"codex second real prompt"* ]] || false
   [[ "$output" == *"raw extract"* ]] || false
+}
+
+_seed_codex_whitespace_transcript() {
+  # Round-1 review P1-1: the "confirmed against a real rollout" shape
+  # (tests/bats/limit-codex-status.bats:215, lib/core/limit.sh's whole codex
+  # family) writes a SPACE after every colon — Python's json.dumps default,
+  # not the compact form the #33 fixture above uses. A whitespace-blind
+  # extractor matches zero lines on exactly this shape and stays silent
+  # about it (that was the whole bug); this fixture proves the fix without
+  # retiring the compact-JSON coverage above.
+  #
+  # session_meta stays COMPACT on purpose: `_codex_meta_field` (the
+  # unrelated cwd/id lookup `_codex_rollouts_for_cwd` uses to find this file
+  # at all) is its own, pre-existing, literal-quote parser — spacing IT is a
+  # real gap too, but a different one, out of scope for this fix. Keeping it
+  # compact here isolates the test to the thing P1-1 actually changed:
+  # adapter_handoff_extract's own anchor/key matching, below.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/12"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-12T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp": "2026-09-12T00:00:01.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "spaced codex prompt"}}'
+    echo '{"timestamp": "2026-09-12T00:00:02.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "spaced codex note"}]}}'
+  } > "$d/rollout-2026-09-12T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-1 P1-1: codex handoff survives real-rollout JSON whitespace (space after every colon)" {
+  clikae init codex spacedwork
+  local work="$TEST_HOME/work-codex-spaced"; mkdir -p "$work"
+  _seed_codex_whitespace_transcript spacedwork "$work" "55555555-5555-5555-5555-555555555555"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/spacedwork" \
+    run clikae handoff codex spacedwork --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spaced codex prompt"* ]] || false
+  [[ "$output" == *"spaced codex note"* ]] || false
+}
+
+_seed_codex_injected_transcript() {
+  # Round-1 review P2-2: a response_item/role:user turn is NOT the same as
+  # something the human typed — codex also records machine-injected context
+  # that way. Two injected turns ahead of one real (event_msg/user_message)
+  # prompt: the digest must show ONLY the human line.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/11"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd=/x shell=bash</environment_context>"}]}}'
+    echo '{"timestamp":"2026-09-11T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>AGENTS.md contents here</user_instructions>"}]}}'
+    echo '{"timestamp":"2026-09-11T00:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"the actual human prompt"}}'
+  } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-1 P2-2: codex handoff drops injected context turns, keeps only the human user_message" {
+  clikae init codex work2
+  local work="$TEST_HOME/work-codex-injected"; mkdir -p "$work"
+  _seed_codex_injected_transcript work2 "$work" "44444444-4444-4444-4444-444444444444"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work2" run clikae handoff codex work2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the actual human prompt"* ]] || false
+  [[ "$output" != *"environment_context"* ]] || false
+  [[ "$output" != *"user_instructions"* ]] || false
+  [[ "$output" != *"AGENTS.md"* ]] || false
+  [[ "$output" != *"cwd=/x"* ]] || false
 }
 
 _seed_grok_transcript() {
@@ -310,6 +380,34 @@ _seed_grok_transcript() {
   [[ "$output" == *"raw extract"* ]] || false
 }
 
+_seed_grok_whitespace_transcript() {
+  # Round-1 review P1-1: no real grok chat_history.jsonl was available to
+  # confirm it writes spaced JSON (unlike codex's rollout, which is
+  # "confirmed against a real rollout" — see codex.sh's own comment), but
+  # tolerating a space after the colon costs nothing and keeps this the
+  # SAME idiom as every other whitespace-tolerant scanner in the repo.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
+  mkdir -p "$d"
+  printf '{"info": {"id": "%s", "cwd": "%s"}, "generated_title": "test"}\n' "$sid" "$dir" > "$d/summary.json"
+  {
+    echo '{"type": "user", "content": [{"type": "text", "text": "spaced grok prompt"}]}'
+    echo '{"type": "assistant", "content": [{"type": "text", "text": "spaced grok note"}]}'
+  } > "$d/chat_history.jsonl"
+}
+
+@test "#33 round-1 P1-1: grok handoff survives JSON whitespace (space after every colon)" {
+  clikae init grok spacedwork
+  local work="$TEST_HOME/work-grok-spaced"; mkdir -p "$work"
+  _seed_grok_whitespace_transcript spacedwork "$work" "66666666-6666-6666-6666-666666666666"
+  cd "$work"
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/spacedwork" \
+    run clikae handoff grok spacedwork --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spaced grok prompt"* ]] || false
+  [[ "$output" == *"spaced grok note"* ]] || false
+}
+
 @test "#33 handoff on codex survives a 20 kB single-line transcript (no truncation crash/hang)" {
   clikae init codex work
   local work="$TEST_HOME/work-codex-20k"; mkdir -p "$work"
@@ -319,7 +417,9 @@ _seed_grok_transcript() {
   local pad; pad="$(head -c 20000 /dev/zero | tr '\0' 'x')"
   {
     echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
-    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"START-MARKER-'"$pad"'-END-MARKER"}]}}'
+    # user_message (round-1 P2-2 shape, not response_item) so this still
+    # exercises the actual escape-scanning loop the "user" branch runs.
+    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"START-MARKER-'"$pad"'-END-MARKER"}}'
   } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
   cd "$work"
   CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work

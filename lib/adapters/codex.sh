@@ -222,45 +222,99 @@ adapter_transcript_path() {
   printf '%s\n' "$f"
 }
 
-# Optional hook (#33): the transcript SHAPE belongs to the adapter. Prints one
-# line per message of <role> ("user"/"assistant"), text only, newest last —
-# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+# _CODEX_USER_MESSAGE_TYPE_RE — the ONE anchor for "this line records
+# something the human actually typed", shared by adapter_title_for_file
+# (below) and adapter_handoff_extract's "user" branch, so the two functions
+# stop disagreeing about what a codex human prompt looks like (round-1
+# review P2-2). Codex writes a human-typed turn as an event_msg whose
+# payload.type is "user_message", carrying the prompt in "message" — see the
+# comment on adapter_handoff_extract's "user" branch below for why a
+# response_item/role:user turn is NOT the same thing.
 #
-# A codex rollout wraps a turn as a "response item" (the OpenAI Responses API
-# shape), not the flat claude `"role":"…","content":"…"` string handoff.sh's
-# default extraction anchors on:
+# ` *` (a literal space, starred), not `[ \t]*`/`[[:space:]]*`: a real
+# rollout writes `"type": "user_message"` (space after the colon — every
+# codex event on this machine does, confirmed by `lib/core/limit.sh`'s whole
+# codex family: :281, :322, :1160, :1183, and
+# tests/bats/limit-codex-status.bats:215's "confirmed against a real
+# rollout" fixture). Matching that exact idiom keeps this the SAME
+# whitespace convention as every other codex scanner in the repo, not a
+# fourth one (round-1 review P1-1).
+_CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
+
+# Optional hook (#33, P1-1 + P2-2 fixes from the round-1 review): the
+# transcript SHAPE belongs to the adapter. Prints one line per MESSAGE of
+# <role> ("user"/"assistant") — several text parts in one message join with
+# a space onto one line, unlike claude.sh's twin, which prints one line per
+# text BLOCK instead (round-1 review P3-1; docs/adding-an-adapter.md spells
+# out the difference) — text only, newest last — used by `clikae handoff`'s
+# digest (lib/core/handoff.sh, _handoff_extract).
+#
+# ASSISTANT: a codex rollout wraps an assistant turn as a "response item"
+# (the OpenAI Responses API shape), not the flat claude
+# `"role":"…","content":"…"` string handoff.sh's default extraction anchors
+# on:
+#   {"type":"response_item","payload":{"type":"message","role":"assistant",
+#     "content":[{"type":"output_text","text":"…"}]}}
+# `role` IS present, but `content` is an ARRAY of typed parts, so the
+# claude-shaped grep matches zero lines on a real codex tank — that was the
+# original #33 bug (`grep -ac '"role":"user","content":"' <rollout>` = 0).
+#
+# USER (P2-2): a response_item/role:user turn is NOT necessarily something
+# the human typed — codex also records MACHINE-INJECTED context that way,
+# e.g.
 #   {"type":"response_item","payload":{"type":"message","role":"user",
-#     "content":[{"type":"input_text","text":"…"}]}}
-# Assistant turns are the same shape with role":"assistant" and "output_text"
-# parts. `role` IS present, but `content` is an ARRAY of typed parts, so the
-# claude-shaped grep matches zero lines on a real codex tank — that's the
-# whole bug (#33: `grep -ac '"role":"user","content":"' <rollout>` = 0).
+#     "content":[{"type":"input_text","text":"<environment_context>cwd=…
+#     </environment_context>"}]}}
+#   {"type":"response_item","payload":{"type":"message","role":"user",
+#     "content":[{"type":"input_text","text":"<user_instructions>AGENTS.md
+#     contents here</user_instructions>"}]}}
+# The #33 round-1 extractor anchored on response_item/role:user for BOTH
+# roles, so it surfaced this injected context as "Recent prompts" instead of
+# anything the human actually typed — on a short session (injected turns not
+# yet pushed out of the `tail` window by real ones) the brief showed NO real
+# prompt at all (round-1 review, Hunt/P2-2). adapter_title_for_file below has
+# always anchored on the right shape for a human prompt — event_msg /
+# user_message — so this branch now shares that SAME anchor
+# (_CODEX_USER_MESSAGE_TYPE_RE) instead of a second, disagreeing guess.
+# `<environment_context>` / `<user_instructions>` are ALSO stripped
+# defensively below — belt-and-suspenders, the same spirit as claude's own
+# four filters for role:user noise (toolUseResult/isMeta/isSidechain/
+# `<command-*>`) — in case a future codex version ever wraps injected text
+# inside a user_message turn too.
 #
-# awk, one pass over the whole file (no bash-4+ line-slurping builtin needed),
-# using index()/substr() rather than a regex: the nested-star pattern that
-# hangs bash's own `[[ =~ ]]` on a long line (see adapter_title_for_file
-# above) is exactly the trap a JSON-string scanner has to avoid, and
-# index()/substr() can't backtrack. A "text":"…" value's own escaped quote
-# (`\"`) is honoured while hunting for the CLOSING quote, so a value
-# containing one is never truncated.
+# awk, one pass over the whole file (no bash-4+ line-slurping builtin
+# needed), using index()/substr() for the VALUE scan rather than a regex:
+# the nested-star pattern that hangs bash's own `[[ =~ ]]` on a long line
+# (see adapter_title_for_file above) is exactly the trap a JSON-string
+# scanner has to avoid, and index()/substr() can't backtrack. match() is
+# still used for the fixed anchor/key patterns — safe, since each is a
+# literal string either side of a single, non-nested ` *` (no ReDoS risk).
+# A "text"/"message" value's own escaped quote (`\"`) is honoured while
+# hunting for the CLOSING quote, so a value containing one is never
+# truncated.
 #
 # Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
 # has always unescaped, never \uXXXX (parity first; see handoff.sh's own
 # comment on this — a \uXXXX decoder is a follow-up, not a regression, since
 # grep/sed/awk alone can't safely decode one without jq/python).
+#
+# Silent failure is not allowed (round-1 review P1-1): a real-tank miss on a
+# whitespace-bearing rollout must be VISIBLE, not indistinguishable from "this
+# transcript genuinely has no <role> turns" — so a zero-match result prints
+# ONE line to stderr. handoff.sh's _handoff_extract no longer swallows a
+# hook's stderr (see its own comment), so this reaches the user.
 adapter_handoff_extract() {
   local t="$1" role="$2"
   [ -n "$t" ] && [ -f "$t" ] || return 0
   case "$role" in user|assistant) ;; *) return 0 ;; esac
-  awk -v role="$role" '
-    index($0, "\"type\":\"response_item\"") == 0 { next }
-    index($0, "\"role\":\"" role "\"") == 0 { next }
-    {
-      rest = $0; key = "\"text\":\""; klen = length(key); out = ""
-      while (1) {
-        pos = index(rest, key)
-        if (pos == 0) break
-        rest = substr(rest, pos + klen)
+  local out
+  if [ "$role" = user ]; then
+    out="$(awk -v type_re="$_CODEX_USER_MESSAGE_TYPE_RE" '
+      $0 !~ type_re { next }
+      {
+        rest = $0; keyre = "\"message\": *\""
+        if (!match(rest, keyre)) next
+        rest = substr(rest, RSTART + RLENGTH)
         seg = ""; i = 1; n = length(rest)
         while (i <= n) {
           c = substr(rest, i, 1)
@@ -268,14 +322,43 @@ adapter_handoff_extract() {
           if (c == "\"") { i++; break }
           seg = seg c; i++
         }
-        out = (out == "" ? seg : out " " seg)
-        rest = substr(rest, i)
+        if (seg != "") print seg
       }
-      if (out != "") print out
-    }
-  ' "$t" 2>/dev/null \
-    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-    | grep -av '^[[:space:]]*$' || true
+    ' "$t" 2>/dev/null \
+      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+      | grep -avE '^[[:space:]]*<(environment_context|user_instructions)' \
+      | grep -av '^[[:space:]]*$' || true)"
+  else
+    out="$(awk -v role="$role" '
+      BEGIN { role_re = "\"role\": *\"" role "\"" }
+      $0 !~ /"type": *"response_item"/ { next }
+      $0 !~ role_re { next }
+      {
+        rest = $0; keyre = "\"text\": *\""; res = ""
+        while (1) {
+          if (!match(rest, keyre)) break
+          rest = substr(rest, RSTART + RLENGTH)
+          seg = ""; i = 1; n = length(rest)
+          while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
+            if (c == "\"") { i++; break }
+            seg = seg c; i++
+          }
+          res = (res == "" ? seg : res " " seg)
+          rest = substr(rest, i)
+        }
+        if (res != "") print res
+      }
+    ' "$t" 2>/dev/null \
+      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+      | grep -av '^[[:space:]]*$' || true)"
+  fi
+  if [ -z "$out" ]; then
+    printf 'handoff: codex extractor matched 0 %s lines in %s\n' "$role" "$t" >&2
+    return 0
+  fi
+  printf '%s\n' "$out"
 }
 
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
@@ -322,6 +405,13 @@ adapter_session_title() {
 # No customTitle-equivalent here: codex's rollout format has no user-rename
 # event to prefer (checked 2026-07-12 alongside claude.sh's customTitle fix;
 # nothing invented — first user_message stays the only title source).
+#
+# Anchors on _CODEX_USER_MESSAGE_TYPE_RE, the SAME regex
+# adapter_handoff_extract's "user" branch uses above — one model of "what a
+# codex human prompt looks like" shared by both (round-1 review P2-2), not
+# two independent guesses. Bounded to the first 100 lines, so the
+# `[[ =~ ]]` nested-star risk that pushed the whole-file extractor onto
+# awk/index()/substr() doesn't apply here.
 adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
@@ -331,7 +421,7 @@ adapter_title_for_file() {
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
     [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"type":"user_message"'* ]] && [[ $line_in =~ $re_msg ]]; then
+    if [[ "$line_in" =~ $_CODEX_USER_MESSAGE_TYPE_RE ]] && [[ $line_in =~ $re_msg ]]; then
       title_in="${BASH_REMATCH[1]}"
       break
     fi

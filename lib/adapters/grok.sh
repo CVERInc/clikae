@@ -219,9 +219,13 @@ EOF
   printf '%s\n' "$t"
 }
 
-# Optional hook (#33): the transcript SHAPE belongs to the adapter. Prints one
-# line per message of <role> ("user"/"assistant"), text only, newest last —
-# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+# Optional hook (#33, P1-1 fix from the round-1 review): the transcript SHAPE
+# belongs to the adapter. Prints one line per MESSAGE of <role>
+# ("user"/"assistant") — several text parts in one message join with a space
+# onto one line, unlike claude.sh's twin, which prints one line per text
+# BLOCK instead (round-1 review P3-1; docs/adding-an-adapter.md spells out
+# the difference) — text only, newest last — used by `clikae handoff`'s
+# digest (lib/core/handoff.sh, _handoff_extract).
 #
 # grok's chat_history.jsonl has NO `role` key at all — the message kind IS
 # the top-level `type`:
@@ -232,22 +236,40 @@ EOF
 # of typed parts on top of that — the same two-part gap codex has, different
 # keys.
 #
-# Same awk shape as codex.sh's twin (one pass, index()/substr() — no regex,
-# so a pathological line can't hang it) and the same escape parity note: only
-# \n \t \" \\ are unescaped, matching the claude path; \uXXXX is left as a
-# documented follow-up, not decoded here either.
+# Same awk shape as codex.sh's twin (one pass, index()/substr() for the VALUE
+# scan — no regex there, so a pathological line can't hang it) and the same
+# escape parity note: only \n \t \" \\ are unescaped, matching the claude
+# path; \uXXXX is left as a documented follow-up, not decoded here either.
+#
+# Whitespace (round-1 review P1-1): the anchor/key patterns below tolerate a
+# space after the colon (` *`, the SAME idiom `lib/core/limit.sh`'s whole
+# codex family and codex.sh's twin of this function use — see codex.sh's
+# comment for the real-rollout evidence). No real grok `chat_history.jsonl`
+# was available to confirm it writes spaced JSON the way codex does — issue
+# #33's own excerpt and tests/bats/adapters/grok.bats:44 both show it
+# compact — but tolerating the space costs nothing and keeps this hook from
+# being the one scanner in the codex/grok family that silently breaks if
+# grok's writer ever does add one (see `_grok_json_str` above, which already
+# tolerates `[[:space:]]*` for grok's OTHER file, summary.json).
+#
+# Silent failure is not allowed (round-1 review P1-1): a zero-match result
+# prints ONE line to stderr instead of staying quiet, so a real-tank miss is
+# visible rather than indistinguishable from "this transcript genuinely has
+# no <role> turns". handoff.sh's _handoff_extract no longer swallows a
+# hook's stderr (see its own comment), so this reaches the user.
 adapter_handoff_extract() {
   local t="$1" role="$2"
   [ -n "$t" ] && [ -f "$t" ] || return 0
   case "$role" in user|assistant) ;; *) return 0 ;; esac
-  awk -v role="$role" '
-    index($0, "\"type\":\"" role "\"") == 0 { next }
+  local out
+  out="$(awk -v role="$role" '
+    BEGIN { type_re = "\"type\": *\"" role "\"" }
+    $0 !~ type_re { next }
     {
-      rest = $0; key = "\"text\":\""; klen = length(key); out = ""
+      rest = $0; keyre = "\"text\": *\""; res = ""
       while (1) {
-        pos = index(rest, key)
-        if (pos == 0) break
-        rest = substr(rest, pos + klen)
+        if (!match(rest, keyre)) break
+        rest = substr(rest, RSTART + RLENGTH)
         seg = ""; i = 1; n = length(rest)
         while (i <= n) {
           c = substr(rest, i, 1)
@@ -255,14 +277,19 @@ adapter_handoff_extract() {
           if (c == "\"") { i++; break }
           seg = seg c; i++
         }
-        out = (out == "" ? seg : out " " seg)
+        res = (res == "" ? seg : res " " seg)
         rest = substr(rest, i)
       }
-      if (out != "") print out
+      if (res != "") print res
     }
   ' "$t" 2>/dev/null \
     | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-    | grep -av '^[[:space:]]*$' || true
+    | grep -av '^[[:space:]]*$' || true)"
+  if [ -z "$out" ]; then
+    printf 'handoff: grok extractor matched 0 %s lines in %s\n' "$role" "$t" >&2
+    return 0
+  fi
+  printf '%s\n' "$out"
 }
 
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
