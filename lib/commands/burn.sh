@@ -475,6 +475,9 @@ _burn_size() {
 # this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
 # overrides the default (7); 0 disables the sweep (kept forever, old
 # behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+# Also sweeps `watch-github-*` run dirs (P3-3, 2026-09-13 fix-round-3
+# review): those had ONLY _wg_runs_rotate's 200-directory count cap, no
+# day-based retention — same directory, same shape, same policy belongs.
 _burn_sweep_old_logs() {
   local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
   case "$days" in ''|*[!0-9]*) return 0 ;; esac
@@ -483,7 +486,7 @@ _burn_sweep_old_logs() {
   local d
   while IFS= read -r -d '' d; do
     rm -rf "$d" 2>/dev/null || true
-  done < <(find "$base" -maxdepth 1 -type d -name 'burn-*' -mtime "+$days" -print0 2>/dev/null)
+  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*' \) -mtime "+$days" -print0 2>/dev/null)
 }
 
 # Capture evidence beside the engine, before publishing completion. Consumers

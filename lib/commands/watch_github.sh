@@ -744,7 +744,10 @@ _wg_build_summary() {
 # --once overlapping) would otherwise collide on the SAME directory name —
 # a counter suffix makes every run's own directory unique instead of the
 # second one silently overwriting the first. Rotated to the newest 200
-# afterward (_wg_runs_rotate) — this directory has no other GC.
+# afterward (_wg_runs_rotate) — plus burn's own day-based sweep now also
+# globs these dirs (P3-3, 2026-09-13 fix-round-3 review — see
+# _burn_sweep_old_logs in burn.sh), run from `clikae burn` OR `clikae
+# clean`, whichever happens first.
 #
 # `artifact` (P3-11): THIS poll's own events, written to
 # <run_dir>/events.jsonl — not $CLIKAE_HOME/logs/watch-github-<org>/
@@ -776,10 +779,11 @@ _wg_status_write() {
 }
 
 # _wg_runs_rotate <org> -> keep only the newest 200 watch-github-<org>-*
-# run directories under $HOME/.clikae/logs (P3-10) — this directory has no
-# other retention/GC, unlike burn's own (lib/commands/burn.sh's
-# CLIKAE_BURN_LOG_RETENTION_DAYS sweep, which only ever globs `burn-*`).
-# Sorted by mtime (not name — no assumption about epoch digit width).
+# run directories under $HOME/.clikae/logs (P3-10) — a count-based floor
+# independent of burn.sh's own day-based sweep (_burn_sweep_old_logs, which
+# now also globs `watch-github-*`, P3-3), which only runs when `clikae
+# burn` or `clikae clean` actually gets invoked, not on every poll. Sorted
+# by mtime (not name — no assumption about epoch digit width).
 _wg_runs_rotate() {
   local org="$1" base="$HOME/.clikae/logs" d keep=200 i=0
   [ -d "$base" ] || return 0

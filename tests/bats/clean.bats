@@ -433,6 +433,24 @@ PSSTUB
   [ -f "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" ]
 }
 
+# P3-3 (2026-09-13 fix-round-3 review): `clikae clean` had NO notion of
+# ~/.clikae/logs at all — burn's own day-based retention sweep
+# (_burn_sweep_old_logs) only ever ran as a side effect of `clikae burn`
+# itself. clean.sh already sources burn.sh (for the tank-lock GC) — wired
+# in here too, real deletion only outside --dry-run.
+@test "clean (P3-3): a stale watch-github-* run directory is swept by a plain 'clikae clean', not just 'clikae burn'" {
+  mkdir -p "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  printf '{"ok":true}' > "$HOME/.clikae/logs/watch-github-CVERInc-99999/status.json"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]   # --dry-run: not yet
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]
+}
+
 @test "clean --help documents the sections and axes" {
   run clikae clean --help
   [ "$status" -eq 0 ]
