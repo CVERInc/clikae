@@ -198,6 +198,27 @@ _hops=$((_hops + 1))
 _CLIKAE_TMUX_SHIM_HOPS="$_hops"
 export _CLIKAE_TMUX_SHIM_HOPS
 
+# 🔴 A HARD CEILING, OR "PREFER A BINARY" CAN ITSELF LOOP FOREVER. Measured:
+# shim + exactly one OTHER guard (tests/stubs/tmux-guard) + NO real tmux
+# binary anywhere on PATH (GitHub's macos runner; also this shim's own
+# reefbox test rig with tmux hidden) hangs indefinitely without this check.
+# Why: hop 2 correctly starts preferring a binary, but when none exists at
+# all, its only candidate is the SAME other guard every time — which, using
+# its own unmodified "skip only literally me" logic, cannot tell this shim
+# apart from a real tmux and bounces straight back, forever. No amount of
+# hops changes that outcome, so past a small bound this stops trying
+# candidates altogether and fails the same way it would if PATH were empty
+# — a fast, clean 127 instead of a hang. `clikae switch` already falls back
+# to a direct (non-tmux) run when the tmux path fails outright (P1-1 broke
+# that fallback for exactly this shape by hanging instead of failing);
+# 4 hops is generous for any real chain (host guard + this shim + one test
+# guard resolves in <=2) and small enough to fail fast in the pathological
+# one.
+if [ "$_hops" -gt 4 ]; then
+  printf 'tmux-guard: no real tmux found on PATH past this shim (gave up after %s hops)\n' "$_hops" >&2
+  exit 127
+fi
+
 _real_tmux=""
 _fallback_tmux=""
 _ifs_save="$IFS"
