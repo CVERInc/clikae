@@ -588,6 +588,19 @@ _resume_pick() {
       else
         export CLIKAE_RESUME_ALL=1
       fi
+      # #74 round-1 P2-4: `a` used to skip the terminal-leaving cleanup `c`
+      # (right below) always does, going straight back to _resume_picker's
+      # rescan while still in the alt screen with `stty -echo` in effect. Not
+      # theoretical: toggling --all OFF on a store that is now all-burn makes
+      # `sessions` empty, which takes the "No sessions to resume yet" +
+      # `exit 0` path a few dozen lines down — those lines got printed INSIDE
+      # the alt screen, then the EXIT trap's `_home_tty_leave` wiped the whole
+      # screen on the way out, and the user saw nothing happen at all. Leave
+      # the alt screen the same way `c` does BEFORE rescanning, so anything
+      # the rescan prints (that message included) lands on the real screen.
+      { exec 3>&-; } 2>/dev/null || true
+      _home_tty_leave; trap - EXIT INT TERM
+      unset -f _handle_key
       _RESUME_PICK_AGAIN=1
       return 0
     fi
