@@ -2764,3 +2764,51 @@ STUB
   [[ "$output" == *'"ok":true'* ]] || false
   [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }
+# --- P2-2 (round-2 fix review, this PR): the fast-failure `reason` field's
+# redaction used _burn_redact_full's DEFAULT replacement — an empty string —
+# and only ever looked at stderr's first line. When that first line IS, in
+# its entirety, the thing being redacted (codex echoing the whole prompt
+# back as its own first stderr line), redacting it to "" and stopping left
+# `reason` empty, even though a real diagnostic sat right there on the next
+# line.
+
+@test "burn #99/P2-2 fix2: a stderr first line that IS the prompt does not empty reason — the real diagnostic on the next line survives" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" >&2
+printf 'error: real diagnostic follows\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [ -n "$reason_field" ]
+  [ "$reason_field" != '"reason":""' ]
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" == *'real diagnostic follows'* ]] || { echo "$reason_field"; false; }
+}
+
+@test "burn #99/P2-2 fix2: when every stderr line is placeholder or blank, reason falls back to a plain message — never empty or null" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" >&2
+printf '\n' >&2
+printf '%s\n' "${@: -1}" >&2
+exit 9
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [ -n "$reason_field" ]
+  [ "$reason_field" != '"reason":""' ]
+  [[ "$reason_field" == *'engine exited rc=9, output redacted'* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+}

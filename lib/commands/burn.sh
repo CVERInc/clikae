@@ -2708,7 +2708,6 @@ KV
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       local failure_reason="no fresh artifact and no limit" stderr_first=""
       if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
-        stderr_first="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$stderr_file")"
         # P3-2 (#81 round-1 fix review): this used to go straight from the
         # RAW stderr line to _burn_sanitize_reason (which only escapes
         # control bytes for valid JSON, never redacts) — an engine that
@@ -2718,9 +2717,44 @@ KV
         # above already redacts the SAME stderr through _burn_redact_full
         # for classification; give `reason` the same treatment before it
         # is sanitized for JSON and truncated.
-        stderr_first="$(_burn_redact_full "$stderr_first")"
-        stderr_first="$(_burn_sanitize_reason "$stderr_first")"
-        failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+        #
+        # P2-2 (round-2 fix review, this PR): that fix used _burn_redact_full's
+        # DEFAULT replacement — an empty string — and only ever looked at
+        # stderr's FIRST line. When that first line IS, in its entirety, the
+        # thing being redacted (codex echoing the whole prompt back as its
+        # own first stderr line is one of the "several failure shapes" the
+        # comment above already names), redacting it to "" and stopping left
+        # `reason` an empty string — not the missing-leak the redaction
+        # promised, but a genuinely uninformative field (and, on the #99
+        # shape — a >128 KiB prompt that makes _burn_redact_full's own perl
+        # invocation fail closed and hand back "" regardless of content —
+        # every attempt looks "entirely redacted" even though the real
+        # stderr never leaked at all, worked, or was even touched). Redact
+        # with the SAME "[prompt: …]" placeholder burn.sh:385 already uses
+        # for the human-facing tail (never a bare "", which is
+        # indistinguishable from "nothing was here"), then walk the
+        # redacted lines — not just the first — and keep the first one that
+        # ISN'T entirely that placeholder (or blank): the prompt-echo line
+        # is skipped, a real diagnostic on the next line is kept. If every
+        # line is placeholder or blank (a stderr that is ONLY the prompt,
+        # or the #99 shape above), say so in plain words — `reason` must
+        # never be "" or null.
+        local _reason_placeholder="" _reason_redacted _reason_candidate
+        [ -n "${saved_prompt:-}" ] && _reason_placeholder="[prompt: $saved_prompt]"
+        _reason_redacted="$(_burn_redact_full "$(head -c "$_BURN_REDACT_TAIL_BYTES" "$stderr_file")" "$_reason_placeholder")"
+        while IFS= read -r _reason_candidate; do
+          _reason_candidate="$(printf '%s' "$_reason_candidate" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$_reason_candidate" ] || continue
+          [ -n "$_reason_placeholder" ] && [ "$_reason_candidate" = "$_reason_placeholder" ] && continue
+          stderr_first="$_reason_candidate"
+          break
+        done <<< "$_reason_redacted"
+        if [ -n "$stderr_first" ]; then
+          stderr_first="$(_burn_sanitize_reason "$stderr_first")"
+          failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+        else
+          failure_reason="engine exited rc=$rc, output redacted"
+        fi
       fi
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
       _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
