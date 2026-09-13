@@ -61,17 +61,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `clikae watch github [--org <org>] [--interval <dur>] [--once]` — a second
-  source under `watch` (alongside the existing dry-tank watcher): polls
-  GitHub's search API for issues/PRs opened by others, replies, and
-  @mentions, and turns each new one into a wake line (`github
-  <org>/<repo>#<n> opened|comment|mention by <login>: <title>`), printed live
-  and appended as flat JSON to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl`
-  so a cron job or a Stop hook calling `--once` has something durable to
-  read. A cursor + capped seen-file de-dupe by (issue number, updated
-  timestamp); on a 403/429 the interval backs off ×2 up to 1h without
-  advancing past an unread event. No daemon, no tmux window of its own — a
-  foreground loop (Ctrl-C to stop) or a one-shot poll (#46).
+- `clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]`
+  — a second source under `watch` (alongside the existing dry-tank watcher):
+  polls GitHub's search API for every issue/PR update in an org — including
+  replies on issues YOU opened — plus @mentions, and turns each new one into
+  a wake line (`github <org>/<repo>#<n> opened|comment|review|activity|mention
+  by <login>: <title>`), printed live and appended as flat JSON to
+  `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a durable trail. The
+  actual wake a cron job or Stop hook calling `--once` consumes: every poll
+  finding ≥1 new event writes a burn-status-shaped `status.json` to
+  `$HOME/.clikae/logs/watch-github-<org>-<epoch>/` — burn's own directory
+  layout, so `clikae wait watch-github-<org>-<epoch>` (the run_id printed
+  inside the file) or `clikae wait --latest watch-github-<org>` (no epoch
+  needed — see below) resolves and blocks on it exactly like a burn.
+  Self-exclusion is per EVENT ACTOR, checked against `issues/<n>/timeline`
+  for any issue/PR already seen before (bounded to 50 such lookups/poll,
+  newest-first, stopped early under GitHub's own rate limit; a candidate
+  past that bound is still reported, as `by unknown`, never dropped) — never
+  against who opened the issue, so a collaborator's reply on your own issue
+  reaches you. A cursor + capped seen-file de-dupe by (repo, issue number,
+  updated timestamp); a poll cut short by the 5-page/query cap pins the
+  cursor to the OLDEST row it actually read, not the newest, and says so
+  ("truncated: continuing next poll"). On a genuine rate limit (429, a 403
+  the response attributes to it, or a 5xx) the interval backs off ×2 up to
+  1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
+  permanent — retried once, then reported, never backed off. No daemon, no
+  tmux window of its own — a foreground loop (Ctrl-C to stop) or a one-shot
+  poll (#46).
+- `clikae wait` gains `--latest <prefix>`: resolves to the newest (by mtime)
+  run directory under `$HOME/.clikae/logs` whose name starts with `<prefix>`
+  and already has a `status.json` — for a caller (like `watch github` above)
+  that knows a run's prefix but not the epoch suffix a not-yet-finished poll
+  will pick. Composes with plain targets and `--any`/`--all`/`--timeout`
+  normally (#46).
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
