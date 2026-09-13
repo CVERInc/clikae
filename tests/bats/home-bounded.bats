@@ -416,3 +416,111 @@ _board_shims() {
   after="$(board_recent claude "$dir" 20)"
   [[ "$after" == *session-new* ]] || false
 }
+
+# --- round-6 fix review receipts --------------------------------------------
+# round-5's fingerprint pushed EVERY transcript path into one `stat` argv;
+# past ARG_MAX `stat` died E2BIG and the failure was swallowed by
+# `2>/dev/null`, silently degrading the fingerprint to a file count. Round-6
+# replaced it with one `find … -exec stat … {} +` (find batches its own
+# argv, so this cannot E2BIG) and made the rebuild itself incremental.
+
+@test "board: a batch-stat fingerprint over 20,000 transcripts still sees one appended line, and find+stat never fail (round-6 P1-1)" {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  local slug dir i
+  slug="$(_claude_project_slug "$PWD")"
+  dir="$CLIKAE_HOME/profiles/claude/work/projects/$slug"
+  mkdir -p "$dir"
+  for ((i = 0; i < 20000; i++)); do
+    printf '{"type":"ai-title","aiTitle":"Fixture %s"}\n' "$i" > "$dir/session-$i.jsonl"
+  done
+  # Backdate everything but session-0 well outside claude's 300-min rate-limit
+  # window (in one batched `touch -t … {} +`, not 20,000 forks) — this test is
+  # about the FINGERPRINT surviving ARG_MAX, not about the per-file reading
+  # fold's own (already-covered-elsewhere) cold-build cost.
+  local stamp
+  stamp="$(date -d '30 days ago' '+%Y%m%d%H%M' 2>/dev/null || date -v-30d '+%Y%m%d%H%M')"
+  find "$dir" -name '*.jsonl' ! -name session-0.jsonl -exec touch -t "$stamp" {} +
+  # Deliberately no `board_state_refresh` call here: the fingerprint
+  # (`_board_transcript_fingerprint`) is independent of any generation ever
+  # having been built — this test is about IT surviving ARG_MAX, not about
+  # a full cold rebuild's own (already fork-heavy, already covered by
+  # receipt 2's timing table) cost at 20,000 files.
+  local before after
+  before="$(_board_transcript_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
+  printf '{"type":"ai-title","aiTitle":"Fixture 0 appended"}\n' >> "$dir/session-0.jsonl"
+  after="$(_board_transcript_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
+  [ "$before" != "$after" ]
+  # Re-run the SAME shape of pipeline `_board_stat_rows` uses, but WITHOUT
+  # its `2>/dev/null` (that one only hides a missing directory — see its own
+  # header) and with `pipefail` on, so an E2BIG anywhere in the chain shows
+  # up as a non-zero status here instead of being silently absorbed.
+  local rc=0 statfmt
+  _clikae_statv
+  statfmt="$_CLIKAE_STAT_FMT"
+  (
+    set -o pipefail
+    if [ "$statfmt" = '%Y %n' ]; then
+      find "$dir" -type f -name '*.jsonl' -exec stat -c $'%.9Y\037%s\037%n' {} + 2> "$TEST_HOME/staterr" | sort | cksum > /dev/null
+    else
+      find "$dir" -type f -name '*.jsonl' -exec stat -f $'%Fm\037%z\037%N' {} + 2> "$TEST_HOME/staterr" | sort | cksum > /dev/null
+    fi
+  )
+  rc=$?
+  [ "$rc" -eq 0 ]
+  [ ! -s "$TEST_HOME/staterr" ]
+}
+
+@test "board: an incremental rebuild re-reads only the ONE file that changed (round-6 P1-2)" {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  local slug dir i
+  slug="$(_claude_project_slug "$PWD")"
+  dir="$CLIKAE_HOME/profiles/claude/work/projects/$slug"
+  mkdir -p "$dir"
+  for ((i = 0; i < 50; i++)); do
+    printf '{"type":"ai-title","aiTitle":"Fixture %s"}\n' "$i" > "$dir/session-$i.jsonl"
+  done
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/work"
+  # Design decision (round-6 fix review): a generation change must not drop
+  # the per-file reading cache — only a file whose (mtime, size) actually
+  # differs from the previous generation gets re-parsed. Stubbing the
+  # per-file parser and counting its calls on the SECOND (incremental)
+  # rebuild proves that directly, independent of wall-clock timing.
+  _limit_claude_reading() { printf '%s\n' "$1" >> "$TEST_HOME/parsed.log"; printf '\037\037'; }
+  printf '{"type":"ai-title","aiTitle":"Fixture 0 changed"}\n' >> "$dir/session-0.jsonl"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/work"
+  [ -f "$TEST_HOME/parsed.log" ]
+  [ "$(wc -l < "$TEST_HOME/parsed.log" | tr -d ' ')" -eq 1 ]
+  [[ "$(cat "$TEST_HOME/parsed.log")" == */session-0.jsonl ]] || false
+}
+
+@test "board: a removed transcript's resume row disappears after the next rebuild (round-6 incremental rebuild)" {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  local slug dir
+  slug="$(_claude_project_slug "$PWD")"
+  dir="$CLIKAE_HOME/profiles/claude/work/projects/$slug"
+  mkdir -p "$dir"
+  printf '{"type":"ai-title","aiTitle":"Fixture keep"}\n' > "$dir/session-keep.jsonl"
+  printf '{"type":"ai-title","aiTitle":"Fixture gone"}\n' > "$dir/session-gone.jsonl"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/work"
+  local before after
+  before="$(board_recent claude "$CLIKAE_HOME/profiles/claude/work" 20)"
+  [[ "$before" == *session-gone* ]] || false
+  rm -f "$dir/session-gone.jsonl"
+  printf '{"type":"ai-title","aiTitle":"Fixture keep, edited"}\n' >> "$dir/session-keep.jsonl"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/work"
+  after="$(board_recent claude "$CLIKAE_HOME/profiles/claude/work" 20)"
+  [[ "$after" != *session-gone* ]] || false
+  [[ "$after" == *session-keep* ]] || false
+}
