@@ -318,3 +318,26 @@ _codex_reply_line() {
   [ "$status" -eq 0 ]
   [ "$output" = "1789265580" ]
 }
+
+# --- P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing
+# prefix the anchor accepted, rejecting a real ISO timestamp or a single
+# bracketed tag ahead of it — narrow to codex's one current wording rather
+# than the class of transport noise it should be.
+
+@test "codex output_dry: an ISO timestamp ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "2026-09-13T02:13:00Z ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: a bracketed tag ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "[codex] ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: free prose ahead of ERROR: (warn: ERROR: ...) is still rejected (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "warn: ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -ne 0 ]
+}

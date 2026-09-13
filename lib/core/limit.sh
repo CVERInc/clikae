@@ -191,9 +191,21 @@ _limit_codex_anchor_line() {
   done
   return 1
 }
+# P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing prefix
+# the anchor accepted — a special case for codex's CURRENT transport wording,
+# not a description of "transport noise" as a class. Real captures commonly
+# carry an ISO-ish timestamp and/or a single bracketed tag ahead of that
+# ("2026-09-13T02:13:00Z ERROR: …", "[codex] ERROR: …") and both were being
+# rejected outright, right back to #81's original symptom for anyone whose
+# transport adds either. Accept one optional ISO timestamp token (anything
+# non-space containing a literal "T", i.e. a date-Ttime shape, followed by a
+# space) and/or one optional "[...] " tag ahead of the existing ERROR:
+# allowance — still never free prose: "warn: ERROR: …" has letters in a
+# position neither group recognizes, and the base noise class right below
+# excludes letters outright, so it stays rejected.
 limit_codex_output_dry() {
   local out="$1" reset tail matched
-  local anchor="^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit"
+  local anchor="^[^A-Za-z0-9>#\"'.-]{0,12}(\S+T\S+ )?(\[[^]]+\] )?(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit"
   tail="$(tail -n 20 <<< "$out")"
   matched="$(_limit_codex_anchor_line "$anchor" "$tail")" || return 1
   reset="$(limit_codex_reset "$matched")"

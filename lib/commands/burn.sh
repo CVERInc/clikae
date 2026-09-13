@@ -2696,6 +2696,16 @@ KV
       local failure_reason="no fresh artifact and no limit" stderr_first=""
       if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
         stderr_first="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$stderr_file")"
+        # P3-2 (#81 round-1 fix review): this used to go straight from the
+        # RAW stderr line to _burn_sanitize_reason (which only escapes
+        # control bytes for valid JSON, never redacts) — an engine that
+        # echoes the task's own prompt back on stderr (codex does, on
+        # several failure shapes) put the operator's prompt text verbatim
+        # into `reason` in both `--json` and status.json. out_for_class
+        # above already redacts the SAME stderr through _burn_redact_full
+        # for classification; give `reason` the same treatment before it
+        # is sanitized for JSON and truncated.
+        stderr_first="$(_burn_redact_full "$stderr_first")"
         stderr_first="$(_burn_sanitize_reason "$stderr_first")"
         failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
       fi

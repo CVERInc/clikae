@@ -565,7 +565,12 @@ STUB
   load_adapter gh
   run declare -F adapter_burn_flags # gh must NOT have inherited it
   [ "$status" -ne 0 ]
-  ! declare -F adapter_audit_flags >/dev/null
+  # P3-5 (#81 round-1 fix review): matches the line above — `! cmd` (like a
+  # bare `[[ ]]`) is exempt from `set -e`, so a failing bare assertion here
+  # would be silently ignored mid-body, not just stylistically inconsistent
+  # with its neighbour.
+  run declare -F adapter_audit_flags
+  [ "$status" -ne 0 ]
 }
 
 # P1-1 (2026-09-12 round-2 review): adapter_meta_permission_modes (claude.sh,
@@ -2363,6 +2368,32 @@ STUB
   [[ "$output" == *'"reason":"error:  file    not found  (rc=3)"'* ]] || { echo "$output"; false; }
 }
 
+# --- P3-2 (#81 round-1 fix review): the fast-failure `reason` above went
+# straight from raw stderr to _burn_sanitize_reason (JSON-escaping only,
+# never redaction) — an engine that echoes the operator's own prompt back
+# on stderr put it verbatim into --json/status.json's `reason`, the same
+# class of leak #43 already closed for the diagnostic tail.
+
+@test "burn #81: a prompt fragment echoed to stderr never reaches --json's reason (P3-2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'fatal: %s\n' "${@: -1}" >&2
+exit 7
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  # The human-readable "preview:" line legitimately echoes the operator's own
+  # prompt — only the JSON `reason` field is the thing #66 promises never
+  # carries raw, unredacted engine stderr.
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" == *'fatal:'* ]] || { echo "$reason_field"; false; }
+}
+
 # --- #66 round-1 review fixes ---
 
 @test "burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd" {
@@ -2527,7 +2558,10 @@ STUB
   export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
   run clikae burn codex T1 --artifact "$A" --prompt "do it"
   [ "$status" -eq 0 ]
-  ! grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  # P3-5 (#81 round-1 fix review): same `! cmd` set -e exemption as above —
+  # bring this in line with the equivalent assertion earlier in this file.
+  run grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  [ "$status" -ne 0 ]
 }
 
 _stub_codex_stderr81() {
@@ -2568,7 +2602,11 @@ STUB
   run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'produced no fresh artifact and shows no limit'* ]] || false
-  [[ "$output" == *'"reason":"ERROR: could not open input file"'* || "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
+  # P3-6 (#81 round-1 fix review): this used to accept EITHER reason string,
+  # so a real regression in #66's stderr-reason plumbing (the actual thing
+  # this test's own title promises to guard) could never turn it red. Only
+  # the shape this stub actually produces.
+  [[ "$output" == *'"reason":"ERROR: could not open input file"'* ]] || false
   [[ "$output" == *'"reset":null'* ]] || false
   [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }
