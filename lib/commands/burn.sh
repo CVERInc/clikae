@@ -986,10 +986,24 @@ _burn_lb_bounded() {
   # `sleep` holds no reference to the real pipe.
   ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
-  wait "$pid" 2>/dev/null
-  rc=$?
-  kill "$watcher" 2>/dev/null
-  wait "$watcher" 2>/dev/null
+  # This whole function runs under the caller's `set -eo pipefail`
+  # (bin/clikae:6, same as every other git call in this file). `wait`'s
+  # own exit status is the waited-on job's exit status — non-zero for
+  # ANY command this bounds that legitimately fails (not just a timeout:
+  # `git rev-list --count '@{u}..HEAD'` with no upstream configured,
+  # which round-1's own tests exercise constantly), and bash versions are
+  # NOT consistent with each other about whether a bare `wait` at that
+  # status trips errexit (observed: silent on this box's bash 5.2.21,
+  # aborted the whole scan on macOS CI's bash — same file, same review
+  # round's own lesson about `_burn_left_behind`'s git calls needing
+  # individual `||` guards, applied to a NEW function that forgot it).
+  # Bare `kill` is the same hazard: it returns non-zero when the target
+  # has already exited (the common, non-timeout case), which is exactly
+  # what happens here every time nothing needed killing.
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
   # The watchdog firing and the command finishing on its own race at the
   # boundary; rather than a marker file (another fork+file per call, on
   # the hottest path in this function), elapsed wall time already answers
