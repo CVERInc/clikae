@@ -1038,7 +1038,13 @@ _burn_left_behind() {
     # P1-1: the one git call the round-1 review found with no guard at all —
     # a bare assignment is NOT the condition of any if/&&/||, so `set -e`
     # aborted right here, before `_burn_result`'s printf ever ran.
-    dirty="$(_burn_lb_git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
+    # P3-5: --ignore-submodules=all — without it, a submodule with its own
+    # uncommitted changes counts as "dirty" TWICE: once in its own row
+    # (correct) and again in the superproject's row (wrong — the
+    # superproject's own push never carries the submodule's changes, so
+    # attributing them to it overstates what pushing the superproject
+    # would actually save).
+    dirty="$(_burn_lb_git -C "$repo" status --porcelain --ignore-submodules=all 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
     [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
     # P2-1/P2-2 (round-1 review): the old version forked _clikae_mtime (a
     # `stat`, or two on macOS) PER FILE under an unbounded `find`, and never
@@ -1115,8 +1121,15 @@ _burn_left_behind() {
     elif [ -n "$files" ]; then
       log_info "  files: [$files]"
     fi
-    if [ -z "$hint" ] && [ "$ahead" != - ] && [ "$ahead" -gt 0 ]; then
+    # P3-2 (round-1 review): a push hint used to print for only the FIRST
+    # ahead repo (`[ -z "$hint" ]` gated it), so three repos each one commit
+    # ahead got one copy-pasteable command out of three — silence for the
+    # other two, and not necessarily the most important one (find order,
+    # not relevance). One hint per ahead repo now, printed right under its
+    # own "left behind:"/"files:" block instead of batched at the end.
+    if [ "$ahead" != - ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
       printf -v hint '  hint: git -C %q push' "$repo"
+      log_info "$hint"
     fi
     # P3-3 (round-1 review): "ahead" used to be a JSON string "-" when there
     # is no upstream to compare against, and a bare integer otherwise —
@@ -1131,7 +1144,6 @@ _burn_left_behind() {
     entries="${entries}${entries:+,}${entry}"
     shown=$((shown + 1))
   done
-  [ -z "$hint" ] || log_info "$hint"
   if [ "$over" -gt 0 ]; then
     local roots_desc; roots_desc="$(IFS=', '; printf '%s' "${roots[*]}")"
     log_info "  … and $over more repositories under $roots_desc"

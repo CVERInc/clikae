@@ -774,7 +774,7 @@ STUB
   load_adapter claude
   declare -F adapter_meta_permission_modes >/dev/null   # claude HAS it
   load_adapter codex
-  ! declare -F adapter_meta_permission_modes >/dev/null # codex must NOT have inherited it
+  ! declare -F adapter_meta_permission_modes >/dev/null || false # codex must NOT have inherited it
   load_adapter claude
   load_adapter grok
   ! declare -F adapter_meta_permission_modes >/dev/null # grok must NOT have inherited it
@@ -3451,4 +3451,59 @@ HOOK
   ( unset GIT_OPTIONAL_LOCKS; git -C "$STUB_LEFT_REPO" status --porcelain >/dev/null )
   after="$(stat -c '%i' "$STUB_LEFT_REPO/.git/index" 2>/dev/null || stat -f '%i' "$STUB_LEFT_REPO/.git/index")"
   [ "$before" != "$after" ]
+}
+
+# P3-2 (round-1 review): the push hint used to print for only the FIRST
+# ahead repo — three ahead repos, one copy-pasteable command. One hint per
+# ahead repo now.
+@test "burn #84 P3-2: every ahead repo gets its own push hint, not just the first" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in a b c; do
+    git init -q "$TEST_HOME/repos/r$i"
+    git -C "$TEST_HOME/repos/r$i" config user.name t
+    git -C "$TEST_HOME/repos/r$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
+    git -C "$TEST_HOME/repos/r$i" branch base
+    git -C "$TEST_HOME/repos/r$i" branch --set-upstream-to=base >/dev/null
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for i in a b c; do
+  git -C "$TEST_HOME/repos/r\$i" commit -q --allow-empty -m "ahead \$i"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  for i in a b c; do
+    [[ "$output" == *"hint: git -C "*"/repos/r$i push"* ]] || { echo "missing hint for r$i"; false; }
+  done
+}
+
+# P3-5 (round-1 review): a submodule with its own uncommitted change used to
+# count as "dirty" in BOTH its own row and the superproject's — but the
+# superproject's push never carries the submodule's changes, so attributing
+# them to it overstates what pushing the superproject would salvage.
+@test "burn #84 P3-5: a submodule's own dirty state is not double-counted into the superproject's" {
+  _left84_setup
+  _left84_repo
+  local sub="$TEST_HOME/repos/subrepo"
+  git init -q "$sub"
+  git -C "$sub" config user.name t; git -C "$sub" config user.email t@example.invalid
+  printf sub > "$sub/s.txt"; git -C "$sub" add s.txt; git -C "$sub" commit -qm sub-init
+  git -c protocol.file.allow=always -C "$STUB_LEFT_REPO" submodule add -q "$sub" sub
+  git -C "$STUB_LEFT_REPO" commit -qm "add submodule"
+  printf changed > "$STUB_LEFT_REPO/sub/s.txt"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+super_row = next(r for r in rows if r["repo"].rstrip("/").endswith("work space"))
+assert super_row["dirty"] == 0, super_row
+assert super_row["ahead"] == 1, super_row
+'
 }

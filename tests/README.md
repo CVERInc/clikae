@@ -89,13 +89,28 @@ stay green while the code is wrong. We close that gap two ways:
    [[ "$output" == *"some text"* ]]                # ❌ silently ignored mid-body
    ```
 
-**When you add a `[[ … ]]` assertion, append `|| false`.** Plain `[ … ]` checks
-don't need it. If a command in a test body may legitimately return non-zero and
-is *not* an assertion, guard it with `|| true`. Sanity check (should print
-nothing):
+3. **The same exemption applies to a bare `! cmd`** — a command prefixed with
+   `!` never triggers `set -e` on its own, in ANY position, not just mid-body
+   (round-1 review of PR #87/#84, P3-1: this convention only documented
+   `[[ … ]]` until then, and a bare `! cmd` assertion sitting anywhere but the
+   test's last statement was a silent no-op — found once already fixed
+   elsewhere in the same PR, then found AGAIN one test over, unfixed). Same
+   fix, same shape:
+
+   ```bash
+   ! grep -q "some text" <<<"$output" || false    # ✅ fails the test if found
+   ! grep -q "some text" <<<"$output"               # ❌ silently ignored, ALWAYS —
+                                                     #    even as the last statement
+   ```
+
+**When you add a `[[ … ]]` or `! cmd` assertion, append `|| false`.** Plain
+`[ … ]` checks don't need it. If a command in a test body may legitimately
+return non-zero and is *not* an assertion, guard it with `|| true`. Sanity
+check (should print nothing):
 
 ```bash
 grep -rnE '^[[:space:]]*\[\[ .* \]\][[:space:]]*$' tests/bats
+grep -rnE '^[[:space:]]*! [^|]*[^\\]$' tests/bats   # bare `! cmd`, no trailing `||` and no line continuation
 ```
 
 ## Proving a guard is load-bearing (`scripts/mutate.sh`)
