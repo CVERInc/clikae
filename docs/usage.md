@@ -89,16 +89,23 @@ rows, even when the app requests SGR mouse tracking (measured 2026-09-13).
 clikae translates movements of at least two rows into tmux history scrolling:
 finger up reads older output; finger down moves toward live output. Each row of
 movement scrolls two lines by default. Tap in copy-mode to return to the live
-view; a tap outside copy-mode keeps the usual click behaviour. Desktop wheel and
-drag-selection bindings are unchanged.
+view (in `copy-mode` and `copy-mode-vi` alike, whichever tmux's `mode-keys`
+picks). Outside copy-mode, the click is always forwarded to the pane's program
+first — same as tmux's own default — so a tap looks like an ordinary click, and
+a swipe reaches the program as a click at the row you lift your finger on
+(it already saw the press on the way down) while the pane also scrolls. Desktop
+wheel and drag-selection bindings are unchanged.
 
-The bindings are installed when clikae creates a tmux session. In tmux's command
-prompt (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable translation,
-or `set -g @clikae_touch_scroll on` to restore it. Set
+The bindings are installed when clikae creates a tmux session, and apply to the
+whole tmux **server** — every session on it, not only clikae's own. In tmux's
+command prompt (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable
+translation server-wide, or `set -g @clikae_touch_scroll on` to restore it. Set
 `set -g @clikae_touch_scroll_lines 3` to scroll three lines per row of movement.
 These server-wide settings survive later clikae launches; put them in
-`~/.tmux.conf` to retain them across server restarts. The multiplier must be a
-positive integer (invalid values fall back to 2).
+`~/.tmux.conf` to retain them across server restarts. Drop the `-g` (`set
+@clikae_touch_scroll off`) to override either setting for just the current
+session instead. The multiplier must be a positive integer (invalid values
+fall back to 2).
 
 ### Make & manage tanks
 

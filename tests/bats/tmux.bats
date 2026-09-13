@@ -7,6 +7,7 @@ setup() {
   export TOUCH_LOG="$BATS_TEST_TMPDIR/tmux.log"
   export TOUCH_ACTIONS="$BATS_TEST_TMPDIR/actions.log"
   export TOUCH_Y1=20 TOUCH_ENABLED=on TOUCH_MULTIPLIER=2
+  export TOUCH_TMUX_V='tmux 3.4'   # feeds _tmux_touch_scroll_floor_met (needs >= 3.1)
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   : > "$TOUCH_LOG"
   : > "$TOUCH_ACTIONS"
@@ -15,6 +16,7 @@ setup() {
 printf '<%s>' "$@" >> "$TOUCH_LOG"
 printf '\n' >> "$TOUCH_LOG"
 case "$1" in
+  -V) printf '%s' "$TOUCH_TMUX_V" ;;
   show-options)
     case "${*: -1}" in
       @clikae_touch_y) printf '%s' "$TOUCH_Y1" ;;
@@ -35,7 +37,7 @@ release() {
   [ "$status" -eq 0 ]
 }
 
-@test "touch: launch installs four bindings alongside mouse and preserves configured defaults" {
+@test "touch: launch installs bindings on root/copy-mode/copy-mode-vi, forwards the release, and preserves configured defaults" {
   # Override filesystem/environment probes; exercise the real constructor.
   # shellcheck source=/dev/null
   source "$TOUCH_ROOT/lib/core/tmux.sh"
@@ -45,22 +47,40 @@ release() {
   [ "$status" -eq 0 ]
   run cat "$TOUCH_LOG"
   [[ "$output" == *'<start-server>'*'<new-session><-d>'* ]] || false
-  [[ "$output" == *'<set-option><-g><mouse><on><;><set-option><-og><@clikae_touch_scroll><on><;><set-option><-og><@clikae_touch_scroll_lines><2>'* ]] || false
+  # mouse on stands alone now — not chained with the touch-scroll bindings, so
+  # it still installs even below the touch-scroll version floor.
+  [[ "$output" == *'<set-option><-g><mouse><on>'* ]] || false
+  [[ "$output" == *'<set-option><-og><@clikae_touch_scroll><on><;><set-option><-og><@clikae_touch_scroll_lines><2>'* ]] || false
   [[ "$output" == *'<bind-key><-T><root><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M>'* ]] || false
-  [[ "$output" == *'<bind-key><-T><copy-mode><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =>'* ]] || false
   # P1-1: root's Up FORWARDS the release (send-keys -M) before translating —
-  # the only table with an app underneath that needs it; copy-mode's Up has no
-  # app to forward to and stays a plain run-shell.
+  # the only table with an app underneath that needs it.
   [[ "$output" == *"<bind-key><-T><root><MouseUp1Pane><send-keys -M; run-shell \"bash '"* ]] || false
   [[ "$output" == *"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}\">"* ]] || false
-  [[ "$output" == *"<bind-key><-T><copy-mode><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
   # P1-2: copy-mode-vi mirrors copy-mode exactly — same Down, same plain-run-shell Up.
-  [[ "$output" == *"<bind-key><-T><copy-mode-vi><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; select-pane -t =>"* ]] || false
-  [[ "$output" == *"<bind-key><-T><copy-mode-vi><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
+  local table
+  for table in copy-mode copy-mode-vi; do
+    [[ "$output" == *"<bind-key><-T><$table><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; select-pane -t =>"* ]] || false
+    [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
+  done
   # choose-mode is deliberately left unbound (a tap there must select, not cancel).
   [[ "$output" != *'<-T><choose'* ]] || false
   [[ "$output" != *'<MouseDrag'* ]] || false
   [[ "$output" != *'<Wheel'* ]] || false
+}
+
+@test "touch: below the tmux floor, mouse still installs but the touch-scroll chain is skipped" {
+  # P3-1: no ordering luck — an explicit floor, not a bind-key abort mid-chain.
+  export TOUCH_TMUX_V='tmux 3.0'
+  # shellcheck source=/dev/null
+  source "$TOUCH_ROOT/lib/core/tmux.sh"
+  _tmux_ssh_agent_link() { return 1; }
+  tmux_server_born_note() { :; }
+  run tmux_spawn_session --session clikae-test -- 'echo test'
+  [ "$status" -eq 0 ]
+  run cat "$TOUCH_LOG"
+  [[ "$output" == *'<set-option><-g><mouse><on>'* ]] || false
+  [[ "$output" != *'@clikae_touch_scroll'* ]] || false
+  [[ "$output" != *'<bind-key>'* ]] || false
 }
 
 @test "touch: finger up enters copy-mode and scrolls eight lines" {
@@ -90,11 +110,6 @@ release() {
   : > "$TOUCH_ACTIONS"
   release 20 %7 2
   [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><cancel>' ]
-}
-
-@test "touch: a stray, non-numeric pane_in_mode does not crash the comparison" {
-  release 16 %7 garbage
-  [ "$(cat "$TOUCH_ACTIONS")" = $'<copy-mode><-t><%7>\n<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
 }
 
 @test "touch: tap in copy-mode cancels including one-row movement" {
@@ -144,6 +159,11 @@ release() {
     release 16 %7 1
     [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
   done
+}
+
+@test "touch: a stray, non-numeric pane_in_mode does not crash the comparison" {
+  release 16 %7 garbage
+  [ "$(cat "$TOUCH_ACTIONS")" = $'<copy-mode><-t><%7>\n<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
 }
 
 @test "touch: @clikae_touch_y is UNSET after one Up, so a second Up without a Down does nothing" {

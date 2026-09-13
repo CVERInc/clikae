@@ -437,6 +437,12 @@ tmux_spawn_session() {
   # screen fills with a field of them. A blank is the same information without
   # the texture. Cosmetic only, and it changes nothing about either client's size.
   tmux set-option -g fill-character " " 2>/dev/null || true
+  # mouse on is unconditional and stays OUTSIDE the touch-scroll floor check
+  # below: it needs none of the newer flags the touch bindings do, and it
+  # predates this feature (was its own line before 2026-09-13). Gating it on
+  # the same floor would regress mouse support itself on an old tmux for a
+  # convenience feature that tmux does not even reach on that build.
+  tmux set-option -g mouse on 2>/dev/null || true
   # TOUCH SCROLLING. Measured 2026-09-13: a-Shell on iPhone over ssh sends
   # a swipe as SGR button-1 press/release at different rows, never a wheel.
   # Claude Code asks for mouse tracking, so the default forwards that click and
@@ -470,34 +476,52 @@ tmux_spawn_session() {
   # — same lesson docs/DESIGN-tmux.md:74 already draws about `base-index`: not
   # setting an option does not mean the default applies, it means whatever the
   # human's rc file says applies. Binding only `copy-mode` left `copy-mode-vi`
-  # without its own Down, so a same-table tap there reused whatever
-  # @clikae_touch_y an EARLIER, unrelated Down had written — the swipe that
-  # entered copy-mode, or older. Measured (tmux 3.4, `set -g mode-keys vi`): a
-  # same-row tap after a swipe that had already entered copy-mode-vi kept
-  # scrolling further back instead of cancelling — the only escape a phone (no
-  # scroll wheel) has, going backwards (2026-09 R1 review, P1-2).
+  # falling back to root: Down never fires there (root's Down still runs, but
+  # writes @clikae_touch_y on every press — including one made a moment before
+  # entering copy-mode), and Up runs the helper against whatever @clikae_touch_y
+  # was last written, not the value for this copy-mode session. Measured (tmux
+  # 3.4, `set -g mode-keys vi`): a same-row tap AFTER a swipe that had already
+  # entered copy-mode scrolled 36 -> 52 instead of cancelling — the only escape
+  # a phone (no scroll wheel) has, going backwards (2026-09 R1 review, P1-2).
   # Fixed two ways, together: (a) mirror the copy-mode Down/Up pair onto
-  # copy-mode-vi, so it gets its own fresh @clikae_touch_y instead of a stale
-  # one; (b) touch_scroll.sh now UNSETS @clikae_touch_y the moment it reads
-  # it, so an Up with no Down on ITS OWN table is structurally incapable of
-  # reusing a value some earlier Down left behind.
+  # copy-mode-vi, so it gets its own fresh @clikae_touch_y instead of root's
+  # leftovers; (b) touch_scroll.sh now UNSETS @clikae_touch_y the moment it
+  # reads it (`set-option -pu`), so an Up with no Down on ITS OWN table is
+  # structurally incapable of reusing a value some earlier Down left behind —
+  # not "we remembered to clear it", but "there is nothing left to reuse".
   #
   # choose-mode / choose-mode-vi (`choose-tree`, the pane/window/session
   # picker) are deliberately LEFT UNBOUND here, not mirrored a third time. A
   # tap there is a SELECTION, not a swipe-cancel — that is a different design
   # than "leave copy-mode", and inventing one is out of scope for this fix.
+  # Measured: today a tap in choose-tree still reaches this helper via root's
+  # fallback (no choose-mode override exists to catch it first) and stacks a
+  # view-mode layer over the picker (`#{pane_in_mode}` 1 -> 2) rather than
+  # selecting. That gap is unresolved and known, not silently accepted.
   local touch_helper
   touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_in_mode}"
-  tmux set-option -g mouse on \
-    \; set-option -og @clikae_touch_scroll on \
-    \; set-option -og @clikae_touch_scroll_lines 2 \
-    \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M' \
-    \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
-    \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
-    \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
-    \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
-    \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
-    2>/dev/null || true
+  # 🔴 THE FLOOR. `set-option -p` / `-pu` (pane-scoped options, used by every
+  # binding below) needs tmux >= 3.1 (added CHANGES-3.0-to-3.1); the
+  # copy-mode-vi key table needs only >= 2.4 (CHANGES-2.3-to-2.4) — 3.1 is the
+  # binding floor. The repo declared no tmux floor anywhere before this
+  # (2026-09 R1 review, P3-1): `bind-key` validates its own command AT BIND
+  # TIME and a tmux command list aborts at the first failure, so on a tmux
+  # below this floor the chain used to stop at the first line an old binary
+  # rejected and install whatever came before it — a half-install that
+  # happened to be all-or-nothing only by the accident of which command was
+  # written first, silenced by `2>/dev/null || true`. Skip the whole chain
+  # below the floor instead of gambling on write order.
+  if _tmux_touch_scroll_floor_met; then
+    tmux set-option -og @clikae_touch_scroll on \
+      \; set-option -og @clikae_touch_scroll_lines 2 \
+      \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M' \
+      \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
+      \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+      \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
+      \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+      \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
+      2>/dev/null || true
+  fi
   tmux set-option -s set-clipboard on 2>/dev/null || true
 
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
@@ -632,6 +656,26 @@ tmux_attach() {
 # neither `bash -n` nor shellcheck can see it. Core owns it now — that is the
 # part that mattered (DESIGN-tmux Rule 2; burn.sh once wrote its own copy of
 # this and got it wrong). A rename is a separate, isolated change.
+# _tmux_touch_scroll_floor_met -> 0 if this tmux build is new enough for the
+# touch-scroll bind-key chain (needs `set-option -p`/`-pu`, tmux >= 3.1), 1
+# otherwise or if the version cannot be parsed (fail closed — this feature is
+# a convenience, not a dependency, per DESIGN-tmux Rule 2; skipping it costs
+# nothing a caller depends on). bash 3.2-safe, same per-segment numeric
+# compare as update_version_gt (lib/core/update_check.sh) instead of a string
+# compare, which would rank "3.10" below "3.9".
+_tmux_touch_scroll_floor_met() {
+  local v maj min
+  v="$(tmux -V 2>/dev/null)"                 # "tmux 3.4", "tmux next-3.5", ...
+  v="${v#tmux }"; v="${v#next-}"
+  maj="${v%%.*}"
+  min="${v#*.}"; min="${min%%[!0-9]*}"        # drop a trailing "a"/"b" suffix
+  case "$maj" in ''|*[!0-9]*) return 1 ;; esac
+  case "$min" in '') min=0 ;; *[!0-9]*) return 1 ;; esac
+  [ "$maj" -gt 3 ] && return 0
+  [ "$maj" -eq 3 ] && [ "$min" -ge 1 ] && return 0
+  return 1
+}
+
 # _switch_shquote <string> -> the string as ONE POSIX-sh single-quoted word.
 # The tmux session command is ultimately run by `sh -c`, and inside it we spawn
 # `bash -c <target>`. Wrapping <target> in `"..."` (the old shape) let sh EXPAND
