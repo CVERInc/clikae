@@ -101,10 +101,14 @@ teardown() {
   # is invisible when it regresses: a bare target works perfectly until the day
   # two session names share a prefix, which is the day a digest suffix appears.
   #
-  # Two kinds of target legitimately do not start with `=` here, and both are
+  # Three kinds of target legitimately do not start with `=` here, and all are
   # named rather than pattern-matched, so the exception cannot widen by accident:
   #
   #   $TMUX_PANE            a pane ID (`%3`), not a name — IDs are already exact
+  #   $TS_PANE_ID           touch_scroll.sh's pane, handed in as #{pane_id} by the
+  #                         MouseUp binding — an ID like $TMUX_PANE. Measured on
+  #                         tmux 3.4: `-t =%0` is 「can't find pane」, so `=` is
+  #                         not merely unnecessary on an ID, it is wrong.
   #   $_WT_SESS/$_WT_PANE   wake.sh's resolver already put the `=` in. It exists
   #                         because wake's parameter is session-OR-target, and
   #                         the first version of this very change produced
@@ -119,7 +123,7 @@ teardown() {
 
   while IFS= read -r line; do
     case "$line" in
-      *TMUX_PANE*|*'$_WT_SESS'*|*'$_WT_PANE'*) continue ;;
+      *TMUX_PANE*|*'$_WT_SESS'*|*'$_WT_PANE'*|*'$TS_PANE_ID'*) continue ;;
     esac
     bad="$bad$line"$'\n'
   done < <(grep -rnE "tmux (${subs})\b[^\"]*-t \"[^=]" "$CLIKAE_TEST_ROOT/lib" 2>/dev/null || true)
