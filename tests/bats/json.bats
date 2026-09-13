@@ -56,6 +56,27 @@ _json_extract() {
   [ "$output" = 'a path C:\nul' ]
 }
 
+@test "json_field_str tolerates whitespace around the colon (pretty-printed JSON)" {
+  local f="$BATS_TEST_TMPDIR/p.json"
+  # #63 P1-1: a bare `"tool_name": "Agent"` (one space after the colon) went
+  # completely unmatched under the old zero-tolerance pattern.
+  printf '%s' '{"tool_name": "Agent"}' > "$f"
+  _json_extract "$f" tool_name
+  [ "$status" -eq 0 ]
+  [ "$output" = "Agent" ]
+}
+
+@test "json_field_str tolerates a fully pretty-printed payload (newlines and indentation)" {
+  local f="$BATS_TEST_TMPDIR/p.json"
+  printf '%s\n' '{' '  "tool_name": "Agent",' '  "tool_input": {' '    "model": "sonnet"' '  }' '}' > "$f"
+  _json_extract "$f" tool_name
+  [ "$status" -eq 0 ]
+  [ "$output" = "Agent" ]
+  _json_extract "$f" model
+  [ "$status" -eq 0 ]
+  [ "$output" = "sonnet" ]
+}
+
 @test "json_field_str returns 1 and nothing for a field that is absent" {
   local f="$BATS_TEST_TMPDIR/p.json"
   printf '%s' '{"tool_name":"Agent"}' > "$f"

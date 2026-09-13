@@ -68,9 +68,14 @@ json_value_for_key() {
 # is matched against contain a backslash).
 json_field_str() {
   local json="$1" field="$2" raw esc
-  raw="$(printf '%s' "$json" | grep -oE "\"$field\":\"(\\\\.|[^\"\\\\])*\"" | head -n 1)"
+  # `[[:space:]]*` around the colon: JSON permits whitespace there (pretty-
+  # printed output, or a hand-edited fixture) and the old pattern (`"field":"`
+  # with zero tolerance) went silently blind on anything but compact JSON —
+  # no match, rc=1, indistinguishable from the field being absent (#63 P1-1).
+  raw="$(printf '%s' "$json" | grep -oE "\"$field\"[[:space:]]*:[[:space:]]*\"(\\\\.|[^\"\\\\])*\"" | head -n 1)"
   [ -n "$raw" ] || return 1
-  raw="${raw#*:}"            # drop `"field":`
+  raw="${raw#*:}"            # drop `"field"[[:space:]]*:`
+  raw="${raw#"${raw%%[![:space:]]*}"}"   # drop any whitespace left after the colon
   raw="${raw#\"}"; raw="${raw%\"}"   # drop the surrounding quotes
   esc=$'\001'                # placeholder: protects real backslashes while
                               # the two-char escapes below are decoded, so
