@@ -377,7 +377,11 @@ as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
 durable trail, and — the actual wake — every poll that finds at least one
 new event writes a burn-status-shaped file to
 `$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json` — burn's own
-directory layout, not a lookalike location `clikae wait` can't resolve — so
+directory layout, not a lookalike location `clikae wait` can't resolve.
+🔴 Deliberately `$HOME`, not `$CLIKAE_HOME` (P3-2, 2026-09-13 fix-round-3
+review) — the one path in this feature that ignores a `$CLIKAE_HOME`
+override, the same as burn's own status files always have; a sandboxed
+`$CLIKAE_HOME` does not sandbox this one file. So
 `clikae wait watch-github-<org>-<epoch>` (the run_id printed inside the
 file) or `clikae wait --latest watch-github-<org>` (a cockpit that doesn't
 know the epoch yet) returns 0 and prints the events, the same reader a

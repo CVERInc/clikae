@@ -1041,8 +1041,13 @@ a Stop hook calling --once has something to read even with nobody watching.
 
 The actual wake: every poll that finds >=1 new event writes ONE status file
 (the same shape, same DIRECTORY LAYOUT, `clikae burn` writes) to
-$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json — so
-`clikae wait watch-github-<org>-<epoch>` (the run_id this file itself
+$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json — deliberately
+$HOME, NOT $CLIKAE_HOME (P3-2, 2026-09-13 fix-round-3 review): this is the
+one path in this feature that does not follow a $CLIKAE_HOME override —
+burn's own status files never have either, and `clikae wait` only knows
+how to resolve THAT layout. A sandboxed $CLIKAE_HOME therefore does not
+sandbox this one file — so `clikae wait watch-github-<org>-<epoch>` (the
+run_id this file itself
 prints) or `clikae wait --latest watch-github-<org>` (no epoch needed)
 returns 0 and prints the events, exactly like waiting on a burn. A cursor
 (the last update this poll actually processed) persists at

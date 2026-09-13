@@ -1144,6 +1144,32 @@ _honest_corpus_write() {
 # watch-github-<org>` against the REAL writer, no epoch known in advance —
 # the whole point of the fix (a cockpit can only know the prefix).
 
+# P3-2 (2026-09-13 fix-round-3 review): documented, not changed — the run
+# status file deliberately does NOT follow a $CLIKAE_HOME override (same
+# as burn's own status files never have; `clikae wait` only knows how to
+# resolve $HOME's layout). Regression guard: this needs to stay true, or
+# the docs/usage.md and --help notes added this round go stale silently.
+@test "watch github --once: the run status file lands under \$HOME even when \$CLIKAE_HOME is sandboxed elsewhere (P3-2)" {
+  _gh_stub_install
+  local real_clikae_home="$CLIKAE_HOME"
+  export CLIKAE_HOME="$TEST_HOME/elsewhere/.clikae-sandbox"
+  mkdir -p "$CLIKAE_HOME"
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # cursor/seen/events DO follow the sandboxed CLIKAE_HOME...
+  [ -f "$CLIKAE_HOME/state/watch-github/CVERInc.cursor" ]
+  [ -f "$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl" ]
+  # ...but the run status file (what `clikae wait` reads) does NOT — it's
+  # under real $HOME/.clikae/logs, same as burn's own.
+  local status_file
+  status_file="$(find "$real_clikae_home/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  [ -n "$status_file" ]
+  [ -f "$status_file" ]
+  ! find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | grep -q .
+}
+
 @test "watch github --once: clikae wait --latest resolves the run a cockpit never saw the epoch for (P2-3)" {
   _gh_stub_install
   _gh_stub_page org 1 \
