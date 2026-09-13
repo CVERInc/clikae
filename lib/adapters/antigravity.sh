@@ -170,6 +170,7 @@ adapter_recent_sids() {
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
+  local -a afiles=()
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.
   if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
@@ -187,19 +188,38 @@ adapter_recent_sids() {
     if [ -n "$sid" ]; then
       f="$brain/$sid/.system_generated/logs/transcript.jsonl"
       if [ -f "$f" ]; then
-        local mt
-        mt="$(_clikae_mtime "$f" 2>/dev/null || echo "?")"
-        printf '%s\037%s\n' "$mt" "$sid"
-        return 0
+        # #74 round-1 P2-1: the cache is a per-directory POINTER — at most one
+        # candidate for $want, ever — so it can only fully answer a limit=1
+        # ask (burn's own use, via the "disk"-bypassing 3rd arg aside). A
+        # caller wanting more than one (the board's Continue list, home.sh's
+        # exclusion-pass retries) used to get back exactly this one anyway: a
+        # cache hit returned immediately and the scan below — the only thing
+        # that can rank several sessions against each other — never ran.
+        # limit=1 keeps the original single-stat fast path unchanged; only a
+        # bigger ask falls through, and even then this hit is kept (not
+        # re-discovered) and excluded from the scan below so it isn't listed
+        # twice.
+        if [ "$limit" -le 1 ]; then
+          local mt
+          mt="$(_clikae_mtime "$f" 2>/dev/null || echo "?")"
+          printf '%s\037%s\n' "$mt" "$sid"
+          return 0
+        fi
+        afiles=("$f")
       fi
     fi
   fi
 
-  local -a afiles=()
+  local _seen _sf
   for sdir in "$brain"/*/; do
     [ -d "$sdir" ] || continue
     f="${sdir}.system_generated/logs/transcript.jsonl"
     [ -f "$f" ] || continue
+    _seen=0
+    if [ "${#afiles[@]}" -gt 0 ]; then
+      for _sf in "${afiles[@]}"; do [ "$_sf" = "$f" ] && { _seen=1; break; }; done
+    fi
+    [ "$_seen" -eq 1 ] && continue
     cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
     [ "${cwd%/}" = "$want" ] || continue
     afiles+=("$f")

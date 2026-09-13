@@ -296,3 +296,62 @@ assert_agy_title() {
   [[ "$output" == *"$sid_here"* ]] || false
   [[ "$output" != *"$sid_other"* ]] || false
 }
+
+# --- #74 round-1 P2-1: a cache hit used to `return 0` immediately, so any
+# limit greater than 1 still got back exactly one row — the board's Continue
+# list (limit 10) and its exclusion-pass retries (home.sh:330/437, also
+# limit 10) silently collapsed to at most one agy candidate no matter how
+# many real sessions this directory actually had. -----------------------------
+
+@test "antigravity recent_sids with limit>1 returns the cached hit PLUS the rest from disk, not just the cached one" {
+  _setup_agy
+  local sid_cached="ag-cached-01"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  # Three MORE real sessions in this same directory that the cache never
+  # learned about (a stale/not-yet-refreshed pointer is the normal case).
+  seed_agy_session ag-disk-01 "$WORK" "disk only 1"
+  seed_agy_session ag-disk-02 "$WORK" "disk only 2"
+  seed_agy_session ag-disk-03 "$WORK" "disk only 3"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 4 ]
+  [[ "$output" == *"$sid_cached"* ]] || false
+  [[ "$output" == *"ag-disk-01"* ]] || false
+  [[ "$output" == *"ag-disk-02"* ]] || false
+  [[ "$output" == *"ag-disk-03"* ]] || false
+  # The cached one is not ALSO re-discovered by the disk scan (no duplicate line).
+  local hits; hits="$(printf '%s\n' "$output" | grep -c "$sid_cached")"
+  [ "$hits" -eq 1 ]
+}
+
+@test "antigravity recent_sids with limit=1 keeps the original single-stat cache fast path" {
+  _setup_agy
+  local sid_cached="ag-cached-02"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  seed_agy_session ag-disk-04 "$WORK" "disk only"
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 1 ]
+  [[ "$output" == *"$sid_cached"* ]] || false
+}
+
+@test "antigravity recent_sids with limit>1 still caps at limit across cache+disk" {
+  _setup_agy
+  local sid_cached="ag-cached-03"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  seed_agy_session ag-disk-05 "$WORK" "d1"
+  seed_agy_session ag-disk-06 "$WORK" "d2"
+  seed_agy_session ag-disk-07 "$WORK" "d3"
+  run adapter_recent_sids "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 2 ]
+}
