@@ -161,11 +161,12 @@ _stub_claude() {
 @test "mcp share: fails clearly without jq" {
   local jq_path; jq_path="$(command -v jq || true)"
   [ -n "$jq_path" ] || skip "jq not installed (nothing to hide)"
-  local stripped="/usr/bin:/bin"
-  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
+  local nojq="$BATS_TEST_TMPDIR/nojq"
+  path_without_jq "$nojq"
+  PATH="$nojq" command -v jq >/dev/null 2>&1 && skip "jq is on PATH even without /usr/bin and /bin"
   clikae init claude a
   _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
-  run env PATH="$stripped" "$CLIKAE_BIN" mcp share stripe claude a
+  run env PATH="$nojq" "$CLIKAE_BIN" mcp share stripe claude a
   [ "$status" -ne 0 ]
   [[ "$output" == *"jq"* ]] || false
 }

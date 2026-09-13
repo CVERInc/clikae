@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Versioned Claude permissions template and `clikae settings apply` with union
+  merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
+  template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
+  set; doctor reports missing rules per tank. A missing template or missing
+  `jq` degrades instead of failing `init` (#76).
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
