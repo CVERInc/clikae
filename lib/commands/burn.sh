@@ -2698,16 +2698,49 @@ KV
       local _burn_found_transcript
       _burn_found_transcript="$(adapter_find_session "$dir" "$sid_to_record" 2>/dev/null || true)"
       [ -n "$_burn_found_transcript" ] || sid_to_record=""
-      # #74 round-2 P2-3: for a --resume of an EXISTING sid (_burn_resume_pre_stamp
-      # set above), "the transcript exists" is true before the engine even ran —
-      # record it only if the engine actually ran: rc == 0, or the transcript's
-      # (mtime,size) changed across the run (it read/rewrote it before dying).
-      # A minted sid has no pre-stamp (nothing existed to snapshot), so this
-      # never fires for that path — "found" is already proof there.
-      if [ -n "$sid_to_record" ] && [ -n "$_burn_resume_pre_stamp" ] && [ "$rc" -ne 0 ]; then
-        local _burn_resume_post_stamp
+      # #74 round-2 P2-3 / round-3 P3-1,P3-2: for a --resume of an EXISTING sid
+      # (_burn_resume_pre_stamp set above), "the transcript exists" is true
+      # before the engine even ran — record it only when ALL THREE hold:
+      #   1. the engine itself exited 0 — round-2's own "rc==0 OR stamp
+      #      changed" was an OR, so a FAILED engine whose target transcript
+      #      merely changed anyway (a concurrent human still typing into the
+      #      SAME sid) still got recorded and hidden (R3 review P3-2, probe
+      #      r3out/49-probeD.log). rc==0 is now required outright, not an
+      #      alternative to the stamp check.
+      #   2. the transcript's byte size actually GREW across the run — a bare
+      #      (mtime,size)-changed check can't tell "the engine wrote to it"
+      #      from "someone else wrote to it" (P3-2's actual finding: it's a
+      #      "someone wrote" detector, not an "engine ran" detector); grew is
+      #      the one direction a resumed transcript's own append-only log
+      #      moves in.
+      #   3. no OTHER live process still has that transcript open — a human's
+      #      own concurrent `codex resume <sid>` / `claude --resume <sid>` on
+      #      the SAME sid holds the file open for the whole time burn's
+      #      attempt runs, so it can grow and rc can still land 0 purely from
+      #      burn's side while none of the growth is burn's. Checked with
+      #      fuser (preferred) or lsof; neither on PATH just skips this one
+      #      check and says so — rc==0 + grew still has to hold either way.
+      # A minted sid has no pre-stamp (nothing existed to snapshot), so none
+      # of this fires for that path — "found" is already proof there.
+      if [ -n "$sid_to_record" ] && [ -n "$_burn_resume_pre_stamp" ]; then
+        local _burn_resume_post_stamp _burn_resume_pre_size _burn_resume_post_size
+        local _burn_resume_grew=0 _burn_resume_open_elsewhere=0
         _burn_resume_post_stamp="$(_clikae_mtime "$_burn_found_transcript") $(_burn_size "$_burn_found_transcript")"
-        [ "$_burn_resume_post_stamp" != "$_burn_resume_pre_stamp" ] || sid_to_record=""
+        _burn_resume_pre_size="${_burn_resume_pre_stamp#* }"
+        _burn_resume_post_size="${_burn_resume_post_stamp#* }"
+        case "$_burn_resume_pre_size" in ''|*[!0-9]*) _burn_resume_pre_size=0 ;; esac
+        case "$_burn_resume_post_size" in ''|*[!0-9]*) _burn_resume_post_size=0 ;; esac
+        [ "$_burn_resume_post_size" -gt "$_burn_resume_pre_size" ] && _burn_resume_grew=1
+        if command -v fuser >/dev/null 2>&1; then
+          fuser "$_burn_found_transcript" >/dev/null 2>&1 && _burn_resume_open_elsewhere=1
+        elif command -v lsof >/dev/null 2>&1; then
+          [ -n "$(lsof -- "$_burn_found_transcript" 2>/dev/null)" ] && _burn_resume_open_elsewhere=1
+        else
+          log_warn "burn: neither fuser nor lsof is on PATH — skipping the concurrent-open check for $_burn_found_transcript."
+        fi
+        if [ "$rc" -ne 0 ] || [ "$_burn_resume_grew" -ne 1 ] || [ "$_burn_resume_open_elsewhere" -eq 1 ]; then
+          sid_to_record=""
+        fi
       fi
     fi
     if [ -z "$sid_to_record" ] && declare -F adapter_all_transcripts >/dev/null 2>&1; then

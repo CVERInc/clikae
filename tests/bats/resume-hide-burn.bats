@@ -554,6 +554,37 @@ STUB
   [[ "$output" == *"$HUMAN_SID"* ]] || false
 }
 
+# #74 round-3 P3-2: round-2's own judgment was "rc == 0 OR (mtime,size)
+# changed" — an OR, so a FAILED engine whose (mtime,size) changed anyway (a
+# concurrent human still typing into the SAME transcript while burn's own
+# attempt failed and never touched it) still got recorded and hidden. A
+# (mtime,size)-changed check is a "someone wrote it" detector, not an "the
+# engine ran" detector. rc == 0 is now required outright, not an alternative.
+@test "#74 round-3 P3-2: burn claude --resume <existing sid> that fails while a concurrent human keeps typing into it writes no sidecar line" {
+  _fixture
+  clikae init claude T1
+  _human_claude   # the transcript pre-exists
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+f="$CLAUDE_CONFIG_DIR/projects/$slug/$HUMAN_SID.jsonl"
+# Simulate a concurrent human still typing into the SAME transcript — the
+# file grows — while THIS engine invocation itself refuses to start and
+# never reads or writes a single byte of it.
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"more human typing"}}\n' "$PWD" >> "$f"
+echo "error: engine refused to start" >&2
+exit 1
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -ne 0 ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ]
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+}
+
 @test "burn claude does not clash --session-id onto a caller-supplied --session-id" {
   _fixture
   clikae init claude T1
