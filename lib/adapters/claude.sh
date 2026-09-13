@@ -761,18 +761,34 @@ adapter_usage() (
       # loop no longer reaches this (P2-2), but `clikae usage`/`--fresh`
       # still can, and a locked keychain or an ACL prompt with no `security`
       # on PATH must not hang a headless caller.
+      #
+      # P2-2 (round-2 review): this used to resolve its OWN two-arm bound
+      # (timeout -> gtimeout, nothing else) right here — on the one platform
+      # this branch runs on (darwin* above), which ships NEITHER by default.
+      # stock macOS has no `timeout`/`gtimeout` at all (Homebrew coreutils
+      # only), so the 5s bound below was silently empty on every install
+      # that hadn't gone out of its way to add one — this repo already had
+      # the correct three-arm resolver (timeout -> gtimeout -> perl, plus an
+      # honest warning when none exist) 300 lines away in burn.sh, now
+      # lib/core/timeout_bin.sh (P2-2) — call that instead of re-rolling it
+      # narrower.
       command -v security >/dev/null 2>&1 || exit 1
       service="$(_claude_keychain_service "$dir")" || exit 1
-      local _tbin=""
-      if command -v timeout >/dev/null 2>&1; then _tbin="timeout"
-      elif command -v gtimeout >/dev/null 2>&1; then _tbin="gtimeout"; fi
-      if [ -n "$_tbin" ]; then
-        "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
-      else
-        security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
-      fi
+      local _tbin=""; declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin 2>/dev/null)"
+      case "$_tbin" in
+        timeout|gtimeout)
+          "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
+            jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null ;;
+        perl)
+          perl -e 'alarm shift; exec @ARGV or exit 127' 5 \
+              security find-generic-password -s "$service" -w 2>/dev/null |
+            jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null ;;
+        *)
+          # No timeout tool at all (_burn_timeout_bin already warned to
+          # stderr) — same as before this fix, unbounded, never a silent lie.
+          security find-generic-password -s "$service" -w 2>/dev/null |
+            jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null ;;
+      esac
     fi
   )" || return 1
   # Restrict to bearer-token characters; reject curl-config injection.

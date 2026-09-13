@@ -531,16 +531,12 @@ EOF
   printf '%s\n' "${best:-$fallback}"
 }
 
-# _burn_timeout_bin -> echo `timeout` or `gtimeout` if one is on PATH; otherwise echo
-# NOTHING and warn that the run will be UNBOUNDED. Factored out so the "no tool →
-# honest warning, still runs" contract is unit-testable (stock macOS ships neither).
-_burn_timeout_bin() {
-  if command -v timeout  >/dev/null 2>&1; then printf 'timeout';  return 0; fi
-  if command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout'; return 0; fi
-  if command -v perl     >/dev/null 2>&1; then printf 'perl';     return 0; fi
-  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) or \`perl\` on PATH — running WITHOUT a time bound."
-  return 0
-}
+# _burn_timeout_bin moved to lib/core/timeout_bin.sh (P2-2, round-2 review):
+# lib/adapters/claude.sh's Keychain read needs the same three-arm resolver
+# (timeout -> gtimeout -> perl -> honest warning) and an adapter has no
+# business sourcing a command file for it — see that file's header for why.
+# Sourced globally in bin/clikae like every other lib/core/*.sh, so it's
+# still just `_burn_timeout_bin` here, unchanged call sites below.
 
 # Artifact freshness uses _clikae_mtime (lib/core/adapter_loader.sh) — epoch mtime,
 # 0 if absent, GNU-stat-first for Linux portability — so a STALE file from a prior
