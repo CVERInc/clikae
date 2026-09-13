@@ -318,6 +318,80 @@ _agy_log() { # <line>
   [[ "$output" != *"Continue"* ]] || false
 }
 
+# --- #34: agy's Resume rows are TANK-scoped, not directory-scoped ------------
+# On every real agy install, history.jsonl's "workspace" field is a constant
+# ($HOME), not the directory a session actually ran in — measured on #34/#83:
+# 607/607 indexed conversations, one distinct workspace value. Filtering these
+# rows by "$PWD == recorded workspace" could therefore never match outside
+# $HOME, and this list was permanently empty in any real project directory.
+# Fixture mirrors the verify report: one session recorded IN this dir, one
+# recorded at $HOME (the realistic case), one with no history.jsonl entry at
+# all (adapter_session_cwd's fallback, also $HOME) — from a non-$HOME cwd, all
+# three must show up, newest first.
+@test "agy board Resume rows show sessions regardless of recorded workspace, newest first (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+
+  local sid_match="aaaaaaaa-0000-4000-8000-000000000001"    # workspace == this dir
+  local sid_homews="bbbbbbbb-0000-4000-8000-000000000002"   # workspace == $HOME (realistic)
+  local sid_nohist="cccccccc-0000-4000-8000-000000000003"   # no history.jsonl entry at all
+
+  mkdir -p "$base/brain/$sid_match/.system_generated/logs"
+  printf '{"content":"CWD-MATCH session content"}\n' > "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_homews/.system_generated/logs"
+  printf '{"content":"HOME-WORKSPACE session content"}\n' > "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_nohist/.system_generated/logs"
+  printf '{"content":"NO-HISTORY session content"}\n' > "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+
+  {
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_match" "$work"
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_homews" "$HOME"
+  } > "$base/brain/history.jsonl"
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"CWD-MATCH session content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HOME-WORKSPACE session content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NO-HISTORY session content"* ]] || { echo "$output"; false; }
+  # newest mtime first: NO-HISTORY, then HOME-WORKSPACE, then CWD-MATCH.
+  [[ "$output" == *"NO-HISTORY session content"*"HOME-WORKSPACE session content"*"CWD-MATCH session content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "agy board Resume rows are capped at CLIKAE_HOME_RECENT_MAX, not flooded (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+
+  local sid1="dddddddd-0000-4000-8000-000000000001"
+  local sid2="dddddddd-0000-4000-8000-000000000002"
+  local sid3="dddddddd-0000-4000-8000-000000000003"
+  mkdir -p "$base/brain/$sid1/.system_generated/logs" "$base/brain/$sid2/.system_generated/logs" "$base/brain/$sid3/.system_generated/logs"
+  printf '{"content":"SESSION-ONE content"}\n' > "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-TWO content"}\n' > "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-THREE content"}\n' > "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=2 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-THREE content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-TWO content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SESSION-ONE content"* ]] || { echo "cap not applied: $output"; false; }
+}
+
 @test "the continue list shows multiple recent sessions, newest first" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"

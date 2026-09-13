@@ -36,14 +36,63 @@ seed_agy_session() {
   [[ "$output" == *"ag-0001"* ]] || false
 }
 
-@test "antigravity recent_sids EXCLUDES sessions recorded in a different cwd" {
+# --- #34: agy rows are TANK-scoped, not directory-scoped ---------------------
+# This used to be "antigravity recent_sids EXCLUDES sessions recorded in a
+# different cwd", asserting the OLD $PWD filter. That filter is exactly the
+# bug: workspace is a constant ($HOME) on every real agy install (measured on
+# #34/#83: 607/607 indexed conversations, one distinct workspace value), so it
+# could never match outside $HOME and this list was permanently empty in any
+# real project directory. See docs/EXPECTATIONS.md "Engines on one board".
+@test "antigravity recent_sids INCLUDES sessions regardless of recorded cwd (#34)" {
   _setup_agy
   seed_agy_session ag-aaaa "$WORK" "here"
   seed_agy_session ag-bbbb "/somewhere/else" "elsewhere"
-  run adapter_recent_sids "$PROFILE"
+  run adapter_recent_sids "$PROFILE" 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"ag-aaaa"* ]] || false
-  [[ "$output" != *"ag-bbbb"* ]] || false
+  [[ "$output" == *"ag-bbbb"* ]] || false
+}
+
+@test "antigravity recent_sids: newest-first, capped at limit, regardless of cwd (#34)" {
+  _setup_agy
+  seed_agy_session ag-old "/elsewhere" "oldest"
+  touch -t 202001010000 "$BRAIN/ag-old/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-mid "$WORK" "middle"
+  touch -t 202101010000 "$BRAIN/ag-mid/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-new "/somewhere/else" "newest"
+  touch -t 202201010000 "$BRAIN/ag-new/.system_generated/logs/transcript.jsonl"
+
+  run adapter_recent_sids "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  local first second
+  first="$(printf '%s\n' "$output" | sed -n 1p | cut -d$'\037' -f2)"
+  second="$(printf '%s\n' "$output" | sed -n 2p | cut -d$'\037' -f2)"
+  [ "$first" = "ag-new" ] || { echo "got: $output"; false; }
+  [ "$second" = "ag-mid" ] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-old"* ]] || false
+}
+
+@test "antigravity recent_sids: a cache entry pointing at a deleted brain dir is skipped, not an error (#34)" {
+  _setup_agy
+  seed_agy_session ag-real "$WORK" "still here"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-ghost-deleted" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-real"* ]] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-ghost"* ]] || false
+}
+
+@test "antigravity recent_sids: a present cache does not truncate a multi-row request (#34)" {
+  _setup_agy
+  seed_agy_session ag-one "$WORK" "one"
+  seed_agy_session ag-two "/elsewhere" "two"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-one" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-one"* ]] || { echo "got: $output"; false; }
+  [[ "$output" == *"ag-two"* ]] || { echo "got: $output"; false; }
 }
 
 @test "antigravity recent_sids: no brain dir at all -> empty, not an error" {
@@ -273,7 +322,14 @@ assert_agy_title() {
   # greedy `.*:` walk gets wrong regardless of which key actually matched.
   printf '{"%s":"%s","%s":"%s"}\n' "$WORK" "$sid_here" "$other_dir" "$sid_other" \
     > "$PROFILE/antigravity-cli/cache/last_conversations.json"
-  run adapter_recent_sids "$PROFILE" 5
+  # limit=1 isolates the cache fast path (returns immediately on the anchored
+  # hit, never reaching the disk scan below) — #34 made recent_sids
+  # tank-scoped, so at limit>1 sid_other's OWN session would legitimately
+  # appear too (it has its own real transcript in this tank); that is no
+  # longer evidence of a mis-anchored cache read, so it can't be asserted
+  # away here. What this test still pins is the cache extraction itself:
+  # the anchored lookup must resolve $want to sid_here, not sid_other.
+  run adapter_recent_sids "$PROFILE" 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"$sid_here"* ]] || false
   [[ "$output" != *"$sid_other"* ]] || false
@@ -291,7 +347,10 @@ assert_agy_title() {
   # shape would have passed this ordering by accident; both orderings must work.
   printf '{"%s":"%s","%s":"%s"}\n' "$other_dir" "$sid_other" "$WORK" "$sid_here" \
     > "$PROFILE/antigravity-cli/cache/last_conversations.json"
-  run adapter_recent_sids "$PROFILE" 5
+  # limit=1: see the sibling test above — isolates the cache extraction from
+  # #34's tank-scoped disk scan, which would otherwise legitimately surface
+  # sid_other's own session too.
+  run adapter_recent_sids "$PROFILE" 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"$sid_here"* ]] || false
   [[ "$output" != *"$sid_other"* ]] || false

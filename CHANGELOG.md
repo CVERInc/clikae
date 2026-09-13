@@ -46,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since nothing was redacted — the tool crashed. #99 itself (the
   underlying `Argument list too long`) is still open, tracked separately.
 
+- `clikae resume <agy-sid>` now actually hands agy `--conversation <sid>`.
+  `adapter_resume_args` built its argv with
+  `printf '--conversation\n%s\n' "$sid"` — bash's `printf` builtin parses a
+  leading `--conversation` as an unknown option (rc=2, no stdout), so the
+  resume silently launched agy with no `--conversation` at all, opening a new
+  conversation instead of the one asked for (#34).
+- The home board's "Resume" rows for agy are no longer permanently empty in
+  every real project directory. They used to filter by the session's recorded
+  `workspace` matching `$PWD`, but every real agy install records the same
+  `workspace` (`$HOME`) for every conversation regardless of where it actually
+  ran, so that filter could never match outside `$HOME`. agy's Resume rows are
+  now tank-scoped instead of directory-scoped: every session in the active
+  tank, newest first, capped by `CLIKAE_HOME_RECENT_MAX` like every other
+  engine (#34).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or

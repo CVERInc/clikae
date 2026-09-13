@@ -178,6 +178,16 @@ dir and the recorded `cwd` no longer equals `$PWD`, so the session goes invisibl
 (grok *also* names its session folder after the encoded cwd, but clikae deliberately
 reads the recorded value instead — a folder-name scheme is the vendor's to change.)
 
+**agy's board "Resume" rows are TANK-scoped, not directory-scoped, unlike every
+other engine.** claude/codex/grok match a session's recorded `cwd` against
+`$PWD`; agy doesn't, on purpose (#34) — workspace is a constant on real
+installs, so cwd-scoping would hide everything: every indexed agy conversation
+records the same `workspace` (your home directory), never the project
+directory you actually ran it from, so a `$PWD` filter here could never match
+outside `$HOME`. The Resume list for agy is every session in the active tank,
+newest first, capped the same way every engine's list is
+(`CLIKAE_HOME_RECENT_MAX`, default 10) — not narrowed to "this project".
+
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. codex and grok
 join the Soul through a *pointer* note instead of a real memory dir, so there is

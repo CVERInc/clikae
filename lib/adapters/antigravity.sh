@@ -167,20 +167,31 @@ adapter_title_for_file() {
   printf '%s' "$t"
 }
 
-# Optional hook: CHEAP list of this directory's recent sessions under <dir> —
+# Optional hook: CHEAP list of this TANK's recent sessions under <dir> —
 # "<epoch-mtime>\037<session-id>" per line, newest first, capped at [limit]
 # (default 5) — the same contract as claude.sh's/codex.sh's twins, and the
 # missing half of why the home board's Live row showed an empty preview for
 # agy: without this hook, `_home_live_rows` (lib/commands/home.sh) never even
 # calls adapter_session_title — its `declare -F adapter_recent_sids` gate
 # failed outright, so title/recap stayed the empty strings they were
-# initialized to. `agy` has no equivalent of $PWD-embedded transcript paths
-# (claude) or in-file cwd records (codex); the only cwd record is
-# history.jsonl's "workspace" field per session, keyed by session id — so scope
-# by reading that back per candidate, same as adapter_session_cwd already does
-# for one session at a time.
+# initialized to.
+#
+# 🔴 #34: this used to also filter by "$PWD == the session's recorded
+# history.jsonl workspace field" (the same trick adapter_session_cwd uses for
+# one session at a time). But workspace is a constant ($HOME) on every real
+# agy install — measured on #34/#83: 607/607 indexed conversations share one
+# distinct workspace value — so that filter could never match outside $HOME,
+# and the board's Resume rows for agy were permanently empty in any real
+# project directory. workspace is a constant on real installs, so
+# cwd-scoping would hide everything: dropped in favor of TANK-scoped rows
+# (issue #34's "Option 1") — every session in this tank, newest first,
+# relying on the CALLER's own cap ($limit / the board's
+# CLIKAE_HOME_RECENT_MAX) rather than a cwd match to keep the list from
+# flooding. Burn one-shots stay hidden through #83's sidecar, unaffected by
+# this. See docs/EXPECTATIONS.md "Engines on one board" for the trade-off in
+# user-facing terms.
 adapter_recent_sids() {
-  local dir="$1" limit="${2:-5}" brain want sdir sid f cwd
+  local dir="$1" limit="${2:-5}" brain want sdir sid f
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
@@ -221,6 +232,9 @@ adapter_recent_sids() {
         fi
         afiles=("$f")
       fi
+      # Stale: the cache's pointer no longer has a brain dir (e.g. cleaned up
+      # since the cache was written). Fall through to the disk scan below
+      # rather than erroring or returning nothing.
     fi
   fi
 
@@ -234,8 +248,10 @@ adapter_recent_sids() {
       for _sf in "${afiles[@]}"; do [ "$_sf" = "$f" ] && { _seen=1; break; }; done
     fi
     [ "$_seen" -eq 1 ] && continue
-    cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
-    [ "${cwd%/}" = "$want" ] || continue
+    # #34: tank-scoped — every session in this tank, newest first, capped by
+    # the caller's own limit. No adapter_session_cwd/$want filter here (see
+    # the docstring above): workspace is a constant on real installs, so
+    # cwd-scoping would hide everything.
     afiles+=("$f")
   done
   [ "${#afiles[@]}" -gt 0 ] || return 0
