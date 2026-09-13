@@ -263,7 +263,12 @@ live_usage() {
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
   __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
-  _home_is_dryv() { _DRY_RESET='reset passed · unverified'; return 1; }
+  # round-3 review, P2-1: dry/expired-limit are now checked BEFORE the usage
+  # cache (home.sh's _home_fuel_dotv_compute) and WIN outright, so a stub
+  # that reports an unverified caution here would mask every glyph below
+  # regardless of percentage — report nothing dry/expired so the usage
+  # block this test actually means to exercise is reachable at all.
+  _home_is_dryv() { _DRY_RESET=''; return 1; }
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
   local pct expected
   for pct in 59 60 90; do
@@ -288,7 +293,17 @@ live_usage() {
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
   __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
-  _home_is_dryv() { _DRY_RESET='reset passed · unverified'; return 1; }
+  # round-3 review, P2-1: dry/expired-limit are now checked BEFORE the usage
+  # cache and WIN outright — a stub that unconditionally reports the
+  # unverified caution would mask the FIRST (fresh, <24h) case below, which
+  # this test means to prove shows the READING instead. Report nothing
+  # dry/expired until the second (25h-old, meant-to-fall-through) case flips
+  # the flag below.
+  local _sim_unverified=0
+  _home_is_dryv() {
+    if [ "$_sim_unverified" = 1 ]; then _DRY_RESET='reset passed · unverified'; else _DRY_RESET=''; fi
+    return 1
+  }
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
   local now=1789400000
 
@@ -307,6 +322,7 @@ live_usage() {
   # 25h old — past the 24h line: too stale to show as a number at all, falls
   # through to whatever the rest of the chain says (here, the mocked
   # unverified-reset fallback, same as a missing cache would hit).
+  _sim_unverified=1
   jq -cn --argjson pct 44 --argjson now "$now" --argjson cached_at "$((now - 90000))" \
     '{window_pct:$pct,weekly_pct:20,source:"vendor",cached_at:$cached_at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"

@@ -1065,10 +1065,27 @@ _home_fuel_memo_reset() {
 # cached reading at all once the reading is 24h or older (falls through to
 # the same dry/weekly/codex/ready chain below this block, unchanged) — a
 # number that old is closer to noise than to a fact worth a coloured dot.
+#
+# P2-1, round 3: dry and "reset passed · unverified" are checked FIRST, below,
+# and WIN outright — a fresh vendor percentage never overrides them. Per
+# docs/DESIGN-board-fuel-dots.md:41 (red = dry, including account contagion
+# and the verbatim reset string) and :223-224 (#75: an expired limit takes
+# precedence over proactive percentage snapshots), the vendor reading only
+# gets to colour a tank that has already cleared BOTH checks. Landing the
+# usage_board_fields block ahead of _home_is_dryv (as this function did before
+# round 3) let any <24h cached reading paper over a dry tank, silently eating
+# its reset string — round-2's own receipt found four real tanks all carrying
+# a vendor reading, so that ordering was the common case, not an edge one.
 _home_fuel_dotv_compute() {
   local dry="$1" cli="$2" profile="$3" now="${4:-}"
   _FNOTE=""
   [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
+  if _home_is_dryv "$dry" "$cli" "$profile"; then
+    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
+  fi
+  if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
+  fi
   local usage_fields up uw peak cached_at age ttl
   if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
     IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
@@ -1084,12 +1101,6 @@ _home_fuel_dotv_compute() {
       return 0
     fi
     # 24h or older: too stale to trust — fall through as if unread, below.
-  fi
-  if _home_is_dryv "$dry" "$cli" "$profile"; then
-    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
-  fi
-  if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
-    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
   if _home_weekly_readv "$cli" "$profile"; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0

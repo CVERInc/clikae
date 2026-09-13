@@ -308,10 +308,18 @@ whole redraw) — see that function's own header (round-2 review, P3-1) for
 the measured cost and why a hand-rolled bash-only JSON reader was judged
 not worth it for a sub-millisecond-per-tank, redraw-only cost.
 
-For a current reading, the higher used percentage determines the dot: 90%
-or more red, 60% or more yellow, otherwise green. The note shows both
-window and weekly percentages. Missing, expired, or unknown readings fall
-through to the existing transcript logic, including `reset passed · unverified`.
+Dry and the expired-limit caution are decided FIRST, from `_home_is_dryv` —
+a persisted dry marker, an account-contagion sibling, or a parseable reset
+that has already passed (`reset passed · unverified`) all win outright,
+verbatim reset string included, before the vendor cache is even consulted
+(round-3 review, P2-1: the reverse ordering let any <24h cached reading
+paper over a dry tank). The vendor reading only colours a tank that has
+already cleared both checks: for a current (<24h) reading on such a tank,
+the higher used percentage determines the dot — 90% or more red, 60% or
+more yellow, otherwise green — and the note shows both window and weekly
+percentages. Missing readings, and readings 24h or older, are treated as
+unknown and fall through to the existing weekly-caution / codex-status /
+ready chain below.
 
 The tank a caller names is always the one burn launches — there is no
 pre-launch substitution (round-1 review, P1-2/P1-3/P1-4). Headroom
