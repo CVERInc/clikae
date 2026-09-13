@@ -2031,10 +2031,20 @@ cmd_burn() {
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s=""
-  # #74 round-2 P1-1: the cwd the engine actually runs in, not the cwd of
-  # THIS shell. Defaults to $PWD (raw '-- <cmd...>' mode never overrides the
-  # engine's cwd), reset to add_dirs[0] at each _burn_compose call below —
-  # that argv IS what tells codex's `-C` where to run (adapter_burn_flags).
+  # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
+  # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
+  # caller that ever reads this default value directly, before any reset
+  # below — has no cwd-override flag at all, so $PWD IS its launch cwd).
+  # --prompt/--prompt-file mode resets it to add_dirs[0] at each
+  # _burn_compose call below (that argv IS what tells codex's `-C` where to
+  # run, adapter_burn_flags). Raw '-- <cmd...>' mode is NOT exempt from
+  # overriding the engine's cwd — the user's own argv can carry codex's `-C`
+  # (burn --help's own raw example, burn.sh:118, is exactly that) — so that
+  # path re-derives it from cmd[@] via adapter_cwd_from_args instead of
+  # trusting this default; empty when the adapter defines no such hook or the
+  # flag isn't present, so the multi-candidate tie-break below matches
+  # nothing rather than misattributing a concurrent session (never hide what
+  # is not proven).
   local _burn_launch_cwd="$PWD"
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
@@ -2348,6 +2358,17 @@ cmd_burn() {
     _burn_launch_cwd="${add_dirs[0]}"
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
+  else
+    # #74 round-3 P1-1: raw '-- <cmd...>' mode — the user's own argv owns the
+    # engine's cwd (codex's `-C`/`--cd`; burn --help's raw example, burn.sh:118,
+    # uses exactly that). Ask the adapter to read it back out of cmd[@]; empty
+    # when the adapter has no such hook or the flag isn't there, so the
+    # multi-candidate tie-break below finds nothing to match rather than
+    # falling back to $PWD and re-catching a concurrent human session.
+    _burn_launch_cwd=""
+    if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+      _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+    fi
   fi
   _burn_claude_headless_guards
 
@@ -2954,6 +2975,14 @@ KV
         _burn_claude_headless_guards
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
       else
+        # #74 round-3 P1-1: raw mode keeps the same argv verbatim, but it now
+        # runs under a DIFFERENT engine's adapter — re-derive rather than
+        # keep whatever the previous engine's adapter_cwd_from_args read (or
+        # didn't), same rule as the entry-point derivation above.
+        _burn_launch_cwd=""
+        if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+          _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+        fi
         log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       fi
     fi

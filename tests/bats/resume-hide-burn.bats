@@ -408,6 +408,88 @@ STUB
   [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
 }
 
+# --- #74 round-3 P1-1: raw '-- <cmd...>' mode reruns round-2's P1-1 exactly —
+# _burn_launch_cwd used to stay at its "$PWD" default for this path no matter
+# what the user's own argv said, because both places that ever reset it
+# (_burn_compose's two call sites) are gated on prompt_set==1. codex's OWN -C
+# can be given directly after `--` (this is literally burn --help's own raw
+# example, burn.sh:118), so a caller-supplied `-C` outside $PWD reproduced
+# round-2's exact bug on this path: burn's own session stopped matching and a
+# concurrent human session in $PWD got recorded and hidden instead. ---------
+
+@test "#74 round-3 P1-1: raw '-- <cmd...>' codex burn with -C attributes to it, not the caller's \$PWD, and never hides a concurrent human session there" {
+  _fixture
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/repo"
+  (cd "$TEST_HOME/repo" && git init -q .)
+  local artifact="$TEST_HOME/repo/result"
+  # Two transcripts appear DURING the run: burn's own, whose recorded cwd is
+  # codex's -C launch dir ($TEST_HOME/repo); and a concurrent human's, whose
+  # recorded cwd is the CALLER's $PWD ($TEST_HOME/work, unchanged). Before
+  # this fix, _burn_launch_cwd never left its "$PWD" default in raw mode, so
+  # the human's transcript was the one that matched.
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+orig_pwd="\$PWD"
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = -C ]; then cd "\$2" || exit 1; break; fi
+  shift
+done
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$HUMAN_SID" "\$orig_pwd" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$HUMAN_SID.jsonl"
+printf 'done\n' > "$artifact"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --artifact "$artifact" -- exec -C "$TEST_HOME/repo" --skip-git-repo-check -s workspace-write 'go'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$artifact" ]
+  _assert_sidecar codex T1 "$STUB_SID"
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$STUB_SID"* ]] || false
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+  run clikae resume
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+  [[ "$output" != *"$STUB_SID"* ]] || false
+}
+
+@test "#74 round-3 P1-1: raw '-- <cmd...>' codex burn WITHOUT -C and two candidates records nothing" {
+  _fixture
+  clikae init codex T1
+  local other_sid="88888888-8888-4888-8888-888888888888"
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$other_sid" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$other_sid.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  # No -C at all: adapter_cwd_from_args finds nothing, _burn_launch_cwd is
+  # EMPTY, so the tie-break's cwd compare 0-hits both candidates — never
+  # falls back to $PWD and picks one by accident.
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" -- exec -s workspace-write 'go'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"could not attribute session"* ]] || false
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
+}
+
+@test "#74 round-3 P1-1: burn --help's own raw -C example shape still records the single new session" {
+  _fixture
+  clikae init codex T1
+  # The literal shape documented at burn --help (burn.sh:118) and
+  # docs/proposals/issue-24-burn-simplify.md:44 — a single new transcript, so
+  # this never even reaches the cwd tie-break, but it must still run clean.
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" -- exec -C "$TEST_HOME/work" --skip-git-repo-check -s workspace-write 'read in.txt, write out.md'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$STUB_ARTIFACT" ]
+  _assert_sidecar codex T1 "$STUB_SID"
+}
+
 # --- #74 round-1 P1-3: burn used to append --session-id unconditionally, even
 # when the caller's own extra args already carried resume/session identity —
 # fighting claude's own rule ("--session-id can only be used with --continue

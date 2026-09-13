@@ -58,6 +58,16 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd agy's OWN argv carries — see codex.sh's twin for why
+# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). Moot
+# in practice — burn.sh:2315 refuses raw mode for agy outright, it only ever
+# runs through --prompt/--prompt-file — but defined for the same reason
+# claude.sh's twin is: `agy --help` (checked live) has no cwd-override flag,
+# so the honest answer is "no", not an absent function.
+adapter_cwd_from_args() {
+  return 1
+}
+
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1

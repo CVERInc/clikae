@@ -178,6 +178,31 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd codex's OWN argv carries, read back out of "$@" for
+# `clikae burn`'s raw '-- <cmd...>' mode (#74 round-3 P1-1). Unlike
+# --prompt/--prompt-file mode, which composes -C itself from add_dirs[0]
+# (adapter_burn_flags above), a raw command's cwd is entirely the caller's:
+# `clikae burn codex T -- exec -C /tmp -s workspace-write '…'` — the --help
+# example at burn.sh:118 is exactly this shape. Recognises `-C <dir>`, the
+# attached `-C<dir>` (codex's own arg parser accepts both, same convention
+# git -C does), and the long alias `--cd <dir>`. Returns empty (rc 1) when
+# none appear — codex then runs in $PWD like every other engine, and the
+# caller (burn.sh) treats that as "no override" rather than guessing $PWD
+# itself (an unresolved raw launch must match nothing, not something).
+adapter_cwd_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "-C" ] || [ "$prev" = "--cd" ]; then
+      printf '%s' "$a"; return 0
+    fi
+    case "$a" in
+      -C?*) printf '%s' "${a#-C}"; return 0 ;;
+    esac
+    prev="$a"
+  done
+  return 1
+}
+
 # This dir's most recent rollout under <dir> (for relay / handoff).
 adapter_transcript_path() {
   local f; f="$(_codex_rollouts_for_cwd "$1" | head -n 1)"
