@@ -440,9 +440,12 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
-    if declare -F usage_read >/dev/null; then
-      usage_read "$cli" "$t" >/dev/null
-      if fields="$(usage_cached_fields "$cli" "$t")"; then
+    # P2-2 (round-1 review): read the cache only — never a vendor round-trip
+    # from burn's hot path. Stale is fine here (usage_cache_peek, not
+    # usage_read/usage_cached_fields); missing/unknown just loses to any
+    # tank with a reading (P2-9 below still applies its own tie-break).
+    if declare -F usage_cache_peek >/dev/null; then
+      if fields="$(usage_cache_peek "$cli" "$t")"; then
         IFS=$'\t' read -r _up _uw peak <<< "$fields"
         peak="${peak%%.*}"
         if [ "$peak" -lt "$best_peak" ]; then best="$t"; best_peak="$peak"; fi

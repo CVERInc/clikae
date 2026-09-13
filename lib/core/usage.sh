@@ -39,14 +39,37 @@ usage_read() (
   printf '%s\n' "$reading"
 )
 
+# Cache-only peek: never calls the vendor, never forks the adapter, never
+# writes. burn's candidate ranking (P2-2, round-1 review) needs a headroom
+# number to order tanks by — but burn's launch/reroute path must not pay a
+# vendor round-trip (up to --max-time 8 EACH, serialized per candidate) just
+# to pick one. Unlike usage_cached_fields below, a STALE reading is still
+# returned here (stale headroom beats no headroom for ranking purposes);
+# only a missing cache, missing jq, or a non-vendor/incomplete reading is
+# "unknown" (empty stdout, rc=1). Fresh reads happen only in `clikae usage`
+# (usage_read, optionally --fresh) and in the board's own refresh step.
+usage_cache_peek() {
+  local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
+  [ -f "$cache" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -er '
+    select(.source == "vendor") |
+    select(.window_pct != null and .weekly_pct != null) |
+    [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
+}
+
 # Board reads only: never do network I/O during a redraw. Expired readings
-# fall back to the existing transcript/expired-reset state.
+# fall back to the existing transcript/expired-reset state. `now` may be
+# passed in (epoch seconds) so a caller doing several lookups in one redraw
+# forks `date` once, not once per lookup (P2-1, round-1 review) — see
+# lib/commands/home.sh's _home_fuel_dotv memoization.
 usage_cached_fields() {
-  local cache="$CLIKAE_HOME/state/usage/$1/$2.json" ttl="${CLIKAE_USAGE_TTL:-120}"
+  local cache="$CLIKAE_HOME/state/usage/$1/$2.json" ttl="${CLIKAE_USAGE_TTL:-120}" now="${3:-}"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
-  jq -er --argjson now "$(date +%s)" --argjson ttl "$ttl" '
+  [ -n "$now" ] || now="$(date +%s)"
+  jq -er --argjson now "$now" --argjson ttl "$ttl" '
     select(.source == "vendor" and .cached_at <= $now and ($now-.cached_at < $ttl)) |
     select(.window_pct != null and .weekly_pct != null) |
     select(all([.window_resets_at,.weekly_resets_at][];

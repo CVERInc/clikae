@@ -991,9 +991,45 @@ _home_codex_status_readv() {
 # broke this contract before the fix.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
+  # P2-1 (round-1 review): a tank can appear in more than one row of the SAME
+  # redraw (a Live row and its Tank row are the same tank) — 1634/1657/1686/
+  # 2574/2632 are five call sites, not five DIFFERENT tanks. usage_cached_fields
+  # forks `date`+`jq`; paying that per ROW instead of per TANK-per-REDRAW was
+  # the 719µs -> 4605µs regression. _home_fuel_memo_reset (called once per
+  # render, same "once per render" shape as _home_cols_prime) clears this
+  # between redraws; within one redraw a repeat (dry,cli,profile) key is
+  # served from memory with zero forks.
+  local _key="$dry"$'\037'"$cli/$profile" _n="${#_FUEL_MEMO_KEYS[@]}" _i
+  if [ "$_n" -gt 0 ]; then
+    for (( _i = 0; _i < _n; _i++ )); do
+      if [ "${_FUEL_MEMO_KEYS[_i]}" = "$_key" ]; then
+        _FDOT="${_FUEL_MEMO_DOT[_i]}"; _FNOTE="${_FUEL_MEMO_NOTE[_i]}"
+        return 0
+      fi
+    done
+  fi
+  [ -n "$_FUEL_MEMO_NOW" ] || _FUEL_MEMO_NOW="$(date +%s 2>/dev/null || echo 0)"
+  _home_fuel_dotv_compute "$dry" "$cli" "$profile" "$_FUEL_MEMO_NOW"
+  _FUEL_MEMO_KEYS[_n]="$_key"; _FUEL_MEMO_DOT[_n]="$_FDOT"; _FUEL_MEMO_NOTE[_n]="$_FNOTE"
+}
+
+# _home_fuel_memo_reset — clear the per-redraw fuel-dot memo. Called once at
+# the top of each redraw entry point (_home_render_static, _home_pick_draw_body),
+# right beside _home_cols_prime — the same "one per render, not one per row"
+# shape that function already established.
+_FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+_home_fuel_memo_reset() {
+  _FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+}
+
+# The actual computation _home_fuel_dotv used to do inline — unchanged logic,
+# just given a $4 `now` (epoch seconds, shared for the whole redraw) so it
+# never forks `date` itself; usage_cached_fields accepts the same param.
+_home_fuel_dotv_compute() {
+  local dry="$1" cli="$2" profile="$3" now="${4:-}"
   _FNOTE=""
   local usage_fields up uw peak
-  if declare -F usage_cached_fields >/dev/null && usage_fields="$(usage_cached_fields "$cli" "$profile")"; then
+  if declare -F usage_cached_fields >/dev/null && usage_fields="$(usage_cached_fields "$cli" "$profile" "$now")"; then
     IFS=$'\t' read -r up uw peak <<< "$usage_fields"
     _FNOTE="window ${up}% · weekly ${uw}%"
     peak="${peak%%.*}"
@@ -1641,6 +1677,7 @@ _home_trunc_mid() {
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
   _home_cols_prime          # one width question per render, not one per row
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   local items="$1" dry="$2" any_dry=""
   # Two numbers for one headline used to cost nine processes — two awks, a sort, a
   # uniq-by-grep and the pipes to feed them — over a string the loop below is
@@ -2533,6 +2570,7 @@ _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
   local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
   _home_cols_prime
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with

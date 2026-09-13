@@ -756,9 +756,23 @@ adapter_usage() (
     if [ -f "$dir/.credentials.json" ]; then
       jq -er '.claudeAiOauth.accessToken // empty' "$dir/.credentials.json" 2>/dev/null
     elif [[ "${OSTYPE:-}" == darwin* ]]; then
+      # P2-7 (round-1 review): mirror adapter_migrate_credentials:702's
+      # `command -v security` guard, and bound the call — burn's candidate
+      # loop no longer reaches this (P2-2), but `clikae usage`/`--fresh`
+      # still can, and a locked keychain or an ACL prompt with no `security`
+      # on PATH must not hang a headless caller.
+      command -v security >/dev/null 2>&1 || exit 1
       service="$(_claude_keychain_service "$dir")" || exit 1
-      security find-generic-password -s "$service" -w 2>/dev/null |
-        jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      local _tbin=""
+      if command -v timeout >/dev/null 2>&1; then _tbin="timeout"
+      elif command -v gtimeout >/dev/null 2>&1; then _tbin="gtimeout"; fi
+      if [ -n "$_tbin" ]; then
+        "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      else
+        security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      fi
     fi
   )" || return 1
   # Restrict to bearer-token characters; reject curl-config injection.
