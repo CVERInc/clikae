@@ -1832,6 +1832,53 @@ STUB
   [ "$status" -ne 0 ]
 }
 
+# --- P3-1 (round-3 fix review, this PR): `_burn_redact_full` used to
+# `return 0` regardless of whether its own `perl` invocation actually ran —
+# a needle list too large for perl's exec to accept at all (E2BIG, the #99
+# shape: a >128 KiB --prompt-file) prints NOTHING on stdout and now returns
+# 1 instead, so a caller can tell "redacted to nothing" apart from "the
+# redaction tool itself crashed". A real E2BIG needs an OS-specific argv
+# ceiling to reproduce; a `perl` stub that fails to run proves the SAME
+# code path (PIPESTATUS[1] != 0) without depending on that ceiling.
+
+@test "_burn_redact_full: perl failing to run is reported via a non-zero return, not a silent empty success (P3-1 r3)" {
+  _src_burn
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  cat > "$BATS_TEST_TMPDIR/fakebin/perl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/fakebin/perl"
+  PATH="$BATS_TEST_TMPDIR/fakebin:$PATH"
+  prompt="this-is-the-secret-needle-value"
+  cmd=()
+  run _burn_redact_full "some text with this-is-the-secret-needle-value inside"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "burn #99 (P3-1 r3): when redaction itself fails, the fast-failure reason says so distinctly, not 'output redacted'" {
+  _stub_burn_transport
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  cat > "$BATS_TEST_TMPDIR/fakebin/perl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/fakebin/perl"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "some ordinary diagnostic line, unrelated to any prompt echo" >&2
+exit 3
+STUB
+  clikae init codex T1
+  PATH="$BATS_TEST_TMPDIR/fakebin:$PATH" run clikae burn codex T1 --json --no-reroute \
+    --artifact "$BATS_TEST_TMPDIR/out" --prompt "this-is-the-secret-needle-value-in-the-prompt" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"engine exited rc=3, output could not be redacted"'* ]] || false
+  [[ "$output" != *'"reason":"engine exited rc=3, output redacted"'* ]] || false
+}
+
 # --- P1-2 (2026-09-08 ROUND-3 review): pre-classification redaction ran bash's
 # super-linear ${text//needle/repl} over the WHOLE captured output — measured
 # 129x main's time on an 8 MB raw-argv capture (240s vs 1.9s), entirely AFTER

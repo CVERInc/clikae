@@ -360,7 +360,14 @@ _burn_redact_full() {
       }
       s/(?<![A-Za-z0-9_])(?:$pat)(?![A-Za-z0-9_])/$r/g if length($pat);
     '
-    return 0
+    # P3-1 (round-3 fix review, this PR): this used to `return 0` no matter
+    # what — a huge needle_list (e.g. a >128 KiB --prompt-file, #99) can make
+    # the exec of perl ITSELF fail (E2BIG, rc=126), which prints nothing on
+    # stdout; the caller then read an empty string as "redacted to nothing"
+    # and said so, when really nothing was redacted at all — the tool
+    # crashed. Report that distinctly via a non-zero return instead.
+    [ "${PIPESTATUS[1]}" -eq 0 ] && return 0
+    return 1
   fi
   local n
   for n in "${needles[@]}"; do
@@ -374,7 +381,13 @@ _burn_redact() {
   if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
     text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
   fi
-  _burn_redact_full "$text" "$repl"
+  # P3-1 (round-3 fix review, this PR): _burn_redact_full can now return 1
+  # when its own redaction tool fails to run (see its comment) — this
+  # wrapper's contract has always been "best-effort text back, never abort
+  # the caller under bin/clikae's `set -e`", so swallow that here; the one
+  # call site that needs to tell "redacted to nothing" apart from "the tool
+  # crashed" calls _burn_redact_full directly and checks its own rc.
+  _burn_redact_full "$text" "$repl" || true
 }
 
 # Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
@@ -2575,7 +2588,11 @@ KV
     # nothing) that re-slurped the whole stream unbounded and re-ran
     # _burn_redact_full on it. #81's actual cause was limit.sh:130's anchor
     # not accepting codex's "ERROR:" transport prefix — fixed there.
-    local out_for_class; out_for_class="$(_burn_redact_full "$out")"
+    # P3-1 (round-3 fix review, this PR): `|| true` — a non-zero rc here
+    # (the redaction tool itself failing to run) must not abort the burn
+    # under `set -e`; this call site doesn't need to tell that apart from
+    # "redacted to nothing", it only needs SOME text to classify against.
+    local out_for_class; out_for_class="$(_burn_redact_full "$out")" || true
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry
@@ -2739,9 +2756,16 @@ KV
         # line is placeholder or blank (a stderr that is ONLY the prompt,
         # or the #99 shape above), say so in plain words — `reason` must
         # never be "" or null.
-        local _reason_placeholder="" _reason_redacted _reason_candidate
+        local _reason_placeholder="" _reason_redacted _reason_candidate _redact_rc=0
         [ -n "${saved_prompt:-}" ] && _reason_placeholder="[prompt: $saved_prompt]"
-        _reason_redacted="$(_burn_redact_full "$(head -c "$_BURN_REDACT_TAIL_BYTES" "$stderr_file")" "$_reason_placeholder")"
+        _reason_redacted="$(_burn_redact_full "$(head -c "$_BURN_REDACT_TAIL_BYTES" "$stderr_file")" "$_reason_placeholder")" || _redact_rc=$?
+        # P3-1 (round-3 fix review, this PR): a non-zero _redact_rc means the
+        # redaction tool itself failed to run (perl exec E2BIG, #99 shape) —
+        # nothing was redacted, so say THAT, not "output redacted" (which
+        # implies redaction happened and just found nothing worth keeping).
+        if [ "$_redact_rc" -ne 0 ]; then
+          failure_reason="engine exited rc=$rc, output could not be redacted"
+        else
         while IFS= read -r _reason_candidate; do
           _reason_candidate="$(printf '%s' "$_reason_candidate" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           [ -n "$_reason_candidate" ] || continue
@@ -2754,6 +2778,7 @@ KV
           failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
         else
           failure_reason="engine exited rc=$rc, output redacted"
+        fi
         fi
       fi
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
