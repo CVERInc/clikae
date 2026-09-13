@@ -50,6 +50,28 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   [[ "$output" != *"clikae_touch_scroll"* ]] || { echo "$output"; false; }
 }
 
+@test "doc gate: a BARE mention of an @-option's name is still checked as a function" {
+  # P2-1 (2026-09 R1 review): the @-option branch's unconditional `continue`
+  # let a bare, function-shaped mention of the SAME name go unchecked purely
+  # because that name also occurs, elsewhere, as `@name`. Reviewer's negative
+  # control: `clikae_touch_scroll` already occurs as `@clikae_touch_scroll` in
+  # docs/usage.md; name it a second time, bare and backtick-wrapped, as if it
+  # were a function clikae calls — it must go red for that claim, on top of
+  # (not instead of) the correct @-option claim staying green. A second name,
+  # `clikae_ghost_helper`, never occurs with an `@` at all and was already
+  # going red before this fix — kept here so a regression narrowing the check
+  # back down would still be caught.
+  _copy_repo
+  printf '\nThe helper calls `clikae_touch_scroll` to decide, and `clikae_ghost_helper` to log.\n' \
+    >> "$REPO/docs/usage.md"
+  run _gate_in_copy
+  [ "$status" -ne 0 ] || { echo "the gate stayed silent"; false; }
+  [[ "$output" == *"clikae_touch_scroll — named in a doc, defined nowhere"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae_ghost_helper — named in a doc, defined nowhere"* ]] || { echo "$output"; false; }
+  # The @-option claim is still true and must not be reported as broken.
+  [[ "$output" != *"@clikae_touch_scroll — named in a doc as a tmux option"* ]] || { echo "$output"; false; }
+}
+
 @test "doc gate: fires when a docstring names a caller that does not call" {
   # The shape that hid burn's missing prelaunch: an enumeration is only useful
   # if it is complete, so it is checked in both directions.

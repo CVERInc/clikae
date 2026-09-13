@@ -115,10 +115,23 @@ while IFS= read -r fn; do
   # one is the `@` prefix, and \b matches right after it. The doc still makes
   # a claim about the code — that lib/core/tmux.sh sets the option — so hold
   # it to that claim instead of a definition it can never have.
+  #
+  # 🔴 A NAME CAN BE NAMED BOTH WAYS IN THE SAME DOC SET, and an unconditional
+  # `continue` here let the second one go unchecked (P2-1, 2026-09 R1 review):
+  # once @fn occurred anywhere, the function check below never ran again for
+  # fn even where a DIFFERENT sentence named it bare — backtick-wrapped, no
+  # `@` — which is a claim that a FUNCTION of that name exists. Negative
+  # control from the review: a doc naming `clikae_touch_scroll` (an existing
+  # tmux option) bare, as if it called it, went silently green. Only skip the
+  # function check when EVERY occurrence of fn in the docs is @-prefixed;
+  # `@?\bfn\b` captures each occurrence with or without its `@`, so any match
+  # missing that `@` proves a bare, function-shaped mention exists.
   if grep -qE "@${fn}\b" "${DOCS[@]}" 2>/dev/null; then
     grep -qE "set-option.*@${fn}\b" lib/core/tmux.sh 2>/dev/null \
       || say_fail "@$fn — named in a doc as a tmux option, never set in lib/core/tmux.sh"
-    continue
+    if ! grep -ohE "@?\b${fn}\b" "${DOCS[@]}" 2>/dev/null | grep -qv '^@'; then
+      continue
+    fi
   fi
   grep -qE "^[[:space:]]*${fn}\(\)" "${SRC[@]}" 2>/dev/null \
     || say_fail "$fn — named in a doc, defined nowhere"
