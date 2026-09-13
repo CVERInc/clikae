@@ -42,12 +42,17 @@ fi
 
 if [ "${1:-}" = "api" ] && [ "${2:-}" = "search/issues" ]; then
   shift 2
-  q=""
+  q="" method="" page=""
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-f" ]; then
-      shift
-      case "${1:-}" in q=*) q="${1#q=}" ;; esac
-    fi
+    case "$1" in
+      --method) shift; method="${1:-}" ;;
+      -f) shift
+          case "${1:-}" in
+            q=*) q="${1#q=}" ;;
+            page=*) page="${1#page=}" ;;
+          esac
+          ;;
+    esac
     shift
   done
   queue="org"
@@ -57,6 +62,13 @@ if [ "${1:-}" = "api" ] && [ "${2:-}" = "search/issues" ]; then
   [ -f "$cf" ] && n="$(cat "$cf")"
   n=$((n + 1))
   printf '%s' "$n" > "$cf"
+  # P2-8: record what was actually SENT, not just what to answer with — a
+  # bats test can then assert on the query string / HTTP method / page
+  # number, the exact gap the round-1 review named ("stub永遠驗不到 HTTP
+  # 動詞" — the stub is ours to write; asserting it is three lines).
+  printf '%s\n' "$method" > "$dir/$queue.$n.sent_method"
+  printf '%s\n' "$q" > "$dir/$queue.$n.sent_query"
+  printf '%s\n' "$page" > "$dir/$queue.$n.sent_page"
   rcf="$dir/$queue.$n.rc"
   tsvf="$dir/$queue.$n.tsv"
   errf="$dir/$queue.$n.err"
@@ -457,6 +469,93 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   _gh_stub_install
   run clikae watch github --org CVERInc --interval 30m --once
   [ "$status" -eq 0 ]
+}
+
+# --- P2-8: regression coverage for what the stub never validated before ----
+
+@test "watch github --once: sends --method GET (P2-8)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # This is the ONE assertion the review's round-1 audit found missing:
+  # 11 tests passed with `--method GET` deleted outright (the exact shape
+  # that 404s against the real API — see _wg_fetch's own 🔴 comment).
+  [ "$(cat "$GH_STUB_DIR/org.1.sent_method")" = "GET" ]
+}
+
+@test "watch github --once: the query uses updated:>= , never a bare > (P2-8)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  # Second poll: a cursor now exists, so THIS query must carry updated:>=.
+  _gh_stub_page org 2 \
+    "$(_row 101 2026-09-07T04:40:00Z bob reef https://x/101 0 "Second issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$GH_STUB_DIR/org.2.sent_query")" == *"updated:>="* ]] || false
+}
+
+@test "watch github --once: the cursor sent next poll is lagged 300s behind the max seen (P2-8)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:32:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  _gh_stub_page org 2 \
+    "$(_row 101 2026-09-07T05:00:00Z bob reef https://x/101 0 "Second issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # 04:32:00 - 300s = 04:27:00 — the SENT query, not just the persisted
+  # cursor file, must reflect the lag.
+  [[ "$(cat "$GH_STUB_DIR/org.2.sent_query")" == *"updated:>=2026-09-07T04:27:00Z"* ]] || false
+}
+
+@test "watch github --once: cursor is not advanced when a later PAGE fails to read (P2-8)" {
+  _gh_stub_install
+  # A fixed, old persisted cursor (not the 24h-ago cold-start default,
+  # which would depend on today's date) so "oldest row < since" reliably
+  # stays FALSE across all 100 generated rows and pagination genuinely
+  # continues to page 2, deterministically, forever.
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf '2026-09-01T00:00:00Z\n' > "$state_dir/CVERInc.cursor"
+  # 100 rows -> a full page, so _wg_poll_one_query requests page 2. Newest
+  # first (order=desc), one minute apart, hour rolling over correctly
+  # (04:59 down to 04:00, then 03:59 down to 03:20) rather than going
+  # negative.
+  local -a rows=()
+  local i hour minute
+  for i in $(seq 0 99); do
+    if [ "$i" -lt 60 ]; then hour=4; minute=$((59 - i)); else hour=3; minute=$((119 - i)); fi
+    minute="$(printf '%02d' "$minute")"
+    rows+=("$(_row "$((200 + i))" "2026-09-07T0${hour}:${minute}:00Z" alice reef "https://x/$((200 + i))" 0 "issue $i")")
+  done
+  _gh_stub_page org 1 "${rows[@]}"
+  _gh_stub_fail org 2 1 'gh: connection reset'
+  run clikae watch github --org CVERInc --once
+  # P2-5's rc contract applies here too: page 2 failing makes the WHOLE
+  # poll a failure, so --once is rc=1, and the "N new event(s)" success
+  # line is suppressed — even though page 1's 100 events were real.
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"new event(s)"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#200 opened by alice: issue 0"* ]] || false
+  # Two calls were made — page 2 really was requested (pagination
+  # continued), not silently skipped.
+  [ "$(cat "$GH_STUB_DIR/org.calls")" = "2" ]
+  # The whole point: page 1's 100 events were real and got announced /
+  # written to events.jsonl, but the cursor must NOT advance PAST the
+  # pre-existing one — page 2 failing means we don't know what we might
+  # have missed between page 1's oldest row and wherever page 2 would
+  # have continued from.
+  [ "$(cat "$state_dir/CVERInc.cursor")" = "2026-09-01T00:00:00Z" ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 100 ]
 }
 
 @test "watch: still dispatches to the engine path for a non-github first argument" {
