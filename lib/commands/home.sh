@@ -975,7 +975,7 @@ _home_codex_status_readv() {
   return 0
 }
 
-# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, fork-free, into $_FDOT.
+# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, into $_FDOT.
 #
 # The redraw path wants just the mark, and every row was paying a `$( )` to get
 # it — and this one is the priciest on the board, because _home_is_dry forks awk
@@ -983,12 +983,36 @@ _home_codex_status_readv() {
 # 248 ms frame, for a value that cannot change between two keypresses.
 # The echoing form above stays for the non-hot callers that want the phrase too.
 #
-# "Fork-free" is aspirational for the codex branch specifically, not literal:
-# a cache hit (_home_codex_status_readv -> limit_codex_status_cached) still
-# costs a handful of forks (`find`/`stat`/`head`/`awk` to check the cache key)
-# — see P2-1 in limit_codex_status_cached's header — just no longer one
-# proportional to the rollout store's CONTENT size, which is what actually
-# broke this contract before the fix.
+# P3-1 (round-2 review): this header used to promise "fork-free" outright.
+# That was never true even at its narrowest (see the codex paragraph below,
+# unchanged), and P2-1(c)'s fix to actually SHOW the vendor cache (not just
+# the fresh-within-120s slice of it) made it less true, not more: every tank
+# not yet memoized this redraw still pays one `jq` fork (usage_board_fields)
+# to parse its cache file, plus one `date` fork for the whole redraw (below,
+# shared via $_FUEL_MEMO_NOW — not one per tank). The real, current contract
+# is "at most one `date` fork per redraw, and at most one `jq` fork per
+# (dry,cli,tank) key per redraw" — memoization removes the multiplier a tank
+# repeated across several rows used to pay (see the P2-1 round-1 comment
+# just below), it does not remove the base cost of reading the cache at all.
+# Measured on this host, µs/call, `origin/main` (no usage cache in play) vs
+# this branch: 43–49 (main) vs ~960–1000 with a warm vendor cache and one
+# call per tank per redraw (was ~4700 before the P2-1 round-1 memoization —
+# see docs/DESIGN-board-fuel-dots.md's own numbers). A hand-rolled bash-only
+# JSON reader could close that last gap, but the cache format already goes
+# through `jq -ce` on write specifically so nothing downstream has to
+# re-implement JSON parsing by hand (see lib/core/usage.sh's usage_read) —
+# rewriting that decision here, for one caller, in exchange for shaving a
+# sub-millisecond-per-tank cost that is not on any hot per-keypress path
+# (only a redraw, and only the tanks whose memo missed) was judged not worth
+# the fragility. Rewritten to say what ships, not what this used to promise.
+#
+# "Fork-free" was, and remains, more aspirational for the codex branch
+# specifically: a cache hit (_home_codex_status_readv ->
+# limit_codex_status_cached) still costs a handful of forks (`find`/`stat`/
+# `head`/`awk` to check the cache key) — see P2-1 in
+# limit_codex_status_cached's header — just no longer one proportional to
+# the rollout store's CONTENT size, which is what actually broke this
+# contract before that fix.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
   # P2-1 (round-1 review): a tank can appear in more than one row of the SAME
@@ -2781,8 +2805,19 @@ LIVEACT
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
         local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
-        local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
-        dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
+        # P3-2 (round-2 review): this used to call the ECHOING _home_fuel_dot
+        # via `$( )` — a command substitution IS a subshell, so any memo
+        # write _home_fuel_dotv makes inside it (the per-redraw fuel-dot
+        # cache, `_FUEL_MEMO_*`) never reaches the parent shell: readable
+        # (a repeat lookup here would still see nothing to reuse) but not
+        # writable back out. Every OTHER call site already calls
+        # _home_fuel_dotv directly and reads $_FDOT/$_FNOTE in this same
+        # shell (1634/1657/1686/2612 above) — this was the one holdout, and
+        # it silently broke :940's "repeat … with zero forks" promise at
+        # exactly this call point (a tank whose Live row already computed
+        # its dot paid the fork again here instead of hitting the memo).
+        _home_fuel_dotv "$dry" "$cli" "$profile"
+        dot="$_FDOT"; _reset="$_FNOTE"
         # Aligned columns (display-width padded): name · engine · account, then a
         # right gutter holding the reset time when the tank is dry. (No "this shell"
         # marker — see _home_render_static: with many tanks open at once it's noise.)

@@ -20,13 +20,23 @@ wrote locally — no live process invoked; currently Codex), or "unknown"
 (no usable reading).
 
 Readings are cached for 120s (CLIKAE_USAGE_TTL overrides; --fresh bypasses
-the cache and always calls). The board and `clikae burn` only ever read
-this cache — burn never fetches on its own, so a cold burn never pays a
-vendor round-trip just to pick a tank.
+the cache and always calls; codex is the one exception — its cache hit is
+timed from the last SCAN, but its reading is stamped with the underlying
+event's own time, which is often older than 120s on a quiet tank). The
+board never fetches — it only ever shows what is already on disk, aged if
+it must. `clikae burn` does: once for the tank it just ran, when the run
+ends (never before launching), and once per candidate right before
+choosing a reroute target on a dry tank.
 HELP
         return 0 ;;
       -*) log_err "Unknown option: $arg"; return 1 ;;
-      *) if [ -z "$engine" ]; then engine="$arg"; elif [ -z "$tank" ]; then tank="$arg"; else return 1; fi ;;
+      *)
+        if [ -z "$engine" ]; then engine="$arg"
+        elif [ -z "$tank" ]; then tank="$arg"
+        else
+          log_err "Too many arguments: clikae usage [engine] [tank] [--json] [--fresh]"
+          return 1
+        fi ;;
     esac
   done
   [ "$engine" != agy ] || engine=antigravity

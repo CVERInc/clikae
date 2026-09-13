@@ -10,10 +10,24 @@ usage_read() (
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
   command -v jq >/dev/null 2>&1 || { usage_unknown; return; }
+  # P3 (round-2 review, "codex reading gets a TTL like claude's"): the
+  # cache-hit check below used to key off `cached_at` alone — fine for a
+  # vendor reading (cached_at IS the fetch time) but wrong for codex's
+  # transcript readings, whose `cached_at` is the EVENT's own timestamp
+  # (P2-4, round-1 review — deliberate, so a stale reading is never lied
+  # about as fresh). Since codex only writes a token_count event
+  # occasionally, `cached_at` is almost always older than $ttl, so this
+  # check never hit and `clikae usage codex` re-scanned the ENTIRE rollout
+  # store on every call (measured: 85ms/82ms back-to-back, zero cache hits).
+  # `scanned_at` is the wall-clock time of the last actual scan, separate
+  # from the reading's own evidentiary timestamp — that's what a cache-hit
+  # check should mean, the same thing it already means for a vendor read
+  # (where the two coincide). `// .cached_at` falls back for any cache file
+  # written before this field existed.
   if [ "$fresh" != 1 ] && [ -f "$cache" ] &&
      jq -e --argjson now "$now" --argjson ttl "$ttl" \
-       '.cached_at <= $now and ($now - .cached_at < $ttl)' "$cache" >/dev/null 2>&1; then
-    jq -c 'del(.cached_at)' "$cache"; return
+       '(.scanned_at // .cached_at) as $s | $s <= $now and ($now - $s < $ttl)' "$cache" >/dev/null 2>&1; then
+    jq -c 'del(.cached_at, .scanned_at)' "$cache"; return
   fi
   reading=""
   if [ -f "$CLIKAE_LIB/adapters/$engine.sh" ]; then
@@ -43,7 +57,7 @@ usage_read() (
   umask 077
   if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" \
-         '. + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end)}' > "$tmp"; then
+         '. + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end), scanned_at:$now}' > "$tmp"; then
       mv -f "$tmp" "$cache"
     else rm -f "$tmp"; fi
   fi
@@ -178,11 +192,10 @@ usage_cached_fields() {
   command -v jq >/dev/null 2>&1 || return 1
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
   [ -n "$now" ] || now="$(date +%s)"
-  jq -er --argjson now "$now" --argjson ttl "$ttl" '
-    def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
-    select((.source == "vendor" or .source == "transcript") and .cached_at <= $now and ($now-.cached_at < $ttl)) |
+  jq -er --argjson now "$now" --argjson ttl "$ttl" "$_USAGE_NORM_STAMP_JQ"'
+    (.scanned_at // .cached_at) as $scanned |
+    select((.source == "vendor" or .source == "transcript") and $scanned <= $now and ($now-$scanned < $ttl)) |
     select(.window_pct != null and .weekly_pct != null) |
-    select(all([.window_resets_at,.weekly_resets_at][];
-      . == null or ((try (norm_stamp | fromdateiso8601) catch ($now+1)) > $now))) |
+    select(all(.window_resets_at, .weekly_resets_at; expired | not)) |
     [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
 }

@@ -80,8 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and burn never calls the vendor to decide (it reads whatever usage
   reading is already on disk). Unavailable readings retain transcript
   fallbacks (#72; round-1 review: named-tank launch, no vendor calls off
-  burn's hot path, honest codex `source`, board redraw fork removed).
-
+  burn's hot path, honest codex `source`, board redraw fork removed;
+  round-2 review: burn now refreshes the tank it just ran on at run end and
+  each reroute candidate before ranking, the board shows a stale-but-recent
+  reading with its age instead of hiding it, a reset instant already past
+  reads as 0% used rather than a stale percentage, and intra-tier ordering
+  is window_pct first, weekly_pct only the tie-break).
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
