@@ -795,8 +795,22 @@ _home_timing() {
 # freshness/rebuild cost is paid at all, so attributing it to any one of the
 # four named sections below would make that section's number stand in for
 # the whole render's cost, not its own share of it.
+#
+# round-5 fix review, P2-1: `_BOARD_GEN_CACHE` is declared `-g` (global) —
+# see board_state.sh's own header for why — so it OUTLIVES a single
+# `_home_refresh` call in a long-lived process (the interactive TUI's
+# `_home_pick`, which calls `_home_refresh` again after every `c`/`m`/`n`/
+# `a`/`d`/`l`), not just a `$( )` subshell. Priming it (above) without first
+# clearing it meant the SECOND refresh in the same process reused the FIRST
+# refresh's memoized generation unconditionally, even though the whole point
+# of priming is to re-ask `board_generation`/`board_stale` on every refresh —
+# a brand new session, or a limit landing, between two refreshes was
+# invisible until the process exited and a new one started. Clearing here,
+# right before priming, makes every refresh ask fresh, exactly as if this
+# were the first one.
 _home_refresh() {
   local _CLIKAE_BOARD=1 _start
+  declare -F board_generation >/dev/null 2>&1 && _BOARD_GEN_CACHE=()
   if declare -F board_generation >/dev/null 2>&1 && declare -F list_all_profiles >/dev/null 2>&1; then
     local _pe _pt _pd
     while IFS=$'\t' read -r _pe _pt _pd; do
