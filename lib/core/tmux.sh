@@ -279,21 +279,30 @@ tmux_spawn_session() {
   case "$session" in *[!a-zA-Z0-9_-]*) return 2 ;; esac
 
   # Rule 10 — the tmux guard shim (CVERInc/clikae#97, lib/shims/tmux) goes
-  # first on PATH for the new session, the same way Rule 4 hands SSH_AUTH_SOCK
-  # to it: an explicit `-e`, not a hope that tmux copies our environment.
+  # first on PATH for the new session.
   #
-  # 🔴 MEASURED, NOT ASSUMED. `tmux(1)`'s own "GLOBAL AND SESSION ENVIRONMENT"
-  # section is explicit: a new process's environment is the GLOBAL table
-  # (frozen at server BIRTH) merged with the SESSION table (only touched by
-  # `-e`/`set-environment`/`update-environment`) — PATH is in neither by
-  # default. Checked directly (throwaway -S server, no clikae involved): a
-  # plain `tmux new-session` DOES hand the spawning client's live $PATH to the
-  # pane's real process even on an EXISTING server, but an arbitrary
-  # unlisted variable does not — an inconsistency this file has no business
-  # depending on for a guard. `-e` is what Rule 4 already uses for exactly
-  # this reason, and it is also the only form `tmux show-environment -t`
-  # (what `doctor`'s `_doctor_tmux_guard` reads back) can ever see: PATH
-  # reaching a pane through the undocumented path above is invisible to it.
+  # 🔴 THE PANE'S OWN PROCESS, NOT `-e`, IS WHAT ACTUALLY CARRIES THIS (P1-1,
+  # clikae#97 review round 1). `tmux(1)`'s own "GLOBAL AND SESSION
+  # ENVIRONMENT" section says a new process's environment is the GLOBAL table
+  # (frozen at server birth) merged with the SESSION table (only touched by
+  # `-e`/`set-environment`) — PATH in neither by default — but measured
+  # directly (throwaway -S server, no clikae involved) that is not what a
+  # pane's REAL process gets: it inherits the SPAWNING CLIENT's live $PATH
+  # instead, which `-e PATH=…` never touches and `tmux show-environment -t`
+  # can never see either way (it only ever reports what `-e` wrote). An
+  # earlier version of this function relied on `-e` alone for the whole
+  # guarantee — every LAUNCH test read `show-environment` back and stayed
+  # green — while the pane process itself, and everything it forked,
+  # inherited whatever PATH the client happened to have. `doctor`'s
+  # `_doctor_tmux_guard` had the identical blind spot for the identical
+  # reason (P1-2, same review) and now reads the pane process directly.
+  #
+  # So: wrap the PANE'S OWN START COMMAND with `env PATH=…`, below, once
+  # `$cmd` is otherwise finalised. That is the pane's own first exec — the
+  # guard reaches it no matter what tmux does with its environment tables,
+  # any client-PATH quirk included. `-e "PATH=…"` is kept alongside (next
+  # line) as a harmless, documentary trace visible to `show-environment`;
+  # nothing in clikae relies on it for the guarantee any more.
   #
   # Also mutate THIS process's own $PATH, idempotently: harmless, and it
   # means every tmux call this function goes on to make (including the
@@ -305,6 +314,12 @@ tmux_spawn_session() {
   esac
   export PATH
   env_args+=("-e" "PATH=$PATH")
+  # The real guarantee (see above): the pane's own process is `env`'s child,
+  # so its PATH is exactly this, regardless of tmux. `printf %q` because $cmd
+  # travels on to `new-session` as a single shell command STRING (tmux runs it
+  # via the pane's default shell), and PATH is user- and machine-dependent
+  # data, not something to splice in unquoted.
+  cmd="env PATH=$(printf '%q' "$PATH") $cmd"
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
   local _agent_sock=""

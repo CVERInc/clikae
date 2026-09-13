@@ -440,6 +440,43 @@ STUB
   [[ "$output" == clikae-*-burn-* ]]
 }
 
+@test "burn's engine process gets the tmux guard first on PATH despite the compgen -e restore (P2-3)" {
+  if ! command -v tmux >/dev/null 2>&1; then
+    skip "tmux not installed"
+  fi
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+
+  # A stub codex that dumps its OWN process's PATH — the engine burn's
+  # wrapper script actually execs, downstream of the `compgen -e` restore
+  # that P2-3 (review round 1) found clobbers whatever tmux_spawn_session put
+  # there. This bats process's own PATH (below) deliberately has NO shim on
+  # it — the shape of an unattended `clikae burn` (cron, CI, a plain shell
+  # that never ran through tmux_spawn_session), which is burn's actual home
+  # turf and exactly what `compgen -e` captures and restores.
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat << 'STUB' > "$BATS_TEST_TMPDIR/bin/codex"
+#!/usr/bin/env bash
+printf '%s' "$PATH" > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  case "$PATH" in
+    "$CLIKAE_LIB/shims:"*) skip "premise broken: shim already on the caller's PATH" ;;
+  esac
+
+  run clikae burn codex T1 --artifact "$A" --prompt "dump my PATH"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  run cat "$A"
+  case "$output" in
+    "$CLIKAE_LIB/shims:"*) : ;;
+    *) echo "engine process PATH: $output"; false ;;
+  esac
+}
+
 @test "burn --prompt-file builds the engine command via the hook and completes" {
   _stub_codex
   clikae init codex T1
@@ -864,7 +901,10 @@ _stub_burn_transport() {
 #!/usr/bin/env bash
 for arg in "$@"; do
   case "$arg" in
-    'bash "'*)
+    # P1-1 (clikae#97 review round 1): the pane's start command is now
+    # `env PATH=<shim dir>:$PATH bash "<wrapper>"`, not bare `bash "<wrapper>"`
+    # — match the substring wherever it lands, not just at the start of $arg.
+    *'bash "'*)
       bash -c "$arg" >/dev/null 2>&1
       [ -z "${STUB_CONSUME_ARTIFACT:-}" ] || rm -f "$STUB_CONSUME_ARTIFACT"
       # Simulate a write landing AFTER the engine-exit snapshot (P2-1): the

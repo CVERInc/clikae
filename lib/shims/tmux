@@ -14,11 +14,23 @@
 #               lanes. The lane was resumed from its own transcript and did
 #               it again 31 minutes later, same shape.
 #
-# clikae prepends this shim's directory to PATH in the launch environment of
-# every session it starts (lib/core/tmux.sh, tmux_spawn_session — the one
-# place a session is created). A sub-agent, a bats run, or any script that
-# session goes on to run inherits it for free — nothing to install, nothing
-# for a human to remember.
+# clikae's pane processes get this shim first on PATH by construction —
+# `tmux_spawn_session` (lib/core/tmux.sh) wraps the pane's own start command
+# as `env PATH=<shim dir>:$PATH <cmd>`, so the process itself is guaranteed
+# this PATH no matter what tmux does with its session environment tables. A
+# sub-agent, a bats run, or any script that pane goes on to run inherits it
+# for free — nothing to install, nothing for a human to remember.
+#
+# 🔴 PANE PROCESS, NOT SESSION TABLE (CVERInc/clikae#97 review round 1,
+# P1-1). tmux(1)'s "GLOBAL AND SESSION ENVIRONMENT" section says a new
+# process's environment is the GLOBAL table (frozen at server birth) merged
+# with the SESSION table (only touched by `-e`/`set-environment`) — but
+# measured directly, a pane's REAL process instead gets the SPAWNING
+# CLIENT's live $PATH, an inconsistency `tmux show-environment -t` can never
+# see (it only ever reports what `-e` wrote, which is not what the pane
+# process got). An earlier version of this shim relied on `-e PATH=…` alone
+# for the whole guarantee; it was decoration. `env PATH=… cmd` is what
+# actually reaches the pane's own first exec.
 #
 # WHAT IT REFUSES. Only a verb that is destructive to the WHOLE inherited
 # server or to the CURRENT session on it, and only when $TMUX says a server is
@@ -34,10 +46,114 @@
 # is the whole ask, and everything else this shim does not recognise is none
 # of its business — it execs straight through.
 #
+# 🔴 THE REFUSAL DECISION COMES BEFORE RESOLVING A REAL TMUX. Deciding "would
+# this be destructive" only needs argv and $TMUX — it never needs to find or
+# run anything. Checking it first means a refusal never depends on there
+# being a real tmux binary anywhere on PATH (clikae#97 review round 1, P2-2:
+# GitHub's macos CI runner ships no tmux at all, so every test gated on
+# `command -v tmux` silently skipped there — including the ones that only
+# ever needed to prove a REFUSAL, never a real server).
+#
 # bash 3.2 (clikae's floor): no arrays, no [[ ]], no ${var,,}, no process
 # substitution, no `local` (this is a script, not a sourced function).
 
 set -u
+
+if [ -n "${TMUX:-}" ]; then
+  _sock="${TMUX%%,*}"
+  _has_sock=0
+  _has_target=0
+  _has_a=0
+  for _a in "$@"; do
+    case "$_a" in
+      -S|-S*|-L|-L*) _has_sock=1 ;;
+      -t|-t*)        _has_target=1 ;;
+      -a)            _has_a=1 ;;
+    esac
+  done
+
+  # Verb resolution (P2-1, clikae#97 review round 1): the literal-string
+  # check this replaced only ever matched argv[1] read verbatim, and tmux
+  # itself is far more permissive than that — three independent ways
+  # "kill-server"/"kill-session" reach it without ever appearing as argv[1]:
+  #
+  #   unambiguous PREFIX      tmux accepts any abbreviation of a command name
+  #                            that no other command name also starts with
+  #   value-taking GLOBAL      `-f file`/`-L name`/`-S path`/`-c cmd`/`-T
+  #   OPTION                   features` each consume the NEXT argv slot, so
+  #                            the verb is not always argv[1]
+  #   `\;` COMMAND LIST        tmux runs every `;`-separated segment as its
+  #                            own command; only the first was ever checked
+  #
+  # Measured bypasses under the old check (review out-16-bypass.txt), each
+  # one a real disposable server actually killed: `kill-serv`, `kill-ses`,
+  # `-f /dev/null kill-server`, `list-sessions \; kill-server`.
+  _global_phase=1
+  _skip_next=0
+  _seg_verb=""
+  for _a in "$@"; do
+    if [ "$_skip_next" -eq 1 ]; then
+      _skip_next=0
+      continue
+    fi
+    if [ "$_a" = ";" ]; then
+      # A `\;` command list: everything after this starts a NEW command, and
+      # only the very first command in the whole invocation can carry global
+      # options ahead of its verb.
+      _global_phase=0
+      _seg_verb=""
+      continue
+    fi
+    # Once this segment's verb is known, later tokens in it (its own flags
+    # and arguments) are none of this loop's business.
+    [ -n "$_seg_verb" ] && continue
+    if [ "$_global_phase" -eq 1 ]; then
+      case "$_a" in
+        # Global options that take a value (man tmux: -c, -f, -L, -S, -T) —
+        # meaningful only ahead of the first command, which is the only place
+        # tmux itself accepts them.
+        -c|-f|-L|-S|-T) _skip_next=1; continue ;;
+        -c*|-f*|-L*|-S*|-T*) continue ;;
+        # Global options that take no value (-2 -C -D -l -N -u -V -v), or
+        # anything else dash-prefixed sitting where a global option could be.
+        -*) continue ;;
+      esac
+    fi
+    _seg_verb="$_a"
+    # An unambiguous prefix of either destructive verb is treated exactly
+    # like the verb itself. ≥6 chars: short enough to catch real
+    # abbreviations (tmux's own minimum for these two is 8, where "kill-ser"
+    # vs "kill-ses" first diverge), long enough that nothing this short is
+    # ever a prefix of some OTHER, harmless tmux command — `case` below only
+    # matches when it truly is a literal prefix of the 11/12-char verb, so a
+    # too-low floor could only make this MORE cautious, never less.
+    if [ "${#_seg_verb}" -ge 6 ]; then
+      # shellcheck disable=SC2194  # subject is deliberately the literal verb:
+      # this checks whether $_seg_verb is a PREFIX of it, not the reverse.
+      case kill-server in
+        "$_seg_verb"*)
+          if [ "$_has_sock" -eq 0 ]; then
+            printf 'tmux-guard: refusing `tmux %s` — $TMUX names a socket (%s) and this would kill its whole server. Name yours: tmux -S <path> kill-server\n' "$_seg_verb" "$_sock" >&2
+            exit 86
+          fi
+          ;;
+      esac
+      # shellcheck disable=SC2194  # same reason as the kill-server case above.
+      case kill-session in
+        "$_seg_verb"*)
+          if [ "$_has_target" -eq 0 ]; then
+            if [ "$_has_a" -eq 1 ]; then
+              printf 'tmux-guard: refusing `tmux %s` — with no -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+            else
+              printf 'tmux-guard: refusing `tmux %s` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+            fi
+            exit 86
+          fi
+          ;;
+      esac
+    fi
+  done
+fi
 
 # Resolve the real tmux by walking PATH and skipping every entry that IS this
 # file, by identity (`-ef`: same device+inode — survives symlinks and however
@@ -47,25 +163,43 @@ set -u
 # candidate measured ~21ms added to every tmux call — enough to break a
 # timing-sensitive test).
 #
-# 🔴 ALSO STRIP OURSELVES FROM THE PATH WE HAND FORWARD. Self-identity alone
-# stops US from calling US — it does nothing about TWO guards leapfrogging
-# each other. pty-smoke.py installs its own `tests/stubs/tmux-guard` as
-# `tmux` in its sandbox; once this shim's directory lands ahead of it on
-# PATH, this shim resolves ITS "real tmux" to that stub (correct: it isn't
-# us), execs into it — and that stub does the identical walk, skips only
-# ITSELF, finds THIS shim sitting earlier on PATH, decides *that* is the real
-# tmux (it isn't ITSELF either), and execs back into us. Neither script did
-# anything wrong in isolation; two independent "skip only literally me"
-# guards interleaved on PATH is a cycle, and it hung every CI platform's
-# pty-smoke job (never a fork bomb here — bash's own exec chain just spun,
-# so `new-session` never ran and the socket never existed: "No such file").
-# Removing our own directory from $PATH before the exec below means nothing
-# downstream — that stub, the reefbox host guard, or a third one someday —
-# can ever find us again, no matter what identity check IT uses. The PATH
-# handed forward strictly shrinks by at least one entry per hop, so this
-# terminates regardless of how many such guards are stacked.
+# 🔴 SKIP-BY-IDENTITY ALONE STOPS US CALLING US; IT DOES NOTHING ABOUT TWO
+# GUARDS LEAPFROGGING EACH OTHER (clikae#97 review round 1, P1-1).
+# pty-smoke.py installs its own `tests/stubs/tmux-guard` as `tmux` in its
+# sandbox; once this shim's directory lands ahead of it on PATH, this shim
+# resolves its "real tmux" to that stub (correct: it isn't us), execs into it
+# — and that stub does the identical walk, skips only ITSELF, finds THIS
+# shim sitting earlier on PATH, decides *that* is the real tmux (it isn't
+# ITSELF either), and execs back into us. Neither script did anything wrong
+# in isolation; two independent "skip only literally me" guards interleaved
+# on PATH is a cycle, and it hung every CI platform's pty-smoke job.
+#
+# 🔴 THE FIX IS A HOP COUNT, NOT "SKIP EVERY SCRIPT" — an earlier draft of
+# this file did the latter (unconditionally treating any script as "another
+# guard, keep looking for a real binary") and it broke something the review
+# never exercised: a test's own fake `tmux` — installed as a script, exactly
+# like a guard is — is deliberately what Rule 10 is SUPPOSED to hand control
+# to once this shim clears the refusal check. Skipping every script skipped
+# those too, silently running the REAL tmux instead of the test's stub (or,
+# in pty-smoke, silently bypassing tests/stubs/tmux-guard's own TMUX_TMPDIR
+# check on exactly the internal call its own comments say matters most).
+# `$_CLIKAE_TMUX_SHIM_HOPS` counts how many times THIS shim has been entered
+# in the current exec chain: on the first hop it behaves exactly like the
+# plain identity-only walk always did (so a lone guard — or a lone test
+# stub — ahead of it is simply exec'd into, unconditionally, same as
+# before); only once we detect we have been through ourselves again (hops
+# > 1 — the actual signature of a cycle, and it can only mean whatever we
+# deferred to bounced back) does it switch to skipping scripts too, which is
+# the one situation where "keep looking for a real binary" is both safe and
+# necessary. It is dropped again once resolution finishes — see the note
+# just above the final `exec` below for exactly when that is safe to do.
+_hops="${_CLIKAE_TMUX_SHIM_HOPS:-0}"
+_hops=$((_hops + 1))
+_CLIKAE_TMUX_SHIM_HOPS="$_hops"
+export _CLIKAE_TMUX_SHIM_HOPS
+
 _real_tmux=""
-_new_path=""
+_fallback_tmux=""
 _ifs_save="$IFS"
 IFS=:
 for _d in $PATH; do
@@ -74,53 +208,53 @@ for _d in $PATH; do
     IFS=:
     continue
   fi
-  if [ -z "$_real_tmux" ] && [ -n "$_d" ] && [ -x "$_d/tmux" ]; then
+  if [ -n "$_real_tmux" ] || [ -z "$_d" ] || [ ! -x "$_d/tmux" ]; then
+    IFS=:
+    continue
+  fi
+  if [ "$_hops" -le 1 ]; then
+    # First hop: identical to the original, pre-#97-hardening walk — take
+    # the first non-self candidate, script or not. This is what lets a lone
+    # guard (or a test's fake `tmux`) sitting right after us be exec'd into
+    # normally; it is not yet known to be part of a cycle.
+    _real_tmux="$_d/tmux"
+  elif [ "$(head -c 2 "$_d/tmux" 2>/dev/null)" = '#!' ]; then
+    # A cycle was detected (see above): now avoid handing off to ANOTHER
+    # script, which is how we got back here in the first place. Remember it
+    # as a last resort only — see the fallback note below.
+    [ -z "$_fallback_tmux" ] && _fallback_tmux="$_d/tmux"
+  else
     _real_tmux="$_d/tmux"
   fi
-  if [ -z "$_new_path" ]; then _new_path="$_d"; else _new_path="$_new_path:$_d"; fi
   IFS=:
 done
 IFS="$_ifs_save"
+[ -n "$_real_tmux" ] || _real_tmux="$_fallback_tmux"
 
 if [ -z "$_real_tmux" ]; then
   printf 'tmux-guard: no real tmux found on PATH past this shim\n' >&2
   exit 127
 fi
 
-PATH="$_new_path"
-export PATH
-
-if [ -n "${TMUX:-}" ]; then
-  _sock="${TMUX%%,*}"
-  _has_sock=0
-  _has_target=0
-  _verb=""
-  for _a in "$@"; do
-    case "$_a" in
-      -S|-S*|-L|-L*) _has_sock=1 ;;
-      -t|-t*)        _has_target=1 ;;
-    esac
-  done
-  for _a in "$@"; do
-    case "$_a" in
-      -*) continue ;;
-      *)  _verb="$_a"; break ;;
-    esac
-  done
-  case "$_verb" in
-    kill-server)
-      if [ "$_has_sock" -eq 0 ]; then
-        printf 'tmux-guard: refusing bare `tmux kill-server` — $TMUX names a socket (%s) and this would kill its whole server. Name yours: tmux -S <path> kill-server\n' "$_sock" >&2
-        exit 86
-      fi
-      ;;
-    kill-session)
-      if [ "$_has_target" -eq 0 ]; then
-        printf 'tmux-guard: refusing bare `tmux kill-session` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_sock" >&2
-        exit 86
-      fi
-      ;;
-  esac
+# 🔴 THE PATH HANDED FORWARD IS LEFT EXACTLY AS RECEIVED. An earlier version
+# stripped this shim's own directory from $PATH before the exec below, on the
+# theory that whatever it exec'd into could then never find this shim again
+# either. That broke the actual guarantee: what a spawned PANE PROCESS's own
+# PATH starts with is `env PATH=…` (see the top of this file), not anything
+# tmux's client resolves through — so mutating $PATH here bought nothing
+# against recursion (the hop count above already ends it) and only ever cost
+# every downstream process the guard it was supposed to inherit.
+#
+# 🔴 ONLY DROP THE HOP COUNT WHEN THE DESTINATION IS CONFIRMED A BINARY. The
+# very first cut of this unset unconditionally, right here — which stripped
+# it before handing off to a SCRIPT too (a lone guard, or a test stub, on the
+# very first hop: exactly the normal, non-cyclic case this file spends most
+# of its time in). That script's own exec back to us then read hops as unset
+# again, forever: an infinite loop, caught by testing before it shipped, not
+# by anything in the review this responds to. A destination that is itself a
+# script might still bounce back to us, so the count has to survive into it;
+# only a genuine binary is guaranteed not to call back into this chain.
+if [ "$(head -c 2 "$_real_tmux" 2>/dev/null)" != '#!' ]; then
+  unset _CLIKAE_TMUX_SHIM_HOPS
 fi
-
 exec "$_real_tmux" "$@"

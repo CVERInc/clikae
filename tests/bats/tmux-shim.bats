@@ -142,13 +142,18 @@ _src_tmux() {
 }
 
 # ── clikae's own launch env: the shim goes first, at the single constructor ──
+#
+# 🔴 P1-1 (clikae#97 review round 1): `show-environment -t` only ever reports
+# what Rule 10's `-e "PATH=…"` was asked to write — it is NOT what a pane's
+# real PROCESS gets (tmux hands a new pane's process the spawning CLIENT's
+# live PATH instead). The two tests below still probe the `-e` table because
+# staying in sync with what Rule 10 intends is worth checking, but they are
+# no longer this file's proof of the actual guarantee — the "PANE PROCESS"
+# section further down is.
 
-@test "launch: tmux_spawn_session puts the shim directory first on the session's PATH (Rule 10)" {
+@test "launch: tmux_spawn_session puts the shim directory first on the session's -e table (documentary, not the guarantee)" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
-  # Rule 10 sets PATH via an explicit `-e`, exactly like Rule 4 already does
-  # for SSH_AUTH_SOCK (see ssh-agent-link.bats) — so `show-environment -t` is
-  # the right probe here, and this is executed rather than asserted about.
   tmux_spawn_session --session pathprobe97 -- 'sleep 30'
   run tmux show-environment -t '=pathprobe97' PATH
   tmux kill-session -t '=pathprobe97' 2>/dev/null || true
@@ -159,7 +164,7 @@ _src_tmux() {
   esac
 }
 
-@test "launch: spawning from an already-shimmed PATH does not grow it" {
+@test "launch: spawning from an already-shimmed PATH does not grow the -e table" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
   PATH="$CLIKAE_LIB/shims:$PATH"
@@ -170,4 +175,183 @@ _src_tmux() {
   local count
   count="$(printf '%s' "$output" | grep -o "$CLIKAE_LIB/shims" | wc -l | tr -d ' ')"
   [ "$count" -eq 1 ] || { echo "shim dir appears $count times in: $output"; false; }
+}
+
+# ── P1-1: the PANE PROCESS itself, not the session table (review round 1) ──
+# Linux-only: these read the pane process's real environment straight out of
+# /proc, the same probe `doctor`'s `_doctor_pane_path` now uses (P1-2) — see
+# lib/commands/doctor.sh for the macOS `ps eww` equivalent, not exercised
+# here because bats has no portable way to inspect a process's environment
+# without /proc.
+
+@test "launch: the pane PROCESS itself gets the shim first on PATH, not just the -e table" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -r /proc/self/environ ] || skip "no /proc on this platform"
+  _src_tmux
+  tmux_spawn_session --session pathprocprobe97 -- 'sleep 30'
+  local pid; pid="$(tmux list-panes -t '=pathprocprobe97' -F '#{pane_pid}' | head -n1)"
+  # tr NUL->newline INSIDE the run'd command, not after: bats captures `run`
+  # output via command substitution, which silently DROPS embedded NUL bytes
+  # (bash's own behaviour) — by the time that happened to a raw `cat` of
+  # /proc/…/environ, every "KEY=value" pair had already run together with no
+  # separator left to split on.
+  run bash -c "tr '\\0' '\\n' < /proc/$pid/environ"
+  tmux kill-session -t '=pathprocprobe97' 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "could not read /proc/$pid/environ: $output"; false; }
+  local pane_path
+  pane_path="$(printf '%s\n' "$output" | sed -n 's/^PATH=//p')"
+  case "$pane_path" in
+    "$CLIKAE_LIB/shims:"*) : ;;
+    *) echo "pane process PATH: $pane_path"; false ;;
+  esac
+}
+
+@test "launch: a CHILD of the pane process inherits the shim on PATH too" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -r /proc/self/environ ] || skip "no /proc on this platform"
+  _src_tmux
+  local outfile="$TEST_HOME/child-path.out"
+  tmux_spawn_session --session pathchildprobe97 -- \
+    "bash -c 'printenv PATH > $outfile; sleep 30'"
+  local i=0
+  while [ ! -s "$outfile" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  tmux kill-session -t '=pathchildprobe97' 2>/dev/null || true
+  [ -s "$outfile" ] || { echo "the nested child never wrote its PATH"; false; }
+  case "$(cat "$outfile")" in
+    "$CLIKAE_LIB/shims:"*) : ;;
+    *) echo "child PATH: $(cat "$outfile")"; false ;;
+  esac
+}
+
+@test "launch: a bare kill-server run AS the pane's own process is refused (rc 86), the throwaway server survives" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -r /proc/self/environ ] || skip "no /proc on this platform"
+  _src_tmux
+  tmux_spawn_session --session pathkillprobe97 -- 'sleep 30'
+  local pid; pid="$(tmux list-panes -t '=pathkillprobe97' -F '#{pane_pid}' | head -n1)"
+  local pane_path pane_tmux
+  pane_path="$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^PATH=//p')"
+  pane_tmux="$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^TMUX=//p')"
+  [ -n "$pane_tmux" ] || { echo "premise broken: the pane process has no \$TMUX"; false; }
+  # Reconstruct exactly what the pane's own process would run: its own real
+  # PATH and $TMUX, nothing inherited from this bats process.
+  run env -i PATH="$pane_path" TMUX="$pane_tmux" HOME="$TEST_HOME" bash -c 'tmux kill-server'
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux list-sessions -F '#{session_name}'
+  tmux kill-session -t '=pathkillprobe97' 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "the throwaway server did NOT survive: $output"; false; }
+  [[ "$output" == *"pathkillprobe97"* ]] || { echo "got: $output"; false; }
+}
+
+# ── P2-1: verb resolution beyond the literal string (review round 1) ───────
+# tmux itself is far more permissive than an exact "kill-server"/"kill-session"
+# string: it accepts an unambiguous PREFIX of a command name, a value-taking
+# GLOBAL OPTION can push the verb out of argv[1], and a `\;` COMMAND LIST runs
+# every segment as its own command. Each row measured as a real bypass — a
+# disposable server actually killed — under the old literal check.
+
+@test "shim: an unambiguous prefix of kill-server (kill-serv) is refused exactly like the verb" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-serv.sock"
+  tmux -S "$sock" new-session -d -s bypassserv 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" kill-serv
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypassserv" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test "shim: an unambiguous prefix of kill-session (kill-ses) is refused exactly like the verb" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-ses.sock"
+  tmux -S "$sock" new-session -d -s bypassses 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" kill-ses
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypassses" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test "shim: a value-taking global option ahead of the verb (-f /dev/null kill-server) does not hide it" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-f.sock"
+  tmux -S "$sock" new-session -d -s bypassf 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" -f /dev/null kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypassf" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test 'shim: a `\;` command list checks EVERY segment, not just the first' {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-list.sock"
+  tmux -S "$sock" new-session -d -s bypasslist 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" list-sessions \; kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypasslist" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test "shim: kill-session -t =<name> is still allowed (naming the target is the whole ask)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/allowed-eqtarget.sock"
+  tmux -S "$sock" new-session -d -s x 'sleep 60'
+  run env TMUX="$TEST_HOME/not-the-real-one,1,0" bash "$(SHIM)" -S "$sock" kill-session -t =x
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions
+  [ "$status" -ne 0 ] || { echo "the target session should be dead: $output"; false; }
+}
+
+# ── P2-2: the REFUSAL decision needs no real tmux at all (review round 1) ──
+# lib/shims/tmux checks argv + $TMUX and can exit 86 before ever resolving a
+# real tmux, so these run identically whether or not tmux is installed —
+# unlike every test above this line, gated on `command -v tmux` because they
+# also have to prove a REAL server survived or died. This is what actually
+# closes the macOS CI gap: GitHub's macos bats runner ships no tmux at all,
+# so ALL of the tests above (P2-1's new bypass coverage included) silently
+# skipped there. These do not.
+
+# A "real tmux" that only records what reached it, never installed as `tmux`
+# anywhere a refusal should stop the call reaching it first. `#!<absolute
+# path>` rather than `#!/usr/bin/env bash`: the recorder's own exec must not
+# depend on the restricted PATH being handed to the shim under test.
+_tg_recorder() {
+  mkdir -p "$TEST_HOME/.recorderbin"
+  local bash_bin; bash_bin="$(command -v bash)"
+  cat > "$TEST_HOME/.recorderbin/tmux" <<EOF
+#!$bash_bin
+printf 'ARGV:%s\n' "\$*" >> "$TEST_HOME/recorder.log"
+exit 0
+EOF
+  chmod +x "$TEST_HOME/.recorderbin/tmux"
+}
+
+@test "shim: kill-server is refused without ever needing a real tmux on PATH" {
+  _tg_recorder
+  # Absolute path for bash itself: `env PATH=<restricted> bash …` would make
+  # env resolve "bash" through that SAME restricted PATH and fail to find it
+  # — nothing to do with the shim under test, just env's own lookup.
+  local bash_bin; bash_bin="$(command -v bash)"
+  run env TMUX="$TEST_HOME/fake,1,0" PATH="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  [ ! -e "$TEST_HOME/recorder.log" ] || { echo "reached the recorder — should have refused first"; false; }
+}
+
+@test "shim: kill-serv (bypass prefix) is refused without ever needing a real tmux on PATH" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  run env TMUX="$TEST_HOME/fake,1,0" PATH="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" kill-serv
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  [ ! -e "$TEST_HOME/recorder.log" ] || { echo "reached the recorder — should have refused first"; false; }
+}
+
+@test "shim: an allowed call reaches whatever is on PATH with argv and PATH intact, real tmux or not" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  run env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" -V
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [ -f "$TEST_HOME/recorder.log" ] || { echo "the recorder was never reached"; false; }
+  grep -qF -- '-V' "$TEST_HOME/recorder.log" || { echo "argv not forwarded: $(cat "$TEST_HOME/recorder.log")"; false; }
 }
