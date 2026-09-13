@@ -160,36 +160,60 @@ limit_codex_reset() {
 # end in terminal punctuation, glue the next line onto it before handing
 # it to limit_codex_reset — the common case (an unwrapped, already-
 # terminated line) never touches its neighbour.
+# P1-1 (round-2 fix review, this PR): removing the `tail -n 20` window
+# upstream (limit_codex_output_dry) means this now walks the reply's FULL
+# line count, not a bounded 20 — and the original loop forked one `grep`
+# PER LINE, twice (the direct check, and again for the backward-join
+# fallback). Measured: a 20,000-line capture with the anchor on its very
+# last line — an everyday build-log-style task that happens to run dry —
+# took ~60s to classify (a P1-3 timing guard, round-5, that already exists
+# for a different shape caught it immediately). One `grep -n` over the
+# WHOLE buffer finds every candidate line in a single fork; only the rare
+# fallback (the anchor phrase itself split across a line boundary — the
+# common wrap case, a trailing reset phrase split off, is handled by the
+# forward-join below and never reaches this) pays for building every
+# adjacent pair, and even that is one more single grep call, not one per
+# pair.
 _limit_codex_anchor_line() {
   local re="$1" buf="$2"
   local -a lines=()
   local line
   while IFS= read -r line; do lines+=("$line"); done <<< "$buf"
-  local n=${#lines[@]} i joined
-  for ((i = 0; i < n; i++)); do
-    if grep -qaiE "$re" <<< "${lines[$i]}"; then
-      joined="${lines[$i]}"
-      case "$joined" in
-        *[.\!?]) : ;;
-        *) [ $((i + 1)) -lt "$n" ] && joined="$joined ${lines[$((i + 1))]}" ;;
-      esac
-      printf '%s' "$joined"
-      return 0
-    fi
-    if [ "$i" -gt 0 ]; then
-      case "${lines[$((i - 1))]}" in
-        *[.\!?]) : ;;
-        *)
-          joined="${lines[$((i - 1))]} ${lines[$i]}"
-          if grep -qaiE "$re" <<< "$joined"; then
-            printf '%s' "$joined"
-            return 0
-          fi
-          ;;
-      esac
-    fi
+  local n=${#lines[@]}
+  [ "$n" -gt 0 ] || return 1
+
+  local hit hit_i joined
+  # P1-1 (round-2 fix review, this PR): case-sensitive (no `grep -i`) — the
+  # caller's anchor spells out every case variant it wants to accept (see
+  # limit_codex_output_dry); folding case here would silently widen
+  # whatever regex a future caller passes in too.
+  hit="$(grep -naE "$re" <<< "$buf" | head -n 1)" || true
+  if [ -n "$hit" ]; then
+    hit_i=$(( "${hit%%:*}" - 1 ))
+    joined="${lines[$hit_i]}"
+    case "$joined" in
+      *[.\!?]) : ;;
+      *) [ $((hit_i + 1)) -lt "$n" ] && joined="$joined ${lines[$((hit_i + 1))]}" ;;
+    esac
+    printf '%s' "$joined"
+    return 0
+  fi
+
+  # No single line matches — the anchor phrase may itself be split across a
+  # line boundary. Test every adjacent pair in ONE more grep pass (build the
+  # pairs with plain bash string ops — no forking — then grep the whole
+  # joined buffer at once).
+  [ "$n" -gt 1 ] || return 1
+  local -a pairs=()
+  local i
+  for ((i = 0; i < n - 1; i++)); do
+    pairs+=("${lines[$i]} ${lines[$((i + 1))]}")
   done
-  return 1
+  hit="$(printf '%s\n' "${pairs[@]}" | grep -naE "$re" | head -n 1)" || true
+  [ -n "$hit" ] || return 1
+  hit_i=$(( "${hit%%:*}" - 1 ))
+  printf '%s' "${pairs[$hit_i]}"
+  return 0
 }
 # P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing prefix
 # the anchor accepted — a special case for codex's CURRENT transport wording,
@@ -197,17 +221,56 @@ _limit_codex_anchor_line() {
 # carry an ISO-ish timestamp and/or a single bracketed tag ahead of that
 # ("2026-09-13T02:13:00Z ERROR: …", "[codex] ERROR: …") and both were being
 # rejected outright, right back to #81's original symptom for anyone whose
-# transport adds either. Accept one optional ISO timestamp token (anything
-# non-space containing a literal "T", i.e. a date-Ttime shape, followed by a
-# space) and/or one optional "[...] " tag ahead of the existing ERROR:
-# allowance — still never free prose: "warn: ERROR: …" has letters in a
-# position neither group recognizes, and the base noise class right below
-# excludes letters outright, so it stays rejected.
+# transport adds either.
+#
+# P1-1 (round-2 fix review, this PR): the round-5 fix above ("accept one
+# optional ISO timestamp token") was written as "anything non-space
+# containing a literal T" — under `grep -i` that reads as "any token with a
+# t OR T anywhere in its middle", not "an ISO-8601 stamp". `agent:`,
+# `context:`, `stderr:`, `output:`, `note:` and even bare `attempt` all
+# satisfy "a non-space run with a t sandwiched inside", so a task that
+# merely echoed codex's own sentence back while genuinely failing for an
+# unrelated reason (prefixed with any of those words) came out dry — wider
+# than the 12-byte noise class it replaced, and never exercised by a test
+# with more than two lines of input. There is also a companion bug this
+# review's own P1-1 finding: the whole-reply scan below used to be handed
+# only a `tail -n 20` window (removed — see below), so this anchor was two
+# bugs deep, not one.
+#
+# Rewritten as the three prefixes a real transport actually composes, each
+# spelled out exactly, in the order a transport would emit them — an ISO-8601
+# stamp, then one bracketed tag, then codex's own "ERROR: " — every one
+# optional, and nothing else: no generic noise class, no markdown, no free
+# prose ahead of them ("warn: ERROR: …" is still rejected — "warn: " is none
+# of the three). Matched case-SENSITIVELY (no `grep -i` reaching this
+# anchor) so a literal "T"/"ERROR: " can never be satisfied by a lowercase
+# "t"/"error: " standing in for it the way the old `-i` pass let happen —
+# the vendor sentence itself keeps the same coverage as before ("You've"/
+# "you've"/"You have"/"you have", curly apostrophe included), just spelled
+# out instead of leaning on case-folding. POSIX ERE only: no `\S`/`\s` (GNU/
+# PCRE extensions this repo's macOS CI grep does not define) — plain digit
+# and character classes do the same job without them.
+#
+# P1-1 (round-2 fix review, this PR) — the TAIL WINDOW itself: the round-1
+# fix (#81 fix review) limited the anchor to the reply's LAST 20 lines,
+# reasoning that "the caller only reaches this function once the artifact
+# check has already failed, so 'no artifact' is a given here" (limit.sh's
+# old comment on this function). That premise holds for exactly ONE of this
+# function's three real callers — burn.sh's no-artifact branch — and not
+# for the other two: burn.sh's ARTIFACT-PRODUCED branch (the run kept going
+# and finished the task, so the vendor's limit line is often nowhere near
+# the tail) and conduct.sh's per-leg capture (which has no concept of an
+# artifact at all). On both of those, a genuine limit line beyond line 20
+# read as "no limit here" — on the artifact path that silently cleared a
+# real dry marker (round-2 P2-2's own guarantee, undone); on conduct it
+# reported a dried-out leg as CAPTURED. The false-dry guard the window
+# bought by POSITION is now bought by PRECISION instead (the anchor above):
+# scan the WHOLE captured reply, every line, and lean on the anchor being
+# narrow rather than on the line being near the end.
 limit_codex_output_dry() {
-  local out="$1" reset tail matched
-  local anchor="^[^A-Za-z0-9>#\"'.-]{0,12}(\S+T\S+ )?(\[[^]]+\] )?(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit"
-  tail="$(tail -n 20 <<< "$out")"
-  matched="$(_limit_codex_anchor_line "$anchor" "$tail")" || return 1
+  local out="$1" reset matched
+  local anchor="^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2}) )?(\[[A-Za-z0-9_.:-]+\] )?(ERROR: )?([Yy]ou've|[Yy]ou’ve|[Yy]ou have)( [a-z]+){0,2} hit your (usage|session) limit"
+  matched="$(_limit_codex_anchor_line "$anchor" "$out")" || return 1
   reset="$(limit_codex_reset "$matched")"
   [ -n "$reset" ] || return 1
   printf '%s' "$reset"

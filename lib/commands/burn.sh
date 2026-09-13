@@ -2615,10 +2615,23 @@ KV
       # marker as-is (never clear a tank that may still be genuinely dry).
       # The reset phrase, when there is one, already reaches the caller via
       # `_burn_result`'s "reset" field below — unchanged by this.
+      #
+      # P1-1 (round-2 fix review, this PR): this branch's own guard above was
+      # sound — a limit line found ANYWHERE in the reply already skips
+      # dry_store_clear — but limit_codex_output_dry fed it was windowed to
+      # the last 20 lines (limit.sh), and THIS is the one call site where the
+      # vendor's limit line is most likely to sit far from the end (the run
+      # kept going and finished the artifact afterward): a real limit line
+      # >20 lines from the tail read as "no limit here" and cleared a marker
+      # that should have survived. Fixed at the source (limit.sh now scans
+      # the whole reply); the extra `rc == 0` below is this call site's own
+      # belt: a fresh artifact with a NON-ZERO engine exit and no limit line
+      # is not the "real success" this clear exists for either — leave any
+      # existing marker alone in that case too, same as the limit-line arm.
       local live_reset=""
       if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
         log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
-      else
+      elif [ "$rc" -eq 0 ]; then
         dry_store_clear "$cli" "$cur"   # a real success recovered this tank
         # codex's hard-limit text above is the only DRY signal; a HEALTHY
         # codex run still has something worth showing — its own 5h/weekly

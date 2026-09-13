@@ -2658,3 +2658,109 @@ STUB
   reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
   [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
 }
+
+# --- P1-1 (round-2 fix review, this PR): the `tail -n 20` window this
+# function's P2-2 fix (above) was tested against hid the anchor from the
+# other two real callers — burn.sh's NO-ARTIFACT branch (a real limit line
+# followed by a stack trace longer than 20 lines read as "no limit here", an
+# exact #81 recurrence) and burn.sh's ARTIFACT-PRODUCED branch (below). The
+# window is gone: the classifier now scans the whole captured reply.
+
+@test "burn #81 fix2: a limit line followed by a >20-line stack trace, no artifact, is dry — not a task failure (P1-1)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 1 25); do printf '    at codex::exec::run (src/exec.rs:%s)\n' "$i"; done
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  [[ "$output" != *'no fresh artifact and no limit'* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+}
+
+# --- P1-1(b) (round-2 fix review, this PR): burn.sh's artifact-wins branch
+# already refused to clear a marker when limit_output_dry fired on the SAME
+# reply — but limit_output_dry was fed the windowed tail, so on the path
+# most likely to have the vendor's limit line far from the end (the run kept
+# GOING and finished the artifact afterward), the window hid it and a real,
+# pre-existing dry marker was silently cleared. The 2026-09-08 round-2 P2-2
+# receipt, restored: a marker that predates this run must survive it.
+
+@test "burn #81 fix2: a pre-existing dry marker survives an artifact-producing run whose SAME reply still shows a limit far from the tail (P1-1b)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 1 25); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'not marking it dry'* ]] || false
+  [ -f "$CLIKAE_HOME/dry/codex/T1" ]
+  [ "$(cat "$CLIKAE_HOME/dry/codex/T1")" = "$(printf '1700000000\ttry again earlier today')" ]
+}
+
+# --- P1-1 rc-gate (round-2 fix review, this PR): the artifact-wins branch's
+# clear was gated only on "no limit line in this reply" — add the belt this
+# review's own design decision calls for: a fresh artifact with a NON-ZERO
+# engine exit is not the "real success" dry_store_clear exists for either,
+# even with no limit line in the reply.
+
+@test "burn #81 fix2: a fresh artifact with a non-zero engine exit does not clear a pre-existing marker (P1-1 rc-gate)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'partial output, then a crash\n'
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 9
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ -f "$CLIKAE_HOME/dry/codex/T1" ]
+  [ "$(cat "$CLIKAE_HOME/dry/codex/T1")" = "$(printf '1700000000\ttry again earlier today')" ]
+}
+
+@test "burn #81 fix2: a fresh artifact with rc==0 and no limit line still clears a pre-existing marker (P1-1 rc-gate control)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'all clear, task complete\n'
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
+}

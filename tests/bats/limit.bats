@@ -341,3 +341,27 @@ _codex_reply_line() {
   run limit_codex_output_dry "warn: ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
   [ "$status" -ne 0 ]
 }
+
+# --- P2-1 (round-2 fix review, this PR): the prior "ISO timestamp" allowance
+# was `(\S+T\S+ )?` under `grep -i` — read as "any non-space token with a t
+# or T anywhere in its middle", not "an ISO-8601 stamp". Every one of these
+# decoys satisfies that (a `t` sandwiched inside a real word), so a task that
+# merely echoed codex's own sentence back while genuinely failing for an
+# unrelated reason came out dry. Rewritten as an exact ISO-8601 literal,
+# matched case-sensitively — none of these are it.
+
+@test "codex output_dry: prefix decoys with a letter-embedded 't' are rejected, not accepted via case-folding (P2-1)" {
+  _src_limit
+  local line
+  for line in \
+    "agent: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "context: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "stderr: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "output: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "note: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "attempt You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -ne 0 ] || { echo "wrongly dry: $line"; false; }
+  done
+}
