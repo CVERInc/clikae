@@ -400,19 +400,37 @@ _burn_output_tail() {
 }
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
-# The next same-engine tank to reroute a dry burn onto, in listing order — but the
-# reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
+# The next same-engine tank to reroute a dry burn onto — the reserve is not
+# naive (the 2026-06-04 "burn-out" dogfood):
 #   · P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
 #   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
+#   · P2-6 (round-1 review) — SKIP a tank whose account is the SAME as the hop
+#     we just left ($tried's last entry): same login, same real quota, so it
+#     is a wasted hop even before dried_accts knows it. And among the
+#     candidates that remain, tanks sharing an account are ranked as ONE —
+#     see the "collapse" pass below — never offered as two independent
+#     options in the same ranking.
+#   · P2-9 (round-1 review) — a tank we KNOW is nearly exhausted (peak >=90%)
+#     must not outrank a tank we simply have no reading for. Ranking is three
+#     tiers, best first: known headroom <90% (lowest weekly_pct, then lowest
+#     window_pct) -> unknown -> known >=90%.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
   local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
-  local best="" best_peak=101 fields _up _uw peak fallback=""
+  local fallback=""
+  local last_hop="" last_acct=""
+  last_hop="${tried##* }"
+  case "$last_hop" in "$cli/"*) last_acct="$(_limit_tank_account "$cli" "${last_hop#*/}" 2>/dev/null || true)" ;; esac
+
+  # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays.
+  # peak/up/uw empty = no usable reading (unknown), never a fork to get one
+  # (usage_cache_peek: cache only, stale allowed — P2-2).
+  local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=()
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -423,12 +441,14 @@ _burn_next_same_engine() {
       log_warn "skipping $cli/$t — an interactive session is using it (burn would spend that quota; --allow-active to override)."
       continue
     fi
-    if [ -n "$dried_accts" ]; then
-      tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
-      if [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
-        log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
-        continue
-      fi
+    tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
+    if [ -n "$dried_accts" ] && [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
+      log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
+      continue
+    fi
+    if [ -n "$last_acct" ] && [ -n "$tacct" ] && [ "$tacct" = "$last_acct" ]; then
+      log_warn "skipping $cli/$t — same account as the tank just tried (shared quota; not a real second option)."
+      continue
     fi
     # P2 (#40) — SKIP a tank that already has a RUNNING burn on it, per #41's
     # status files (never tmux session names: two burns on one tank collide
@@ -440,20 +460,64 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
-    # P2-2 (round-1 review): read the cache only — never a vendor round-trip
-    # from burn's hot path. Stale is fine here (usage_cache_peek, not
-    # usage_read/usage_cached_fields); missing/unknown just loses to any
-    # tank with a reading (P2-9 below still applies its own tie-break).
-    if declare -F usage_cache_peek >/dev/null; then
-      if fields="$(usage_cache_peek "$cli" "$t")"; then
-        IFS=$'\t' read -r _up _uw peak <<< "$fields"
-        peak="${peak%%.*}"
-        if [ "$peak" -lt "$best_peak" ]; then best="$t"; best_peak="$peak"; fi
-      fi
+    local up="" uw="" peak="" fields
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
     fi
+    c_tank+=("$t"); c_acct+=("$tacct"); c_up+=("$up"); c_uw+=("$uw"); c_peak+=("$peak")
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
+
+  # Pass 2 (P2-6) — collapse same-account candidates to ONE. The account's
+  # reading is the WORST (highest) window/weekly seen across its candidate
+  # tanks this call — never overstate a shared quota just because one
+  # sibling's cache snapshot happens to look better. Only the FIRST such
+  # tank (listing order) stays a candidate; every other sibling is dropped
+  # from ranking outright (a `c_skip` flag, not a fake "unknown" — an
+  # unknown reading must never let a dropped, actually-known-bad sibling
+  # sneak ahead of a genuine unknown, see P2-9 above).
+  local n="${#c_tank[@]}" i j
+  local -a c_skip=()
+  for (( i = 0; i < n; i++ )); do c_skip[i]=0; done
+  local seen=$'\n'
+  for (( i = 0; i < n; i++ )); do
+    [ -n "${c_acct[i]}" ] || continue
+    case "$seen" in *$'\n'"${c_acct[i]}"$'\n'*) continue ;; esac
+    seen="$seen${c_acct[i]}"$'\n'
+    local first=-1 wu="" ww=""
+    for (( j = 0; j < n; j++ )); do
+      [ "${c_acct[j]}" = "${c_acct[i]}" ] || continue
+      [ "$first" -ge 0 ] || first=$j
+      if [ "$j" != "$first" ]; then c_skip[j]=1; fi
+      [ -n "${c_up[j]}" ] || continue
+      { [ -n "$wu" ] && [ "${c_up[j]}" -le "$wu" ]; } || wu="${c_up[j]}"
+      { [ -n "$ww" ] && [ "${c_uw[j]}" -le "$ww" ]; } || ww="${c_uw[j]}"
+    done
+    c_up[first]="$wu"; c_uw[first]="$ww"
+    if [ -n "$wu" ]; then
+      c_peak[first]="$wu"; [ "$ww" -le "$wu" ] || c_peak[first]="$ww"
+    else
+      c_peak[first]=""
+    fi
+  done
+
+  # Pass 3 — pick the best surviving (non-skipped) candidate, three tiers.
+  local best="" best_tier=9 best_uw=999999 best_up=999999
+  for (( i = 0; i < n; i++ )); do
+    [ "${c_skip[i]}" = 0 ] || continue
+    local tier up uw
+    if [ -z "${c_peak[i]}" ]; then tier=1; up=0; uw=0
+    elif [ "${c_peak[i]}" -ge 90 ]; then tier=2; up="${c_up[i]}"; uw="${c_uw[i]}"
+    else tier=0; up="${c_up[i]}"; uw="${c_uw[i]}"
+    fi
+    if [ "$tier" -lt "$best_tier" ] ||
+       { [ "$tier" -eq "$best_tier" ] && { [ "$uw" -lt "$best_uw" ] ||
+         { [ "$uw" -eq "$best_uw" ] && [ "$up" -lt "$best_up" ]; }; }; }; then
+      best="${c_tank[i]}"; best_tier=$tier; best_uw=$uw; best_up=$up
+    fi
+  done
   printf '%s\n' "${best:-$fallback}"
 }
 

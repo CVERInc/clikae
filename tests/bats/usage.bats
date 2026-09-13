@@ -83,6 +83,79 @@ STUB
   [ "$output" = reserve ]
 }
 
+@test "P2-9: a tank we have no reading for beats one known >=90% used" {
+  usage_fixture
+  clikae init claude aaa
+  clikae init claude bbb
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  # aaa: no cache file at all (unknown). bbb: known, 99% used on both windows.
+  jq -cn --argjson pct 99 --argjson now "$(date +%s)" \
+    '{window_pct:$pct,weekly_pct:$pct,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/bbb.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  # A tank known to be nearly exhausted must not outrank one we simply have
+  # no data for — before this fix, unknown always lost to ANY reading.
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = aaa ]
+}
+
+@test "P2-6a: same-account tanks rank as one, using the worst shared reading" {
+  usage_fixture
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  write_usage() { jq -cn --argjson pct "$2" --argjson now "$(date +%s)" \
+    '{window_pct:$pct,weekly_pct:$pct,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/$1.json"; }
+
+  # xxx and yyy share an account; xxx looks bad (95, >=90) and yyy looks
+  # great (20) — but they are the SAME real quota. zzz is independent at 50.
+  # Ranking must use the WORST shared reading (95, tier >=90), so the
+  # genuinely independent 50% tank (zzz) wins, not yyy's falsely-good 20%.
+  clikae init claude xxx; clikae init claude yyy; clikae init claude zzz
+  printf '{"emailAddress":"shared@acct"}\n' > "$CLIKAE_HOME/profiles/claude/xxx/.claude.json"
+  printf '{"emailAddress":"shared@acct"}\n' > "$CLIKAE_HOME/profiles/claude/yyy/.claude.json"
+  write_usage xxx 95; write_usage yyy 20; write_usage zzz 50
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = zzz ]
+}
+
+@test "P2-6b: a same-account sibling is never chosen as the next (consecutive) hop" {
+  usage_fixture
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  write_usage() { jq -cn --argjson pct "$2" --argjson now "$(date +%s)" \
+    '{window_pct:$pct,weekly_pct:$pct,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/$1.json"; }
+
+  # ppp and qqq share an account; ppp is the tank the caller JUST tried
+  # (passed in $tried). qqq looks great (5%) but sharing ppp's account means
+  # hopping there gains nothing real — it must be skipped even though
+  # dried_accts (confirmed-dry only) says nothing about it yet. rrr is the
+  # only genuine option left.
+  clikae init claude ppp; clikae init claude qqq; clikae init claude rrr
+  printf '{"emailAddress":"hop@acct"}\n' > "$CLIKAE_HOME/profiles/claude/ppp/.claude.json"
+  printf '{"emailAddress":"hop@acct"}\n' > "$CLIKAE_HOME/profiles/claude/qqq/.claude.json"
+  write_usage ppp 30; write_usage qqq 5; write_usage rrr 60
+  run _burn_next_same_engine claude ' claude/ppp' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = rrr ]
+}
+
 @test "cached vendor thresholds and expired reading preserve unverified fallback" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

@@ -279,15 +279,19 @@ through to the existing transcript logic, including `reset passed · unverified`
 
 The tank a caller names is always the one burn launches — there is no
 pre-launch substitution (round-1 review, P1-2/P1-3/P1-4). Headroom
-preference only governs which tank a *dry* burn reroutes to *next*:
-eligible same-engine reserves are ranked by lowest maximum utilization,
-with unknown readings ranked ahead of any known reading ≥90% (P2-9 — a tank
-we know nothing about should not lose to one the vendor just called nearly
-exhausted), tanks sharing a vendor account ranked and picked as one — never
-as two consecutive hops of the same reroute (P2-6) — and the existing
-live-session, busy-burn, solo, and dried-account exclusions retained.
-`--to` always wins outright over this ordering, and every hop it produces —
-including the very first, off a tank that just went dry — is recorded in
+preference only governs which tank a *dry* burn reroutes to *next*, in
+three tiers, best first: a known reading under 90% used (sorted by lowest
+weekly_pct, then lowest window_pct) beats an unknown reading, which beats
+a known reading of 90% or more (P2-9 — a tank we know nothing about should
+not lose to one the vendor just called nearly exhausted). Tanks sharing a
+vendor account rank as ONE, using the worst (highest) reading any of them
+reported this call — never overstating a shared quota because one
+sibling's cache snapshot happens to look better — and a tank is never
+offered as the very next hop after a sibling on the same account, even
+before that account is confirmed dry (P2-6). The existing live-session,
+busy-burn, solo, and dried-account exclusions are retained. `--to` always
+wins outright over this ordering, and every hop it produces — including
+the very first, off a tank that just went dry — is recorded in
 `rerouted_from`. Unknown usage keeps the existing transcript-based launch
 and reroute behavior otherwise.
 
