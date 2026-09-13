@@ -810,7 +810,23 @@ STUB
 # failure) — both in prose and in --json, with a documented, distinguishable
 # exit code. Fixture mirrors the issue exactly: x/ (dry), hello/ (skipped —
 # another burn is already running on it, #40), hello.lock (a FILE), ghost (a
-# dangling symlink), .cache (a dotdir).
+# dangling symlink), .cache (a dotdir), world.lock/ (a DIRECTORY-shaped
+# sidecar), a dir under an unknown engine, and zzempty/ (an empty dir with no
+# lock-ish name at all).
+#
+# round-1 review P1-2: the negative control in the PR body ("delete this
+# PR's two new lines and both new tests go red") moved TWO variables at
+# once — the guard AND main's own pre-existing `for … in "$cli_dir"*/` +
+# `[ -d "$profile_path" ] || continue`. hello.lock (a plain FILE), ghost (a
+# dangling symlink) and .cache (a dotdir, which that glob never even yields
+# — bash doesn't match a leading dot without dotglob) were ALL already
+# stopped by that pre-existing glob, with or without this PR's own guard —
+# so the control's red proved main's glob works, not that this PR's code
+# does anything. The one case that actually needs a directory-aware guard —
+# a directory that PASSES the `[ -d ]` glob and has no marker/fingerprint —
+# had no fixture at all. world.lock/ (a lock-SHAPED name, but a directory),
+# an unknown-engine dir, and zzempty/ (no lock-ish name whatsoever — the
+# reviewer's own R61-D reproduction, round-1 P1-3) are that case, three ways.
 #
 # round-1 review P1-1: hello's "skip" signal used to be a real background
 # `env CODEX_HOME=… sleep 60 &`, relying on live_dir_users' env-of-process
@@ -844,6 +860,11 @@ STUB
   : > "$CLIKAE_HOME/profiles/codex/hello.lock"
   ln -s /nonexistent "$CLIKAE_HOME/profiles/codex/ghost"
   mkdir -p "$CLIKAE_HOME/profiles/codex/.cache"
+  # round-1 P1-2: these three DO pass main's own `*/ ` + `[ -d ]` glob — only
+  # this PR's marker/fingerprint guard (round-1 P1-3) keeps them out.
+  mkdir -p "$CLIKAE_HOME/profiles/codex/world.lock"       # directory-shaped sidecar
+  mkdir -p "$CLIKAE_HOME/profiles/nonsense-engine/ghostly" # unknown-engine dir
+  mkdir -p "$CLIKAE_HOME/profiles/codex/zzempty"           # empty dir, no lock-ish name
 
   local A="$BATS_TEST_TMPDIR/out.md" rc=0
   clikae burn codex x --artifact "$A" --json -- run "$A" \
@@ -858,12 +879,15 @@ STUB
   # skipped, never judged dry; the fixture's non-tanks were never candidates).
   run jq -e '.reset | test("Jul 7th, 2026")' "$BATS_TEST_TMPDIR/j.txt"
   [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
-  run jq -e '.tank == "hello.lock" or .tank == "ghost" or .tank == ".cache"' "$BATS_TEST_TMPDIR/j.txt"
+  run jq -e '.tank == "hello.lock" or .tank == "ghost" or .tank == ".cache" or .tank == "world.lock" or .tank == "zzempty" or .engine == "nonsense-engine"' "$BATS_TEST_TMPDIR/j.txt"
   [ "$status" -eq 1 ] || { echo "reroute named a non-tank: $(cat "$BATS_TEST_TMPDIR/j.txt")"; false; }
 
   grep -qF "hello.lock" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned hello.lock"; false; }
   grep -qF "codex/ghost" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned ghost"; false; }
   grep -qF "codex/.cache" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned .cache"; false; }
+  grep -qF "codex/world.lock" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned world.lock"; false; }
+  grep -qF "codex/zzempty" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned zzempty"; false; }
+  grep -qF "nonsense-engine" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned nonsense-engine"; false; }
   true
 }
 
