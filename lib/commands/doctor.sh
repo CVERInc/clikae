@@ -182,28 +182,68 @@ _doctor_legacy_prefix() {
   return 0
 }
 
-# _doctor_tmux_guard -> say something ONLY when a live clikae session's PATH
-# does not start with the tmux guard shim directory (CVERInc/clikae#97,
-# lib/shims/tmux — refuses a bare kill-server/kill-session while $TMUX is
-# inherited, rc 86).
+# _doctor_pane_path <pid> -> the PATH value from that PROCESS's real
+# environment (P1-2, clikae#97 review round 1). NOT tmux's session table:
+# `tmux_spawn_session` (lib/core/tmux.sh, Rule 10) writes the shim dir into
+# the session table via `-e` AND wraps the pane's own start command with
+# `env PATH=…` — but a pane's real process gets the SPAWNING CLIENT's live
+# PATH, which `-e` never touches, so reading `show-environment -t` back only
+# ever proves what was ASKED for, never what the process actually got. The
+# original version of this probe did exactly that, and structurally could
+# not have gone red for a session spawned through `tmux_spawn_session`,
+# guard present or not: it always read back its own `-e` write.
 #
-# 🔴 FIRST, not just present. `tmux_spawn_session` (lib/core/tmux.sh, Rule 10)
-# is the only place that prepends it, and a session captures its creating
-# client's PATH once, at birth (DESIGN-tmux Rule 8) — nothing repaints it
-# later. So a session started before the guard shipped, or one whose spawn
-# path drifted around Rule 10, is silently unprotected for its whole life; the
-# only way to know is to ask THAT session what its PATH actually is, read back
-# from tmux's own per-session environment table (`show-environment -t`), not
-# from this process's.
+# Linux reads /proc directly. macOS has no /proc; `ps eww` (BSD ps: e = show
+# environment, ww = don't truncate) is the documented fallback — it appends
+# "KEY=value" pairs after the command, space-separated, which is unambiguous
+# for PATH except in the (unsupported) case of a PATH entry that itself
+# contains a space.
+_doctor_pane_path() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  if [ -r "/proc/$pid/environ" ]; then
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^PATH=//p' | head -n1
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | head -n1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _doctor_tmux_guard -> say something ONLY when a live clikae session's PANE
+# PROCESS does not have the tmux guard shim first on its real PATH
+# (CVERInc/clikae#97, lib/shims/tmux — refuses a bare kill-server/kill-session
+# while $TMUX is inherited, rc 86).
+#
+# 🔴 FIRST, not just present. `tmux_spawn_session` is the only place that
+# arranges it, and a session captures its creating client's PATH once, at
+# birth (DESIGN-tmux Rule 8) — nothing repaints it later. So a session
+# started before the guard shipped, or one whose spawn path drifted around
+# Rule 10, is silently unprotected for its whole life; the only way to know
+# is to ask THAT session's own pane process what its PATH actually is
+# (`_doctor_pane_path`, above), not this process's, and not tmux's table.
 _doctor_tmux_guard() {
   command -v tmux >/dev/null 2>&1 || return 0
+  # P3 (clikae#97 review round 1): this is DOCTOR's own process's
+  # $CLIKAE_LIB, compared against sessions doctor did not necessarily spawn.
+  # Two copies of clikae on one machine (a release install plus a checkout
+  # like this review's own worktree) can each spawn sessions from a
+  # different $CLIKAE_LIB, and this only ever matches its OWN. A known,
+  # narrow blind spot — not fixed here — rather than a claim this covers
+  # every install on the machine.
   local shim_dir="$CLIKAE_LIB/shims"
-  local sess created attached sess_path missing=""
+  local sess created attached pid pane_path missing=""
   while IFS=$'\t' read -r sess created attached; do
     [ -n "$sess" ] || continue
     : "$created" "$attached"
-    sess_path="$(tmux show-environment -t "=$sess" PATH 2>/dev/null | sed -n 's/^PATH=//p')"
-    case "$sess_path" in
+    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)"
+    if [ -z "$pid" ]; then
+      missing="$missing $sess"
+      continue
+    fi
+    pane_path="$(_doctor_pane_path "$pid")"
+    case "$pane_path" in
       "$shim_dir:"*|"$shim_dir") continue ;;
       *) missing="$missing $sess" ;;
     esac

@@ -251,20 +251,32 @@ EOF
 }
 
 # --- tmux guard shim reporting (CVERInc/clikae#97) -----------------------------
-# The guard (lib/shims/tmux) only protects a session that has it FIRST on
-# PATH — tmux_spawn_session (Rule 10, lib/core/tmux.sh) is the only place that
-# arranges that, and a session's PATH is fixed at birth (DESIGN-tmux Rule 8),
-# so a session spawned some other way, or before the guard shipped, stays
-# unprotected for its whole life. doctor is the only place that can say so,
-# reading each live session's OWN tmux-tracked PATH back with
-# `show-environment`, never this process's.
+# The guard (lib/shims/tmux) only protects a session whose PANE PROCESS has it
+# FIRST on its real PATH — tmux_spawn_session (Rule 10, lib/core/tmux.sh) is
+# the only place that arranges that, and a session's PATH is fixed at birth
+# (DESIGN-tmux Rule 8), so a session spawned some other way, or before the
+# guard shipped, stays unprotected for its whole life.
+#
+# 🔴 P1-2 (clikae#97 review round 1): this used to construct both the "with"
+# and "without" cases via `tmux new-session -e "PATH=…"` and read
+# `show-environment -t` back — the same write-and-read-back-the-same-table
+# loop `_doctor_pane_path` replaced doctor's own probe to stop doing. That
+# probe could not structurally go red for a real `tmux_spawn_session`
+# session, guarded or not: it only ever proved what `-e` had been asked to
+# write. These two now use the actual code paths — a bare `tmux new-session`
+# (no guard, the pre-#97 shape) and the real `tmux_spawn_session` (the
+# guard, as clikae itself spawns it) — and read the PANE PROCESS back via
+# `/proc`, the same probe doctor itself now uses.
 
 _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
 
-@test "doctor reports a live session whose PATH does not start with the guard shim" {
+@test "doctor reports a live session whose PANE PROCESS lacks the guard on PATH" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   local sess; sess="clikae-codex-$(_tg_tank)"
-  tmux new-session -d -e "PATH=/usr/bin:/bin" -s "$sess" 'sleep 60'
+  # A bare `tmux new-session`, not tmux_spawn_session — the shape of a
+  # session that predates the guard, or whose spawn path drifted around
+  # Rule 10. Its pane process never gets the shim.
+  tmux new-session -d -s "$sess" 'sleep 60'
   run clikae doctor
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]
@@ -272,10 +284,16 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   [[ "$output" == *"$sess"* ]] || { echo "$output"; false; }
 }
 
-@test "doctor stays silent when the live session's PATH starts with the guard shim" {
+@test "doctor stays silent when the live session's PANE PROCESS actually has the guard first on PATH" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
   local sess; sess="clikae-codex-$(_tg_tank)"
-  tmux new-session -d -e "PATH=$CLIKAE_LIB/shims:/usr/bin:/bin" -s "$sess" 'sleep 60'
+  # The real production spawn path (Rule 10) — this is what actually gives
+  # the pane process the guard, per P1-1.
+  tmux_spawn_session --session "$sess" -- 'sleep 60'
   run clikae doctor
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]
