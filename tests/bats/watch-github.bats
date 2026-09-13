@@ -227,14 +227,62 @@ _row() { # number updated login repo html_url is_pr title
   [[ "$output" != *"comment"* ]] || false
 }
 
-@test "watch github --once: a 403 body means no cursor advance and a back-off line" {
+@test "watch github --once: a genuine rate-limit 403 means no cursor advance, a back-off line, and rc=1 (P2-5)" {
   _gh_stub_install
   _gh_stub_fail org 1 1 'gh: HTTP 403: API rate limit exceeded (https://api.github.com/search/issues)'
   run clikae watch github --org CVERInc --once
-  [ "$status" -eq 0 ]   # --once still exits 0 — see the next test
+  # P2-5 (2026-09-13 fix-round-1 review): --once used to exit 0 on ANY
+  # failure and print "0 new event(s) this poll" — actively claiming
+  # success. A rate limit IS a failed poll: rc=1, and no "0 new event(s)"
+  # line (that would be the same false claim under a new name).
+  [ "$status" -eq 1 ]
   [[ "$output" == *"403"* ]] || false
   [[ "$output" == *"back"* ]] || false
+  [[ "$output" != *"new event(s)"* ]] || false
   [ ! -f "$CLIKAE_HOME/state/watch-github/CVERInc.cursor" ]
+}
+
+@test "watch github --once: a permanent 403 (missing scope) retries once, then exits 1 without a back-off line (P2-6)" {
+  _gh_stub_install
+  # No "rate limit" wording — a genuine scope/SAML denial, exactly what
+  # _wg_classify_error must NOT treat as rate-limited. Seeded on BOTH call
+  # 1 and call 2: a real permanent failure fails the identical way twice,
+  # so the one retry _wg_fetch_classified spends does not cure it.
+  _gh_stub_fail org 1 1 'gh: Resource not accessible by personal access token (HTTP 403)'
+  _gh_stub_fail org 2 1 'gh: Resource not accessible by personal access token (HTTP 403)'
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"giving up"* ]] || false
+  [[ "$output" == *"Resource not accessible"* ]] || false
+  [[ "$output" != *"back"* ]] || false
+  [ ! -f "$CLIKAE_HOME/state/watch-github/CVERInc.cursor" ]
+  # The retry actually happened — two calls recorded for this queue.
+  [ "$(cat "$GH_STUB_DIR/org.calls")" = "2" ]
+}
+
+@test "watch github --once: a 404 (bad org / the --method bug) is permanent, not rate-limited (P3-14)" {
+  _gh_stub_install
+  # Deliberately includes a trailing 3-digit number in the URL that is NOT
+  # an HTTP status — the exact shape that used to fool a bare 403|429 grep
+  # over the whole error line.
+  _gh_stub_fail org 1 1 'gh: Not Found (HTTP 404) https://api.github.com/repos/CVERInc/reef/issues/403'
+  _gh_stub_fail org 2 1 'gh: Not Found (HTTP 404) https://api.github.com/repos/CVERInc/reef/issues/403'
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"giving up"* ]] || false
+  [[ "$output" != *"back"* ]] || false
+}
+
+@test "watch github --once: a permanent-shaped failure that clears on retry succeeds (one retry, P2-6)" {
+  _gh_stub_install
+  # Call 1 fails permanent-shaped; call 2 (the automatic retry) is NOT
+  # seeded, so the stub's default (success, empty page) answers it — a
+  # transient blip that merely wore a permission-denied costume.
+  _gh_stub_fail org 1 1 'gh: Resource not accessible by personal access token (HTTP 403)'
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [ "$(cat "$GH_STUB_DIR/org.calls")" = "2" ]
 }
 
 @test "watch github --once exits 0 after one poll (even with zero events)" {

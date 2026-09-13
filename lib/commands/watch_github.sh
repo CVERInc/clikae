@@ -199,9 +199,90 @@ _wg_fetch() {
     2>"$errfile"
 }
 
-# _wg_is_rate_limited <errfile> -> 0 if gh's own error text names 403/429.
-_wg_is_rate_limited() {
-  grep -qE '(^|[^0-9])(403|429)([^0-9]|$)' "$1" 2>/dev/null
+# _wg_http_status <errfile> -> the HTTP status code gh's own error text
+# reported, or empty. Reads ONLY text immediately after the literal word
+# "HTTP" — never any 3-digit number that happens to appear anywhere else in
+# the message (an issue number in a URL, e.g. ".../issues/403", used to be
+# misread as a rate-limit status by a bare `403|429` grep over the whole
+# line — P3-14, 2026-09-13 fix-round-1 review). Handles both shapes `gh`
+# actually emits: "HTTP 403: <msg>" and "<msg> (HTTP 404)".
+_wg_http_status() {
+  grep -oE 'HTTP[: ]+[0-9]{3}' "$1" 2>/dev/null | head -n1 | grep -oE '[0-9]{3}$'
+}
+
+# _wg_classify_error <errfile> -> one of: rate-limit | permanent | transient.
+# P2-5/P2-6 (2026-09-13 fix-round-1 review): the OLD code treated every
+# 403/429 as "back off and try again forever" — including a 403 for missing
+# OAuth scope, SAML enforcement, or a bad org name, none of which a retry
+# EVER fixes. In a live loop that meant backing off to 1h and printing
+# "rate-limited" once an hour, permanently, with the real reason never
+# shown. Now:
+#   - 429, or a 403 whose text actually says the rate limit is why -> a
+#     genuine rate limit: back off (see _wg_poll_one_query/cmd_watch_github).
+#   - any OTHER 403, or 404 (a bad org/endpoint — this file's own --method
+#     GET bug produced exactly this) -> permanent: never enters back-off,
+#     surfaces the reason, exits (after one retry — see
+#     _wg_fetch_classified below).
+#   - anything else (network error, DNS, timeout, a status this can't read)
+#     -> transient: today's existing behaviour (log and move on, no
+#     back-off, cursor not advanced past it).
+_wg_classify_error() {
+  local errfile="$1" status
+  status="$(_wg_http_status "$errfile")"
+  case "$status" in
+    429) printf 'rate-limit' ;;
+    403)
+      if grep -qiE 'rate.?limit' "$errfile" 2>/dev/null; then
+        printf 'rate-limit'
+      else
+        printf 'permanent'
+      fi
+      ;;
+    404) printf 'permanent' ;;
+    5[0-9][0-9]) printf 'rate-limit' ;;
+    *) printf 'transient' ;;
+  esac
+}
+
+# _wg_fetch_classified <query> <page> -> rc 0 on success, with the TSV in
+# global $__WG_LAST_TSV. On failure, retries the SAME call ONCE if (and
+# only if) the first failure classified as "permanent" (a transient blip
+# that merely wore a permission-denied costume is cheap to rule out; a
+# genuine permanent failure fails the same way twice) — then sets
+# $__WG_LAST_KIND / $__WG_LAST_REASON from whichever attempt is final and
+# returns 1.
+#
+# 🔴 MUST be called directly, never as `x="$(_wg_fetch_classified …)"` — a
+# command substitution forks a SUBSHELL, and this function's whole point is
+# the global variables it sets on failure; those would be silently lost the
+# instant the subshell exits (caught in this file's own bats suite: a "403"
+# assertion failed because $__WG_LAST_REASON came back empty). The TSV
+# payload goes through $__WG_LAST_TSV for the same reason, not stdout.
+_wg_fetch_classified() {
+  local query="$1" page="$2" errfile rc kind
+  errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+  rc=0
+  __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile")" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$errfile"
+    return 0
+  fi
+  kind="$(_wg_classify_error "$errfile")"
+  if [ "$kind" = "permanent" ]; then
+    rm -f "$errfile"
+    errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+    rc=0
+    __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile")" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      rm -f "$errfile"
+      return 0
+    fi
+    kind="$(_wg_classify_error "$errfile")"
+  fi
+  __WG_LAST_KIND="$kind"
+  __WG_LAST_REASON="$(head -n1 "$errfile" 2>/dev/null)"
+  rm -f "$errfile"
+  return 1
 }
 
 # _wg_process <kind_query: org|mentions> <tsv> <org> <seen_file> <events_file>
@@ -315,42 +396,48 @@ _wg_status_write() {
 # there is no next page) or once a page's oldest row is already <= <since>
 # (defensive — the query itself already filters `updated:>=since`, so every
 # row returned should already satisfy this; kept as the brief's own stated
-# stop condition rather than trusting the filter silently). Sets $ok=0 and
-# $__WG_BACKOFF via the caller's is-rate-limited check on a failed page,
-# WITHOUT advancing past whatever pages DID read successfully — the pages
-# already processed already folded their rows into $__WG_MAX_UPDATED via
-# _wg_process, so a failure on page 3 still leaves the cursor able to
-# advance to what pages 1-2 saw (never past a page that failed to read).
+# stop condition rather than trusting the filter silently). On a failed
+# page (P2-5/P2-6): sets $__WG_OK=0 always; a rate-limit-classified failure
+# also sets $__WG_BACKOFF=1, a permanent one (missing scope, SAML, bad org
+# — see _wg_classify_error) sets $__WG_PERMANENT=1/$__WG_PERMANENT_REASON
+# and the caller (cmd_watch_github) exits rather than ever backing off on
+# it. Either way, pages already processed already folded their rows into
+# $__WG_MAX_UPDATED via _wg_process, so a failure on page 3 still leaves the
+# cursor able to advance to what pages 1-2 saw (never past a page that
+# failed to read).
 _wg_poll_one_query() {
   local kind_query="$1" org="$2" since="$3" seen_file="$4" events_file="$5"
-  local q page=1 errfile tsv rc page_n oldest
+  local q page=1 tsv page_n oldest
   if [ "$kind_query" = "org" ]; then q="$(_wg_query_org "$org" "$since")"
   else                               q="$(_wg_query_mentions "$org" "$since")"
   fi
   while :; do
-    errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
-    # 🔴 `cmd || rc=$?`, never a bare `cmd; rc=$?` — bin/clikae runs under
-    # `set -eo pipefail`. A bare `tsv="$(_wg_fetch …)"` failing is not the
-    # condition of any if/while/&&/||, so set -e would abort this whole
-    # function right here — before `rc` is ever read, before the 403/429
-    # check, before the cursor-preserving `continue` below — the moment
-    # _wg_fetch's first nonzero exit happened to be a rate limit. Same fix
-    # burn.sh's own tank-lock acquire documents at length for the identical
-    # shape (search this repo for "never a bare").
-    rc=0
-    tsv="$(_wg_fetch "$q" "$page" "$errfile")" || rc=$?
-    if [ "$rc" -ne 0 ]; then
+    # Called DIRECTLY, never through `tsv="$(...)"` — see the 🔴 note on
+    # _wg_fetch_classified's own definition for why a subshell would lose
+    # its global side effects. `never a bare cmd; rc=$?` still applies
+    # (bin/clikae runs under `set -eo pipefail`): the `!` here is that
+    # guard, same reasoning burn.sh's own tank-lock acquire documents at
+    # length (search this repo for "never a bare").
+    if ! _wg_fetch_classified "$q" "$page"; then
       __WG_OK=0
-      if _wg_is_rate_limited "$errfile"; then
-        __WG_BACKOFF=1
-        log_warn "GitHub search rate-limited (403/429) on the $kind_query query — backing off."
-      else
-        log_warn "gh api search/issues failed on the $kind_query query: $(head -n1 "$errfile" 2>/dev/null)"
-      fi
-      rm -f "$errfile"
+      case "$__WG_LAST_KIND" in
+        rate-limit)
+          __WG_BACKOFF=1
+          log_warn "GitHub search rate-limited on the $kind_query query — backing off. ($__WG_LAST_REASON)"
+          ;;
+        permanent)
+          if [ "${__WG_PERMANENT:-0}" -ne 1 ]; then
+            __WG_PERMANENT=1
+            __WG_PERMANENT_REASON="$__WG_LAST_REASON"
+          fi
+          ;;
+        *)
+          log_warn "gh api search/issues failed on the $kind_query query: $__WG_LAST_REASON"
+          ;;
+      esac
       return 0
     fi
-    rm -f "$errfile"
+    tsv="$__WG_LAST_TSV"
     _wg_process "$kind_query" "$tsv" "$org" "$seen_file" "$events_file"
 
     page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
@@ -386,6 +473,8 @@ _wg_poll() {
   __WG_EVENTS=0
   __WG_BACKOFF=0
   __WG_OK=1
+  __WG_PERMANENT=0
+  __WG_PERMANENT_REASON=""
   __WG_MAX_UPDATED=""
   __WG_SUMMARY_LINES=""
 
@@ -404,6 +493,10 @@ _wg_poll() {
   [ -n "$since" ] || since="${since_override:-$(_wg_since_default)}"
 
   for kind_query in org mentions; do
+    # A permanent failure on the first query means the second would fail
+    # the identical way (same auth, same org) — no point spending the
+    # request or the retry on it.
+    [ "$__WG_PERMANENT" -eq 1 ] && break
     _wg_poll_one_query "$kind_query" "$org" "$since" "$seen_file" "$events_file"
   done
 
@@ -473,11 +566,19 @@ that cap prints "+more, will catch up next poll" rather than blocking.
 
 Rate limits: normally 2 requests per poll (up to 10 when paginating both
 queries to the cap; the search API allows 30/min authenticated). On a
-403/429 the interval backs off ×2 up to 1h and one line is printed; the
-cursor is never advanced past a page that failed to read, and is kept 300s
-behind the newest update actually seen (GitHub's search index itself lags
-real writes by some minutes) — a small seen-file de-dupes the resulting
-overlap between polls.
+genuine rate limit (429, or a 403 the response itself attributes to the
+rate limit, or a 5xx) the interval backs off ×2 up to 1h and one line is
+printed; the cursor is never advanced past a page that failed to read, and
+is kept 300s behind the newest update actually seen (GitHub's search index
+itself lags real writes by some minutes) — a small seen-file de-dupes the
+resulting overlap between polls.
+
+A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
+name — any other 403, or a 404) is retried once, then reported and this
+command exits 1 — it never enters back-off, since no amount of retrying
+fixes a scope or SAML problem. `--once` returns 0 only when a poll actually
+succeeded (events or none); 1 on any failure, permanent or not, so a cron
+job can tell "quiet today" from "I've been failing silently".
 
 Requires `gh` already logged in (whatever account that is — this never reads
 or writes a token itself); exits 1 immediately if `gh auth status` fails.
@@ -538,14 +639,38 @@ cmd_watch_github() {
 
   if [ "$once" -eq 1 ]; then
     _wg_poll "$org" "$since_flag"
-    log_info "github:$org — $__WG_EVENTS new event(s) this poll."
-    return 0
+    # P2-6: a permanent failure (missing scope, SAML, bad org — see
+    # _wg_classify_error) is reported and failed outright, never retried
+    # again beyond the ONE retry _wg_fetch_classified already spent.
+    if [ "$__WG_PERMANENT" -eq 1 ]; then
+      log_err "github:$org — giving up: ${__WG_PERMANENT_REASON:-a permanent error (see the warning above)}"
+      return 1
+    fi
+    # P2-5: "0 new event(s)" is a SUCCESS claim — nothing to report is not
+    # the same thing as "I read nothing because the query failed". The old
+    # code printed this line and returned 0 unconditionally, so a cron job
+    # calling --once could never tell "today was quiet" from "I've been
+    # blind for three days" — exactly the failure mode issue #46 exists to
+    # catch, reintroduced one layer up.
+    if [ "$__WG_OK" -eq 1 ]; then
+      log_info "github:$org — $__WG_EVENTS new event(s) this poll."
+      return 0
+    fi
+    log_err "github:$org — poll failed (see the warning above); not counted as 0 events."
+    return 1
   fi
 
   log_info "Watching GitHub org $org as $__WG_SELF — polling every $(wake_human_left "$interval_s"). Ctrl-C to stop."
   local cur="$interval_s"
   while :; do
     _wg_poll "$org" "$since_flag"
+    if [ "$__WG_PERMANENT" -eq 1 ]; then
+      # P2-6: never enter back-off on a permanent failure — a live loop
+      # backing off to 1h and printing "rate-limited" once an hour, forever,
+      # for a missing OAuth scope is exactly the bug this fixes.
+      log_err "github:$org — giving up: ${__WG_PERMANENT_REASON:-a permanent error (see the warning above)}"
+      return 1
+    fi
     if [ "$__WG_BACKOFF" -eq 1 ]; then
       cur=$((cur * 2))
       [ "$cur" -le 3600 ] || cur=3600
