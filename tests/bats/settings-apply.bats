@@ -15,6 +15,10 @@ load '../helpers'
 @test "settings unions both lists and preserves other keys and backup" {
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
+  # #61 round-2 P2-3: naming a tank now requires the marker (no more seeding
+  # a fingerprint by writing settings.json) — stamp it directly, same as a
+  # real `clikae init` would have.
+  printf 'claude\n' > "$d/.clikae-tank"
   printf '%s\n' '{"permissions":{"allow":["Bash(custom *)"],"deny":["Bash(secret *)"],"defaultMode":"acceptEdits"},"env":{"X":"keep"},"hooks":{}}' > "$d/settings.json"
   cp "$d/settings.json" "$TEST_HOME/before"
   run clikae settings apply claude work
@@ -60,6 +64,11 @@ load '../helpers'
   # no fingerprint to be adopted by; stamp it directly, same as a real
   # `clikae init` would have.
   printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/good/.clikae-tank"
+  # #61 round-2 P2-3: "bad"'s only fingerprint used to be the very
+  # settings.json this test writes below — that no longer seeds a tank, so
+  # stamp its marker directly too (same as "good" above), or apply would
+  # never enumerate "bad" at all and this test would stop touching it.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/bad/.clikae-tank"
   local f="$CLIKAE_HOME/profiles/claude/bad/settings.json"
   printf '{broken' > "$f"
   cp "$f" "$TEST_HOME/before"
@@ -80,18 +89,22 @@ load '../helpers'
   run clikae settings apply --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude/a: +"*"claude/b: +"* ]] || false
-  # #61 round-1 P1-3: was a blanket "zero files under profiles/" — no longer
-  # true now that a real tank's OWN fixture setup puts a `.clikae-tank`
-  # marker there (see above). The actual claim ("dry-run creates no
-  # settings.json") still holds; assert THAT instead of an incidental count
-  # that a real tank marker was always going to break.
-  [ ! -e "$CLIKAE_HOME/profiles/claude/a/settings.json" ]
-  [ ! -e "$CLIKAE_HOME/profiles/claude/b/settings.json" ]
+  # #61 round-2 P3: was narrowed to two `[ ! -e … /settings.json ]` checks —
+  # equivalent for THESE two fixtures, but weaker in general: it would stay
+  # green even if --dry-run started writing some OTHER file. Assert the full
+  # claim ("dry-run creates no files at all") again, just excluding the
+  # `.clikae-tank` markers this fixture itself stamped above.
+  [ "$(find "$CLIKAE_HOME/profiles" -type f ! -name .clikae-tank | wc -l | tr -d ' ')" -eq 0 ]
 }
 
 @test "settings rejects malformed shapes and empty files unchanged" {
   local d="$CLIKAE_HOME/profiles/claude/work" value
   mkdir -p "$d"
+  # #61 round-2 P2-3: without a marker, named apply would now refuse for a
+  # DIFFERENT reason ("not a tank") before ever reaching the malformed-JSON
+  # check this test exists to exercise — stamp it so the assertion stays
+  # honest about what it is testing.
+  printf 'claude\n' > "$d/.clikae-tank"
   for value in '' 'null' '[]' '{"permissions":{"allow":"oops"}}' '{} {}'; do
     printf '%s' "$value" > "$d/settings.json"
     cp "$d/settings.json" "$TEST_HOME/before"
@@ -133,6 +146,9 @@ load '../helpers'
   # unopposed, instead of picking up the template's matching deny rule).
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
+  # #61 round-2 P2-3: naming a tank now requires the marker — stamp it
+  # directly, same as a real `clikae init` would have.
+  printf 'claude\n' > "$d/.clikae-tank"
   printf '%s\n' '{"permissions":{"allow":["Bash(sudo *)"]}}' > "$d/settings.json"
   run clikae settings apply claude work
   [ "$status" -eq 0 ]
@@ -174,6 +190,10 @@ load '../helpers'
 
 @test "targeted apply leaves other tanks alone and expands \$HOME" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/a" "$CLIKAE_HOME/profiles/claude/b"
+  # #61 round-2 P2-3: naming "a" now requires the marker — stamp it directly,
+  # same as a real `clikae init` would have. "b" is never named, so it needs
+  # none (the assertion below is that apply never touches it).
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/a/.clikae-tank"
   clikae settings apply claude a
   [ ! -e "$CLIKAE_HOME/profiles/claude/b/settings.json" ]
   jq -e --arg rule "Bash($HOME/*)" '.permissions.allow | index($rule) != null' "$CLIKAE_HOME/profiles/claude/a/settings.json"
@@ -181,6 +201,9 @@ load '../helpers'
 
 @test "\$HOME/* expands the same whether or not the caller's HOME has a trailing slash" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/a"
+  # #61 round-2 P2-3: naming "a" now requires the marker — stamp it directly,
+  # same as a real `clikae init` would have.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/a/.clikae-tank"
   clikae settings apply claude a
   run env HOME="$HOME/" "$CLIKAE_BIN" settings apply claude a --check
   [ "$status" -eq 0 ]
@@ -190,6 +213,9 @@ load '../helpers'
 @test "a colon-spelled allow rule is recognized as equivalent to the template's space-spelled rule" {
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
+  # #61 round-2 P2-3: naming a tank now requires the marker — stamp it
+  # directly, same as a real `clikae init` would have.
+  printf 'claude\n' > "$d/.clikae-tank"
   printf '%s\n' '{"permissions":{"allow":["Bash(ls:*)"]}}' > "$d/settings.json"
   run clikae settings apply claude work
   [ "$status" -eq 0 ]
@@ -198,6 +224,11 @@ load '../helpers'
 
 @test "symlinked settings are skipped without changing the target" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/work"
+  # #61 round-2 P2-3: this tank's only "fingerprint" is the deliberately
+  # SYMLINKED settings.json below, which no longer counts — without a real
+  # marker, unnamed `settings apply` would enumerate zero claude tanks and
+  # never even reach the symlink this test exists to exercise.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/work/.clikae-tank"
   printf '{}\n' > "$TEST_HOME/target"
   cp "$TEST_HOME/target" "$TEST_HOME/before"
   ln -s "$TEST_HOME/target" "$CLIKAE_HOME/profiles/claude/work/settings.json"
@@ -210,6 +241,9 @@ load '../helpers'
 @test "failed rename preserves the live file and cleans the temporary file" {
   local d="$CLIKAE_HOME/profiles/claude/work"
   mkdir -p "$d"
+  # #61 round-2 P2-3: without a marker, unnamed `settings apply` would
+  # enumerate zero claude tanks and never reach this fixture's settings.json.
+  printf 'claude\n' > "$d/.clikae-tank"
   printf '{}\n' > "$d/settings.json"
   cp "$d/settings.json" "$TEST_HOME/before"
   printf '#!/bin/sh\nexit 1\n' > "$TEST_HOME/.testbin/mv"

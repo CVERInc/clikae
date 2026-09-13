@@ -124,6 +124,15 @@ HELP
   command -v jq >/dev/null 2>&1 || { log_err 'settings apply requires jq; permissions template not applied'; return 3; }
   if [ -n "$tank" ]; then
     profile_exists "$engine" "$tank" || { log_err "Tank does not exist: $engine/$tank"; return 1; }
+    # #61 round-2 P2-3: profile_exists is a bare `[ -d ]` — naming an
+    # existing but not-yet-a-tank directory used to write settings.json
+    # straight into it, and since claude's OLD fingerprint list included
+    # settings.json (a file CLIKAE ITSELF writes, never the engine), the next
+    # walk silently adopted it as a permanent tank — #61's exact symptom,
+    # this time with the enumerator's own blessing. A named target must be a
+    # tank already; there is no more "seed it into existence" side door.
+    tank_dir_is_tank "$engine" "$(profile_dir "$engine" "$tank")" \
+      || { log_err "Not a tank: $engine/$tank (no .clikae-tank marker — see clikae doctor)"; return 1; }
     _settings_tank "$engine" "$tank" "$mode" "$template"
     return $?
   fi
