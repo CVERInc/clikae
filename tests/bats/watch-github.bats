@@ -358,6 +358,56 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [[ "$output" == *"0 new event(s)"* ]] || false
 }
 
+@test "watch github --once: seen-file caps at 5,000 lines, not 500 (P2-10)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  # 5,100 pre-existing keys, well past the OLD 500 cap and past the NEW
+  # 5,000 one too — P2-10's finding was that 500 was smaller than a single
+  # cold-start backlog could legitimately be, evicting entries the SAME
+  # poll had just written and re-announcing them next time.
+  seq 1 5100 | sed 's/^/reef|/; s/$/|2026-01-01T00:00:00Z/' > "$state_dir/CVERInc.seen"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$state_dir/CVERInc.seen")" -eq 5000 ]
+  # It's a TAIL — the newest (highest-numbered) keys survive, not the oldest.
+  grep -qxF "reef|5100|2026-01-01T00:00:00Z" "$state_dir/CVERInc.seen"
+  ! grep -qxF "reef|100|2026-01-01T00:00:00Z" "$state_dir/CVERInc.seen"
+}
+
+@test "watch github --once: an empty cursor file is cold start, not a full org replay (P2-11)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  # A zero-byte cursor file — e.g. left behind by an older clikae, or any
+  # foreign empty file at that path.
+  : > "$state_dir/CVERInc.cursor"
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # A real cursor got written (proves _wg_poll treated the empty file as
+  # "no cursor" and fell through to the cold-start default, not as some
+  # unparseable literal it choked on).
+  [ -s "$state_dir/CVERInc.cursor" ]
+}
+
+@test "watch github --once: a stale poll lock is reclaimed, not blocked on forever (P2-11)" {
+  _gh_stub_install
+  local lock="$CLIKAE_HOME/state/watch-github/CVERInc.lock"
+  mkdir -p "$lock"
+  # Backdate it well past the 300s staleness window — simulating a poll
+  # that crashed mid-run and never released it.
+  local past
+  past="$(date -u -d '-10 minutes' +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-10M +%Y%m%d%H%M.%S)"
+  touch -t "$past" "$lock"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  # Released normally after the reclaimed poll finished — not left behind.
+  [ ! -d "$lock" ]
+}
+
 @test "watch github --once: a comment by self is not an event" {
   _gh_stub_install
   _gh_stub_page mentions 1 \

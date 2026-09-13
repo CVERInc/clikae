@@ -116,6 +116,53 @@ _wg_events_file() { printf '%s/events.jsonl\n' "$(_wg_log_dir "$1")"; }
 # _wg_runs_dir <org> -> where the burn-status-shaped file `clikae wait` reads
 # lives for this org (P1-1, see the WHAT "WAKE" MEANS HERE note above).
 _wg_runs_dir()    { printf '%s/%s/runs\n' "$(_wg_state_dir)" "$1"; }
+# _wg_lock_dir <org> -> the mkdir-lock guarding one poll's read-poll-write
+# section for this org (P2-11). See _wg_lock_acquire/_wg_lock_release below.
+_wg_lock_dir()    { printf '%s/%s.lock\n' "$(_wg_state_dir)" "$1"; }
+
+# _wg_lock_acquire <org> [timeout_s=30] -> 0 once this process holds the
+# lock (mkdir is atomic on every filesystem this needs to work on, NFS
+# included — unlike a lock FILE's `O_CREAT|O_EXCL`, which some of clikae's
+# other locks avoid for exactly that reason too), 1 on timeout. P2-11
+# (2026-09-13 fix-round-1 review): this feature is explicitly designed to
+# be invoked BOTH by cron (`--once`) and by hand (a person also running
+# `--once`, or the live loop) — with no lock, two overlapping polls race
+# the seen-file compaction (`tail`+`mv` under each other) and the cursor
+# write, and an append landing in the gap between them silently vanishes.
+#
+# Deliberately much simpler than burn's own tank lock
+# (lib/commands/burn.sh's _burn_tank_lock_acquire): that one has to survive
+# a burn running for HOURS, with real pid/started-at reclaim logic for a
+# holder that crashed mid-run. A watch-github poll is a handful of `gh api`
+# calls that finishes in seconds — a plain mkdir + mtime-based staleness
+# check (reusing lib/core/profile_store.sh's own file_mtime, which already
+# solves the GNU/BSD `stat` footgun once) is honest here, not a shortcut.
+_wg_lock_acquire() {
+  local org="$1" timeout="${2:-30}" dir waited=0 age mtime
+  dir="$(_wg_lock_dir "$org")"
+  mkdir -p "$(_wg_state_dir)" 2>/dev/null || true
+  while ! mkdir "$dir" 2>/dev/null; do
+    if [ -d "$dir" ]; then
+      mtime="$(file_mtime "$dir")"
+      case "$mtime" in
+        ''|*[!0-9]*) : ;;   # can't read it — don't guess, just keep waiting
+        *)
+          age=$(( $(date +%s 2>/dev/null || echo 0) - mtime ))
+          if [ "$age" -gt 300 ]; then
+            rmdir "$dir" 2>/dev/null || true   # stale — a crashed poll never released it; reclaim and retry
+            continue
+          fi
+          ;;
+      esac
+    fi
+    [ "$waited" -lt "$timeout" ] || return 1
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+
+_wg_lock_release() { rmdir "$(_wg_lock_dir "$1")" 2>/dev/null || true; }
 
 # --- time helpers -----------------------------------------------------------
 
@@ -522,6 +569,17 @@ _wg_poll() {
   __WG_MAX_UPDATED=""
   __WG_SUMMARY_LINES=""
 
+  # P2-11: one mkdir-lock around the whole read-poll-write section, so cron
+  # running `--once` and a person ALSO running `--once` (or the live loop)
+  # never interleave a seen-file compaction or a cursor write with each
+  # other. A poll that can't get the lock inside 30s is reported as a
+  # failed poll (ok=0) rather than proceeding unguarded.
+  if ! _wg_lock_acquire "$org"; then
+    __WG_OK=0
+    log_warn "github:$org — could not acquire the poll lock (another watch github --once running concurrently?); skipping this poll."
+    return 0
+  fi
+
   mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
   local seen_file events_file cursor_file since
   seen_file="$(_wg_seen_file "$org")"
@@ -544,9 +602,18 @@ _wg_poll() {
     _wg_poll_one_query "$kind_query" "$org" "$since" "$seen_file" "$events_file"
   done
 
-  # Cap the seen-file at the last 500 keys (brief's stated cap).
+  # Cap the seen-file at the last 5,000 keys (brief's stated cap; P2-10 —
+  # 500 was smaller than a single cold-start backlog could legitimately
+  # be, so a busy first run would evict entries it had just written and
+  # then re-announce them as "opened" a second time next poll). Atomic
+  # `mktemp`+`mv` (P2-11): the old fixed `.tmp` name could collide with a
+  # concurrent poll's own compaction even under the lock above if a
+  # previous crashed run left a stale `.tmp` sitting there.
   if [ -f "$seen_file" ]; then
-    tail -n 500 "$seen_file" > "${seen_file}.tmp" 2>/dev/null && mv "${seen_file}.tmp" "$seen_file"
+    local seen_tmp
+    seen_tmp="$(mktemp "${seen_file}.XXXXXX" 2>/dev/null)" && \
+      tail -n 5000 "$seen_file" > "$seen_tmp" 2>/dev/null && \
+      mv -f "$seen_tmp" "$seen_file" 2>/dev/null
   fi
 
   # Never advance past an event a failed page might have contained. The new
@@ -569,6 +636,8 @@ _wg_poll() {
   if [ "$__WG_EVENTS" -ge 1 ]; then
     _wg_status_write "$org" "$events_file" "$(_wg_build_summary "$__WG_SUMMARY_LINES" "$__WG_EVENTS")"
   fi
+
+  _wg_lock_release "$org"
 }
 
 # --- the command --------------------------------------------------------------
