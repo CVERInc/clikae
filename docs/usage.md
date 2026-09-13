@@ -355,26 +355,45 @@ hand.
 clikae watch github --org CVERInc              # foreground, polls every 10m, Ctrl-C to stop
 clikae watch github --org CVERInc --interval 5m # a tighter poll interval
 clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
+clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bound, default 24h ago
 ```
 
 `--org` defaults to the login `gh repo view` reports for this directory's
 GitHub remote when omitted. Every new event prints live as one line —
 
 ```
-[ DONE ] github CVERInc/reef#313 comment by collaborator: auth redirect — next: retry the callback test
+[ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect — cc @maintainer, retry the callback test
 ```
 
-— and is also appended, as flat JSON, to
-`$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl`, so `--once` from a cron
-job or a Stop hook leaves a durable trail even with nobody watching the pane.
-A cursor (the newest event timestamp seen) persists at
-`$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small file next to it
-de-dupes by (issue number, updated timestamp), capped at the last 500.
+— a collaborator's @mention on an issue reaching you even though it's an
+issue YOU opened (the mentions query is not author-excluded — see the
+caveat below for the one shape this still can't catch). It's also appended,
+as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
+durable trail, and — the actual wake — every poll that finds at least one
+new event writes a burn-status-shaped file to
+`$CLIKAE_HOME/state/watch-github/<org>/runs/<epoch>.json`, so
+`clikae wait <that file>` (the same reader a cockpit already blocks on for
+`clikae burn`) returns 0 and prints the events — that's what a cron job or
+Stop hook calling `--once` actually has to consume, not the JSONL log.
 
-Rate limits: one poll is 2 requests, well inside the search API's 30/min
-authenticated. On a 403/429 the poll interval backs off ×2 up to 1h; the
-cursor is never advanced past a request that failed to read, so nothing is
-silently skipped.
+The cursor (the newest update seen, lagged 300s to absorb GitHub search's
+own indexing delay) persists at
+`$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small seen-file next to
+it de-dupes by (repo, issue number, updated timestamp), capped at the last
+5,000. Cold start (no cursor yet) bounds to the last 24 hours by default —
+`--since` overrides that bound — and each query paginates up to 500 rows
+(5 pages of 100) so a busy org's backlog can't outrun a poll.
+
+Rate limits: normally 2 requests per poll (more when paginating). On a
+genuine rate limit (429, or a 403 the response attributes to it, or a 5xx)
+the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
+never advanced past a page that failed to read, so nothing is silently
+skipped. A PERMANENT failure — missing OAuth scope, SAML enforcement, a
+bad org name — is retried once, then reported and the command exits 1; it
+never enters back-off, since no amount of retrying fixes those. `--once`
+returns 0 only when a poll actually succeeded (events or none); 1 on any
+failure, so a cron job can tell "quiet today" from "I've been failing
+silently".
 
 Requires `gh` already logged in — this feature never reads or writes a token
 itself, it uses whatever account `gh auth login` already set up, and refuses
@@ -383,11 +402,21 @@ immediately (exit 1) if `gh auth status` fails.
 > **Honest caveat.** GitHub's search API returns issue/PR-level rows, not a
 > per-comment feed, so a `kind` of `comment` names the issue's own author,
 > not necessarily whoever's activity just touched it — search has no cheaper
-> per-event actor field within a 2-request budget. And because the org query
-> excludes everything YOU opened (`-author:<self>`, so your own activity
-> never reads back as a new "opened" event), a plain reply on an issue you
-> opened yourself is caught only when it also @mentions you — the org query
-> alone won't surface it.
+> per-event actor field within a 2-request budget (the one exception: when a
+> comment lands on an issue in the org query, one extra request fetches
+> just that comment's actual author, so a comment YOU left on someone
+> else's issue is correctly dropped rather than waking you up under their
+> name — see the source for `_wg_latest_comment_author`). And because the
+> org query excludes everything YOU opened (`-author:<self>`, so your own
+> activity never reads back as a new "opened" event, and a comment on your
+> own issue never reaches the extra-request check above either — the
+> ISSUE itself never appears in the org query's results at all), a plain
+> reply on an issue you opened yourself is caught only when it also
+> @mentions you, as in the example above — the org query alone still won't
+> surface it. This is a known, deliberately unchanged limitation (fixing it
+> would mean scoping the org query by `involves:<self>`, or dropping
+> `-author:<self>` outright, rather than excluding your own authorship —
+> noted here rather than changed unilaterally).
 
 ## What is running right now — the board's Live section
 
