@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again after a cross-engine reroute), and `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`
   is exported unless already set. A lane that delegated to a background agent
   used to be terminated after 600 s with nothing on disk.
-- `clikae resume` and the home board's picker now hide headless one-shot sessions (`clikae burn`) by default, so the session picker isn't cluttered with "ghost" transcripts. Use `clikae resume --all` or press `a` in the interactive picker to reveal them (labelled as `[burn]`). (#74)
+- `clikae resume`'s picker and the home board's Continue list now hide headless one-shot sessions (`clikae burn`) by default, so neither is cluttered with "ghost" transcripts. Use `clikae resume --all` or press `a` in the interactive picker to reveal them (labelled as `[burn]`). Burn's sidecar (which session belongs to which run) is attributed only when proven — never a guess — and is now pruned by `clikae clean` and carried/removed by `clikae rename`/`clikae remove` like the rest of a tank's state. (#74)
+- `clikae burn agy --json`'s `run_id` field is now the run's id (a string) instead of always `null`, matching every other engine's `--json` output. It is informational only — not a wait handle; `status.json` still keys on `burn_id` for that. (#74 round-1 P3-4)
 - `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
   permission mode while preserving the default argv. codex and agy have no
   equivalent flag and keep their existing flags, reporting the degradation for

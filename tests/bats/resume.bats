@@ -289,3 +289,31 @@ PYEOF
   tmux kill-server 2>/dev/null || true
   [[ "$sessions" == *"clikae-claude-R"* ]] || { echo "resume started no tmux session: '$sessions'"; false; }
 }
+
+# #74 round-1 P3-2: CLIKAE_RESUME_ALL used to be `export`ed — it is only ever
+# read inside this same clikae process (the picker's filter, the non-
+# interactive list), never needed by the resumed engine, and `export` let it
+# leak into the engine's environment (the same class of incident claude.sh's
+# CLIKAE_LAUNCH_SID comment records: an exported clikae-internal variable
+# reaching a process it was never meant for).
+@test "resume --all does not leak CLIKAE_RESUME_ALL into the resumed engine's environment" {
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+env > "$CLAUDE_STUB_LOG"
+exit 0
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  export PATH="$TEST_HOME/bin:$PATH"
+  export CLAUDE_STUB_LOG="$TEST_HOME/stub.log"
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sid="66666666-7777-4888-9999-000000000000"
+  _seed_transcript a "$work" "$sid"
+  cd "$TEST_HOME"
+  unset CLAUDE_CONFIG_DIR
+  run clikae resume --all "$sid"
+  [ "$status" -eq 0 ]
+  [ -s "$CLAUDE_STUB_LOG" ]
+  ! grep -q '^CLIKAE_RESUME_ALL=' "$CLAUDE_STUB_LOG"
+}

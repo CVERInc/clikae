@@ -584,9 +584,9 @@ _resume_pick() {
 
     if [ "$trigger_all" -eq 1 ]; then
       if [ "${CLIKAE_RESUME_ALL:-0}" -eq 1 ]; then
-        export CLIKAE_RESUME_ALL=0
+        CLIKAE_RESUME_ALL=0
       else
-        export CLIKAE_RESUME_ALL=1
+        CLIKAE_RESUME_ALL=1
       fi
       # #74 round-1 P2-4: `a` used to skip the terminal-leaving cleanup `c`
       # (right below) always does, going straight back to _resume_picker's
@@ -866,7 +866,7 @@ cmd_resume() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _resume_help; return 0 ;;
-      --all)     export CLIKAE_RESUME_ALL=1; shift ;;
+      --all)     CLIKAE_RESUME_ALL=1; shift ;;
       --)        shift; passthru=("$@"); break ;;
       -*)        log_fail "Unknown flag: $1  (clikae resume [session-id] [-- args])" ;;
       *)         [ -z "$sid" ] || log_fail "Too many arguments. Usage: clikae resume [session-id]"
