@@ -1,0 +1,6 @@
+## Recent user prompts (oldest first)
+- first real prompt
+- second real prompt with 中文 too
+
+## Recent assistant notes (oldest first)
+- working on it, quote: he said "hi"
