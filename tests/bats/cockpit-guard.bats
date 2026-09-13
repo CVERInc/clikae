@@ -248,6 +248,43 @@ _CKPT_CORPUS=(
   [ "$hits" -ge 11 ]
 }
 
+# --- #63 P3-5: a SECOND corpus, chosen adversarially to be innocuous -------
+# (round-2 review, REVIEW-cockpit63-r2.md, plus 4 more in the same spirit)
+# rather than to round out the first table. docs/usage.md's "All 3 misses"
+# undersold the false-refusal rate — it's a property of the 14-item corpus,
+# not a bound. This asserts the CURRENT, honestly-measured outcome (2/10
+# allowed), same philosophy as the 14-item test above: catch drift, don't
+# pretend the heuristic is better than it is.
+_CKPT_FALSE_REFUSAL_CORPUS=(
+  "refuse	Find every file that mentions push notifications and list them"
+  "refuse	Review the attached spec and tell me if the wording is clear"
+  "refuse	What does the word \"commit\" mean in the context of database transactions?"
+  "refuse	Explain how git worktrees differ from clones, conceptually"
+  "refuse	Search the codebase for where we grade student submissions"
+  "allow	Summarize the customer reviews in reviews.csv"
+  "refuse	What does npm test actually run under the hood?"
+  "refuse	Can you explain what 'open a PR' means for someone new to GitHub?"
+  "allow	List the files that were pushed in the last release"
+  "refuse	Grade how readable this poem is, out of 10"
+)
+
+@test "the 10-item false-refusal corpus: outcome matches docs/usage.md's table (#63 P3-5)" {
+  local row actual_expected prompt esc want_status got_status
+  for row in "${_CKPT_FALSE_REFUSAL_CORPUS[@]}"; do
+    actual_expected="${row%%$'\t'*}"
+    prompt="${row#*$'\t'}"
+    [ "$actual_expected" = refuse ] && want_status=2 || want_status=0
+    esc="${prompt//\\/\\\\}"
+    esc="${esc//\"/\\\"}"
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"%s"}}' "$esc")"
+    got_status="$status"
+    [ "$got_status" -eq "$want_status" ] || {
+      echo "docs/usage.md's table is now wrong for: $prompt (expected $actual_expected/$want_status, got $got_status)" >&2
+      false
+    }
+  done
+}
+
 # --- #63 P1-1/P2-1 fix2 (REVIEW-cockpit63-r2.md): NON-UNIFORM large-payload
 # specimens ------------------------------------------------------------------
 # Round 1's large-payload fixtures here were a single repeated ASCII byte
@@ -325,6 +362,21 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
   run _guard_file <(python3 "$GEN" model-before-prompt sonnet)
   [ "$status" -eq 2 ]
   [[ "$output" != *"carried no model"* ]] || false
+}
+
+@test "family-prefixed model ids refuse like their short aliases (#63 P3-1)" {
+  # An EXACT `opus|sonnet` match (round 1) silently allowed every real API
+  # model id -- only the short aliases matched. `opusplan` is a real value
+  # (not a family prefix) matched literally.
+  local m
+  for m in claude-sonnet-4-5-20250929 claude-opus-4-5 opusplan; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"make a worktree and implement the feature"}}' "$m")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for model=$m" >&2; false; }
+  done
+  # A model that merely CONTAINS "sonnet" as a substring must NOT match --
+  # this is a family-PREFIX match, not a substring search.
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"not-a-sonnet-clone","prompt":"make a worktree and implement the feature"}}'
+  [ "$status" -eq 0 ]
 }
 
 # --- #63 P2-7: large-payload timing (re-measured for fix2's full-payload

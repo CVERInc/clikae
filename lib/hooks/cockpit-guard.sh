@@ -14,8 +14,9 @@
 # means: print the reason to stderr, `exit 2`.
 #
 # Refuses only Agent (subagent) spawns whose model is missing, or whose model
-# is opus/sonnet AND whose prompt reads as a build/review lane. The prompt
-# heuristic is a TRIPWIRE, not a
+# is opus/sonnet (any family-prefixed form — `claude-opus-*`, `claude-
+# sonnet-*`, `opusplan`, or the bare alias — #63 P3-1) AND whose prompt reads
+# as a build/review lane. The prompt heuristic is a TRIPWIRE, not a
 # classifier: it is the issue's own narrow phrases (worktree, a git
 # commit/push, REVIEWER/adversarial review, a test run) OR'd with a widened
 # set of bare imperative verbs (commit, push, "open a PR", review, grade, run
@@ -27,7 +28,9 @@
 # directions. `--allow-agents`/CLIKAE_COCKPIT_ALLOW_AGENTS is the real door;
 # this tripwire is cheap insurance, not a permission gate. Everything else —
 # haiku, fable, any model with a prompt that doesn't match, and every OTHER
-# tool — is untouched.
+# tool — is untouched. This is a check on MODEL, never on `subagent_type`:
+# the guard doesn't read that field at all, so an opus/sonnet `Explore` spawn
+# is checked exactly like any other opus/sonnet spawn (#63 P3-2).
 #
 # FAIL OPEN, same tier as scripts/harness-pretool-hook.sh: this runs on every
 # single Agent call, so a broken guard must never brick the session. Any parse
@@ -263,7 +266,16 @@ _CKPT_HEURISTIC='worktree|git commit|git push|REVIEWER|adversarial review|bats |
 
 model_lc="$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')"
 case "$model_lc" in
-  opus|sonnet)
+  # #63 P3-1: an EXACT match against the two short aliases used to silently
+  # allow (rc=0, zero stderr) every real API model id this guard exists to
+  # catch — `claude-sonnet-4-5-20250929`, `claude-opus-4-5`, `opusplan` all
+  # measured straight through. Today's captured traffic uses the short
+  # aliases (n=2), so this wasn't yet a live miss, but it's a one-character-
+  # format-change away from becoming one, with nothing to notice when it
+  # does. Family-prefix match instead: the two short aliases plus every
+  # `claude-opus-*`/`claude-sonnet-*` id, plus `opusplan` (a real value, not
+  # a family — matched literally).
+  opus|sonnet|opusplan|claude-opus-*|claude-sonnet-*)
     # Length tripwire: independent of any keyword, and independent of the
     # 8,192-character heuristic cap above — this reads $prompt_len_full, the
     # UNTRUNCATED count, specifically so a prompt long enough to BE the

@@ -70,11 +70,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings.json) and caps backups at the newest 5 per tank; the prompt
   heuristic is widened (bare `commit`/`push`/`review`/`grade`/"run
   tests"/"make CI", plus a 1,500-character length tripwire) and documented
-  as a tripwire, not a classifier; a large prompt is capped to its first 8
-  KiB before the heuristic runs, keeping the hook fast regardless of prompt
-  size; installing from a git checkout now warns that the guard's path
-  isn't stable; `clikae cockpit` names a stale recorded tank instead of
-  showing it as if nothing were wrong.
+  as a tripwire, not a classifier; a large prompt was capped to its first 8
+  KiB before the heuristic ran (superseded in round 2 below — that cap
+  itself turned out to be unsafe); installing from a git checkout now warns
+  that the guard's path isn't stable; `clikae cockpit` names a stale
+  recorded tank instead of showing it as if nothing were wrong. Installing
+  or removing the guard round-trips the tank's settings.json through jq
+  (same mechanism as `clikae settings apply`): key order gets normalized
+  and CRLF becomes LF, but content — a hand-written hooks block, any other
+  key in the file — survives intact (also documented in `docs/usage.md` and
+  `clikae cockpit --help`).
+- `clikae cockpit` round 2 (#63, `REVIEW-cockpit63-r2.md`): round 1's fixed
+  8 KiB window — `head -c`/`tail -c` slicing the RAW PAYLOAD before ever
+  reading `tool_input.model`/`.prompt` — could land mid multi-byte UTF-8
+  character (routine on a Chinese-language prompt) or mid JSON-escape, which
+  silently blinded BOTH the prompt heuristic AND the 1,500-character length
+  tripwire at once (`exit 0`, zero stderr), and separately could miss
+  `model` entirely — wrongly refusing every model, haiku included — on a
+  payload shape where `model` precedes a large `prompt` in `tool_input`.
+  Fixed: `tool_name`/`model`/`prompt` are all read from the full payload
+  (cost scales with payload size — no longer flat, see the hook's own
+  docstring for measured numbers); only a copy of the prompt truncated to
+  its first 8,192 CHARACTERS (sliced after JSON-decoding, under a locale
+  pinned to `C.UTF-8`/`en_US.UTF-8`/`C` so the cut can't land mid-character)
+  feeds the keyword heuristic, while the length tripwire reads the
+  UNTRUNCATED decoded length. Also: the model check widened from an exact
+  `opus`/`sonnet` match (silently missed every real API model id, e.g.
+  `claude-sonnet-4-5-20250929`) to a family-prefix match; `clikae cockpit
+  <tank>` (moving the role, not just `--off`) now sweeps past a broken OLD
+  tank's settings.json instead of aborting the whole move.
 
 ### Added
 

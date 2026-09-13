@@ -176,13 +176,18 @@ problem instead of memory's:
 | `cockpit --allow-agents <dur>` | Temporarily lift the guard (e.g. `4h`) without removing it. |
 
 The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
-a spawn whose model is missing, or whose model is opus/sonnet **and** whose
-prompt reads as a build/review lane — naming the current idle reserve and the
-exact `clikae burn <engine> <tank> --prompt-file <f> --artifact <path>` shape
-to use instead. It also refuses an opus/sonnet spawn outright when the prompt
-is over 1,500 characters, regardless of content. Exploration spawns (haiku,
-`Explore`) and anything with no lane heuristic in the prompt are untouched —
-this is not a general permission gate. The role, and the hook, live on
+a spawn whose model is missing, or whose model is opus/sonnet (any family-
+prefixed form too — `claude-opus-*`, `claude-sonnet-*`, `opusplan`, or the
+bare alias) **and** whose prompt reads as a build/review lane — naming the
+current idle reserve and the exact `clikae burn <engine> <tank>
+--prompt-file <f> --artifact <path>` shape to use instead. It also refuses an
+opus/sonnet spawn outright when the prompt is over 1,500 characters,
+regardless of content. **The guard never reads `subagent_type`** — `model` is
+the only thing that decides whether a spawn gets examined at all. A spawn
+whose model isn't opus/sonnet (haiku, for instance) is untouched regardless
+of `subagent_type` or prompt content; an opus/sonnet spawn — `Explore`
+included — is checked against the prompt heuristic below exactly like any
+other. This is not a general permission gate. The role, and the hook, live on
 exactly one tank at a time; moving it with `clikae cockpit` cleans up the old
 tank first. A human's own hooks on that tank are marked apart from the
 guard's and are never touched — the settings.json write rides the same
@@ -199,16 +204,40 @@ tests", "make CI") because missing a real build/review lane is the expensive
 direction (that's the incident this guard exists for) and a false refusal is
 cheap (the escape hatches below exist precisely for this). Measured against a
 14-item corpus (`tests/bats/cockpit-guard.bats`) — 8 prompts that read as
-dispatchable work, 6 that don't — the heuristic gets 11/14 right. All 3
-misses are false refusals, not false allows, and all 3 are structural: an
-innocuous prompt that merely **mentions** one of these words in passing (a
-question about `git push --force-with-lease`, about a `worktree` section in
-the docs, about what `npm test` does) gets refused exactly like a prompt that
-asks for the real thing, because a plain keyword match can't tell "explains
-X" from "do X" apart, and every attempt to narrow the pattern enough to allow
-the innocuous case would also let its should-refuse sibling in this same
-corpus through. If a refusal looks wrong, that's expected, not a bug —
-`--allow-agents` (below) is how you get past it.
+dispatchable work, 6 that don't — the heuristic gets 11/14 right. On THIS
+corpus, all 3 misses are false refusals, not false allows, and all 3 are
+structural: an innocuous prompt that merely **mentions** one of these words
+in passing (a question about `git push --force-with-lease`, about a
+`worktree` section in the docs, about what `npm test` does) gets refused
+exactly like a prompt that asks for the real thing, because a plain keyword
+match can't tell "explains X" from "do X" apart, and every attempt to narrow
+the pattern enough to allow the innocuous case would also let its
+should-refuse sibling in this same corpus through. If a refusal looks wrong,
+that's expected, not a bug — `--allow-agents` (below) is how you get past it.
+
+**"3 misses" is a property of this corpus, not a bound on the false-refusal
+rate.** A second, adversarially-innocuous 10-prompt corpus (round-2 review,
+`REVIEW-cockpit63-r2.md`, plus 4 more in the same spirit) scores 8/10
+refused — worse, not better, because these were chosen specifically to
+brush against a trigger word without asking for build/review work:
+
+| Prompt | Outcome |
+|---|---|
+| Find every file that mentions push notifications and list them | refused |
+| Review the attached spec and tell me if the wording is clear | refused |
+| What does the word "commit" mean in the context of database transactions? | refused |
+| Explain how git worktrees differ from clones, conceptually | refused |
+| Search the codebase for where we grade student submissions | refused |
+| Summarize the customer reviews in reviews.csv | **allowed** (`\breview\b` doesn't match "reviews") |
+| What does npm test actually run under the hood? | refused |
+| Can you explain what 'open a PR' means for someone new to GitHub? | refused |
+| List the files that were pushed in the last release | **allowed** |
+| Grade how readable this poem is, out of 10 | refused |
+
+Expect a false-refusal rate closer to this table's than the 14-item corpus's
+on real, adversarially-chosen prompts — that's still the cheap direction
+(`--allow-agents` exists precisely because false refusals are meant to be
+routine, not rare).
 
 Sometimes the right call is to spend the cockpit tank's own budget on purpose
 ("burn the cockpit tank tonight") — a guard that cannot be lifted gets
