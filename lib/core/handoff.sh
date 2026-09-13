@@ -94,8 +94,11 @@ _handoff_default_extract() {
   esac
 }
 
-# _handoff_extract <transcript> <role: user|assistant> — one line per message
-# of <role>, text only, unescaped, newest last. (#33) The transcript SHAPE
+# _handoff_extract <transcript> <role: user|assistant> — text only,
+# unescaped, newest last, one line per <role> turn's unit of text — the unit
+# itself is engine-defined (one MESSAGE for codex/grok, one TEXT BLOCK for
+# claude; see docs/adding-an-adapter.md and each hook's own comment, round-1
+# review P3-1). (#33) The transcript SHAPE
 # belongs to the adapter, not to handoff.sh: use the loaded adapter's
 # `adapter_handoff_extract` hook when it defines one (claude/codex/grok all
 # do), so each engine's own JSON layout is read correctly. An adapter that
@@ -103,10 +106,16 @@ _handoff_default_extract() {
 # lib/adapters/) falls back to _handoff_default_extract above — same
 # behaviour clikae has always had, so nothing that worked before regresses.
 # No count/cap here — callers `tail -n` the amount they want.
+#
+# 🔴 Do NOT redirect the hook's stderr to /dev/null (round-1 review P3-2): the
+# codex/grok hooks print a loud `handoff: <engine> extractor matched 0 <role>
+# lines in <file>` line when they come up empty (see their own comments), and
+# swallowing it here would put us right back to the silent-miss failure mode
+# #33 exists to fix, just one layer further out.
 _handoff_extract() {
   local t="$1" role="$2"
   if declare -F adapter_handoff_extract >/dev/null 2>&1; then
-    adapter_handoff_extract "$t" "$role" 2>/dev/null
+    adapter_handoff_extract "$t" "$role"
   else
     _handoff_default_extract "$t" "$role"
   fi

@@ -329,12 +329,18 @@ adapter_memory_dir() {
 }
 
 # Optional hook (#33): the transcript SHAPE belongs to the adapter, not to
-# handoff.sh. Prints one line per message of <role> ("user"/"assistant"),
-# text only, unescaped, newest last — used by `clikae handoff`'s digest
-# (lib/core/handoff.sh, _handoff_extract). This is the SAME grep pipeline
-# handoff.sh ran inline before #33, moved here verbatim — proven
-# byte-identical before/after by tests/bats/handoff.bats's existing claude
-# coverage, which never changed. It is also the shape
+# handoff.sh. Prints one line per TEXT BLOCK of <role> ("user"/"assistant")
+# — an assistant message with two text parts becomes two lines, not one
+# (round-1 review P3-1: docs/adding-an-adapter.md used to say "one line per
+# message" for every engine; codex/grok really are one-line-per-message, this
+# one isn't, and the doc now says so) — text only, unescaped, newest last —
+# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+# This is the SAME grep pipeline handoff.sh ran inline before #33, moved here
+# verbatim — proven byte-identical before/after against a FROZEN pre-#33
+# golden fixture (tests/fixtures/handoff-claude-golden.txt,
+# tests/bats/handoff.bats's "byte-identical" test), so this shape can't
+# change without breaking that receipt — the DOC was fixed to match this
+# code, not the other way round. It is also the shape
 # _handoff_default_extract (handoff.sh) falls back to for any adapter that
 # doesn't define this hook, so third-party adapters keep working.
 adapter_handoff_extract() {
@@ -349,6 +355,13 @@ adapter_handoff_extract() {
       # this shows real prompts, not file dumps / command output / sub-agent
       # chatter that also lives under role:user. Still best-effort (it
       # truncates a prompt at a literal `"}`).
+      # 🔴 `|| true` (round-1 review P3-3, extended to this branch too — see
+      # its comment on the assistant case below for why): a transcript with
+      # no matching lines makes the LAST stage of this pipe (the trailing
+      # `grep -av`) exit 1 on truly empty input, which aborts the caller
+      # under `set -eo pipefail` — verified by doing (empty transcript, this
+      # branch, no `|| true`: the shell dies mid-command, nothing after it
+      # runs). codex/grok's hooks already guard the equivalent tail this way.
       grep -a '"role":"user","content":"' "$t" 2>/dev/null \
         | grep -av '"toolUseResult"' \
         | grep -av '"isMeta":true' \
@@ -357,14 +370,19 @@ adapter_handoff_extract() {
         | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
         | grep -av '^[[:space:]]*<command-' \
         | grep -av '^[[:space:]]*<local-command' \
-        | grep -av '^[[:space:]]*$'
+        | grep -av '^[[:space:]]*$' || true
       ;;
     assistant)
+      # 🔴 `|| true` (round-1 review P3-3): same reason as the user branch
+      # above — the trailing `grep -av` is the last stage of this pipe, and
+      # exits 1 on a transcript with no assistant text at all, which aborts
+      # the caller under `set -eo pipefail` with nothing to show for it.
+      # codex.sh / grok.sh's twin of this function already end this way.
       grep -a '"role":"assistant"' "$t" 2>/dev/null \
         | grep -aoE '"text":"([^"\\]|\\.)*"' \
         | sed 's/^"text":"//; s/"$//' \
         | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-        | grep -av '^[[:space:]]*$'
+        | grep -av '^[[:space:]]*$' || true
       ;;
   esac
 }
