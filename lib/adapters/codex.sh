@@ -33,6 +33,15 @@ adapter_init() {
   : "$profile_dir"
 }
 
+# Optional hook (#61 round-1 P1-3): paths, relative to a tank dir, that CODEX
+# ITSELF writes there — used ONLY to recognise a legacy tank (predates the
+# `.clikae-tank` marker) worth adopting. `config.toml` exists as soon as
+# anyone has run codex against this CODEX_HOME at all; `auth.json` exists
+# once they've logged in — either is proof this dir is a real codex tank.
+adapter_tank_fingerprint() {
+  printf 'auth.json\nconfig.toml\n'
+}
+
 adapter_export_env() {
   local profile_dir="$1"
   printf 'CODEX_HOME=%s\n' "$profile_dir"

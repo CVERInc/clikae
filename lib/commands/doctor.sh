@@ -227,6 +227,41 @@ _doctor_memory() {
   return 0
 }
 
+# _doctor_stray_dirs -> name directories sitting where a tank would be —
+# directly inside a recognised engine's profiles dir — that list_all_profiles
+# does NOT (and, on the fingerprint it can see right now, would not adopt
+# either): no `.clikae-tank` marker, and no content the engine itself would
+# have written there. #61 round-1 P1-3's reproduction (`mkdir zzempty` next to
+# real tanks) is exactly this. Deliberately reuses list_all_profiles's own
+# output as the source of truth (diff against what's on disk) rather than
+# re-deriving tank-ness with a second copy of tank_dir_is_tank/adoption — the
+# "ONE ENUMERATOR, REALLY" rule applies to reads too, not just writes.
+_doctor_stray_dirs() {
+  local root cli_dir cli tdir name printed=0 known
+  root="$(profiles_root)"
+  [ -d "$root" ] || return 0
+  known="$(list_all_profiles 2>/dev/null | cut -f1,2)"
+  for cli_dir in "$root"/*/; do
+    [ -d "$cli_dir" ] || continue
+    cli="${cli_dir%/}"; cli="${cli##*/}"
+    tank_engine_known "$cli" || continue
+    for tdir in "$cli_dir"*/; do
+      [ -d "$tdir" ] || continue
+      name="${tdir%/}"; name="${name##*/}"
+      case $'\n'"$known"$'\n' in
+        *$'\n'"$cli"$'\t'"$name"$'\n'*) continue ;;
+      esac
+      if [ "$printed" -eq 0 ]; then
+        log_bold "Not a tank directory (no .clikae-tank marker, no recognised engine content):"
+        printed=1
+      fi
+      printf '  %-16s %s\n' "$cli/$name" "${tdir%/}"
+    done
+  done
+  [ "$printed" -eq 1 ] && echo ""
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -267,6 +302,7 @@ EOF
   local rows; rows="$(scan_clis)"
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
+  _doctor_stray_dirs
   _doctor_legacy_prefix
   _doctor_memory
   # shellcheck source=./settings.sh

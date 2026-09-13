@@ -334,26 +334,59 @@ soul_left_set() {
 soul_left_clear() { rm -f "$(soul_left_file "$1" "$2")" 2>/dev/null || true; }
 
 # tank_engine_known <cli> -> 0 if <cli> is an engine clikae actually knows how
-# to run — an adapter file under lib/adapters/, or a launch-only target under
-# lib/targets/ (clikae_is_target) — else 1. A directory under profiles_root()
-# whose name is neither is not an engine clikae recognises; nothing under it
-# can be a tank, no matter how many subdirectories it holds. This is the
-# "engine's adapter recognises it" half of #61's fix — the profile-store
-# walk used to accept ANY subdirectory of profiles_root() as a CLI.
+# to run — else 1. A directory under profiles_root() whose name is neither is
+# not an engine clikae recognises; nothing under it can be a tank, no matter
+# how many subdirectories it holds. This is the "engine's adapter recognises
+# it" half of #61's fix — the profile-store walk used to accept ANY
+# subdirectory of profiles_root() as a CLI.
+#
+# round-1 review P2-1: this used to be `[ -f adapters/$cli.sh ] ||
+# clikae_is_target "$cli"` — two bugs. (1) a raw `-f` test accepted
+# lib/adapters/_template.sh, so a stray `profiles/_template/` was read as a
+# real engine's tanks. (2) clikae_is_target ALIASES "agy" -> "antigravity"
+# (it has to — that alias is what a human types), so it said yes to a
+# directory literally named `profiles/agy/` even though the on-disk name is
+# always `antigravity` (never "fix" that to match — see engine_labelv above).
+# Fixed by reusing list_adapters() (already excludes `_*` — one owner, not a
+# second copy of that rule) for the adapter half, and testing the target
+# FILE directly (no alias) for the target half: a directory's name IS the
+# canonical on-disk name or it is nothing.
 tank_engine_known() {
   local cli="$1"
-  [ -f "$CLIKAE_LIB/adapters/$cli.sh" ] && return 0
-  clikae_is_target "$cli"
+  list_adapters | grep -qxF "$cli" && return 0
+  [ -f "$CLIKAE_LIB/targets/$cli.sh" ]
 }
 
-# tank_dir_is_tank <name> -> 0 if a directory named <name>, found directly
-# inside a known engine's profiles dir, is a real tank rather than a lock
-# file, sidecar, or dotdir that happens to (or would, if it existed) sit next
-# to real tanks. Directory-ness and "resolves to something that exists" are
-# already guaranteed by the caller's own "*/ " glob (a plain file or a
-# dangling symlink never matches it) — this is the SHAPE test on the NAME
-# itself, so it holds even for a directory (not just a file) someone names
-# like a lock/sidecar.
+# CLIKAE_TANK_MARKER — the file that makes a directory a tank clikae
+# recognises, rather than a directory that merely happens to sit where one
+# would. One constant so init/the enumerator's adoption path can never drift
+# on the name.
+CLIKAE_TANK_MARKER=".clikae-tank"
+
+# tank_marker_path <dir> -> the marker file's path inside <dir>.
+tank_marker_path() { printf '%s/%s\n' "${1%/}" "$CLIKAE_TANK_MARKER"; }
+
+# tank_marker_write <cli> <dir> -> stamp <dir>'s marker with <cli> — the
+# CANONICAL, on-disk engine name (never an alias like "agy"; always exactly
+# what tank_engine_known would accept as this directory's own cli). Called
+# from the one true creation point (ensure_profile --create, below) and from
+# agy's own tank-creation paths (lib/commands/antigravity.sh — agy tanks
+# never go through ensure_profile). Best-effort: a read-only filesystem must
+# never turn "list my tanks" into a failure.
+tank_marker_write() {
+  local cli="$1" dir="$2"
+  printf '%s\n' "$cli" > "$(tank_marker_path "$dir")" 2>/dev/null || true
+}
+
+# tank_dir_is_tank <cli> <dir> -> 0 if <dir> is a tank clikae itself made:
+# its marker exists and names <cli> exactly. Read-only — does not adopt (see
+# _tank_fingerprint_match / _tank_adopt_if_legacy below for that) and does
+# not re-derive anything from the directory's NAME. #61 round-1 P1-3: the
+# previous version was a NAME-SHAPE test (rejecting `*.lock`/dotdir-looking
+# names) — so a stray `mkdir zzempty` (no lock-ish name at all) sailed
+# through as a "real" tank and reproduced #61's exact symptom verbatim,
+# just under a different name. A tank is a directory clikae MADE or ADOPTED,
+# never a guess from what it's called.
 #
 # #61: a stray `hello.lock` sitting beside real tank dirs was picked up as a
 # reroute target and burned a few minutes failing to log in before reporting
@@ -363,19 +396,77 @@ tank_engine_known() {
 # resume's next_tank all read it) — this is that filter, so nobody downstream
 # writes a second one next to it.
 tank_dir_is_tank() {
-  case "$1" in
-    .*) return 1 ;;                                             # dotdir sidecar
-    *.lock|*.lck|*.tmp|*.bak|*.swp|*.orig|*.reclaim|*~) return 1 ;;  # lock/sidecar suffix
-  esac
+  local cli="$1" dir="$2" marker
+  marker="$(tank_marker_path "$dir")"
+  [ -f "$marker" ] || return 1
+  [ "$(cat "$marker" 2>/dev/null)" = "$cli" ]
+}
+
+# _tank_fingerprint_match <cli> <dir> -> 0 if <dir> holds content the ENGINE
+# ITSELF creates in a tank — never anything clikae writes — per that
+# adapter's optional adapter_tank_fingerprint hook (one candidate path per
+# line, relative to the tank dir; the first that exists wins). Read-only, no
+# side effects — the predicate half of adoption, shared by the write path
+# below and `doctor`'s read-only "not a tank" report so the two can never
+# disagree on what WOULD be adopted.
+#
+# Runs load_adapter in a SUBSHELL: this can fire for an engine other than
+# whichever one a caller further up already `load_adapter`'d, and clobbering
+# THAT engine's functions out from under it would be exactly the kind of
+# cross-talk "ONE ENUMERATOR, REALLY" exists to prevent (see
+# newest_transcript_tank above for the same pattern).
+_tank_fingerprint_match() {
+  local cli="$1" dir="$2" fps f
+  fps="$(
+    load_adapter "$cli" >/dev/null 2>&1 || exit 0
+    declare -F adapter_tank_fingerprint >/dev/null 2>&1 || exit 0
+    adapter_tank_fingerprint
+  )"
+  [ -n "$fps" ] || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -e "$dir/$f" ] && return 0
+  done <<EOF
+$fps
+EOF
+  return 1
+}
+
+# _tank_adopt_if_legacy <cli> <dir> -> 0 and WRITES the marker (+ prints ONE
+# "adopted" line — see below) when <dir> predates the marker but is a real
+# legacy tank (#61 round-1 P1-3's honest but-else: "no per-tank marker exists
+# yet" was a real gap, not a one-line fix — this is that fix). 1, no write,
+# otherwise: a directory with neither a marker nor the engine's own
+# fingerprint is not a tank (#61's `zzempty` reproduction) — `list_all_profiles`
+# simply skips it, and `doctor` names it.
+#
+# The print goes to `printf … >&2`, NOT log_info (which is stdout) — this
+# runs INSIDE list_all_profiles, whose stdout is the tab-separated data
+# contract every caller (`clikae tanks`, burn's reroute picker, `to`,
+# `resume`) parses; a narration line on that stream would corrupt every one
+# of them. One line, once — after the write, tank_dir_is_tank short-circuits
+# true on every later call and this function is never reached again for the
+# same directory.
+_tank_adopt_if_legacy() {
+  local cli="$1" dir="$2"
+  _tank_fingerprint_match "$cli" "$dir" || return 1
+  tank_marker_write "$cli" "$dir"
+  printf '[ INFO ] adopted %s/%s\n' "$cli" "${dir##*/}" >&2
   return 0
 }
 
 # List every profile as "<cli> <profile> <path>" lines, sorted.
+#
+# 🔴 Not purely read-only: a legacy tank (no marker yet) that passes
+# _tank_fingerprint_match gets its marker WRITTEN here, the first time
+# anything walks it (#61 round-1 P1-3 — see _tank_adopt_if_legacy). This is
+# deliberate and is the one documented exception to callers like `doctor`
+# that otherwise promise to change nothing on disk.
 list_all_profiles() {
   local root
   root="$(profiles_root)"
   [ -d "$root" ] || return 0
-  local cli_dir cli profile_path profile
+  local cli_dir cli profile_path profile real seen=$'\n'
   for cli_dir in "$root"/*/; do
     [ -d "$cli_dir" ] || continue
     cli="${cli_dir%/}"; cli="${cli##*/}"
@@ -383,8 +474,20 @@ list_all_profiles() {
     for profile_path in "$cli_dir"*/; do
       [ -d "$profile_path" ] || continue
       profile="${profile_path%/}"; profile="${profile##*/}"
-      tank_dir_is_tank "$profile" || continue
-      printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
+      # P2-2 (round-1 review): a symlink to a real tank must count ONCE — a
+      # burn dry on the real tank and its alias would otherwise "reroute" onto
+      # the very same directory it just proved dry, burning a real hop for
+      # nothing. Resolve to the REAL path (pwd -P, so an intermediate symlink
+      # in a PARENT dir is also collapsed) and dedupe on that, not on the
+      # name a caller happened to reach it by.
+      real="$(cd "$profile_path" 2>/dev/null && pwd -P)" || continue
+      case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+      seen="$seen$real"$'\n'
+      if tank_dir_is_tank "$cli" "${profile_path%/}"; then
+        printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
+      elif _tank_adopt_if_legacy "$cli" "${profile_path%/}"; then
+        printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
+      fi
     done
   done | sort
 }
@@ -662,6 +765,16 @@ ensure_profile() {
       # existing install is always identifiable for future migrations (read commands
       # then never need to write it). Guarded — older callers may not have it sourced.
       declare -F state_version_ensure >/dev/null 2>&1 && state_version_ensure
+      # #61 round-1 P1-3: this is THE one creation point every env-adapter
+      # engine's `clikae init` goes through (agy is symlink-managed and never
+      # calls ensure_profile — it stamps its own marker directly, see
+      # lib/commands/antigravity.sh). A tank is a directory clikae MADE or
+      # ADOPTED, so the tank clikae is making right now gets its marker before
+      # anything else runs (adapter_init, the permissions template, …).
+      # `rename` MOVES this file with the directory (no separate handling
+      # needed — the marker only names the ENGINE, which a rename never
+      # changes); `remove` deletes the directory, marker included.
+      tank_marker_write "$cli" "$d"
       ;;
     --require)
       [ -d "$d" ] || log_fail "Profile not found: $cli/$profile  (expected at $d)"

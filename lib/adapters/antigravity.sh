@@ -16,6 +16,17 @@ adapter_meta_env_var()     { echo ""; }
 adapter_meta_strategy()    { echo "subcommand"; }
 adapter_meta_description() { echo "Google DeepMind Antigravity CLI"; }
 
+# Optional hook (#61 round-1 P1-3): paths, relative to a tank dir, that AGY
+# ITSELF writes there — used ONLY to recognise a legacy tank (predates the
+# `.clikae-tank` marker, e.g. one carried over by a pre-marker `clikae agy
+# --release`-then-reimport, or hand-restored from a backup) worth adopting.
+# `antigravity-cli/` is the directory agy creates on first launch under
+# whichever slot ~/.gemini currently points at (brain/, conversations/, its
+# own log — see lib/targets/antigravity.sh and lib/core/scan.sh).
+adapter_tank_fingerprint() {
+  printf 'antigravity-cli\n'
+}
+
 adapter_init() {
   :
 }

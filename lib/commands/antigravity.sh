@@ -254,9 +254,14 @@ EOF
     # after --release) -> a fresh 'restored-<ts>' tank, never clobbering.
     adopt="default"; [ -e "$slots/default" ] && adopt="restored-$ts"
     mv "$link" "$slots/$adopt" && log_done "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
+    # #61 round-1 P1-3: agy never calls ensure_profile (it's symlink-managed,
+    # not an env adapter), so it stamps its own marker at every point it
+    # creates/adopts a tank dir. This one clikae itself just moved into place.
+    tank_marker_write antigravity "$slots/$adopt"
     ln -s "$slots/$adopt" "$link"
   else
     mkdir -p "$slots/default"
+    tank_marker_write antigravity "$slots/default"
     ln -s "$slots/default" "$link"
     log_done "Created an empty 'default' tank."
   fi
@@ -269,6 +274,7 @@ _agy_create_tank() {
   local name="$1" slot; slot="$(_agy_slots)/$name"
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
+  tank_marker_write antigravity "$slot"   # #61 round-1 P1-3 — see _agy_takeover's twin
   log_done "Created agy tank: $name"
   # The tank comes with the harness on. It does not change how agy talks — it
   # stops a reply from ending with "verified" in a session that ran nothing.
