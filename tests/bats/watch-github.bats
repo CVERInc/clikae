@@ -688,6 +688,27 @@ _honest_corpus_write() {
   [ "$(wc -l < "$events")" -eq 2 ]
 }
 
+# P3-1 (2026-09-13 fix-round-3 review): the seen-file's `known` check
+# spliced `$repo` into an ERE unescaped — `.` is the only GitHub-legal repo
+# character that's also an ERE metachar. seen-file entry `axb|5|…` would
+# make a BRAND NEW `a.b#5` misread as already-known (`.` matches `x`),
+# costing a lookup and printing 'comment' instead of 'opened'.
+@test "watch github --once: a repo name containing '.' is not misread as a regex against an unrelated repo (P3-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  # A DIFFERENT repo, "axb", already has #5 seen — under the old unescaped
+  # regex, "a.b" (this poll's repo) as a PATTERN would match "axb" as DATA.
+  printf 'axb|5|2020-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline "a.b" 5 zed commented   # only reachable if the bug fires
+  _gh_stub_page org 1 \
+    "$(_row 5 2026-09-07T04:00:00Z alice "a.b" https://x/5 0 "brand new in a.b")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/a.b#5 opened by alice: brand new in a.b"* ]] || false
+  [[ "$output" != *"comment by zed"* ]] || false
+}
+
 @test "watch github --once: a brand-new issue in a DIFFERENT repo reusing a seen number reads 'opened', not 'comment' (P1-4)" {
   _gh_stub_install
   _gh_stub_page org 1 \

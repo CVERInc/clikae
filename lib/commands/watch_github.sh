@@ -656,8 +656,14 @@ _wg_process() {
     # every repo in an org restarts issue numbering at #1 — a bare
     # `${number}` match here used to read repo-B's brand-new #12 as a
     # "comment" on repo-A's #12.
+    # P3-1 (2026-09-13 fix-round-3 review): `$repo` was spliced into this
+    # ERE unescaped — a repo name is the only GitHub-legal character that's
+    # also an ERE metachar (`.` = "any char"), so seen-file `axb|5|…` made a
+    # BRAND NEW `a.b#5` misread as already-known. GitHub repo names are
+    # `[A-Za-z0-9._-]` only, so `.` is the only character needing escaping.
+    local repo_esc="${repo//./\\.}"
     local known=0
-    grep -qE "^${repo}\\|${number}\\|" "$seen_file" 2>/dev/null && known=1
+    grep -qE "^${repo_esc}\\|${number}\\|" "$seen_file" 2>/dev/null && known=1
 
     local kind actor
     if [ "$known" -eq 0 ]; then
