@@ -3004,13 +3004,22 @@ STUB
   chmod +x "$TEST_HOME/.testbin/curl"
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/usr/bin/env bash
-echo "5-hour limit reached ∙ resets 2pm"
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
 exit 0
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   local A="$BATS_TEST_TMPDIR/out.md"
-  run clikae burn claude dry1 --artifact "$A" --no-reroute --prompt "do it"
+  # round-3 review, P3-2: the round-2 stub line ("5-hour limit reached ∙
+  # resets 2pm") is rc=1-BUT-NOT-dry under `limit_output_dry claude` ("no
+  # fresh artifact and no limit") — the run was classified as a plain
+  # failure, not dry, and the test's sole assertion (status -ne 0) held true
+  # either way, so it never actually proved this was a DRY run. Use the
+  # corpus phrase burn #45 (this file, above) already proved
+  # `limit_output_dry claude` recognizes as dry, and assert --json's own
+  # dry verdict, not just a nonzero exit.
+  run clikae burn claude dry1 --artifact "$A" --no-reroute --json --prompt "do it"
   [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]
   jq -e '.window_pct == 95 and .source == "vendor"' \
     "$CLIKAE_HOME/state/usage/claude/dry1.json"
