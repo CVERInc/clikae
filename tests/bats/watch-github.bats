@@ -68,6 +68,21 @@ if [ "${1:-}" = "api" ] && [ "${2:-}" = "search/issues" ]; then
   exit 0
 fi
 
+# P2-9: _wg_latest_comment_author's one-request-per-candidate lookup.
+# $dir/lastauthor.<repo>.<number> (repo-scoped so different tests/rows never
+# collide), one login per line. No file -> empty (no comments to speak of).
+case "${1:-}/${2:-}" in
+  api/repos/*/issues/*/comments)
+    path="$2"
+    # path = repos/<org>/<repo>/issues/<number>/comments
+    repo="$(printf '%s' "$path" | cut -d/ -f3)"
+    number="$(printf '%s' "$path" | cut -d/ -f5)"
+    f="$dir/lastauthor.$repo.$number"
+    [ -f "$f" ] && cat "$f"
+    exit 0
+    ;;
+esac
+
 exit 1
 STUB
   chmod +x "$TEST_HOME/.testbin/gh"
@@ -75,9 +90,17 @@ STUB
   printf 'me\n' > "$GH_STUB_DIR/login"
 }
 
+# _gh_stub_last_author <repo> <number> <login> — seed the answer
+# _wg_latest_comment_author's `gh api repos/.../issues/<number>/comments`
+# call gets for this repo/number.
+_gh_stub_last_author() {
+  printf '%s\n' "$3" > "$GH_STUB_DIR/lastauthor.$1.$2"
+}
+
 # _gh_stub_page <org|mentions> <call#> <tsv-lines...> — seed one call's TSV
 # response. Each line is already tab-separated: number, updated_at, login,
-# repo, html_url, is_pr, title — the exact shape _wg_fetch's jq filter emits.
+# repo, html_url, is_pr, title, comments — the exact shape _wg_fetch's jq
+# filter emits.
 _gh_stub_page() {
   local queue="$1" n="$2"; shift 2
   printf '%s\n' "$@" > "$GH_STUB_DIR/$queue.$n.tsv"
@@ -89,8 +112,8 @@ _gh_stub_fail() {
   printf '%s\n' "$err" > "$GH_STUB_DIR/$queue.$n.err"
 }
 
-_row() { # number updated login repo html_url is_pr title
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+_row() { # number updated login repo html_url is_pr title [comments=0]
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${8:-0}"
 }
 
 @test "watch github: gh auth status failing exits 1 with a clear line" {
@@ -189,6 +212,49 @@ _row() { # number updated login repo html_url is_pr title
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"#100 comment by alice"* ]] || false
+}
+
+@test "watch github --once: a self-comment on someone ELSE's issue is dropped, not woken (P2-9)" {
+  _gh_stub_install
+  # bob opens reef#100; org query's -author:me already excludes anything
+  # self opened, so this is a normal 'opened' event.
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 opened by bob"* ]] || false
+
+  # reef#100 updated again — the row's own login is STILL bob (search/issues
+  # gives the ISSUE's author, never the commenter), but the LATEST comment
+  # was actually left by self. -author:<self> in the query does nothing
+  # here: the issue itself was never self-authored, only this one comment
+  # was. This is exactly the gap the review named: "I reply to my own
+  # inbox, and get woken back up under someone else's name."
+  _gh_stub_last_author reef 100 me
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue" 3)"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [[ "$output" != *"#100"* ]] || false
+  # One gh api call made to check — the request budget the review asked for.
+  [ -f "$GH_STUB_DIR/lastauthor.reef.100" ]
+}
+
+@test "watch github --once: a comment by someone ELSE on a non-self issue still wakes (P2-9)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  _gh_stub_last_author reef 100 carol
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue" 2)"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#100 comment by bob: bob's issue"* ]] || false
+  [[ "$output" == *"1 new event(s)"* ]] || false
 }
 
 @test "watch github --once: same number, two DIFFERENT repos, same poll — neither is dropped (P1-4)" {

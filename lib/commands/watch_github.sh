@@ -170,10 +170,13 @@ _wg_query_mentions() {
 # --- one query's worth of work ---------------------------------------------
 
 # _wg_fetch <query> <page> <errfile> -> TSV on stdout (number, updated_at,
-# login, repo, html_url, is_pr, title — see the jq filter), gh's own exit
-# code. gh's `--jq` is its own vendored implementation (gojq) — no external
-# `jq` binary required, unlike lib/core/fleet_mcp.sh's merge (which
-# genuinely needs the real jq for --slurpfile).
+# login, repo, html_url, is_pr, title, comments — see the jq filter), gh's
+# own exit code. `comments` (P2-9, see _wg_latest_comment_author below) is
+# the issue's own comment COUNT as of this search hit — used to fetch the
+# single latest comment's author with one extra request, not to print
+# anything. gh's `--jq` is its own vendored implementation (gojq) — no
+# external `jq` binary required, unlike lib/core/fleet_mcp.sh's merge
+# (which genuinely needs the real jq for --slurpfile).
 #
 # `order=desc` + `per_page=100` (P2-7, 2026-09-13 fix-round-1 review): the
 # old call took whatever the API's own default page (30, oldest-first via
@@ -195,7 +198,7 @@ _wg_fetch() {
   local query="$1" page="$2" errfile="$3"
   gh api search/issues --method GET -f q="$query" -f sort=updated -f order=desc \
     -f per_page=100 -f page="$page" \
-    --jq '.items[]? | [(.number|tostring), .updated_at, .user.login, (.repository_url|split("/")|.[-1]), .html_url, (if .pull_request then "1" else "0" end), .title] | @tsv' \
+    --jq '.items[]? | [(.number|tostring), .updated_at, .user.login, (.repository_url|split("/")|.[-1]), .html_url, (if .pull_request then "1" else "0" end), .title, (.comments|tostring)] | @tsv' \
     2>"$errfile"
 }
 
@@ -285,6 +288,27 @@ _wg_fetch_classified() {
   return 1
 }
 
+# _wg_latest_comment_author <org> <repo> <number> <comments> -> the login of
+# the LATEST comment on <org>/<repo>#<number>, or empty if it can't be
+# determined. One `gh api` request per candidate (P2-9, 2026-09-13
+# fix-round-1 review): fetching page=<comments> at per_page=1 on the
+# comments endpoint returns exactly the last comment, never the whole
+# thread — same "ask for only what's needed" discipline as the search
+# calls themselves. Bounded the same way those are: only ever called for a
+# row that already survived pagination (_wg_poll_one_query), so this never
+# runs unboundedly many times in one poll.
+_wg_latest_comment_author() {
+  local org="$1" repo="$2" number="$3" comments="$4" errfile out
+  case "$comments" in ''|*[!0-9]*|0) return 1 ;; esac
+  errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+  out="$(gh api "repos/$org/$repo/issues/$number/comments" --method GET \
+    -f per_page=1 -f page="$comments" \
+    --jq '.[0].user.login // empty' 2>"$errfile")" || out=""
+  rm -f "$errfile"
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
 # _wg_process <kind_query: org|mentions> <tsv> <org> <seen_file> <events_file>
 # -> for every NEW (not-yet-seen) row: prints the wake line, appends a JSON
 # record, appends the dedup key to the seen file. Folds updated_at into the
@@ -293,13 +317,15 @@ _wg_fetch_classified() {
 # actually SAW, not just the ones that turned out new, or a poll that only
 # re-saw already-handled rows near a boundary would never advance the
 # cursor at all and requery the same window forever). Bumps $__WG_EVENTS
-# only for genuinely new rows. bash 3.2: no associative arrays, no mapfile —
-# a plain while/read loop over a variable via a here-string.
+# only for genuinely new rows that are also NOT a comment self made on
+# someone else's issue (P2-9, see the self-exclusion block below). bash
+# 3.2: no associative arrays, no mapfile — a plain while/read loop over a
+# variable via a here-string.
 _wg_process() {
   local kind_query="$1" tsv="$2" org="$3" seen_file="$4" events_file="$5"
   [ -n "$tsv" ] || return 0
-  local number updated login repo html_url is_pr title
-  while IFS=$'\t' read -r number updated login repo html_url is_pr title; do
+  local number updated login repo html_url is_pr title comments
+  while IFS=$'\t' read -r number updated login repo html_url is_pr title comments; do
     [ -n "$number" ] || continue
 
     if [ -z "$__WG_MAX_UPDATED" ] || [[ "$updated" > "$__WG_MAX_UPDATED" ]]; then
@@ -329,6 +355,24 @@ _wg_process() {
 
     local key="${repo}|${number}|${updated}"
     grep -qxF "$key" "$seen_file" 2>/dev/null && continue   # already handled
+
+    # P2-9 (2026-09-13 fix-round-1 review): self-exclusion is per EVENT, not
+    # per issue. `-author:<self>` in the org query (_wg_query_org) only
+    # excludes issues YOU opened — it says nothing about a COMMENT you left
+    # on someone else's issue, which still bumps updated_at and still
+    # matches the query, kind="comment", login=<the issue's own author, not
+    # you>. Left unfixed, replying to your own inbox wakes it back up under
+    # someone else's name. Only checkable for "comment" rows (an "opened"
+    # row is already excluded server-side by -author:<self>), and only
+    # costs a request when the issue actually has comments to check.
+    if [ "$kind_query" = "org" ] && [ "$kind" = "comment" ]; then
+      local latest_author
+      if latest_author="$(_wg_latest_comment_author "$org" "$repo" "$number" "$comments")" \
+        && [ "$latest_author" = "$__WG_SELF" ]; then
+        printf '%s\n' "$key" >> "$seen_file"   # handled — don't re-check every poll in the overlap window
+        continue
+      fi
+    fi
 
     local line
     line="$(printf 'github %s/%s#%s %s by %s: %s' "$org" "$repo" "$number" "$kind" "$login" "$title")"
