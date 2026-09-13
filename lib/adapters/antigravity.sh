@@ -174,8 +174,16 @@ adapter_recent_sids() {
   # Burn needs the newest transcript even before the CLI refreshes its cache.
   if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
     local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
-    sid="$(grep -E '"'"$want_esc"'"[[:space:]]*:[[:space:]]*"[^"]+"' "$cache" 2>/dev/null \
-      | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/".*//' || true)"
+    # #74 round-1 P1-4: json_value_for_key (lib/core/json.sh) ANCHORS the
+    # extraction to the matched "<cwd>": "<sid>" pair itself — the previous
+    # shape (`grep -E … | sed 's/.*:[[:space:]]*"//'`) grep'd the whole
+    # MATCHING LINE, then let sed's greedy `.*:` walk past it to whichever
+    # `: "` came LAST in that line. Every real agy install writes this cache
+    # compact/single-line (JSON.stringify's default), so once it holds more
+    # than one project's pointer, that greedy walk silently returned a
+    # DIFFERENT project's session — the board's Continue row (and its Enter
+    # key) resumed the wrong conversation, not just a wrong preview string.
+    sid="$(json_value_for_key "$cache" "$want_esc" 2>/dev/null | tail -n 1 || true)"
     if [ -n "$sid" ]; then
       f="$brain/$sid/.system_generated/logs/transcript.jsonl"
       if [ -f "$f" ]; then
