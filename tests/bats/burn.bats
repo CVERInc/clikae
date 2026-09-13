@@ -3239,11 +3239,21 @@ assert rows == [] or rows[0]["dirty"] in (0, None), rows
   _left84_repo
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
 #!/usr/bin/env bash
+# One shared epoch base, computed ONCE — not resampled per file. A fresh
+# `date -v+NS`/`date -d "+N seconds"` call PER ITERATION (round-2's first
+# cut here) measures "N seconds from whenever this particular iteration
+# happens to run", and 30 iterations of real subprocess work (date, touch)
+# drift by more than 1 second under any real load — which corrupted the
+# two CLOSEST offsets (26 vs 27) often enough to be a real flake, not a
+# hypothetical one (measured on this box). Adding a fixed epoch instead
+# means every file's timestamp is relative to the SAME instant.
+now="$(date +%s)"
 for i in $(seq -w 1 30); do
   f="$STUB_LEFT_REPO/f$i"
   printf '%s' "$i" > "$f"
   off=$(( ((10#$i - 1) * 13 % 30) + 1 ))
-  ts="$(date -v+${off}S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "+${off} seconds" '+%Y%m%d%H%M.%S')"
+  target=$((now + off))
+  ts="$(date -d "@$target" '+%Y%m%d%H%M.%S' 2>/dev/null || date -r "$target" '+%Y%m%d%H%M.%S')"
   touch -t "$ts" "$f"
 done
 STUB
@@ -3290,11 +3300,13 @@ assert files == expect, files
   done
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
 #!/usr/bin/env bash
+now="\$(date +%s)"
 for i in \$(seq -w 1 30); do
   f="$TEST_HOME/repos/r\$i/touched"
   printf work > "\$f"
   off=\$(( 10#\$i ))
-  ts="\$(date -v+\${off}S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "+\${off} seconds" '+%Y%m%d%H%M.%S')"
+  target=\$((now + off))
+  ts="\$(date -d "@\$target" '+%Y%m%d%H%M.%S' 2>/dev/null || date -r "\$target" '+%Y%m%d%H%M.%S')"
   touch -t "\$ts" "\$f"
 done
 STUB
