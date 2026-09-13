@@ -77,7 +77,27 @@ _cockpit_hook_install() {
     printf '%s/%s: cockpit guard already installed (unchanged)\n' "$engine" "$tank"
     return 0
   fi
-  _settings_write_file "$file" "$(printf '%s' "$new" | jq '.settings')" "$engine/$tank" || return 1
+  # #63 P2-4: check the jq substitution's OWN exit status before handing its
+  # output to the writer — command substitution swallows a failing jq's exit
+  # code otherwise, and `_settings_write_file` would just see an empty string.
+  local settings_out
+  settings_out="$(printf '%s' "$new" | jq '.settings')" || {
+    printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
+    return 1
+  }
+  _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
+  # #63 P3-12: the hook command written above is $CLIKAE_LIB's OWN resolved
+  # path (bin/clikae's `__resolve_self`) — for a real install (install.sh,
+  # Homebrew) that's a stable location, but running `clikae` straight out of
+  # a git checkout or worktree bakes THAT checkout's path in instead. Remove
+  # or garbage-collect the checkout later and the guard goes permanently,
+  # silently silent (command not found -> non-2 exit -> fail-open) with
+  # nothing — not even `clikae doctor` — ever noticing. One line at install
+  # time beats nothing noticing at all.
+  if [ -e "$CLIKAE_LIB/../.git" ]; then
+    printf '%s/%s: warning — installing from a git checkout (%s); the guard goes silent if that checkout is ever removed. A real install (install.sh or Homebrew) keeps a stable path.\n' \
+      "$engine" "$tank" "$CLIKAE_LIB" >&2
+  fi
   printf '%s/%s: cockpit guard installed\n' "$engine" "$tank"
 }
 
@@ -124,7 +144,13 @@ _cockpit_hook_remove() {
     printf '%s/%s: cockpit guard not installed here (unchanged)\n' "$engine" "$tank"
     return 0
   fi
-  _settings_write_file "$file" "$(printf '%s' "$new" | jq '.settings')" "$engine/$tank" || return 1
+  # #63 P2-4: see _cockpit_hook_install's matching comment.
+  local settings_out
+  settings_out="$(printf '%s' "$new" | jq '.settings')" || {
+    printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
+    return 1
+  }
+  _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
   printf '%s/%s: cockpit guard removed\n' "$engine" "$tank"
 }
 
@@ -135,6 +161,15 @@ _cockpit_show() {
     printf 'clikae cockpit <tank>  marks the tank that dispatches build/review lanes via `clikae burn` instead of spawning them in-session — see clikae help cockpit.\n'
   else
     printf 'cockpit: %s\n' "$cur"
+    # #63 P3-8: the move path already warns when the RECORDED cockpit no
+    # longer exists (cockpit.sh, _cockpit_move); bare `clikae cockpit` never
+    # did, so a tank deleted out from under the role showed as if nothing
+    # were wrong. `--off` is the fix either way (it sweeps every tank, not
+    # just this stale record), so name it.
+    local cur_engine="${cur%%/*}" cur_tank="${cur#*/}"
+    if ! profile_exists "$cur_engine" "$cur_tank" 2>/dev/null; then
+      printf 'warning: %s no longer exists; run `clikae cockpit --off` to clear the stale state.\n' "$cur" >&2
+    fi
   fi
 }
 
@@ -198,20 +233,35 @@ _cockpit_move() {
 
 # --off sweeps every tank (not just the one the state file names) so a state
 # file left stale by a crash mid-move can never leave a guard stranded behind.
+# #63 P1-3: this is the escape hatch of last resort — the sweep must never
+# abort partway through. `bin/clikae` runs under `set -eo pipefail`, so a bare
+# `_cockpit_hook_remove` call that fails (invalid JSON, a symlink, …) on the
+# FIRST tank `list_all_profiles`' `| sort` puts in front of a real cockpit
+# tank used to kill the whole loop before it ever reached that tank — the
+# guard stayed installed, and the operator's one way out did nothing and
+# printed a message about some OTHER tank. `|| failed="…"` below turns every
+# per-tank failure into bookkeeping instead of an abort; state and the timed
+# allowance are always cleared regardless, and a non-zero rc (P3-14) names
+# exactly which tanks still need attention rather than staying silent about it.
 _cockpit_off() {
   command -v jq >/dev/null 2>&1 || log_fail "cockpit requires jq to edit settings.json"
-  local cli profile path any=0 had_state=0
+  local cli profile path any=0 had_state=0 failed=""
   [ -f "$(_cockpit_state_file)" ] && had_state=1
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
     [ -f "$path/settings.json" ] || continue
     grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
     any=1
-    _cockpit_hook_remove "$cli" "$profile"
+    _cockpit_hook_remove "$cli" "$profile" || failed="$failed $cli/$profile"
   done <<EOF
 $(list_all_profiles)
 EOF
   _cockpit_state_clear
+  rm -f "$(_cockpit_allow_file)" 2>/dev/null || true
+  if [ -n "$failed" ]; then
+    log_err "cockpit: --off could not clean up:$failed — fix their settings.json and run --off again"
+    return 1
+  fi
   if [ "$any" -eq 0 ] && [ "$had_state" -eq 0 ]; then
     printf 'cockpit: already off (unchanged)\n'
   else
@@ -248,9 +298,20 @@ removes the hook from the old tank and installs it on the new one.
 A bare tank name resolves the way `clikae <name>` does: unique across every
 engine wins, ambiguous asks you to qualify it (clikae cockpit <engine> <tank>).
 
+The prompt heuristic is a tripwire, not a classifier: an innocuous prompt
+that merely mentions "worktree", "commit", "push", "review", etc. can still
+get refused. That's expected — use --allow-agents below, not a bug report.
+See docs/usage.md's cockpit section for the measured hit rate.
+
+Installing/removing the guard round-trips settings.json through jq: key
+order gets normalized and CRLF becomes LF. Content survives intact; exact
+byte-for-byte formatting does not.
+
 Escape hatch — the operator sometimes rules "burn the cockpit tank tonight":
 CLIKAE_COCKPIT_ALLOW_AGENTS=1 in the environment, or a timed allowance from
---allow-agents, lift the guard without removing it.
+--allow-agents, lift the guard without removing it. --off clears both the
+guard (everywhere, sweeping every tank without aborting on a broken one) and
+any live --allow-agents allowance.
 EOF
 }
 

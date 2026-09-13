@@ -89,6 +89,33 @@ _guard_installed() {
   cmp "$BATS_TEST_TMPDIR/before-human-hook.json" "$f"
 }
 
+@test "a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)" {
+  # The test above's fixture is jq's OWN canonical formatting, chosen so a
+  # later jq-written file compares byte-for-byte — that's real, but it's
+  # ALSO the one shape where "byte for byte" was never going to be tested.
+  # Round-1 review: install/remove round-trips settings.json through jq,
+  # which normalizes key order and re-wraps everything, CRLF included — a
+  # human-authored file (single-line hooks, no particular key order) is
+  # content-intact (jq -S compares equal) but NOT byte-identical. Both
+  # things are true and documented (docs/usage.md, clikae cockpit --help,
+  # CHANGELOG.md); this fixture is the one that actually proves it.
+  clikae init claude A
+  local f="$CLIKAE_HOME/profiles/claude/A/settings.json"
+  printf '%s\n' \
+    '{"env":{"X":"1"},"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/human/stop.sh"}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/human/hook.sh","timeout":10}]}]}}' \
+    > "$f"
+  cp "$f" "$BATS_TEST_TMPDIR/before-handwritten.json"
+  run clikae cockpit claude A
+  [ "$status" -eq 0 ]
+  # Content: identical once both sides are canonicalized.
+  diff <(jq -S . "$BATS_TEST_TMPDIR/before-handwritten.json") <(jq -S 'del(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard"))' "$f")
+  # Formatting: NOT byte-identical -- jq re-wrapped it. If this ever starts
+  # passing, either jq changed its own formatting or the write path stopped
+  # round-tripping through jq -- either way, docs/usage.md's claim needs a
+  # second look before this assertion gets "fixed" by deleting it.
+  ! cmp -s "$BATS_TEST_TMPDIR/before-handwritten.json" "$f"
+}
+
 @test "--off removes the guard from wherever it is and clears the state" {
   clikae init claude A
   clikae cockpit claude A
@@ -126,6 +153,41 @@ _guard_installed() {
   [ "$status" -eq 0 ]
   run ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
   [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
+@test "--off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)" {
+  # The exact shape from the round-1 review: `list_all_profiles | sort` puts
+  # an alphabetically-earlier broken tank in front of the real cockpit, and
+  # `bin/clikae`'s `set -eo pipefail` used to let ITS failure abort the loop
+  # before it ever reached zzz -- the guard stayed live and --off, the one
+  # way out, printed a message about aaa and did nothing else.
+  clikae init claude aaa
+  clikae init claude mmm
+  clikae init claude zzz
+  clikae cockpit claude zzz
+  # Corrupt aaa's settings.json AFTER install, but leave the marker text
+  # inside it -- so --off's own text-grep pre-filter still picks it up as
+  # "has our guard, needs removing" and hands it to jq, which then fails.
+  printf '{"hooks":{"PreToolUse":[{"_clikae":"cockpit-guard" THIS IS NOT VALID JSON\n' \
+    > "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run clikae cockpit --off
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"claude/aaa"* ]] || false
+  # zzz -- alphabetically AFTER the broken tank -- must still be cleaned up.
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/zzz/settings.json"
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+  # mmm was never touched -- no marker, not part of the failure list either.
+  [[ "$output" != *"claude/mmm"* ]] || false
+}
+
+@test "--off clears a live timed allowance too, not just the guard and state (#63 P1-3)" {
+  clikae init claude A
+  clikae cockpit claude A
+  clikae cockpit --allow-agents 1h
+  [ -f "$CLIKAE_HOME/state/cockpit-allow" ]
+  run clikae cockpit --off
+  [ "$status" -eq 0 ]
+  [ ! -f "$CLIKAE_HOME/state/cockpit-allow" ]
 }
 
 @test "settings apply --check on a cockpit tank reports the guard as expected, not as drift" {
@@ -171,4 +233,32 @@ _guard_installed() {
   run clikae cockpit --allow-agents nonsense
   [ "$status" -ne 0 ]
   [ ! -f "$CLIKAE_HOME/state/cockpit-allow" ]
+}
+
+@test "bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)" {
+  clikae init claude A
+  clikae cockpit claude A
+  # Simulate the tank having been deleted out from under the role -- the
+  # state file (and the marker on whatever settings.json got deleted with
+  # it) is now the only trace the role ever existed.
+  rm -rf "$CLIKAE_HOME/profiles/claude/A"
+  run clikae cockpit
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cockpit: claude/A"* ]] || false
+  [[ "$output" == *"no longer exists"* ]] || false
+  [[ "$output" == *"--off"* ]] || false
+}
+
+@test "installing from a git checkout warns that the guard's path is not stable (#63 P3-12)" {
+  # This test environment (CLIKAE_LIB pointing at the checkout/worktree this
+  # suite runs from) IS the shape the warning exists for -- a real install
+  # (install.sh, Homebrew) never ships a .git alongside lib/, so the warning
+  # is silent there. See tests/fixtures/cockpit-guard/ for the same
+  # distinction on the payload side.
+  [ -e "$CLIKAE_LIB/../.git" ]   # sanity: this test's own premise holds
+  clikae init claude L
+  run clikae cockpit claude L
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cockpit guard installed"* ]] || false
+  [[ "$output" == *"guard goes silent if that checkout is ever removed"* ]] || false
 }
