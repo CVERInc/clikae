@@ -947,6 +947,19 @@ _clean_burn_sidecar_gc() {
       local adapter_name="$engine"
       [ "$adapter_name" = "agy" ] && adapter_name="antigravity"
       local pdir; pdir="$(profile_dir "$adapter_name" "$tank" 2>/dev/null || true)"
+      # #74 round-2 P2-1: load_adapter exit()s the WHOLE PROCESS on a broken
+      # adapter (lib/core/adapter_loader.sh) — `|| true` only catches a
+      # nonzero return, never an exit. home.sh:193-201 already has the fix
+      # for this exact hazard: probe in a subshell first (safe to let exit
+      # there — only the subshell dies), and only load for real in THIS
+      # shell once the probe has proven it won't. A stray/unrecognized
+      # engine dir under state/burn-sessions/ (removed adapter, hand-placed
+      # directory) used to take the entire `clikae clean` down with it —
+      # rc=1, zero output, no GC, no Trash scan, no report.
+      if ! ( load_adapter "$adapter_name" >/dev/null 2>&1 ); then
+        log_warn "clean: no adapter for '$adapter_name' — skipping its burn sidecar ($f)"
+        continue
+      fi
       load_adapter "$adapter_name" >/dev/null 2>&1 || true
       local -a lines=()
       while IFS= read -r _bl || [ -n "$_bl" ]; do

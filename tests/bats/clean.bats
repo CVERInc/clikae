@@ -1704,3 +1704,28 @@ _pin_clean_tank_lock_gc_removals() {
   ! grep -qF "$dead_sid" "$f"
   [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
 }
+
+# #74 round-2 P2-1: `load_adapter` EXIT()S THE WHOLE PROCESS on an adapter it
+# can't find (lib/core/adapter_loader.sh) — `|| true` catches a nonzero
+# return, never an exit. An unrecognized engine directory under
+# state/burn-sessions/ (a removed custom adapter, docs/adding-an-adapter.md;
+# a downgrade; anything hand-placed) used to take the ENTIRE `clikae clean`
+# down with it: rc=1, zero output, no GC, no Trash scan, no report — for a
+# command that has nothing to do with the broken adapter at all.
+@test "#74 round-2 P2-1: an unrecognized engine dir under state/burn-sessions/ does not kill clikae clean" {
+  clikae init claude T1
+  local live_sid="88888888-8888-4888-8888-888888888888" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude" "$CLIKAE_HOME/state/burn-sessions/unknown-engine"
+  printf '%s\trun-1\t1700000000\n' "$live_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  printf 'ffffffff-ffff-4fff-8fff-ffffffffffff\trun-1\t1700000000\n' \
+    > "$CLIKAE_HOME/state/burn-sessions/unknown-engine/some-tank"
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"no adapter for 'unknown-engine'"* ]] || false
+  # The known engine's sidecar still got its normal GC pass, unaffected.
+  grep -qF "$live_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+}
