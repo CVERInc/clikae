@@ -96,16 +96,27 @@ a swipe reaches the program as a click at the row you lift your finger on
 (it already saw the press on the way down) while the pane also scrolls. Desktop
 wheel and drag-selection bindings are unchanged.
 
-The bindings are installed when clikae creates a tmux session, and apply to the
-whole tmux **server** — every session on it, not only clikae's own. In tmux's
-command prompt (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable
-translation server-wide, or `set -g @clikae_touch_scroll on` to restore it. Set
+Needs tmux **3.1 or newer** (`set-option -p`, pane-scoped options). Older
+tmux keeps `mouse on` — installed unconditionally, before this check — and
+silently skips the six key bindings and the two `@clikae_touch_scroll`/
+`@clikae_touch_scroll_lines` options;
+nothing breaks, but nothing translates either.
+
+The six bindings are installed when clikae creates a tmux session, and apply
+to the whole tmux **server** — every session on it, not only clikae's own —
+so if `~/.tmux.conf` binds its own root-table `MouseDown1Pane`/`MouseUp1Pane`,
+clikae's `bind-key` overwrites it (there is no `-o`, and tmux has no per-key
+opt-out). Setting `@clikae_touch_scroll off` (below) does not restore your
+binding; it only makes clikae's copy of it a no-op. In tmux's command prompt
+(`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable translation
+server-wide, or `set -g @clikae_touch_scroll on` to restore it. Set
 `set -g @clikae_touch_scroll_lines 3` to scroll three lines per row of movement.
 These server-wide settings survive later clikae launches; put them in
 `~/.tmux.conf` to retain them across server restarts. Drop the `-g` (`set
 @clikae_touch_scroll off`) to override either setting for just the current
 session instead. The multiplier must be a positive integer (invalid values
-fall back to 2).
+fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
+`0`, `no`, `false`, any case, all disable).
 
 ### Make & manage tanks
 

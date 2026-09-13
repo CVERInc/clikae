@@ -247,3 +247,31 @@ STUB
   release 16 %7 ''
   [ ! -s "$TOUCH_ACTIONS" ]
 }
+
+@test "touch: tmux floor — 3.0 is below it, 3.1 is at it (version-gate boundary, P3-3)" {
+  # P3-3 (2026-09 R2 review): the earlier stub only proved the gate fires
+  # SOMEWHERE, at 3.0 (skip) and the 3.4 default (install) — any floor
+  # anywhere in (3.0, 3.4] made both of those cases pass, including a wrong
+  # one. Pin the actual boundary tmux itself changed at: `set-option -p`/`-pu`
+  # (pane-scoped options, used by every binding this chain installs) shipped
+  # in CHANGES FROM 3.0 TO 3.1 — the same floor lib/core/tmux.sh's
+  # _tmux_touch_scroll_floor_met and docs/usage.md both declare.
+  # shellcheck source=/dev/null
+  source "$TOUCH_ROOT/lib/core/tmux.sh"
+  _tmux_ssh_agent_link() { return 1; }
+  tmux_server_born_note() { :; }
+
+  export TOUCH_TMUX_V='tmux 3.0'
+  : > "$TOUCH_LOG"
+  run tmux_spawn_session --session clikae-floor-red -- 'echo test'
+  [ "$status" -eq 0 ]
+  run cat "$TOUCH_LOG"
+  [[ "$output" != *'@clikae_touch_scroll'* ]] || false      # RED at 3.0
+
+  export TOUCH_TMUX_V='tmux 3.1'
+  : > "$TOUCH_LOG"
+  run tmux_spawn_session --session clikae-floor-green -- 'echo test'
+  [ "$status" -eq 0 ]
+  run cat "$TOUCH_LOG"
+  [[ "$output" == *'@clikae_touch_scroll'* ]] || false      # GREEN at 3.1
+}
