@@ -36,7 +36,11 @@ adapter_run() {
 adapter_resume_args() {
   local sid="$1"
   [ -n "$sid" ] || return 1
-  printf '--conversation\n%s\n' "$sid"
+  # 🔴 #34: NEVER a format string that starts with `-` — bash's printf builtin
+  # parses a leading `--conversation` as an unknown OPTION (rc=2, no stdout),
+  # so `clikae resume <agy-sid>` silently launched agy with no --conversation
+  # at all. Format first, literal args after.
+  printf '%s\n%s\n' '--conversation' "$sid"
 }
 
 # Optional hook: the inverse of adapter_resume_args — see claude.sh's twin for
