@@ -113,7 +113,10 @@ _row() { # number updated login repo html_url is_pr title
   [[ "$output" == *"2 new event(s)"* ]] || false
   local cursor="$CLIKAE_HOME/state/watch-github/CVERInc.cursor"
   [ -f "$cursor" ]
-  [ "$(cat "$cursor")" = "2026-09-07T04:32:00Z" ]
+  # P1-3 (2026-09-13 fix-round-1 review): the cursor lags 300s behind the max
+  # updated_at actually seen (04:32:00 - 5m = 04:27:00), never the exact max
+  # — see the CURSOR SEMANTICS note in lib/commands/watch_github.sh.
+  [ "$(cat "$cursor")" = "2026-09-07T04:27:00Z" ]
   # Durable JSONL record too — same $CLIKAE_HOME/logs directory burn's own
   # status.json lives under.
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"

@@ -111,39 +111,71 @@ _wg_events_file() { printf '%s/events.jsonl\n' "$(_wg_log_dir "$1")"; }
 # lives for this org (P1-1, see the WHAT "WAKE" MEANS HERE note above).
 _wg_runs_dir()    { printf '%s/%s/runs\n' "$(_wg_state_dir)" "$1"; }
 
-# --- queries --------------------------------------------------------------
+# --- time helpers -----------------------------------------------------------
 
-# _wg_query_org <org> <since|""> -> the search string for "issues/PRs opened
-# by others, replies on issues updated since <since>" (see the ⚠️ note above
-# for what this does NOT catch).
-_wg_query_org() {
-  local org="$1" since="$2"
-  if [ -n "$since" ]; then
-    printf 'org:%s updated:>%s -author:%s' "$org" "$since" "$__WG_SELF"
-  else
-    printf 'org:%s -author:%s' "$org" "$__WG_SELF"
-  fi
+# _wg_since_default -> ISO8601 Z for "24 hours ago" (the cold-start lower
+# bound, P1-3/P2-7, 2026-09-13 fix-round-1 review — without a bound, a cold
+# start's first query was `org:X -author:me` with NO time filter at all,
+# `order=asc` handed back the org's oldest 30 issues ever, and a busy org
+# took HOURS to crawl forward to "today", which is the entire value this
+# feature exists for). GNU first, BSD fallback — same two-attempt shape
+# lib/core/limit.sh's _limit_iso_epoch already uses for the same reason.
+_wg_since_default() {
+  date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
-# _wg_query_mentions <org> <since|""> -> @mentions of self. Deliberately NOT
+# _wg_iso_from_epoch <epoch> -> ISO8601 Z string, or empty if this platform's
+# `date` can't do it (GNU `-d @epoch`, BSD `-r epoch`).
+_wg_iso_from_epoch() {
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+# --- queries --------------------------------------------------------------
+
+# CURSOR SEMANTICS (P1-3, 2026-09-13 fix-round-1 review). The old query used
+# `updated:>cursor` (strict) with the cursor set to the exact max updated_at
+# seen — no margin. GitHub's search index lags real writes by some minutes
+# (documented search-API behaviour); anything that lands in the index AFTER
+# the poll that set the cursor, but whose updated_at is <= that cursor,
+# would never appear in ANY future query — gone, silently, forever. Fixed by
+# using `>=` (inclusive) with the cursor itself already lagged 300s behind
+# the max seen (_wg_poll below) — the seen-file dedup (already needed for
+# other reasons) absorbs the resulting overlap between polls for free.
+
+# _wg_query_org <org> <since> -> the search string for "issues/PRs opened by
+# others, replies on issues updated since <since>" (see the ⚠️ note above for
+# what this does NOT catch). <since> is never empty — _wg_poll always
+# resolves it to either the persisted cursor, --since, or the 24h default.
+_wg_query_org() {
+  local org="$1" since="$2"
+  printf 'org:%s updated:>=%s -author:%s' "$org" "$since" "$__WG_SELF"
+}
+
+# _wg_query_mentions <org> <since> -> @mentions of self. Deliberately NOT
 # author-excluded (a self-mention needs the login check in _wg_process, not
 # the query, to be filtered — see the file header).
 _wg_query_mentions() {
   local org="$1" since="$2"
-  if [ -n "$since" ]; then
-    printf 'org:%s updated:>%s mentions:%s' "$org" "$since" "$__WG_SELF"
-  else
-    printf 'org:%s mentions:%s' "$org" "$__WG_SELF"
-  fi
+  printf 'org:%s updated:>=%s mentions:%s' "$org" "$since" "$__WG_SELF"
 }
 
 # --- one query's worth of work ---------------------------------------------
 
-# _wg_fetch <query> <errfile> -> TSV on stdout (number, updated_at, login,
-# repo, html_url, is_pr, title — see the jq filter), gh's own exit code.
-# gh's `--jq` is its own vendored implementation (gojq) — no external `jq`
-# binary required, unlike lib/core/fleet_mcp.sh's merge (which genuinely
-# needs the real jq for --slurpfile).
+# _wg_fetch <query> <page> <errfile> -> TSV on stdout (number, updated_at,
+# login, repo, html_url, is_pr, title — see the jq filter), gh's own exit
+# code. gh's `--jq` is its own vendored implementation (gojq) — no external
+# `jq` binary required, unlike lib/core/fleet_mcp.sh's merge (which
+# genuinely needs the real jq for --slurpfile).
+#
+# `order=desc` + `per_page=100` (P2-7, 2026-09-13 fix-round-1 review): the
+# old call took whatever the API's own default page (30, oldest-first via
+# `order=asc`) handed back — a busy org's backlog could outrun a single
+# poll forever. desc + 100/page + the pagination loop in _wg_poll (up to 5
+# pages = 500 rows/poll/query) means the NEWEST items are always seen
+# first, so a cold start (or a poll that falls behind) still surfaces
+# today's events on poll #1 instead of queueing behind history.
 #
 # 🔴 `--method GET` IS NOT OPTIONAL. `gh api`'s own default HTTP method
 # flips from GET to POST the moment ANY `-f`/`-F` is given (its docs say so
@@ -154,8 +186,9 @@ _wg_query_mentions() {
 # explicit GET, which is the whole point of using it instead of hand-quoting
 # a URL.
 _wg_fetch() {
-  local query="$1" errfile="$2"
-  gh api search/issues --method GET -f q="$query" -f sort=updated -f order=asc \
+  local query="$1" page="$2" errfile="$3"
+  gh api search/issues --method GET -f q="$query" -f sort=updated -f order=desc \
+    -f per_page=100 -f page="$page" \
     --jq '.items[]? | [(.number|tostring), .updated_at, .user.login, (.repository_url|split("/")|.[-1]), .html_url, (if .pull_request then "1" else "0" end), .title] | @tsv' \
     2>"$errfile"
 }
@@ -167,16 +200,24 @@ _wg_is_rate_limited() {
 
 # _wg_process <kind_query: org|mentions> <tsv> <org> <seen_file> <events_file>
 # -> for every NEW (not-yet-seen) row: prints the wake line, appends a JSON
-# record, appends the dedup key to the seen file, and folds updated_at into
-# the running-max global $__WG_MAX_UPDATED. Bumps $__WG_EVENTS. bash 3.2: no
-# associative arrays, no mapfile — a plain while/read loop over a variable
-# via a here-string.
+# record, appends the dedup key to the seen file. Folds updated_at into the
+# running-max global $__WG_MAX_UPDATED for EVERY row read (P1-3, 2026-09-13
+# fix-round-1 review — the cursor has to track the max updated_at this poll
+# actually SAW, not just the ones that turned out new, or a poll that only
+# re-saw already-handled rows near a boundary would never advance the
+# cursor at all and requery the same window forever). Bumps $__WG_EVENTS
+# only for genuinely new rows. bash 3.2: no associative arrays, no mapfile —
+# a plain while/read loop over a variable via a here-string.
 _wg_process() {
   local kind_query="$1" tsv="$2" org="$3" seen_file="$4" events_file="$5"
   [ -n "$tsv" ] || return 0
   local number updated login repo html_url is_pr title
   while IFS=$'\t' read -r number updated login repo html_url is_pr title; do
     [ -n "$number" ] || continue
+
+    if [ -z "$__WG_MAX_UPDATED" ] || [[ "$updated" > "$__WG_MAX_UPDATED" ]]; then
+      __WG_MAX_UPDATED="$updated"
+    fi
 
     local kind
     if [ "$kind_query" = "mentions" ]; then
@@ -212,9 +253,6 @@ _wg_process() {
     # `summary` field, which is the whole reason `clikae wait` on that file
     # has anything to print — see _wg_build_summary below for the cap.
     __WG_SUMMARY_LINES="${__WG_SUMMARY_LINES:+$__WG_SUMMARY_LINES$'\n'}$line"
-    if [ -z "$__WG_MAX_UPDATED" ] || [[ "$updated" > "$__WG_MAX_UPDATED" ]]; then
-      __WG_MAX_UPDATED="$updated"
-    fi
   done <<EOF
 $tsv
 EOF
@@ -259,32 +297,25 @@ _wg_status_write() {
 
 # --- one poll ---------------------------------------------------------------
 
-# _wg_poll <org> -> runs both queries, updates $__WG_EVENTS / $__WG_BACKOFF
-# (globals, set here — see lib/core/wake.sh's _wake_targetsv for the same
-# "sets globals instead of forking a subshell" idiom this follows). Never
-# advances the cursor past a query that failed to read.
-_wg_poll() {
-  local org="$1"
-  __WG_EVENTS=0
-  __WG_BACKOFF=0
-  __WG_MAX_UPDATED=""
-  __WG_SUMMARY_LINES=""
-  local ok=1
-
-  mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
-  local seen_file events_file cursor_file since
-  seen_file="$(_wg_seen_file "$org")"
-  events_file="$(_wg_events_file "$org")"
-  cursor_file="$(_wg_cursor_file "$org")"
-  [ -f "$seen_file" ] || : > "$seen_file"
-  since=""
-  [ -f "$cursor_file" ] && since="$(cat "$cursor_file" 2>/dev/null)"
-
-  local q errfile tsv rc
-  for kind_query in org mentions; do
-    if [ "$kind_query" = "org" ]; then q="$(_wg_query_org "$org" "$since")"
-    else                               q="$(_wg_query_mentions "$org" "$since")"
-    fi
+# _wg_poll_one_query <kind_query> <org> <since> <seen_file> <events_file> ->
+# paginate ONE query (org or mentions) up to 5 pages of 100 (P2-7), stopping
+# early on a short page (the normal case: fewer than per_page rows means
+# there is no next page) or once a page's oldest row is already <= <since>
+# (defensive — the query itself already filters `updated:>=since`, so every
+# row returned should already satisfy this; kept as the brief's own stated
+# stop condition rather than trusting the filter silently). Sets $ok=0 and
+# $__WG_BACKOFF via the caller's is-rate-limited check on a failed page,
+# WITHOUT advancing past whatever pages DID read successfully — the pages
+# already processed already folded their rows into $__WG_MAX_UPDATED via
+# _wg_process, so a failure on page 3 still leaves the cursor able to
+# advance to what pages 1-2 saw (never past a page that failed to read).
+_wg_poll_one_query() {
+  local kind_query="$1" org="$2" since="$3" seen_file="$4" events_file="$5"
+  local q page=1 errfile tsv rc page_n oldest
+  if [ "$kind_query" = "org" ]; then q="$(_wg_query_org "$org" "$since")"
+  else                               q="$(_wg_query_mentions "$org" "$since")"
+  fi
+  while :; do
     errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
     # 🔴 `cmd || rc=$?`, never a bare `cmd; rc=$?` — bin/clikae runs under
     # `set -eo pipefail`. A bare `tsv="$(_wg_fetch …)"` failing is not the
@@ -295,9 +326,9 @@ _wg_poll() {
     # burn.sh's own tank-lock acquire documents at length for the identical
     # shape (search this repo for "never a bare").
     rc=0
-    tsv="$(_wg_fetch "$q" "$errfile")" || rc=$?
+    tsv="$(_wg_fetch "$q" "$page" "$errfile")" || rc=$?
     if [ "$rc" -ne 0 ]; then
-      ok=0
+      __WG_OK=0
       if _wg_is_rate_limited "$errfile"; then
         __WG_BACKOFF=1
         log_warn "GitHub search rate-limited (403/429) on the $kind_query query — backing off."
@@ -305,10 +336,63 @@ _wg_poll() {
         log_warn "gh api search/issues failed on the $kind_query query: $(head -n1 "$errfile" 2>/dev/null)"
       fi
       rm -f "$errfile"
-      continue
+      return 0
     fi
     rm -f "$errfile"
     _wg_process "$kind_query" "$tsv" "$org" "$seen_file" "$events_file"
+
+    page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
+    [ "$page_n" -gt 0 ] || return 0        # empty page: nothing more to read
+    [ "$page_n" -ge 100 ] || return 0      # short page: that WAS the last page
+
+    oldest="$(printf '%s\n' "$tsv" | tail -n1 | cut -f2)"
+    local LC_ALL=C   # fixed-width ISO8601 sorts lexicographically; pin the
+                      # collation so this never depends on the caller's locale
+    if [ -n "$oldest" ] && [ -n "$since" ] && [[ "$oldest" < "$since" ]]; then
+      return 0   # already reached (or passed) the requested lower bound
+    fi
+
+    page=$((page + 1))
+    if [ "$page" -gt 5 ]; then
+      log_warn "github:$org — $kind_query query has +more, will catch up next poll."
+      return 0
+    fi
+  done
+}
+
+# _wg_poll <org> [since_override] -> runs both queries (paginated), updates
+# $__WG_EVENTS / $__WG_BACKOFF / $__WG_OK (globals, set here — see
+# lib/core/wake.sh's _wake_targetsv for the same "sets globals instead of
+# forking a subshell" idiom this follows). Never advances the cursor past a
+# page that failed to read; the new cursor is lagged 300s behind the max
+# updated_at actually seen (P1-3 — see the CURSOR SEMANTICS note above
+# _wg_query_org). <since_override>, when non-empty, is used ONLY for a cold
+# start (no persisted cursor, or an empty cursor file) — see cmd_watch_github's
+# --since flag.
+_wg_poll() {
+  local org="$1" since_override="${2:-}"
+  __WG_EVENTS=0
+  __WG_BACKOFF=0
+  __WG_OK=1
+  __WG_MAX_UPDATED=""
+  __WG_SUMMARY_LINES=""
+
+  mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
+  local seen_file events_file cursor_file since
+  seen_file="$(_wg_seen_file "$org")"
+  events_file="$(_wg_events_file "$org")"
+  cursor_file="$(_wg_cursor_file "$org")"
+  [ -f "$seen_file" ] || : > "$seen_file"
+  since=""
+  [ -f "$cursor_file" ] && since="$(cat "$cursor_file" 2>/dev/null)"
+  # P2-11: an EMPTY cursor file (a half-written one from before the
+  # write-then-rename fix, or any other foreign zero-byte file at that
+  # path) must read as cold start, never as "no time bound at all" (which
+  # used to mean a full org replay — see _wg_query_org's history above).
+  [ -n "$since" ] || since="${since_override:-$(_wg_since_default)}"
+
+  for kind_query in org mentions; do
+    _wg_poll_one_query "$kind_query" "$org" "$since" "$seen_file" "$events_file"
   done
 
   # Cap the seen-file at the last 500 keys (brief's stated cap).
@@ -316,9 +400,18 @@ _wg_poll() {
     tail -n 500 "$seen_file" > "${seen_file}.tmp" 2>/dev/null && mv "${seen_file}.tmp" "$seen_file"
   fi
 
-  # Never advance past an event a failed query might have contained.
-  if [ "$ok" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
-    printf '%s\n' "$__WG_MAX_UPDATED" > "$cursor_file"
+  # Never advance past an event a failed page might have contained. The new
+  # cursor lags 300s behind the max updated_at actually seen this poll —
+  # `>=` in the query plus the seen-file dedup absorb the resulting overlap.
+  if [ "$__WG_OK" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
+    local max_epoch new_cursor
+    max_epoch="$(_limit_iso_epoch "$__WG_MAX_UPDATED" "")"
+    new_cursor=""
+    if [ -n "$max_epoch" ]; then
+      new_cursor="$(_wg_iso_from_epoch "$((max_epoch - 300))")"
+    fi
+    [ -n "$new_cursor" ] || new_cursor="$__WG_MAX_UPDATED"   # unparseable: no lag, still forward progress
+    printf '%s\n' "$new_cursor" > "${cursor_file}.tmp" 2>/dev/null && mv -f "${cursor_file}.tmp" "$cursor_file" 2>/dev/null || true
   fi
 
   # P1-1 (2026-09-13 fix-round-1 review): the wake itself — one status file
@@ -333,7 +426,7 @@ _wg_poll() {
 
 _watch_github_help() {
   cat <<'EOF'
-Usage: clikae watch github [--org <org>] [--interval <dur>] [--once]
+Usage: clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]
 
 Poll GitHub's search API for issues/PRs opened by others, replies, and
 @mentions in <org>, and turn each new one into a wake line:
@@ -355,12 +448,24 @@ de-dupes (repo, issue number, updated_at) triples.
   --org <org>       GitHub org to watch. Default: inferred from this
                      directory's GitHub remote (`gh repo view`).
   --interval <dur>  Poll interval: bare seconds, or Ns/Nm/Nh/Nd. Default 10m.
-  --once            Poll exactly once and exit 0 — for cron or a Stop hook,
-                     not a live pane. No daemon, no tmux window of its own.
+  --once            Poll exactly once — for cron or a Stop hook, not a live
+                     pane. No daemon, no tmux window of its own.
+  --since <ts>      Cold-start lower bound (ISO8601, e.g.
+                     2026-09-01T00:00:00Z), used ONLY when there is no
+                     persisted cursor yet. Default: 24 hours ago.
 
-Rate limits: one poll is 2 requests (the search API allows 30/min
-authenticated). On a 403/429 the interval backs off ×2 up to 1h and one line
-is printed; the cursor is never advanced past a query that failed to read.
+Each query paginates up to 5 pages of 100 (order=desc, newest first), so a
+cold start or a poll that fell behind still surfaces today's events first
+instead of crawling forward from the org's oldest history. A page beyond
+that cap prints "+more, will catch up next poll" rather than blocking.
+
+Rate limits: normally 2 requests per poll (up to 10 when paginating both
+queries to the cap; the search API allows 30/min authenticated). On a
+403/429 the interval backs off ×2 up to 1h and one line is printed; the
+cursor is never advanced past a page that failed to read, and is kept 300s
+behind the newest update actually seen (GitHub's search index itself lags
+real writes by some minutes) — a small seen-file de-dupes the resulting
+overlap between polls.
 
 Requires `gh` already logged in (whatever account that is — this never reads
 or writes a token itself); exits 1 immediately if `gh auth status` fails.
@@ -376,17 +481,29 @@ _wg_infer_org() {
 }
 
 cmd_watch_github() {
-  local org="" interval_dur="10m" once=0
+  local org="" interval_dur="10m" once=0 since_flag=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help)   _watch_github_help; return 0 ;;
       --org)       shift; [ $# -gt 0 ] || log_fail "--org needs a value"; org="$1"; shift ;;
       --interval)  shift; [ $# -gt 0 ] || log_fail "--interval needs a duration"; interval_dur="$1"; shift ;;
       --once)      once=1; shift ;;
+      --since)     shift; [ $# -gt 0 ] || log_fail "--since needs an ISO8601 timestamp, e.g. 2026-09-01T00:00:00Z"
+                   since_flag="$1"; shift ;;
       -*)          log_fail "Unknown flag: $1  (try: clikae watch github --help)" ;;
       *)           log_fail "Unexpected argument: $1  (try: clikae watch github --help)" ;;
     esac
   done
+
+  if [ -n "$since_flag" ]; then
+    # P1-3 (2026-09-13 fix-round-1 review): only ever used for a COLD start
+    # (no persisted cursor yet) — see _wg_poll's since_override. Validated
+    # the same way an updated_at from GitHub itself is parsed
+    # (lib/core/limit.sh's _limit_iso_epoch), so a caller gets a clear
+    # refusal instead of a query GitHub's search API silently mis-parses.
+    [ -n "$(_limit_iso_epoch "$since_flag" "")" ] \
+      || log_fail "--since: not an ISO8601 timestamp: $since_flag  (e.g. 2026-09-01T00:00:00Z)"
+  fi
 
   local interval_s
   interval_s="$(_burn_parse_duration "$interval_dur")" \
@@ -408,7 +525,7 @@ cmd_watch_github() {
   validate_name org "$org"
 
   if [ "$once" -eq 1 ]; then
-    _wg_poll "$org"
+    _wg_poll "$org" "$since_flag"
     log_info "github:$org — $__WG_EVENTS new event(s) this poll."
     return 0
   fi
@@ -416,7 +533,7 @@ cmd_watch_github() {
   log_info "Watching GitHub org $org as $__WG_SELF — polling every $(wake_human_left "$interval_s"). Ctrl-C to stop."
   local cur="$interval_s"
   while :; do
-    _wg_poll "$org"
+    _wg_poll "$org" "$since_flag"
     if [ "$__WG_BACKOFF" -eq 1 ]; then
       cur=$((cur * 2))
       [ "$cur" -le 3600 ] || cur=3600
