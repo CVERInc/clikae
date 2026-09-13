@@ -222,14 +222,22 @@ adapter_transcript_path() {
   printf '%s\n' "$f"
 }
 
-# _CODEX_USER_MESSAGE_TYPE_RE — the ONE anchor for "this line records
-# something the human actually typed", shared by adapter_title_for_file
-# (below) and adapter_handoff_extract's "user" branch, so the two functions
-# stop disagreeing about what a codex human prompt looks like (round-1
-# review P2-2). Codex writes a human-typed turn as an event_msg whose
-# payload.type is "user_message", carrying the prompt in "message" — see the
-# comment on adapter_handoff_extract's "user" branch below for why a
-# response_item/role:user turn is NOT the same thing.
+# _CODEX_USER_MESSAGE_TYPE_RE / _CODEX_AGENT_MESSAGE_TYPE_RE — the anchors
+# for "this line records something the human/the model actually typed",
+# shared by adapter_title_for_file (below) and adapter_handoff_extract's
+# event_msg scan, so nothing in this file disagrees with itself about what a
+# codex event looks like (round-1 review P2-2). Codex writes a human-typed
+# turn as an event_msg whose payload.type is "user_message" and a model
+# reply as an event_msg whose payload.type is "agent_message" — both carry
+# the text in "message". _CODEX_AGENT_MESSAGE_TYPE_RE is the SAME anchor
+# lib/core/limit.sh already uses for this exact shape (limit.sh:322, whose
+# comment at :275-293 says "confirmed against a real rollout"). Before
+# round-2 review P2-1, the assistant branch below had its own, UNCONFIRMED
+# response_item-only anchor instead of sharing this one — the same "no
+# sibling backing this guess" bug round-1 P1-1 found in the user branch,
+# just on the other role: a rollout that (like every other codex scanner in
+# this repo) records replies as event_msg/agent_message showed as EMPTY
+# here while limit.sh read the same file fine.
 #
 # ` *` (a literal space, starred), not `[ \t]*`/`[[:space:]]*`: a real
 # rollout writes `"type": "user_message"` (space after the colon — every
@@ -240,47 +248,50 @@ adapter_transcript_path() {
 # whitespace convention as every other codex scanner in the repo, not a
 # fourth one (round-1 review P1-1).
 _CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
+_CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 
-# Optional hook (#33, P1-1 + P2-2 fixes from the round-1 review): the
-# transcript SHAPE belongs to the adapter. Prints one line per MESSAGE of
-# <role> ("user"/"assistant") — several text parts in one message join with
-# a space onto one line, unlike claude.sh's twin, which prints one line per
-# text BLOCK instead (round-1 review P3-1; docs/adding-an-adapter.md spells
-# out the difference) — text only, newest last — used by `clikae handoff`'s
-# digest (lib/core/handoff.sh, _handoff_extract).
+# Optional hook (#33, P1-1 + P2-2 fixes from the round-1 review; round-2
+# review P2-1 folded in): the transcript SHAPE belongs to the adapter.
+# Prints one line per MESSAGE of <role> ("user"/"assistant") — several text
+# parts in one message join with a space onto one line, unlike claude.sh's
+# twin, which prints one line per text BLOCK instead (round-1 review P3-1;
+# docs/adding-an-adapter.md spells out the difference) — text only, newest
+# last — used by `clikae handoff`'s digest (lib/core/handoff.sh,
+# _handoff_extract).
 #
-# ASSISTANT: a codex rollout wraps an assistant turn as a "response item"
-# (the OpenAI Responses API shape), not the flat claude
-# `"role":"…","content":"…"` string handoff.sh's default extraction anchors
-# on:
-#   {"type":"response_item","payload":{"type":"message","role":"assistant",
-#     "content":[{"type":"output_text","text":"…"}]}}
-# `role` IS present, but `content` is an ARRAY of typed parts, so the
-# claude-shaped grep matches zero lines on a real codex tank — that was the
-# original #33 bug (`grep -ac '"role":"user","content":"' <rollout>` = 0).
+# Round-2 review P2-1: a codex rollout can record the SAME turn in two
+# different ways depending on how the session ran, and this hook now reads
+# the UNION of both rather than betting on one:
 #
-# USER (P2-2): a response_item/role:user turn is NOT necessarily something
-# the human typed — codex also records MACHINE-INJECTED context that way,
-# e.g.
+#   Shape A — event_msg (the UI event stream; limit.sh's whole codex family
+#   — :281, :322, :1160, :1183 — reads ONLY this shape, "confirmed against a
+#   real rollout"):
+#     {"type":"event_msg","payload":{"type":"user_message","message":"…"}}
+#     {"type":"event_msg","payload":{"type":"agent_message","message":"…"}}
+#
+#   Shape B — response_item (the OpenAI Responses API conversation state):
+#     {"type":"response_item","payload":{"type":"message","role":"assistant",
+#       "content":[{"type":"output_text","text":"…"}]}}
+#     {"type":"response_item","payload":{"type":"message","role":"user",
+#       "content":[{"type":"input_text","text":"…"}]}}
+#
+# `role` IS present in shape B, but `content` is an ARRAY of typed parts, so
+# the claude-shaped `"role":"…","content":"…"` string anchor matches
+# neither role — that was the original #33 bug (`grep -ac
+# '"role":"user","content":"' <rollout>` = 0).
+#
+# USER shape B ALSO carries MACHINE-INJECTED context, not just what the
+# human typed, e.g.
 #   {"type":"response_item","payload":{"type":"message","role":"user",
 #     "content":[{"type":"input_text","text":"<environment_context>cwd=…
 #     </environment_context>"}]}}
 #   {"type":"response_item","payload":{"type":"message","role":"user",
 #     "content":[{"type":"input_text","text":"<user_instructions>AGENTS.md
 #     contents here</user_instructions>"}]}}
-# The #33 round-1 extractor anchored on response_item/role:user for BOTH
-# roles, so it surfaced this injected context as "Recent prompts" instead of
-# anything the human actually typed — on a short session (injected turns not
-# yet pushed out of the `tail` window by real ones) the brief showed NO real
-# prompt at all (round-1 review, Hunt/P2-2). adapter_title_for_file below has
-# always anchored on the right shape for a human prompt — event_msg /
-# user_message — so this branch now shares that SAME anchor
-# (_CODEX_USER_MESSAGE_TYPE_RE) instead of a second, disagreeing guess.
-# `<environment_context>` / `<user_instructions>` are ALSO stripped
-# defensively below — belt-and-suspenders, the same spirit as claude's own
-# four filters for role:user noise (toolUseResult/isMeta/isSidechain/
-# `<command-*>`) — in case a future codex version ever wraps injected text
-# inside a user_message turn too.
+# so `<environment_context>` / `<user_instructions>` are stripped
+# defensively below regardless of which shape produced the line (round-1
+# review P2-2) — belt-and-suspenders, the same spirit as claude's own four
+# filters for role:user noise.
 #
 # awk, one pass over the whole file (no bash-4+ line-slurping builtin
 # needed), using index()/substr() for the VALUE scan rather than a regex:
@@ -310,8 +321,7 @@ adapter_handoff_extract() {
   local out
   if [ "$role" = user ]; then
     out="$(awk -v type_re="$_CODEX_USER_MESSAGE_TYPE_RE" '
-      $0 !~ type_re { next }
-      {
+      $0 ~ type_re {
         rest = $0; keyre = "\"message\": *\""
         if (!match(rest, keyre)) next
         rest = substr(rest, RSTART + RLENGTH)
@@ -323,17 +333,46 @@ adapter_handoff_extract() {
           seg = seg c; i++
         }
         if (seg != "") print seg
+        next
+      }
+      $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"user"/ {
+        rest = $0; keyre = "\"text\": *\""; res = ""
+        while (1) {
+          if (!match(rest, keyre)) break
+          rest = substr(rest, RSTART + RLENGTH)
+          seg = ""; i = 1; n = length(rest)
+          while (i <= n) {
+            c = substr(rest, i, 1)
+            if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
+            if (c == "\"") { i++; break }
+            seg = seg c; i++
+          }
+          res = (res == "" ? seg : res " " seg)
+          rest = substr(rest, i)
+        }
+        if (res != "") print res
       }
     ' "$t" 2>/dev/null \
       | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
       | grep -avE '^[[:space:]]*<(environment_context|user_instructions)' \
       | grep -av '^[[:space:]]*$' || true)"
   else
-    out="$(awk -v role="$role" '
-      BEGIN { role_re = "\"role\": *\"" role "\"" }
-      $0 !~ /"type": *"response_item"/ { next }
-      $0 !~ role_re { next }
-      {
+    out="$(awk -v agent_re="$_CODEX_AGENT_MESSAGE_TYPE_RE" '
+      $0 ~ agent_re {
+        rest = $0; keyre = "\"message\": *\""
+        if (!match(rest, keyre)) next
+        rest = substr(rest, RSTART + RLENGTH)
+        seg = ""; i = 1; n = length(rest)
+        while (i <= n) {
+          c = substr(rest, i, 1)
+          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
+          if (c == "\"") { i++; break }
+          seg = seg c; i++
+        }
+        if (seg != "") print seg
+        next
+      }
+      $0 ~ /"type": *"response_item"/ && $0 ~ /"role": *"assistant"/ {
         rest = $0; keyre = "\"text\": *\""; res = ""
         while (1) {
           if (!match(rest, keyre)) break
