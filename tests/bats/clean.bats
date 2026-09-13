@@ -1600,3 +1600,82 @@ _pin_clean_tank_lock_gc_removals() {
     false
   }
 }
+
+# --- #74 round-1 P2-2: the burn sidecar (state/burn-sessions/<engine>/<tank>)
+# had no GC at all — every attempt appended a line forever. `clikae clean`
+# now drops lines whose transcript is gone and caps what's left, newest kept;
+# a file needing neither prune stays byte-identical. ------------------------
+
+@test "_clean_burn_sidecar_gc drops a sidecar line whose transcript no longer exists" {
+  _source_clean
+  clikae init claude T1
+  local live_sid dead_sid slug
+  live_sid="11111111-1111-4111-8111-111111111111"
+  dead_sid="22222222-2222-4222-8222-222222222222"
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '%s\trun-1\t1700000000\n%s\trun-2\t1700000001\n' "$live_sid" "$dead_sid" \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ -f "$f" ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$dead_sid" "$f"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+}
+
+@test "_clean_burn_sidecar_gc caps the sidecar at the configured limit, newest kept" {
+  _source_clean
+  clikae init claude T1
+  export CLIKAE_BURN_SIDECAR_CAP=5
+  local i slug sid
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  for i in $(seq 1 8); do
+    sid="$(printf '33333333-3333-4333-8333-33333333%04d' "$i")"
+    printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+      > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$sid.jsonl"
+    printf '%s\trun-%d\t%d\n' "$sid" "$i" "$((1700000000 + i))" >> "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  done
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 5 ]
+  # newest 5 (run-4..run-8) kept, oldest 3 dropped
+  ! grep -qF "run-1" "$f"
+  ! grep -qF "run-2" "$f"
+  ! grep -qF "run-3" "$f"
+  grep -qF "run-8" "$f"
+}
+
+@test "_clean_burn_sidecar_gc leaves a sidecar with nothing to prune byte-identical" {
+  _source_clean
+  clikae init claude T1
+  local live_sid="44444444-4444-4444-8444-444444444444" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  printf '%s\trun-1\t1700000000\n' "$live_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  local before; before="$(sha256sum "$CLIKAE_HOME/state/burn-sessions/claude/T1" | cut -d' ' -f1)"
+  local mtime_before; mtime_before="$(stat -c '%Y' "$CLIKAE_HOME/state/burn-sessions/claude/T1" 2>/dev/null || stat -f '%m' "$CLIKAE_HOME/state/burn-sessions/claude/T1")"
+  sleep 1
+  _clean_burn_sidecar_gc 0
+  local after; after="$(sha256sum "$CLIKAE_HOME/state/burn-sessions/claude/T1" | cut -d' ' -f1)"
+  local mtime_after; mtime_after="$(stat -c '%Y' "$CLIKAE_HOME/state/burn-sessions/claude/T1" 2>/dev/null || stat -f '%m' "$CLIKAE_HOME/state/burn-sessions/claude/T1")"
+  [ "$before" = "$after" ]
+  [ "$mtime_before" = "$mtime_after" ]
+}
+
+@test "_clean_burn_sidecar_gc dry-run changes nothing on disk" {
+  _source_clean
+  clikae init claude T1
+  local dead_sid="55555555-5555-4555-8555-555555555555"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '%s\trun-1\t1700000000\n' "$dead_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 1
+  grep -qF "$dead_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+}

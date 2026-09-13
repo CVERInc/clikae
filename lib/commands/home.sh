@@ -147,6 +147,37 @@ _home_alias_for() {
 # How many recent sessions the "continue" list surfaces.
 CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
 
+# _burn_sids_file -> writes every currently-recorded burn sid (deduped, one
+# per line — the first tab field of each well-formed
+# state/burn-sessions/<engine>/<tank> line) to a fresh temp file and prints
+# its path; empty output + rc=1 if there is nothing to hide. The ONE store
+# read shared by `clikae resume`'s picker and the board's Continue list
+# (#74 round-1 P2-2/P2-5) — both used to check membership a different way
+# (or, for the board, not at all), and the picker's own way was a `case`
+# substring compare against the WHOLE accumulated sidecar PER CANDIDATE
+# SESSION: O(sessions × sidecar lines), measured 8170ms at 20,000 sidecar
+# lines the sidecar had no GC to ever shrink. Callers pair this with
+# `grep -n -F -x -f` over their own candidate list — one process, not a loop —
+# which is what actually fixes the asymptotics; this function only owns the
+# store read so both callers read it exactly the same way. Caller removes the
+# file when done.
+_burn_sids_file() {
+  local base="$CLIKAE_HOME/state/burn-sessions" out
+  [ -d "$base" ] || return 1
+  out="$(mktemp "${TMPDIR:-/tmp}/clikae-burn-sids.XXXXXX")" || return 1
+  # NF==3 + all three fields checked mirrors resume.sh's old per-line regex
+  # exactly ($'^[^\t]+\t[^\t]+\t[0-9]+$') — a partial/corrupt record must
+  # never hide a real (human) session.
+  awk -F'\t' 'NF==3 && $1!="" && $2!="" && $3 ~ /^[0-9]+$/ {print $1}' "$base"/*/* 2>/dev/null \
+    | LC_ALL=C sort -u > "$out"
+  if [ -s "$out" ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  rm -f "$out"
+  return 1
+}
+
 _home_recent_rows() {
   local name proot tdir tank rows sid mt acc="" _proots
   _proots="$(profiles_root)"      # constant; asked once, not once per adapter

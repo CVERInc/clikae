@@ -917,6 +917,83 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_burn_sidecar_gc <dry_run> -> prune state/burn-sessions/<engine>/<tank>
+# (#74 round-1 P2-2): burn appends one line per attempt and NOTHING ever
+# collected it — every infra retry mints its own line forever, and the
+# resume picker pays for every line on every render (8170ms measured at
+# 20,000 lines vs 1287ms at 0). Two independent prunes, per file:
+#   1. drop lines whose sid no longer has a transcript (the session they
+#      recorded is gone — nothing left for them to hide)
+#   2. cap what's left at $CLIKAE_BURN_SIDECAR_CAP (default 2000), newest
+#      kept — an append-only file, so newest = the TAIL
+# A file needing neither prune is left BYTE-IDENTICAL: untouched, no rewrite,
+# same mtime — a store with nothing to prune stays provably unchanged
+# (tests/bats/resume-hide-burn.bats already asserts this for the common case).
+CLIKAE_BURN_SIDECAR_CAP="${CLIKAE_BURN_SIDECAR_CAP:-2000}"
+
+_clean_burn_sidecar_gc() {
+  local dry_run="$1" base="$CLIKAE_HOME/state/burn-sessions" eng_dir f
+  [ -d "$base" ] || return 0
+  local total_dropped=0 total_capped=0 total_files=0
+  for eng_dir in "$base"/*/; do
+    [ -d "$eng_dir" ] || continue
+    local engine; engine="${eng_dir%/}"; engine="${engine##*/}"
+    for f in "$eng_dir"*; do
+      [ -f "$f" ] || continue
+      local tank="${f##*/}"
+      # burn.sh has always stored agy's sidecar under the literal dir name
+      # "agy" (see rename_tank_state's comment) — everything else in clikae
+      # (adapters, profile dirs) calls it "antigravity".
+      local adapter_name="$engine"
+      [ "$adapter_name" = "agy" ] && adapter_name="antigravity"
+      local pdir; pdir="$(profile_dir "$adapter_name" "$tank" 2>/dev/null || true)"
+      load_adapter "$adapter_name" >/dev/null 2>&1 || true
+      local -a lines=()
+      while IFS= read -r _bl || [ -n "$_bl" ]; do
+        [ -n "$_bl" ] && lines+=("$_bl")
+      done < "$f"
+      local n_total="${#lines[@]}"
+      [ "$n_total" -gt 0 ] || continue
+      local -a live=()
+      local _ln _sid dropped_stale=0
+      for _ln in "${lines[@]}"; do
+        _sid="${_ln%%$'\t'*}"
+        if [ -n "$_sid" ] && [ -n "$pdir" ] && declare -F adapter_find_session >/dev/null 2>&1 \
+           && adapter_find_session "$pdir" "$_sid" >/dev/null 2>&1; then
+          live+=("$_ln")
+        else
+          dropped_stale=$((dropped_stale + 1))
+        fi
+      done
+      local n_live="${#live[@]}" dropped_cap=0
+      if [ "$n_live" -gt "$CLIKAE_BURN_SIDECAR_CAP" ]; then
+        dropped_cap=$((n_live - CLIKAE_BURN_SIDECAR_CAP))
+        live=("${live[@]:$dropped_cap}")
+      fi
+      total_files=$((total_files + 1))
+      if [ "$dropped_stale" -eq 0 ] && [ "$dropped_cap" -eq 0 ]; then
+        continue   # nothing to prune — leave byte-identical
+      fi
+      total_dropped=$((total_dropped + dropped_stale))
+      total_capped=$((total_capped + dropped_cap))
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] Would prune burn sidecar $engine/$tank: $dropped_stale stale, $dropped_cap over cap (kept ${#live[@]} of $n_total)"
+        continue
+      fi
+      if [ "${#live[@]}" -eq 0 ]; then
+        rm -f "$f"
+      else
+        local tmp; tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null || printf '%s.tmp.%s' "$f" "$$")"
+        printf '%s\n' "${live[@]}" > "$tmp" && mv "$tmp" "$f"
+      fi
+    done
+  done
+  if [ "$dry_run" != "1" ] && { [ "$total_dropped" -gt 0 ] || [ "$total_capped" -gt 0 ]; }; then
+    log_info "GC: pruned $total_dropped stale + $total_capped over-cap burn sidecar line(s)."
+  fi
+  return 0
+}
+
 # _clean_session_id_gc <dry_run> -> delete `.session_id` state files whose
 # tmux session is gone.
 #
@@ -1360,6 +1437,7 @@ cmd_clean() {
   _clean_scrollback_gc "$dry_run"
   _clean_session_id_gc "$dry_run"
   _clean_tank_lock_gc "$dry_run"
+  _clean_burn_sidecar_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

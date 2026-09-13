@@ -116,3 +116,21 @@ load '../helpers'
   [ "$status" -eq 0 ]
   [[ "$output" == *"gh"*"personal"*"-"* ]] || false
 }
+
+# #74 round-1 P2-2: the burn sidecar is out-of-dir state keyed by tank NAME —
+# rename_tank_state's twin for burn-order/the dry marker, added here too.
+@test "rename carries the burn sidecar across (a renamed tank's burn sessions stay hidden under the new name)" {
+  clikae init claude a
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  clikae rename claude a cver --force
+  [ ! -f "$CLIKAE_HOME/state/burn-sessions/claude/a" ]
+  [ -f "$CLIKAE_HOME/state/burn-sessions/claude/cver" ]
+  grep -qF "aaaaaaaa-1111-4111-8111-111111111111" "$CLIKAE_HOME/state/burn-sessions/claude/cver"
+}
+
+@test "rename with no burn sidecar on record is a no-op (no file created)" {
+  clikae init claude a
+  clikae rename claude a cver --force
+  [ ! -d "$CLIKAE_HOME/state/burn-sessions" ]
+}

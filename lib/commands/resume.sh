@@ -741,42 +741,51 @@ _resume_picker() {
       if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
-    # 2. Build indexed array in Bash (zero process spawn)
-    # Bash 3.2 (macOS) has no associative arrays. Keep validated ids newline
-    # delimited; partial/corrupt records must not hide human conversations.
-    local burn_sids="" bfile record bsid
-    local burn_record_re=$'^[^\t]+\t[^\t]+\t[0-9]+$'
-    if [ -d "$CLIKAE_HOME/state/burn-sessions" ]; then
-      for bfile in "$CLIKAE_HOME"/state/burn-sessions/*/*; do
-        [ -f "$bfile" ] || continue
-        while IFS= read -r record; do
-          [[ "$record" =~ $burn_record_re ]] || continue
-          bsid="${record%%$'\t'*}"
-          burn_sids+="$bsid"$'\n'
-        done < "$bfile"
-      done
+    # 2. Build indexed array in Bash (zero process spawn), then classify every
+    # candidate against the sidecar in ONE PASS (#74 round-1 P2-2): the old
+    # shape did a `case` substring compare against the WHOLE accumulated
+    # sidecar blob PER SESSION — O(sessions × sidecar lines), 8170ms measured
+    # at 20,000 sidecar lines (the sidecar had no GC at all before this
+    # round; `clikae clean` now prunes it — see clean.sh). _burn_sids_file
+    # (home.sh) is the one store read; grep -n -F -x -f is the one process
+    # that answers "which of these candidate lines is a member" for every
+    # candidate at once, instead of a bash loop re-scanning the member set
+    # per candidate.
+    local -a _rf_engine=() _rf_tank=() _rf_sid=() _rf_f=() _rf_mt=()
+    local mt f
+    while read -r mt f; do
+      [ -n "$f" ] || continue
+      _resume_session_fields "$f"
+      _rf_engine+=("$_rs_engine"); _rf_tank+=("$_rs_tank"); _rf_sid+=("$_rs_sid")
+      _rf_f+=("$f"); _rf_mt+=("$mt")
+    done <<EOF
+$files
+EOF
+
+    local -a _is_burn=()
+    local idx
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do _is_burn[idx]=0; done
+    local burn_sids_file; burn_sids_file="$(_burn_sids_file 2>/dev/null || true)"
+    if [ -n "$burn_sids_file" ] && [ "${#_rf_sid[@]}" -gt 0 ]; then
+      local _ln _rest
+      while IFS=: read -r _ln _rest; do
+        [ -n "$_ln" ] || continue
+        _is_burn[$((_ln - 1))]=1
+      done < <(printf '%s\n' "${_rf_sid[@]}" | grep -n -F -x -f "$burn_sids_file" 2>/dev/null || true)
+      rm -f "$burn_sids_file"
     fi
 
     local -a sessions=()
     local -a cached_title=()
     local -a cached_age=()
     local -a cached_cwd=()
-
-    local mt f
-    while read -r mt f; do
-      [ -n "$f" ] || continue
-      _resume_session_fields "$f"
-      local is_b=0
-      case $'\n'"$burn_sids" in
-        *$'\n'"$_rs_sid"$'\n'*) is_b=1 ;;
-      esac
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do
+      local is_b="${_is_burn[idx]}"
       if [ "$is_b" -eq 1 ] && [ "${CLIKAE_RESUME_ALL:-0}" -eq 0 ]; then
         continue
       fi
-      sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt"$'\x1f'"$is_b")
-    done <<EOF
-$files
-EOF
+      sessions+=("${_rf_engine[idx]}"$'\x1f'"${_rf_tank[idx]}"$'\x1f'"${_rf_sid[idx]}"$'\x1f'"${_rf_f[idx]}"$'\x1f'"${_rf_mt[idx]}"$'\x1f'"$is_b")
+    done
 
     if [ "${#sessions[@]}" -eq 0 ]; then
       # Same state, reached when every candidate file failed to decode. Same
