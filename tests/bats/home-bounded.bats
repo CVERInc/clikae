@@ -809,3 +809,33 @@ _b8_tank() {
   done
 }
 
+@test "board (P2-3): a transcript that changes PATH but keeps its sid keeps its entry" {
+  # Round-7 P2-3: `removed` ran after `changed`, so a file seen at a new path
+  # was written by the changed loop and then deleted by the removed loop
+  # under the same key. The file was on disk, its resume row was there, and
+  # board_find could not resolve it.
+  _b8_tank
+  mkdir -p "$TEST_HOME/other"
+  local other="$B8_TANK/projects/$(_claude_project_slug "$TEST_HOME/other")"
+  mkdir -p "$other"
+  local i
+  for i in 0 1 2; do
+    printf '{"type":"ai-title","aiTitle":"T%s"}\n' "$i" > "$B8_PROJ/session-$i.jsonl"
+  done
+  board_state_refresh claude "$B8_TANK"
+  [ "$(board_find claude "$B8_TANK" session-1)" = "$B8_PROJ/session-1.jsonl" ]
+
+  mv "$B8_PROJ/session-1.jsonl" "$other/session-1.jsonl"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  [ "$(board_find claude "$B8_TANK" session-1)" = "$other/session-1.jsonl" ]
+
+  # and a genuinely removed file still stops resolving (the tombstone works
+  # through the chain, where `rm -f` on this generation's own name would not)
+  rm -f "$other/session-1.jsonl"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  run board_find claude "$B8_TANK" session-1
+  [ "$status" -ne 0 ]
+}
+

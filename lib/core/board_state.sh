@@ -1163,6 +1163,37 @@ board_state_refresh() (
     fi
     printf '%s\n' "$depth" > "$gen/depth"
 
+    # ---- REMOVED, BEFORE CHANGED ----
+    # Round-7 fix review P2-3: this block used to run AFTER the changed loop
+    # below, and a file that moves to a new path while keeping its sid is
+    # classified as BOTH — removed at the old path, changed at the new one.
+    # The changed loop wrote `sids/<key>` and this one then deleted the very
+    # entry it had just written, so the session stayed on disk, kept its
+    # `recent/` row, and `board_find` could no longer resolve it at all.
+    # Ordering is the whole fix: purge what the previous generation knew
+    # first, then apply this generation's facts on top. A moved file's entry
+    # is tombstoned and immediately rewritten with its new path; a genuinely
+    # deleted file's entry stays tombstoned.
+    # The trigger surface is not narrow: claude encodes the sid in the
+    # filename (so only a whole-file move between project directories hits
+    # it), but codex, grok and antigravity read the sid out of the file's
+    # CONTENT — a rollout moved, a grok session directory renamed, an agy
+    # brain directory renamed all keep the sid and change the path.
+    if [ -f "$removed_f" ]; then
+      local rsid rscope rkey
+      while IFS=$'\037' read -r _ rsid rscope; do
+        [ -n "$rsid" ] || continue
+        _board_entry_key "$rsid"; rkey="$_board_entry_key_out"
+        # Round-8: `rm -f` only unlinked THIS generation's name, which since
+        # the chain landed is usually not where the entry lives at all — the
+        # ancestor would go on answering for a transcript that is gone. A
+        # zero-byte TOMBSTONE is how a chain says "removed here" (see
+        # _board_gen_entry).
+        : | _board_gen_put "$gen" "sids/$rkey"
+        _board_purge_recent_row "$gen" "$rscope" "$rsid"
+      done < "$removed_f"
+    fi
+
     local -a manifest_lines=() reading_lines=()
     local mtv szv fpv age mtsec val sidscope
     if [ -f "$changed_f" ]; then
@@ -1216,23 +1247,6 @@ board_state_refresh() (
       ' > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
     fi
 
-    # A file gone missing since the previous generation must not go on
-    # answering for a session that no longer exists — see
-    # _board_purge_recent_row's own header.
-    if [ -f "$removed_f" ]; then
-      local rsid rscope rkey
-      while IFS=$'\037' read -r _ rsid rscope; do
-        [ -n "$rsid" ] || continue
-        _board_entry_key "$rsid"; rkey="$_board_entry_key_out"
-        # Round-8: `rm -f` only unlinked THIS generation's name, which since
-        # the chain landed is usually not where the entry lives at all — the
-        # ancestor would go on answering for a transcript that is gone. A
-        # zero-byte TOMBSTONE is how a chain says "removed here" (see
-        # _board_gen_entry).
-        : | _board_gen_put "$gen" "sids/$rkey"
-        _board_purge_recent_row "$gen" "$rscope" "$rsid"
-      done < "$removed_f"
-    fi
     rm -f "$unchanged_f" "$changed_f" "$removed_f"
   fi
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A transcript that changes PATH while keeping its session id — a codex
+  rollout moved, a grok session directory renamed, an antigravity brain
+  directory renamed, a claude session moved between project directories — no
+  longer disappears from `clikae resume`. The rebuild classified it as both
+  removed (old path) and changed (new path) and processed removals LAST, so
+  the entry it had just written was deleted again. Removals are applied first
+  now (#62).
 - The home board's first (cold) render on a large tank is fast again: 5,000
   transcripts went from 35.6 s to well under 1 s, which is what #62's
   acceptance text asks for. The cost was never the tree walk — it was about
