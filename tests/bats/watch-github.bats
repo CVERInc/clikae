@@ -80,17 +80,48 @@ if [ "${1:-}" = "api" ] && [ "${2:-}" = "search/issues" ]; then
   exit 0
 fi
 
-# P2-9: _wg_latest_comment_author's one-request-per-candidate lookup.
-# $dir/lastauthor.<repo>.<number> (repo-scoped so different tests/rows never
-# collide), one login per line. No file -> empty (no comments to speak of).
+# P1-2/P2-4/P2-5: _wg_latest_actor's one-request-per-candidate lookup against
+# the TIMELINE endpoint (not /comments — round 1's endpoint had no actor for
+# a review/label/assignee change). `-i` (--include) means gh prints headers,
+# a blank line, then the body — the stub answers the same shape so
+# _wg_latest_actor's own header/body split is exercised for real.
+# $dir/timeline.<repo>.<number>: line 1 = actor login, line 2 = event type
+# (default "commented"). No file -> empty timeline (`[]`), no actor.
+# $dir/timeline.<repo>.<number>.remaining overrides X-RateLimit-Remaining
+# (default 5000 — "not rate-limited" unless a test says otherwise).
 case "${1:-}/${2:-}" in
-  api/repos/*/issues/*/comments)
+  api/repos/*/issues/*/timeline)
     path="$2"
-    # path = repos/<org>/<repo>/issues/<number>/comments
+    # path = repos/<org>/<repo>/issues/<number>/timeline
     repo="$(printf '%s' "$path" | cut -d/ -f3)"
     number="$(printf '%s' "$path" | cut -d/ -f5)"
-    f="$dir/lastauthor.$repo.$number"
-    [ -f "$f" ] && cat "$f"
+    cf="$dir/timeline.calls"
+    n=0
+    [ -f "$cf" ] && n="$(cat "$cf")"
+    n=$((n + 1))
+    printf '%s' "$n" > "$cf"
+    rcf="$dir/timeline.$repo.$number.rc"
+    errf="$dir/timeline.$repo.$number.err"
+    if [ -f "$rcf" ]; then
+      [ -f "$errf" ] && cat "$errf" >&2
+      exit "$(cat "$rcf")"
+    fi
+    remaining=5000
+    [ -f "$dir/timeline.$repo.$number.remaining" ] && remaining="$(cat "$dir/timeline.$repo.$number.remaining")"
+    actor="" event="commented"
+    if [ -f "$dir/timeline.$repo.$number" ]; then
+      actor="$(sed -n '1p' "$dir/timeline.$repo.$number")"
+      ev="$(sed -n '2p' "$dir/timeline.$repo.$number")"
+      [ -n "$ev" ] && event="$ev"
+    fi
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: %s\r\n' "$remaining"
+    printf '\r\n'
+    if [ -n "$actor" ]; then
+      printf '[{"event":"%s","actor":{"login":"%s"}}]\n' "$event" "$actor"
+    else
+      printf '[]\n'
+    fi
     exit 0
     ;;
 esac
@@ -102,11 +133,18 @@ STUB
   printf 'me\n' > "$GH_STUB_DIR/login"
 }
 
-# _gh_stub_last_author <repo> <number> <login> — seed the answer
-# _wg_latest_comment_author's `gh api repos/.../issues/<number>/comments`
-# call gets for this repo/number.
-_gh_stub_last_author() {
-  printf '%s\n' "$3" > "$GH_STUB_DIR/lastauthor.$1.$2"
+# _gh_stub_timeline <repo> <number> <actor> [event=commented] [remaining] —
+# seed the answer _wg_latest_actor's timeline lookup gets for this row.
+_gh_stub_timeline() {
+  local repo="$1" number="$2" actor="$3" event="${4:-commented}" remaining="${5:-}"
+  printf '%s\n%s\n' "$actor" "$event" > "$GH_STUB_DIR/timeline.$repo.$number"
+  [ -z "$remaining" ] || printf '%s\n' "$remaining" > "$GH_STUB_DIR/timeline.$repo.$number.remaining"
+}
+
+# _gh_stub_timeline_fail <repo> <number> <rc> <err> — the lookup itself fails.
+_gh_stub_timeline_fail() {
+  printf '%s\n' "$3" > "$GH_STUB_DIR/timeline.$1.$2.rc"
+  printf '%s\n' "$4" > "$GH_STUB_DIR/timeline.$1.$2.err"
 }
 
 # _gh_stub_page <org|mentions> <call#> <tsv-lines...> — seed one call's TSV
@@ -211,7 +249,7 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [[ "$output" != *"#100"* ]] || false
 }
 
-@test "watch github --once: an already-seen number updated again reads as 'comment'" {
+@test "watch github --once: an already-seen number updated again reads as 'comment', actor via timeline" {
   _gh_stub_install
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
@@ -219,6 +257,7 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [ "$status" -eq 0 ]
   [[ "$output" == *"#100 opened by alice"* ]] || false
 
+  _gh_stub_timeline reef 100 alice commented
   _gh_stub_page org 2 \
     "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
   run clikae watch github --org CVERInc --once
@@ -226,31 +265,64 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [[ "$output" == *"#100 comment by alice"* ]] || false
 }
 
-@test "watch github --once: a self-comment on someone ELSE's issue is dropped, not woken (P2-9)" {
+@test "watch github --once: my OWN new issue is not an event, but a collaborator's reply on it IS (P1-2 headline)" {
   _gh_stub_install
-  # bob opens reef#100; org query's -author:me already excludes anything
-  # self opened, so this is a normal 'opened' event.
+  # No `-author:<self>` any more (P1-2) — the org query DOES return an issue
+  # I opened myself, but opening it is not an event: I already know.
+  _gh_stub_page org 1 \
+    "$(_row 313 2026-09-07T04:00:00Z me reef https://x/313 0 "auth redirect")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [[ "$output" != *"#313"* ]] || false
+
+  # A collaborator replies. The row's own login is STILL "me" (search/issues
+  # gives the ISSUE's author, never the commenter) — round 1's bug compared
+  # THAT against self and dropped this unconditionally. The timeline lookup
+  # gives the REAL actor.
+  _gh_stub_timeline reef 313 collaborator commented
+  _gh_stub_page org 2 \
+    "$(_row 313 2026-09-07T05:00:00Z me reef https://x/313 0 "auth redirect")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#313 comment by collaborator: auth redirect"* ]] || false
+  [[ "$output" == *"1 new event(s)"* ]] || false
+}
+
+@test "watch github --once: my own comment on my own issue is 0 events (P1-2)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 313 2026-09-07T04:00:00Z me reef https://x/313 0 "auth redirect")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+
+  _gh_stub_timeline reef 313 me commented
+  _gh_stub_page org 2 \
+    "$(_row 313 2026-09-07T05:00:00Z me reef https://x/313 0 "auth redirect")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [[ "$output" != *"#313"* ]] || false
+}
+
+@test "watch github --once: a self-reply on someone ELSE's issue is dropped, not woken (P2-9/P1-2)" {
+  _gh_stub_install
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z bob reef https://x/100 0 "bob's issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"#100 opened by bob"* ]] || false
 
-  # reef#100 updated again — the row's own login is STILL bob (search/issues
-  # gives the ISSUE's author, never the commenter), but the LATEST comment
-  # was actually left by self. -author:<self> in the query does nothing
-  # here: the issue itself was never self-authored, only this one comment
-  # was. This is exactly the gap the review named: "I reply to my own
-  # inbox, and get woken back up under someone else's name."
-  _gh_stub_last_author reef 100 me
+  _gh_stub_timeline reef 100 me commented
   _gh_stub_page org 2 \
-    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue" 3)"
+    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"0 new event(s)"* ]] || false
   [[ "$output" != *"#100"* ]] || false
   # One gh api call made to check — the request budget the review asked for.
-  [ -f "$GH_STUB_DIR/lastauthor.reef.100" ]
+  [ "$(cat "$GH_STUB_DIR/timeline.calls")" = "1" ]
 }
 
 @test "watch github --once: a comment by someone ELSE on a non-self issue still wakes (P2-9)" {
@@ -260,13 +332,89 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
 
-  _gh_stub_last_author reef 100 carol
+  _gh_stub_timeline reef 100 carol commented
   _gh_stub_page org 2 \
-    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue" 2)"
+    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 0 "bob's issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
-  [[ "$output" == *"github CVERInc/reef#100 comment by bob: bob's issue"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#100 comment by carol: bob's issue"* ]] || false
   [[ "$output" == *"1 new event(s)"* ]] || false
+}
+
+@test "watch github --once: a review on an already-known issue reads 'review' with the real actor (P2-5)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z bob reef https://x/100 1 "bob's PR")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  _gh_stub_timeline reef 100 carol reviewed
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T05:00:00Z bob reef https://x/100 1 "bob's PR")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#100 review by carol: bob's PR"* ]] || false
+}
+
+@test "watch github --once: a lookup beyond the 50-per-poll budget still wakes, as 'unknown' (P2-4)" {
+  _gh_stub_install
+  # 51 already-known issues in one poll, all pre-seeded into the seen-file
+  # (so poll 1 treats every row as an UPDATE, not an 'opened').
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local i mm ts
+  local -a rows=() seed=()
+  for i in $(seq 1 51); do
+    mm="$(printf '%02d' "$i")"
+    ts="2026-09-07T04:${mm}:00Z"
+    rows+=("$(_row "$i" "$ts" bob reef "https://x/$i" 0 "issue $i")")
+    seed+=("reef|$i|2026-01-01T00:00:00Z")
+  done
+  printf '%s\n' "${seed[@]}" > "$state_dir/CVERInc.seen"
+  # Every candidate resolves to a real (non-self) actor if looked up — the
+  # test is about the BOUND, not about any individual lookup failing.
+  for i in $(seq 1 51); do _gh_stub_timeline reef "$i" carol commented; done
+  _gh_stub_page org 1 "${rows[@]}"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # Exactly 50 lookups spent — never 51.
+  [ "$(cat "$GH_STUB_DIR/timeline.calls")" = "50" ]
+  # All 51 rows still woke (never silently dropped) — 50 as "carol", 1 as
+  # "unknown" (the one past budget).
+  [[ "$output" == *"51 new event(s)"* ]] || false
+  [[ "$output" == *"by unknown:"* ]] || false
+}
+
+@test "watch github --once: a lookup that comes back rate-limited stops the rest and still wakes as 'unknown' (P2-4)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|1|2026-01-01T00:00:00Z\nreef|2|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline reef 1 carol commented 42   # X-RateLimit-Remaining: 42, under the 100 floor
+  _gh_stub_page org 1 \
+    "$(_row 1 2026-09-07T04:00:01Z bob reef https://x/1 0 "issue 1")" \
+    "$(_row 2 2026-09-07T04:00:02Z bob reef https://x/2 0 "issue 2")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # Only ONE lookup made — the second candidate's budget check saw
+  # X-RateLimit-Remaining=42 from the first response and stopped early.
+  [ "$(cat "$GH_STUB_DIR/timeline.calls")" = "1" ]
+  [[ "$output" == *"2 new event(s)"* ]] || false
+  [[ "$output" == *"by unknown:"* ]] || false
+}
+
+@test "watch github --once: a lookup failure is classified, not swallowed (P2-4)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_fail reef 100 1 'gh: HTTP 403: API rate limit exceeded'
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"activity lookup failed (rate-limit)"* ]] || false
+  [[ "$output" == *"by unknown:"* ]] || false
 }
 
 @test "watch github --once: same number, two DIFFERENT repos, same poll — neither is dropped (P1-4)" {

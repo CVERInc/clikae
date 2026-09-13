@@ -347,9 +347,9 @@ you what it did.
 
 A different source under the same verb: instead of watching a tank's own
 transcript for a dry limit, `clikae watch github` polls GitHub's search API
-for issues/PRs opened by others, replies, and @mentions in an org — so a
-collaborator's reply doesn't sit unseen until someone happens to run `gh` by
-hand.
+for every issue/PR update in an org — including replies on issues YOU
+opened — plus @mentions of you, so a collaborator's reply doesn't sit
+unseen until someone happens to run `gh` by hand.
 
 ```bash
 clikae watch github --org CVERInc              # foreground, polls every 10m, Ctrl-C to stop
@@ -365,9 +365,9 @@ GitHub remote when omitted. Every new event prints live as one line —
 [ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect — cc @maintainer, retry the callback test
 ```
 
-— a collaborator's @mention on an issue reaching you even though it's an
-issue YOU opened (the mentions query is not author-excluded — see the
-caveat below for the one shape this still can't catch). It's also appended,
+— a collaborator's reply reaching you even on an issue YOU opened (the org
+query has no `-author:<self>` filter; see the caveat below for exactly what
+self-exclusion means instead). It's also appended,
 as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
 durable trail, and — the actual wake — every poll that finds at least one
 new event writes a burn-status-shaped file to
@@ -384,39 +384,48 @@ it de-dupes by (repo, issue number, updated timestamp), capped at the last
 `--since` overrides that bound — and each query paginates up to 500 rows
 (5 pages of 100) so a busy org's backlog can't outrun a poll.
 
-Rate limits: normally 2 requests per poll (more when paginating). On a
-genuine rate limit (429, or a 403 the response attributes to it, or a 5xx)
-the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
+Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
+`issues/<n>/timeline?per_page=1&direction=desc` — to learn who actually did
+it (a reply, a review, a label, an assignee change) and whether that was
+you. Bounded to 50 such lookups per poll, spent newest-first, and stopped
+early once GitHub's own `X-RateLimit-Remaining` drops under 100. A
+candidate beyond that bound is still reported — never silently dropped —
+just as `by unknown` instead of a real login.
+
+Rate limits: normally 2 search requests per poll (more when paginating),
+plus up to 50 activity lookups against the core API's much larger budget.
+On a genuine rate limit (429, or a 403 the response attributes to it, or a
+5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
 never advanced past a page that failed to read, so nothing is silently
-skipped. A PERMANENT failure — missing OAuth scope, SAML enforcement, a
-bad org name — is retried once, then reported and the command exits 1; it
-never enters back-off, since no amount of retrying fixes those. `--once`
-returns 0 only when a poll actually succeeded (events or none); 1 on any
-failure, so a cron job can tell "quiet today" from "I've been failing
-silently".
+skipped — a poll cut short by the 5-page cap prints "truncated: continuing
+next poll" and pins the cursor to the OLDEST row it actually read (not the
+newest), so the next poll picks up exactly there. A PERMANENT failure —
+missing OAuth scope, SAML enforcement, a bad org name — is retried once,
+then reported and the command exits 1; it never enters back-off, since no
+amount of retrying fixes those. `--once` returns 0 only when a poll
+actually succeeded (events or none); 1 on any failure, so a cron job can
+tell "quiet today" from "I've been failing silently".
 
 Requires `gh` already logged in — this feature never reads or writes a token
 itself, it uses whatever account `gh auth login` already set up, and refuses
 immediately (exit 1) if `gh auth status` fails.
 
 > **Honest caveat.** GitHub's search API returns issue/PR-level rows, not a
-> per-comment feed, so a `kind` of `comment` names the issue's own author,
-> not necessarily whoever's activity just touched it — search has no cheaper
-> per-event actor field within a 2-request budget (the one exception: when a
-> comment lands on an issue in the org query, one extra request fetches
-> just that comment's actual author, so a comment YOU left on someone
-> else's issue is correctly dropped rather than waking you up under their
-> name — see the source for `_wg_latest_comment_author`). And because the
-> org query excludes everything YOU opened (`-author:<self>`, so your own
-> activity never reads back as a new "opened" event, and a comment on your
-> own issue never reaches the extra-request check above either — the
-> ISSUE itself never appears in the org query's results at all), a plain
-> reply on an issue you opened yourself is caught only when it also
-> @mentions you, as in the example above — the org query alone still won't
-> surface it. This is a known, deliberately unchanged limitation (fixing it
-> would mean scoping the org query by `involves:<self>`, or dropping
-> `-author:<self>` outright, rather than excluding your own authorship —
-> noted here rather than changed unilaterally).
+> per-comment feed, so its own `user.login` is always the ISSUE's author,
+> never whoever's activity just touched it. Self-exclusion and the `kind`
+> shown for an update therefore never trust that field: for a number seen
+> before, both come from the timeline lookup above (round 1 of this feature
+> compared the issue's own author against self instead — which meant a
+> collaborator's reply on an issue YOU opened was invisible no matter what,
+> the exact headline case above, not a documented exception to it). A number
+> never seen before needs no lookup — opening IS the event, and the row's
+> own login is unambiguously who did it; a self-authored new issue is
+> recorded as seen but is not itself an event. `kind` is `opened`,
+> `comment`, `review`, `activity` (any other timeline event — a label, an
+> assignee change, …), or `mention` (a fresh number whose own opening text
+> carries the @mention). Past the 50-lookup budget or the API's own rate
+> limit, an update's actor cannot be verified and is reported as `unknown`
+> rather than guessed — see the rate-limits paragraph above.
 
 ## What is running right now — the board's Live section
 

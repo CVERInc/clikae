@@ -5,11 +5,20 @@
 #
 # WHY POLL, NOT STREAM. The token clikae runs as has no notifications scope
 # (#46's own report), so the only signal available is the search API:
-#   gh api search/issues -f q='org:<org> updated:><cursor> -author:<self>'
-# — issues/PRs updated since the last poll, with your own activity excluded —
-# plus a second query for `mentions:<self>` (which is NOT author-scoped, so a
-# self-mention on a self-opened issue can still appear; filtered in code, see
-# below). Two requests per poll, well inside the search API's 30 req/min.
+#   gh api search/issues -f q='org:<org> updated:>=<cursor>'
+# — every issue/PR updated since the last poll, INCLUDING your own, plus a
+# second query for `mentions:<self>` (also not author-scoped). Two requests
+# per poll before pagination, well inside the search API's 30 req/min.
+#
+# 🔴 P1-2 (2026-09-13 fix-round-2 review): the org query used to carry
+# `-author:<self>` — which does not mean "exclude my own activity", it means
+# "exclude every issue I ever OPENED, in full" — so a collaborator replying
+# on an issue you opened never appeared in this query's results AT ALL, no
+# matter who replied. That was issue #46's own headline example. Fixed by
+# dropping the filter and moving self-exclusion to where it actually
+# belongs: per EVENT ACTOR (see WHAT "KIND" HONESTLY MEANS below), checked
+# in code against the login of whoever's activity actually bumped
+# `updated_at` — never against who opened the issue.
 #
 # WHERE THIS PLUGS IN. `clikae watch` already means "watch something and turn
 # a detected event into an announcement" (today: a dry tank -> an offer to
@@ -59,26 +68,35 @@
 # the same way `clikae watch <engine>` prints "Looks like … hit its limit."
 # live to whoever is watching that pane — the interactive half of "wake".
 #
-# WHAT "KIND" HONESTLY MEANS. The search API returns issue/PR-level rows, not
-# per-comment ones — there is no cheap way, inside a 2-request budget, to ask
-# "who commented, and was it a review?". So:
+# WHAT "KIND" (AND "WHO") HONESTLY MEANS. The search API returns issue/PR-
+# level rows, not per-comment ones, and its own `user.login` is always the
+# ISSUE's author — never whoever's activity just bumped `updated_at` (P1-2/
+# P2-5, 2026-09-13 fix-round-2 review: round 1 used that login both to guess
+# `kind` AND to decide self-exclusion, which is wrong on both counts — an
+# issue YOU opened stays forever "mine" by that field even after a
+# collaborator replies on it). So:
 #   - a number never seen before (this org's seen-file, any prior poll) ->
-#     "opened"
-#   - a number seen before, updated again -> "comment" — this is also what a
-#     PR REVIEW looks like from search/issues, since a review's HTTP surface
-#     is invisible here; "review" is accepted as a `kind` value (the issue
-#     text lists it) but this implementation never emits it — folding it into
-#     "comment" is the honest choice over guessing from is-this-a-PR, which
-#     would mislabel an ordinary PR comment as a review.
-#   - a mentions:<self> hit -> "mention", UNLESS the issue's own `user.login`
-#     (the only login the search API gives us) is <self> — that is how "a
-#     comment by self is not an event" is satisfied for the one query where
-#     self can appear (the org query already excludes author:<self> in the
-#     query string itself). It is an approximation, not proof: item.user is
-#     the ISSUE's author, not necessarily whoever's activity just bumped
-#     updated_at, because search/issues has no per-event actor field. The
-#     `login` printed in a "comment" wake line is the issue's author for the
-#     same reason — it is what is available, not a claim about who replied.
+#     "opened", actor = the row's own `user.login` (unambiguous: opening IS
+#     the event, no lookup needed). Self-authored -> not an event (you know
+#     you opened it), but still recorded as seen.
+#   - a number seen before, updated again -> the ACTUAL actor and kind come
+#     from `issues/<n>/timeline?per_page=1&direction=desc` (_wg_latest_actor),
+#     the one endpoint whose events carry an actor for every activity shape
+#     that bumps `updated_at` — a comment, a review, a label, an assignee
+#     change (`repos/.../comments`, round 1's endpoint, only ever covers the
+#     first of those). Bounded to 50 lookups/poll, newest-first, and stopped
+#     early once `X-RateLimit-Remaining` drops below 100 (_wg_lookup_and_count,
+#     P2-4) — a candidate beyond the budget is NEVER dropped, it is emitted
+#     with actor "unknown" and kind's best guess instead (fail-open: a false
+#     wake beats a silent miss, same call the review's own P2-5 fix made).
+#   - a mentions:<self> hit on a FRESH number -> "mention", actor = the row's
+#     own login (the issue's own opening text is what triggered the mention).
+#     On an ALREADY-KNOWN number, same timeline lookup as above decides the
+#     actor — this is the fix for the round-1 bug where a reply that
+#     @mentioned you on your OWN issue was silently dropped: the mentions
+#     query DID return that row, but the old self-check compared the row's
+#     login (you, the issue's author) against self and threw it away,
+#     regardless of who actually wrote the reply.
 #
 # DEDUP KEY. The issue text says "(number, updated_at, comment id)"; there is
 # no comment id available from search/issues within the request budget, so
@@ -96,15 +114,16 @@
 # events immediately instead of crawling forward from the org's oldest
 # history — see _wg_poll_one_query.
 #
-# ⚠️ KNOWN GAP, not fixed here because it is a locked design decision (the
-# brief's DESIGN DECISION (a), from the dispatcher): `-author:<self>` in the
-# org query excludes every issue YOU opened from that query's results — which
-# is exactly issue #46's own motivating example (a collaborator's reply on an
-# issue the maintainer opened). Only an explicit @mention on such a reply
-# reaches the mentions:<self> query instead. Catching a plain reply on your
-# own issue would need a query scoped by `involves:<self>` (or dropping
-# `-author:<self>`) rather than excluding your authorship outright — noted
-# here and in the PR body/report rather than changed unilaterally.
+# ⚠️ FORMERLY A KNOWN GAP, FIXED (P1-2, 2026-09-13 fix-round-2 review): round
+# 1 shipped `-author:<self>` in the org query as a "locked design decision",
+# with a caveat saying a plain reply on your own issue only reaches you via
+# an explicit @mention on the mentions:<self> query instead. That caveat was
+# ALSO wrong — the mentions query's self-check compared the issue's own
+# author (always you, on your own issue) against self, so it dropped that
+# row too. Net effect: issue #46's own headline example (a collaborator's
+# reply on an issue the maintainer opened) had 0% coverage, not the "half
+# covered, half documented" the caveat claimed. Both are fixed now — see
+# WHY POLL, NOT STREAM and WHAT "KIND" (AND "WHO") HONESTLY MEANS above.
 
 # --- paths --------------------------------------------------------------
 
@@ -197,17 +216,20 @@ _wg_iso_from_epoch() {
 # the max seen (_wg_poll below) — the seen-file dedup (already needed for
 # other reasons) absorbs the resulting overlap between polls for free.
 
-# _wg_query_org <org> <since> -> the search string for "issues/PRs opened by
-# others, replies on issues updated since <since>" (see the ⚠️ note above for
-# what this does NOT catch). <since> is never empty — _wg_poll always
-# resolves it to either the persisted cursor, --since, or the 24h default.
+# _wg_query_org <org> <since> -> the search string for "issues/PRs updated
+# since <since>" in <org> — EVERY one, including issues you opened yourself
+# (P1-2, 2026-09-13 fix-round-2 review: no `-author:<self>` — see WHY POLL,
+# NOT STREAM in the file header for why that filter was wrong, not just
+# incomplete). Self-exclusion happens in _wg_process, per event actor.
+# <since> is never empty — _wg_poll always resolves it to either the
+# persisted cursor, --since, or the 24h default.
 _wg_query_org() {
   local org="$1" since="$2"
-  printf 'org:%s updated:>=%s -author:%s' "$org" "$since" "$__WG_SELF"
+  printf 'org:%s updated:>=%s' "$org" "$since"
 }
 
 # _wg_query_mentions <org> <since> -> @mentions of self. Deliberately NOT
-# author-excluded (a self-mention needs the login check in _wg_process, not
+# author-excluded (a self-mention needs the actor check in _wg_process, not
 # the query, to be filtered — see the file header).
 _wg_query_mentions() {
   local org="$1" since="$2"
@@ -335,25 +357,89 @@ _wg_fetch_classified() {
   return 1
 }
 
-# _wg_latest_comment_author <org> <repo> <number> <comments> -> the login of
-# the LATEST comment on <org>/<repo>#<number>, or empty if it can't be
-# determined. One `gh api` request per candidate (P2-9, 2026-09-13
-# fix-round-1 review): fetching page=<comments> at per_page=1 on the
-# comments endpoint returns exactly the last comment, never the whole
-# thread — same "ask for only what's needed" discipline as the search
-# calls themselves. Bounded the same way those are: only ever called for a
-# row that already survived pagination (_wg_poll_one_query), so this never
-# runs unboundedly many times in one poll.
-_wg_latest_comment_author() {
-  local org="$1" repo="$2" number="$3" comments="$4" errfile out
-  case "$comments" in ''|*[!0-9]*|0) return 1 ;; esac
+# _wg_latest_actor <org> <repo> <number> -> 0 with $__WG_LOOKUP_ACTOR /
+# $__WG_LOOKUP_KIND set, or 1 with $__WG_LOOKUP_LAST_KIND (rate-limit |
+# permanent | transient, via the SAME _wg_classify_error the search calls
+# use — never `|| out=""`, P2-4/P2-5, 2026-09-13 fix-round-2 review) /
+# $__WG_LOOKUP_LAST_REASON set. `issues/<n>/timeline` (not `/comments`,
+# round 1's endpoint — it has no actor for a review, label, or assignee
+# change; the timeline event does) at per_page=1, direction=desc: exactly
+# the single most recent activity, whatever shape it is. `--include` (`-i`)
+# is used instead of `--jq` so the response headers are readable at all —
+# `$__WG_LOOKUP_RATE_REMAINING` comes from `X-RateLimit-Remaining` there,
+# feeding _wg_lookup_budget_ok's early-stop check.
+#
+# 🔴 Called DIRECTLY, never through `x="$(_wg_latest_actor …)"` — same
+# subshell footgun as _wg_fetch_classified above (search this file for "MUST
+# be called directly"): the globals this function sets would vanish the
+# instant a command-substitution subshell exited.
+_wg_latest_actor() {
+  local org="$1" repo="$2" number="$3" errfile raw rc body event
   errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
-  out="$(gh api "repos/$org/$repo/issues/$number/comments" --method GET \
-    -f per_page=1 -f page="$comments" \
-    --jq '.[0].user.login // empty' 2>"$errfile")" || out=""
+  raw="$(gh api "repos/$org/$repo/issues/$number/timeline" --method GET \
+    -f per_page=1 -f direction=desc -i 2>"$errfile")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    __WG_LOOKUP_LAST_KIND="$(_wg_classify_error "$errfile")"
+    __WG_LOOKUP_LAST_REASON="$(head -n1 "$errfile" 2>/dev/null)"
+    rm -f "$errfile"
+    return 1
+  fi
   rm -f "$errfile"
-  [ -n "$out" ] || return 1
-  printf '%s' "$out"
+  __WG_LOOKUP_RATE_REMAINING="$(printf '%s\n' "$raw" \
+    | grep -iE '^x-ratelimit-remaining:' | head -n1 | tr -d '\r' | awk '{print $2}')"
+  body="$(printf '%s\n' "$raw" | awk 'f{print} /^\r?$/{f=1}')"
+  __WG_LOOKUP_ACTOR="$(printf '%s' "$body" | grep -oE '"actor":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
+  [ -n "$__WG_LOOKUP_ACTOR" ] || __WG_LOOKUP_ACTOR="$(printf '%s' "$body" | grep -oE '"user":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
+  event="$(printf '%s' "$body" | grep -oE '"event":"[^"]*"' | head -n1 | sed -E 's/.*"event":"([^"]*)"$/\1/')"
+  case "$event" in
+    commented) __WG_LOOKUP_KIND="comment" ;;
+    reviewed)  __WG_LOOKUP_KIND="review" ;;
+    *)         __WG_LOOKUP_KIND="activity" ;;
+  esac
+  if [ -z "$__WG_LOOKUP_ACTOR" ]; then
+    __WG_LOOKUP_LAST_KIND="transient"
+    __WG_LOOKUP_LAST_REASON="timeline: no actor in the latest event"
+    return 1
+  fi
+  return 0
+}
+
+# _wg_lookup_budget_ok -> 0 while this poll may still spend a lookup: fewer
+# than 50 done so far (P2-4, bounded, newest-first — candidates arrive in
+# the order the desc-sorted search results streamed them, so the budget is
+# naturally spent on the newest activity first), AND the last observed
+# X-RateLimit-Remaining (if any) is not already under 100.
+_wg_lookup_budget_ok() {
+  [ "${__WG_LOOKUPS_DONE:-0}" -lt 50 ] || return 1
+  case "${__WG_LOOKUP_RATE_REMAINING:-}" in
+    ''|*[!0-9]*) return 0 ;;
+    *) [ "$__WG_LOOKUP_RATE_REMAINING" -ge 100 ] ;;
+  esac
+}
+
+# _wg_lookup_and_count <org> <repo> <number> -> 0 with $__WG_LOOKUP_ACTOR /
+# $__WG_LOOKUP_KIND set on success. 1 when the budget is spent OR the lookup
+# itself failed — EITHER WAY the caller (_wg_process) must still emit the
+# event (actor "unknown", kind's best guess) rather than drop it; a lookup
+# failure classified as rate-limit also stops the REST of this poll's
+# lookups (same effect as the rate-remaining check above) and sets
+# $__WG_BACKOFF, same as a search-query rate limit would.
+_wg_lookup_and_count() {
+  local org="$1" repo="$2" number="$3"
+  _wg_lookup_budget_ok || { __WG_LOOKUPS_SKIPPED=$((__WG_LOOKUPS_SKIPPED + 1)); return 1; }
+  __WG_LOOKUPS_DONE=$((__WG_LOOKUPS_DONE + 1))
+  _wg_latest_actor "$org" "$repo" "$number" && return 0
+  __WG_LOOKUPS_SKIPPED=$((__WG_LOOKUPS_SKIPPED + 1))
+  if [ "$__WG_LOOKUP_LAST_KIND" = "rate-limit" ]; then
+    __WG_LOOKUP_RATE_REMAINING=0
+    __WG_BACKOFF=1
+  fi
+  if [ "${__WG_LOOKUP_WARNED:-0}" -ne 1 ]; then
+    __WG_LOOKUP_WARNED=1
+    log_warn "github:$org — activity lookup failed ($__WG_LOOKUP_LAST_KIND): $__WG_LOOKUP_LAST_REASON"
+  fi
+  return 1
 }
 
 # _wg_process <kind_query: org|mentions> <tsv> <org> <seen_file> <events_file>
@@ -364,70 +450,79 @@ _wg_latest_comment_author() {
 # actually SAW, not just the ones that turned out new, or a poll that only
 # re-saw already-handled rows near a boundary would never advance the
 # cursor at all and requery the same window forever). Bumps $__WG_EVENTS
-# only for genuinely new rows that are also NOT a comment self made on
-# someone else's issue (P2-9, see the self-exclusion block below). bash
+# only for genuinely new rows whose actual actor is NOT self (P1-2/P2-4/
+# P2-5, 2026-09-13 fix-round-2 review — see WHAT "KIND" (AND "WHO") HONESTLY
+# MEANS in the file header for the self-exclusion / lookup design). bash
 # 3.2: no associative arrays, no mapfile — a plain while/read loop over a
-# variable via a here-string.
+# variable via a here-string. `local LC_ALL=C` (P3-13, round-2 review): the
+# `[[ … > … ]]` comparisons below are fixed-width-ISO8601 lexicographic, and
+# must not depend on the caller's locale.
 _wg_process() {
   local kind_query="$1" tsv="$2" org="$3" seen_file="$4" events_file="$5"
   [ -n "$tsv" ] || return 0
-  local number updated login repo html_url is_pr title comments
-  while IFS=$'\t' read -r number updated login repo html_url is_pr title comments; do
+  local LC_ALL=C
+  local number updated login repo html_url is_pr title
+  # shellcheck disable=SC2034  # _comments: consumed to keep the 8-field TSV
+  # aligned (see _wg_fetch's jq filter); no longer read (P1-2/P2-4/P2-5 moved
+  # self-exclusion off the comments-count-based lookup onto the timeline one).
+  local _comments
+  while IFS=$'\t' read -r number updated login repo html_url is_pr title _comments; do
     [ -n "$number" ] || continue
 
     if [ -z "$__WG_MAX_UPDATED" ] || [[ "$updated" > "$__WG_MAX_UPDATED" ]]; then
       __WG_MAX_UPDATED="$updated"
     fi
 
-    local kind
-    if [ "$kind_query" = "mentions" ]; then
-      # Self mentioning self (e.g. a self-authored issue that also contains
-      # "@self") is not an event — the query itself can't exclude it (it has
-      # no author filter; see _wg_query_mentions), only this login check can.
-      [ "$login" != "$__WG_SELF" ] || continue
-      kind="mention"
-    else
-      # P1-4 (2026-09-13 fix-round-1 review): the seen-file is PER-ORG, and
-      # every repo in an org restarts issue numbering at #1 — a bare
-      # `${number}` match here used to read repo-B's brand-new #12 as a
-      # "comment" on repo-A's #12, and the dedup key below (before the
-      # `repo|` prefix was added) would silently DROP repo-B's #12 entirely
-      # whenever the two happened to share an updated_at second.
-      if grep -qE "^${repo}\\|${number}\\|" "$seen_file" 2>/dev/null; then
-        kind="comment"
-      else
-        kind="opened"
-      fi
-    fi
-
+    # Already handled — by this exact query, or by the OTHER query earlier
+    # in this same poll (an issue can legitimately match both org and
+    # mentions), so check this FIRST, before spending a lookup on it.
     local key="${repo}|${number}|${updated}"
-    grep -qxF "$key" "$seen_file" 2>/dev/null && continue   # already handled
+    grep -qxF "$key" "$seen_file" 2>/dev/null && continue
 
-    # P2-9 (2026-09-13 fix-round-1 review): self-exclusion is per EVENT, not
-    # per issue. `-author:<self>` in the org query (_wg_query_org) only
-    # excludes issues YOU opened — it says nothing about a COMMENT you left
-    # on someone else's issue, which still bumps updated_at and still
-    # matches the query, kind="comment", login=<the issue's own author, not
-    # you>. Left unfixed, replying to your own inbox wakes it back up under
-    # someone else's name. Only checkable for "comment" rows (an "opened"
-    # row is already excluded server-side by -author:<self>), and only
-    # costs a request when the issue actually has comments to check.
-    if [ "$kind_query" = "org" ] && [ "$kind" = "comment" ]; then
-      local latest_author
-      if latest_author="$(_wg_latest_comment_author "$org" "$repo" "$number" "$comments")" \
-        && [ "$latest_author" = "$__WG_SELF" ]; then
-        printf '%s\n' "$key" >> "$seen_file"   # handled — don't re-check every poll in the overlap window
-        continue
+    # P1-4 (2026-09-13 fix-round-1 review): the seen-file is PER-ORG, and
+    # every repo in an org restarts issue numbering at #1 — a bare
+    # `${number}` match here used to read repo-B's brand-new #12 as a
+    # "comment" on repo-A's #12.
+    local known=0
+    grep -qE "^${repo}\\|${number}\\|" "$seen_file" 2>/dev/null && known=1
+
+    local kind actor
+    if [ "$kind_query" = "mentions" ]; then
+      if [ "$known" -eq 0 ]; then
+        # A brand-new issue whose OWN opening text carries the mention — the
+        # row's login IS whoever wrote it, unambiguous, no lookup needed.
+        actor="$login"; kind="mention"
+      elif _wg_lookup_and_count "$org" "$repo" "$number"; then
+        actor="$__WG_LOOKUP_ACTOR"; kind="mention"
+      else
+        actor="unknown"; kind="mention"   # never dropped — see _wg_lookup_and_count
+      fi
+      [ "$actor" != "$__WG_SELF" ] || { printf '%s\n' "$key" >> "$seen_file"; continue; }
+    else
+      if [ "$known" -eq 0 ]; then
+        kind="opened"; actor="$login"
+        if [ "$actor" = "$__WG_SELF" ]; then
+          printf '%s\n' "$key" >> "$seen_file"   # my own new issue — seen, not an event
+          continue
+        fi
+      elif _wg_lookup_and_count "$org" "$repo" "$number"; then
+        actor="$__WG_LOOKUP_ACTOR"; kind="$__WG_LOOKUP_KIND"
+        if [ "$actor" = "$__WG_SELF" ]; then
+          printf '%s\n' "$key" >> "$seen_file"   # my own reply/review — handled, not an event
+          continue
+        fi
+      else
+        actor="unknown"; kind="comment"   # never dropped — see _wg_lookup_and_count
       fi
     fi
 
     local line
-    line="$(printf 'github %s/%s#%s %s by %s: %s' "$org" "$repo" "$number" "$kind" "$login" "$title")"
+    line="$(printf 'github %s/%s#%s %s by %s: %s' "$org" "$repo" "$number" "$kind" "$actor" "$title")"
     log_done "$line"
 
     printf '{"kind":%s,"org":%s,"repo":%s,"number":%s,"login":%s,"title":%s,"updated_at":%s,"html_url":%s,"is_pr":%s,"line":%s}\n' \
       "$(json_str "$kind")" "$(json_str "$org")" "$(json_str "$repo")" "$number" \
-      "$(json_str "$login")" "$(json_str "$title")" "$(json_str "$updated")" \
+      "$(json_str "$actor")" "$(json_str "$title")" "$(json_str "$updated")" \
       "$(json_str "$html_url")" "$([ "$is_pr" = "1" ] && printf true || printf false)" \
       "$(json_str "$line")" >> "$events_file"
 
@@ -582,6 +677,13 @@ _wg_poll() {
   __WG_SUMMARY_LINES=""
   __WG_TRUNCATED=0
   __WG_TRUNCATED_OLDEST=""
+  # P2-4: the per-poll activity-lookup budget (_wg_lookup_and_count) — shared
+  # across BOTH queries below, spent in the order results streamed in
+  # (newest-first, per the search API's own desc sort).
+  __WG_LOOKUPS_DONE=0
+  __WG_LOOKUPS_SKIPPED=0
+  __WG_LOOKUP_RATE_REMAINING=""
+  __WG_LOOKUP_WARNED=0
 
   # P2-11: one mkdir-lock around the whole read-poll-write section, so cron
   # running `--once` and a person ALSO running `--once` (or the live loop)
@@ -663,10 +765,11 @@ _watch_github_help() {
   cat <<'EOF'
 Usage: clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]
 
-Poll GitHub's search API for issues/PRs opened by others, replies, and
-@mentions in <org>, and turn each new one into a wake line:
+Poll GitHub's search API for every issue/PR update in <org> — including
+replies on issues YOU opened — and @mentions of you, and turn each new one
+into a wake line:
 
-  github <org>/<repo>#<n> <opened|comment|mention> by <login>: <title>
+  github <org>/<repo>#<n> <opened|comment|review|activity|mention> by <login>: <title>
 
 Printed live (a foreground run) and appended, as flat JSON, to
 $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl — durable, so a cron job or
@@ -695,15 +798,25 @@ cold start or a poll that fell behind still surfaces today's events first
 instead of crawling forward from the org's oldest history. A page beyond
 that cap prints "+more, will catch up next poll" rather than blocking.
 
-Rate limits: normally 2 requests per poll (up to 10 when paginating both
-queries to the cap; the search API allows 30/min authenticated). On a
-genuine rate limit (429, or a 403 the response itself attributes to the
-rate limit, or a 5xx) the interval backs off ×2 up to 1h — from a floor of
-60s, regardless of --interval — and one line is printed; the cursor is
-never advanced past a page that failed to read, and is kept 300s behind
-the newest update actually seen (GitHub's search index itself lags real
-writes by some minutes) — a small seen-file de-dupes the resulting overlap
-between polls.
+Every issue/PR update ALREADY SEEN before (a reply, review, label, or
+assignee change) costs one more request to learn who actually did it and
+whether it was you — bounded to 50 such lookups per poll, newest-first, and
+stopped early if GitHub's own rate limit drops under 100 remaining. Past
+that bound, the event is still reported (never silently dropped), just with
+"by unknown" instead of a real login.
+
+Rate limits: normally 2 search requests per poll (up to 10 when paginating
+both queries to the cap; the search API allows 30/min authenticated), plus
+up to 50 activity lookups (above) against the core API's much larger
+budget. On a genuine rate limit (429, or a 403 the response itself
+attributes to the rate limit, or a 5xx) the interval backs off ×2 up to 1h
+— from a floor of 60s, regardless of --interval — and one line is printed;
+the cursor is never advanced past a page that failed to read, and is kept
+300s behind the newest update actually seen (GitHub's search index itself
+lags real writes by some minutes) — a small seen-file de-dupes the
+resulting overlap between polls. A poll cut short by the 5-page cap prints
+"truncated: continuing next poll" — true now: the cursor pins to the oldest
+row actually read, not the newest, so the next poll picks up exactly there.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this
