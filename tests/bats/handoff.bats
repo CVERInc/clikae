@@ -222,3 +222,151 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"No session for this directory"* ]] || false
 }
+
+# --- #33: per-engine transcript shapes (adapter_handoff_extract) -----------
+#
+# codex wraps a turn as a "response item" (OpenAI Responses API shape):
+# `role` is present but `content` is an ARRAY of typed parts, not a string —
+# the claude-shaped `"role":"user","content":"` anchor never matches it.
+# grok's chat_history.jsonl has no `role` key at all: the message kind IS
+# the top-level `type` ("user"/"assistant"), with the same array-of-parts
+# `content`. Both fixtures also carry one garbage line (malformed JSON) to
+# prove a bad line is skipped, not fatal.
+
+_seed_codex_transcript() {
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/10"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-10T12:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-10T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex first real prompt"}]}}'
+    echo '{"timestamp":"2026-09-10T12:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex working note"}]}}'
+    echo 'THIS LINE IS NOT JSON AT ALL {{{ garbage SHOULD-NOT-APPEAR'
+    echo '{"timestamp":"2026-09-10T12:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codex second real prompt"}]}}'
+    echo '{"timestamp":"2026-09-10T12:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex last assistant note"}]}}'
+  } > "$d/rollout-2026-09-10T12-00-00-$sid.jsonl"
+}
+
+@test "#33 handoff on codex extracts prompts+notes from the response_item shape (malformed line skipped, not fatal)" {
+  clikae init codex work
+  local work="$TEST_HOME/work-codex"; mkdir -p "$work"
+  _seed_codex_transcript work "$work" "11111111-1111-1111-1111-111111111111"
+  cd "$work"
+  # The raw (no-summarizer) brief only ever shows prompts (see
+  # _handoff_raw_brief) — assistant notes are part of the CLEAN-TAIL digest,
+  # which only a summarizer sees. `cat` as the summarizer echoes that digest
+  # back verbatim, so this exercises BOTH _handoff_extract call sites (user
+  # AND assistant) for the codex shape in one command, same as the
+  # "handoff pipes the session to a summarizer" test above does for claude.
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" \
+    run clikae handoff codex work --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex first real prompt"* ]] || false
+  [[ "$output" == *"codex second real prompt"* ]] || false
+  [[ "$output" == *"codex working note"* ]] || false
+  [[ "$output" == *"codex last assistant note"* ]] || false
+  # The malformed line neither crashed the command nor leaked into the brief.
+  [[ "$output" != *"SHOULD-NOT-APPEAR"* ]] || false
+  # Also prove the plain raw-extract path (no summarizer) survives codex's
+  # shape and shows the real prompt, not just metadata.
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex second real prompt"* ]] || false
+  [[ "$output" == *"raw extract"* ]] || false
+}
+
+_seed_grok_transcript() {
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
+  mkdir -p "$d"
+  printf '{"info":{"id":"%s","cwd":"%s"},"generated_title":"test"}\n' "$sid" "$dir" > "$d/summary.json"
+  {
+    echo '{"type":"user","content":[{"type":"text","text":"grok first real prompt"}]}'
+    echo '{"type":"assistant","content":[{"type":"text","text":"grok working note"}]}'
+    echo 'NOT VALID JSON AT ALL ][{ SHOULD-NOT-APPEAR'
+    echo '{"type":"user","content":[{"type":"text","text":"grok second real prompt 測試繁體中文"}]}'
+    echo '{"type":"assistant","content":[{"type":"text","text":"grok last assistant note"}]}'
+  } > "$d/chat_history.jsonl"
+}
+
+@test "#33 handoff on grok extracts prompts+notes from the no-role/array-content shape (CJK survives, malformed line skipped)" {
+  clikae init grok work
+  local work="$TEST_HOME/work-grok"; mkdir -p "$work"
+  _seed_grok_transcript work "$work" "22222222-2222-2222-2222-222222222222"
+  cd "$work"
+  # Same reasoning as the codex test above: `cat` as the summarizer surfaces
+  # the assistant-notes section too (raw-extract only ever shows prompts).
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work" \
+    run clikae handoff grok work --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"grok first real prompt"* ]] || false
+  [[ "$output" == *"grok second real prompt 測試繁體中文"* ]] || false
+  [[ "$output" == *"grok working note"* ]] || false
+  [[ "$output" == *"grok last assistant note"* ]] || false
+  [[ "$output" != *"SHOULD-NOT-APPEAR"* ]] || false
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work" run clikae handoff grok work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"grok second real prompt 測試繁體中文"* ]] || false
+  [[ "$output" == *"raw extract"* ]] || false
+}
+
+@test "#33 handoff on codex survives a 20 kB single-line transcript (no truncation crash/hang)" {
+  clikae init codex work
+  local work="$TEST_HOME/work-codex-20k"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/11"
+  mkdir -p "$d"
+  local sid="33333333-3333-3333-3333-333333333333"
+  local pad; pad="$(head -c 20000 /dev/zero | tr '\0' 'x')"
+  {
+    echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"START-MARKER-'"$pad"'-END-MARKER"}]}}'
+  } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
+  [ "$status" -eq 0 ]
+}
+
+@test "#33 an engine with no adapter_handoff_extract hook falls back to the claude-shaped extraction" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/handoff.sh"
+  # No adapter loaded in this process at all -> adapter_handoff_extract is
+  # undefined, exactly the third-party-adapter case.
+  unset -f adapter_handoff_extract 2>/dev/null || true
+  local t="$TEST_HOME/fallback.jsonl"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"fallback claude-shaped prompt"},"timestamp":"2026-05-31T01:00:00.000Z"}' > "$t"
+  run _handoff_recent_prompts "$t" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fallback claude-shaped prompt"* ]] || false
+}
+
+@test "#33 claude's adapter_handoff_extract is byte-identical to the pre-#33 inline extraction" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/handoff.sh"
+  local t="$TEST_HOME/parity.jsonl"
+  {
+    echo '{"type":"user","message":{"role":"user","content":"first real prompt"},"timestamp":"2026-05-31T01:00:00.000Z"}'
+    echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/clear</command-name>"},"timestamp":"2026-05-31T01:00:01.000Z"}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working on it, quote: he said \"hi\""}]},"timestamp":"2026-05-31T01:00:02.000Z"}'
+    echo '{"type":"user","toolUseResult":true,"message":{"role":"user","content":[{"type":"tool_result","content":"SHOULD NOT APPEAR file dump"}]},"timestamp":"2026-05-31T01:00:03.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"second real prompt with 中文 too"},"timestamp":"2026-05-31T01:05:00.000Z"}'
+  } > "$t"
+  # _handoff_default_extract is the pre-#33 inline grep, moved verbatim into
+  # handoff.sh's own fallback; claude.sh's adapter_handoff_extract is the SAME
+  # pipeline, moved verbatim the OTHER way (out to the adapter). They must
+  # produce byte-identical output for both roles, proving the move changed
+  # nothing about claude's own behaviour.
+  local before_u after_u before_a after_a
+  before_u="$(_handoff_default_extract "$t" user)"
+  before_a="$(_handoff_default_extract "$t" assistant)"
+  source "$CLIKAE_LIB/adapters/claude.sh"
+  after_u="$(adapter_handoff_extract "$t" user)"
+  after_a="$(adapter_handoff_extract "$t" assistant)"
+  [ "$before_u" = "$after_u" ]
+  [ "$before_a" = "$after_a" ]
+  [ -n "$after_u" ]
+  [ -n "$after_a" ]
+}

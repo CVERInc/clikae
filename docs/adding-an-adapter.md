@@ -46,6 +46,7 @@ implementation to read.
 | `adapter_migrate_credentials <old> <new>` | `--keep-login` on `migrate`/`rename` (macOS Keychain re-key). | claude |
 | **Sessions — the board, `resume`, `clean`** | | |
 | `adapter_transcript_path <dir>` | Your sessions appear in the board's Resume list. | claude, codex, grok |
+| `adapter_handoff_extract <transcript> <role>` | `clikae handoff`'s digest reads YOUR transcript's own shape (`role` is "user"/"assistant") instead of assuming claude's `"role":"…","content":"…"` — prints one line per message of that role, text only, newest last. Undefined → falls back to the claude-shaped grep (thinner, not broken). | claude, codex, grok |
 | `adapter_title_for_file <file>` | A session's title, derived from the transcript file alone. **Prefer a user-set rename over a machine-generated title**, and scan the tail — a rename lands wherever it was typed. | claude, codex, grok, antigravity |
 | `adapter_session_title` / `adapter_session_recap` / `adapter_session_meta` | Richer board rows (title, one-line recap, age/size). | claude |
 | `adapter_find_session <id>` / `adapter_session_cwd` / `adapter_resume_args` | `clikae resume <id>` can locate, `cd` to, and reopen a past session. | claude, codex, grok, antigravity |

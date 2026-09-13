@@ -222,6 +222,62 @@ adapter_transcript_path() {
   printf '%s\n' "$f"
 }
 
+# Optional hook (#33): the transcript SHAPE belongs to the adapter. Prints one
+# line per message of <role> ("user"/"assistant"), text only, newest last —
+# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+#
+# A codex rollout wraps a turn as a "response item" (the OpenAI Responses API
+# shape), not the flat claude `"role":"…","content":"…"` string handoff.sh's
+# default extraction anchors on:
+#   {"type":"response_item","payload":{"type":"message","role":"user",
+#     "content":[{"type":"input_text","text":"…"}]}}
+# Assistant turns are the same shape with role":"assistant" and "output_text"
+# parts. `role` IS present, but `content` is an ARRAY of typed parts, so the
+# claude-shaped grep matches zero lines on a real codex tank — that's the
+# whole bug (#33: `grep -ac '"role":"user","content":"' <rollout>` = 0).
+#
+# awk, one pass over the whole file (no bash-4+ line-slurping builtin needed),
+# using index()/substr() rather than a regex: the nested-star pattern that
+# hangs bash's own `[[ =~ ]]` on a long line (see adapter_title_for_file
+# above) is exactly the trap a JSON-string scanner has to avoid, and
+# index()/substr() can't backtrack. A "text":"…" value's own escaped quote
+# (`\"`) is honoured while hunting for the CLOSING quote, so a value
+# containing one is never truncated.
+#
+# Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
+# has always unescaped, never \uXXXX (parity first; see handoff.sh's own
+# comment on this — a \uXXXX decoder is a follow-up, not a regression, since
+# grep/sed/awk alone can't safely decode one without jq/python).
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  [ -n "$t" ] && [ -f "$t" ] || return 0
+  case "$role" in user|assistant) ;; *) return 0 ;; esac
+  awk -v role="$role" '
+    index($0, "\"type\":\"response_item\"") == 0 { next }
+    index($0, "\"role\":\"" role "\"") == 0 { next }
+    {
+      rest = $0; key = "\"text\":\""; klen = length(key); out = ""
+      while (1) {
+        pos = index(rest, key)
+        if (pos == 0) break
+        rest = substr(rest, pos + klen)
+        seg = ""; i = 1; n = length(rest)
+        while (i <= n) {
+          c = substr(rest, i, 1)
+          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
+          if (c == "\"") { i++; break }
+          seg = seg c; i++
+        }
+        out = (out == "" ? seg : out " " seg)
+        rest = substr(rest, i)
+      }
+      if (out != "") print out
+    }
+  ' "$t" 2>/dev/null \
+    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+    | grep -av '^[[:space:]]*$' || true
+}
+
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {

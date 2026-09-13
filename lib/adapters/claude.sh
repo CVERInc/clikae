@@ -328,6 +328,47 @@ adapter_memory_dir() {
   printf '%s\n' "$dir/projects/$(_claude_project_slug "$PWD")/memory"
 }
 
+# Optional hook (#33): the transcript SHAPE belongs to the adapter, not to
+# handoff.sh. Prints one line per message of <role> ("user"/"assistant"),
+# text only, unescaped, newest last — used by `clikae handoff`'s digest
+# (lib/core/handoff.sh, _handoff_extract). This is the SAME grep pipeline
+# handoff.sh ran inline before #33, moved here verbatim — proven
+# byte-identical before/after by tests/bats/handoff.bats's existing claude
+# coverage, which never changed. It is also the shape
+# _handoff_default_extract (handoff.sh) falls back to for any adapter that
+# doesn't define this hook, so third-party adapters keep working.
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  case "$role" in
+    user)
+      # `"role":"user","content":"` anchors on role immediately followed by a
+      # *string* content — a person's typed turn. Tool results carry an array
+      # content (`"content":[`) and a "toolUseResult" field; system/slash
+      # wrappers are tagged (<command-name>, <local-command-caveat>) or
+      # flagged "isMeta"; sub-agent turns are "isSidechain" — all dropped so
+      # this shows real prompts, not file dumps / command output / sub-agent
+      # chatter that also lives under role:user. Still best-effort (it
+      # truncates a prompt at a literal `"}`).
+      grep -a '"role":"user","content":"' "$t" 2>/dev/null \
+        | grep -av '"toolUseResult"' \
+        | grep -av '"isMeta":true' \
+        | grep -av '"isSidechain":true' \
+        | sed 's/.*"role":"user","content":"//; s/"}.*//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*<command-' \
+        | grep -av '^[[:space:]]*<local-command' \
+        | grep -av '^[[:space:]]*$'
+      ;;
+    assistant)
+      grep -a '"role":"assistant"' "$t" 2>/dev/null \
+        | grep -aoE '"text":"([^"\\]|\\.)*"' \
+        | sed 's/^"text":"//; s/"$//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*$'
+      ;;
+  esac
+}
+
 # Optional hook: print the path to the *current directory's* most recent
 # transcript under the given config dir, or return non-zero if there is none.
 # Used by `clikae relay` (to carry/resume a session) and `clikae handoff` (to

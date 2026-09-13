@@ -19,6 +19,14 @@
 #      clearly labelled as raw so nobody mistakes it for a real summary.
 #
 # Pure bash 3.2 + grep/sed/awk. No jq, no python, no network.
+#
+# The transcript SHAPE belongs to the adapter, not here (#33): claude/codex/
+# grok each define an optional `adapter_handoff_extract <transcript> <role>`
+# hook (see lib/adapters/{claude,codex,grok}.sh) that prints one line per
+# message of that role, text only, newest last. _handoff_extract below calls
+# it when defined and falls back to the historical claude-shaped grep
+# (_handoff_default_extract) otherwise, so a third-party adapter with no hook
+# keeps working exactly as it always has.
 
 # How much of the (often huge) transcript tail to feed a summarizer / scan for
 # the raw extract. Lines, not bytes, so we never cut a JSON object in half.
@@ -32,33 +40,84 @@ CLIKAE_HANDOFF_CONTEXT_CHARS="${CLIKAE_HANDOFF_CONTEXT_CHARS:-8000}"
 
 # Reliable single-value metadata: every transcript line repeats these as plain
 # "key":"value" pairs, so a first-match grep is safe (no JSON parser needed).
+# 🔴 `|| true`: every field here is CLAUDE-shaped (sessionId, gitBranch,
+# version — codex/grok transcripts have none of them), and under bin/clikae's
+# `set -eo pipefail` a no-match grep makes the whole assignment's pipeline
+# fail. That failure isn't a pipe's last stage (head/sed still succeed), so
+# it's easy to miss — but `sid="$(_handoff_field "$t" sessionId)"` is a plain
+# (non-`local`) assignment, and -e DOES abort a script on a failing plain
+# assignment. Verified by doing (#33 negative control): an un-guarded
+# _handoff_field made `clikae handoff codex/grok` exit silently with NO output
+# at all — the transcript-shape fix below can't matter if the metadata line
+# above it already killed the command. Every field is already optional at the
+# call site (`[ -n "$cwd" ] && echo …`), so empty-on-no-match is correct, not
+# a compromise.
 _handoff_field() {
   # _handoff_field <transcript> <jsonKey>
-  grep -aoE "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | head -n 1 | sed 's/.*":"//; s/"$//'
+  grep -aoE "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | head -n 1 | sed 's/.*":"//; s/"$//' || true
 }
 
-# Best-effort: the text of the most recent user-TYPED prompts. We anchor on
-# `"role":"user","content":"` — role immediately followed by a *string* content
-# — which is exactly a person's typed turn. Tool results carry an array content
-# (`"content":[`) and a "toolUseResult" field; system/slash wrappers are tagged
-# (<command-name>, <local-command-caveat>) or flagged "isMeta"; sub-agent turns
-# are "isSidechain". We drop all of those so the section shows real prompts, not
+# Default (fallback) extraction: the historical CLAUDE-shaped grep, kept here
+# (not moved) as the extraction any adapter without a shape of its own falls
+# back to — see _handoff_extract below. Anchors on `"role":"user","content":"`
+# — role immediately followed by a *string* content — which is exactly a
+# person's typed turn. Tool results carry an array content (`"content":[`) and
+# a "toolUseResult" field; system/slash wrappers are tagged (<command-name>,
+# <local-command-caveat>) or flagged "isMeta"; sub-agent turns are
+# "isSidechain". We drop all of those so the section shows real prompts, not
 # the file dumps and command output that also live under role:user. Still
-# best-effort (it truncates a prompt at a literal `"}`), hence the "raw" label.
+# best-effort (it truncates a prompt at a literal `"}`), hence the "raw"
+# label. Assistant text is `"role":"assistant"` followed anywhere on the line
+# by one or more `"text":"…"` fields.
+_handoff_default_extract() {
+  # _handoff_default_extract <transcript> <role: user|assistant>
+  local t="$1" role="$2"
+  case "$role" in
+    user)
+      grep -a '"role":"user","content":"' "$t" 2>/dev/null \
+        | grep -av '"toolUseResult"' \
+        | grep -av '"isMeta":true' \
+        | grep -av '"isSidechain":true' \
+        | sed 's/.*"role":"user","content":"//; s/"}.*//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*<command-' \
+        | grep -av '^[[:space:]]*<local-command' \
+        | grep -av '^[[:space:]]*$'
+      ;;
+    assistant)
+      grep -a '"role":"assistant"' "$t" 2>/dev/null \
+        | grep -aoE '"text":"([^"\\]|\\.)*"' \
+        | sed 's/^"text":"//; s/"$//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*$'
+      ;;
+  esac
+}
+
+# _handoff_extract <transcript> <role: user|assistant> — one line per message
+# of <role>, text only, unescaped, newest last. (#33) The transcript SHAPE
+# belongs to the adapter, not to handoff.sh: use the loaded adapter's
+# `adapter_handoff_extract` hook when it defines one (claude/codex/grok all
+# do), so each engine's own JSON layout is read correctly. An adapter that
+# doesn't define the hook (any third-party adapter dropped into
+# lib/adapters/) falls back to _handoff_default_extract above — same
+# behaviour clikae has always had, so nothing that worked before regresses.
+# No count/cap here — callers `tail -n` the amount they want.
+_handoff_extract() {
+  local t="$1" role="$2"
+  if declare -F adapter_handoff_extract >/dev/null 2>&1; then
+    adapter_handoff_extract "$t" "$role" 2>/dev/null
+  else
+    _handoff_default_extract "$t" "$role"
+  fi
+}
+
+# Best-effort: the text of the most recent user-TYPED prompts, most recent
+# <count> kept (the whole transcript is scanned first — in a tool-heavy
+# session the last real prompt can be many tool-result lines back).
 _handoff_recent_prompts() {
   # _handoff_recent_prompts <transcript> <count>
-  # Scan the WHOLE transcript (in a tool-heavy session the last real prompt is
-  # many tool-result lines back), then keep the most recent <count>.
-  grep -a '"role":"user","content":"' "$1" 2>/dev/null \
-    | grep -av '"toolUseResult"' \
-    | grep -av '"isMeta":true' \
-    | grep -av '"isSidechain":true' \
-    | sed 's/.*"role":"user","content":"//; s/"}.*//' \
-    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-    | grep -av '^[[:space:]]*<command-' \
-    | grep -av '^[[:space:]]*<local-command' \
-    | grep -av '^[[:space:]]*$' \
-    | tail -n "$2" || true
+  _handoff_extract "$1" user | tail -n "$2" || true
 }
 
 # Build the compact, plain-text digest fed to a summarizer: the recent real
@@ -75,12 +134,7 @@ _handoff_clean_tail() {
     _handoff_recent_prompts "$t" 14 | sed 's/^/- /'
     echo
     echo "## Recent assistant notes (oldest first)"
-    grep -a '"role":"assistant"' "$t" 2>/dev/null \
-      | grep -aoE '"text":"([^"\\]|\\.)*"' \
-      | sed 's/^"text":"//; s/"$//' \
-      | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
-      | grep -av '^[[:space:]]*$' \
-      | tail -n 14 | sed 's/^/- /'
+    _handoff_extract "$t" assistant | tail -n 14 | sed 's/^/- /'
   } | tail -c "$CLIKAE_HANDOFF_CONTEXT_CHARS"
 }
 
@@ -93,7 +147,7 @@ _handoff_raw_brief() {
   branch="$(_handoff_field "$t" gitBranch)"
   ver="$(_handoff_field "$t" version)"
   first="$(_handoff_field "$t" timestamp)"
-  last="$(grep -aoE '"timestamp":"[^"]*"' "$t" 2>/dev/null | tail -n 1 | sed 's/.*":"//; s/"$//')"
+  last="$(grep -aoE '"timestamp":"[^"]*"' "$t" 2>/dev/null | tail -n 1 | sed 's/.*":"//; s/"$//' || true)"
 
   echo "# Session handoff (raw extract)"
   echo

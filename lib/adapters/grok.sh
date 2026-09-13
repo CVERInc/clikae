@@ -219,6 +219,52 @@ EOF
   printf '%s\n' "$t"
 }
 
+# Optional hook (#33): the transcript SHAPE belongs to the adapter. Prints one
+# line per message of <role> ("user"/"assistant"), text only, newest last —
+# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+#
+# grok's chat_history.jsonl has NO `role` key at all — the message kind IS
+# the top-level `type`:
+#   {"type":"user","content":[{"type":"text","text":"…"}]}
+#   {"type":"assistant","content":[{"type":"text","text":"…"}]}
+# so the claude-shaped `"role":"user","content":"` anchor can't even start
+# matching (there is no `"role"` key to anchor on), and `content` is an ARRAY
+# of typed parts on top of that — the same two-part gap codex has, different
+# keys.
+#
+# Same awk shape as codex.sh's twin (one pass, index()/substr() — no regex,
+# so a pathological line can't hang it) and the same escape parity note: only
+# \n \t \" \\ are unescaped, matching the claude path; \uXXXX is left as a
+# documented follow-up, not decoded here either.
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  [ -n "$t" ] && [ -f "$t" ] || return 0
+  case "$role" in user|assistant) ;; *) return 0 ;; esac
+  awk -v role="$role" '
+    index($0, "\"type\":\"" role "\"") == 0 { next }
+    {
+      rest = $0; key = "\"text\":\""; klen = length(key); out = ""
+      while (1) {
+        pos = index(rest, key)
+        if (pos == 0) break
+        rest = substr(rest, pos + klen)
+        seg = ""; i = 1; n = length(rest)
+        while (i <= n) {
+          c = substr(rest, i, 1)
+          if (c == "\\" && i < n) { seg = seg substr(rest, i, 2); i += 2; continue }
+          if (c == "\"") { i++; break }
+          seg = seg c; i++
+        }
+        out = (out == "" ? seg : out " " seg)
+        rest = substr(rest, i)
+      }
+      if (out != "") print out
+    }
+  ' "$t" 2>/dev/null \
+    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+    | grep -av '^[[:space:]]*$' || true
+}
+
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
