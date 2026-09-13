@@ -4,7 +4,27 @@ cmd_usage() {
   for arg in "$@"; do
     case "$arg" in
       --json) json=1 ;; --fresh) fresh=1 ;;
-      --help|-h) echo 'Usage: clikae usage [engine] [tank] [--json] [--fresh]'; return ;;
+      --help|-h)
+        cat <<'HELP'
+Usage: clikae usage [engine] [tank] [--json] [--fresh]
+
+Report each tank's vendor usage window(s) — how much of the quota is used,
+and when it resets. No engine/tank = every tank. --json prints one object
+per tank, adding "engine"/"tank" to the reading; the plain form prints
+"<engine>/<tank> <reading>".
+
+Reading fields: window_pct, weekly_pct (0-100, or null), window_resets_at,
+weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
+live call answered), "transcript" (read from evidence the engine already
+wrote locally — no live process invoked; currently Codex), or "unknown"
+(no usable reading).
+
+Readings are cached for 120s (CLIKAE_USAGE_TTL overrides; --fresh bypasses
+the cache and always calls). The board and `clikae burn` only ever read
+this cache — burn never fetches on its own, so a cold burn never pays a
+vendor round-trip just to pick a tank.
+HELP
+        return 0 ;;
       -*) log_err "Unknown option: $arg"; return 1 ;;
       *) if [ -z "$engine" ]; then engine="$arg"; elif [ -z "$tank" ]; then tank="$arg"; else return 1; fi ;;
     esac

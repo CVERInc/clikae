@@ -62,6 +62,8 @@ Use & inspect:
   lang [<locale>]                  interface language (bare `clikae lang` lists them)
   tanks                            list all tanks (with the logged-in account)
   status [engine]                  which tank each engine is on (+ recent carries)
+  usage [engine] [tank]            vendor usage window(s): used% and reset time
+                                   (--json · --fresh forces a live call)
   clean                            free disk space: one smart list of deletable
                                    session data, preview first, asks before deleting
   doctor                           read-only health check: what clikae can do here
