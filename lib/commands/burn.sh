@@ -991,15 +991,15 @@ _burn_lb_bounded() {
   # own exit status is the waited-on job's exit status — non-zero for
   # ANY command this bounds that legitimately fails (not just a timeout:
   # `git rev-list --count '@{u}..HEAD'` with no upstream configured,
-  # which round-1's own tests exercise constantly), and bash versions are
-  # NOT consistent with each other about whether a bare `wait` at that
-  # status trips errexit (observed: silent on this box's bash 5.2.21,
-  # aborted the whole scan on macOS CI's bash — same file, same review
-  # round's own lesson about `_burn_left_behind`'s git calls needing
-  # individual `||` guards, applied to a NEW function that forgot it).
-  # Bare `kill` is the same hazard: it returns non-zero when the target
-  # has already exited (the common, non-timeout case), which is exactly
-  # what happens here every time nothing needed killing.
+  # which round-1's own tests exercise constantly). A bare `wait`/`kill`
+  # left unguarded here matches the exact P1 shape (round-1 review)
+  # `_burn_left_behind`'s own comment already warns about — every git call
+  # in this file is individually `||`-guarded for that reason, and a new
+  # function that forgets it reopens the same class of bug even though it
+  # wasn't, in the end, this round's actual macOS failure (see
+  # `_burn_left_behind`'s own comment on the process-substitution bug that
+  # was). Bare `kill` is the same hazard: it returns non-zero when the
+  # target has already exited (the common, non-timeout case).
   rc=0
   wait "$pid" 2>/dev/null || rc=$?
   kill "$watcher" 2>/dev/null || true
@@ -1049,7 +1049,7 @@ _burn_lb_git() { _burn_lb_bounded 5 command git -c core.fsmonitor=false -c core.
 # `_burn_result`'s `|| left_behind='[]'` fallback exists for the SUBSHELL
 # dying unexpectedly, not for this function returning non-zero on purpose.
 _burn_left_behind() {
-  local root marker repo seen="" branch ahead dirty files count entry
+  local root marker repo seen="" branch ahead dirty files count entry rp_rc
   local -a repos=() roots=()
   local GIT_OPTIONAL_LOCKS=0
   export GIT_OPTIONAL_LOCKS
@@ -1070,32 +1070,53 @@ _burn_left_behind() {
     root="$(cd "$root" && pwd -P)" || continue
     roots+=("$root")
   done
+  # P2-3 (round-2 review, macOS-only regression found watching real CI):
+  # this used to be a process substitution NESTED inside another process
+  # substitution (`while read … done < <(printf …; while read … done <
+  # <(find …))`) — bash 3.2, which is what `/usr/bin/env bash` actually
+  # resolves to on the macOS CI runner (confirmed: `$BASH_VERSION` traced
+  # as 3.2.57 there, not the bash 5 round-1's own review assumed), fails
+  # this construct SILENTLY: the outer process substitution's subshell
+  # never even started (traced: zero output, not even its own first
+  # statement, from inside), and the enclosing `$(_burn_left_behind …)`
+  # command substitution came back empty with rc=1 — every #84 test with
+  # any expected row read back `left_behind: []`. A plain temp file
+  # (`mktemp`, POSIX, no bash-version-dependent process-substitution
+  # machinery at all) replaces BOTH nested substitutions: one `find`,
+  # written once, read once, with the SAME two-step logic (root itself
+  # first, unconditionally — the "cwd/root IS a git repo" case below
+  # doesn't come through `find` at all — then every discovered `.git`
+  # stripped to its parent dir) — just via a `case` on the read-back value
+  # instead of a second `printf`/`read` pipeline.
+  local _lb_disc
   for root in "${roots[@]}"; do
+    _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
+    {
+      printf '%s\0' "$root"
+      # `-maxdepth 3` (round-1) capped repo discovery 2 levels below
+      # $root, so a lane's commits in a repo nested 3+ deep (`a/b/L3`,
+      # `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>` produces)
+      # vanished silently: no row, no hint. `-name .git -prune -print0`
+      # alone (no maxdepth) is unbounded in depth but each repo is still
+      # visited exactly once: pruning `.git` stops find from ever
+      # descending INTO it (irrelevant, expensive), but leaves every
+      # sibling and subdirectory of the surrounding working tree open, so
+      # a repo nested inside another repo's working tree is still found —
+      # this is how nested repos get discovered at all, not a bug to fix.
+      find "$root" \( -name node_modules -o -name .venv -o -name target \
+        -o -name dist -o -name build -o -name .cache \) -prune \
+        -o \( -name .git -print0 -prune \) 2>/dev/null
+    } > "$_lb_disc" 2>/dev/null
     while IFS= read -r -d '' marker; do
-      repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || continue
+      [ "$marker" = "$root" ] || marker="${marker%/.git}"
+      rp_rc=0
+      repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+      [ "$rp_rc" -eq 0 ] || continue
       case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
       seen="${seen}"$'\n'"${repo}"$'\n'
       repos+=("$repo")
-    done < <(
-      printf '%s\0' "$root"
-      # P2-3 (round-2 review): `-maxdepth 3` capped repo discovery at 2
-      # levels below $root, so a lane's commits in a repo nested 3+ deep
-      # (`a/b/L3`, `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>`
-      # produces) vanished silently: no row, no hint, and the nested
-      # repo's own files got misattributed to whichever ancestor repo DID
-      # fit inside the cap. `-name .git -prune -print0` alone (no
-      # maxdepth) is unbounded in depth but each repo is still visited
-      # exactly once: pruning `.git` stops find from ever descending INTO
-      # it (irrelevant, expensive), but leaves every sibling and every
-      # subdirectory of the surrounding working tree open, so a repo
-      # nested inside another repo's working tree is still found — this
-      # is how nested repos get discovered at all, not a bug to fix.
-      while IFS= read -r -d '' marker; do
-        printf '%s\0' "${marker%/.git}"
-      done < <(find "$root" \( -name node_modules -o -name .venv -o -name target \
-        -o -name dist -o -name build -o -name .cache \) -prune \
-        -o \( -name .git -print0 -prune \) 2>/dev/null)
-    )
+    done < "$_lb_disc"
+    rm -f "$_lb_disc"
   done
   local entries="" hint="" scan
   # P2-2/P2-5 (round-1 review): no cap meant "200 repos, 200 lines" for any
@@ -1224,8 +1245,19 @@ _burn_left_behind() {
   local total=${#lb_repo[@]} shown=0 over=0
   local -a order=()
   if [ "$total" -gt 0 ]; then
-    local i idx a_flag d_flag
-    while IFS= read -r idx; do order+=("$idx"); done < <(
+    # P2-3's own fix (this round): a process substitution here — even a
+    # single-level one, unlike discovery's nested pair — turned out to be
+    # ANOTHER spot this round's added complexity (the ahead/dirty flag
+    # computation below, absent from round-1's simpler single-key sort)
+    # tripped on real macOS CI's bash 3.2: traced all the way through
+    # discovery and every per-repo git/find call with rc=0, then nothing
+    # — not even the caller's very next statement — ever ran again. Same
+    # fix as discovery: a `mktemp` file instead of `< <(...)`, no
+    # process-substitution machinery left in this function's ranking path
+    # either.
+    local i idx a_flag d_flag _lb_rank
+    _lb_rank="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-rank.XXXXXX" 2>/dev/null)"
+    if [ -n "$_lb_rank" ]; then
       for i in "${!lb_repo[@]}"; do
         a_flag=0
         [ "${lb_ahead[$i]}" = - ] || { [ "${lb_ahead[$i]}" -gt 0 ] 2>/dev/null && a_flag=1; }
@@ -1240,8 +1272,11 @@ _burn_left_behind() {
         # named in "and N more"). Three-level key now: ahead>0 first, then
         # dirty>0, then newest-activity — noise never outranks real work.
         printf '%s\t%s\t%s\t%s\n' "$a_flag" "$d_flag" "${lb_ts[$i]}" "$i"
-      done | sort -t "$(printf '\t')" -s -k1,1rn -k2,2rn -k3,3rn | cut -f4
-    )
+      done > "$_lb_rank"
+      sort -t "$(printf '\t')" -s -k1,1rn -k2,2rn -k3,3rn "$_lb_rank" | cut -f4 > "$_lb_rank.sorted"
+      while IFS= read -r idx; do order+=("$idx"); done < "$_lb_rank.sorted"
+      rm -f "$_lb_rank" "$_lb_rank.sorted"
+    fi
   fi
   for idx in "${order[@]:-}"; do
     [ -n "$idx" ] || continue
