@@ -1,8 +1,42 @@
 # shellcheck shell=bash
+
+# _settings_write_file <file> <content> <label>  ->  write <content> to <file>
+# atomically: a temp file seeded with the live file's owner/mode, a backup of
+# the live file made right before it is replaced, then a rename into place.
+# <label> (e.g. "claude/work") prefixes every failure message.
+#
+# The ONE write path every settings.json mutation in clikae goes through —
+# #76/#85's permissions-template apply below, and the cockpit guard's hook
+# install/remove (#63, lib/commands/cockpit.sh) — so a second writer never
+# hand-rolls its own jq-and-redirect with none of this safety.
+_settings_write_file() (
+  local file="$1" content="$2" label="$3" tmp=""
+  trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || { printf '%s: failed to create a temp file\n' "$label"; return 1; }
+  if [ -f "$file" ]; then
+    # Seed the temp file's owner/mode from the live file; the actual backup
+    # is the separate copy made below, right before the live file is touched.
+    cp -p "$file" "$tmp" || { printf '%s: failed to prepare the temp file\n' "$label"; return 1; }
+  fi
+  # Trailing newline: command substitution (how every caller builds $content
+  # from `jq`) strips it, so add exactly one back — jq's own CLI output
+  # always ends in one, and a write that quietly drops it would leave a
+  # settings.json byte-different from anything jq itself would ever produce.
+  printf '%s\n' "$content" > "$tmp" || { printf '%s: failed to write the temp file\n' "$label"; return 1; }
+  if [ -f "$file" ]; then
+    local backup
+    backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || { printf '%s: failed to create a backup file\n' "$label"; return 1; }
+    cp -p "$file" "$backup" || { printf '%s: failed to back up settings.json\n' "$label"; return 1; }
+  fi
+  mv -f "$tmp" "$file" || { printf '%s: failed to replace settings.json\n' "$label"; return 1; }
+  tmp=""
+)
+
 # Merge only missing template permissions; compliant files are never rewritten.
 _settings_tank() (
   local engine="$1" tank="$2" mode="$3" template="$4"
-  local file input result allow deny tmp=""
+  local file input result allow deny
   command -v jq >/dev/null 2>&1 || {
     printf '%s/%s: skipped — settings inspection requires jq\n' "$engine" "$tank"
     return 1
@@ -65,22 +99,7 @@ _settings_tank() (
     return 1
   fi
   if [ "$mode" = apply ]; then
-    trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
-    trap 'exit 1' HUP INT TERM
-    tmp="$(mktemp "${file}.tmp.XXXXXX")" || { printf '%s/%s: failed to create a temp file\n' "$engine" "$tank"; return 1; }
-    if [ -f "$file" ]; then
-      # Seed the temp file's owner/mode from the live file; the actual backup
-      # is the separate copy made below, right before the live file is touched.
-      cp -p "$file" "$tmp" || { printf '%s/%s: failed to prepare the temp file\n' "$engine" "$tank"; return 1; }
-    fi
-    printf '%s' "$result" | jq '.settings' > "$tmp" || { printf '%s/%s: failed to write the temp file\n' "$engine" "$tank"; return 1; }
-    if [ -f "$file" ]; then
-      local backup
-      backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || { printf '%s/%s: failed to create a backup file\n' "$engine" "$tank"; return 1; }
-      cp -p "$file" "$backup" || { printf '%s/%s: failed to back up settings.json\n' "$engine" "$tank"; return 1; }
-    fi
-    mv -f "$tmp" "$file" || { printf '%s/%s: failed to replace settings.json\n' "$engine" "$tank"; return 1; }
-    tmp=""
+    _settings_write_file "$file" "$(printf '%s' "$result" | jq '.settings')" "$engine/$tank" || return 1
   fi
   printf '%s/%s: +%s allow / +%s deny%s\n' "$engine" "$tank" "$allow" "$deny" "$( [ "$mode" != dry-run ] || printf ' (dry-run)' )"
 )

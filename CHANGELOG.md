@@ -61,6 +61,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `clikae cockpit <tank>` marks the tank that STEERS — the coordinating
+  session that dispatches build/review lanes to worker tanks with `clikae
+  burn` instead of spawning them in its own context (which spends the
+  cockpit's own weekly budget on work meant for a worker; broke for real
+  2026-09-10). Installs a PreToolUse hook (`lib/hooks/cockpit-guard.sh`) on
+  that one tank's settings.json that refuses an in-session `Agent` spawn
+  whose model is missing, or opus/sonnet with a prompt that reads as a
+  build/review lane (worktree, a git commit/push, REVIEWER/adversarial
+  review, a test run) — naming the current idle reserve and the exact `burn`
+  shape to use instead. Moving the role removes the hook from the old tank
+  and installs it on the new one (`--off` removes it everywhere); a human's
+  own hooks on that tank are identified by marker and never touched. Escape
+  hatch for "burn the cockpit tank tonight": `CLIKAE_COCKPIT_ALLOW_AGENTS=1`,
+  or a timed `clikae cockpit --allow-agents <dur>`. The settings.json edit
+  rides #76/#85's write mechanism (union merge, backup, atomic rename) rather
+  than a one-off jq edit (#63).
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is

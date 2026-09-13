@@ -159,6 +159,39 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > background unless you launched it through clikae (no daemon) — deliberate.
 > `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
 
+### The cockpit role — dispatch, don't spawn
+
+A coordinating session ("the cockpit") should hand build/review work to worker
+tanks with `clikae burn` rather than spawning it through its own in-session
+Agent/Task tool — a spawn like that spends the cockpit's OWN weekly budget on
+work a worker tank was going to pay for anyway. That rule is easy to forget
+exactly when a session is busiest, so `clikae cockpit` makes it the machine's
+problem instead of memory's:
+
+| Command | What it does |
+|---|---|
+| `cockpit` | Show the current cockpit tank (or that none is set). |
+| `cockpit [<engine>] <tank>` | Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like `clikae <name>`. |
+| `cockpit --off` | Remove the guard everywhere and forget the role. |
+| `cockpit --allow-agents <dur>` | Temporarily lift the guard (e.g. `4h`) without removing it. |
+
+The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
+a spawn whose model is missing, or whose model is opus/sonnet **and** whose
+prompt reads as a build/review lane (mentions a worktree, a git commit/push,
+`REVIEWER`/an adversarial review, or a test run) — naming the current idle
+reserve and the exact `clikae burn <engine> <tank> --prompt-file <f> --artifact <path>`
+shape to use instead. Exploration spawns (haiku, `Explore`) and anything with
+no lane heuristic in the prompt are untouched — this is not a general
+permission gate. The role, and the hook, live on exactly one tank at a time;
+moving it with `clikae cockpit` cleans up the old tank first. A human's own
+hooks on that tank are marked apart from the guard's and are never touched.
+
+Sometimes the right call is to spend the cockpit tank's own budget on purpose
+("burn the cockpit tank tonight") — a guard that cannot be lifted gets
+deleted instead of obeyed, so there's an escape hatch: set
+`CLIKAE_COCKPIT_ALLOW_AGENTS=1` in the environment, or run `clikae cockpit
+--allow-agents <dur>` for a timed allowance.
+
 ### Inspect
 
 | Command | What it does |

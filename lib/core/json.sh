@@ -47,3 +47,40 @@ json_value_for_key() {
     | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//' || true
   return 0
 }
+
+# json_field_str <json> <field>  ->  the DECODED string value of "<field>":"…"
+# found anywhere in <json>, or return 1 (nothing echoed) if <field> is absent,
+# not a string, or <json> doesn't contain a well-formed "field":"value" pair.
+#
+# Purpose-built, like lib/core/burn_status.sh's burn_status_field: the only
+# JSON this is asked to read is a hook payload (PreToolUse's stdin object —
+# lib/hooks/cockpit-guard.sh, #63) where every field name it looks up
+# (tool_name, and tool_input's model/prompt) is unique across the whole
+# object, so a flat scan finds the right pair without walking into nested
+# objects on purpose. NOT a general JSON parser: a field name that repeats
+# at two different nesting levels would find whichever occurs first.
+#
+# The match handles escaped quotes/backslashes inside the value (`\"`, `\\`)
+# so a value containing a literal `"` doesn't truncate the extraction early —
+# an agent prompt routinely contains quoted text. Decodes `\"` `\\` `\n` `\t`
+# `\r`; everything else survives as the literal two-character escape (this is
+# a keyword-matching input, not a display value, and none of the keywords it
+# is matched against contain a backslash).
+json_field_str() {
+  local json="$1" field="$2" raw esc
+  raw="$(printf '%s' "$json" | grep -oE "\"$field\":\"(\\\\.|[^\"\\\\])*\"" | head -n 1)"
+  [ -n "$raw" ] || return 1
+  raw="${raw#*:}"            # drop `"field":`
+  raw="${raw#\"}"; raw="${raw%\"}"   # drop the surrounding quotes
+  esc=$'\001'                # placeholder: protects real backslashes while
+                              # the two-char escapes below are decoded, so
+                              # `\\n` (backslash, n) doesn't get read as `\n`
+                              # (an escaped newline) — order matters here.
+  raw="${raw//\\\\/$esc}"
+  raw="${raw//\\\"/\"}"
+  raw="${raw//\\n/$'\n'}"
+  raw="${raw//\\t/$'\t'}"
+  raw="${raw//\\r/$'\r'}"
+  raw="${raw//$esc/\\}"
+  printf '%s' "$raw"
+}
