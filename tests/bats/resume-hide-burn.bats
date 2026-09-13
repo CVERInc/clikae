@@ -447,6 +447,31 @@ STUB
   _assert_sidecar claude T1 "$existing_sid"
 }
 
+# #74 round-2 P2-3: a caller-supplied `--resume <sid>` names a transcript that
+# ALREADY EXISTS before the engine ever runs — "the transcript exists" is a
+# tautology for it, true whether or not this run touched anything. The old
+# code recorded (and hid) a human's own conversation the moment the engine
+# was TOLD to resume it, even when the engine refused to start and never
+# read or wrote a single byte of it.
+@test "#74 round-2 P2-3: burn claude --resume <existing sid> writes no sidecar line when the engine refuses to start" {
+  _fixture
+  clikae init claude T1
+  _human_claude   # the transcript pre-exists, untouched by this run
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+echo "error: engine refused to start" >&2
+exit 1
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -ne 0 ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ]
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+}
+
 @test "burn claude does not clash --session-id onto a caller-supplied --session-id" {
   _fixture
   clikae init claude T1

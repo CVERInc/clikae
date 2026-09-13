@@ -2501,6 +2501,20 @@ $(adapter_new_session_args "$launch_sid" 2>/dev/null || true)
 _NS_EOF
       fi
     fi
+    # #74 round-2 P2-3: a caller-supplied --resume/--session-id names a sid
+    # whose transcript ALREADY EXISTS before this run even starts — "the
+    # transcript exists" (below) is a tautology for it, true whether or not
+    # the engine ran at all. Snapshot (mtime,size) of THAT specific file now,
+    # before launch, so a refusal that never touched it (engine_rc != 0, file
+    # untouched) can be told apart from an engine that read AND rewrote it.
+    local _burn_resume_pre_stamp=""
+    if [ -n "$launch_sid" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      local _burn_resume_pre_file
+      _burn_resume_pre_file="$(adapter_find_session "$dir" "$launch_sid" 2>/dev/null || true)"
+      if [ -n "$_burn_resume_pre_file" ]; then
+        _burn_resume_pre_stamp="$(_clikae_mtime "$_burn_resume_pre_file") $(_burn_size "$_burn_resume_pre_file")"
+      fi
+    fi
     # #74 round-1 P1-2: a BEFORE snapshot of every transcript this profile
     # already has, so codex's post-run attribution (below) can tell "the file
     # THIS run created" from "the file a human's concurrent session created" —
@@ -2663,6 +2677,17 @@ KV
       local _burn_found_transcript
       _burn_found_transcript="$(adapter_find_session "$dir" "$sid_to_record" 2>/dev/null || true)"
       [ -n "$_burn_found_transcript" ] || sid_to_record=""
+      # #74 round-2 P2-3: for a --resume of an EXISTING sid (_burn_resume_pre_stamp
+      # set above), "the transcript exists" is true before the engine even ran —
+      # record it only if the engine actually ran: rc == 0, or the transcript's
+      # (mtime,size) changed across the run (it read/rewrote it before dying).
+      # A minted sid has no pre-stamp (nothing existed to snapshot), so this
+      # never fires for that path — "found" is already proof there.
+      if [ -n "$sid_to_record" ] && [ -n "$_burn_resume_pre_stamp" ] && [ "$rc" -ne 0 ]; then
+        local _burn_resume_post_stamp
+        _burn_resume_post_stamp="$(_clikae_mtime "$_burn_found_transcript") $(_burn_size "$_burn_found_transcript")"
+        [ "$_burn_resume_post_stamp" != "$_burn_resume_pre_stamp" ] || sid_to_record=""
+      fi
     fi
     if [ -z "$sid_to_record" ] && declare -F adapter_all_transcripts >/dev/null 2>&1; then
       local -a _snap_post=() _snap_new=()
