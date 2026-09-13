@@ -95,11 +95,20 @@ case "${1:-}/${2:-}" in
     # path = repos/<org>/<repo>/issues/<number>/timeline
     repo="$(printf '%s' "$path" | cut -d/ -f3)"
     number="$(printf '%s' "$path" | cut -d/ -f5)"
+    shift 2
+    page=1
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift; case "${1:-}" in page=*) page="${1#page=}" ;; esac ;;
+      esac
+      shift
+    done
     cf="$dir/timeline.calls"
     n=0
     [ -f "$cf" ] && n="$(cat "$cf")"
     n=$((n + 1))
     printf '%s' "$n" > "$cf"
+    printf '%s\n' "$page" > "$dir/timeline.$repo.$number.$n.sent_page"
     rcf="$dir/timeline.$repo.$number.rc"
     errf="$dir/timeline.$repo.$number.err"
     if [ -f "$rcf" ]; then
@@ -108,17 +117,30 @@ case "${1:-}/${2:-}" in
     fi
     remaining=5000
     [ -f "$dir/timeline.$repo.$number.remaining" ] && remaining="$(cat "$dir/timeline.$repo.$number.remaining")"
-    actor="" event="commented"
-    if [ -f "$dir/timeline.$repo.$number" ]; then
-      actor="$(sed -n '1p' "$dir/timeline.$repo.$number")"
-      ev="$(sed -n '2p' "$dir/timeline.$repo.$number")"
-      [ -n "$ev" ] && event="$ev"
-    fi
+    last=1
+    [ -f "$dir/timeline.$repo.$number.last" ] && last="$(cat "$dir/timeline.$repo.$number.last")"
     printf 'HTTP/2.0 200 OK\r\n'
     printf 'x-ratelimit-remaining: %s\r\n' "$remaining"
+    if [ "$page" = "1" ] && [ "$last" != "1" ]; then
+      printf 'link: <https://api.github.com/repositories/1/issues/%s/timeline?per_page=100&page=%s>; rel="last"\r\n' \
+        "$number" "$last"
+    fi
     printf '\r\n'
-    if [ -n "$actor" ]; then
-      printf '[{"event":"%s","actor":{"login":"%s"}}]\n' "$event" "$actor"
+    bodyfile="$dir/timeline.$repo.$number.page$page.json"
+    if [ -f "$bodyfile" ]; then
+      cat "$bodyfile"
+    elif [ "$page" = "1" ] && [ -f "$dir/timeline.$repo.$number" ]; then
+      # Legacy single-page shape (_gh_stub_timeline): line 1 = actor login,
+      # line 2 = event type — still exercised by the many pre-P1-1 tests
+      # that never needed multi-page control.
+      actor="$(sed -n '1p' "$dir/timeline.$repo.$number")"
+      ev="$(sed -n '2p' "$dir/timeline.$repo.$number")"
+      [ -n "$ev" ] || ev="commented"
+      if [ -n "$actor" ]; then
+        printf '[{"event":"%s","actor":{"login":"%s"}}]\n' "$ev" "$actor"
+      else
+        printf '[]\n'
+      fi
     else
       printf '[]\n'
     fi
@@ -145,6 +167,29 @@ _gh_stub_timeline() {
 _gh_stub_timeline_fail() {
   printf '%s\n' "$3" > "$GH_STUB_DIR/timeline.$1.$2.rc"
   printf '%s\n' "$4" > "$GH_STUB_DIR/timeline.$1.$2.err"
+}
+
+# --- P1-1 (2026-09-13 fix-round-3 review): the timeline endpoint has no
+# `direction` — _wg_latest_actor now reads page 1's own `Link: rel="last"`
+# header and fetches THAT page, then scans it backwards for the last event
+# carrying `actor.login` OR `user.login`. These two helpers give a test full
+# control over a specific page's raw body and the reported last-page number,
+# modelled on the real shapes the round-3 review's one real call captured
+# (committed events with neither field, comment events keyed `user` not
+# `actor`, an all-committed tail, an empty `[]` page).
+
+# _gh_stub_timeline_page <repo> <number> <page> <raw-json-array> — the exact
+# body _wg_latest_actor's request for <page> gets.
+_gh_stub_timeline_page() {
+  printf '%s\n' "$4" > "$GH_STUB_DIR/timeline.$1.$2.page$3.json"
+}
+
+# _gh_stub_timeline_last <repo> <number> <last_page> — the page number
+# reported in the `Link: rel="last"` header on a page=1 request. Not set (or
+# set to 1) means "single page" — no Link header at all, same as a real
+# timeline with <=100 items.
+_gh_stub_timeline_last() {
+  printf '%s\n' "$3" > "$GH_STUB_DIR/timeline.$1.$2.last"
 }
 
 # _gh_stub_page <org|mentions> <call#> <tsv-lines...> — seed one call's TSV
@@ -533,6 +578,97 @@ _honest_corpus_write() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"activity lookup failed (rate-limit)"* ]] || false
   [[ "$output" == *"by unknown:"* ]] || false
+}
+
+# --- P1-1 (2026-09-13 fix-round-3 review): the timeline endpoint has no
+# `direction`. Fixture shapes modelled on what the one real `--once` call
+# actually captured: `committed` events with neither `actor` nor `user`,
+# comment events keyed `user` not `actor`, and a `[]` page.
+
+@test "watch github --once: a committed tail with no actor falls back to an EARLIER comment on the same page (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # Single page (no Link header): a comment, then two commits with neither
+  # actor nor user — the real, most common shape. The LAST event with an
+  # actor is the comment, even though it is not literally the last element.
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"commented","actor":{"login":"dana"}},{"event":"committed","author":{"name":"dana","email":"d@x"},"committer":{"name":"dana","email":"d@x"}},{"event":"committed","author":{"name":"dana","email":"d@x"},"committer":{"name":"dana","email":"d@x"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T09:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#100 comment by dana: bob's issue"* ]] || false
+}
+
+@test "watch github --once: an all-committed page has no actor at all — never dropped, never treated as self (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"committed","author":{"name":"dana"}},{"event":"committed","author":{"name":"dana"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T09:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # Never dropped — still emitted, actor "unknown", never mistaken for self.
+  [[ "$output" == *"github CVERInc/reef#100"*"by unknown: bob's issue"* ]] || false
+  [[ "$output" == *"1 new event(s)"* ]] || false
+}
+
+@test "watch github --once: an empty timeline page ([]) is never dropped, never treated as self (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 100 1 '[]'
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T09:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"by unknown: bob's issue"* ]] || false
+}
+
+@test "watch github --once: a multi-page timeline fetches the LAST page (Link rel=last), not page 1 (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # Page 1 (stale, hours old): opened by carol. If the code ever regresses
+  # to reading page 1 (round 1/2's bug, applied to the wrong end this time),
+  # this would wrongly report "carol".
+  _gh_stub_timeline_page reef 100 1 '[{"event":"opened","actor":{"login":"carol"}}]'
+  _gh_stub_timeline_last reef 100 3
+  # Page 3 (the true last page): the real latest actor, erin, via a comment.
+  _gh_stub_timeline_page reef 100 3 '[{"event":"commented","actor":{"login":"erin"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T09:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#100 comment by erin: bob's issue"* ]] || false
+  [[ "$output" != *"by carol"* ]] || false
+  # Exactly 2 timeline calls for this one candidate — page 1 (to learn the
+  # last page number) then page 3 (the true tail) — still 1 unit against
+  # the 50-lookup budget (see the P2-4 budget test elsewhere in this file).
+  [ "$(cat "$GH_STUB_DIR/timeline.calls")" = "2" ]
+  [ "$(cat "$GH_STUB_DIR/timeline.reef.100.1.sent_page")" = "1" ]
+  [ "$(cat "$GH_STUB_DIR/timeline.reef.100.2.sent_page")" = "3" ]
+}
+
+@test "watch github --once: a single-page timeline (no Link header) costs exactly ONE timeline call (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|100|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline reef 100 alice commented
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T09:00:00Z bob reef https://x/100 0 "bob's issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#100 comment by alice: bob's issue"* ]] || false
+  [ "$(cat "$GH_STUB_DIR/timeline.calls")" = "1" ]
 }
 
 @test "watch github --once: same number, two DIFFERENT repos, same poll — neither is dropped (P1-4)" {

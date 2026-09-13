@@ -84,7 +84,9 @@
 #     the event, no lookup needed). Self-authored -> not an event (you know
 #     you opened it), but still recorded as seen.
 #   - a number seen before, updated again -> the ACTUAL actor and kind come
-#     from `issues/<n>/timeline?per_page=1&direction=desc` (_wg_latest_actor),
+#     from `issues/<n>/timeline` (_wg_latest_actor — the endpoint has no
+#     `direction` param; fetches the LAST page via its own `Link: rel="last"`
+#     header, up to 2 requests, still 1 unit against the budget below),
 #     the one endpoint whose events carry an actor for every activity shape
 #     that bumps `updated_at` — a comment, a review, a label, an assignee
 #     change (`repos/.../comments`, round 1's endpoint, only ever covers the
@@ -403,23 +405,50 @@ _wg_fetch_classified() {
 # $__WG_LOOKUP_KIND set, or 1 with $__WG_LOOKUP_LAST_KIND (rate-limit |
 # permanent | transient, via the SAME _wg_classify_error the search calls
 # use — never `|| out=""`, P2-4/P2-5, 2026-09-13 fix-round-2 review) /
-# $__WG_LOOKUP_LAST_REASON set. `issues/<n>/timeline` (not `/comments`,
-# round 1's endpoint — it has no actor for a review, label, or assignee
-# change; the timeline event does) at per_page=1, direction=desc: exactly
-# the single most recent activity, whatever shape it is. `--include` (`-i`)
-# is used instead of `--jq` so the response headers are readable at all —
-# `$__WG_LOOKUP_RATE_REMAINING` comes from `X-RateLimit-Remaining` there,
-# feeding _wg_lookup_budget_ok's early-stop check.
+# $__WG_LOOKUP_LAST_REASON set.
 #
-# 🔴 Called DIRECTLY, never through `x="$(_wg_latest_actor …)"` — same
-# subshell footgun as _wg_fetch_classified above (search this file for "MUST
-# be called directly"): the globals this function sets would vanish the
-# instant a command-substitution subshell exited.
+# 🔴 REWRITTEN (P1-1, 2026-09-13 fix-round-3 review — read before touching
+# this again). `issues/<n>/timeline` HAS NO `direction` PARAMETER — round
+# 2's `-f direction=desc` was silently ignored by the API, so `per_page=1`
+# always returned the timeline's FIRST (oldest) item, not the latest. Real-
+# world measurement (the one real `--once` this feature is allowed, against
+# a temp CLIKAE_HOME through a forwarding shim): 22 lookups, only 9 carried
+# `actor`/`user` at all, and the ones that did were hours-to-a-day stale —
+# 13/22 fell back to `unknown`, and (worse, silently) some genuinely fresh
+# activity got attributed to whoever the STALE first event happened to be,
+# wrongly self-excluding it. `committed` — the single most common timeline
+# event shape in real data — carries no `actor` field at all (only
+# `author`/`committer` name/email, not a login), which is a second,
+# independent reason `per_page=1` on an arbitrary item so often came back
+# empty.
+#
+# Fixed in two calls (still ONE unit against the 50-lookup budget — see
+# _wg_lookup_and_count): (1) fetch page 1 at `per_page=100` and read the
+# `Link: rel="last"` response header for the LAST page number — the only
+# way to find "the end of the timeline" this endpoint offers, since it
+# can't be asked to sort descending; (2) if a last page beyond page 1
+# exists, fetch THAT page (100 more items, the true tail of the timeline);
+# otherwise page 1 already had everything, no second call needed. Either
+# way, `_wg_last_actor_in_body` then scans that page BACKWARDS for the LAST
+# event that carries `actor.login` OR `user.login` (a comment's own object
+# is keyed `user`, not `actor` — round 1 and 2 both checked `actor` first,
+# which still needs to happen first here, but a comment-shaped event was
+# never reachable under the old per_page=1 approach often enough to notice
+# the fallback mattered) — skipping `committed`/`cross-referenced`/anything
+# else with neither. If NOTHING on that page carries either field (an
+# all-`committed` history, or a genuinely empty timeline), this returns 1
+# exactly like a lookup failure — the caller (_wg_process, via
+# _wg_lookup_and_count) already treats that as "never drop, emit as
+# unknown, never treated as self" — never inferring "not you" OR "you" from
+# an actor it could not find.
 _wg_latest_actor() {
-  local org="$1" repo="$2" number="$3" errfile raw rc body event
+  local org="$1" repo="$2" number="$3" errfile raw rc body last_page
+  __WG_LOOKUP_ACTOR=""
+  __WG_LOOKUP_KIND=""
+
   errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
   raw="$(gh api "repos/$org/$repo/issues/$number/timeline" --method GET \
-    -f per_page=1 -f direction=desc -i 2>"$errfile")"
+    -f per_page=100 -f page=1 -i 2>"$errfile")"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     __WG_LOOKUP_LAST_KIND="$(_wg_classify_error "$errfile")"
@@ -430,21 +459,70 @@ _wg_latest_actor() {
   rm -f "$errfile"
   __WG_LOOKUP_RATE_REMAINING="$(printf '%s\n' "$raw" \
     | grep -iE '^x-ratelimit-remaining:' | head -n1 | tr -d '\r' | awk '{print $2}')"
+  # `Link: <...?per_page=100&page=3>; rel="next", <...&page=3>; rel="last"`
+  # — isolate the rel="last" segment first, THEN pull its page number, so
+  # `per_page=100` in the same URL (which also contains the substring
+  # "page=100") can never be misread as the page number: require a `?`/`&`
+  # immediately before `page=`.
+  last_page="$(printf '%s\n' "$raw" | grep -iE '^link:' | head -n1 \
+    | grep -oE '<[^>]*>; *rel="last"' | grep -oE '[?&]page=[0-9]+' | head -n1 | grep -oE '[0-9]+$')"
   body="$(printf '%s\n' "$raw" | awk 'f{print} /^\r?$/{f=1}')"
-  __WG_LOOKUP_ACTOR="$(printf '%s' "$body" | grep -oE '"actor":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
-  [ -n "$__WG_LOOKUP_ACTOR" ] || __WG_LOOKUP_ACTOR="$(printf '%s' "$body" | grep -oE '"user":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
-  event="$(printf '%s' "$body" | grep -oE '"event":"[^"]*"' | head -n1 | sed -E 's/.*"event":"([^"]*)"$/\1/')"
-  case "$event" in
-    commented) __WG_LOOKUP_KIND="comment" ;;
-    reviewed)  __WG_LOOKUP_KIND="review" ;;
-    *)         __WG_LOOKUP_KIND="activity" ;;
-  esac
-  if [ -z "$__WG_LOOKUP_ACTOR" ]; then
-    __WG_LOOKUP_LAST_KIND="transient"
-    __WG_LOOKUP_LAST_REASON="timeline: no actor in the latest event"
-    return 1
+
+  if [ -n "$last_page" ] && [ "$last_page" != "1" ]; then
+    errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+    raw="$(gh api "repos/$org/$repo/issues/$number/timeline" --method GET \
+      -f per_page=100 -f page="$last_page" -i 2>"$errfile")"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      __WG_LOOKUP_LAST_KIND="$(_wg_classify_error "$errfile")"
+      __WG_LOOKUP_LAST_REASON="$(head -n1 "$errfile" 2>/dev/null)"
+      rm -f "$errfile"
+      return 1
+    fi
+    rm -f "$errfile"
+    __WG_LOOKUP_RATE_REMAINING="$(printf '%s\n' "$raw" \
+      | grep -iE '^x-ratelimit-remaining:' | head -n1 | tr -d '\r' | awk '{print $2}')"
+    body="$(printf '%s\n' "$raw" | awk 'f{print} /^\r?$/{f=1}')"
   fi
-  return 0
+
+  if _wg_last_actor_in_body "$body"; then
+    return 0
+  fi
+  __WG_LOOKUP_LAST_KIND="transient"
+  __WG_LOOKUP_LAST_REASON="timeline: no actor in the last page fetched (page ${last_page:-1})"
+  return 1
+}
+
+# _wg_last_actor_in_body <compact-json-array-body> -> 0 with
+# $__WG_LOOKUP_ACTOR/$__WG_LOOKUP_KIND set to the LAST array element that
+# carries `actor.login` or `user.login`, scanning from the end backward —
+# or 1 if nothing in the page carries either (all `committed`, or `[]`).
+# `gh api` responses are compact (single line, confirmed against the real
+# API, not pretty-printed — see the PR report), so array elements are split
+# on `},{` boundaries; a GitHub timeline event's own top-level fields never
+# contain that literal substring unescaped. Portable reverse (no `tac`,
+# which macOS doesn't ship): the classic `sed '1!G;h;$!d'` idiom.
+_wg_last_actor_in_body() {
+  local body="$1" flat events evline actor event
+  flat="$(printf '%s' "$body" | tr -d '\n')"
+  flat="${flat#\[}"; flat="${flat%\]}"
+  [ -n "$flat" ] || return 1
+  events="$(printf '%s' "$flat" | sed -E 's/\},\{/}\n{/g')"
+  while IFS= read -r evline; do
+    [ -n "$evline" ] || continue
+    actor="$(printf '%s' "$evline" | grep -oE '"actor":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
+    [ -n "$actor" ] || actor="$(printf '%s' "$evline" | grep -oE '"user":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
+    [ -n "$actor" ] || continue
+    event="$(printf '%s' "$evline" | grep -oE '"event":"[^"]*"' | head -n1 | sed -E 's/.*"event":"([^"]*)"$/\1/')"
+    __WG_LOOKUP_ACTOR="$actor"
+    case "$event" in
+      commented) __WG_LOOKUP_KIND="comment" ;;
+      reviewed)  __WG_LOOKUP_KIND="review" ;;
+      *)         __WG_LOOKUP_KIND="activity" ;;
+    esac
+    return 0
+  done < <(printf '%s\n' "$events" | sed '1!G;h;$!d')
+  return 1
 }
 
 # _wg_lookup_budget_ok -> 0 while this poll may still spend a lookup: fewer

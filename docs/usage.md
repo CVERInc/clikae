@@ -393,9 +393,14 @@ from `--since`/24h-ago instead of surfacing today's newest activity first.
 
 Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
 `issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
-label, an assignee change) and whether that was you. Bounded to 50 such
-lookups per poll, spent oldest-unseen-first (the order the asc-paginated
-search results stream in), and stopped early once GitHub's own
+label, an assignee change) and whether that was you. That endpoint has no
+`direction` parameter, so learning the LATEST event means reading its own
+`Link: rel="last"` page number and fetching that page (up to 2 requests,
+still counted as 1 lookup against the budget below) — the one endpoint
+whose events carry an actor for review/label/assignee shapes too, not just
+a comment. Bounded to 50 such lookups per poll, spent oldest-unseen-first
+(the order the asc-paginated search results stream in), and stopped early
+once GitHub's own
 `X-RateLimit-Remaining` drops under 100. A candidate beyond that bound is
 still reported — never silently dropped — just as `by unknown` instead of a
 real login.
