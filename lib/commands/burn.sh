@@ -416,8 +416,18 @@ _burn_output_tail() {
 #     options in the same ranking.
 #   · P2-9 (round-1 review) — a tank we KNOW is nearly exhausted (peak >=90%)
 #     must not outrank a tank we simply have no reading for. Ranking is three
-#     tiers, best first: known headroom <90% (lowest weekly_pct, then lowest
-#     window_pct) -> unknown -> known >=90%.
+#     tiers, best first: known headroom <90% -> unknown -> known >=90%
+#     (tiering itself uses peak = max(window_pct, weekly_pct): a tank with
+#     PLENTY of weekly room left but its 5h window nearly gone still lands in
+#     the worst tier, because a burn starting NOW hits that wall in minutes).
+#   · P2-3 (round-2 review) — WITHIN a tier, ordered by lowest window_pct
+#     first, weekly_pct only as the tie-break. A burn is about to run NOW: a
+#     tank with a great weekly number but its 5-hour window nearly spent
+#     would be picked over one with hours of window left just because its
+#     weekly digit looks nicer — a real reroute to the WORSE choice for the
+#     run about to happen. Tiering above already weighs window heavily (via
+#     peak); ordering used to weigh it only as a tie-break, the two
+#     disagreeing about which window matters — this makes them agree.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
@@ -514,6 +524,10 @@ EOF
   done
 
   # Pass 3 — pick the best surviving (non-skipped) candidate, three tiers.
+  # P2-3 (round-2 review): WITHIN a tier, ordered by window_pct (the 5-hour
+  # clock a burn starting now actually runs against) first, weekly_pct only
+  # breaking a tie — swapped from the round-1 shape, which ordered by
+  # weekly_pct first. See this function's own header for why.
   local best="" best_tier=9 best_uw=999999 best_up=999999
   for (( i = 0; i < n; i++ )); do
     [ "${c_skip[i]}" = 0 ] || continue
@@ -523,8 +537,8 @@ EOF
     else tier=0; up="${c_up[i]}"; uw="${c_uw[i]}"
     fi
     if [ "$tier" -lt "$best_tier" ] ||
-       { [ "$tier" -eq "$best_tier" ] && { [ "$uw" -lt "$best_uw" ] ||
-         { [ "$uw" -eq "$best_uw" ] && [ "$up" -lt "$best_up" ]; }; }; }; then
+       { [ "$tier" -eq "$best_tier" ] && { [ "$up" -lt "$best_up" ] ||
+         { [ "$up" -eq "$best_up" ] && [ "$uw" -lt "$best_uw" ]; }; }; }; then
       best="${c_tank[i]}"; best_tier=$tier; best_uw=$uw; best_up=$up
     fi
   done
