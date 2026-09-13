@@ -187,6 +187,12 @@ EOF
     esac
   done
 
+  # #61 round-2 P2-4: warm the per-process tank cache before anything below
+  # walks the store — this command's own `list_all_profiles` call below plus
+  # one `resolve_active_profile`/`tanks_for_engine` walk per engine (via
+  # _status_row_for) otherwise re-derive the same rows once each.
+  profiles_cache_warm
+
   # Which CLIs to report on. With an explicit <engine>, just that one. Otherwise
   # every CLI that has at least one profile.
   local clis=""

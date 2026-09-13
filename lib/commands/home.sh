@@ -848,6 +848,19 @@ _home_reap() {
 
 _home_refresh() {
   local _df _tf _dpid _tpid
+  # #61 round-2 P2-4: warm the per-process tank cache for THIS refresh before
+  # anything below (including the background scans this function starts)
+  # walks the store — board was 2.4x slower than main on 30 tanks. Reset
+  # first, not warm-once-for-the-process: the board is a single long-lived
+  # process that mutates tanks (n/a/d/s below) and calls this again after
+  # every mutation, so a stale cache from the FIRST refresh would otherwise
+  # keep answering for the rest of the session. Guarded: tests/bats/home.bats
+  # sources this file standalone (log.sh only) to unit-test the overlap/
+  # fallback logic below with fake _home_items/_home_dry_set, without
+  # profile_store.sh in scope — an unguarded call is a bare "command not
+  # found" under this function's own `set -eo pipefail` contract.
+  declare -F profiles_cache_reset >/dev/null 2>&1 && profiles_cache_reset
+  declare -F profiles_cache_warm  >/dev/null 2>&1 && profiles_cache_warm
   _df="$(mktemp "${TMPDIR:-/tmp}/clikae-dry.XXXXXX" 2>/dev/null)"   || _df=""
   _tf="$(mktemp "${TMPDIR:-/tmp}/clikae-tot.XXXXXX" 2>/dev/null)"   || _tf=""
   if [ -z "$_df" ] || [ -z "$_tf" ]; then
