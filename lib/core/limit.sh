@@ -174,15 +174,25 @@ limit_codex_reset() {
 # forward-join below and never reaches this) pays for building every
 # adjacent pair, and even that is one more single grep call, not one per
 # pair.
+# P3-2 (round-2 fix review, this PR): `while read -r` does not strip a
+# trailing `\r` — a CRLF capture left one on the end of EVERY line, so the
+# `case … in *[.\!?])` terminal-punctuation check below never matched (a
+# line ending "…AM.\r" tests against `.\r`, not `.`) and every single
+# anchor line, not just the rare wrapped one, tried to glue its neighbour
+# on. Harmless today only because `limit_codex_reset`'s own `head -n 1`
+# lets the anchor line's own phrase win over whatever got glued to it —
+# see the comment on limit_codex_reset's callers — but it widened P3-1's
+# exposure from "occasionally" to "every line of a CRLF transport", so
+# strip it at the source instead of leaning on that.
 _limit_codex_anchor_line() {
   local re="$1" buf="$2"
   local -a lines=()
   local line
-  while IFS= read -r line; do lines+=("$line"); done <<< "$buf"
+  while IFS= read -r line; do lines+=("${line%$'\r'}"); done <<< "$buf"
   local n=${#lines[@]}
   [ "$n" -gt 0 ] || return 1
 
-  local hit hit_i joined
+  local hit hit_i joined next
   # P1-1 (round-2 fix review, this PR): case-sensitive (no `grep -i`) — the
   # caller's anchor spells out every case variant it wants to accept (see
   # limit_codex_output_dry); folding case here would silently widen
@@ -193,7 +203,26 @@ _limit_codex_anchor_line() {
     joined="${lines[$hit_i]}"
     case "$joined" in
       *[.\!?]) : ;;
-      *) [ $((hit_i + 1)) -lt "$n" ] && joined="$joined ${lines[$((hit_i + 1))]}" ;;
+      *)
+        if [ $((hit_i + 1)) -lt "$n" ]; then
+          next="${lines[$((hit_i + 1))]}"
+          # P3-1 (round-2 fix review, this PR): gluing the next line on
+          # whenever the matched line lacked terminal punctuation was meant
+          # for a vendor sentence the terminal wrapped mid-RESET-PHRASE
+          # ("…2:13\nAM."), but it fired just as readily when the matched
+          # line simply had no trailing period for its own reasons and the
+          # NEXT line was unrelated prose that happened to carry its OWN
+          # "resets …"/"try again at …" text — donating THAT decoy's reset
+          # to the genuine anchor instead of just a wrapped continuation.
+          # Only glue when the next line does not already stand on its
+          # own — neither as another anchor match nor as something that
+          # itself parses as a reset phrase (a decoy must not donate its
+          # reset; a genuine wrapped continuation like "AM." is neither).
+          if ! grep -qaE "$re" <<< "$next" && [ -z "$(limit_codex_reset "$next")" ]; then
+            joined="$joined $next"
+          fi
+        fi
+        ;;
     esac
     printf '%s' "$joined"
     return 0

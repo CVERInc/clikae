@@ -365,3 +365,43 @@ _codex_reply_line() {
     [ "$status" -ne 0 ] || { echo "wrongly dry: $line"; false; }
   done
 }
+# --- P3-1 (round-2 fix review, this PR): the forward-join used to glue the
+# next line onto an anchor line with no trailing punctuation UNCONDITIONALLY
+# — meant for a vendor sentence the terminal wrapped mid-RESET-PHRASE, but it
+# fired just as readily when the next line was unrelated prose that happened
+# to carry its OWN "resets …" text, donating that decoy's reset to the
+# genuine anchor. limit_codex_reset used to have this exact bug at the
+# buffer level (P2-3, fixed by isolating the anchor line) — this is the same
+# shape one line-join later.
+
+@test "codex output_dry: a decoy reset phrase on the NEXT line is not donated to an anchor line missing its own (P3-1)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit\nthe schedule resets Monday morning, so try again at 9:00 PM if unsure.'
+  run limit_codex_output_dry "$out"
+  # Conservative and correct: the anchor line itself carries no reset
+  # phrase, and the next line's reset belongs to unrelated prose, not this
+  # event — so this is NOT dry (same as before P2-3 ever existed).
+  [ "$status" -ne 0 ]
+}
+
+@test "codex output_dry: a genuine wrapped reset (no decoy reset on the next line) still joins (P3-1 control)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+}
+
+# --- P3-2 (round-2 fix review, this PR): `while read -r` does not strip a
+# trailing `\r` — a CRLF capture left one on the end of every line, so the
+# "does this line already end in terminal punctuation" check never matched
+# and every anchor line tried to glue its neighbour on, whether wrapped or
+# not.
+
+@test "codex output_dry: a CRLF capture's reset stays byte-clean, no stray \\r (P3-2)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\r\ntrailer line\r'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "try again at Sep 13th, 2026 2:13 AM" ]] || { echo "$output" | od -c; false; }
+}
