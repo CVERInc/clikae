@@ -287,6 +287,9 @@ STUB
 @test "_burn_timeout_bin: picks \`timeout\` when it's on PATH" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): _burn_timeout_bin moved to lib/core/timeout_bin.sh —
+  # sourced globally by bin/clikae, but this test sources burn.sh directly.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
@@ -298,6 +301,8 @@ STUB
 @test "_burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): moved to lib/core/timeout_bin.sh — see above.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   local out
@@ -398,6 +403,8 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
 @test "_burn_timeout_bin: falls back to perl when no timeout/gtimeout" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): moved to lib/core/timeout_bin.sh — see above.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/perlbin"
@@ -2947,4 +2954,64 @@ STUB
   [ "$reason_field" != '"reason":""' ]
   [[ "$reason_field" == *'engine exited rc=9, output redacted'* ]] || { echo "$reason_field"; false; }
   [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+}
+
+# --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
+# --- cache at run end, off the launch path                                 ---
+
+@test "P2-1(a): burn refreshes the launched tank's usage cache at run end — one vendor call, off the launch path" {
+  _stub_claude
+  clikae init claude solo1
+  # Starting state P2-1's own receipt found on a real machine: no `clikae
+  # usage` has ever run for this tank, so there is no cache at all yet.
+  [ ! -f "$CLIKAE_HOME/state/usage/claude/solo1.json" ]
+  printf '{"claudeAiOauth":{"accessToken":"tok-solo1"}}\n' > "$CLIKAE_HOME/profiles/claude/solo1/.credentials.json"
+  export CURL_CALLS="$BATS_TEST_TMPDIR/curl_calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$CURL_CALLS"
+config="$(cat)"
+[[ "$config" == *'Bearer tok-solo1'* ]] || exit 2
+echo '{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":17,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn claude solo1 --artifact "$A" --prompt "do it"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  # Exactly ONE vendor call, made after the run concluded — P1-2..P1-4
+  # (round-1 review) already proved the LAUNCH itself pays zero; this is
+  # the separate, deliberate call P2-1(a) adds at the other end.
+  [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]
+  [ -f "$CLIKAE_HOME/state/usage/claude/solo1.json" ]
+  jq -e '.window_pct == 42 and .weekly_pct == 17 and .source == "vendor"' \
+    "$CLIKAE_HOME/state/usage/claude/solo1.json"
+}
+
+@test "P2-1(a) control: a DRY run also refreshes the tank it just tried, not only a successful one" {
+  _stub_claude
+  clikae init claude dry1; clikae init claude dry2
+  printf '{"claudeAiOauth":{"accessToken":"tok-dry1"}}\n' > "$CLIKAE_HOME/profiles/claude/dry1/.credentials.json"
+  export CURL_CALLS="$BATS_TEST_TMPDIR/curl_calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$CURL_CALLS"
+config="$(cat)"
+[[ "$config" == *'Bearer tok-dry1'* ]] || exit 2
+echo '{"five_hour":{"utilization":95,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":80,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "5-hour limit reached ∙ resets 2pm"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn claude dry1 --artifact "$A" --no-reroute --prompt "do it"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]
+  jq -e '.window_pct == 95 and .source == "vendor"' \
+    "$CLIKAE_HOME/state/usage/claude/dry1.json"
 }

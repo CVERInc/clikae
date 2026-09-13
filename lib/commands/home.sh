@@ -1024,19 +1024,42 @@ _home_fuel_memo_reset() {
 
 # The actual computation _home_fuel_dotv used to do inline — unchanged logic,
 # just given a $4 `now` (epoch seconds, shared for the whole redraw) so it
-# never forks `date` itself; usage_cached_fields accepts the same param.
+# never forks `date` itself; usage_board_fields accepts the same param.
+#
+# P2-1(c) (round-2 review): this used to call usage_cached_fields, which
+# stops returning ANYTHING once the reading is older than the 120s TTL —
+# and nothing but a manual `clikae usage` ever refreshes it (see
+# lib/core/usage.sh's "who writes this cache" header), so on a real machine
+# the vendor number was invisible almost all the time (round-2 review's own
+# receipt: 3 of 4 real tanks, hours stale, showed nothing). usage_board_fields
+# has no TTL of its own — it returns whatever is on disk, however old, same
+# cache-only/no-fetch/reset-instant-aware contract as burn's
+# usage_cache_peek — so THIS function is the one that draws the line: still
+# shown, silently, inside the TTL; shown WITH its age once past the TTL
+# ("window 44% · weekly 20% · 3h ago" — _human_age already has this exact
+# phrasing, built for the Continue list); and treated as if there were no
+# cached reading at all once the reading is 24h or older (falls through to
+# the same dry/weekly/codex/ready chain below this block, unchanged) — a
+# number that old is closer to noise than to a fact worth a coloured dot.
 _home_fuel_dotv_compute() {
   local dry="$1" cli="$2" profile="$3" now="${4:-}"
   _FNOTE=""
-  local usage_fields up uw peak
-  if declare -F usage_cached_fields >/dev/null && usage_fields="$(usage_cached_fields "$cli" "$profile" "$now")"; then
-    IFS=$'\t' read -r up uw peak <<< "$usage_fields"
-    _FNOTE="window ${up}% · weekly ${uw}%"
-    peak="${peak%%.*}"
-    if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
-    elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
-    else _FDOT="${__C_GREEN}●$__C_RESET"; fi
-    return 0
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
+  local usage_fields up uw peak cached_at age ttl
+  if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
+    IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
+    age=$(( now - cached_at )); [ "$age" -ge 0 ] || age=0
+    if [ "$age" -lt 86400 ]; then
+      ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
+      _FNOTE="window ${up}% · weekly ${uw}%"
+      [ "$age" -lt "$ttl" ] || _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
+      peak="${peak%%.*}"
+      if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
+      elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
+      else _FDOT="${__C_GREEN}●$__C_RESET"; fi
+      return 0
+    fi
+    # 24h or older: too stale to trust — fall through as if unread, below.
   fi
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0

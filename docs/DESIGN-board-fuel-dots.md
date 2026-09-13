@@ -258,19 +258,55 @@ rollout must not be stamped "just now"); Antigravity currently returns
 unknown. Parsing requires jq; without it readings are unknown.
 
 Readings live at `$CLIKAE_HOME/state/usage/<engine>/<tank>.json`, including
-`cached_at` epoch seconds. TTL defaults to 120 seconds; `CLIKAE_USAGE_TTL`
+`cached_at` (the reading's own evidentiary timestamp — see `usage_read`'s
+header) and `scanned_at` (when it was actually fetched/scanned; round-2
+review, P3 — the two coincide for a vendor reading but not for codex's
+transcript evidence, whose `cached_at` is the underlying event's own time).
+TTL defaults to 120 seconds against `scanned_at`; `CLIKAE_USAGE_TTL`
 overrides it and `--fresh` bypasses it. Errors are cached too. Writes are
-atomic. The board only reads this cache — `usage_cached_fields` reads the
-cache file directly and never forks the adapter or `date` more than once per
-redraw (round-1 review, P2-1) — so redraws never make network calls or pay a
-vendor-cache read proportional to how many rows a tank appears in.
+atomic, and `usage_read` is the ONLY writer in the repo.
 
-`clikae usage [engine] [tank] [--fresh]` (a bare `clikae usage --fresh`
-covers every tank) is the *only* thing that calls the vendor. Burn never
-does (round-1 review, P2-2): `_burn_next_same_engine`'s candidate ranking
-reads whatever is already on disk (`usage_cache_peek` — stale allowed,
-missing = unranked) and never triggers a fetch, so a cold burn never pays a
-serialized vendor round-trip (`--max-time 8` each) just to launch.
+**Who writes this cache, and who reads what (round-2 review, P2-1):**
+
+- **(a)** `burn` refreshes the LAUNCHED tank's reading once, at run END —
+  after the run's own artifact check (so it can never delay judging that
+  run's outcome), never before launching (the launch itself still pays
+  zero vendor round-trips — round-1 review, P1-2/P1-3/P1-4, unchanged).
+- **(b)** when the named tank is dry and burn must reroute, it refreshes
+  each surviving CANDIDATE's reading once, right before ranking them
+  (bounded to candidates only — never a tank already skipped as
+  live/busy/solo/same-account — reusing the adapter's own existing
+  `--max-time`, no new bound invented). This is the one moment a stale
+  number would cost burn a wrong hop.
+- **(c)** the board NEVER fetches. It reads whatever is already on disk,
+  however old, via `usage_board_fields` — silently within the TTL, WITH its
+  age alongside it ("window 44% · weekly 20% · 3h ago") once past the TTL,
+  and treated as if there were no cached reading at all once it is 24h or
+  older. `clikae usage [engine] [tank] [--fresh]` (a bare `clikae usage
+  --fresh` covers every tank) is the only thing a HUMAN runs to fill this
+  cache; (a)/(b) are `burn` calling the same writer (`usage_read`) the same
+  way, on its own schedule.
+- **(d)** `usage_cache_peek` (burn's ranking) and `usage_board_fields` (the
+  board's display) both honour the reading's OWN `window_resets_at` /
+  `weekly_resets_at`: a window whose reset instant has already passed reads
+  as 0% used, never as whatever stale percentage the last fetch happened to
+  record — a tank that ran dry at 15:00Z must not still be ranked (or
+  shown) at its old 100% two hours after its window reset.
+
+`usage_cached_fields` (fresh-only, no age shown) still exists with its
+original contract for any caller that genuinely wants "fresh or nothing",
+but is no longer the board's primary read — see (c) above for why a
+120s-TTL-only gate left the vendor cache invisible almost all the time on
+a real machine (round-2 review's own receipt: 3 of 4 real tanks, hours
+stale, showed nothing).
+
+`_home_fuel_dotv`'s header used to promise the redraw path is "fork-free";
+that was never fully true (see the codex paragraph above) and is even less
+so now that (c) means every tank not yet memoized this redraw pays one
+`jq` fork to parse its cache file (plus one shared `date` fork for the
+whole redraw) — see that function's own header (round-2 review, P3-1) for
+the measured cost and why a hand-rolled bash-only JSON reader was judged
+not worth it for a sub-millisecond-per-tank, redraw-only cost.
 
 For a current reading, the higher used percentage determines the dot: 90%
 or more red, 60% or more yellow, otherwise green. The note shows both
@@ -280,25 +316,35 @@ through to the existing transcript logic, including `reset passed · unverified`
 The tank a caller names is always the one burn launches — there is no
 pre-launch substitution (round-1 review, P1-2/P1-3/P1-4). Headroom
 preference only governs which tank a *dry* burn reroutes to *next*, in
-three tiers, best first: a known reading under 90% used (sorted by lowest
-weekly_pct, then lowest window_pct) beats an unknown reading, which beats
-a known reading of 90% or more (P2-9 — a tank we know nothing about should
-not lose to one the vendor just called nearly exhausted). Tanks sharing a
-vendor account rank as ONE, using the worst (highest) reading any of them
-reported this call — never overstating a shared quota because one
-sibling's cache snapshot happens to look better — and a tank is never
-offered as the very next hop after a sibling on the same account, even
-before that account is confirmed dry (P2-6). The existing live-session,
-busy-burn, solo, and dried-account exclusions are retained. `--to` always
-wins outright over this ordering, and every hop it produces — including
-the very first, off a tank that just went dry — is recorded in
-`rerouted_from`. Unknown usage keeps the existing transcript-based launch
-and reroute behavior otherwise.
+three tiers, best first: a known reading under 90% used beats an unknown
+reading, which beats a known reading of 90% or more (P2-9 — a tank we know
+nothing about should not lose to one the vendor just called nearly
+exhausted; tiering itself uses `peak = max(window_pct, weekly_pct)`).
+WITHIN a tier, ordered by lowest **window_pct** first, `weekly_pct` only as
+the tie-break (round-2 review, P2-3 — swapped from round-1's weekly-first
+shape: a burn is about to run NOW, against the 5-hour window, so a tank
+with a great weekly number but its window nearly spent is the wrong pick).
+Tanks sharing a vendor account rank as ONE, using the worst (highest)
+reading any of them reported this call — never overstating a shared quota
+because one sibling's cache snapshot happens to look better — and a tank
+is never offered as the very next hop after a sibling on the same account,
+even before that account is confirmed dry (P2-6). The existing
+live-session, busy-burn, solo, and dried-account exclusions are retained.
+`--to` always wins outright over this ordering, and every hop it produces
+— including the very first, off a tank that just went dry — is recorded
+in `rerouted_from`. Unknown usage keeps the existing transcript-based
+launch and reroute behavior otherwise.
 
 Claude reads the tank credential file or tank-specific macOS Keychain
-service, guarded by `command -v security` and a bounded wait when
-`timeout`/`gtimeout` is available (mirroring the credential-migration
-hook's own guard; round-1 review, P2-7). The bearer token is passed solely
+service, guarded by `command -v security` and a bounded wait via
+`lib/core/timeout_bin.sh`'s `_burn_timeout_bin` — `timeout` → `gtimeout` →
+`perl -e 'alarm …; exec …'` → an honest warning and an unbounded call as a
+last resort (mirroring the credential-migration hook's own guard; round-1
+review, P2-7; round-2 review, P2-2: this used to be its own two-arm copy,
+`timeout`/`gtimeout` only, right here — the ONE platform this branch runs
+on, stock macOS, ships NEITHER by default, so the bound was silently empty
+on an unmodified install; now it calls the repo's one shared resolver,
+which already had the third arm). The bearer token is passed solely
 through curl configuration on stdin, with shell tracing disabled, never
 through argv or an exported variable. Curl defaults are disabled and
 timeouts bound failures; HTTP errors and network failures become unknown

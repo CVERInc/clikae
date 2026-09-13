@@ -428,8 +428,17 @@ _burn_next_same_engine() {
   case "$last_hop" in "$cli/"*) last_acct="$(_limit_tank_account "$cli" "${last_hop#*/}" 2>/dev/null || true)" ;; esac
 
   # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays.
-  # peak/up/uw empty = no usable reading (unknown), never a fork to get one
-  # (usage_cache_peek: cache only, stale allowed — P2-2).
+  # peak/up/uw empty = no usable reading (unknown).
+  # P2-1(b) (round-2 review): this is THE one moment a stale headroom number
+  # costs burn a wrong hop — we are about to CHOOSE among these candidates —
+  # so unlike a plain cache peek, each ELIGIBLE candidate's reading is
+  # refreshed with one real vendor call before it is read (bounded by the
+  # adapter's own existing --max-time; no new bound invented). Never for a
+  # candidate that got `continue`d above (solo/in-use/same-account/busy):
+  # bounded to candidates only, not the whole fleet. usage_read is still the
+  # ONLY writer of this cache (see lib/core/usage.sh's header) — this calls
+  # it the same way `clikae usage --fresh` does, just once per candidate,
+  # here, instead of leaving it to whenever a human last ran that command.
   local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=()
   while IFS= read -r t; do
     [ -n "$t" ] || continue
@@ -460,6 +469,7 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
+    declare -F usage_read >/dev/null && usage_read "$cli" "$t" 1 >/dev/null 2>&1
     local up="" uw="" peak="" fields
     if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
       IFS=$'\t' read -r up uw peak <<< "$fields"
@@ -2918,6 +2928,16 @@ KV
       artifact_fresh=1
       artifact_bytes_snapshot="$(_burn_size "$artifact")"
     fi
+
+    # P2-1(a) (round-2 review): this tank just finished a run — the board's
+    # cache for it is either absent or as stale as its last `clikae usage`
+    # (nothing else ever wrote it; see lib/core/usage.sh's header). One vendor
+    # call, here, off the launch path (the launch itself still pays zero — see
+    # P1-2..P1-4 above) and AFTER the artifact check so it can never delay
+    # judging this run's own outcome. Best-effort: a failed refresh leaves the
+    # existing cache untouched (usage_read's own contract) and never affects
+    # $rc/$out.
+    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1
 
     # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
     # BEFORE classifying — not just at display time. _burn_output_tail already

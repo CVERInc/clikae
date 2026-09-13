@@ -50,42 +50,128 @@ usage_read() (
   printf '%s\n' "$reading"
 )
 
+# --- who writes this cache, and who honours what (P2-1, round-2 review) ---
+#
+# (a) `burn` refreshes the LAUNCHED tank's reading at run END — one vendor
+#     call, off the launch path (launching itself still pays zero — P1-2..
+#     P1-4), fired after the run's artifact check so it can never delay
+#     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn.
+# (b) when the named tank is dry and burn must reroute, `_burn_next_same_
+#     engine` refreshes each surviving CANDIDATE's reading once, right
+#     before ranking them (bounded to candidates only, reusing the
+#     adapter's own existing --max-time — no new bound invented) — because
+#     that is the one moment a stale number costs burn a wrong hop.
+# (c) the board NEVER fetches (usage_cache_peek/usage_board_fields below are
+#     cache-only, always) and shows the reading's age next to the dot once
+#     it is older than the TTL ("3h ago"), or "unknown" once it is older
+#     than 24h — see lib/commands/home.sh's _home_fuel_dotv_compute.
+# (d) `usage_cache_peek` (burn's ranking) and `usage_board_fields` (the
+#     board's display) both honour the reading's OWN window_resets_at /
+#     weekly_resets_at: a window whose reset instant has already passed
+#     reads as 0% used, not as whatever stale percentage the last fetch
+#     happened to record — a tank that ran dry at 15:00Z must not still be
+#     ranked (or shown) at its old 100% two hours after its window reset.
+#
+# Nothing else writes or refreshes this cache. `usage_read` above is the
+# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b) above calling
+# it the same way); a cache file with no `clikae usage`/burn run behind it
+# simply does not exist yet, and one that stops being refreshed simply ages
+# in place — (c) is how the board says so instead of staying silent.
+#
+# `scanned_at` vs `cached_at` (P3, round-2 review): a vendor reading's
+# `cached_at` IS the fetch time — the two never differ. A transcript
+# (codex) reading's `cached_at` is the underlying EVENT's own timestamp
+# (P2-4, round-1 review, deliberate: never lie about how old the FACT is),
+# which can be old even in a cache written moments ago. `scanned_at` is
+# always "when `usage_read` last actually looked" — that is what a
+# cache-hit/TTL check means everywhere else, so codex gets the same TTL
+# behaviour claude already had instead of a check that almost never fires.
+# `cached_at` keeps meaning "how old is this NUMBER", used by (c)'s age
+# display and (d)'s reset-instant guard — unchanged by this.
+
+# P2-3 (round-1 review) / P3-12 (round-2 review): the vendor's real reset
+# instant is "2026-09-13T14:50:00.189940+00:00" — microseconds AND a UTC
+# offset, never the bare "…Z" jq's fromdateiso8601 requires. norm_stamp
+# drops the fractional seconds, then parses ANY "±HH:MM" offset (not just
+# "+00:00"/"-00:00", the round-1 fix's shape) and converts to an epoch by
+# arithmetic: the naive local time read as if it were already UTC, then
+# shifted by the offset (subtract for "+", add for "-"). A stamp that
+# doesn't match this shape at all still fails to parse — the caller's own
+# `catch` decides what that means (both uses below fail OPEN: treat as not
+# yet expired, same as before this fix, and still no real vendor sends a
+# shape this doesn't parse).
+_USAGE_NORM_STAMP_JQ='
+  def norm_stamp:
+    sub("\\.[0-9]+";"") as $s
+    | if ($s | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$")) then
+        ($s | capture("^(?<naive>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?<off>Z|[+-][0-9]{2}:[0-9]{2})$")) as $c
+        | ($c.naive + "Z" | fromdateiso8601) as $base
+        | if $c.off == "Z" then $base
+          elif ($c.off[0:1]) == "+" then $base - (($c.off[1:3]|tonumber)*3600 + ($c.off[4:6]|tonumber)*60)
+          else $base + (($c.off[1:3]|tonumber)*3600 + ($c.off[4:6]|tonumber)*60)
+          end
+      else error("norm_stamp: unrecognized timestamp shape")
+      end;
+  def expired: if . == null then false else ((try norm_stamp catch ($now+1)) <= $now) end;
+'
+
 # Cache-only peek: never calls the vendor, never forks the adapter, never
-# writes. burn's candidate ranking (P2-2, round-1 review) needs a headroom
-# number to order tanks by — but burn's launch/reroute path must not pay a
-# vendor round-trip (up to --max-time 8 EACH, serialized per candidate) just
-# to pick one. Unlike usage_cached_fields below, a STALE reading is still
-# returned here (stale headroom beats no headroom for ranking purposes);
-# only a missing cache, missing jq, or a non-vendor/incomplete reading is
-# "unknown" (empty stdout, rc=1). Fresh reads happen only in `clikae usage`
-# (usage_read, optionally --fresh) and in the board's own refresh step.
+# writes. burn's candidate ranking needs a headroom number to order tanks by
+# — but burn's launch/reroute path must not pay a vendor round-trip just to
+# pick one (that bound is (b) above's job, done once per reroute, not here).
+# A STALE reading is still returned here (stale headroom beats no headroom
+# for ranking purposes) — EXCEPT a window/weekly whose own reset instant has
+# already passed, which reads as 0% used, never as its last stale reading
+# (P2-1(d) above). Only a missing cache, missing jq, or a non-vendor/
+# incomplete reading is "unknown": empty stdout, rc=4 (jq -er's exit status
+# when the pipeline produces no output at all, not rc=1 — rc=1 is "last
+# value was false/null", which never happens here since select() either
+# produces a value or nothing).
 usage_cache_peek() {
-  local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
+  local cache="$CLIKAE_HOME/state/usage/$1/$2.json" now="${3:-}"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  jq -er '
+  [ -n "$now" ] || now="$(date +%s)"
+  jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript") |
     select(.window_pct != null and .weekly_pct != null) |
-    [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
+    (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
+    (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
+    [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
 }
 
-# Board reads only: never do network I/O during a redraw. Expired readings
-# fall back to the existing transcript/expired-reset state. `now` may be
-# passed in (epoch seconds) so a caller doing several lookups in one redraw
-# forks `date` once, not once per lookup (P2-1, round-1 review) — see
-# lib/commands/home.sh's _home_fuel_dotv memoization.
-#
-# P2-3 (round-1 review): the vendor's real reset instant is
-# "2026-09-13T14:50:00.189940+00:00" — microseconds AND a "+00:00" offset,
-# never the bare "…Z" jq's fromdateiso8601 requires. The old guard fed the
-# raw string straight in, the `catch` swallowed the resulting parse error,
-# and the select() below fell open ("not yet expired") on every real
-# reading — dead code that had never once fired against an actual vendor
-# response (tests/bats/usage.bats's fixture used "2099-01-01T00:00:00Z",
-# a shape the vendor never sends). `norm_stamp` is the one place both
-# fields go through: drop fractional seconds, then turn a UTC-zero
-# "+00:00"/"-00:00" offset into "Z" (any other offset still fails to parse
-# and still fails open — unchanged, and no real vendor sends one).
+# Board reads, up to 24h old (P2-1(c) above): never does network I/O during a
+# redraw (cache-only, same file usage_cache_peek reads), but unlike
+# usage_cached_fields below does NOT stop returning a reading once it is
+# older than the TTL — it returns the reading PLUS its age (epoch
+# `cached_at`, 4th column) so the caller can show "3h ago" instead of
+# nothing. Same window/weekly reset-instant guard as usage_cache_peek (P2-1
+# (d)): an expired window reads as 0%, not a stale ≥90%. The caller (home.sh)
+# is the one that draws the 24h line and prints "unknown" past it — this
+# function itself has no upper bound, same as usage_cache_peek.
+usage_board_fields() {
+  local cache="$CLIKAE_HOME/state/usage/$1/$2.json" now="${3:-}"
+  [ -f "$cache" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [ -n "$now" ] || now="$(date +%s)"
+  jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
+    select(.source == "vendor" or .source == "transcript") |
+    select(.window_pct != null and .weekly_pct != null) |
+    (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
+    (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
+    [$w,$k,([$w,$k]|max),.cached_at] | @tsv' "$cache" 2>/dev/null
+}
+
+# Board reads, fresh only (within the TTL): never do network I/O during a
+# redraw. `now` may be passed in (epoch seconds) so a caller doing several
+# lookups in one redraw forks `date` once, not once per lookup (P2-1, round-1
+# review) — see lib/commands/home.sh's _home_fuel_dotv memoization. Same
+# window/weekly reset-instant guard as usage_cache_peek/usage_board_fields
+# above (P2-1(d)). Superseded as the board's PRIMARY read by
+# usage_board_fields (P2-1(c), round-2 review: a 120s TTL made the vendor
+# cache invisible to the board within a couple of minutes of the last
+# `clikae usage`) but kept — same contract, same tests — for anything that
+# genuinely only wants "fresh or nothing".
 usage_cached_fields() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json" ttl="${CLIKAE_USAGE_TTL:-120}" now="${3:-}"
   [ -f "$cache" ] || return 1
