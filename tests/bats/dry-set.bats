@@ -13,6 +13,7 @@ _boot() {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/dry_store.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"

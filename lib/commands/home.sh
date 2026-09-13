@@ -207,9 +207,13 @@ _home_recent_rows() {
     # $( … ) fork below, so the per-tank loads become instant instead of each
     # re-sourcing the adapter file (measured: 47 loads per board render before).
     load_adapter "$name" >/dev/null 2>&1
-    for tdir in "$proot"/*/; do
-      [ -d "$tdir" ] || continue
-      tank="${tdir%/}"; tank="${tank##*/}"
+    # #61 round-1 P2-6: used to be its own `for … in $proot/*/` — this is the
+    # board's OWN "continue" list, so a stray non-tank directory holding
+    # anything transcript-shaped could show up as a resumable row nowhere
+    # else in clikae names as a tank. Routed through tanks_for_engine.
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      tdir="$(profile_dir "$name" "$tank")"
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
       rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
@@ -219,7 +223,9 @@ _home_recent_rows() {
       done <<INNER
 $rows
 INNER
-    done
+    done <<TANKS
+$(tanks_for_engine "$name")
+TANKS
   done <<EOF
 $(list_adapters)
 EOF

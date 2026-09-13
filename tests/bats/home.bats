@@ -136,6 +136,12 @@ _fake_bin() {
 @test "antigravity slots render as tanks with the active one marked (multi mode)" {
   # Simulate the opt-in multi-account state: slots + consent + the ~/.gemini link.
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/default" "$CLIKAE_HOME/profiles/antigravity/work"
+  # #61 round-1 P1-3: a real slot gets its marker from _agy_create_tank /
+  # _agy_takeover at the moment clikae makes it; this fixture builds the
+  # slot directly (no login yet, so no antigravity-cli/ fingerprint either),
+  # so it stamps the same marker those functions would have.
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/default/.clikae-tank"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/work/.clikae-tank"
   : > "$CLIKAE_HOME/antigravity-multi-consent"
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
@@ -416,6 +422,7 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   clikae init claude work
   local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
@@ -436,6 +443,7 @@ _agy_log() { # <line>
   # positions 2, 4, 7 and 8.
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   clikae init claude alpha
   clikae init claude beta
   clikae init claude gamma
@@ -465,6 +473,7 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/shell_rc.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   clikae init claude alpha
   clikae alias claude alpha
@@ -491,6 +500,7 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   clikae init claude alpha
@@ -511,6 +521,7 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   clikae init claude alpha
@@ -544,6 +555,7 @@ _agy_log() { # <line>
 
 @test "agy tanks show the 'agy' name, not 'antigravity'" {
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/main"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/main/.clikae-tank"   # #61 round-1 P1-3
   printf 'consented\n' > "$CLIKAE_HOME/antigravity-multi-consent"
   ln -s "$CLIKAE_HOME/profiles/antigravity/main" "$HOME/.gemini"
   clikae init claude work
@@ -631,6 +643,7 @@ _agy_log() { # <line>
   # docs/DESIGN-board-fuel-dots.md ("codex gets a real light now").
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   local d="$CLIKAE_HOME/profiles/codex/cheap"
@@ -1064,6 +1077,7 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/autonomy.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"

@@ -492,6 +492,22 @@ list_all_profiles() {
   done | sort
 }
 
+# tanks_for_engine <cli> -> every real tank NAME under <cli>, one per line,
+# sorted — exactly the subset of list_all_profiles' own output for this
+# engine. #61 round-1 P2-6 ("ONE ENUMERATOR, REALLY"): six call sites besides
+# list_all_profiles' existing callers were each re-deriving "which tanks does
+# this engine have" with their own `for … in profiles_root/$cli/*/`, so a
+# stray non-tank directory could reappear as a tank through any ONE of them
+# even with list_all_profiles itself fully hardened (P1-3/P2-1/P2-2 above) —
+# most pointedly lib/commands/settings.sh, which WRITES into whatever it
+# finds. This is the one place that filter is written; everyone else reads
+# it. Callers that also need the path use profile_dir(cli, tank) — a second
+# lookup, not a second walk.
+tanks_for_engine() {
+  local cli="$1"
+  list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}'
+}
+
 # order_file -> the burn-order file. One "<engine>/<tank>" per line, top first.
 # The board IS this order; there is no separate "pool". Optional — when absent or
 # partial, order_list fills in the rest deterministically.
@@ -737,18 +753,22 @@ resolve_active_profile() {
       profile_exists "$cli" "$value" && printf '%s\n' "$value"
       ;;
     *)
-      local norm="${value%/}" pdir profile root
-      root="$(profiles_root)/$cli"
-      [ -d "$root" ] || return 0
-      for pdir in "$root"/*/; do
-        [ -d "$pdir" ] || continue
-        pdir="${pdir%/}"
-        profile="${pdir##*/}"
+      # #61 round-1 P2-6: this used to be its own `for … in profiles_root/
+      # $cli/*/` — a second walk inside the very file that claims to own the
+      # one true walk (list_all_profiles, above). Routed through
+      # tanks_for_engine so a stray non-tank directory can never resolve as
+      # the "active" profile here even when its path happens to match.
+      local norm="${value%/}" pdir profile
+      while IFS= read -r profile; do
+        [ -n "$profile" ] || continue
+        pdir="$(profile_dir "$cli" "$profile")"
         if [ "$norm" = "$pdir" ] || case "$norm" in "$pdir"/*) true ;; *) false ;; esac; then
           printf '%s\n' "$profile"
           return 0
         fi
-      done
+      done <<EOF
+$(tanks_for_engine "$cli")
+EOF
       ;;
   esac
 }

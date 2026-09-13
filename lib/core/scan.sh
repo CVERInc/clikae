@@ -18,18 +18,22 @@ scan_clis() {
     [ -n "$cli" ] || continue
     (
       load_adapter "$cli" >/dev/null 2>&1 || exit 0
-      local binary strategy installed=0 count=0 label="" pdir root
+      local binary strategy installed=0 count=0 label="" tank
       binary="$(adapter_meta_cli_binary)"
       strategy="$(adapter_meta_strategy)"
       command -v "$binary" >/dev/null 2>&1 && installed=1
-      root="$(profiles_root)/$cli"
-      if [ -d "$root" ]; then
-        for pdir in "$root"/*/; do
-          [ -d "$pdir" ] || continue
-          count=$((count + 1))
-          [ -n "$label" ] || label="$(adapter_label "${pdir%/}")"
-        done
-      fi
+      # #61 round-1 P2-6: used to be its own `for … in profiles_root/$cli/
+      # */` — this is the count `doctor` and the new-user home screen both
+      # show, so a stray non-tank directory inflated "TANKS" on both without
+      # ever showing up in `clikae tanks` itself. Routed through
+      # tanks_for_engine so the two can no longer disagree.
+      while IFS= read -r tank; do
+        [ -n "$tank" ] || continue
+        count=$((count + 1))
+        [ -n "$label" ] || label="$(adapter_label "$(profile_dir "$cli" "$tank")")"
+      done <<EOF
+$(tanks_for_engine "$cli")
+EOF
       printf '%s\037%d\037%s\037%s\037%d\037%s\n' \
         "$cli" "$installed" "$binary" "$strategy" "$count" "$label"
     )

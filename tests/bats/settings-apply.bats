@@ -55,6 +55,11 @@ load '../helpers'
 
 @test "invalid JSON is skipped while other tanks are applied" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/bad" "$CLIKAE_HOME/profiles/claude/good"
+  # #61 round-1 P1-3: "good" has no settings.json/.claude.json of its own yet
+  # (that's the whole point of this test — apply must CREATE one), so it has
+  # no fingerprint to be adopted by; stamp it directly, same as a real
+  # `clikae init` would have.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/good/.clikae-tank"
   local f="$CLIKAE_HOME/profiles/claude/bad/settings.json"
   printf '{broken' > "$f"
   cp "$f" "$TEST_HOME/before"
@@ -67,10 +72,21 @@ load '../helpers'
 
 @test "dry-run previews all tanks without creating settings" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/a" "$CLIKAE_HOME/profiles/claude/b"
+  # #61 round-1 P1-3: --dry-run creates no settings.json by design, so these
+  # have no fingerprint of their own — stamp the marker directly, same as a
+  # real `clikae init` would have.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/a/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/b/.clikae-tank"
   run clikae settings apply --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude/a: +"*"claude/b: +"* ]] || false
-  [ "$(find "$CLIKAE_HOME/profiles" -type f | wc -l | tr -d ' ')" -eq 0 ]
+  # #61 round-1 P1-3: was a blanket "zero files under profiles/" — no longer
+  # true now that a real tank's OWN fixture setup puts a `.clikae-tank`
+  # marker there (see above). The actual claim ("dry-run creates no
+  # settings.json") still holds; assert THAT instead of an incidental count
+  # that a real tank marker was always going to break.
+  [ ! -e "$CLIKAE_HOME/profiles/claude/a/settings.json" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/b/settings.json" ]
 }
 
 @test "settings rejects malformed shapes and empty files unchanged" {
@@ -128,6 +144,23 @@ load '../helpers'
   run clikae settings apply
   [ "$status" -eq 0 ]
   [[ "$output" == *"No claude tanks found."* ]] || false
+}
+
+# --- #61 round-1 P2-6 ("ONE ENUMERATOR, REALLY"): settings.sh:131's own
+# `for d in profiles_root/$engine/*` (no trailing slash on the glob, so it
+# did not even need `[ -d ]` to fail) was the ONE walker in the whole audit
+# that WRITES into whatever it finds — a directory-shaped `hello.lock/`
+# sitting next to real tanks got settings.json written straight into it.
+@test "settings apply with a hello.lock/ dir and a zzempty/ dir present writes nothing into them" {
+  clikae init claude real
+  mkdir -p "$CLIKAE_HOME/profiles/claude/hello.lock" "$CLIKAE_HOME/profiles/claude/zzempty"
+  run clikae settings apply
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"claude/real:"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"hello.lock"* ]] || { echo "prose mentioned hello.lock: $output"; false; }
+  [[ "$output" != *"zzempty"* ]] || { echo "prose mentioned zzempty: $output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/claude/hello.lock/settings.json" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/zzempty/settings.json" ]
 }
 
 @test "doctor permissions helper reports each drifted tank and stays read-only" {

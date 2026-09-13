@@ -44,20 +44,26 @@ _clikae_mtime() { stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 newest_transcript_tank() {
   local engine="$1"
   [ -f "$CLIKAE_LIB/adapters/$engine.sh" ] || return 0
-  local root; root="$(profiles_root)/$engine"
-  [ -d "$root" ] || return 0
   (
     load_adapter "$engine" >/dev/null 2>&1 || exit 0
     declare -F adapter_transcript_path >/dev/null 2>&1 || exit 0
-    local pdir tank tpath mt best="" best_mt=0
-    for pdir in "$root"/*/; do
-      [ -d "$pdir" ] || continue
-      tank="$(basename "$pdir")"
-      tpath="$(adapter_transcript_path "${pdir%/}" 2>/dev/null || true)"
+    # #61 round-1 P2-6: used to be its own `for … in profiles_root/$engine/
+    # */` — the walker P2-6 flags as "the closest to a P1", since this
+    # function NAMES a tank that switch/relay/handoff then LAUNCH. Routed
+    # through tanks_for_engine (lib/core/profile_store.sh) so a stray
+    # non-tank directory holding a transcript-shaped file can never win a
+    # source-detection race and get switched into.
+    local tank pdir tpath mt best="" best_mt=0
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      pdir="$(profile_dir "$engine" "$tank")"
+      tpath="$(adapter_transcript_path "$pdir" 2>/dev/null || true)"
       [ -n "$tpath" ] && [ -f "$tpath" ] || continue
       mt="$(_clikae_mtime "$tpath")"
       if [ "$mt" -gt "$best_mt" ]; then best_mt="$mt"; best="$tank"; fi
-    done
+    done <<EOF
+$(tanks_for_engine "$engine")
+EOF
     if [ -n "$best" ]; then printf '%s\t%s\n' "$best" "$best_mt"; fi
   )
 }

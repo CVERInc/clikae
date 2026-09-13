@@ -6,6 +6,7 @@ _boot_expiry() {
   source "$CLIKAE_LIB/core/log.sh"
   source "$CLIKAE_LIB/core/i18n.sh"
   source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
   source "$CLIKAE_LIB/core/dry_store.sh"
   source "$CLIKAE_LIB/core/limit.sh"
   source "$CLIKAE_LIB/commands/home.sh"

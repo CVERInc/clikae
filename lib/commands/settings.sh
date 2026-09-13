@@ -86,7 +86,7 @@ _settings_tank() (
 )
 
 cmd_settings() {
-  local engine="" tank="" mode=apply arg template d rc=0
+  local engine="" tank="" mode=apply arg template rc=0
   case "${1:-}" in
     -h|--help) ;;
     apply) shift ;;
@@ -127,12 +127,20 @@ HELP
     _settings_tank "$engine" "$tank" "$mode" "$template"
     return $?
   fi
-  local found=0
-  for d in "$(profiles_root)/$engine"/*; do
-    [ -d "$d" ] || continue
+  # #61 round-1 P2-6: used to be its own `for … in profiles_root/$engine/*`
+  # (no trailing slash — so it did not even need `[ -d ]` to fail: it
+  # happily WROTE settings.json into a directory-shaped `hello.lock/`, the
+  # ONE walker in this whole audit that mutates what it finds). Routed
+  # through tanks_for_engine (lib/core/profile_store.sh) so `settings apply`
+  # only ever touches a real tank.
+  local found=0 d_tank
+  while IFS= read -r d_tank; do
+    [ -n "$d_tank" ] || continue
     found=1
-    _settings_tank "$engine" "${d##*/}" "$mode" "$template" || rc=1
-  done
+    _settings_tank "$engine" "$d_tank" "$mode" "$template" || rc=1
+  done <<EOF
+$(tanks_for_engine "$engine")
+EOF
   [ "$found" -eq 1 ] || printf 'No %s tanks found.\n' "$engine"
   return "$rc"
 }

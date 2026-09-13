@@ -53,6 +53,7 @@ _seed_daemon_log() {
   local tank="$1"; shift
   local d="$CLIKAE_HOME/profiles/claude/$tank"
   mkdir -p "$d"
+  printf 'claude\n' > "$d/.clikae-tank"   # #61 round-1 P1-3: a real tank, not a legacy adoption target — no INFO line to trip the "stays quiet" assertions below
   clikae settings apply claude "$tank" >/dev/null
   local l; : > "$d/daemon.log"
   for l in "$@"; do printf '%s\n' "$l" >> "$d/daemon.log"; done
@@ -98,6 +99,8 @@ _seed_daemon_log() {
   [ "$(uname -s)" = "Darwin" ] || skip "keychain section is macOS-only"
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/haslogin"
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/nologin"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/haslogin/.clikae-tank"   # #61 round-1 P1-3
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/nologin/.clikae-tank"
   # Stub `security` so the test never touches the real login keychain: only the
   # 'haslogin' tank's stash is reported present.
   local stub="$TEST_HOME/bin"; mkdir -p "$stub"

@@ -309,11 +309,19 @@ EOF
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"
   if [ -f "$claude_template" ]; then
-    local settings_dir
-    for settings_dir in "$(profiles_root)/claude"/*; do
-      [ -d "$settings_dir" ] || continue
-      _settings_tank claude "${settings_dir##*/}" doctor "$claude_template" || true
-    done
+    # #61 round-1 P2-6: used to be its own `for … in profiles_root/claude/*`
+    # — so a stray non-tank directory (e.g. `zzempty`, reported above by
+    # _doctor_stray_dirs) got its own "permissions drift" line here too,
+    # inviting `clikae settings apply claude zzempty` right into it. Routed
+    # through tanks_for_engine so doctor's drift report only ever names real
+    # tanks — the same set `_doctor_stray_dirs` above excludes.
+    local settings_tank
+    while IFS= read -r settings_tank; do
+      [ -n "$settings_tank" ] || continue
+      _settings_tank claude "$settings_tank" doctor "$claude_template" || true
+    done <<EOF
+$(tanks_for_engine claude)
+EOF
   else
     printf 'claude: permissions template missing (installation incomplete); skipping\n'
   fi
