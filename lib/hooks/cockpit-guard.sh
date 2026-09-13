@@ -44,15 +44,19 @@
 # written by `clikae cockpit --allow-agents <dur>` (state/cockpit-allow) — a
 # guard nobody can lift gets deleted instead of obeyed.
 #
-# PERFORMANCE: measured well under 50ms for a compact payload with a prompt
-# up to a few KB (no jq, no subshell-heavy JSON parsing — lib/core/json.sh's
-# grep field extractor). That budget is NOT flat with prompt size: the value-
-# scanning regex is O(prompt length), measured ~54ms at 50kB and ~167ms at
-# 200kB (#63 P2-7). Since the hook runs on EVERY Agent call, `prompt` is
-# capped to its first 8 KiB before the heuristic match runs — a 200kB prompt
-# still finishes in the same ballpark as a small one. `model`/`tool_name`
-# are NOT capped (they are short values found by a fast literal search
-# regardless of where they sit in the payload).
+# PERFORMANCE: measured well under 50ms on Linux/GNU-grep for a compact
+# payload with a prompt up to a few KB (no jq, no subshell-heavy JSON parsing
+# — lib/core/json.sh's grep field extractor); measured ~90-100ms for the same
+# shape on GitHub's macos-latest runner (BSD grep, bash 3.2, slower CI
+# hardware) — a real platform floor, not flakiness (tests/bats/cockpit-
+# guard.bats's own timing test bound reflects this, not a strict 50ms). That
+# budget is NOT flat with prompt size either way: the value-scanning regex is
+# O(prompt length), measured ~54ms at 50kB and ~167ms at 200kB on the fast
+# host before this was bounded (#63 P2-7). Since the hook runs on EVERY Agent
+# call, `prompt` is capped to its first 8 KiB before the heuristic match runs
+# — a 200kB prompt now finishes in the same ballpark as a small one on both
+# platforms. `model`/`tool_name` are NOT capped (they are short values found
+# by a fast literal search regardless of where they sit in the payload).
 
 set -uo pipefail
 
