@@ -449,13 +449,26 @@ tmux_spawn_session() {
   # Like mouse on, this chain runs AFTER creation: mouse support cannot prevent
   # a session from being born. The helper is a standalone script, avoiding the
   # CLI's state migration and profile setup on every release.
+  #
+  # 🔴 root's MouseUp1Pane binds run-shell ONLY, so it CONSUMES the release
+  # instead of forwarding it. Stock tmux's root table has no MouseUp1Pane at
+  # all — the release falls through to the pane's program by default — so any
+  # app that tracks mouse state (Claude Code included) got the press and never
+  # the release. Measured (tmux 3.4, throwaway socket, `mouse on`, pane running
+  # `printf '\e[?1006h\e[?1000h'; cat -v`): stock tmux delivers both `M` and
+  # `m`; the un-fixed binding delivered only `M` (2026-09 R1 review, P1-1).
+  # Fixed by forwarding FIRST, translating second — `send-keys -M` before
+  # `run-shell` — the same order stock tmux already uses for MouseDown1Pane's
+  # own select-pane-then-forward. A swipe therefore also reaches the app as a
+  # click at the release row (the app already got the press on the way down;
+  # docs/usage.md says so).
   local touch_helper
   touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_in_mode}"
   tmux set-option -g mouse on \
     \; set-option -og @clikae_touch_scroll on \
     \; set-option -og @clikae_touch_scroll_lines 2 \
     \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M' \
-    \; bind-key -T root MouseUp1Pane run-shell "$touch_helper" \
+    \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
     \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
     \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
     2>/dev/null || true

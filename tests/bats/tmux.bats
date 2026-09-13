@@ -48,10 +48,12 @@ release() {
   [[ "$output" == *'<set-option><-g><mouse><on><;><set-option><-og><@clikae_touch_scroll><on><;><set-option><-og><@clikae_touch_scroll_lines><2>'* ]] || false
   [[ "$output" == *'<bind-key><-T><root><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M>'* ]] || false
   [[ "$output" == *'<bind-key><-T><copy-mode><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =>'* ]] || false
-  local table
-  for table in root copy-mode; do
-    [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
-  done
+  # P1-1: root's Up FORWARDS the release (send-keys -M) before translating —
+  # the only table with an app underneath that needs it; copy-mode's Up has no
+  # app to forward to and stays a plain run-shell.
+  [[ "$output" == *"<bind-key><-T><root><MouseUp1Pane><send-keys -M; run-shell \"bash '"* ]] || false
+  [[ "$output" == *"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}\">"* ]] || false
+  [[ "$output" == *"<bind-key><-T><copy-mode><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
   [[ "$output" != *'<MouseDrag'* ]] || false
   [[ "$output" != *'<Wheel'* ]] || false
 }
