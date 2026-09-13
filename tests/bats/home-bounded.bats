@@ -694,40 +694,57 @@ _b8_tank() {
   done
 }
 
-@test "board (P2-2): the cold build's entry key is the SAME rule in bash and in awk" {
-  # The cold build writes `sids/<name>` from awk and every reader computes
-  # <name> in bash. Two spellings of one rule is how this file's own
-  # fingerprint drifted (see _board_fingerprint_rows), so they are pinned
-  # against each other here rather than trusted to stay in step.
-  _board_source
-  local s out awkout
-  local long="$(printf 'a%.0s' $(seq 1 140))"
-  for s in "plain-sid" \
-           "0199a1b2-c3d4-7e8f-9012-3456789abcde" \
-           "/home/someone/a project/with spaces" \
-           "unicode-éè" \
-           "." ".." "" \
-           "$long" \
-           "sl/ash:colon;semi|pipe*star?q" ; do
-    _board_entry_key "$s"
-    out="$_board_entry_key_out"
-    awkout="$(printf '%s' "$s" | awk '
-      function ekey(x,   t, n) {
-        t = x
-        gsub(/[^A-Za-z0-9._-]/, "_", t)
-        if (t == "" || t == "." || t == "..") t = "_" t "_"
-        n = length(t)
-        if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
-        return t
-      }
-      { print ekey($0) }
-      END { if (NR == 0) print ekey("") }
-    ')"
-    [ "$out" = "$awkout" ] || { echo "bash=[$out] awk=[$awkout] for [$s]"; false; }
+@test "board (P2-2): the entry name the cold build WRITES is the one a reader LOOKS UP (incl. non-ASCII)" {
+  # The cold build names `sids/<entry>` from awk; every reader computes
+  # <entry> to find it again. The first version of this had one rule in bash
+  # and a copy in awk, and PR #78's macOS CI job caught them disagreeing on a
+  # non-ASCII sid within hours (bash 3.2's bracket expression matched nothing,
+  # awk matched every byte) — a disagreement that shows up as a MISS, i.e. a
+  # session silently absent from `clikae resume` with its file still on disk,
+  # and that no Linux run would ever have surfaced.
+  #
+  # So this does not compare two spellings of the rule. It writes real
+  # transcripts, cold-builds, and asserts the name on disk IS the name the
+  # reader computes — through the real code path, on whatever platform and
+  # locale the suite happens to run under.
+  _b8_tank
+  local sids=(
+    "plain-sid"
+    "0199a1b2-c3d4-7e8f-9012-3456789abcde"
+    "dotted.name"
+    "$(printf 'caf\303\251-r\303\251sum\303\251')"
+    "$(printf '\344\270\255\346\226\207-\345\260\210\346\241\210')"
+    "spaced name"
+    "punct+colon;semi~tilde"
+  )
+  local sid
+  for sid in "${sids[@]}"; do
+    printf '{"type":"ai-title","aiTitle":"T"}\n' > "$B8_PROJ/$sid.jsonl"
   done
-  # and it can never escape the entry directory
+  rm -rf "$CLIKAE_HOME/state/board"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  local root gen resolved
+  root="$(board_root "$B8_TANK")"
+  gen="$root/$(cat "$root/current")"
+  for sid in "${sids[@]}"; do
+    _board_entry_key "$sid"
+    [ -f "$gen/sids/$_board_entry_key_out" ] \
+      || { echo "no entry at [$_board_entry_key_out] for sid [$sid]; have: $(ls "$gen/sids")"; false; }
+    resolved="$(board_find claude "$B8_TANK" "$sid")"
+    [ "$resolved" = "$B8_PROJ/$sid.jsonl" ] \
+      || { echo "board_find [$sid] gave [$resolved]"; false; }
+  done
+  # the name is always a single path component, whatever went in
   _board_entry_key "../../etc/passwd"
   [[ "$_board_entry_key_out" != */* ]] || false
+  _board_entry_key ""
+  [ -n "$_board_entry_key_out" ]
+  # and a long scope keeps both ends, so two paths sharing a prefix differ
+  local a b
+  _board_entry_key "/home/x/$(printf 'p%.0s' $(seq 1 130))/alpha"; a="$_board_entry_key_out"
+  _board_entry_key "/home/x/$(printf 'p%.0s' $(seq 1 130))/omega"; b="$_board_entry_key_out"
+  [ "$a" != "$b" ]
 }
 
 @test "board (P2-2): a cold build parses only the BOUNDED reading set, never every file" {

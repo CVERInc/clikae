@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and grok's from ONE batched bounded read instead of one parse per file; and
   the rate-limit scan is bounded to the newest `CLIKAE_HOME_RECENT_MAX` files
   per project directory rather than every file in the window (#62).
+- A session id or project path containing non-ASCII characters (a Chinese or
+  accented directory name) no longer drops out of `clikae resume` on macOS.
+  The board snapshot's entry name was computed by two different engines whose
+  idea of "one character" differs by platform and by locale, so the name
+  written and the name looked up could disagree — a silent miss, with the
+  transcript still on disk. One implementation now, run byte-wise on both
+  sides.
 - A tank with no transcripts at all — every freshly `clikae init`'d tank, and
   the first screen a new user sees — is no longer permanently stale. The
   publisher and the freshness check computed the snapshot fingerprint from two

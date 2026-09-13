@@ -169,14 +169,54 @@ _BOARD_GEN_MAX_DEPTH="${CLIKAE_BOARD_GEN_MAX_DEPTH:-8}"
 #     ~345 tanks that size.
 # `board_key` itself stays exactly as it was: it still names the per-tank root
 # (`board_root`), where it runs once per tank, not once per file.
+#
+# ONE implementation, in awk, used by BOTH sides — and it had to become that.
+# The first version of this computed the name with bash parameter expansion on
+# the reader side and `gsub` on the cold build's side: two spellings of one
+# rule, exactly the shape that let this file's own fingerprint drift. PR #78's
+# macOS CI job (run 34769949650, `bats (macos-latest)`) caught them
+# disagreeing within hours, on a non-ASCII input:
+#
+#   bash (macOS 3.2) = "unicode-<2 non-ASCII chars>"   (matched nothing)
+#   awk              = "unicode-__"                     (matched both)
+#
+# and on Linux they agreed, so nothing local would ever have shown it. A
+# bracket expression over multibyte input is not portable — bash 3.2's and
+# each awk's notion of "one character" differ, and the locale changes the
+# answer again. The consequence would not have been visible either: the cold
+# build writes `sids/unicode-__`, a reader looks up `sids/unicode-<chars>`,
+# the lookup MISSES, and the session silently drops out of `clikae resume`
+# with the file still on disk. A tank whose project paths are not ASCII (a
+# Chinese or accented directory name — normal, not exotic) would lose its
+# whole Resume list on macOS.
+#
+# So the rule is written once, as awk source, and both callers run it under
+# `LC_ALL=C` so it is BYTE-oriented on every platform and every locale. The
+# reader pays one fork per lookup, which is exactly what `board_key`'s
+# `printf | cksum` cost before it — and the COLD path, the one that runs per
+# file, still pays none: it runs this same source inline in the awk it was
+# already running.
+_BOARD_EKEY_AWK='
+function ekey(s,   t, n) {
+  t = s
+  gsub(/[^A-Za-z0-9._-]/, "_", t)
+  if (t == "" || t == "." || t == "..") t = "_" t "_"
+  n = length(t)
+  if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
+  return t
+}'
 _board_entry_key_out=""
 _board_entry_key() {
-  local s="${1//[^A-Za-z0-9._-]/_}"
-  case "$s" in ''|.|..) s="_${s}_" ;; esac
-  if [ "${#s}" -gt 100 ]; then
-    s="${s:0:60}_${s: -40}_${#1}"
-  fi
-  _board_entry_key_out="$s"
+  # A newline is folded first: awk reads records, so a sid or scope carrying
+  # one would arrive as two. `$'\n'` is a single ASCII byte, so this fold is
+  # locale-independent, unlike the class of pattern that caused the bug above.
+  # (The cold build cannot hit this — its input comes from `find`, which is
+  # newline-delimited already.)
+  local s="${1//$'\n'/_}"
+  _board_entry_key_out="$(printf '%s' "$s" | LC_ALL=C awk "$_BOARD_EKEY_AWK"'
+    { print ekey($0) }
+    END { if (NR == 0) print ekey("") }
+  ')"
 }
 
 # Generation layout version. A generation written by an older clikae has a
@@ -939,16 +979,9 @@ board_state_refresh() (
     # turn into `recent/` entries and `readings-pending`. `close()` after each
     # entry keeps the open-file count at 1 — the one-true-awk on macOS has a
     # hard FOPEN_MAX and would abort without it.
-    awk -v gen="$gen" -v now="${reading_now:-0}" -v window="${window:-0}" \
-        -v man_out="$gen/manifest" -v rec_out="$rec_f" -v pend_out="$pend_f" '
-      function ekey(s,   t, n) {
-        t = s
-        gsub(/[^A-Za-z0-9._-]/, "_", t)
-        if (t == "" || t == "." || t == "..") t = "_" t "_"
-        n = length(t)
-        if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
-        return t
-      }
+    LC_ALL=C awk -v gen="$gen" -v now="${reading_now:-0}" -v window="${window:-0}" \
+        -v man_out="$gen/manifest" -v rec_out="$rec_f" -v pend_out="$pend_f" \
+        "$_BOARD_EKEY_AWK"'
       BEGIN { S = sprintf("%c", 31); R = sprintf("%c", 30) }
       FNR == NR {
         i = index($0, S); if (i == 0) next
