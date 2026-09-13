@@ -958,8 +958,14 @@ _clean_burn_sidecar_gc() {
       local _ln _sid dropped_stale=0
       for _ln in "${lines[@]}"; do
         _sid="${_ln%%$'\t'*}"
-        if [ -n "$_sid" ] && [ -n "$pdir" ] && declare -F adapter_find_session >/dev/null 2>&1 \
-           && adapter_find_session "$pdir" "$_sid" >/dev/null 2>&1; then
+        # #74 round-2 P2-2: read adapter_find_session's OUTPUT, not its exit
+        # code — codex/grok both return 0 on a miss (empty stdout), so the
+        # exit-code form never pruned a stale codex/grok line.
+        local _found_transcript=""
+        if [ -n "$_sid" ] && [ -n "$pdir" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+          _found_transcript="$(adapter_find_session "$pdir" "$_sid" 2>/dev/null || true)"
+        fi
+        if [ -n "$_found_transcript" ]; then
           live+=("$_ln")
         else
           dropped_stale=$((dropped_stale + 1))

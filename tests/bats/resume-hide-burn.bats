@@ -301,6 +301,29 @@ STUB
   [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
 }
 
+# #74 round-2 P2-2: "proven" used to read adapter_find_session's EXIT CODE,
+# but codex/grok both return 0 (success) on a miss — empty stdout, no
+# matching rollout on disk. A caller-supplied `-- exec resume <sid>` (P2-3's
+# minted-vs-caller-supplied path) recorded that sid as proven the moment
+# codex accepted the flag, whether or not the sid corresponded to any real
+# rollout on this profile.
+@test "#74 round-2 P2-2: codex burn with a caller-supplied --resume sid that matches zero transcripts writes no ghost sidecar line" {
+  _fixture
+  clikae init codex T1
+  local fake_sid="99999999-9999-4999-8999-999999999999"
+  # Models codex accepting an unknown `resume <sid>` without erroring on it
+  # and without ever writing a rollout for that sid.
+  cat > "$TEST_HOME/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" -- exec --skip-git-repo-check resume "$fake_sid" go
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
+}
+
 @test "codex burn picks the ONE new rollout whose recorded cwd is this run's, among several" {
   _fixture
   clikae init codex T1

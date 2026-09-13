@@ -1679,3 +1679,28 @@ _pin_clean_tank_lock_gc_removals() {
   _clean_burn_sidecar_gc 1
   grep -qF "$dead_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
 }
+
+# #74 round-2 P2-2: codex/grok's adapter_find_session returns 0 (success) on a
+# miss — empty stdout, no matching rollout on disk. Reading the exit code (the
+# round-1 shape) meant this GC's stale-prune never fired for those two
+# engines; a codex line with no transcript is exactly as "live" to it as one
+# that does.
+@test "_clean_burn_sidecar_gc drops a stale codex sidecar line (adapter_find_session returns 0 on a miss)" {
+  _source_clean
+  clikae init codex T1
+  local live_sid dead_sid
+  live_sid="66666666-6666-4666-8666-666666666666"
+  dead_sid="77777777-7777-4777-8777-777777777777"
+  mkdir -p "$CLIKAE_HOME/profiles/codex/T1/sessions/2026/09/13"
+  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$live_sid" "$PWD" \
+    > "$CLIKAE_HOME/profiles/codex/T1/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  printf '%s\trun-1\t1700000000\n%s\trun-2\t1700000001\n' "$live_sid" "$dead_sid" \
+    > "$CLIKAE_HOME/state/burn-sessions/codex/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/codex/T1"
+  [ -f "$f" ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$dead_sid" "$f"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+}

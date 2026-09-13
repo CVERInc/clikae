@@ -2656,9 +2656,13 @@ KV
     # apart from a human's concurrent one, and "never hide what is not
     # proven" outranks "always record something".
     local sid_to_record="$launch_sid"
-    if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1 \
-       && ! adapter_find_session "$dir" "$sid_to_record" >/dev/null 2>&1; then
-      sid_to_record=""
+    if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      # #74 round-2 P2-2: "proven" means a transcript path came back, not
+      # that the exit code was 0 — codex/grok's adapter_find_session both
+      # return 0 on a miss (empty stdout, no matching transcript on disk).
+      local _burn_found_transcript
+      _burn_found_transcript="$(adapter_find_session "$dir" "$sid_to_record" 2>/dev/null || true)"
+      [ -n "$_burn_found_transcript" ] || sid_to_record=""
     fi
     if [ -z "$sid_to_record" ] && declare -F adapter_all_transcripts >/dev/null 2>&1; then
       local -a _snap_post=() _snap_new=()
