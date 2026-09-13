@@ -881,10 +881,14 @@ _agy_burn() {
       break
     done < <(_agy_tank_names)
     if [ -z "$nxt" ]; then
-      # #61: a distinct reason + exit code from a real task failure — the
-      # machine-readable answer has to be said first (_burn_result), since
-      # log_err below doesn't return. reset is the EARLIEST parseable reset
-      # seen across the whole walk (null if none parsed), not just this hop's.
+      # #61 round-2 P3: the order below is deliberate, not what an earlier
+      # version of this comment claimed. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` below actually leave this rc; a caller reading either stream
+      # sees the full picture regardless of which one it reads first. reset
+      # is the EARLIEST parseable reset seen across the whole walk (null if
+      # none parsed), not just this hop's.
       log_err "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
       _burn_result false agy "$cur" "$artifact" "no-tank-available" "$earliest_reset"
@@ -3143,11 +3147,14 @@ KV
     if [ -z "$nxt" ]; then
       # The reserve is exhausted. #61: a distinct reason ("no-tank-available")
       # and exit code from a real task failure — this is the outcome an agent
-      # most needs to tell apart from "the task itself is broken". The
-      # machine-readable answer is said first (log_err below doesn't exit, so
-      # the explicit `exit` at the end is what actually leaves this rc). reset
-      # is the EARLIEST parseable reset seen across the whole walk (null if
-      # none of the dry hops parsed), not just this last hop's.
+      # most needs to tell apart from "the task itself is broken". #61 round-2
+      # P3: the order below is deliberate. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` at the end actually leave this rc; a caller reading either
+      # stream sees the full picture regardless of which one it reads first.
+      # reset is the EARLIEST parseable reset seen across the whole walk
+      # (null if none of the dry hops parsed), not just this last hop's.
       log_err "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
       _burn_status_write dry false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
       _burn_result false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
