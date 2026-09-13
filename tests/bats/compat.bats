@@ -20,6 +20,13 @@ scan() {
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
 }
 
+# The bash-4 flag pattern, written ONCE. Round-7 fix review P3-1: the negative
+# control below used to re-spell it (and re-spell `scan`'s greps) inline, so it
+# proved "this regex fires", not "THIS RULER fires" — the moment `scan` changed
+# its roots or its comment exemption, the control would have gone on vouching
+# for a ruler that no longer existed.
+BASH4_FLAG_RE='declare -[gAn]|local -[An]|typeset -[An]'
+
 @test "no mapfile / readarray (bash 4+)" {
   run scan '\b(mapfile|readarray)\b'
   [ -z "$output" ]
@@ -67,7 +74,7 @@ scan() {
 # red on every macOS job since this branch's first commit. `[[ … =~ …]]` is
 # deliberately NOT scanned here — 3.2 has that.
 @test "no declare/local/typeset -g / -A / -n (bash 4+ global/assoc-array/nameref flags)" {
-  run scan 'declare -[gAn]|local -[An]|typeset -[An]'
+  run scan "$BASH4_FLAG_RE"
   [ -z "$output" ]
 }
 
@@ -77,13 +84,19 @@ scan() {
   local probe="$TEST_HOME/probe2"; mkdir -p "$probe/lib" "$probe/bin"
   : > "$probe/bin/clikae"
   printf '# we deliberately avoid local -A here, see board_state.sh\n' > "$probe/lib/note.sh"
-  run env CLIKAE_TEST_ROOT="$probe" bash -c \
-    'grep -rnE "declare -[gAn]|local -[An]|typeset -[An]" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
-  [ -z "$output" ] || { echo "still fires on a comment: $output"; false; }
+
+  # P3-1: point the REAL `scan` at the probe tree and call it with the REAL
+  # pattern. Nothing about the ruler is restated here, so a change to either
+  # can no longer leave this control vouching for a ruler that moved.
+  local saved="$CLIKAE_TEST_ROOT"
+  CLIKAE_TEST_ROOT="$probe"
+
+  run scan "$BASH4_FLAG_RE"
+  [ -z "$output" ] || { CLIKAE_TEST_ROOT="$saved"; echo "still fires on a comment: $output"; false; }
 
   printf 'local -A x=()\n' > "$probe/lib/real.sh"
-  run env CLIKAE_TEST_ROOT="$probe" bash -c \
-    'grep -rnE "declare -[gAn]|local -[An]|typeset -[An]" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  run scan "$BASH4_FLAG_RE"
+  CLIKAE_TEST_ROOT="$saved"
   [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
 }
 

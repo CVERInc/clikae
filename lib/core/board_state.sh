@@ -270,6 +270,19 @@ _board_engine_root() {
     antigravity) printf '%s/antigravity-cli/brain' "$2" ;;
   esac
 }
+#
+# Round-7 fix review P3-4 — a KNOWN blind spot of the (mtime, size)
+# fingerprint, recorded where the file that has it is named. grok's
+# fingerprint file is `summary.json`, and grok REWRITES it; the other three
+# engines append to a `.jsonl`, so their size always moves. On a filesystem
+# whose mtime granularity is one whole second (this repo's CI hosts and this
+# developer's ext4/tmpfs are 2-3 ms, measured — but HFS+, SMB and some NFS
+# mounts are not), a `summary.json` rewritten to the SAME size inside the same
+# second changes neither mtime nor size, and `_board_transcript_fingerprint`
+# cannot see it. Consequence is bounded: the Resume list's ORDER for that grok
+# session goes one edit stale until anything else in the tank changes. Fuel
+# dots are unaffected (grok has no rate-limit window here) and no answer is
+# wrong, only late.
 _board_engine_name() {
   case "$1" in
     claude) printf '*.jsonl' ;;
@@ -281,16 +294,26 @@ _board_engine_name() {
 
 # _board_transcript_find <engine> <dir> [find-args...] -> runs the ONE `find`
 # this engine's whole tank uses, with any extra args (e.g. `-exec … +`)
-# appended after the name filter. `2>/dev/null` here only ever hides "no such
-# directory" for an engine this tank has never used (round-6 fix review: it
-# is NOT hiding a `stat` argv failure — `-exec … {} +` batches its own argv,
-# so that failure mode no longer exists; see this file's own header).
+# appended after the name filter.
+#
+# Round-7 fix review P3-3: this used to end in `2>/dev/null`, documented as
+# "only ever hides 'no such directory' for an engine this tank has never
+# used". It hid more than that. A redirection on `find` covers the stderr of
+# whatever `-exec … +` runs too, so a `stat` that failed on an INDIVIDUAL file
+# (a permission change, a mount that went away mid-walk) silently dropped that
+# file's row — and its absence is indistinguishable, to the fingerprint, from
+# the file not existing. Nothing reads wrong (both sides of the comparison run
+# this same function, so a dropped row is dropped symmetrically), but it is
+# not a class of failure that should be invisible. The one case the redirect
+# genuinely existed for is now handled by asking the question directly, and
+# everything else reaches the caller.
 _board_transcript_find() {
   local engine="$1" dir="$2" root; shift 2
   root="$(_board_engine_root "$engine" "$dir")"
+  [ -n "$root" ] && [ -d "$root" ] || return 0
   case "$engine" in
-    grok) find "$root" -maxdepth 3 -type f -name "$(_board_engine_name "$engine")" "$@" 2>/dev/null ;;
-    *) find "$root" -type f -name "$(_board_engine_name "$engine")" "$@" 2>/dev/null ;;
+    grok) find "$root" -maxdepth 3 -type f -name "$(_board_engine_name "$engine")" "$@" ;;
+    *) find "$root" -type f -name "$(_board_engine_name "$engine")" "$@" ;;
   esac
 }
 

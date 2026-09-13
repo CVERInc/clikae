@@ -839,3 +839,25 @@ _b8_tank() {
   [ "$status" -ne 0 ]
 }
 
+@test "board (P3-3): a per-file stat failure is not swallowed by the tree walk" {
+  # Round-7 P3-3: `2>/dev/null` on the `find` covered the stderr of the
+  # `stat` it `-exec`s, so an unreadable file vanished from the fingerprint
+  # silently. The one case the redirect existed for — an engine this tank has
+  # never used — is answered directly now.
+  _b8_tank
+  # an engine root this tank has never created: silent, rc=0, no `find` error
+  run _board_transcript_find claude "$TEST_HOME/never-used-tank"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "unused tank was not silent: $output"; false; }
+  printf '{"type":"ai-title","aiTitle":"T"}\n' > "$B8_PROJ/session-0.jsonl"
+  # a directory find cannot descend into must be audible, not silent
+  local blocked="$B8_PROJ/blocked"
+  mkdir -p "$blocked"
+  printf '{}\n' > "$blocked/session-x.jsonl"
+  chmod 000 "$blocked"
+  run _board_transcript_find claude "$CLIKAE_HOME/profiles/claude/work"
+  chmod 755 "$blocked"
+  if [ "$(id -u)" -ne 0 ]; then
+    [[ "$output" == *blocked* ]] || { echo "walk error was swallowed: $output"; false; }
+  fi
+}

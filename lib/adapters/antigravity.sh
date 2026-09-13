@@ -161,8 +161,33 @@ adapter_session_cwd_index() {
 # usable on its own, the same self-containment `adapter_session_cwd_index`
 # above already has; board_state.sh's own call sites guard every use with
 # `declare -F` for exactly this reason.
+#
+# Round-7 fix review P3-2: the name is namespaced by the TANK directory, and
+# `_agy_ws_load` unsets what it loaded last. The old `local -A _ws=()` this
+# replaced was FUNCTION-scoped, so every call started from an empty map for
+# free; plain globals do not, and two things followed. A long-lived TUI
+# accumulated one global per sid it had ever seen and kept answering for sids
+# that had since vanished from `history.jsonl`, and a lookup made after
+# loading a DIFFERENT tank could be answered by the first tank's index — the
+# sid is written back and checked (see `_agy_ws_lookup`), but the same sid
+# genuinely existing in two tanks is not a collision the write-back can catch.
+# `board_generation`'s memo in board_state.sh already had the matching
+# `_board_gen_cache_clear`; this is its twin.
+_AGY_WS_NS=""
+_AGY_WS_KEYS=()
 _agy_ws_varname() {
-  _agy_ws_var_out="_AGY_WS_${1//[^A-Za-z0-9_]/_}"
+  _agy_ws_var_out="_AGY_WS_${_AGY_WS_NS}_${1//[^A-Za-z0-9_]/_}"
+}
+
+# _agy_ws_clear -> drop every global `_agy_ws_load` set, without enumerating
+# the environment (same indexed-array bookkeeping `_board_gen_cache_clear`
+# uses, and for the same bash-3.2 reason: no associative arrays).
+_agy_ws_clear() {
+  local _ak
+  for _ak in "${_AGY_WS_KEYS[@]}"; do
+    unset "$_ak" 2>/dev/null
+  done
+  _AGY_WS_KEYS=()
 }
 
 # _agy_ws_load <dir> -> populates one global per antigravity session id this
@@ -174,10 +199,13 @@ _agy_ws_varname() {
 # this port: O(1) forks per RENDER, never O(sessions).
 _agy_ws_load() {
   local dir="$1" _asid _aws
+  _agy_ws_clear
+  _AGY_WS_NS="${dir//[^A-Za-z0-9_]/_}"
   while IFS=$'\037' read -r _asid _aws; do
     [ -n "$_asid" ] || continue
     _agy_ws_varname "$_asid"
     printf -v "$_agy_ws_var_out" '%s\037%s' "$_asid" "$_aws"
+    _AGY_WS_KEYS+=("$_agy_ws_var_out")
   done < <(adapter_session_cwd_index "$dir" 2>/dev/null)
 }
 

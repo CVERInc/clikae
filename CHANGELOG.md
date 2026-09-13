@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The antigravity workspace index clears what it loaded last and is namespaced
+  by tank, so a long-lived board no longer accumulates one entry per session
+  id it has ever seen, keeps answering for ids that have left `history.jsonl`,
+  or lets one tank's index answer for another tank's identical id.
+- A `stat` that fails on an individual transcript is no longer swallowed by
+  the tree walk's blanket `2>/dev/null`. The one case that redirect existed
+  for — an engine this tank has never used — is answered directly now.
 - A transcript that changes PATH while keeping its session id — a codex
   rollout moved, a grok session directory renamed, an antigravity brain
   directory renamed, a claude session moved between project directories — no
