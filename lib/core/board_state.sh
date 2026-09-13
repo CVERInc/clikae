@@ -103,6 +103,99 @@
 board_key() { local k; k="$(printf '%s' "$1" | cksum)"; printf '%s' "${k%% *}"; }
 board_root() { printf '%s/state/board/%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$(board_key "$1")"; }
 
+# 2026-09-13 round-7 fix review P1-1/P2-1 — GENERATION CHAIN (design decision,
+# KITT): rounds 6/7 carried `sids/`/`recent/` forward with `cp -al`, so every
+# generation's entries were HARD LINKS to the previous generation's inodes and
+# the two in-place rewrites below (`> "$base"`, `> "$gen/sids/$key"`) mutated a
+# generation `current` was still pointing at — measured, not theorised (the
+# reviewer's three-way probe: gen1's recent row changed the moment gen2
+# published). It also made a rebuild cost one `link()` per file PRESENT
+# (5,001 at 5,000 files), which is the O(tank) bookkeeping #62 exists to kill.
+#
+# Both go away together by not copying at all:
+#
+#   * A generation directory holds ONLY the `sids/`/`recent/` entries this
+#     refresh actually changed, plus a `parent` file naming the generation it
+#     was built from and a `depth` file counting how far that chain now runs.
+#   * A reader resolves one entry by walking gen -> parent -> … and taking the
+#     FIRST generation that has that name (`_board_gen_entry`). Nothing is
+#     ever shared: two generations that both have the name have two separate
+#     inodes, and the newer one wins by position, not by mutation.
+#   * The walk is bounded. When appending one more link would reach
+#     `_BOARD_GEN_MAX_DEPTH`, the next publish MATERIALISES instead: `cp -a`
+#     (a real copy, no `-l`) of the resolved set, oldest ancestor first so the
+#     newest copy of each name lands last, then `parent` is dropped and depth
+#     goes back to 0. So a read is at most _BOARD_GEN_MAX_DEPTH lookups and a
+#     write is proportional to CHANGED files, amortised against one full copy
+#     every _BOARD_GEN_MAX_DEPTH publishes.
+#   * A file that goes away cannot be expressed by deleting an entry — the
+#     ancestor still has it — so removal writes a zero-byte TOMBSTONE under the
+#     same name. `_board_gen_entry` treats a zero-byte entry as "resolved to
+#     nothing" (rc=1). A real entry is never zero bytes: every writer below
+#     emits at least one line, through a temp file + `mv -f`, so a half-written
+#     entry never appears under its final name at all.
+#   * Materialising drops tombstones (`-size 0c`, POSIX bytes — NOT `-size 0`,
+#     which is 512-byte blocks and would match every small entry).
+#
+# `board_gc_generations` had to learn about this: keep-5 alone would happily
+# unlink an ancestor the current generation still resolves through.
+_BOARD_GEN_MAX_DEPTH="${CLIKAE_BOARD_GEN_MAX_DEPTH:-8}"
+
+# Generation layout version. A generation written by an older clikae has a
+# different on-disk shape and must never be read as if it were this one: an
+# entry looked up under the wrong scheme reads as a MISS, which leaves Resume
+# silently empty until the tank changes again instead of triggering the one
+# rebuild that fixes it. A mismatch is treated exactly like a stale generation
+# (board_stale) and like no previous generation at all (board_state_refresh).
+_BOARD_GEN_FORMAT=8
+_board_gen_format_ok() {
+  local v=""
+  [ -f "$1/format" ] || return 1
+  IFS= read -r v < "$1/format" 2>/dev/null || return 1
+  [ "$v" = "$_BOARD_GEN_FORMAT" ]
+}
+
+# _board_gen_entry <gen> <rel> -> sets $_board_gen_entry_out to the resolved
+# path of one entry ("sids/<key>" / "recent/<key>"), rc=1 when the chain has no
+# live entry under that name. Out-variable, not `$( )`: this runs once per
+# lookup on a render's hot path and once per changed file inside a rebuild, and
+# a subshell fork there is exactly the per-file cost this whole round is about
+# (same pattern `_agy_ws_lookup` already uses in lib/adapters/antigravity.sh).
+# No fork of any kind: `[ -f ]`/`[ -s ]` are builtins and `read < file` is a
+# redirection, so a full-depth miss costs at most 3 * _BOARD_GEN_MAX_DEPTH
+# syscalls.
+_board_gen_entry_out=""
+_board_gen_entry() {
+  local g="$1" rel="$2" root="${1%/*}" d=0 p
+  _board_gen_entry_out=""
+  while [ -n "$g" ] && [ "$d" -lt "$_BOARD_GEN_MAX_DEPTH" ]; do
+    if [ -f "$g/$rel" ]; then
+      # Zero bytes is the tombstone (see the chain header above): the entry
+      # exists in an ancestor but this generation says it is gone.
+      [ -s "$g/$rel" ] || return 1
+      _board_gen_entry_out="$g/$rel"
+      return 0
+    fi
+    p=""
+    [ ! -f "$g/parent" ] || IFS= read -r p < "$g/parent" 2>/dev/null
+    case "$p" in generation.*) g="$root/$p" ;; *) return 1 ;; esac
+    d=$((d + 1))
+  done
+  return 1
+}
+
+# _board_gen_put <gen> <rel> -> reads the entry's bytes from stdin and puts
+# them at "$gen/<rel>" as temp + `mv -f`, the pattern _board_purge_recent_row
+# has used since round-6. `mv` replaces a NAME; it never opens the inode an
+# ancestor generation's identical name points at, and no reader can ever see a
+# partially written entry (the reason this matters is in the chain header
+# above). `.tmp/` is a sibling directory inside the same generation, so the
+# rename is always same-filesystem and therefore atomic.
+_board_gen_put() {
+  local gen="$1" rel="$2" tmp="$1/.tmp/e.$$"
+  cat > "$tmp" 2>/dev/null && mv -f "$tmp" "$gen/$rel" 2>/dev/null
+}
+
 # _board_scope_raw <engine> -> the per-(cwd, engine) scope string itself
 # (never hashed) — factored out so a reader (board_stale, board_recent) and
 # the writer can never drift on what "this scope" means, AND so a reader can
@@ -217,6 +310,9 @@ board_stale() {
   local engine="$1" dir="$2" gen="$3" saved cur
   [ -f "$gen/updated" ] || return 0
   [ -f "$gen/transcripts-fp" ] || return 0
+  # An older layout is not "fresh data in a shape I can read" — see
+  # _BOARD_GEN_FORMAT's own header.
+  _board_gen_format_ok "$gen" || return 0
   IFS= read -r saved < "$gen/transcripts-fp"
   cur="$(_board_transcript_fingerprint "$engine" "$dir")"
   [ "$cur" = "$saved" ] || return 0
@@ -318,8 +414,11 @@ board_recent() {
   case "$n" in ''|*[!0-9]*) n=10 ;; esac
   gen="$(board_generation "$engine" "$dir")" || return 0
   scope="$(_board_scope_raw "$engine")"; key="$(board_key "$scope")"
-  [ -f "$gen/recent/$key" ] || return 0
-  IFS=$'\037' read -r hmark hscope < "$gen/recent/$key"
+  # Round-8: the entry may live in an ancestor generation — see
+  # _board_gen_entry's own header.
+  _board_gen_entry "$gen" "recent/$key" || return 0
+  local rf="$_board_gen_entry_out"
+  IFS=$'\037' read -r hmark hscope < "$rf"
   # P3-2: a board_key collision on the scope is a miss, never someone else's
   # recent list — see board_stale's twin guard.
   { [ "$hmark" = "#scope" ] && [ "$hscope" = "$scope" ]; } || return 0
@@ -329,7 +428,7 @@ board_recent() {
   # for board_stale's OWN per-file comparison — dropped along with that
   # signal (superseded by the single whole-tank fingerprint; see this file's
   # own header), since nothing reads them anymore.
-  tail -n +2 "$gen/recent/$key" | head -n "$n"
+  tail -n +2 "$rf" | head -n "$n"
 }
 board_find() {
   local engine="$1" dir="$2" sid="$3" gen f="" sf savedsid
@@ -340,8 +439,10 @@ board_find() {
     [ ! -f "$f" ] || { printf '%s\n' "$f"; return 0; }
   fi
   gen="$(board_generation "$engine" "$dir")" || return 1
-  sf="$gen/sids/$(board_key "$sid")"
-  [ -f "$sf" ] || return 1
+  # Round-8: resolve through the parent chain, and a zero-byte tombstone (a
+  # transcript removed since an ancestor recorded it) resolves to nothing.
+  _board_gen_entry "$gen" "sids/$(board_key "$sid")" || return 1
+  sf="$_board_gen_entry_out"
   { IFS= read -r savedsid; IFS= read -r f; } < "$sf"
   # P3-2: a board_key collision on the sid is a miss, never another
   # session's transcript.
@@ -365,18 +466,45 @@ board_find() {
 # a dangling pointer), but the sort itself should still be reproducible.
 # Directory name as the tie-break: cheap, and turns "arbitrary" into
 # "deterministic" even though mktemp's XXXXXX suffix is random, not ordered.
+#
+# Round-8: a generation is no longer self-contained (see the chain header at
+# the top of this file) — the current one resolves entries through up to
+# _BOARD_GEN_MAX_DEPTH ancestors, and keep-N alone would happily unlink one of
+# them. An unlinked ancestor is not a dangling POINTER that a rebuild heals; it
+# is a silently EMPTY Resume list for every session that had not changed since
+# that ancestor recorded it, with `current` still valid and `board_stale` still
+# saying "fresh". So the chain from `current` is protected outright and the
+# keep-N window applies to what is left. `_board_gc_candidates` is the ONE
+# place that decides this: `clean.sh`'s own sweep (_clean_board_gc) calls it
+# too, rather than keeping a second copy of the rule that would have to be
+# taught about the chain separately.
+_board_gc_candidates() {
+  local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd gmt cur="" p prot=$'\n' d=0
+  [ -d "$root" ] || return 0
+  if [ -f "$root/current" ]; then
+    IFS= read -r cur < "$root/current" 2>/dev/null || cur=""
+    while [ -n "$cur" ] && [ "$d" -lt "$_BOARD_GEN_MAX_DEPTH" ]; do
+      case "$cur" in generation.*) ;; *) break ;; esac
+      prot="$prot$cur"$'\n'
+      p=""
+      [ ! -f "$root/$cur/parent" ] || IFS= read -r p < "$root/$cur/parent" 2>/dev/null
+      cur="$p"
+      d=$((d + 1))
+    done
+  fi
+  for gd in "$root"/generation.*; do
+    [ -d "$gd" ] || continue
+    case "$prot" in *$'\n'"${gd##*/}"$'\n'*) continue ;; esac
+    gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
+    printf '%s\037%s\n' "$gmt" "$gd"
+  done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
+}
 board_gc_generations() {
-  local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd gmt
+  local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd
   [ -d "$root" ] || return 0
   while IFS= read -r gd; do
     [ -n "$gd" ] && rm -rf "$gd"
-  done < <(
-    for gd in "$root"/generation.*; do
-      [ -d "$gd" ] || continue
-      gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
-      printf '%s\037%s\n' "$gmt" "$gd"
-    done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
-  )
+  done < <(_board_gc_candidates "$root" "$keep")
   return 0
 }
 
@@ -394,17 +522,24 @@ board_gc_generations() {
 # previously-uncapped session invisible; nothing here re-derives full scope
 # membership to cover that narrow case.
 _board_merge_recent_row() {
-  local gen="$1" scope="$2" sid="$3" mt="$4" n="$5" key base hdr rmt rsid
+  local gen="$1" scope="$2" sid="$3" mt="$4" n="$5" key src hdr rmt rsid
   key="$(board_key "$scope")"
-  base="$gen/recent/$key"
   local -a rows=()
-  if [ -f "$base" ]; then
-    IFS= read -r hdr < "$base"
+  # Round-8: the row this merges against is whatever the CHAIN resolves for
+  # this scope — this generation's own copy if an earlier call in this same
+  # refresh already wrote one, otherwise the nearest ancestor's. The result is
+  # always written into THIS generation, through temp + `mv -f`
+  # (_board_gen_put): the ancestor's file is never opened for writing, which
+  # is the round-7 P1-1 defect (`> "$base"` through a `cp -al` hard link
+  # rewrote a generation `current` still pointed at).
+  if _board_gen_entry "$gen" "recent/$key"; then
+    src="$_board_gen_entry_out"
+    IFS= read -r hdr < "$src"
     while IFS=$'\037' read -r rmt rsid; do
       [ -n "$rsid" ] || continue
       [ "$rsid" = "$sid" ] && continue
       rows+=("$rmt"$'\037'"$rsid")
-    done < <(tail -n +2 "$base")
+    done < <(tail -n +2 "$src")
   else
     hdr="#scope"$'\037'"$scope"
   fi
@@ -412,7 +547,7 @@ _board_merge_recent_row() {
   {
     printf '%s\n' "$hdr"
     printf '%s\n' "${rows[@]}" | sort -t$'\037' -k1,1rn | head -n "$n"
-  } > "$base"
+  } | _board_gen_put "$gen" "recent/$key"
 }
 
 # _board_purge_recent_row <gen> <scope> <sid> -> drops <sid>'s row from
@@ -421,13 +556,13 @@ _board_merge_recent_row() {
 # own header, but a stale row copied forward into `recent/` would keep
 # LISTING a deleted session until something else in the same scope changed).
 _board_purge_recent_row() {
-  local gen="$1" scope="$2" sid="$3" key base hdr
+  local gen="$1" scope="$2" sid="$3" key src hdr
   key="$(board_key "$scope")"
-  base="$gen/recent/$key"
-  [ -f "$base" ] || return 0
-  IFS= read -r hdr < "$base"
-  { printf '%s\n' "$hdr"; tail -n +2 "$base" | awk -F$'\037' -v s="$sid" '$2 != s'; } \
-    > "$base.tmp" && mv -f "$base.tmp" "$base"
+  _board_gen_entry "$gen" "recent/$key" || return 0
+  src="$_board_gen_entry_out"
+  IFS= read -r hdr < "$src"
+  { printf '%s\n' "$hdr"; tail -n +2 "$src" | awk -F$'\037' -v s="$sid" '$2 != s'; } \
+    | _board_gen_put "$gen" "recent/$key"
 }
 
 # _board_engine_sidscope <engine> <path> -> echoes "<sid>\037<scope>" for a
@@ -495,10 +630,11 @@ board_state_refresh() (
     IFS= read -r oldname < "$root/current"
     case "$oldname" in generation.*) [ -d "$root/$oldname" ] && oldgen="$root/$oldname" ;; esac
   fi
-  [ -n "$oldgen" ] && [ -f "$oldgen/manifest" ] || oldgen=""
+  [ -n "$oldgen" ] && [ -f "$oldgen/manifest" ] && _board_gen_format_ok "$oldgen" || oldgen=""
 
   gen="$(mktemp -d "$root/generation.XXXXXX")" || return 0
-  mkdir -p "$gen/recent" "$gen/sids"
+  mkdir -p "$gen/recent" "$gen/sids" "$gen/.tmp"
+  printf '%s\n' "$_BOARD_GEN_FORMAT" > "$gen/format"
 
   # A file's rate-limit reading is independent of its sid/scope. `window` is
   # the ONLY per-engine knob the rest of this function needs for it.
@@ -552,6 +688,9 @@ board_state_refresh() (
     # position in `stat_rows`, never by path — `${all_mtime[idx]}` is a plain
     # integer-subscript array read, not a hash lookup, so nothing here needed
     # `declare -A` to begin with.
+    # A cold build owns every entry it writes and has no ancestor to resolve
+    # through: depth 0, no `parent`.
+    printf '0\n' > "$gen/depth"
     local -a all_path=() all_mtime=() all_size=() all_sid=() all_scope=()
     local -a all_reading=() path_idx=() manifest_lines=() reading_lines=()
     local mtv szv fpv age mtsec val sidscope idx i=0 j
@@ -671,18 +810,50 @@ board_state_refresh() (
     [ -f "$changed_f" ] && count=$((count + $(wc -l < "$changed_f")))
     printf '%s\n' "$count" > "$gen/count"
 
-    # `sids/` and `recent/` start as an exact copy of the previous
-    # generation — one `cp -al` (hard link, not a data copy; both
-    # directories are removed independently later by
-    # `board_gc_generations`, which only ever unlinks a NAME, so sharing the
-    # underlying inode across generations is safe — same reasoning as this
-    # file's own note on deleting a generation a concurrent reader still
-    # holds a path into) — and are only touched below for the sid/scope a
-    # changed or removed file actually affects. `-l` is a option both GNU
-    # and BSD/macOS `cp` accept (unlike the GNU-only `--reflink`), so this
-    # needs no platform branch.
-    [ -d "$oldgen/sids" ] && cp -al "$oldgen/sids/." "$gen/sids/" 2>/dev/null
-    [ -d "$oldgen/recent" ] && cp -al "$oldgen/recent/." "$gen/recent/" 2>/dev/null
+    # Round-7 fix review P1-1/P2-1 — carry-forward is now a LINK IN A CHAIN,
+    # not a copy of the previous generation. See this file's own chain header
+    # (`_BOARD_GEN_MAX_DEPTH`) for the whole design; here it is two branches:
+    #
+    #   depth+1 < max  -> write nothing. `parent` names the generation this
+    #     one was built from and `_board_gen_entry` resolves any entry this
+    #     refresh does not itself rewrite by walking to it. Cost: ZERO file
+    #     operations proportional to the tank (round-7 measured 5,001 `link()`
+    #     calls per rebuild at 5,000 files; this is 0).
+    #   depth+1 >= max -> MATERIALISE: copy the resolved set once, oldest
+    #     ancestor first so the newest copy of each name overwrites the older
+    #     ones, then start a fresh chain (no `parent`, depth 0). `cp -a`, no
+    #     `-l`: a hard link is exactly what round-7's P1-1 was, and the whole
+    #     point here is that no two generations ever share an inode again.
+    #     Tombstones (zero-byte entries, see the chain header) are dropped on
+    #     the way out — `-size 0c` is POSIX BYTES; plain `-size 0` counts
+    #     512-byte blocks and would match every entry in the tank.
+    local depth=0 parentname="" cg cd=0 ci cp_p
+    [ ! -f "$oldgen/depth" ] || IFS= read -r depth < "$oldgen/depth" 2>/dev/null
+    case "$depth" in ''|*[!0-9]*) depth=0 ;; esac
+    if [ "$((depth + 1))" -lt "$_BOARD_GEN_MAX_DEPTH" ]; then
+      depth=$((depth + 1))
+      parentname="${oldgen##*/}"
+      printf '%s\n' "$parentname" > "$gen/parent"
+    else
+      local -a chain=()
+      cg="$oldgen"
+      while [ -n "$cg" ] && [ "$cd" -lt "$_BOARD_GEN_MAX_DEPTH" ]; do
+        chain[cd]="$cg"; cd=$((cd + 1))
+        cp_p=""
+        [ ! -f "$cg/parent" ] || IFS= read -r cp_p < "$cg/parent" 2>/dev/null
+        case "$cp_p" in
+          generation.*) cg="$root/$cp_p"; [ -d "$cg" ] || cg="" ;;
+          *) cg="" ;;
+        esac
+      done
+      for ((ci = cd - 1; ci >= 0; ci--)); do
+        [ ! -d "${chain[ci]}/sids" ] || cp -a "${chain[ci]}/sids/." "$gen/sids/" 2>/dev/null
+        [ ! -d "${chain[ci]}/recent" ] || cp -a "${chain[ci]}/recent/." "$gen/recent/" 2>/dev/null
+      done
+      find "$gen/sids" "$gen/recent" -type f -size 0c -exec rm -f {} + 2>/dev/null
+      depth=0
+    fi
+    printf '%s\n' "$depth" > "$gen/depth"
 
     local -a manifest_lines=() reading_lines=()
     local mtv szv fpv age mtsec val sidscope
@@ -700,7 +871,7 @@ board_state_refresh() (
               # P3-2: the sid itself is written back so a reader (board_find,
               # board_stale) can verify it — a 32-bit cksum collision then
               # reads as a miss, never someone else's transcript.
-              printf '%s\n%s\n' "$sid" "$fpv" > "$gen/sids/$key"
+              printf '%s\n%s\n' "$sid" "$fpv" | _board_gen_put "$gen" "sids/$key"
               mt="${mtv%%.*}"
               _board_merge_recent_row "$gen" "$scope" "$sid" "$mt" "$n"
             fi
@@ -745,7 +916,12 @@ board_state_refresh() (
       while IFS=$'\037' read -r _ rsid rscope; do
         [ -n "$rsid" ] || continue
         rkey="$(board_key "$rsid")"
-        rm -f "$gen/sids/$rkey"
+        # Round-8: `rm -f` only unlinked THIS generation's name, which since
+        # the chain landed is usually not where the entry lives at all — the
+        # ancestor would go on answering for a transcript that is gone. A
+        # zero-byte TOMBSTONE is how a chain says "removed here" (see
+        # _board_gen_entry).
+        : | _board_gen_put "$gen" "sids/$rkey"
         _board_purge_recent_row "$gen" "$rscope" "$rsid"
       done < "$removed_f"
     fi
@@ -756,6 +932,7 @@ board_state_refresh() (
     antigravity) agy_email "$dir" > "$gen/email" ;;
     codex) _limit_codex_rate_limits_cached "$dir" "$root/codex-cache" > "$gen/codex-usage" || true ;;
   esac
+  rm -rf "$gen/.tmp"
   pointer="$(mktemp "$root/current.XXXXXX")" || return 0
   printf '%s\n' "${gen##*/}" > "$pointer"
   mv -f "$pointer" "$root/current"

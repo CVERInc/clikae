@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The home board's per-tank snapshot generations no longer share inodes. A
+  rebuild used to `cp -al` the previous generation's `sids/`/`recent/` entries
+  and then write through those hard links, rewriting a generation the board
+  was still reading from, and costing one `link()` per transcript PRESENT
+  (5,001 at 5,000 files) on every rebuild. A generation now holds only the
+  entries that changed in it plus a `parent` pointer; readers resolve an entry
+  by walking that chain, which is bounded (it materialises a real copy before
+  it can grow past 8) and which `clikae clean`'s sweep and the per-publish GC
+  both now protect from keep-N (#62).
+
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or

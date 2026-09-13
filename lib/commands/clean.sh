@@ -1334,7 +1334,7 @@ _clean_tmux_gc() {
 # review, P2-3.
 _clean_board_gc() {
   local dry_run="$1" root="${CLIKAE_HOME:-$HOME/.clikae}/state/board"
-  local keep="${CLIKAE_BOARD_KEEP_GENERATIONS:-5}" tdir gd gmt n=0
+  local keep="${CLIKAE_BOARD_KEEP_GENERATIONS:-5}" tdir gd n=0
   [ -d "$root" ] || return 0
   for tdir in "$root"/*/; do
     [ -d "$tdir" ] || continue
@@ -1347,20 +1347,16 @@ _clean_board_gc() {
         rm -rf "$gd" && n=$((n + 1))
       fi
     done < <(
-      # P3-4 (2026-09-12 round-3 fix review): match board_gc_generations'
-      # tie-break exactly (lib/core/board_state.sh) — the directory name as a
-      # secondary sort key, since several publishes inside the same
-      # wall-clock second all get the same whole-second mtime here (this GC
-      # path isn't in board_gc_generations' hot path, so it stays on
-      # file_mtime; only the SORT needs to agree with it). Without the
-      # matching tie-break, this GC and board_gc_generations could rank the
-      # same set of generations differently and disagree on which one keep-N
-      # protects — including `current`'s own target.
-      for gd in "$tdir"/generation.*; do
-        [ -d "$gd" ] || continue
-        gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
-        printf '%s\037%s\n' "$gmt" "$gd"
-      done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
+      # P3-4 (2026-09-12 round-3 fix review): this used to keep its OWN copy
+      # of board_gc_generations' ranking (mtime desc, directory name as the
+      # tie-break) so the two could not disagree on which generation keep-N
+      # protects. Round-8 made that rule bigger than a sort — a generation is
+      # now a link in a chain and the whole chain from `current` has to be
+      # protected outright (see _board_gc_candidates' own header,
+      # lib/core/board_state.sh) — and a second copy of a rule that just grew
+      # a second clause is exactly how the two drift. There is one copy now,
+      # and this sweep calls it.
+      _board_gc_candidates "$tdir" "$keep"
     )
   done
   [ "$n" -gt 0 ] && log_info "GC: removed $n old board snapshot generation(s)."

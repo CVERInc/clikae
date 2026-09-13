@@ -524,3 +524,122 @@ _board_shims() {
   [[ "$after" != *session-gone* ]] || false
   [[ "$after" == *session-keep* ]] || false
 }
+
+# ---------------------------------------------------------------------------
+# 2026-09-13 round-7 fix review (round-8 fixes). One receipt per finding; each
+# one was RED on 6b952d9 before the fix that follows it.
+# ---------------------------------------------------------------------------
+
+_b8_tank() {
+  [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter claude
+  B8_TANK="$CLIKAE_HOME/profiles/claude/work"
+  B8_PROJ="$B8_TANK/projects/$(_claude_project_slug "$PWD")"
+  mkdir -p "$B8_PROJ"
+}
+
+@test "board (P1-1): publishing a generation leaves the PREVIOUS one byte-identical, and shares no inode with it" {
+  # Round-7 P1-1: `cp -al` hard-linked every carried-forward entry, and
+  # `> "$base"` / `> "$gen/sids/$key"` then wrote THROUGH those links — so
+  # publishing gen2 silently rewrote gen1, which `current` was still pointing
+  # at while the rebuild ran. The reviewer's own three-way probe caught it:
+  # gen1's recent row changed the moment gen2 published.
+  _b8_tank
+  local i
+  for i in 0 1 2 3; do
+    printf '{"type":"ai-title","aiTitle":"T%s"}\n' "$i" > "$B8_PROJ/session-$i.jsonl"
+  done
+  board_state_refresh claude "$B8_TANK"
+  local root gen1 gen2 snap
+  root="$(board_root "$B8_TANK")"
+  gen1="$root/$(cat "$root/current")"
+  snap="$TEST_HOME/gen1-snapshot"
+  rm -rf "$snap"; mkdir -p "$snap"
+  cp -r "$gen1/recent" "$snap/recent"
+  cp -r "$gen1/sids" "$snap/sids"
+
+  printf '{"type":"ai-title","aiTitle":"CHANGED"}\n' >> "$B8_PROJ/session-3.jsonl"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  gen2="$root/$(cat "$root/current")"
+  [ "$gen2" != "$gen1" ]
+
+  # THE receipt: the superseded generation is byte-identical to its snapshot.
+  diff -r "$snap/recent" "$gen1/recent"
+  diff -r "$snap/sids" "$gen1/sids"
+
+  # And the mechanism that guarantees it: nothing is hard-linked any more, so
+  # there is no shared inode left for a future in-place write to reach.
+  local f links
+  for f in "$gen1"/sids/* "$gen1"/recent/* "$gen2"/sids/* "$gen2"/recent/*; do
+    [ -f "$f" ] || continue
+    links="$(stat -c %h "$f" 2>/dev/null || stat -f %l "$f")"
+    [ "$links" -eq 1 ] || { echo "$f has $links links"; false; }
+  done
+
+  # gen2 carries ONLY what changed in it — not a copy of the tank.
+  [ "$(ls "$gen2/sids" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(cat "$gen2/parent")" = "${gen1##*/}" ]
+}
+
+@test "board (P1-1): the parent chain is bounded — it materialises and never outgrows _BOARD_GEN_MAX_DEPTH" {
+  _b8_tank
+  printf '{"type":"ai-title","aiTitle":"T0"}\n' > "$B8_PROJ/session-0.jsonl"
+  printf '{"type":"ai-title","aiTitle":"T1"}\n' > "$B8_PROJ/session-1.jsonl"
+  board_state_refresh claude "$B8_TANK"
+  local root i gen depth saw_materialise=0
+  root="$(board_root "$B8_TANK")"
+  for ((i = 0; i < 20; i++)); do
+    printf '{"n":%s}\n' "$i" >> "$B8_PROJ/session-1.jsonl"
+    _board_gen_cache_clear
+    board_state_refresh claude "$B8_TANK"
+    gen="$root/$(cat "$root/current")"
+    depth="$(cat "$gen/depth")"
+    [ "$depth" -lt "$_BOARD_GEN_MAX_DEPTH" ] || { echo "depth $depth"; false; }
+    [ "$depth" -ne 0 ] || saw_materialise=1
+    # session-0 was written once and never touched again: it can only still
+    # resolve through the chain (or through a materialised copy of it).
+    [ -n "$(board_find claude "$B8_TANK" session-0)" ]
+  done
+  [ "$saw_materialise" -eq 1 ]
+}
+
+@test "board (P1-1): GC never unlinks a generation the current one still resolves through" {
+  # keep-N alone would have: the chain runs up to _BOARD_GEN_MAX_DEPTH deep
+  # and keep is 5 by default. An unlinked ancestor is not a dangling pointer a
+  # rebuild heals — it is a silently empty Resume list with `current` still
+  # valid and board_stale still saying "fresh".
+  _b8_tank
+  local i
+  for i in 0 1 2; do
+    printf '{"type":"ai-title","aiTitle":"T%s"}\n' "$i" > "$B8_PROJ/session-$i.jsonl"
+  done
+  board_state_refresh claude "$B8_TANK"
+  local root
+  root="$(board_root "$B8_TANK")"
+  for ((i = 0; i < 6; i++)); do
+    printf '{"n":%s}\n' "$i" >> "$B8_PROJ/session-2.jsonl"
+    _board_gen_cache_clear
+    board_state_refresh claude "$B8_TANK"
+  done
+  # Walk the live chain and assert every link of it is still on disk.
+  local cur p n=0
+  cur="$(cat "$root/current")"
+  while [ -n "$cur" ]; do
+    [ -d "$root/$cur" ] || { echo "GC removed chain link $cur"; false; }
+    n=$((n + 1))
+    p=""
+    [ ! -f "$root/$cur/parent" ] || p="$(cat "$root/$cur/parent")"
+    cur="$p"
+  done
+  [ "$n" -ge 2 ]
+  [ -n "$(board_find claude "$B8_TANK" session-0)" ]
+  # and `clikae clean`'s own sweep uses the same rule
+  source "$CLIKAE_LIB/commands/clean.sh"
+  _clean_board_gc 0 >/dev/null 2>&1 || true
+  [ -n "$(board_find claude "$B8_TANK" session-0)" ]
+}
+
