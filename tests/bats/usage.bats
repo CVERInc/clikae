@@ -130,9 +130,15 @@ live_usage() {
   [ "$output" = reserve2 ]
 }
 
-@test "P2-3: intra-tier ordering is window_pct primary, weekly_pct only the tie-break" {
-  usage_fixture
-  clikae init claude hiwin; clikae init claude hiweek
+@test "P2-3: intra-tier ordering is window_pct primary, weekly_pct only the tie-break (three-way discriminating fixture)" {
+  # No usage_fixture here (unlike round-2's version of this test): it plants
+  # an unrelated "work" tank whose name sorts between mmwinbest and
+  # zzweekbest — round-3's P3-4 caps the LIVE refresh to the first 3
+  # candidates by listing order, so "work" would steal zzweekbest's refresh
+  # slot and leave it an unrefreshed "unknown" (tier 1), silently defeating
+  # the three-way discrimination below. multi_curl_stub is all this test
+  # needs; it does not depend on usage_fixture's own (overwritten) stub.
+  clikae init claude aamiddle; clikae init claude mmwinbest; clikae init claude zzweekbest
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/log.sh"
   source "$CLIKAE_LIB/core/profile_store.sh"
@@ -141,17 +147,31 @@ live_usage() {
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/burn.sh"
   multi_curl_stub
-  # hiwin: 5h window nearly spent (85%) but a great weekly number (5%).
-  # hiweek: 5h window almost untouched (5%) but a worse weekly number (20%).
-  # Both tier-0 (<90% peak). A burn starting NOW runs against the 5h window
-  # — hiweek is the genuinely better choice, and only wins if window_pct is
-  # the PRIMARY sort key, not weekly_pct (the round-1 shape, which picked
-  # hiwin here — see this function's own header for the reasoning).
-  live_usage hiwin 85 5
-  live_usage hiweek 5 20
+  # round-3 review, P3-1: the round-2 fixture (hiwin 85/5, hiweek 5/20) named
+  # its tanks so the CORRECT answer (hiweek) was ALSO the alphabetical-listing
+  # fallback (list_all_profiles pipes through `sort`) — deleting the intra-tier
+  # comparison entirely (burn.sh's Pass-3 loop then just keeps the first
+  # same-tier candidate it sees) stayed green, indistinguishable from the
+  # ranking actually running. Three tanks, three DIFFERENT answers per
+  # algorithm, so each wrong algorithm has its own distinct wrong tank:
+  #   aamiddle    window=50 weekly=50  — alphabetically first; the answer a
+  #                                       deleted-ranking fallback gives.
+  #   mmwinbest   window=10 weekly=85  — lowest window_pct; the CORRECT
+  #                                       answer (a burn starting now runs
+  #                                       against the 5h window).
+  #   zzweekbest  window=80 weekly=5   — lowest weekly_pct; the answer a
+  #                                       weekly_pct-primary regression
+  #                                       (round-1's shape) gives.
+  # All three tier-0 (<90% peak). Negative controls run against a disposable
+  # `cp -a` of this tree, never this worktree (paste in the fix commit body):
+  #   - delete the Pass-3 up/uw comparison entirely -> aamiddle -> red.
+  #   - swap the comparison back to weekly_pct-primary -> zzweekbest -> red.
+  live_usage aamiddle 50 50
+  live_usage mmwinbest 10 85
+  live_usage zzweekbest 80 5
   run _burn_next_same_engine claude '' '' '' 1
   [ "$status" -eq 0 ]
-  [ "$output" = hiweek ]
+  [ "$output" = mmwinbest ]
 }
 
 @test "P2-3: tier boundary — 89.9%peak beats unknown, 90.0%peak loses to unknown" {
