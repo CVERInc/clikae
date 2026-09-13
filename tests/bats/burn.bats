@@ -1862,6 +1862,35 @@ STUB
   [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
 }
 
+# P1-1 (round-3 fix review, this PR): the guard above only exercises the
+# HIT path (an anchor line found near the tail) — every healthy run with NO
+# limit line anywhere pays the SAME cost on the way to deciding that (the
+# fallback that tests every adjacent line pair for a split anchor phrase).
+# Round-2's `${line%$'\r'}` per-line CR strip was O(n^2) on both paths;
+# measured 727x slower at 2 MB even near-idle load (REVIEW-stderr81-r3.md
+# P1-1). This is the everyday case — a task that just finishes — so it must
+# stay fast even though nothing was ever going to match.
+@test "burn #44: an 8MB HEALTHY capture (no limit line at all) still classifies fast (P1-1 r3 timing guard)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 8000000 /dev/zero | tr '\0' 'x'
+printf '\ndone.\n'
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  # No artifact was written and no limit line is in the reply — a real task
+  # failure, not dry. The behavioral shape isn't the point of this guard,
+  # the WALL TIME is.
+  [[ "$output" == *'"ok":false'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — expected single-digit seconds"; false; }
+}
+
 # --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
 # reads the full, untruncated capture) put the redaction awk loop's
 # per-match `substr(t, i)` copy back in the hot path — and unlike P1-2

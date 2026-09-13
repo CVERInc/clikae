@@ -168,59 +168,60 @@ limit_codex_reset() {
 # last line — an everyday build-log-style task that happens to run dry —
 # took ~60s to classify (a P1-3 timing guard, round-5, that already exists
 # for a different shape caught it immediately). One `grep -n` over the
-# WHOLE buffer finds every candidate line in a single fork; only the rare
-# fallback (the anchor phrase itself split across a line boundary — the
-# common wrap case, a trailing reset phrase split off, is handled by the
-# forward-join below and never reaches this) pays for building every
-# adjacent pair, and even that is one more single grep call, not one per
-# pair.
-# P3-2 (round-2 fix review, this PR): `while read -r` does not strip a
-# trailing `\r` — a CRLF capture left one on the end of EVERY line, so the
-# `case … in *[.\!?])` terminal-punctuation check below never matched (a
-# line ending "…AM.\r" tests against `.\r`, not `.`) and every single
-# anchor line, not just the rare wrapped one, tried to glue its neighbour
-# on. Harmless today only because `limit_codex_reset`'s own `head -n 1`
-# lets the anchor line's own phrase win over whatever got glued to it —
-# see the comment on limit_codex_reset's callers — but it widened P3-1's
-# exposure from "occasionally" to "every line of a CRLF transport", so
-# strip it at the source instead of leaning on that.
+# WHOLE buffer finds every candidate line in a single fork; the rare
+# fallback (the anchor phrase itself split across a line boundary) joins
+# every adjacent pair in one `awk` pass and greps that ONCE too.
+# P1-1 (round-3 fix review, this PR): the fix above still built a `lines[]`
+# bash array with `while read -r line; do lines+=("${line%$'\r'}"); done`
+# to strip a trailing CR per line — bash's `${var%pat}` is NOT O(1); on a
+# long single line (an 8 MB unbroken capture, e.g. a raw argv echo with no
+# newlines) it walks backward byte-by-byte re-deciding the multibyte
+# boundary at every candidate cut point, making the whole loop O(n^2) on
+# that line's length. Measured: 8 MB went from 3s (main) to 2107s on this
+# host, 2266s on CI's own dedicated ubuntu runner — CPU-bound the entire
+# time, not host contention (three refs in the same load window, only this
+# one is quadratic; see REVIEW-stderr81-r3.md P1-1). There is also no need
+# for a per-line array at all: strip every `\r` from the WHOLE buffer with
+# ONE `tr -d '\r'` up front (a single fork, linear), then read the one
+# matched line straight back out of that already-clean buffer with
+# `sed -n "${n}p"` — no bash array, no per-line loop, and (P3-3) the CR
+# strip now happens BEFORE the anchor `grep`, so a line with a leading
+# `\r` (pty residue) is matched too, not just cleaned up after the fact.
 _limit_codex_anchor_line() {
   local re="$1" buf="$2"
-  local -a lines=()
-  local line
-  while IFS= read -r line; do lines+=("${line%$'\r'}"); done <<< "$buf"
-  local n=${#lines[@]}
-  [ "$n" -gt 0 ] || return 1
+  [ -n "$buf" ] || return 1
+  buf="$(tr -d '\r' <<< "$buf")"
 
-  local hit hit_i joined next
+  local hit n joined next
   # P1-1 (round-2 fix review, this PR): case-sensitive (no `grep -i`) — the
   # caller's anchor spells out every case variant it wants to accept (see
   # limit_codex_output_dry); folding case here would silently widen
   # whatever regex a future caller passes in too.
   hit="$(grep -naE "$re" <<< "$buf" | head -n 1)" || true
   if [ -n "$hit" ]; then
-    hit_i=$(( "${hit%%:*}" - 1 ))
-    joined="${lines[$hit_i]}"
+    n="${hit%%:*}"
+    joined="$(sed -n "${n}p" <<< "$buf")"
     case "$joined" in
       *[.\!?]) : ;;
       *)
-        if [ $((hit_i + 1)) -lt "$n" ]; then
-          next="${lines[$((hit_i + 1))]}"
-          # P3-1 (round-2 fix review, this PR): gluing the next line on
-          # whenever the matched line lacked terminal punctuation was meant
-          # for a vendor sentence the terminal wrapped mid-RESET-PHRASE
-          # ("…2:13\nAM."), but it fired just as readily when the matched
-          # line simply had no trailing period for its own reasons and the
-          # NEXT line was unrelated prose that happened to carry its OWN
-          # "resets …"/"try again at …" text — donating THAT decoy's reset
-          # to the genuine anchor instead of just a wrapped continuation.
-          # Only glue when the next line does not already stand on its
-          # own — neither as another anchor match nor as something that
-          # itself parses as a reset phrase (a decoy must not donate its
-          # reset; a genuine wrapped continuation like "AM." is neither).
-          if ! grep -qaE "$re" <<< "$next" && [ -z "$(limit_codex_reset "$next")" ]; then
-            joined="$joined $next"
-          fi
+        # P3-1 (round-2 fix review, this PR): gluing the next line on
+        # whenever the matched line lacked terminal punctuation was meant
+        # for a vendor sentence the terminal wrapped mid-RESET-PHRASE
+        # ("…2:13\nAM."), but it fired just as readily when the matched
+        # line simply had no trailing period for its own reasons and the
+        # NEXT line was unrelated prose that happened to carry its OWN
+        # "resets …"/"try again at …" text — donating THAT decoy's reset
+        # to the genuine anchor instead of just a wrapped continuation.
+        # Only glue when the next line does not already stand on its
+        # own — neither as another anchor match nor as something that
+        # itself parses as a reset phrase (a decoy must not donate its
+        # reset; a genuine wrapped continuation like "AM." is neither).
+        # P1-1 (round-3 fix review, this PR): two `sed -n` reads — the
+        # matched line above and this one successor — never the whole
+        # file; no bash array survives to build a pair from.
+        next="$(sed -n "$((n + 1))p" <<< "$buf")"
+        if [ -n "$next" ] && ! grep -qaE "$re" <<< "$next" && [ -z "$(limit_codex_reset "$next")" ]; then
+          joined="$joined $next"
         fi
         ;;
     esac
@@ -229,19 +230,17 @@ _limit_codex_anchor_line() {
   fi
 
   # No single line matches — the anchor phrase may itself be split across a
-  # line boundary. Test every adjacent pair in ONE more grep pass (build the
-  # pairs with plain bash string ops — no forking — then grep the whole
-  # joined buffer at once).
-  [ "$n" -gt 1 ] || return 1
-  local -a pairs=()
-  local i
-  for ((i = 0; i < n - 1; i++)); do
-    pairs+=("${lines[$i]} ${lines[$((i + 1))]}")
-  done
-  hit="$(printf '%s\n' "${pairs[@]}" | grep -naE "$re" | head -n 1)" || true
+  # line boundary. Join every adjacent pair with ONE `awk` pass (awk walks
+  # the lines internally — no bash loop, no bash array, no second copy of
+  # the buffer sitting in a `pairs[]` array — P3-2) and grep the joined
+  # stream once.
+  local paired
+  paired="$(awk 'NR > 1 { print prev " " $0 } { prev = $0 }' <<< "$buf")"
+  [ -n "$paired" ] || return 1
+  hit="$(grep -naE "$re" <<< "$paired" | head -n 1)" || true
   [ -n "$hit" ] || return 1
-  hit_i=$(( "${hit%%:*}" - 1 ))
-  printf '%s' "${pairs[$hit_i]}"
+  n="${hit%%:*}"
+  printf '%s' "$(sed -n "${n}p" <<< "$paired")"
   return 0
 }
 # P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing prefix
