@@ -78,7 +78,8 @@ Give the task in one of two ways:
                       never the exit code", and with rerouting the tank that did
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
-                         reset, rerouted_from[], elapsed_s, run_id, left_behind[]}
+                         reset, rerouted_from[], elapsed_s, run_id, left_behind[],
+                         left_behind_truncated}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -1174,17 +1175,44 @@ _burn_left_behind() {
   local total=${#lb_repo[@]} shown=0 over=0
   local -a order=()
   if [ "$total" -gt 0 ]; then
-    local i idx
+    local i idx a_flag d_flag
     while IFS= read -r idx; do order+=("$idx"); done < <(
-      for i in "${!lb_repo[@]}"; do printf '%s\t%s\n' "${lb_ts[$i]}" "$i"; done \
-        | sort -t "$(printf '\t')" -s -k1,1rn | cut -f2
+      for i in "${!lb_repo[@]}"; do
+        a_flag=0
+        [ "${lb_ahead[$i]}" = - ] || { [ "${lb_ahead[$i]}" -gt 0 ] 2>/dev/null && a_flag=1; }
+        d_flag=0
+        [ "${lb_dirty[$i]}" -gt 0 ] 2>/dev/null && d_flag=1
+        # P2-2 (round-2 review): the old key was `activity_ts` alone —
+        # `ahead>0` (unpushed commits, the actual thing #84's title is
+        # about) had ZERO weight, so a payload repo with no post-start file
+        # write could be pushed off a 25-cap by pure noise (measured: 29
+        # noise repos with a stray file each buried a real unpushed-commits
+        # repo entirely — not in the JSON, not in the human list, not even
+        # named in "and N more"). Three-level key now: ahead>0 first, then
+        # dirty>0, then newest-activity — noise never outranks real work.
+        printf '%s\t%s\t%s\t%s\n' "$a_flag" "$d_flag" "${lb_ts[$i]}" "$i"
+      done | sort -t "$(printf '\t')" -s -k1,1rn -k2,2rn -k3,3rn | cut -f4
     )
   fi
   for idx in "${order[@]:-}"; do
     [ -n "$idx" ] || continue
-    if [ "$shown" -ge 25 ]; then over=$((over + 1)); continue; fi
-    repo="${lb_repo[$idx]}"; branch="${lb_branch[$idx]}"; ahead="${lb_ahead[$idx]}"
-    dirty="${lb_dirty[$idx]}"; files="${lb_files[$idx]}"
+    repo="${lb_repo[$idx]}"; ahead="${lb_ahead[$idx]}"
+    local idx_ahead_gt0=0
+    [ "$ahead" != - ] && [ "$ahead" -gt 0 ] 2>/dev/null && idx_ahead_gt0=1
+    if [ "$shown" -ge 25 ]; then
+      over=$((over + 1))
+      # P2-2 (round-2 review): the push hint is the whole point of #84 —
+      # losing it for a repo that just didn't make the display cap would
+      # silently un-fix the bug #84 exists for. The cap bounds NOISE
+      # (display rows, JSON size); it was never meant to bound the one
+      # signal (an unpushed commit) that already sorts to the front.
+      if [ "$idx_ahead_gt0" -eq 1 ]; then
+        printf -v hint '  hint: git -C %q push' "$repo"
+        log_info "$hint"
+      fi
+      continue
+    fi
+    branch="${lb_branch[$idx]}"; dirty="${lb_dirty[$idx]}"; files="${lb_files[$idx]}"
     log_info "left behind: $repo $branch ahead $ahead dirty $dirty"
     if [ "${lb_timeout[$idx]}" = 1 ]; then
       log_info "  files: (scan timed out)"
@@ -1197,7 +1225,7 @@ _burn_left_behind() {
     # other two, and not necessarily the most important one (find order,
     # not relevance). One hint per ahead repo now, printed right under its
     # own "left behind:"/"files:" block instead of batched at the end.
-    if [ "$ahead" != - ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
+    if [ "$idx_ahead_gt0" -eq 1 ]; then
       printf -v hint '  hint: git -C %q push' "$repo"
       log_info "$hint"
     fi
@@ -1215,10 +1243,30 @@ _burn_left_behind() {
     shown=$((shown + 1))
   done
   if [ "$over" -gt 0 ]; then
-    local roots_desc; roots_desc="$(IFS=', '; printf '%s' "${roots[*]}")"
+    # P3-4 (round-2 review): `${roots[*]}` only ever uses IFS's FIRST
+    # character as the join separator, so `IFS=', '` printed "a,b" not
+    # "a, b" — cosmetic only, but a plain loop says what it means instead
+    # of relying on a two-char IFS that silently gets truncated to one.
+    local roots_desc="" r
+    for r in "${roots[@]}"; do roots_desc="${roots_desc:+$roots_desc, }$r"; done
     log_info "  … and $over more repositories under $roots_desc"
   fi
-  printf '[%s]' "$entries"
+  # P2-1 (round-2 review): repos the global scan budget never got to are a
+  # DIFFERENT fact from "and N more repositories under …" above — those are
+  # confirmed left-behind candidates trimmed by the display cap; these are
+  # unknowns the budget ran out before even checking (same honesty as a
+  # per-repo scan timeout: say so, don't claim they're clean).
+  if [ "$lb_budget_skipped" -gt 0 ]; then
+    log_info "  … and $lb_budget_skipped more (scan budget exhausted)"
+  fi
+  # P2-2 (round-2 review): `--json` used to carry no truncation signal at
+  # all — a machine consumer had no way to tell "25 rows, that's everything"
+  # from "25 rows, and an unknown number more" without also parsing the
+  # human `log_info` lines. `left_behind_truncated` folds BOTH reasons a
+  # candidate might be missing from `left_behind[]` (cap overflow, budget
+  # exhaustion) into one count; `_burn_result` reads it back off this
+  # function's own last line, same convention as the JSON array itself.
+  printf '%s\t[%s]' "$((over + lb_budget_skipped))" "$entries"
   return 0
 }
 
@@ -1238,7 +1286,7 @@ _burn_left_behind() {
 # artifact's own measurement travels with the verdict rather than being a second
 # call the caller has to remember to make.
 _burn_result() {
-  local left_behind='[]'
+  local left_behind='[]' left_behind_truncated=0
   # P2-3 (round-1 review): pinned HERE, before the scan below ever runs —
   # `_burn_left_behind` can itself take real wall-clock time (P2-2's 97.6s
   # worst case, pre-fix), and `$SECONDS` keeps ticking through all of it. The
@@ -1271,6 +1319,17 @@ _burn_result() {
       *$'\n'*) left_behind="${left_raw##*$'\n'}"; printf '%s\n' "${left_raw%$'\n'*}" ;;
       *)       left_behind="$left_raw" ;;
     esac
+    # P2-2 (round-2 review): `_burn_left_behind`'s last line is now
+    # "<truncated-count>\t[<json array>]" — same tab-split convention as
+    # the newline-split above, so a garbled/short capture degrades to the
+    # same safe defaults (0, '[]') the array already had.
+    case "$left_behind" in
+      *$'\t'*)
+        left_behind_truncated="${left_behind%%$'\t'*}"
+        left_behind="${left_behind#*$'\t'}"
+        ;;
+    esac
+    [[ "$left_behind_truncated" =~ ^[0-9]+$ ]] || left_behind_truncated=0
     case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
   fi
   [ "${as_json:-0}" -eq 1 ] || return 0
@@ -1281,11 +1340,11 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,"left_behind_truncated":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
     "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
-    "$(json_or_null "${run_id:-}")" "$left_behind" >&4
+    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_truncated" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.

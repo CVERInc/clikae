@@ -3303,11 +3303,61 @@ STUB
   [[ "$output" == *"and 5 more repositories under"* ]] || false
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
 import json, sys
-rows = json.load(sys.stdin)["left_behind"]
+obj = json.load(sys.stdin)
+rows = obj["left_behind"]
 assert len(rows) == 25, len(rows)
 names = [r["repo"].rsplit("/", 1)[1] for r in rows]
 expect = [f"r{n:02d}" for n in range(30, 5, -1)]
 assert names == expect, names
+assert obj["left_behind_truncated"] == 5, obj["left_behind_truncated"]
+'
+}
+
+# P2-2 (round-2 review): `activity_ts` alone gave `ahead>0` (unpushed
+# commits — the actual thing #84's title is about) zero ranking weight, so
+# 29 noise repos (a stray post-start file each, ahead=0/dirty=1) could bury
+# a real "payload" repo (a committed-but-unpushed commit, no post-start
+# file at all) off the 25-cap entirely — measured on c42007a: not in the
+# JSON, not in the human list, not even named in "and N more". The fix's
+# whole point is the SAME repo shape here: with the three-level key
+# (ahead>0, dirty>0, ts), payload is row 1 regardless of the 29 noise
+# repos' file-mtime freshness, and its push hint prints even though this
+# fixture keeps `n29` fresh enough that payload would rank last under the
+# old key.
+@test "burn #84 P2-2 (round-2 review): ahead>0 outranks file mtime in the 25-repo cap, and its push hint survives it" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in $(seq -w 1 29); do
+    git init -q "$TEST_HOME/repos/n$i"
+    git -C "$TEST_HOME/repos/n$i" config user.name t
+    git -C "$TEST_HOME/repos/n$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/n$i" commit -q --allow-empty -m init
+  done
+  git init -q "$TEST_HOME/repos/payload"
+  git -C "$TEST_HOME/repos/payload" config user.name t
+  git -C "$TEST_HOME/repos/payload" config user.email t@example.invalid
+  git -C "$TEST_HOME/repos/payload" commit -q --allow-empty -m init
+  git -C "$TEST_HOME/repos/payload" branch base
+  git -C "$TEST_HOME/repos/payload" branch --set-upstream-to=base >/dev/null
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for i in \$(seq -w 1 29); do
+  printf noise > "$TEST_HOME/repos/n\$i/stray"
+done
+git -C "$TEST_HOME/repos/payload" commit -q --allow-empty -m "left behind"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"hint: git -C "*"/repos/payload push"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert rows, "empty left_behind"
+assert rows[0]["repo"].endswith("/repos/payload"), rows[0]["repo"]
+assert rows[0]["ahead"] == 1, rows[0]
 '
 }
 
