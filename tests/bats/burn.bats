@@ -793,6 +793,66 @@ STUB
   [ "$output" = "True T2 codex/T1" ] || { echo "got: $output"; false; }
 }
 
+# --- P1-2/P1-3/P1-4 (round-1 review, PR #89): burn used to swap the named
+# tank for a DIFFERENT one BEFORE the first attempt, whenever a sibling
+# looked like it had more headroom — even when the named tank was perfectly
+# healthy, even with --to naming an explicit next hop, and without ever
+# recording the swap in $tried / rerouted_from. That pre-launch swap is
+# deleted outright; these three tests reproduce the review's exact
+# scenarios against its absence.
+
+@test "burn claude a: worse headroom than b does not stop a from launching (no pre-launch substitution, P1-2)" {
+  _stub_claude
+  clikae init claude a
+  clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:90,weekly_pct:90,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/a.json"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:10,weekly_pct:10,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/b.json"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out.md"
+  clikae burn claude a --artifact "$STUB_ARTIFACT" --json -- -p hi \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], d['rerouted_from'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True a []" ] || { echo "got: $output"; false; }
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn --to codex/c wins outright over headroom ordering on a dry tank (P1-3)" {
+  _stub_codex
+  clikae init codex a
+  clikae init codex b
+  clikae init codex c
+  : > "$CLIKAE_HOME/profiles/codex/a/.dry"
+  mkdir -p "$CLIKAE_HOME/state/usage/codex"
+  # b LOOKS like the obviously better reroute target (5% used); --to must
+  # still win over that ordering and land on c instead.
+  jq -cn --argjson now "$(date +%s)" '{window_pct:5,weekly_pct:5,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/codex/b.json"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex a --artifact "$A" --to codex/c -- run "$A"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"codex/c"* ]] || false
+  [[ "$output" != *"codex/b"* ]] || false
+}
+
+@test "burn --json: a reroute driven by headroom ordering is recorded in rerouted_from (P1-4)" {
+  _stub_codex
+  clikae init codex a
+  clikae init codex b
+  : > "$CLIKAE_HOME/profiles/codex/a/.dry"
+  mkdir -p "$CLIKAE_HOME/state/usage/codex"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:5,weekly_pct:5,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/codex/b.json"
+  clikae burn codex a --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], d['rerouted_from'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True b ['codex/a']" ] || { echo "got: $output"; false; }
+}
+
 @test "burn --json: every tank dry is a distinct, readable outcome" {
   _stub_codex
   clikae init codex T1
