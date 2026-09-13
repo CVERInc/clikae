@@ -343,6 +343,52 @@ you what it did.
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
 
+## Ambient: turn GitHub replies into wake events (`watch github`)
+
+A different source under the same verb: instead of watching a tank's own
+transcript for a dry limit, `clikae watch github` polls GitHub's search API
+for issues/PRs opened by others, replies, and @mentions in an org — so a
+collaborator's reply doesn't sit unseen until someone happens to run `gh` by
+hand.
+
+```bash
+clikae watch github --org CVERInc              # foreground, polls every 10m, Ctrl-C to stop
+clikae watch github --org CVERInc --interval 5m # a tighter poll interval
+clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
+```
+
+`--org` defaults to the login `gh repo view` reports for this directory's
+GitHub remote when omitted. Every new event prints live as one line —
+
+```
+[ DONE ] github CVERInc/reef#313 comment by collaborator: auth redirect — next: retry the callback test
+```
+
+— and is also appended, as flat JSON, to
+`$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl`, so `--once` from a cron
+job or a Stop hook leaves a durable trail even with nobody watching the pane.
+A cursor (the newest event timestamp seen) persists at
+`$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small file next to it
+de-dupes by (issue number, updated timestamp), capped at the last 500.
+
+Rate limits: one poll is 2 requests, well inside the search API's 30/min
+authenticated. On a 403/429 the poll interval backs off ×2 up to 1h; the
+cursor is never advanced past a request that failed to read, so nothing is
+silently skipped.
+
+Requires `gh` already logged in — this feature never reads or writes a token
+itself, it uses whatever account `gh auth login` already set up, and refuses
+immediately (exit 1) if `gh auth status` fails.
+
+> **Honest caveat.** GitHub's search API returns issue/PR-level rows, not a
+> per-comment feed, so a `kind` of `comment` names the issue's own author,
+> not necessarily whoever's activity just touched it — search has no cheaper
+> per-event actor field within a 2-request budget. And because the org query
+> excludes everything YOU opened (`-author:<self>`, so your own activity
+> never reads back as a new "opened" event), a plain reply on an issue you
+> opened yourself is caught only when it also @mentions you — the org query
+> alone won't surface it.
+
 ## What is running right now — the board's Live section
 
 Type `clikae` and the top of the board lists the sessions alive on **this
