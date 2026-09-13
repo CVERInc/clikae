@@ -3421,6 +3421,83 @@ assert rows[0]["ahead"] == 1, rows
 '
 }
 
+# P2-1 (round-2 review): round-1's wall budget wrapped the file-list `find`
+# only — every `_burn_lb_git` call ran bare, so a hung git call could block
+# `_burn_left_behind` (and therefore all of `burn`) forever. `.git/HEAD`
+# replaced by a FIFO reproduces the real trigger (a dead NFS/SMB mount, a
+# wedged git process) without one: `git rev-parse`/`symbolic-ref`/`status`
+# all block in open(2) waiting for a writer that never comes (verified: all
+# three hang past a 3s external `timeout` on plain git, no clikae involved).
+# `_burn_lb_bounded`'s 5s per-call bound must catch this and let the whole
+# `clikae burn` process finish — this test's real assertion IS that `run`
+# below returns at all; the wall-clock check just makes "how bounded" concrete.
+@test "burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget" {
+  _left84_setup
+  _left84_repo
+  rm -f "$STUB_LEFT_REPO/.git/HEAD"
+  mkfifo "$STUB_LEFT_REPO/.git/HEAD"
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  # Generous ceiling (5s bound + a few other fast calls + engine overhead) —
+  # the point is "finishes", not "finishes in exactly N seconds".
+  [ "$((t1 - t0))" -lt 30 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json, sys; json.load(sys.stdin)'
+}
+
+# P2-3 (round-1 review, unresolved until round-2): `-maxdepth 3` capped repo
+# discovery 2 levels below the scanned root. `--add-dir <root>` with repos at
+# increasing depth (L1/a/L2/a/b/L3/a/b/c/L4 — a/b/c/L4's `.git` is 5 levels
+# below root, well past the old cap) reproduces "a lane's commits in a
+# nested repo" (#84's own title) going completely silent: no row, no hint.
+# `inner` is ACTUALLY nested inside L1's own working tree (not just deep
+# under the same --add-dir root) — the fixture that exercises innermost
+# attribution for real: pre-fix, L1's file scan walked straight through
+# inner's `.git` boundary and inner/WORK.md came back in L1's `files`.
+@test "burn #84 P2-3 (round-2 review): nested repos at any depth get their own row and hint; files attribute to the innermost repo" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan"
+  cd "$TEST_HOME/scan" || return 1
+  local d
+  for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+    git init -q "$TEST_HOME/repos/$d"
+    git -C "$TEST_HOME/repos/$d" config user.name t
+    git -C "$TEST_HOME/repos/$d" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/$d" commit -q --allow-empty -m init
+    git -C "$TEST_HOME/repos/$d" branch base
+    git -C "$TEST_HOME/repos/$d" branch --set-upstream-to=base >/dev/null
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+  printf work > "$TEST_HOME/repos/\$d/WORK.md"
+  git -C "$TEST_HOME/repos/\$d" add WORK.md
+  git -C "$TEST_HOME/repos/\$d" commit -q -m work
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+    [[ "$output" == *"hint: git -C "*"/repos/$d push"* ]] || { echo "missing hint for $d"; false; }
+  done
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+byname = {r["repo"].rsplit("/repos/", 1)[1]: r for r in rows}
+for d in ["L1", "a/L2", "a/b/L3", "a/b/c/L4", "L1/vendor/inner"]:
+    assert d in byname, (d, sorted(byname))
+    assert byname[d]["ahead"] == 1, byname[d]
+# innermost attribution: inner is INSIDE L1s own working tree — its
+# WORK.md must show up only under inner, never re-listed under L1.
+l1_files = byname["L1"]["files"]
+assert not any("vendor/inner" in f for f in l1_files), l1_files
+assert any("WORK.md" in f for f in byname["L1/vendor/inner"]["files"]), byname["L1/vendor/inner"]
+'
+}
+
 # P3-3/criteria (round-1 review): "ahead" used to be a multityped JSON field
 # (string "-" or a bare integer) — this asserts the fix (an int or JSON
 # null, never a sentinel string) on the qualifying side: ahead>0 alone, with

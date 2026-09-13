@@ -1064,9 +1064,23 @@ _burn_left_behind() {
       repos+=("$repo")
     done < <(
       printf '%s\0' "$root"
+      # P2-3 (round-2 review): `-maxdepth 3` capped repo discovery at 2
+      # levels below $root, so a lane's commits in a repo nested 3+ deep
+      # (`a/b/L3`, `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>`
+      # produces) vanished silently: no row, no hint, and the nested
+      # repo's own files got misattributed to whichever ancestor repo DID
+      # fit inside the cap. `-name .git -prune -print0` alone (no
+      # maxdepth) is unbounded in depth but each repo is still visited
+      # exactly once: pruning `.git` stops find from ever descending INTO
+      # it (irrelevant, expensive), but leaves every sibling and every
+      # subdirectory of the surrounding working tree open, so a repo
+      # nested inside another repo's working tree is still found — this
+      # is how nested repos get discovered at all, not a bug to fix.
       while IFS= read -r -d '' marker; do
         printf '%s\0' "${marker%/.git}"
-      done < <(find "$root" -maxdepth 3 \( -name node_modules -prune \) -o \( -name .git -print0 -prune \) 2>/dev/null)
+      done < <(find "$root" \( -name node_modules -o -name .venv -o -name target \
+        -o -name dist -o -name build -o -name .cache \) -prune \
+        -o \( -name .git -print0 -prune \) 2>/dev/null)
     )
   done
   local entries="" hint="" scan
@@ -1129,6 +1143,15 @@ _burn_left_behind() {
     # `sort -rn` makes "newest ten" actually mean newest ten. Same platform
     # probe every other `stat` caller in this repo already shares
     # (_clikae_statv/_CLIKAE_STAT_FMT) — not a third one.
+    # P2-3/P3-5 (round-2 review): scanning $repo's tree used to walk STRAIGHT
+    # THROUGH any nested repo or submodule inside it — their files came back
+    # attributed to the outer repo's `files` list even though pushing the
+    # outer repo can never carry them. `-mindepth 1 … -type d -exec test -e
+    # {}/.git \; -prune` prunes at the first NESTED `.git` it meets ($repo's
+    # OWN root is excluded by `-mindepth 1`, so this never prunes $scan
+    # itself) — the inner repo still gets discovered and scanned as its own
+    # `repos[]` entry (the discovery walk above is unbounded now, P2-3), it
+    # just stops being double-counted here.
     files=""; count=0; seen=""
     local repo_ts=0 repo_timeout=0 scan_out rc_scan
     for root in "${roots[@]}"; do
@@ -1138,10 +1161,11 @@ _burn_left_behind() {
       esac
       rc_scan=0
       scan_out="$(
-        _burn_lb_bounded 5 find "$scan" \
+        _burn_lb_bounded 5 find "$scan" -mindepth 1 \
           \( -name .git -o -name node_modules -o -name .venv -o -name target \
              -o -name dist -o -name build -o -name .cache -o -name .next \
              -o -name out -o -name coverage \) -prune \
+          -o -type d -exec test -e {}/.git \; -prune \
           -o -type f -newer "${started_at_sentinel:-/dev/null}" \
              -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + 2>/dev/null \
         | sort -rn
