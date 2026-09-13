@@ -237,7 +237,7 @@ _doctor_memory() {
 # re-deriving tank-ness with a second copy of tank_dir_is_tank/adoption — the
 # "ONE ENUMERATOR, REALLY" rule applies to reads too, not just writes.
 _doctor_stray_dirs() {
-  local root cli_dir cli tdir name printed=0 known
+  local root cli_dir cli tdir name printed=0 known known_real="" real p
   root="$(profiles_root)"
   [ -d "$root" ] || return 0
   known="$(list_all_profiles 2>/dev/null | cut -f1,2)"
@@ -251,14 +251,49 @@ _doctor_stray_dirs() {
       case $'\n'"$known"$'\n' in
         *$'\n'"$cli"$'\t'"$name"$'\n'*) continue ;;
       esac
+      # #61 round-2 P2-2: a symlink ALIAS for a real, already-adopted tank
+      # has no marker of its own by design (dedupe prefers the real
+      # directory — _tank_candidates) and must not be reported as stray on
+      # that account; it is not a gap, it is a name that already resolves to
+      # one. Silence any candidate whose REALPATH matches a known tank's,
+      # not just its own name. $known_real is built LAZILY, on the first
+      # name-mismatch found — a store with zero strays (the common case)
+      # then pays zero extra `cd && pwd -P` forks for this check at all.
+      if [ -z "$known_real" ]; then
+        known_real=$'\n'
+        while IFS= read -r p; do
+          [ -n "$p" ] || continue
+          real="$(cd "$p" 2>/dev/null && pwd -P)" || continue
+          known_real="$known_real$real"$'\n'
+        done <<EOF
+$(list_all_profiles 2>/dev/null | cut -f3)
+EOF
+      fi
+      real="$(cd "$tdir" 2>/dev/null && pwd -P)" || real=""
+      if [ -n "$real" ]; then
+        case "$known_real" in *$'\n'"$real"$'\n'*) continue ;; esac
+      fi
       if [ "$printed" -eq 0 ]; then
-        log_bold "Not a tank directory (no .clikae-tank marker, no recognised engine content):"
+        log_bold "Not a tank directory (no .clikae-tank marker):"
         printed=1
       fi
-      printf '  %-16s %s\n' "$cli/$name" "${tdir%/}"
+      # #61 round-2: _tank_fingerprint_match is no longer a precondition for
+      # adoption, but it is still a useful READ-ONLY signal here — it tells
+      # you WHY a directory looks like it used to be a tank.
+      if _tank_fingerprint_match "$cli" "${tdir%/}" 2>/dev/null; then
+        printf '  %-16s %s\n' "$cli/$name" "${tdir%/}  (has $cli-shaped content)"
+      else
+        printf '  %-16s %s\n' "$cli/$name" "${tdir%/}"
+      fi
     done
   done
-  [ "$printed" -eq 1 ] && echo ""
+  if [ "$printed" -eq 1 ]; then
+    # #61 round-2 P3: an actionable next step, not just a name — clikae never
+    # re-adopts after the one-time sweep, and `init` refuses an existing
+    # directory, so there is genuinely no automatic way back for these.
+    log_dim "    Next: move any content you want to keep, then \`clikae init <engine> <name>\` to make it a real tank."
+    echo ""
+  fi
   return 0
 }
 
@@ -266,15 +301,47 @@ cmd_doctor() {
   case "${1:-}" in
     -h|--help)
       cat <<'EOF'
-Usage: clikae doctor
+Usage: clikae doctor [--adopt]
 
 A read-only health check: which supported engines are installed and logged in,
-how many tanks each has, and what to do next. It changes nothing on disk.
+how many tanks each has, and what to do next. It changes nothing on disk,
+with the one documented exception of --adopt.
+
+--adopt   Retry the one-time tank-adoption sweep (#61) for a store whose
+          adoption flag (state/tanks-adopted-v1) is missing — most likely
+          because the store was read-only the first time anything walked it.
+          Harmless to run when the store is already adopted.
 EOF
+      return 0 ;;
+    --adopt)
+      # #61 round-2 P1-1: the "retry" button named in `Next:` below. Calls the
+      # SAME function every command's first tank walk already calls — its
+      # flag-present check is the guarantee that must hold here too: an
+      # ALREADY-adopted store must never sweep again (that would readmit a
+      # directory like `zzempty` created after the one-time window closed).
+      # So this only ever does real work on a store whose flag genuinely
+      # never persisted (a read-only store), where it retries that write.
+      _tank_adoption_ensure
+      local _adopt_flag; _adopt_flag="$(tanks_adopted_flag_path)"
+      if [ "$_CLIKAE_ADOPT_LAST_FLAG_OK" -eq 1 ]; then
+        if [ "$_CLIKAE_ADOPT_LAST_COUNT" -gt 0 ]; then
+          log_done "Tank adoption flag written: $_adopt_flag ($_CLIKAE_ADOPT_LAST_COUNT tank(s) newly adopted)."
+        else
+          log_pass "Already adopted: $_adopt_flag — nothing to do."
+        fi
+      else
+        log_warn "Could not write the adoption flag: $_adopt_flag — store is read-only. Tanks are still recognised in memory each run (fix permissions to make it permanent)."
+      fi
       return 0 ;;
     "") : ;;
     *) log_fail "Unexpected argument: $1" ;;
   esac
+
+  # #61 round-2 P2-4: warm the per-process tank cache BEFORE anything below
+  # walks the store — scan_clis alone fans out to one subshell per adapter
+  # (15), each re-deriving the same rows via tanks_for_engine; every one of
+  # them inherits this via ordinary fork/copy instead of re-walking.
+  profiles_cache_warm
 
   local rc rc_loaded="no" on_path="no"
   rc="$(detect_shell_rc)"
@@ -285,6 +352,15 @@ EOF
   echo ""
   printf '  %-16s %s\n' "clikae"       "$CLIKAE_VERSION  ($CLIKAE_ROOT)"
   printf '  %-16s %s\n' "CLIKAE_HOME"  "$CLIKAE_HOME"
+  # #61 round-2 P1-1: the two states a store can be in, named plainly. Before
+  # this the only way to learn a store's tanks had silently stopped being
+  # recognised (a fingerprint gap, or a flag write that failed) was to notice
+  # the count drop somewhere else on this same screen.
+  if [ -f "$(tanks_adopted_flag_path)" ]; then
+    printf '  %-16s %s\n' "tank adoption" "done — legacy tanks recognised once; new ones only via init (or agy's own)"
+  else
+    printf '  %-16s %s\n' "tank adoption" "not persisted (read-only store?) — recognised in memory each run; clikae doctor --adopt to retry"
+  fi
   if [ "$on_path" = "yes" ]; then
     printf '  %-16s %s\n' "on PATH"    "yes"
   else

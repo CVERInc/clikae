@@ -353,14 +353,17 @@ soul_left_clear() { rm -f "$(soul_left_file "$1" "$2")" 2>/dev/null || true; }
 # canonical on-disk name or it is nothing.
 tank_engine_known() {
   local cli="$1"
-  list_adapters | grep -qxF "$cli" && return 0
+  # #61 round-2 P3: $cli comes straight from a directory NAME with no `-e`/`--`
+  # guard — a `profiles/-e/` directory makes grep read "$cli" as a second
+  # OPTION instead of a pattern and print its own usage banner twice.
+  list_adapters | grep -qxF -e "$cli" && return 0
   [ -f "$CLIKAE_LIB/targets/$cli.sh" ]
 }
 
 # CLIKAE_TANK_MARKER — the file that makes a directory a tank clikae
 # recognises, rather than a directory that merely happens to sit where one
-# would. One constant so init/the enumerator's adoption path can never drift
-# on the name.
+# would. One constant so init/the adoption sweep/the enumerator can never
+# drift on the name.
 CLIKAE_TANK_MARKER=".clikae-tank"
 
 # tank_marker_path <dir> -> the marker file's path inside <dir>.
@@ -369,24 +372,49 @@ tank_marker_path() { printf '%s/%s\n' "${1%/}" "$CLIKAE_TANK_MARKER"; }
 # tank_marker_write <cli> <dir> -> stamp <dir>'s marker with <cli> — the
 # CANONICAL, on-disk engine name (never an alias like "agy"; always exactly
 # what tank_engine_known would accept as this directory's own cli). Called
-# from the one true creation point (ensure_profile --create, below) and from
+# from the one true creation point (ensure_profile --create, below), from
 # agy's own tank-creation paths (lib/commands/antigravity.sh — agy tanks
-# never go through ensure_profile). Best-effort: a read-only filesystem must
-# never turn "list my tanks" into a failure.
+# never go through ensure_profile), and from the one-time adoption sweep
+# (_tank_adoption_ensure, below). Best-effort AND SILENT: a read-only
+# filesystem must never turn "list my tanks" into a wall of raw shell errors.
+#
+# #61 round-2 P2-1: `> file 2>/dev/null` puts the redirects in the WRONG
+# order — bash wires stdout to the file FIRST, and that redirection's own
+# failure (Permission denied) prints to the ORIGINAL, still-unredirected
+# stderr; only after that does `2>/dev/null` take effect, too late to catch
+# it. Doing `2>/dev/null` first closes that window: every failure from here
+# is silenced, never raced.
+#
+# #61 round-2 P3: also not ATOMIC — a bare `>` truncates the file before
+# writing it, so a concurrent reader (another clikae process walking the
+# same store) can observe a momentarily EMPTY marker and read a real tank as
+# not-a-tank. Writing a per-write temp name and renaming over the marker
+# means a reader only ever sees "old content" or "new content", never
+# "truncated".
 tank_marker_write() {
-  local cli="$1" dir="$2"
-  printf '%s\n' "$cli" > "$(tank_marker_path "$dir")" 2>/dev/null || true
+  local cli="$1" dir="$2" marker tmp
+  marker="$(tank_marker_path "$dir")"
+  tmp="${marker}.tmp.$$"
+  printf '%s\n' "$cli" 2>/dev/null > "$tmp" || { rm -f "$tmp" 2>/dev/null; return 0; }
+  mv -f "$tmp" "$marker" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
 }
 
 # tank_dir_is_tank <cli> <dir> -> 0 if <dir> is a tank clikae itself made:
 # its marker exists and names <cli> exactly. Read-only — does not adopt (see
-# _tank_fingerprint_match / _tank_adopt_if_legacy below for that) and does
-# not re-derive anything from the directory's NAME. #61 round-1 P1-3: the
-# previous version was a NAME-SHAPE test (rejecting `*.lock`/dotdir-looking
-# names) — so a stray `mkdir zzempty` (no lock-ish name at all) sailed
-# through as a "real" tank and reproduced #61's exact symptom verbatim,
-# just under a different name. A tank is a directory clikae MADE or ADOPTED,
-# never a guess from what it's called.
+# _tank_adoption_ensure below) and does not re-derive anything from the
+# directory's NAME. #61 round-1 P1-3: the previous version was a NAME-SHAPE
+# test (rejecting `*.lock`/dotdir-looking names) — so a stray `mkdir zzempty`
+# (no lock-ish name at all) sailed through as a "real" tank and reproduced
+# #61's exact symptom verbatim, just under a different name. A tank is a
+# directory clikae MADE or ADOPTED, never a guess from what it's called.
+#
+# The second branch is the ONE exception, and only fires when this store's
+# adoption flag could not be persisted (a read-only store — #61 round-2
+# P1-1/P2-1): _tank_adoption_ensure still decides tank-ness for THIS run and
+# remembers the decision here in memory rather than on disk, so `clikae
+# tanks` on a read-only store still lists everything it would have adopted
+# instead of going silent the moment persistence fails.
 #
 # #61: a stray `hello.lock` sitting beside real tank dirs was picked up as a
 # reroute target and burned a few minutes failing to log in before reporting
@@ -398,23 +426,188 @@ tank_marker_write() {
 tank_dir_is_tank() {
   local cli="$1" dir="$2" marker
   marker="$(tank_marker_path "$dir")"
-  [ -f "$marker" ] || return 1
-  [ "$(cat "$marker" 2>/dev/null)" = "$cli" ]
+  if [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$cli" ]; then
+    return 0
+  fi
+  [ -n "$_CLIKAE_INMEM_ADOPTED_ACTIVE" ] || return 1
+  local name="${dir%/}"; name="${name##*/}"
+  case "$_CLIKAE_INMEM_ADOPTED" in *$'\n'"$cli"$'\t'"$name"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+# _tank_shape_excluded <name> -> 0 if <name> can NEVER be a tank regardless
+# of content — a dotdir, or a lock/sidecar-suffixed name. The same shapes
+# 3c02eb2 rejected by NAME before the marker existed; a directory clikae
+# itself creates can never look like this (validate_name forbids a leading
+# dot). Used ONLY by the one-time adoption sweep below — once a directory
+# has a marker, tank_dir_is_tank never re-checks its name again.
+_tank_shape_excluded() {
+  case "$1" in
+    .*) return 0 ;;
+    *.lock|*.lck|*.tmp|*.bak|*.swp|*.orig|*.reclaim|*~) return 0 ;;
+  esac
+  return 1
+}
+
+# _tank_candidates <cli_dir> -> "<name>\t<path>" per directory-shaped entry
+# directly inside <cli_dir> (a real directory, or a symlink resolving to
+# one), ONE per resolved real path. #61 round-2 P2-2: real directories are
+# walked FIRST and always keep their own name; a symlink is dropped the
+# moment it resolves to a real path already seen — dedupe prefers the tank
+# ITSELF, never whichever sorts first alphabetically (the previous bug: a
+# symlink named `aalias` sorted before the real `zreal` it pointed at, so
+# `aalias` won the dedupe and doctor then reported the REAL tank as a
+# stray). A symlink whose target is NOT another entry here (an alias to
+# something outside this cli_dir, or the only copy) keeps its own name —
+# nothing to prefer it over.
+#
+# #61 round-2 P2-4 (measured after the first version of this function shipped
+# with a per-process cache above it): TWO `find | sort` pipelines per engine
+# dir — 4 forks — was cheap once, expensive still cached, because caching
+# only removes the "asked 15 times" multiplier, not the base cost of asking
+# once. One plain bash glob (what main itself uses) plus the builtin `[ -L ]`
+# test classifies real-vs-symlink with ZERO extra forks; `cd && pwd -P` per
+# entry is the one remaining fork and is inherent to resolving a realpath at
+# all (also true of the code this replaced).
+_tank_candidates() {
+  local cli_dir="${1%/}" seen=$'\n' d name real
+  local -a reals=() links=()
+  for d in "$cli_dir"/*/; do
+    [ -e "$d" ] || continue   # unmatched glob literal (empty cli_dir)
+    d="${d%/}"
+    if [ -L "$d" ]; then links+=("$d"); else reals+=("$d"); fi
+  done
+  for d in "${reals[@]}"; do
+    name="${d##*/}"
+    real="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+    seen="$seen$real"$'\n'
+    printf '%s\t%s\n' "$name" "$d"
+  done
+  for d in "${links[@]}"; do
+    [ -d "$d" ] || continue   # broken symlink, or one pointing at a non-dir
+    name="${d##*/}"
+    real="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+    seen="$seen$real"$'\n'
+    printf '%s\t%s\n' "$name" "$d"
+  done
+}
+
+# ── One-time inclusive tank adoption (#61 round-2 P1-1) ─────────────────────
+# origin/main's clikae writes NO marker at all, and 12 of the 15 adapters
+# never defined adapter_tank_fingerprint — so gating adoption on a
+# per-adapter fingerprint (this PR's first pass) silently orphaned every
+# existing kubectl/npm/terraform/… tank, and a codex tank nobody had logged
+# into yet, the moment someone upgraded: 7 of 8 tanks vanished from every
+# list, with no CLI command able to bring them back (`init` refuses an
+# existing directory; `doctor` only named the gap).
+#
+# The fix is INCLUSIVE, not smarter fingerprinting: the very first command
+# run against a store with no adoption flag sweeps EVERY directory under
+# EVERY known engine and marks it a tank unless it is shaped like something
+# that can never be one (_tank_shape_excluded) or is a symlink alias for a
+# directory already adopted (_tank_candidates). No fingerprint required. The
+# flag is then written so this sweep NEVER runs again — from here on a
+# marker-less directory is not a tank, full stop, which is what keeps #61's
+# own fix intact (`zzempty`, created AFTER adoption, stays refused forever).
+CLIKAE_TANKS_ADOPTED_FLAG_NAME="tanks-adopted-v1"
+
+# tanks_adopted_flag_path -> the one flag file gating the sweep above.
+tanks_adopted_flag_path() { printf '%s/state/%s\n' "$CLIKAE_HOME" "$CLIKAE_TANKS_ADOPTED_FLAG_NAME"; }
+
+# tanks_adopted_flag_write <path> -> best-effort write, verified by reading
+# the file back (mkdir/printf can each silently no-op on some read-only
+# mounts without ever returning nonzero). Same redirect-order fix as
+# tank_marker_write above.
+tanks_adopted_flag_write() {
+  local flag="$1"
+  mkdir -p "$(dirname "$flag")" 2>/dev/null || true
+  printf '%s\n' "$CLIKAE_VERSION" 2>/dev/null > "$flag" || true
+  [ -f "$flag" ]
+}
+
+# _tank_adoption_warn_once -> exactly ONE line, ONCE per clikae invocation,
+# when the store's adoption flag cannot be persisted. Sentinel lives OUTSIDE
+# $CLIKAE_HOME (the whole point is that $CLIKAE_HOME can't be written to),
+# keyed by `$$` — bash keeps that as the ORIGINAL process's pid even inside
+# every subshell/command-substitution/background job this invocation forks,
+# so it dedupes across all of them, not just within one shell frame.
+#
+# #61 round-2 P2-1: the previous version printed unconditionally, every
+# single call, and scan_clis' 15-adapter fan-out turned ONE read-only tank
+# into 32 identical lines (two read-only tanks: 64).
+_tank_adoption_warn_once() {
+  local sentinel="${TMPDIR:-/tmp}/.clikae-adopt-warn.$$"
+  [ -e "$sentinel" ] && return 0
+  : > "$sentinel" 2>/dev/null || true
+  log_warn "This store's tanks aren't adopted yet and the flag can't be written (read-only store?) — recognising them in memory this run only. \`clikae doctor --adopt\` explains more; fix permissions on $(dirname "$(tanks_adopted_flag_path)") to persist it."
+}
+
+_CLIKAE_INMEM_ADOPTED=$'\n'
+_CLIKAE_INMEM_ADOPTED_ACTIVE=""
+_CLIKAE_ADOPT_LAST_COUNT=0
+_CLIKAE_ADOPT_LAST_FLAG_OK=0
+
+# _tank_adoption_ensure -> run the sweep described above exactly once per
+# store — a fast no-op once the on-disk flag exists. `clikae doctor --adopt`
+# calls this SAME function, unconditionally: the flag-present check below is
+# exactly the guarantee that must hold for --adopt too (an ALREADY-adopted
+# store must never sweep again — that would readmit a directory like
+# `zzempty` created after the one-time window closed). --adopt's only real
+# effect is on a store whose flag genuinely never persisted (read-only),
+# where it retries the same write this function already attempts on every
+# call. Sets _CLIKAE_ADOPT_LAST_COUNT (markers newly written this call) and
+# _CLIKAE_ADOPT_LAST_FLAG_OK (1 once the flag is confirmed on disk) for
+# callers that report on it.
+_tank_adoption_ensure() {
+  local flag; flag="$(tanks_adopted_flag_path)"
+  _CLIKAE_ADOPT_LAST_COUNT=0
+  if [ -f "$flag" ]; then
+    _CLIKAE_ADOPT_LAST_FLAG_OK=1
+    return 0
+  fi
+  local root cli_dir cli name path
+  root="$(profiles_root)"
+  _CLIKAE_INMEM_ADOPTED=$'\n'
+  if [ -d "$root" ]; then
+    for cli_dir in "$root"/*/; do
+      [ -d "$cli_dir" ] || continue
+      cli="${cli_dir%/}"; cli="${cli##*/}"
+      tank_engine_known "$cli" || continue
+      while IFS=$'\t' read -r name path; do
+        [ -n "$name" ] || continue
+        _tank_shape_excluded "$name" && continue
+        _CLIKAE_INMEM_ADOPTED="$_CLIKAE_INMEM_ADOPTED$cli"$'\t'"$name"$'\n'
+        tank_dir_is_tank "$cli" "$path" && continue   # already marked
+        tank_marker_write "$cli" "$path"
+        _CLIKAE_ADOPT_LAST_COUNT=$((_CLIKAE_ADOPT_LAST_COUNT + 1))
+      done < <(_tank_candidates "${cli_dir%/}")
+    done
+  fi
+  _CLIKAE_INMEM_ADOPTED_ACTIVE=1
+  if tanks_adopted_flag_write "$flag"; then
+    _CLIKAE_ADOPT_LAST_FLAG_OK=1
+    _CLIKAE_INMEM_ADOPTED_ACTIVE=""   # on disk now — strict marker mode is correct
+  else
+    _CLIKAE_ADOPT_LAST_FLAG_OK=0
+    _tank_adoption_warn_once
+  fi
+  return 0
 }
 
 # _tank_fingerprint_match <cli> <dir> -> 0 if <dir> holds content the ENGINE
-# ITSELF creates in a tank — never anything clikae writes — per that
-# adapter's optional adapter_tank_fingerprint hook (one candidate path per
-# line, relative to the tank dir; the first that exists wins). Read-only, no
-# side effects — the predicate half of adoption, shared by the write path
-# below and `doctor`'s read-only "not a tank" report so the two can never
-# disagree on what WOULD be adopted.
+# ITSELF creates in a tank, per that adapter's optional
+# adapter_tank_fingerprint hook (one candidate path per line, relative to the
+# tank dir; the first that exists wins). #61 round-2 P1-1: no longer a
+# precondition for adoption (_tank_adoption_ensure above is inclusive) —
+# kept as a read-only signal `doctor` uses to explain WHY a stray directory
+# looks like it used to be a tank of a given engine.
 #
 # Runs load_adapter in a SUBSHELL: this can fire for an engine other than
 # whichever one a caller further up already `load_adapter`'d, and clobbering
 # THAT engine's functions out from under it would be exactly the kind of
-# cross-talk "ONE ENUMERATOR, REALLY" exists to prevent (see
-# newest_transcript_tank above for the same pattern).
+# cross-talk "ONE ENUMERATOR, REALLY" exists to prevent.
 _tank_fingerprint_match() {
   local cli="$1" dir="$2" fps f
   fps="$(
@@ -432,68 +625,73 @@ EOF
   return 1
 }
 
-# _tank_adopt_if_legacy <cli> <dir> -> 0 and WRITES the marker (+ prints ONE
-# "adopted" line — see below) when <dir> predates the marker but is a real
-# legacy tank (#61 round-1 P1-3's honest but-else: "no per-tank marker exists
-# yet" was a real gap, not a one-line fix — this is that fix). 1, no write,
-# otherwise: a directory with neither a marker nor the engine's own
-# fingerprint is not a tank (#61's `zzempty` reproduction) — `list_all_profiles`
-# simply skips it, and `doctor` names it.
-#
-# The print goes to `printf … >&2`, NOT log_done (which is stdout) — this
-# runs INSIDE list_all_profiles, whose stdout is the tab-separated data
-# contract every caller (`clikae tanks`, burn's reroute picker, `to`,
-# `resume`) parses; a narration line on that stream would corrupt every one
-# of them. One line, once — after the write, tank_dir_is_tank short-circuits
-# true on every later call and this function is never reached again for the
-# same directory. Badge is `DONE`, not `INFO`: signet's badge vocabulary
-# (packages/cli/SPEC.md) is a CLOSED set — PASS/DONE/WARN/CRIT/FAIL/HELD,
-# no `INFO` — and this line changed the state (wrote the marker), which is
-# exactly `log_done`'s own rule for which badge a line earns
-# (lib/core/log.sh's comment above log_done/log_info).
-_tank_adopt_if_legacy() {
-  local cli="$1" dir="$2"
-  _tank_fingerprint_match "$cli" "$dir" || return 1
-  tank_marker_write "$cli" "$dir"
-  printf '[ DONE ] adopted %s/%s\n' "$cli" "${dir##*/}" >&2
-  return 0
+# List every profile as "<cli> <profile> <path>" lines, sorted. THE one
+# enumerator (clikae tanks / burn's reroute / to's and resume's next_tank all
+# read it). Cached per process once warmed — see profiles_cache_warm below;
+# a caller that never warms it gets exactly one fresh walk per call, same as
+# before.
+list_all_profiles() {
+  if [ -n "$_CLIKAE_PROFILES_CACHE_SET" ]; then
+    [ -n "$_CLIKAE_PROFILES_CACHE" ] && printf '%s\n' "$_CLIKAE_PROFILES_CACHE"
+    return 0
+  fi
+  _list_all_profiles_uncached
 }
 
-# List every profile as "<cli> <profile> <path>" lines, sorted.
-#
-# 🔴 Not purely read-only: a legacy tank (no marker yet) that passes
-# _tank_fingerprint_match gets its marker WRITTEN here, the first time
-# anything walks it (#61 round-1 P1-3 — see _tank_adopt_if_legacy). This is
-# deliberate and is the one documented exception to callers like `doctor`
-# that otherwise promise to change nothing on disk.
-list_all_profiles() {
+# _list_all_profiles_uncached -> the actual walk. Runs the one-time adoption
+# sweep first (a fast no-op once this store's flag exists), then lists every
+# surviving (cli, dir) pair whose marker names that cli — nothing here
+# re-derives tank-ness from a NAME; _tank_candidates already resolved
+# symlink aliases down to one entry per real directory.
+_list_all_profiles_uncached() {
+  _tank_adoption_ensure
   local root
   root="$(profiles_root)"
   [ -d "$root" ] || return 0
-  local cli_dir cli profile_path profile real seen=$'\n'
+  local cli_dir cli name path
   for cli_dir in "$root"/*/; do
     [ -d "$cli_dir" ] || continue
     cli="${cli_dir%/}"; cli="${cli##*/}"
     tank_engine_known "$cli" || continue
-    for profile_path in "$cli_dir"*/; do
-      [ -d "$profile_path" ] || continue
-      profile="${profile_path%/}"; profile="${profile##*/}"
-      # P2-2 (round-1 review): a symlink to a real tank must count ONCE — a
-      # burn dry on the real tank and its alias would otherwise "reroute" onto
-      # the very same directory it just proved dry, burning a real hop for
-      # nothing. Resolve to the REAL path (pwd -P, so an intermediate symlink
-      # in a PARENT dir is also collapsed) and dedupe on that, not on the
-      # name a caller happened to reach it by.
-      real="$(cd "$profile_path" 2>/dev/null && pwd -P)" || continue
-      case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
-      seen="$seen$real"$'\n'
-      if tank_dir_is_tank "$cli" "${profile_path%/}"; then
-        printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
-      elif _tank_adopt_if_legacy "$cli" "${profile_path%/}"; then
-        printf '%s\t%s\t%s\n' "$cli" "$profile" "${profile_path%/}"
-      fi
-    done
+    while IFS=$'\t' read -r name path; do
+      [ -n "$name" ] || continue
+      tank_dir_is_tank "$cli" "$path" && printf '%s\t%s\t%s\n' "$cli" "$name" "$path"
+    done < <(_tank_candidates "${cli_dir%/}")
   done | sort
+}
+
+# profiles_cache_warm -> populate the process-level cache of
+# list_all_profiles' own output, ONCE, for hot callers (doctor/board/status)
+# that otherwise re-walk the whole store many times in one invocation (#61
+# round-2 P2-4: doctor alone was ~20 full walks on one store — scan_clis'
+# 15-adapter fan-out, each re-deriving the same rows via tanks_for_engine —
+# 2.2s on 30 tanks vs main's 0.46s).
+#
+# MUST be called DIRECTLY, never through $(...): a command substitution
+# forks a subshell, and a subshell's variable writes vanish the moment it
+# exits — so the assignment below has to happen in the CALLER's own frame.
+# Call it as the first thing a refresh does; every subshell forked AFTER
+# that point (command substitutions, background jobs, scan_clis' per-adapter
+# `( … )` blocks) inherits the already-populated cache by ordinary
+# fork/copy, so list_all_profiles above can just print it back instead of
+# re-walking. bash 3.2 (macOS's shipped bash) has no associative arrays — a
+# single string var, exactly i18n.sh's own CLIKAE_LANG_RESOLVED pattern,
+# needs none.
+profiles_cache_warm() {
+  [ -n "$_CLIKAE_PROFILES_CACHE_SET" ] && return 0
+  _CLIKAE_PROFILES_CACHE_SET=1
+  _CLIKAE_PROFILES_CACHE="$(_list_all_profiles_uncached)"
+}
+
+# profiles_cache_reset -> forget the warmed cache. The interactive board is a
+# single long-lived process that mutates tanks (init/rename/remove/solo) and
+# re-derives its rows after every such action (_home_refresh) — without this,
+# the FIRST refresh's cache would keep answering for the rest of the session,
+# so a tank created mid-session would never appear. Callers that mutate then
+# re-render call this before profiles_cache_warm on the next pass.
+profiles_cache_reset() {
+  _CLIKAE_PROFILES_CACHE_SET=""
+  _CLIKAE_PROFILES_CACHE=""
 }
 
 # tanks_for_engine <cli> -> every real tank NAME under <cli>, one per line,
