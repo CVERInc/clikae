@@ -82,6 +82,24 @@ command in the shell you land in, and you get the tmux session:
     ssh yourmac            # then, at the prompt
     clikae claude work     # persists; disconnect and come back to it
 
+### Touch scrolling over ssh
+
+On a-Shell (iPhone), swipes arrive as a left-button press and release at different
+rows, even when the app requests SGR mouse tracking (measured 2026-09-13).
+clikae translates movements of at least two rows into tmux history scrolling:
+finger up reads older output; finger down moves toward live output. Each row of
+movement scrolls two lines by default. Tap in copy-mode to return to the live
+view; a tap outside copy-mode keeps the usual click behaviour. Desktop wheel and
+drag-selection bindings are unchanged.
+
+The bindings are installed when clikae creates a tmux session. In tmux's command
+prompt (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable translation,
+or `set -g @clikae_touch_scroll on` to restore it. Set
+`set -g @clikae_touch_scroll_lines 3` to scroll three lines per row of movement.
+These server-wide settings survive later clikae launches; put them in
+`~/.tmux.conf` to retain them across server restarts. The multiplier must be a
+positive integer (invalid values fall back to 2).
+
 ### Make & manage tanks
 
 | Command | What it does |

@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
   set; doctor reports missing rules per tank. A missing template or missing
   `jq` degrades instead of failing `init` (#76).
+- Touch scrolling for click-pair swipes in tmux (a-Shell over ssh): swipe up
+  to read history, swipe down toward live output, and tap to leave copy-mode.
+  `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
+  (default 2). Desktop wheel and drag bindings are unchanged.
+
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

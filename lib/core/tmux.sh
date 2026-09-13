@@ -437,7 +437,28 @@ tmux_spawn_session() {
   # screen fills with a field of them. A blank is the same information without
   # the texture. Cosmetic only, and it changes nothing about either client's size.
   tmux set-option -g fill-character " " 2>/dev/null || true
-  tmux set-option -g mouse on 2>/dev/null || true
+  # TOUCH SCROLLING. Measured 2026-09-13: a-Shell on iPhone over ssh sends
+  # a swipe as SGR button-1 press/release at different rows, never a wheel.
+  # Claude Code asks for mouse tracking, so the default forwards that click and
+  # history never moves. Translate a two-row displacement into copy-mode scroll;
+  # a tap in copy-mode returns to the live view. Keep the normal press behaviour.
+  #
+  # Desktop wheels and drag selection use WheelUp/DownPane and
+  # MouseDrag1Pane/MouseDragEnd1Pane; none of those bindings are replaced here.
+  # Defaults use -o so a later launch preserves the human's off/speed settings.
+  # Like mouse on, this chain runs AFTER creation: mouse support cannot prevent
+  # a session from being born. The helper is a standalone script, avoiding the
+  # CLI's state migration and profile setup on every release.
+  local touch_helper
+  touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_in_mode}"
+  tmux set-option -g mouse on \
+    \; set-option -og @clikae_touch_scroll on \
+    \; set-option -og @clikae_touch_scroll_lines 2 \
+    \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M' \
+    \; bind-key -T root MouseUp1Pane run-shell "$touch_helper" \
+    \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+    \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
+    2>/dev/null || true
   tmux set-option -s set-clipboard on 2>/dev/null || true
 
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
