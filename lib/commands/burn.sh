@@ -937,6 +937,66 @@ _agy_burn() {
   done
 }
 
+# P2-1 (round-2 review): round-1's wall budget wrapped the file-list `find`
+# ONLY — the four `_burn_lb_git` calls below ran bare. Measured: `find` is
+# the CHEAP half (0.016s on a 20k-file repo vs git status's 0.108s with
+# fsmonitor/locks both off — the exact config P3-4 forces on every call
+# here), so the budget guarded the 1/7-cost side and left the expensive,
+# hang-prone side (a FIFO for `.git/HEAD`, a stuck `git status` on a dead
+# NFS mount) able to block `_burn_left_behind` — and therefore all of
+# `burn` — forever. `timeout`/`gtimeout` don't fix this portably: stock
+# macOS ships neither (see `_burn_timeout_bin`'s own comment), and its
+# `perl` fallback is explicitly skipped there because an alarm-killed
+# perl's exit code isn't reliably 124. `_burn_lb_bounded` needs no external
+# binary at all — background, poll `kill -0`, TERM+KILL past the deadline —
+# so it bounds git and find identically on every platform bash itself runs
+# on. Backgrounding here is safe specifically BECAUSE this whole scan
+# already runs inside `_burn_left_behind`'s own `$(...)` subshell (see the
+# P1 note below): the "&" below can only ever background a child of THAT
+# subshell, so nothing it starts can outlive the one process substitution
+# that already scopes every other failure mode in this function.
+_burn_lb_bounded() {
+  local secs="$1"; shift
+  local start=$SECONDS pid watcher rc
+  "$@" &
+  pid=$!
+  # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
+  # wrong in a way that only showed up under real load: every bounded call
+  # — even one that finishes instantly — pays up to ~1s of pure polling
+  # latency (the loop only notices the child is gone on its NEXT wake-up).
+  # With 4 bounded calls per repo that turned "30 small repos, instant
+  # git" into 3 repos before the 10s global budget (P2-1, same review)
+  # tripped — measured on this box under a normal shared-runner load.
+  # `wait "$pid"` is a real blocking wait (kernel-level, zero polling
+  # tax); the watchdog subshell is the only thing that sleeps, and only
+  # once, for exactly `secs`.
+  # This function is always called from inside `_burn_left_behind`'s own
+  # `$(...)` — a command substitution never returns until every process
+  # holding its output pipe's write end has closed it, INCLUDING a
+  # process that never writes anything. The watchdog's `sleep "$secs"` is
+  # forked as ITS child, not `_burn_lb_bounded`'s — killing the watchdog
+  # subshell (below) does not kill that grandchild, which then runs
+  # orphaned for its full duration, silently holding the pipe open the
+  # whole time. Measured: every bounded call took exactly `secs` — the
+  # RIGHT value came back immediately (rc was correct at $SECONDS+0), the
+  # command substitution just didn't unblock until the orphaned `sleep`
+  # finally exited. `>/dev/null 2>&1` on the watchdog gives it (and
+  # anything it forks) a redirected fd 1 from the start, so an orphaned
+  # `sleep` holds no reference to the real pipe.
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" 2>/dev/null
+  rc=$?
+  kill "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null
+  # The watchdog firing and the command finishing on its own race at the
+  # boundary; rather than a marker file (another fork+file per call, on
+  # the hottest path in this function), elapsed wall time already answers
+  # it — the command cannot have taken >= secs without the bound applying.
+  [ $((SECONDS - start)) -lt "$secs" ] && return "$rc"
+  return 124
+}
+
 # Every git call the left-behind scan makes goes through this: `-c
 # core.fsmonitor=false` overrides ANY value the scanned repo's own
 # .git/config sets (command-line -c always wins over repo config), so a
@@ -944,7 +1004,12 @@ _agy_burn() {
 # because burn happened to walk past that repo (P3-4/P1, round-1 review —
 # GIT_OPTIONAL_LOCKS alone only stops writes, not exec). `-c
 # core.hooksPath=/dev/null` is the same defense for every hook name.
-_burn_lb_git() { command git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+# P2-1 (round-2 review): every call now goes through `_burn_lb_bounded` too
+# — a hung `rev-parse`/`symbolic-ref`/`rev-list`/`status` (dead NFS mount,
+# `.git/HEAD` replaced by a FIFO) gets 5s like the file-list `find` always
+# did, instead of blocking this function — and therefore `burn` itself —
+# indefinitely.
+_burn_lb_git() { _burn_lb_bounded 5 command git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
 # .git may be a directory OR a worktree/submodule pointer file.
@@ -1021,17 +1086,22 @@ _burn_left_behind() {
   local stat_flag='-c'
   [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
   local statline mname mline
-  # Reuse burn's own timeout-tool resolver (grep _burn_timeout_bin — not a
-  # second one) rather than hardcoding `timeout`: stock macOS ships neither
-  # `timeout` nor `gtimeout`. Its `perl` fallback is skipped here on purpose
-  # — an alarm-killed perl's exit code isn't reliably 124, and this budget
-  # is a best-effort perf guard, not the documented `--timeout` contract, so
-  # an unbounded scan is the honest degrade when only perl is available.
-  local -a lb_bound=()
-  case "$(_burn_timeout_bin 2>/dev/null)" in
-    timeout|gtimeout) lb_bound=("$(_burn_timeout_bin 2>/dev/null)" 5) ;;
-  esac
+  # P2-1 (round-2 review), second layer: per-call 5s bounds any ONE hang,
+  # but nothing capped the SUM — `repos=6` that each trip the 5s bound
+  # measured 30s total, perfectly linear, and a real `--add-dir ~/Developer`
+  # with 200 repos in that shape is 1000s. `$SECONDS` (bash builtin, no
+  # fork) gives a zero-cost wall clock for a global budget on TOP of the
+  # per-call one: once 10s of real time has gone into this loop, every
+  # remaining candidate repo is skipped rather than attempted — reported
+  # honestly as "scan budget exhausted" (lb_budget_skipped below), not
+  # silently dropped the way the pre-fix cap dropped its tail.
+  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
   for repo in "${repos[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
     branch="$(_burn_lb_git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)" || branch=HEAD
     ahead="$(_burn_lb_git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
     [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=-
@@ -1067,7 +1137,7 @@ _burn_left_behind() {
       esac
       rc_scan=0
       scan_out="$(
-        "${lb_bound[@]}" find "$scan" \
+        _burn_lb_bounded 5 find "$scan" \
           \( -name .git -o -name node_modules -o -name .venv -o -name target \
              -o -name dist -o -name build -o -name .cache -o -name .next \
              -o -name out -o -name coverage \) -prune \
