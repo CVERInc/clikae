@@ -722,12 +722,18 @@ _honest_corpus_write() {
   [ ! -f "$CLIKAE_HOME/state/watch-github/CVERInc.cursor" ]
 }
 
-@test "watch github --once: the mentions query is skipped once the org query is rate-limited (P3-9)" {
+# P3-9's original fix (round 2: skip the mentions query once the org query
+# is rate-limited) is moot as of P2-2 (2026-09-13 fix-round-3 review): the
+# separate mentions query is gone entirely, not conditionally skipped — see
+# the file header. Kept as a narrower assertion that a rate-limited org
+# query makes exactly ONE search call, not a growing number across retries.
+@test "watch github --once: a rate-limited org query makes exactly ONE search call, no second query exists to skip (P3-9)" {
   _gh_stub_install
   _gh_stub_fail org 1 1 'gh: HTTP 403: API rate limit exceeded (https://api.github.com/search/issues)'
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 1 ]
   [ ! -f "$GH_STUB_DIR/mentions.calls" ]
+  [ "$(cat "$GH_STUB_DIR/org.calls")" = "1" ]
 }
 
 @test "watch github --once: a 5xx backs off with HONEST wording, not a rate-limit claim (P3-7)" {
@@ -845,9 +851,21 @@ _honest_corpus_write() {
   [ ! -d "$lock" ]
 }
 
-@test "watch github --once: a comment by self is not an event" {
+# --- P2-2 (2026-09-13 fix-round-3 review): kind=mention now comes from the
+# fetched activity's own BODY text (@-self, via the P1-1 timeline lookup
+# already made for actor resolution), not a separate `mentions:<self>`
+# search query — see the file header's WHY POLL, NOT STREAM. Both of these
+# tests used to drive the removed mentions queue directly; rewritten to
+# drive the same scenarios through the org query + a timeline body.
+
+@test "watch github --once: a self-authored comment that @-mentions self is still not an event (P2-2)" {
   _gh_stub_install
-  _gh_stub_page mentions 1 \
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|200|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 200 1 \
+    '[{"event":"commented","actor":{"login":"me"},"body":"talking to myself, cc @me"}]'
+  _gh_stub_page org 1 \
     "$(_row 200 2026-09-07T06:00:00Z me reef https://x/200 0 "Self-authored, self-mentioned")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
@@ -855,14 +873,48 @@ _honest_corpus_write() {
   [[ "$output" != *"#200"* ]] || false
 }
 
-@test "watch github --once: a genuine mention by someone else IS an event" {
+@test "watch github --once: a comment by someone else that @-mentions self reads kind=mention (P2-2)" {
   _gh_stub_install
-  _gh_stub_page mentions 1 \
-    "$(_row 201 2026-09-07T06:05:00Z dave reef https://x/201 0 "cc @me please look")"
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|201|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 201 1 \
+    '[{"event":"commented","actor":{"login":"dave"},"body":"cc @me please look"}]'
+  _gh_stub_page org 1 \
+    "$(_row 201 2026-09-07T06:05:00Z alice reef https://x/201 0 "auth redirect")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
-  [[ "$output" == *"github CVERInc/reef#201 mention by dave: cc @me please look"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#201 mention by dave: auth redirect"* ]] || false
   [[ "$output" == *"1 new event(s)"* ]] || false
+}
+
+@test "watch github --once: a mention of someone ELSE ('@dan') never matches self='dana' (word-boundary, P2-2)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|202|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  printf 'dana\n' > "$GH_STUB_DIR/login"
+  _gh_stub_timeline_page reef 202 1 \
+    '[{"event":"commented","actor":{"login":"dave"},"body":"cc @dan please look, not @danother either"}]'
+  _gh_stub_page org 1 \
+    "$(_row 202 2026-09-07T06:05:00Z alice reef https://x/202 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#202 comment by dave: some issue"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: a fresh issue whose OWN opening text @-mentions self still reads 'opened', not 'mention' (P2-2 scope)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 300 2026-09-07T06:05:00Z carol reef https://x/300 0 "cc @me please look")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  # No lookup happens for a fresh number — no body text to check — so this
+  # stays "opened", documented scope, not a regression (see the file header
+  # and docs/usage.md's caveat).
+  [[ "$output" == *"github CVERInc/reef#300 opened by carol: cc @me please look"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
 }
 
 @test "watch github: rejects garbage --interval with rc=2 (P2-12)" {

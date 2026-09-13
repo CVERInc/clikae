@@ -64,9 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]`
   — a second source under `watch` (alongside the existing dry-tank watcher):
   polls GitHub's search API for every issue/PR update in an org — including
-  replies on issues YOU opened — plus @mentions, and turns each new one into
+  replies on issues YOU opened — and turns each new one into
   a wake line (`github <org>/<repo>#<n> opened|comment|review|activity|mention
-  by <login>: <title>`), printed live and appended as flat JSON to
+  by <login>: <title>`; `mention` when a fetched comment/review's own text
+  @-mentions you, checked locally from the timeline lookup already made for
+  actor resolution — no separate `mentions:<self>` search query), printed
+  live and appended as flat JSON to
   `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a durable trail. The
   actual wake a cron job or Stop hook calling `--once` consumes: every poll
   finding ≥1 new event writes a burn-status-shaped `status.json` to

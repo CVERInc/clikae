@@ -359,10 +359,15 @@ clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bou
 ```
 
 `--org` defaults to the login `gh repo view` reports for this directory's
-GitHub remote when omitted. Every new event prints live as one line —
+GitHub remote when omitted. Every new event prints live as one line — this
+is the actual output line for a collaborator's reply that @-mentions you on
+an issue YOU opened (P2-2, 2026-09-13 fix-round-3 review: regenerated from
+what this implementation really prints — the reply's own text decides
+`kind`, but only the issue's TITLE is ever shown, never the reply text
+itself):
 
 ```
-[ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect — cc @maintainer, retry the callback test
+[ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect
 ```
 
 — a collaborator's reply reaching you even on an issue YOU opened (the org
@@ -403,10 +408,18 @@ a comment. Bounded to 50 such lookups per poll, spent oldest-unseen-first
 once GitHub's own
 `X-RateLimit-Remaining` drops under 100. A candidate beyond that bound is
 still reported — never silently dropped — just as `by unknown` instead of a
-real login.
+real login. If that fetched event's own text @-mentions you, `kind` is
+`mention` instead of `comment`/`review` (P2-2, 2026-09-13 fix-round-3
+review — this REPLACES a separate `mentions:<self>` search query that used
+to run every poll: once the org query above lost its `-author:<self>`
+filter, that second query became a strict subset of the first, so it was
+mostly buying nothing but extra requests. A brand-new issue/PR whose own
+OPENING text mentions you is not covered by this — no lookup happens for a
+fresh number, so there is no body text to check).
 
-Rate limits: normally 2 search requests per poll (more when paginating),
-plus up to 50 activity lookups against the core API's much larger budget.
+Rate limits: normally 1 search request per poll (up to 5 when paginating),
+plus up to 50 activity lookups (each up to 2 requests) against the core
+API's much larger budget.
 On a genuine rate limit (429, or a 403 the response attributes to it, or a
 5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
 never advanced past a page that failed to read, so nothing is silently
