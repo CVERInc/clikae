@@ -937,19 +937,47 @@ _agy_burn() {
   done
 }
 
+# Every git call the left-behind scan makes goes through this: `-c
+# core.fsmonitor=false` overrides ANY value the scanned repo's own
+# .git/config sets (command-line -c always wins over repo config), so a
+# `core.fsmonitor` pointed at an arbitrary executable can never run just
+# because burn happened to walk past that repo (P3-4/P1, round-1 review —
+# GIT_OPTIONAL_LOCKS alone only stops writes, not exec). `-c
+# core.hooksPath=/dev/null` is the same defense for every hook name.
+_burn_lb_git() { command git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
 # .git may be a directory OR a worktree/submodule pointer file.
+#
+# P1 (round-1 review): this whole scan runs under the caller's `set -eo
+# pipefail` (bin/clikae:6). A single unguarded pipeline failure in here used
+# to kill the ENTIRE burn process mid-`_burn_result` — before the `--json`
+# printf ever ran — turning a corrupted `.git/index` (exactly the shape a
+# killed/interrupted run leaves behind, i.e. precisely what #84 exists to
+# report on) into exit code 128 and zero JSON output. Two independent layers
+# now stand between a git failure in here and burn's own exit code: (a)
+# every git call below is individually guarded (`|| dirty=0`, `|| ahead=-`,
+# `|| continue`) so `set -e` never sees an unguarded failing statement, and
+# (b) the caller invokes this whole function inside `$(...)` — a real
+# subshell — so even a failure guard (a) misses only kills that subshell;
+# `set -e` never reaches the actual burn process either way.
+# Belt-and-suspenders on purpose: (a) alone was the P1 bug itself (one `||`
+# was missing, and the next missing one would reopen it); (b) alone would
+# still corrupt/lose this function's own human "left behind:" lines (see the
+# stdout-contract note on `_burn_result`'s call site). Every path below ends
+# in `return 0` — this function's own exit status is never the signal;
+# `_burn_result`'s `|| left_behind='[]'` fallback exists for the SUBSHELL
+# dying unexpectedly, not for this function returning non-zero on purpose.
 _burn_left_behind() {
   local root marker repo seen="" branch ahead dirty file mtime files count entry
   local -a repos=() roots=("$PWD" "${add_dirs[@]}")
   local GIT_OPTIONAL_LOCKS=0
   export GIT_OPTIONAL_LOCKS
-  left_behind='[]'
-  command -v git >/dev/null 2>&1 || return 0
+  command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
     while IFS= read -r -d '' marker; do
-      repo="$(git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || continue
+      repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || continue
       case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
       seen="${seen}"$'\n'"${repo}"$'\n'
       repos+=("$repo")
@@ -962,9 +990,14 @@ _burn_left_behind() {
   done
   local entries="" hint="" scan
   for repo in "${repos[@]}"; do
-    branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)"
-    ahead="$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
-    dirty="$(git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    branch="$(_burn_lb_git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)" || branch=HEAD
+    ahead="$(_burn_lb_git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=-
+    # P1-1: the one git call the round-1 review found with no guard at all —
+    # a bare assignment is NOT the condition of any if/&&/||, so `set -e`
+    # aborted right here, before `_burn_result`'s printf ever ran.
+    dirty="$(_burn_lb_git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
+    [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
     files=""; count=0; seen=""
     for root in "${roots[@]}"; do
       [ -d "$root" ] || continue
@@ -999,7 +1032,8 @@ _burn_left_behind() {
     entries="${entries}${entries:+,}${entry}"
   done
   [ -z "$hint" ] || log_info "$hint"
-  left_behind="[$entries]"
+  printf '[%s]' "$entries"
+  return 0
 }
 
 # _burn_result <ok> <engine> <tank> <artifact> <reason> [reset-phrase]
@@ -1019,7 +1053,27 @@ _burn_left_behind() {
 # call the caller has to remember to make.
 _burn_result() {
   local left_behind='[]'
-  [ "$1" != false ] || _burn_left_behind
+  # P1 (round-1 review): `_burn_left_behind` runs inside `$(...)` — a real
+  # subshell — so a failure it doesn't already guard against only kills
+  # that subshell; `|| left_behind='[]'` catches a non-zero exit (dead
+  # subshell, partial/garbled capture) and the trailing shape check catches
+  # a zero exit that still didn't produce a JSON array. Either way this
+  # function's own contract (never change burn's exit code or --json shape)
+  # holds. The function's stdout is "log_info lines, then the JSON array
+  # last" — json_str escapes every literal newline it's given, so the JSON
+  # itself can never contain one, and splitting on the LAST newline is
+  # unambiguous. The log lines are replayed here (uncaptured) so `--json`'s
+  # `exec 1>&2` swap and non-json's real stdout both still see them — they
+  # would otherwise vanish into this variable instead of ever being printed.
+  if [ "$1" = false ]; then
+    local left_raw
+    left_raw="$(_burn_left_behind 2>/dev/null)" || left_raw=''
+    case "$left_raw" in
+      *$'\n'*) left_behind="${left_raw##*$'\n'}"; printf '%s\n' "${left_raw%$'\n'*}" ;;
+      *)       left_behind="$left_raw" ;;
+    esac
+    case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
+  fi
   [ "${as_json:-0}" -eq 1 ] || return 0
   local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
   local bytes=null

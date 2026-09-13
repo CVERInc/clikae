@@ -3187,3 +3187,32 @@ STUB
   [[ "$output" != *"left behind:"* ]] || false
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
 }
+
+# P1 (round-1 review): a `.git/index` truncated to 0 bytes is exactly the
+# shape a run killed mid-write leaves behind — `git rev-parse
+# --show-toplevel` still succeeds (rc=0, so the repo enters the scan) but
+# `git status --porcelain` fails (rc=128, "index file smaller than
+# expected"). Under bin/clikae's `set -eo pipefail`, the ONE bare, unguarded
+# assignment the review found (`burn.sh:808`) used to kill the whole burn
+# process right there — exit code 1 became 128 and the `--json` object never
+# printed at all. This asserts the block can NEVER do that: the JSON still
+# parses, `reason` is unchanged, and the corrupted repo either shows
+# `dirty:0` (the guard's fallback — not "null", since round-1's own
+# suggested fix was literally `|| dirty=0`) or is absent from the array
+# entirely (this fixture has no upstream-ahead commits and no post-start
+# files, so with dirty treated as 0 it doesn't qualify and IS omitted).
+@test "burn #84 P1: a corrupted .git/index never changes burn's exit code or --json shape" {
+  _left84_setup
+  _left84_repo
+  : > "$STUB_LEFT_REPO/.git/index"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["reason"] == "no fresh artifact and no limit", obj["reason"]
+assert isinstance(obj["left_behind"], list)
+rows = [r for r in obj["left_behind"] if r["repo"].endswith("/repos/work space")]
+assert rows == [] or rows[0]["dirty"] in (0, None), rows
+'
+}
