@@ -137,6 +137,29 @@ _assert_sidecar() {
   _assert_sidecar codex T1 "$STUB_SID"
 }
 
+# #74 round-1 P1-1: the sidecar holding the right sid is necessary but not
+# sufficient — resume's picker must derive that SAME sid from the rollout
+# path to actually hide it. codex's two derivations used to disagree (a
+# hyphen-embedding uuid vs "everything after the last hyphen"), so this
+# scenario's sidecar was byte-correct and the row stayed visible anyway.
+@test "codex burn session actually hides in resume (not just recorded in the sidecar)" {
+  _fixture
+  clikae init codex T1
+  _human_claude   # a human claude session too, in the same store, must stay visible
+  _burn codex T1
+  local sid
+  sid="$(cut -f1 "$CLIKAE_HOME/state/burn-sessions/codex/T1")"
+  [ -n "$sid" ]
+  [ "${#sid}" -eq 36 ]
+  run clikae resume
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+  [[ "$output" != *"$sid"* ]] || false
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$sid"* ]] || false
+}
+
 _agy_fixture() {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1

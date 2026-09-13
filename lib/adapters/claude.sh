@@ -254,6 +254,19 @@ adapter_new_session_args() {
   printf -- '--session-id\n%s\n' "$uuid"
 }
 
+# Optional hook: the canonical session id for a transcript PATH — the single
+# derivation BOTH `clikae burn`'s sidecar writer and `clikae resume`'s picker
+# must agree on, or a burn session can be written under one id and looked up
+# under another and never actually get hidden (#74 round-1 P1-1 — codex's two
+# derivations disagreed this way; claude's never has, since its transcript
+# filename already IS the sid, but the hook exists here too so a caller never
+# has to special-case which engine keeps that invariant for free).
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f##*/}"
+  printf '%s' "${sid%.jsonl}"
+}
+
 # Optional hook: a one-line RECAP of a session — "where you left off + next step".
 # Claude Code writes these into the transcript as
 #   {"type":"system","subtype":"away_summary","content":"…"}

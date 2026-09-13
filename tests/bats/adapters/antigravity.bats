@@ -231,3 +231,24 @@ assert_agy_title() {
   run grep -- -readonly "$argv_log"
   [ "$status" -eq 0 ]
 }
+
+# --- #74 round-1 P1-1: one canonical sid derivation, shared by burn's sidecar
+# writer and resume's picker. ---
+
+@test "antigravity adapter_sid_canonical is the brain/<sid>/ directory name" {
+  _setup_agy
+  seed_agy_session ag-canon "$WORK" "hi"
+  run adapter_sid_canonical "$BRAIN/ag-canon/.system_generated/logs/transcript.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ag-canon" ]
+}
+
+@test "antigravity adapter_all_transcripts lists every session's transcript under a profile dir" {
+  _setup_agy
+  seed_agy_session ag-one "$WORK" "one"
+  seed_agy_session ag-two "/elsewhere" "two"
+  run adapter_all_transcripts "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-one"* ]] || false
+  [[ "$output" == *"ag-two"* ]] || false
+}

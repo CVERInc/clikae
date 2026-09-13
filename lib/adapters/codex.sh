@@ -259,3 +259,32 @@ adapter_session_cwd() {
   _codex_meta_field "$1" cwd
 }
 
+# Optional hook: the canonical session id for a rollout PATH — see claude.sh's
+# twin for why this exists (#74 round-1 P1-1). codex's filename is
+# `rollout-<ISO-ts-with-dashes-for-colons>-<uuid>.jsonl`: a v4 uuid embeds
+# hyphens of its own (8-4-4-4-12), so a naive "everything after the last
+# hyphen" (the picker's old shape, resume.sh's `_resume_session_fields`) kept
+# only the UUID'S OWN LAST SEGMENT, not the whole id — it never matched what
+# burn actually recorded (which reads payload.id from the file body, the
+# correct value). A codex uuid is always exactly 36 characters;
+# `_clean_session_is_live` (clean.sh) already trusted exactly this fact for
+# its live-session guard ("ps only ever shows the bare uuid... keep only its
+# trailing 36") — same fact, now the one place every caller reads it from,
+# string-only (no file read) so this stays cheap in a per-session scan.
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f##*/}"; sid="${sid%.jsonl}"
+  if [ "${#sid}" -gt 36 ]; then sid="${sid:$(( ${#sid} - 36 ))}"; fi
+  printf '%s' "$sid"
+}
+
+# Optional hook: EVERY transcript path under this profile dir — no cwd
+# filter, no limit, no per-file reads. Used by `clikae burn`'s before/after
+# snapshot (#74 P1-2): the session THIS run produced is whichever rollout
+# exists after launch that did not exist before — a proven attribution, unlike
+# the old "newest transcript with mtime >= attempt start" heuristic, which
+# happily picked up a HUMAN's concurrent session in the same tank (R1-P1-2).
+adapter_all_transcripts() {
+  find "$1/sessions" -type f -name 'rollout-*.jsonl' 2>/dev/null
+}
+

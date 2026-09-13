@@ -128,3 +128,33 @@ seed_rollout() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"000000000abc"* ]] || false
 }
+
+# --- #74 round-1 P1-1: burn's sidecar writer and resume's picker used to
+# derive a codex session's sid two different ways (payload.id from the file
+# body vs "everything after the last hyphen" in the filename) and could never
+# agree once the uuid itself has internal hyphens — the picker's derivation
+# then never matched what burn recorded, so codex burn sessions were NEVER
+# actually hidden despite the sidecar holding a line for every one of them. ---
+
+@test "codex adapter_sid_canonical recovers the FULL uuid from a rollout path, not just its last hyphen segment" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-00000000abcd"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$sid" ]
+  [ "$output" != "00000000abcd" ]   # the old (broken) last-hyphen-segment answer
+}
+
+@test "codex adapter_sid_canonical matches adapter_recent_sids's own sid, byte for byte" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-0000000beefd"
+  seed_rollout "$sid" "$WORK" "fix the build"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_recent_sids "$PROFILE"
+  [ "$status" -eq 0 ]
+  local from_recent="${output##*$'\037'}"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$from_recent" ]
+}

@@ -81,7 +81,17 @@ _resume_session_fields() {
   if [ "$_rs_engine" = "antigravity" ]; then
     _rs_sid="${f%/.system_generated/*}"; _rs_sid="${_rs_sid##*/}"
   elif [ "$_rs_engine" = "codex" ]; then
-    _rs_sid="${filename%.jsonl}"; _rs_sid="${_rs_sid##*-}"
+    # #74 round-1 P1-1: a codex uuid embeds hyphens of its own (8-4-4-4-12), so
+    # `${_rs_sid##*-}` (the previous shape) kept only the uuid's OWN last
+    # segment — never what burn actually recorded (payload.id from the file
+    # body). A codex uuid is always exactly 36 characters — the same fact
+    # `_clean_session_is_live` (clean.sh) already trusts for its live-session
+    # guard, and now the one place both sides read it from. Mirrors
+    # lib/adapters/codex.sh's adapter_sid_canonical string-for-string (kept
+    # inline, not routed through load_adapter, so this per-session hot path —
+    # clean.sh's dedupe scan — never pays for an adapter (re)source).
+    _rs_sid="${filename%.jsonl}"
+    if [ "${#_rs_sid}" -gt 36 ]; then _rs_sid="${_rs_sid:$(( ${#_rs_sid} - 36 ))}"; fi
   else # claude
     _rs_sid="${filename%.jsonl}"
   fi

@@ -65,6 +65,27 @@ adapter_find_session() {
   [ -f "$f" ] && printf '%s\n' "$f"
 }
 
+# Optional hook: the canonical session id for a transcript PATH — see
+# claude.sh's twin for why this exists (#74 round-1 P1-1). agy's sid IS the
+# brain/<sid>/ directory name; already what every other agy hook in this file
+# derives, given here too so burn's sidecar writer and resume's picker read it
+# from one place instead of two copies that could drift apart.
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f%/.system_generated/*}"
+  printf '%s' "${sid##*/}"
+}
+
+# Optional hook: EVERY transcript path under this profile dir — see codex.sh's
+# twin (#74 P1-2). Used for burn's before/after snapshot diff.
+adapter_all_transcripts() {
+  local f
+  for f in "$1/antigravity-cli/brain"/*/.system_generated/logs/transcript.jsonl; do
+    [ -f "$f" ] && printf '%s\n' "$f"
+  done
+  return 0
+}
+
 adapter_session_cwd() {
   local f="$1"
   [ -f "$f" ] || return 0

@@ -162,3 +162,16 @@ load '../../helpers'
   [ "$status" -eq 0 ]
   [ "$output" = "Second name" ]
 }
+
+# --- #74 round-1 P1-1: one canonical sid derivation, shared by burn's sidecar
+# writer and resume's picker (see codex.bats's twin for the engine that was
+# actually broken; claude's own filename-is-the-sid shape was always right,
+# but the hook is defined here too so no caller has to special-case it). ---
+
+@test "claude adapter_sid_canonical is the transcript basename minus .jsonl" {
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  local f="$TEST_HOME/projects/slug/9a1c2222-3333-4444-8555-666677778888.jsonl"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "9a1c2222-3333-4444-8555-666677778888" ]
+}
