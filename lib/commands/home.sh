@@ -772,8 +772,40 @@ _home_timing() {
 }
 # Consume boundary snapshots; never discover transcripts on a frame.
 # Callers supply dynamically scoped items/dry locals.
+#
+# P1-1/P2-1 (2026-09-13 round-4 fix review): `board_generation`'s memo
+# (`_BOARD_GEN_CACHE`, board_state.sh) is a plain associative array in THIS
+# process — it does not survive a `$( )` command substitution, which forks a
+# CHILD process that can read whatever the array already holds but can never
+# write anything back to the parent. Every section below forks at least one
+# of its own: `_home_items`' live/tanks/recent rows each call
+# `adapter_recent_sids`/`board_recent` from inside their OWN `$( )`, and
+# `_home_dry_set`/`board_total` are each a further, sibling one. Naively,
+# that is one board_stale freshness check — and, on a genuine miss, one full
+# per-tank rebuild (a `find` over every transcript that tank has) — PER
+# SECTION, PER TANK, every single render (measured: 3 claude tanks, idle
+# fuel window, 24 `find` calls a frame — 3 tanks × 2 finds × 4 sections).
+# A `$( )` subshell is a fork(): it inherits whatever this process's
+# variables already hold AT FORK TIME. Priming `_BOARD_GEN_CACHE` here,
+# before any of those subshells exist, means every one of them is born with
+# an already-warm cache and never asks board_stale (or `find`) a second time
+# for the same tank — one board_generation call per tank for the WHOLE
+# render, matching board_total's own per-tank cost exactly, not a multiple
+# of it. Left untimed on purpose: it is now the only place this render's
+# freshness/rebuild cost is paid at all, so attributing it to any one of the
+# four named sections below would make that section's number stand in for
+# the whole render's cost, not its own share of it.
 _home_refresh() {
   local _CLIKAE_BOARD=1 _start
+  if declare -F board_generation >/dev/null 2>&1 && declare -F list_all_profiles >/dev/null 2>&1; then
+    local _pe _pt _pd
+    while IFS=$'\t' read -r _pe _pt _pd; do
+      [ -n "$_pt" ] || continue
+      board_generation "$_pe" "$_pd" >/dev/null 2>&1 || true
+    done <<EOF_PROFILES
+$(list_all_profiles)
+EOF_PROFILES
+  fi
   items="$(_home_items)"
   _home_clock; _start="$_HOME_MS"
   dry="$(_home_dry_set || true)"
