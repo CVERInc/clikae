@@ -58,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the existing dry behavior (#75).
 - `clikae status`'s fuel-note lookup no longer re-scans every tank's
   transcripts once per rendered row (was O(n²) on tank count; #75 round 1).
+- `clikae cockpit` round 1 (#63): `json_field_str` tolerates whitespace
+  around a `:` (pretty-printed JSON silently went unmatched before); the
+  guard now distinguishes "field absent" from "payload looks truncated or
+  malformed" and fails open with a stderr note on the latter instead of
+  refusing with a misleading reason; `--off` sweeps every tank and never
+  aborts partway through a broken one, clearing the guard, state, and any
+  live `--allow-agents` allowance regardless, and reports which tanks (if
+  any) it couldn't clean up; `_settings_write_file` refuses to write empty
+  content (a jq failure mid-pipeline used to silently blank a live
+  settings.json) and caps backups at the newest 5 per tank; the prompt
+  heuristic is widened (bare `commit`/`push`/`review`/`grade`/"run
+  tests"/"make CI", plus a 1,500-character length tripwire) and documented
+  as a tripwire, not a classifier; a large prompt is capped to its first 8
+  KiB before the heuristic runs, keeping the hook fast regardless of prompt
+  size; installing from a git checkout now warns that the guard's path
+  isn't stable; `clikae cockpit` names a stale recorded tank instead of
+  showing it as if nothing were wrong.
 
 ### Added
 

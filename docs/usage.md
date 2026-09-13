@@ -177,20 +177,48 @@ problem instead of memory's:
 
 The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
 a spawn whose model is missing, or whose model is opus/sonnet **and** whose
-prompt reads as a build/review lane (mentions a worktree, a git commit/push,
-`REVIEWER`/an adversarial review, or a test run) — naming the current idle
-reserve and the exact `clikae burn <engine> <tank> --prompt-file <f> --artifact <path>`
-shape to use instead. Exploration spawns (haiku, `Explore`) and anything with
-no lane heuristic in the prompt are untouched — this is not a general
-permission gate. The role, and the hook, live on exactly one tank at a time;
-moving it with `clikae cockpit` cleans up the old tank first. A human's own
-hooks on that tank are marked apart from the guard's and are never touched.
+prompt reads as a build/review lane — naming the current idle reserve and the
+exact `clikae burn <engine> <tank> --prompt-file <f> --artifact <path>` shape
+to use instead. It also refuses an opus/sonnet spawn outright when the prompt
+is over 1,500 characters, regardless of content. Exploration spawns (haiku,
+`Explore`) and anything with no lane heuristic in the prompt are untouched —
+this is not a general permission gate. The role, and the hook, live on
+exactly one tank at a time; moving it with `clikae cockpit` cleans up the old
+tank first. A human's own hooks on that tank are marked apart from the
+guard's and are never touched — the settings.json write rides the same
+mechanism as `clikae settings apply` (below), so **the file round-trips
+through jq**: key order gets normalized and CRLF becomes LF. Content survives
+intact (a hand-written hooks block, extra keys, anything else in the file);
+byte-for-byte formatting does not.
+
+**The prompt heuristic is a tripwire, not a classifier — `--allow-agents` is
+the door.** It matches the issue's own phrases (`worktree`, a git commit/push,
+`REVIEWER`/an adversarial review, a test run) OR'd with a widened set of bare
+imperative verbs (`commit`, `push`, "open a PR", `review`, `grade`, "run
+tests", "make CI") because missing a real build/review lane is the expensive
+direction (that's the incident this guard exists for) and a false refusal is
+cheap (the escape hatches below exist precisely for this). Measured against a
+14-item corpus (`tests/bats/cockpit-guard.bats`) — 8 prompts that read as
+dispatchable work, 6 that don't — the heuristic gets 11/14 right. All 3
+misses are false refusals, not false allows, and all 3 are structural: an
+innocuous prompt that merely **mentions** one of these words in passing (a
+question about `git push --force-with-lease`, about a `worktree` section in
+the docs, about what `npm test` does) gets refused exactly like a prompt that
+asks for the real thing, because a plain keyword match can't tell "explains
+X" from "do X" apart, and every attempt to narrow the pattern enough to allow
+the innocuous case would also let its should-refuse sibling in this same
+corpus through. If a refusal looks wrong, that's expected, not a bug —
+`--allow-agents` (below) is how you get past it.
 
 Sometimes the right call is to spend the cockpit tank's own budget on purpose
 ("burn the cockpit tank tonight") — a guard that cannot be lifted gets
 deleted instead of obeyed, so there's an escape hatch: set
 `CLIKAE_COCKPIT_ALLOW_AGENTS=1` in the environment, or run `clikae cockpit
---allow-agents <dur>` for a timed allowance.
+--allow-agents <dur>` for a timed allowance. `clikae cockpit --off` removes
+the guard everywhere and clears any live allowance; it sweeps every tank
+(not just the recorded one) and never aborts partway through — a tank with a
+broken settings.json is reported at the end, by name, but does not stop the
+rest of the sweep from being cleaned up.
 
 ### Inspect
 
