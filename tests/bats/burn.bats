@@ -2572,3 +2572,51 @@ STUB
   [[ "$output" == *'"reset":null'* ]] || false
   [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }
+
+# --- P2-2 (#81 round-1 fix review): limit_codex_output_dry matched the exact
+# vendor sentence ANYWHERE in the reply, not just when it terminates the run —
+# so a HEALTHY codex asked to write about this very issue, that happens to
+# quote the real sentence verbatim mid-transcript and then keeps working, was
+# misread as dry. A genuine vendor limit line is never followed by pages of
+# ordinary output (it IS the end of the run), so the anchor now only counts
+# inside the last 20 lines.
+
+@test "burn #81: the vendor sentence QUOTED mid-transcript, run finishes with an artifact, is not dry (P2-2)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 99); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 101 200); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
+}
+
+@test "burn #81: the vendor sentence as the LAST line, no artifact, is still dry (P2-2 control)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 199); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+}

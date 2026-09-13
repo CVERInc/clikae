@@ -125,9 +125,21 @@ limit_codex_reset() {
 # to the noise a caller's OWN transport actually adds (whitespace and stray
 # symbols), never markdown syntax a model's prose legitimately uses — see
 # the claude branch below for the shared rationale.
+#
+# P2-2 (#81 round-1 fix review): the anchor above matches ANY line in the
+# WHOLE reply, so a task with no artifact that happens to QUOTE codex's own
+# real sentence verbatim somewhere in the middle of its output (a runbook
+# task summarizing this very issue, for instance) read as dry, even though
+# the run kept going and printed ordinary output for a long time afterward
+# — real vendor limit errors terminate the run, so the genuine line is
+# never followed by pages of normal output. Only count the anchor when it
+# falls in the TAIL of the reply (the last 20 lines) — the caller only
+# reaches this function once the artifact check has already failed, so "no
+# artifact" is a given here; this adds the position half of that guard.
 limit_codex_output_dry() {
-  local out="$1" reset
-  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$out" || return 1
+  local out="$1" reset tail
+  tail="$(tail -n 20 <<< "$out")"
+  grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(ERROR:[[:space:]]*)?(you've|you’ve|you have)( [a-z]+){0,2} hit your (usage|session) limit" <<< "$tail" || return 1
   reset="$(limit_codex_reset "$out")"
   [ -n "$reset" ] || return 1
   printf '%s' "$reset"
