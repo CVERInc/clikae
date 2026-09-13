@@ -809,8 +809,23 @@ STUB
 # reserve must say so distinctly (reason "no-tank-available", not a task
 # failure) — both in prose and in --json, with a documented, distinguishable
 # exit code. Fixture mirrors the issue exactly: x/ (dry), hello/ (skipped —
-# a real process holds CODEX_HOME on it, simulating an interactive session),
-# hello.lock (a FILE), ghost (a dangling symlink), .cache (a dotdir).
+# another burn is already running on it, #40), hello.lock (a FILE), ghost (a
+# dangling symlink), .cache (a dotdir).
+#
+# round-1 review P1-1: hello's "skip" signal used to be a real background
+# `env CODEX_HOME=… sleep 60 &`, relying on live_dir_users' env-of-process
+# scan (lib/core/proc.sh) to see it. That scan is HONEST about not working
+# for a no-tty process on macOS (proc.sh:12-21, "Verified 2026-06-04: … a
+# no-tty `sleep` with the same env is listed but its env is not") — the exact
+# shape this fixture used, so on macOS hello was never skipped, burn
+# succeeded on it, and this test's rc=2 / no-tank-available / never-names-a-
+# non-tank assertions never ran there at all (`bats (macos-latest)` fail,
+# `not ok 309`). Fixed by using a DIFFERENT, OS-agnostic "skip" signal:
+# #40's own burn_tank_busy (lib/core/burn_status.sh) reads a status.json, not
+# a process environment — a fake OTHER burn's status file, `state: running`
+# on codex/hello with this test's own (real, alive) pid, produces the same
+# "another burn is already running on it" skip on every platform bats runs
+# on, with no process to spawn or clean up.
 @test "burn --json: reroute never names a lock file, dangling symlink, or dotdir; exhaustion is no-tank-available (#61)" {
   command -v jq >/dev/null 2>&1 || skip "jq not installed"
   _stub_codex
@@ -818,13 +833,13 @@ STUB
   clikae init codex hello
   : > "$CLIKAE_HOME/profiles/codex/x/.dry"
 
-  # hello: SKIPPED because an interactive session holds it. live_dir_users
-  # scans same-uid processes for one whose CODEX_HOME points at this tank's
-  # dir (lib/core/proc.sh) — a real background process is the honest way to
-  # produce that signal for an end-to-end `clikae burn` run (no tmux, no real
-  # server: a plain `sleep`, killed before this test returns).
-  env CODEX_HOME="$CLIKAE_HOME/profiles/codex/hello" sleep 60 &
-  local live_pid=$!
+  # hello: SKIPPED because burn_tank_busy sees another burn already running
+  # on codex/hello — the pid is this test's own (kill -0 must see it alive
+  # for the whole call), so nothing needs spawning or killing.
+  local fake_run="$HOME/.clikae/logs/burn-faketest61"
+  mkdir -p "$fake_run"
+  printf '{"ok":null,"engine":"codex","tank":"hello","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-faketest61","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null}' \
+    "$(date +%s)" "$(date +%s)" "$$" > "$fake_run/status.json"
 
   : > "$CLIKAE_HOME/profiles/codex/hello.lock"
   ln -s /nonexistent "$CLIKAE_HOME/profiles/codex/ghost"
@@ -833,8 +848,6 @@ STUB
   local A="$BATS_TEST_TMPDIR/out.md" rc=0
   clikae burn codex x --artifact "$A" --json -- run "$A" \
     > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/err.txt" || rc=$?
-
-  kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null || true
 
   [ "$rc" -eq 2 ] || { echo "rc=$rc"; cat "$BATS_TEST_TMPDIR/err.txt"; false; }
   [ ! -e "$A" ]
