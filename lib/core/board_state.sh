@@ -92,6 +92,41 @@ _board_scan_root() {
   esac
 }
 
+# _board_mtime_size_map <path>... -> fills the global `_BOARD_MTMAP`
+# associative array, path -> "<mtime>\037<size>", one entry per arg that
+# still exists. P3-4 (2026-09-13 round-4 fix review): every caller in this
+# file used to zip a batched `files_mtime_size` call back onto its own
+# argument array BY INDEX — safe only as long as every argument is still
+# there when `stat` actually runs. GNU and BSD `stat` both print one FEWER
+# line for a vanished argument (the error itself is swallowed by
+# `2>/dev/null`), so a single file disappearing between the caller building
+# its list and this call landing shifts every zip index after it onto the
+# WRONG path — silently recording one file's (mtime, size) against another
+# file's identity. Reading the path straight back from `stat` itself (`%n`/
+# `%N`, the same field `sessions_by_mtime` already relies on) and keying off
+# THAT instead makes a vanished argument a missing map entry, never a
+# misaligned one. Kept local to this file rather than changed in
+# `files_mtime_size` (profile_store.sh) itself, since that primitive's
+# "<mtime> <size>" contract (no path field) has other callers outside this
+# file (e.g. limit.sh's codex rate-limit cache) that already parse it
+# positionally and would break the moment a third field appeared.
+declare -gA _BOARD_MTMAP
+_board_mtime_size_map() {
+  _BOARD_MTMAP=()
+  _clikae_statv
+  local _p _mt _sz
+  while IFS=$'\037' read -r _mt _sz _p; do
+    [ -n "$_p" ] || continue
+    _BOARD_MTMAP["$_p"]="$_mt"$'\037'"$_sz"
+  done < <(
+    if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
+      stat -c $'%.9Y\037%s\037%n' "$@" 2>/dev/null
+    else
+      stat -f $'%Fm\037%z\037%N' "$@" 2>/dev/null
+    fi
+  )
+}
+
 # _claude_usage_stale <dir> <generation-path> -> success (0) when the
 # ACCOUNT-level claude-usage/fuel reading recorded in <generation-path> no
 # longer matches what is on disk. `limit_profile_dry` reads `claude-usage`
@@ -113,20 +148,47 @@ _board_scan_root() {
 #      signal 3 has no record to re-stat either. Creating a file DOES move
 #      its parent directory's own mtime (a dirent add), so that is the
 #      signal that catches it.
-#   3. the recorded (mtime, size) of each file that was inside the -mmin
-#      -300 window at the last publish, re-stat in ONE batched call — catches
-#      an append (a limit landing, or clearing) to a session in a project
-#      whose directory already existed, which does not bump `projects/`'s
-#      own mtime, only that one file's.
+#   3. (2026-09-13 round-4 fix review, P1-1) the recorded (mtime, size) of
+#      the NEWEST K files of EACH project directory, re-stat in ONE batched
+#      call — catches an append (a limit landing, or clearing) to a session
+#      in a project whose directory already existed, which does not bump
+#      `projects/`'s own mtime, only that one file's. This set used to be
+#      "whatever `-mmin -300` (the SAME window `claude-usage`'s own reading
+#      is computed from) happened to match at publish time" — but that
+#      window is legitimately EMPTY every morning, before anything has been
+#      touched in the last five hours, on every account, every day. See this
+#      function's own tail comment for why recording that window here (round-3
+#      fix review, PROBE B4's fix) was the wrong set to fix B4 with.
 # A file or directory recorded in signal 2/3 having disappeared (aged out,
 # or the fixture moved it) is itself treated as stale — the usage snapshot
 # is trusted only while every path it was computed from is still exactly
-# what it was. An EMPTY signal-3 set at publish time (round-3 fix review:
-# PROBE B4 — an append to an OLD file, already excluded from the -mmin -300
-# window, pulls it back in without moving any directory's mtime) used to
-# read as "nothing to compare against, call it fresh" — permanently, since
-# nothing short of a brand new project directory or file could ever
-# invalidate it again. Zero evidence is not evidence of freshness: rebuild.
+# what it was.
+# round-3 fix review, PROBE B4: an append to an OLD file, already excluded
+# from the `-mmin -300` window, pulls it back into view without moving any
+# directory's mtime — signal 3's old (now-per-window) recorded set had no
+# entry to re-stat, so an EMPTY set read as "nothing to compare against,
+# call it fresh", permanently.
+# round-4 fix review, P1-1: fixing B4 by making an empty signal-3 set mean
+# "rebuild" instead was the wrong half to change — B4's actual shape is "the
+# file the user is about to come back to is still one of the newest in ITS
+# OWN project", which per-project top-K (this signal, now) catches directly,
+# same as any other append. `-mmin -300` being momentarily empty (every idle
+# account, every morning) no longer has anything to do with whether this
+# signal has evidence to compare — it always does, as long as any project
+# has ever had a file in it — so an empty set here is now trusted as
+# genuinely nothing-recorded-because-nothing-exists, not treated as "maybe
+# stale, rebuild every read forever" (measured: 3 claude tanks, idle window,
+# 10.4s/frame before this fix, 390ms/frame on main and after it).
+# P2-1 (2026-09-13 round-4 fix review): this used to run its own THREE
+# `_board_mtime_size_map`/`files_mtime_size` calls (root mtime, projdirs,
+# files) — its own separate stat fork per signal, on top of board_stale's
+# other two. On a warm, idle render that is the entire cost, and it is paid
+# ONCE PER CLAUDE TANK: measured, a claude-tank-heavy dogfood store (6 tanks)
+# cost 260ms MORE per tank than main on the exact same warm store (P2-1's own
+# receipt). `_claude_usage_stale` no longer stats anything itself — it only
+# reads `_BOARD_MTMAP`, which board_stale (its only caller) has ALREADY
+# populated, in ONE batched call, with every path this function and
+# board_stale's other two signals need. See board_stale's own header.
 _claude_usage_stale() {
   local dir="$1" gen="$2" root_mt saved_root_mt
   [ -f "$gen/claude-usage-root-mtime" ] || return 0
@@ -134,9 +196,9 @@ _claude_usage_stale() {
   # comparison to nanosecond precision; this DIRECTORY one was still whole
   # seconds via `file_mtime`, so a project directory created in the SAME
   # wall-clock second as the last publish was invisible to signal 1 in
-  # either direction. `files_mtime_size` is the same nanosecond stat this
-  # file's other two signals already use — just keep its mtime field.
-  root_mt="$(files_mtime_size "$dir/projects" 2>/dev/null)"; root_mt="${root_mt%% *}"
+  # either direction. The nanosecond mtime half of `_BOARD_MTMAP`'s value is
+  # the same stat this file's other two signals already use.
+  root_mt="${_BOARD_MTMAP["$dir/projects"]%%$'\037'*}"
   saved_root_mt=""
   IFS= read -r saved_root_mt < "$gen/claude-usage-root-mtime"
   [ -n "$root_mt" ] && [ "$root_mt" != "$saved_root_mt" ] && return 0
@@ -149,13 +211,13 @@ _claude_usage_stale() {
       [ -d "$pd" ] || return 0   # a counted project directory vanished.
       pdirs+=("$pd"); pmts+=("$pm")
     done < "$gen/claude-usage-projdirs"
-    if [ "${#pdirs[@]}" -gt 0 ]; then
-      local _pi=0 _pmt _psz
-      while read -r _pmt _psz; do
-        [ "$_pmt" = "${pmts[$_pi]}" ] || return 0
-        _pi=$((_pi + 1))
-      done < <(files_mtime_size "${pdirs[@]}")
-    fi
+    local _pi
+    for _pi in "${!pdirs[@]}"; do
+      # projdirs records mtime only (a directory's size is not a
+      # meaningful signal), so compare just the mtime half of the map's
+      # "<mtime>\037<size>" value.
+      [ "${_BOARD_MTMAP[${pdirs[$_pi]}]%%$'\037'*}" = "${pmts[$_pi]}" ] || return 0
+    done
   fi
 
   [ -f "$gen/claude-usage-files" ] || return 0
@@ -166,12 +228,14 @@ _claude_usage_stale() {
     [ -f "$p" ] || return 0   # a counted file vanished — the reading is stale.
     upaths+=("$p"); umts+=("$m"); uszs+=("$s")
   done < "$gen/claude-usage-files"
-  [ "${#upaths[@]}" -gt 0 ] || return 0
-  local i=0 cur_mt cur_sz
-  while IFS=' ' read -r cur_mt cur_sz; do
-    { [ "$cur_mt" = "${umts[$i]}" ] && [ "$cur_sz" = "${uszs[$i]}" ]; } || return 0
-    i=$((i + 1))
-  done < <(files_mtime_size "${upaths[@]}")
+  # P1-1: an empty recorded set is no longer "no evidence, assume stale" —
+  # see this function's own header. It genuinely means no claude session has
+  # ever existed anywhere in this account, which really is fresh.
+  [ "${#upaths[@]}" -gt 0 ] || return 1
+  local i
+  for i in "${!upaths[@]}"; do
+    [ "${_BOARD_MTMAP[${upaths[$i]}]:-}" = "${umts[$i]}"$'\037'"${uszs[$i]}" ] || return 0
+  done
   return 1
 }
 
@@ -188,7 +252,14 @@ _claude_usage_stale() {
 #      at publish — catches a session that did not exist at publish time (a
 #      new file is a new dirent, which always bumps its parent directory's
 #      mtime). One path for claude/grok/antigravity; codex's is a whole
-#      chain (see `_codex_newest_chain`'s header, round-3 fix review P2-1).
+#      chain (see `_codex_newest_chain`'s header, round-3/round-4 fix review
+#      P2-1/P2-2). (2026-09-13 round-4 fix review, P1-2) a level that did NOT
+#      exist yet AT PUBLISH TIME is recorded too, as a MISSING sentinel — see
+#      board_state_refresh's own comment — because "this tank's `sessions/`
+#      doesn't exist yet" is itself a fact worth comparing on the next read:
+#      the moment it (or any ancestor codex chain level) gets created, that
+#      is new evidence, and the old code simply dropped it from the record
+#      entirely, so nothing was ever watching for it to appear.
 #   2. (claude only) the account-level fuel reading — see
 #      `_claude_usage_stale` above. Checked BEFORE the per-scope early return
 #      below, because a scope with no recorded recent sessions must still
@@ -202,73 +273,131 @@ _claude_usage_stale() {
 #      whole-second comparison went blind to any write landing in the SAME
 #      wall-clock second as the last publish, in EITHER direction.
 # Any mismatch means rebuild.
+#
+# P2-1 (2026-09-13 round-4 fix review): the three signals above used to each
+# pay their OWN `_board_mtime_size_map`/`files_mtime_size` fork — up to five
+# on a claude tank (scanroot, claude-usage's root/projdirs/files, recent
+# files). That made a claude tank's WARM, nothing-changed cost scale with
+# SIGNAL COUNT, not stay flat: measured, 6 claude tanks cost 260ms MORE per
+# tank than main on an otherwise-identical small warm store. Every one of
+# those five categories is read from a small on-disk record with NO fork
+# (plain `read`/`[ -f ]`/`[ -d ]`), so nothing stops gathering every path
+# they ALL need before stat-ing anything, then paying `_board_mtime_size_map`
+# exactly ONCE per tank for the union — it is path-keyed (P3-4), so mixing
+# unrelated categories into the same call is safe: each one below still
+# looks its own paths up by their own key, never anyone else's.
 board_stale() {
   local engine="$1" dir="$2" gen="$3" key
   [ -f "$gen/updated" ] || return 0
 
-  # A codex tank's chain (`_board_scan_root`) can be several lines; re-stat
-  # every RECORDED path in one batched call — never a fork per level — and
-  # compare against the mtime published alongside it. A recorded path that
-  # vanished (a fixture rewrite, or a directory recycled) is itself stale.
+  # --- gather (no fork): read every small on-disk record this tank's
+  # signals need, short-circuiting immediately on anything a plain
+  # `[ -f ]`/`[ -d ]` already proves is stale, WITHOUT waiting for the
+  # batched stat below to say so.
+  local -a _stat_union=()
+
+  # Signal 1: the PWD-scoped scan root (a whole chain for codex — see
+  # `_codex_newest_chain`'s header). A row whose recorded mtime is the
+  # `MISSING` sentinel means this level did not exist AT PUBLISH TIME (P1-2,
+  # round-4 fix review) — the only fact worth comparing there is whether it
+  # exists NOW (new evidence: rebuild), never re-stat'd.
+  local -a _sr_paths=() _sr_mts=()
   if [ -f "$gen/scanroot-mtime" ]; then
     local _srp _srm
-    local -a _sr_paths=() _sr_mts=()
     while IFS=$'\037' read -r _srp _srm; do
       [ -n "$_srp" ] || continue
+      if [ "$_srm" = MISSING ]; then
+        [ -d "$_srp" ] && return 0
+        continue
+      fi
       [ -d "$_srp" ] || return 0
       _sr_paths+=("$_srp"); _sr_mts+=("$_srm")
     done < "$gen/scanroot-mtime"
-    if [ "${#_sr_paths[@]}" -gt 0 ]; then
-      local _si=0 _smt _ssz
-      while read -r _smt _ssz; do
-        [ "$_smt" = "${_sr_mts[$_si]}" ] || return 0
-        _si=$((_si + 1))
-      done < <(files_mtime_size "${_sr_paths[@]}")
+    _stat_union+=("${_sr_paths[@]}")
+  fi
+
+  # Signal 2 (claude only): the account-level fuel reading's own three
+  # sub-signals — see `_claude_usage_stale`'s header.
+  local -a _cu_pdirs=() _cu_ufiles=()
+  if [ "$engine" = claude ] && [ -f "$gen/claude-usage-root-mtime" ]; then
+    _stat_union+=("$dir/projects")
+    if [ -f "$gen/claude-usage-projdirs" ]; then
+      local _pd _pm
+      while IFS=$'\037' read -r _pd _pm; do
+        [ -n "$_pd" ] || continue
+        [ -d "$_pd" ] || return 0   # a counted project directory vanished.
+        _cu_pdirs+=("$_pd")
+      done < "$gen/claude-usage-projdirs"
+      _stat_union+=("${_cu_pdirs[@]}")
     fi
+    if [ -f "$gen/claude-usage-files" ]; then
+      local _up _um _us
+      while IFS=$'\037' read -r _up _um _us; do
+        [ -n "$_up" ] || continue
+        [ -f "$_up" ] || return 0   # a counted file vanished — stale.
+        _cu_ufiles+=("$_up")
+      done < "$gen/claude-usage-files"
+      _stat_union+=("${_cu_ufiles[@]}")
+    fi
+  fi
+
+  # Signal 3: this scope's already-recorded recent sessions.
+  local scope; scope="$(_board_scope_raw "$engine")"; key="$(board_key "$scope")"
+  local -a rmts=() rsizes=() rfiles=()
+  local _has_recent=0
+  if [ -f "$gen/recent/$key" ]; then
+    _has_recent=1
+    # ONE stat call for every candidate — this runs on every
+    # board_read/board_recent/board_find, so paying N forks for N recent
+    # files here would multiply right back into the O(files) cost #62 was
+    # written to kill, just moved from "every transcript" to "every recent
+    # file, every read, every render".
+    # Row shape (P1-A): "<display-mt>\037<stale-mt>\037<size>\037<sid>". The
+    # DISPLAY mtime is whole-second — board_recent hands it straight to
+    # callers (home.sh's `_human_age` does bash integer arithmetic on it) —
+    # so it must stay exactly what it always was. The STALENESS check needs
+    # nanosecond precision AND size (see this function's own header), which
+    # live in the two fields between it and the sid.
+    local dmt mt sz sid f sidkey savedsid firstline=1
+    while IFS=$'\037' read -r dmt mt sz sid; do
+      if [ "$firstline" -eq 1 ]; then
+        firstline=0
+        # P3-2: a board_key collision on the scope itself is a miss, not a
+        # confident wrong answer for a completely different directory. (The
+        # header row has only two fields, so `mt` holds the recorded scope.)
+        { [ "$dmt" = "#scope" ] && [ "$mt" = "$scope" ]; } || { _has_recent=2; break; }
+        continue
+      fi
+      [ -n "$sid" ] || continue
+      sidkey="$(board_key "$sid")"
+      [ -f "$gen/sids/$sidkey" ] || continue
+      { IFS= read -r savedsid; IFS= read -r f; } < "$gen/sids/$sidkey"
+      [ "$savedsid" = "$sid" ] || continue   # P3-2: same guard on the sid index.
+      [ -f "$f" ] || continue
+      rmts+=("$mt"); rsizes+=("$sz"); rfiles+=("$f")
+    done < "$gen/recent/$key"
+    _stat_union+=("${rfiles[@]}")
+  fi
+
+  # --- ONE batched stat for every path any signal above needs ---
+  _board_mtime_size_map "${_stat_union[@]}"
+
+  # --- compare (no further fork) ---
+  if [ "${#_sr_paths[@]}" -gt 0 ]; then
+    local _si
+    for _si in "${!_sr_paths[@]}"; do
+      [ "${_BOARD_MTMAP[${_sr_paths[$_si]}]%%$'\037'*}" = "${_sr_mts[$_si]}" ] || return 0
+    done
   fi
 
   if [ "$engine" = claude ] && _claude_usage_stale "$dir" "$gen"; then return 0; fi
 
-  local scope key; scope="$(_board_scope_raw "$engine")"; key="$(board_key "$scope")"
-  [ -f "$gen/recent/$key" ] || return 1
-  # ONE stat call for every candidate (files_mtime_size, shared kernel — see
-  # its own header in profile_store.sh), never one fork per file: this runs
-  # on every board_read/board_recent/board_find, so paying N forks for N
-  # recent files here would multiply right back into the O(files) cost #62
-  # was written to kill, just moved from "every transcript" to "every recent
-  # file, every read, every render".
-  # Row shape (P1-A): "<display-mt>\037<stale-mt>\037<size>\037<sid>". The
-  # DISPLAY mtime is whole-second — board_recent hands it straight to
-  # callers (home.sh's `_human_age` does bash integer arithmetic on it) — so
-  # it must stay exactly what it always was. The STALENESS check needs
-  # nanosecond precision AND size (see this function's own header), which
-  # live in the two fields between it and the sid.
-  local dmt mt sz sid f sidkey savedsid
-  local -a rmts=() rsizes=() rfiles=()
-  local firstline=1
-  while IFS=$'\037' read -r dmt mt sz sid; do
-    if [ "$firstline" -eq 1 ]; then
-      firstline=0
-      # P3-2: a board_key collision on the scope itself is a miss, not a
-      # confident wrong answer for a completely different directory. (The
-      # header row has only two fields, so `mt` holds the recorded scope here.)
-      { [ "$dmt" = "#scope" ] && [ "$mt" = "$scope" ]; } || return 1
-      continue
-    fi
-    [ -n "$sid" ] || continue
-    sidkey="$(board_key "$sid")"
-    [ -f "$gen/sids/$sidkey" ] || continue
-    { IFS= read -r savedsid; IFS= read -r f; } < "$gen/sids/$sidkey"
-    [ "$savedsid" = "$sid" ] || continue   # P3-2: same guard on the sid index.
-    [ -f "$f" ] || continue
-    rmts+=("$mt"); rsizes+=("$sz"); rfiles+=("$f")
-  done < "$gen/recent/$key"
+  [ "$_has_recent" -eq 1 ] || return 1   # 0 = never recorded, 2 = scope collision (P3-2)
   [ "${#rfiles[@]}" -gt 0 ] || return 1
-  local i=0 cur_mt cur_sz
-  while IFS=' ' read -r cur_mt cur_sz; do
-    { [ "$cur_mt" = "${rmts[$i]}" ] && [ "$cur_sz" = "${rsizes[$i]}" ]; } || return 0
-    i=$((i + 1))
-  done < <(files_mtime_size "${rfiles[@]}")
+  local i
+  for i in "${!rfiles[@]}"; do
+    [ "${_BOARD_MTMAP[${rfiles[$i]}]:-}" = "${rmts[$i]}"$'\037'"${rsizes[$i]}" ] || return 0
+  done
   return 1
 }
 
@@ -434,33 +563,62 @@ board_state_refresh() (
   # Recorded for board_stale's equality check, never compared with ">" — see
   # its own header for why (a future-dated fixture/clock skew must not read
   # as permanently stale). `_board_scan_root` can be several lines for codex
-  # (see its own header) — batch every existing one into the SAME
-  # files_mtime_size call, one fork total, not one per level.
-  local -a scan_roots=()
-  while IFS= read -r p; do [ -n "$p" ] && [ -d "$p" ] && scan_roots+=("$p"); done \
+  # (see its own header) — batch every existing one into the SAME stat call,
+  # one fork total, not one per level.
+  # P1-2 (2026-09-13 round-4 fix review): a level `_board_scan_root` names
+  # that does NOT exist yet at THIS publish (a brand new codex tank with no
+  # `sessions/` directory, or claude/grok/antigravity's own scan root before
+  # its first session) used to be silently dropped here (`[ -d "$p" ]`
+  # filtered it out) — so board_stale's signal 1 had nothing recorded for it
+  # at all, and could never notice it come into existence later. Every level
+  # is now recorded, existing or not: an existing one gets its real mtime, a
+  # missing one gets the `MISSING` sentinel (never a possible real mtime
+  # value, see profile_store.sh's `%.9Y`/`%Fm` formats) so board_stale can
+  # tell "should compare a real mtime" from "should compare existence" apart
+  # — see its own header for the read side.
+  local -a scan_roots=() _scan_roots_exist=()
+  while IFS= read -r p; do [ -n "$p" ] && scan_roots+=("$p"); done \
     < <(_board_scan_root "$engine" "$dir" 2>/dev/null)
   : > "$gen/scanroot-mtime"
   if [ "${#scan_roots[@]}" -gt 0 ]; then
-    local _si=0 _smt _ssz
-    while read -r _smt _ssz; do
-      printf '%s\037%s\n' "${scan_roots[$_si]}" "$_smt" >> "$gen/scanroot-mtime"
-      _si=$((_si + 1))
-    done < <(files_mtime_size "${scan_roots[@]}")
+    for p in "${scan_roots[@]}"; do [ -d "$p" ] && _scan_roots_exist+=("$p"); done
+    _board_mtime_size_map "${_scan_roots_exist[@]}"
+    local _srv
+    for p in "${scan_roots[@]}"; do
+      _srv="${_BOARD_MTMAP[$p]:-}"
+      if [ -n "$_srv" ]; then
+        printf '%s\037%s\n' "$p" "${_srv%%$'\037'*}" >> "$gen/scanroot-mtime"
+      else
+        printf '%s\037MISSING\n' "$p" >> "$gen/scanroot-mtime"
+      fi
+    done
   fi
   # P1-A (2026-09-12 round-2 fix review): the mtime `sessions_by_mtime` sorts
   # by is whole-second and only used for ORDER here. What board_stale
   # actually re-checks later needs nanosecond precision AND size (see its own
-  # header) — both come from files_mtime_size, ONE batched call (positional,
-  # same order as $paths — see its own header in profile_store.sh) zipped
-  # back onto each path by index, never a fork per file.
-  local -A _fmap=()
-  if [ "${#paths[@]}" -gt 0 ]; then
-    local _fi=0 _fmt _fsz
-    while read -r _fmt _fsz; do
-      _fmap["${paths[$_fi]}"]="$_fmt"$'\037'"$_fsz"
-      _fi=$((_fi + 1))
-    done < <(files_mtime_size "${paths[@]}")
-  fi
+  # header) — both come from ONE batched stat call. P3-4 (round-4 fix
+  # review): keyed by the path stat itself hands back (`_board_mtime_size_map`),
+  # not zipped onto `$paths` by index — a file that vanished between the
+  # `find` above and this stat is then a missing map entry, never a value
+  # recorded against the WRONG path.
+  _board_mtime_size_map "${paths[@]}"
+  local -A _fmap=(); local _fk
+  for _fk in "${!_BOARD_MTMAP[@]}"; do _fmap["$_fk"]="${_BOARD_MTMAP[$_fk]}"; done
+  # P1-1 (2026-09-13 round-4 fix review): claude-usage-files (below) used to
+  # record whatever `-mmin -300` happened to match — legitimately EMPTY every
+  # morning before anything has been touched in the last five hours, which
+  # made an idle account's fuel reading permanently indistinguishable from
+  # "no evidence yet, keep rebuilding" (see _claude_usage_stale's header).
+  # Tracked here, in the SAME newest-first pass that already builds each
+  # project's recent list, at no extra cost: the newest K files of EACH
+  # project directory (bounded by project count × K, not file count or the
+  # -mmin window) is a signal that is never empty once anything exists, and
+  # covers PROBE B4 (an append to an old, already-excluded-by-window file)
+  # directly — that file only needs to still be among ITS OWN project's
+  # newest K, which an append-in-place always keeps it as.
+  local -A _claude_scope_count=()
+  local -a claude_topk_files=()
+  local _csc
   if [ "${#paths[@]}" -gt 0 ]; then
     while read -r mt f; do
       [ -f "$f" ] || continue
@@ -483,6 +641,13 @@ board_state_refresh() (
       # board_stale) can verify it — a 32-bit cksum collision then reads as a
       # miss, never someone else's transcript.
       printf '%s\n%s\n' "$sid" "$f" > "$gen/sids/$key"
+      if [ "$engine" = claude ]; then
+        _csc="${_claude_scope_count[$scope]:-0}"
+        if [ "$_csc" -lt "$n" ]; then
+          claude_topk_files+=("$f")
+          _claude_scope_count["$scope"]=$((_csc + 1))
+        fi
+      fi
       scope="${scope%/}"
       key="$(board_key "$scope")"
       # Same guard on the scope: a fresh recent/<key>.all gets the raw scope
@@ -521,9 +686,7 @@ board_state_refresh() (
       # P1-2 (2026-09-12 round-3 fix review): neither of the above sees a
       # brand new FILE inside an EXISTING project directory — see
       # _claude_usage_stale's header. Record each existing project
-      # directory's own mtime too, bounded by the project count, folded into
-      # the SAME files_mtime_size call as the files above (one fork, not
-      # two).
+      # directory's own mtime too, bounded by the project count.
       # P3-1: nanosecond precision, matching _claude_usage_stale's own check
       # (see its header) — a whole-second `file_mtime` here went blind to a
       # project directory created in the SAME wall-clock second as this
@@ -532,22 +695,34 @@ board_state_refresh() (
         > "$gen/claude-usage-root-mtime" 2>/dev/null || true
       : > "$gen/claude-usage-files"
       : > "$gen/claude-usage-projdirs"
-      local -a ufiles=() updirs=()
-      while IFS= read -r f; do [ -n "$f" ] && ufiles+=("$f"); done <<< "$files"
+      # P1-1 (2026-09-13 round-4 fix review): this is no longer the `-mmin
+      # -300` set (`$files`, still used above only to COMPUTE the actual
+      # usage reading, which really is a 5-hour window) — it is
+      # `claude_topk_files`, built above in the SAME pass that already
+      # stats every path once (`_fmap`), so no second stat call is needed
+      # here at all — see that pass's own comment for why per-project top-K
+      # is the right freshness set. updirs is its own homogeneous list, kept
+      # in a SEPARATE stat call (P3-4, round-4 fix review): joining it with
+      # ufiles into one call and splitting the result back by index (the
+      # OLD code here) misattributes every row after a vanished path to the
+      # wrong path the moment `stat` silently prints one fewer line for it.
+      # `_board_mtime_size_map` keys off the path stat itself returns
+      # instead, so a vanished path is a missing entry, never a shifted one.
+      for f in "${claude_topk_files[@]}"; do
+        [ -n "${_fmap[$f]:-}" ] || continue
+        printf '%s\037%s\n' "$f" "${_fmap[$f]}" >> "$gen/claude-usage-files"
+      done
+      local -a updirs=()
       for f in "$dir"/projects/*/; do
         [ -d "$f" ] || continue
         updirs+=("${f%/}")
       done
-      if [ "${#ufiles[@]}" -gt 0 ] || [ "${#updirs[@]}" -gt 0 ]; then
-        local _ui=0 _umt _usz
-        while read -r _umt _usz; do
-          if [ "$_ui" -lt "${#ufiles[@]}" ]; then
-            printf '%s\037%s\037%s\n' "${ufiles[$_ui]}" "$_umt" "$_usz" >> "$gen/claude-usage-files"
-          else
-            printf '%s\037%s\n' "${updirs[$((_ui - ${#ufiles[@]}))]}" "$_umt" >> "$gen/claude-usage-projdirs"
-          fi
-          _ui=$((_ui + 1))
-        done < <(files_mtime_size "${ufiles[@]}" "${updirs[@]}")
+      if [ "${#updirs[@]}" -gt 0 ]; then
+        _board_mtime_size_map "${updirs[@]}"
+        for f in "${updirs[@]}"; do
+          [ -n "${_BOARD_MTMAP[$f]:-}" ] || continue
+          printf '%s\037%s\n' "$f" "${_BOARD_MTMAP[$f]%%$'\037'*}" >> "$gen/claude-usage-projdirs"
+        done
       fi
       ;;
     antigravity) agy_email "$dir" > "$gen/email" ;;
