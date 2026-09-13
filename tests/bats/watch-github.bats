@@ -558,6 +558,59 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [ "$(wc -l < "$events")" -eq 100 ]
 }
 
+# --- P1-1 (2026-09-13 fix-round-2 review): pagination truncation must pin
+# the cursor to the OLDEST row actually read, never the max seen — the old
+# code let the cursor race straight to page 1's newest row, making every
+# row past the 5-page cap permanently unreachable with no error and no WARN.
+
+_wgt_epoch_iso() { # <epoch> -> ISO8601 Z, GNU first then BSD
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
+}
+
+@test "watch github --once: pagination truncation pins the cursor to the oldest row READ, not the max (P1-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf '2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.cursor"
+
+  local base
+  base="$(date -u -d '2026-09-07T05:00:00Z' +%s 2>/dev/null \
+    || date -u -jf '%Y-%m-%dT%H:%M:%SZ' '2026-09-07T05:00:00Z' +%s)"
+
+  local page i idx ts
+  for page in 1 2 3 4 5; do
+    local -a rows=()
+    for i in $(seq 0 99); do
+      idx=$(( (page - 1) * 100 + i ))
+      ts="$(_wgt_epoch_iso "$((base - idx))")"
+      rows+=("$(_row "$((900 + idx))" "$ts" alice reef "https://x/$((900 + idx))" 0 "issue $idx")")
+    done
+    _gh_stub_page org "$page" "${rows[@]}"
+  done
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"+more, will catch up next poll"* ]] || false
+  [[ "$output" == *"500 new event(s) this poll. (truncated: continuing next poll)"* ]] || false
+  # Only 5 calls made — page 6 was never fetched (the truncation itself).
+  [ "$(cat "$GH_STUB_DIR/org.calls")" = "5" ]
+  # Page 5's own oldest row is idx 499 (100 rows/page, page 5 = idx 400..499)
+  # — the cursor must land on THAT row minus the 300s lag, not on idx 0's
+  # (page 1's newest, the old buggy formula).
+  local expect_cursor; expect_cursor="$(_wgt_epoch_iso "$((base - 499 - 300))")"
+  [ "$(cat "$state_dir/CVERInc.cursor")" = "$expect_cursor" ]
+
+  # poll 2: the row that lived on the never-fetched page 6 (idx 500 — older
+  # than page 5's oldest, so under the OLD (max-based) cursor it would sit
+  # below the window forever) must now be reachable.
+  local six_ts; six_ts="$(_wgt_epoch_iso "$((base - 500))")"
+  _gh_stub_page org 6 "$(_row 1400 "$six_ts" bob reef "https://x/1400" 0 "page six issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#1400 opened by bob: page six issue"* ]] || false
+  [[ "$(cat "$GH_STUB_DIR/org.6.sent_query")" == *"updated:>=${expect_cursor}"* ]] || false
+}
+
 @test "watch: still dispatches to the engine path for a non-github first argument" {
   # Regression guard for the new branch in cmd_watch: 'github' is special-
   # cased, everything else must reach the ordinary engine flow untouched.

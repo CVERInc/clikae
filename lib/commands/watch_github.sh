@@ -545,6 +545,18 @@ _wg_poll_one_query() {
     page=$((page + 1))
     if [ "$page" -gt 5 ]; then
       log_warn "github:$org — $kind_query query has +more, will catch up next poll."
+      # P1-1 (2026-09-13 fix-round-2 review): the cursor must never advance
+      # past the OLDEST row this poll actually read — $oldest, just above,
+      # is exactly that (desc order: every page is older than the last, so
+      # the last page's own oldest row is the poll-wide oldest read so far).
+      # Advancing to the max (the old behaviour) made everything past page 5
+      # PERMANENTLY unreachable: the next poll's `updated:>=` started at the
+      # NEWEST row seen, not the oldest, so page 6+ fell below the window
+      # forever, with no error and no WARN — see the review's E4 repro.
+      __WG_TRUNCATED=1
+      if [ -z "$__WG_TRUNCATED_OLDEST" ] || [[ "$oldest" < "$__WG_TRUNCATED_OLDEST" ]]; then
+        __WG_TRUNCATED_OLDEST="$oldest"
+      fi
       return 0
     fi
   done
@@ -568,6 +580,8 @@ _wg_poll() {
   __WG_PERMANENT_REASON=""
   __WG_MAX_UPDATED=""
   __WG_SUMMARY_LINES=""
+  __WG_TRUNCATED=0
+  __WG_TRUNCATED_OLDEST=""
 
   # P2-11: one mkdir-lock around the whole read-poll-write section, so cron
   # running `--once` and a person ALSO running `--once` (or the live loop)
@@ -620,13 +634,16 @@ _wg_poll() {
   # cursor lags 300s behind the max updated_at actually seen this poll —
   # `>=` in the query plus the seen-file dedup absorb the resulting overlap.
   if [ "$__WG_OK" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
-    local max_epoch new_cursor
-    max_epoch="$(_limit_iso_epoch "$__WG_MAX_UPDATED" "")"
+    local max_epoch new_cursor base_updated="$__WG_MAX_UPDATED"
+    # P1-1: truncation overrides "the max seen" with "the oldest actually
+    # read" — see the note at _wg_poll_one_query's `page -gt 5` branch.
+    [ "$__WG_TRUNCATED" -eq 1 ] && [ -n "$__WG_TRUNCATED_OLDEST" ] && base_updated="$__WG_TRUNCATED_OLDEST"
+    max_epoch="$(_limit_iso_epoch "$base_updated" "")"
     new_cursor=""
     if [ -n "$max_epoch" ]; then
       new_cursor="$(_wg_iso_from_epoch "$((max_epoch - 300))")"
     fi
-    [ -n "$new_cursor" ] || new_cursor="$__WG_MAX_UPDATED"   # unparseable: no lag, still forward progress
+    [ -n "$new_cursor" ] || new_cursor="$base_updated"   # unparseable: no lag, still forward progress
     printf '%s\n' "$new_cursor" > "${cursor_file}.tmp" 2>/dev/null && mv -f "${cursor_file}.tmp" "$cursor_file" 2>/dev/null || true
   fi
 
@@ -784,7 +801,14 @@ cmd_watch_github() {
     # blind for three days" — exactly the failure mode issue #46 exists to
     # catch, reintroduced one layer up.
     if [ "$__WG_OK" -eq 1 ]; then
-      log_info "github:$org — $__WG_EVENTS new event(s) this poll."
+      # P1-1: an honest word for what just happened — the old WARN
+      # ("will catch up next poll") was a claim nothing in the code backed
+      # up; now that the cursor genuinely pins behind the unread tail (see
+      # _wg_poll), this line is the one place a `--once` caller (a cron job,
+      # a Stop hook) can actually see that a poll was cut short.
+      local trunc_suffix=""
+      [ "$__WG_TRUNCATED" -eq 1 ] && trunc_suffix=" (truncated: continuing next poll)"
+      log_info "github:$org — $__WG_EVENTS new event(s) this poll.${trunc_suffix}"
       return 0
     fi
     log_err "github:$org — poll failed (see the warning above); not counted as 0 events."
