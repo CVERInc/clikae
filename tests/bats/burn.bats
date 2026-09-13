@@ -3219,20 +3219,32 @@ assert rows == [] or rows[0]["dirty"] in (0, None), rows
 
 # P2-1 (round-1 review): the old code capped "recent files" at readdir
 # order, not mtime — reproduced with f01..f30 (20ms apart) it reported 9 of
-# the 10 newest wrong and dropped the actual newest file entirely. Explicit
-# future-offset mtimes (now+1s .. now+30s) here instead of real sleeps: each
-# of the 30 files gets its own distinguishable second, all of them
-# unambiguously newer than the sentinel touched at run start.
+# the 10 newest wrong and dropped the actual newest file entirely.
+#
+# P1-1 (round-2 review): this fixture used `touch -d "@$((now+N))"` — GNU
+# coreutils only, BSD `touch -d` rejects `@epoch`. On macOS CI all 30
+# `touch`es failed, every mtime collapsed to "just created", and `sort -s`
+# fell through to plain string order on the full path — which happened to
+# equal f30..f21 by COINCIDENCE (filenames were assigned in that same
+# order), so this test read green while testing nothing. Two independent
+# fixes, neither optional: (1) `touch -t YYYYMMDDhhmm.SS` — POSIX, works on
+# both — built the same way `tests/bats/live.bats`/`memory.bats` already do
+# (`date -v+NS … 2>/dev/null || date -d "+N seconds" …`), not a new idiom;
+# (2) the offset-to-filename mapping below is a deliberate shuffle (i -> ((i-1)*13
+# mod 30)+1, coprime with 30 so it's a full permutation), asserted NOT to
+# collapse to filename order — a regression back to "all mtimes equal, fall
+# through to string-sort" now fails LOUDLY instead of passing by accident.
 @test "burn #84 P2-1: recent files are the newest ten by mtime, not directory order" {
   _left84_setup
   _left84_repo
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
 #!/usr/bin/env bash
-now="$(date +%s)"
 for i in $(seq -w 1 30); do
   f="$STUB_LEFT_REPO/f$i"
   printf '%s' "$i" > "$f"
-  touch -d "@$((now + 10#$i))" "$f"
+  off=$(( ((10#$i - 1) * 13 % 30) + 1 ))
+  ts="$(date -v+${off}S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "+${off} seconds" '+%Y%m%d%H%M.%S')"
+  touch -t "$ts" "$f"
 done
 STUB
   run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
@@ -3242,7 +3254,12 @@ import json, sys
 rows = json.load(sys.stdin)["left_behind"]
 row = next(r for r in rows if r["repo"].endswith("/repos/work space"))
 files = [f.rsplit("/", 1)[1] for f in row["files"]]
-expect = [f"f{n:02d}" for n in range(30, 20, -1)]
+offs = {f"f{i:02d}": ((i - 1) * 13 % 30) + 1 for i in range(1, 31)}
+expect = sorted(offs, key=lambda f: -offs[f])[:10]
+# The negative control itself: if this shuffle ever degenerated back into
+# filename order, a broken (all-mtimes-equal) sort could pass by accident,
+# same as the macOS bug this test exists to catch.
+assert expect != sorted(offs, reverse=True)[:10], "offsets collapsed to filename order — negative control is dead"
 assert files == expect, files
 '
 }
@@ -3253,6 +3270,12 @@ assert files == expect, files
 # distinct future-offset mtime (same determinism trick as P2-1), so the
 # 25-cap and "newest activity first" ordering are both exactly assertable:
 # repos r30..r06 (25 of them) are kept, r05..r01 are the "5 more".
+# P1-1 (round-2 review): `touch -d "@epoch"` here is the same GNU-only call
+# P2-1's fixture had — `touch -t` (built the live.bats/memory.bats way,
+# `date -v+NS … || date -d "+N seconds" …`) instead.
+# P2-2 (round-2 review): also asserts the new `left_behind_truncated` field
+# — this cap is a pure display/JSON-size bound, so "25 shown, 5 more" must
+# be a machine-readable fact, not only the human "and N more" line.
 @test "burn #84 P2-2/P2-5: repos are capped at 25, newest-activity first, with a remainder line" {
   _stub_burn_transport
   clikae init codex T1
@@ -3267,11 +3290,12 @@ assert files == expect, files
   done
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
 #!/usr/bin/env bash
-now="\$(date +%s)"
 for i in \$(seq -w 1 30); do
   f="$TEST_HOME/repos/r\$i/touched"
   printf work > "\$f"
-  touch -d "@\$((now + 10#\$i))" "\$f"
+  off=\$(( 10#\$i ))
+  ts="\$(date -v+\${off}S '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "+\${off} seconds" '+%Y%m%d%H%M.%S')"
+  touch -t "\$ts" "\$f"
 done
 STUB
   run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
