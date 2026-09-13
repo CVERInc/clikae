@@ -54,6 +54,11 @@ release() {
   [[ "$output" == *"<bind-key><-T><root><MouseUp1Pane><send-keys -M; run-shell \"bash '"* ]] || false
   [[ "$output" == *"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}\">"* ]] || false
   [[ "$output" == *"<bind-key><-T><copy-mode><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
+  # P1-2: copy-mode-vi mirrors copy-mode exactly — same Down, same plain-run-shell Up.
+  [[ "$output" == *"<bind-key><-T><copy-mode-vi><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; select-pane -t =>"* ]] || false
+  [[ "$output" == *"<bind-key><-T><copy-mode-vi><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_in_mode}>"* ]] || false
+  # choose-mode is deliberately left unbound (a tap there must select, not cancel).
+  [[ "$output" != *'<-T><choose'* ]] || false
   [[ "$output" != *'<MouseDrag'* ]] || false
   [[ "$output" != *'<Wheel'* ]] || false
 }
@@ -123,4 +128,34 @@ release() {
     release 16 %7 1
     [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
   done
+}
+
+@test "touch: @clikae_touch_y is UNSET after one Up, so a second Up without a Down does nothing" {
+  # P1-2's structural half: not "we remembered to clear it" but "there is
+  # nothing left to reuse". A stateful stub pane option: `set-option -pu`
+  # clears the same value `show-options -pqv` reads back.
+  local statefile="$BATS_TEST_TMPDIR/touch_y_state"
+  printf '%s' 20 > "$statefile"
+  cat > "$BATS_TEST_TMPDIR/bin/tmux" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  show-options)
+    case "\${*: -1}" in
+      @clikae_touch_y) cat "$statefile" 2>/dev/null ;;
+      @clikae_touch_scroll) printf 'on' ;;
+      @clikae_touch_scroll_lines) printf '2' ;;
+    esac ;;
+  set-option)
+    case " \$* " in *' -pu '*'@clikae_touch_y'*) : > "$statefile" ;; esac ;;
+  copy-mode|send-keys)
+    printf '<%s>' "\$@" >> "$TOUCH_ACTIONS"
+    printf '\n' >> "$TOUCH_ACTIONS" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/tmux"
+  release 16 %7 0
+  [ "$(cat "$TOUCH_ACTIONS")" = $'<copy-mode><-t><%7>\n<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
+  : > "$TOUCH_ACTIONS"
+  release 16 %7 0
+  [ ! -s "$TOUCH_ACTIONS" ]
 }

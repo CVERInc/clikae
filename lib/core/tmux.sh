@@ -462,6 +462,30 @@ tmux_spawn_session() {
   # own select-pane-then-forward. A swipe therefore also reaches the app as a
   # click at the release row (the app already got the press on the way down;
   # docs/usage.md says so).
+  #
+  # 🔴 copy-mode ALONE is not the copy key table on this machine, or on any
+  # machine whose ~/.tmux.conf sets `mode-keys vi` (very common — vim users do
+  # it by habit). tmux picks copy-mode OR copy-mode-vi at copy-mode-entry time
+  # depending on the `mode-keys` option, and clikae has never set that option
+  # — same lesson docs/DESIGN-tmux.md:74 already draws about `base-index`: not
+  # setting an option does not mean the default applies, it means whatever the
+  # human's rc file says applies. Binding only `copy-mode` left `copy-mode-vi`
+  # without its own Down, so a same-table tap there reused whatever
+  # @clikae_touch_y an EARLIER, unrelated Down had written — the swipe that
+  # entered copy-mode, or older. Measured (tmux 3.4, `set -g mode-keys vi`): a
+  # same-row tap after a swipe that had already entered copy-mode-vi kept
+  # scrolling further back instead of cancelling — the only escape a phone (no
+  # scroll wheel) has, going backwards (2026-09 R1 review, P1-2).
+  # Fixed two ways, together: (a) mirror the copy-mode Down/Up pair onto
+  # copy-mode-vi, so it gets its own fresh @clikae_touch_y instead of a stale
+  # one; (b) touch_scroll.sh now UNSETS @clikae_touch_y the moment it reads
+  # it, so an Up with no Down on ITS OWN table is structurally incapable of
+  # reusing a value some earlier Down left behind.
+  #
+  # choose-mode / choose-mode-vi (`choose-tree`, the pane/window/session
+  # picker) are deliberately LEFT UNBOUND here, not mirrored a third time. A
+  # tap there is a SELECTION, not a swipe-cancel — that is a different design
+  # than "leave copy-mode", and inventing one is out of scope for this fix.
   local touch_helper
   touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_in_mode}"
   tmux set-option -g mouse on \
@@ -471,6 +495,8 @@ tmux_spawn_session() {
     \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
     \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
     \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
+    \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+    \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
     2>/dev/null || true
   tmux set-option -s set-clipboard on 2>/dev/null || true
 
