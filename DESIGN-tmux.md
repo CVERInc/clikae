@@ -73,6 +73,8 @@
 
 - **`base-index` 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0**：2026-09 起 `live_engine_alive`（`lib/core/live.sh`）需要問「這個 session 的引擎視窗還在不在」，一度用 `tmux list-windows -F '#{window_index}'` 比對字面 `0`——跟這條規則本身講的道理正是同一件事（`history-limit` 那個收據）：`tmux_spawn_session` 沒有設 `base-index` 不代表它是 0，代表它繼承使用者 `~/.tmux.conf` 裡設的任何值，而 `set -g base-index 1` 是很常見的一行。在 `base-index 1` 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗**名稱**：是否存在一個不是 `wake` 守望者（`^wake( |$)`，`wake_attach_watcher` 開的那個）的視窗——與 `tmux_sess_has_engine`（`lib/core/tmux.sh`）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。
 
+- **2026-09 起新增六條全域 key binding ＋ 兩個全域選項（touch-scroll，P3-4 2026-09 R2 review）**：`bind-key -T root/copy-mode/copy-mode-vi MouseDown1Pane`／`MouseUp1Pane`（六條，`lib/core/tmux.sh` 的 touch-scroll 區塊）與 `@clikae_touch_scroll`／`@clikae_touch_scroll_lines`（`set-option -og`）。跟 `history-limit`／`mouse on` 同一條鏈、同一個作用域（整台 server，不是這個 session），但多一層閘門：`_tmux_touch_scroll_floor_met` 要求 **tmux ≥ 3.1**（`set-option -p`/`-pu`，CHANGES FROM 3.0 TO 3.1）——低於這個版本，`mouse on` 照裝，這六條 binding 與兩個選項整串跳過（不是裝一半，見 Rule 1 開頭 `history-limit` 那條「串在同一個指令」的規範）。`bind-key` 沒有 `-o`，會覆寫使用者自己在 root table 上已經設過的 `MouseDown1Pane`/`MouseUp1Pane`（`docs/usage.md` 已寫明）。細節、每個 binding 的理由、以及 choose-mode/clock-mode 的邊界見 `lib/core/tmux.sh` 本體的行內註解（Rule 9 收 `mouse on`/`set-clipboard` 那兩個更早的全域選項）。
+
 ### Rule 2: tmux 是便利層，不是相依（三個出口）
 
 - **症狀**：沒有 tmux 的機器、`TERM` 畫不了的終端機、或 CI，`clikae <engine> <tank>` 應該照樣把引擎跑起來，而不是壞掉或把 session 丟在背景。
@@ -314,6 +316,8 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   set-option -s set-clipboard on  # copy-mode 的 yank 走 OSC 52 進系統剪貼簿
   ```
   代價要講清楚：要用終端機**原生**選取（貼到 tmux 以外的地方）得按著 `⌥`。這是刻意換的——預設情境是「我要複製剛剛畫面上的東西」，那條路現在直通。
+
+- **同一條全域鏈上另外掛著 touch-scroll 的六條 binding 與兩個選項**（`@clikae_touch_scroll`／`@clikae_touch_scroll_lines`，P3-4 2026-09 R2 review）——`mouse on` 讓滾輪捲得到歷史，touch-scroll 是同一個問題在沒有滾輪的觸控裝置（a-Shell/iPhone）上的另一半答案：把兩指觸控的按下/放開翻譯成同一段 `copy-mode` 歷史的捲動。裝載條件、tmux ≥ 3.1 的版本閘門、與清冊全文見 Rule 1；行為與 mode 的邊界（copy-mode/view-mode 才動作，tree-mode/clock-mode/choose-* 不動）見 `lib/core/tmux.sh`/`lib/core/touch_scroll.sh` 的行內註解與 `docs/usage.md`。
 
 - 🔴 **附帶修掉一個累積型 bug**：`terminal-overrides` / `terminal-features` 是 **append**，而選項區塊每次建立 session 都跑，所以每 spawn 一次就多一份。實測兩天大的 server：
   ```
