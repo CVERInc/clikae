@@ -58,6 +58,35 @@ scan() {
   [ -z "$output" ]
 }
 
+# fix7: PR #78's own CI caught what this file's scans missed —
+# `declare -gA _BOARD_GEN_CACHE` in board_state.sh. macOS bash 3.2 has neither
+# `declare -g` (added 4.2) nor associative arrays (`-A`, added 4.0), and a
+# script that hits either at SOURCE time (not even at call time — `declare -gA`
+# runs the moment the file is sourced) exits 2 before a single command runs:
+# `lib/core/board_state.sh: line 205: declare: -g: invalid option`, ~1,000 bats
+# red on every macOS job since this branch's first commit. `[[ … =~ …]]` is
+# deliberately NOT scanned here — 3.2 has that.
+@test "no declare/local/typeset -g / -A / -n (bash 4+ global/assoc-array/nameref flags)" {
+  run scan 'declare -[gAn]|local -[An]|typeset -[An]'
+  [ -z "$output" ]
+}
+
+@test "the -g/-A/-n scan does not fire on its own documentation, and does fire on a real occurrence" {
+  # Same shape as "the compat scans do not fire on their own documentation"
+  # above — a control for THIS ruler, not for the code.
+  local probe="$TEST_HOME/probe2"; mkdir -p "$probe/lib" "$probe/bin"
+  : > "$probe/bin/clikae"
+  printf '# we deliberately avoid local -A here, see board_state.sh\n' > "$probe/lib/note.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "declare -[gAn]|local -[An]|typeset -[An]" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -z "$output" ] || { echo "still fires on a comment: $output"; false; }
+
+  printf 'local -A x=()\n' > "$probe/lib/real.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "declare -[gAn]|local -[An]|typeset -[An]" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
+}
+
 # --- PowerShell adapter table parity (informational; no Windows/pwsh needed) ----
 # powershell/Clikae.psm1 carries a hand-maintained $script:ClikaeAdapters table that
 # "mirrors lib/adapters/*.sh one-for-one" (its own comment). This is a SOURCE scan
