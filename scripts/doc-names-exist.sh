@@ -111,6 +111,15 @@ while IFS= read -r fn; do
   [ -n "$fn" ] || continue
   grep -qE "${fn}\.[a-z]" "${DOCS[@]}" 2>/dev/null && continue          # a filename
   [ -f "$ALLOW_NAME" ] && grep -qE "^${fn}[[:space:]]" "$ALLOW_NAME" && continue
+  # `@clikae_…` is a tmux USER OPTION, not a function: tmux's own syntax for
+  # one is the `@` prefix, and \b matches right after it. The doc still makes
+  # a claim about the code — that lib/core/tmux.sh sets the option — so hold
+  # it to that claim instead of a definition it can never have.
+  if grep -qE "@${fn}\b" "${DOCS[@]}" 2>/dev/null; then
+    grep -qE "set-option.*@${fn}\b" lib/core/tmux.sh 2>/dev/null \
+      || say_fail "@$fn — named in a doc as a tmux option, never set in lib/core/tmux.sh"
+    continue
+  fi
   grep -qE "^[[:space:]]*${fn}\(\)" "${SRC[@]}" 2>/dev/null \
     || say_fail "$fn — named in a doc, defined nowhere"
 done <<NAMES

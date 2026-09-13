@@ -34,6 +34,22 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   [[ "$output" == *"tmux_no_such_function"* ]] || { echo "$output"; false; }
 }
 
+@test "doc gate: fires when a doc names a tmux user option nothing sets" {
+  # `@clikae_touch_scroll` in docs/usage.md is a claim that lib/core/tmux.sh
+  # sets it. The first run of #88 tripped the FUNCTION check on it instead
+  # (「defined nowhere」) — a true claim reported as the wrong kind of lie.
+  _copy_repo
+  printf '\n`set -g @clikae_no_such_option off` is documented here.\n' >> "$REPO/docs/usage.md"
+  run _gate_in_copy
+  [ "$status" -ne 0 ] || { echo "the gate stayed silent"; false; }
+  [[ "$output" == *"@clikae_no_such_option — named in a doc as a tmux option"* ]] || { echo "$output"; false; }
+}
+
+@test "doc gate: a tmux user option the code sets is not a missing function" {
+  run _gate
+  [[ "$output" != *"clikae_touch_scroll"* ]] || { echo "$output"; false; }
+}
+
 @test "doc gate: fires when a docstring names a caller that does not call" {
   # The shape that hid burn's missing prelaunch: an enumeration is only useful
   # if it is complete, so it is checked in both directions.
