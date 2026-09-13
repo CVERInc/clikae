@@ -3246,3 +3246,43 @@ expect = [f"f{n:02d}" for n in range(30, 20, -1)]
 assert files == expect, files
 '
 }
+
+# P2-2/P2-5 (round-1 review): no cap meant one line per repo under a big
+# --add-dir root, every time — 200 repos, 200 lines, for a run that failed
+# for an unrelated reason. 30 repos, each with one post-start file at a
+# distinct future-offset mtime (same determinism trick as P2-1), so the
+# 25-cap and "newest activity first" ordering are both exactly assertable:
+# repos r30..r06 (25 of them) are kept, r05..r01 are the "5 more".
+@test "burn #84 P2-2/P2-5: repos are capped at 25, newest-activity first, with a remainder line" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in $(seq -w 1 30); do
+    git init -q "$TEST_HOME/repos/r$i"
+    git -C "$TEST_HOME/repos/r$i" config user.name 'Burn test'
+    git -C "$TEST_HOME/repos/r$i" config user.email 'burn@example.invalid'
+    git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+now="\$(date +%s)"
+for i in \$(seq -w 1 30); do
+  f="$TEST_HOME/repos/r\$i/touched"
+  printf work > "\$f"
+  touch -d "@\$((now + 10#\$i))" "\$f"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"and 5 more repositories under"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 25, len(rows)
+names = [r["repo"].rsplit("/", 1)[1] for r in rows]
+expect = [f"r{n:02d}" for n in range(30, 5, -1)]
+assert names == expect, names
+'
+}

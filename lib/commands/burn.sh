@@ -989,6 +989,33 @@ _burn_left_behind() {
     )
   done
   local entries="" hint="" scan
+  # P2-2/P2-5 (round-1 review): no cap meant "200 repos, 200 lines" for any
+  # failed run whose --add-dir root just happens to be big — one flat wall
+  # of noise for every operator, every time. `activity_ts` (the newest
+  # qualifying file's mtime, or $started_at for a repo that qualified on
+  # dirty/ahead alone with no post-start file) orders the list so a 25-cap
+  # drops the STALEST candidates first, not an arbitrary find-order tail.
+  # Same review, same finding: no wall-time budget either — a single repo
+  # under a huge, cold tree could make the file-list `find` itself run
+  # arbitrarily long. `timeout 5` bounds that per repo; a repo that trips it
+  # is force-included (we genuinely don't know what's in it, which is worth
+  # a human's attention, not silence) with "(scan timed out)" in place of a
+  # files list.
+  local -a lb_repo=() lb_branch=() lb_ahead=() lb_dirty=() lb_files=() lb_ts=() lb_timeout=()
+  _clikae_statv
+  local stat_flag='-c'
+  [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
+  local statline mname mline
+  # Reuse burn's own timeout-tool resolver (grep _burn_timeout_bin — not a
+  # second one) rather than hardcoding `timeout`: stock macOS ships neither
+  # `timeout` nor `gtimeout`. Its `perl` fallback is skipped here on purpose
+  # — an alarm-killed perl's exit code isn't reliably 124, and this budget
+  # is a best-effort perf guard, not the documented `--timeout` contract, so
+  # an unbounded scan is the honest degrade when only perl is available.
+  local -a lb_bound=()
+  case "$(_burn_timeout_bin 2>/dev/null)" in
+    timeout|gtimeout) lb_bound=("$(_burn_timeout_bin 2>/dev/null)" 5) ;;
+  esac
   for repo in "${repos[@]}"; do
     branch="$(_burn_lb_git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)" || branch=HEAD
     ahead="$(_burn_lb_git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
@@ -1010,11 +1037,8 @@ _burn_left_behind() {
     # `sort -rn` makes "newest ten" actually mean newest ten. Same platform
     # probe every other `stat` caller in this repo already shares
     # (_clikae_statv/_CLIKAE_STAT_FMT) — not a third one.
-    _clikae_statv
-    local stat_flag='-c'
-    [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
-    local statline mname
     files=""; count=0; seen=""
+    local repo_ts=0 repo_timeout=0 scan_out rc_scan
     for root in "${roots[@]}"; do
       [ -d "$root" ] || continue
       root="$(cd "$root" && pwd -P)" || continue
@@ -1022,31 +1046,62 @@ _burn_left_behind() {
         "$repo/"*) scan="$root" ;;
         *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;
       esac
-      while IFS= read -r statline; do
-        [ -n "$statline" ] || continue
-        mname="${statline#* }"
-        case "$seen" in *$'\n'"$mname"$'\n'*) continue ;; esac
-        seen="${seen}"$'\n'"${mname}"$'\n'
-        [ "$count" -eq 0 ] || files="$files,"
-        files="$files$(json_str "$mname")"
-        count=$((count + 1))
-        [ "$count" -lt 10 ] || break
-      done < <(
-        find "$scan" \
+      rc_scan=0
+      scan_out="$(
+        "${lb_bound[@]}" find "$scan" \
           \( -name .git -o -name node_modules -o -name .venv -o -name target \
              -o -name dist -o -name build -o -name .cache -o -name .next \
              -o -name out -o -name coverage \) -prune \
           -o -type f -newer "${started_at_sentinel:-/dev/null}" \
              -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + 2>/dev/null \
         | sort -rn
-      )
+      )" || rc_scan=$?
+      if [ "$rc_scan" -eq 124 ]; then
+        repo_timeout=1
+        continue
+      fi
+      while IFS= read -r statline; do
+        [ -n "$statline" ] || continue
+        mline="${statline%% *}"; mname="${statline#* }"
+        [[ "$mline" =~ ^[0-9]+$ ]] || continue
+        [ "$mline" -le "${repo_ts:-0}" ] || repo_ts="$mline"
+        case "$seen" in *$'\n'"$mname"$'\n'*) continue ;; esac
+        seen="${seen}"$'\n'"${mname}"$'\n'
+        [ "$count" -eq 0 ] || files="$files,"
+        files="$files$(json_str "$mname")"
+        count=$((count + 1))
+        [ "$count" -lt 10 ] || break
+      done <<< "$scan_out"
       [ "$count" -lt 10 ] || break
     done
-    if [ "$ahead" = - ] || [ "$ahead" = 0 ]; then
+    if [ "$repo_timeout" -ne 1 ] && { [ "$ahead" = - ] || [ "$ahead" = 0 ]; }; then
       [ "$dirty" -gt 0 ] || [ "$count" -gt 0 ] || continue
     fi
+    [ "$repo_ts" -gt 0 ] 2>/dev/null || repo_ts="${started_at:-0}"
+    lb_repo+=("$repo"); lb_branch+=("$branch"); lb_ahead+=("$ahead")
+    lb_dirty+=("$dirty"); lb_files+=("$files"); lb_ts+=("$repo_ts")
+    lb_timeout+=("$repo_timeout")
+  done
+  local total=${#lb_repo[@]} shown=0 over=0
+  local -a order=()
+  if [ "$total" -gt 0 ]; then
+    local i idx
+    while IFS= read -r idx; do order+=("$idx"); done < <(
+      for i in "${!lb_repo[@]}"; do printf '%s\t%s\n' "${lb_ts[$i]}" "$i"; done \
+        | sort -t "$(printf '\t')" -s -k1,1rn | cut -f2
+    )
+  fi
+  for idx in "${order[@]:-}"; do
+    [ -n "$idx" ] || continue
+    if [ "$shown" -ge 25 ]; then over=$((over + 1)); continue; fi
+    repo="${lb_repo[$idx]}"; branch="${lb_branch[$idx]}"; ahead="${lb_ahead[$idx]}"
+    dirty="${lb_dirty[$idx]}"; files="${lb_files[$idx]}"
     log_info "left behind: $repo $branch ahead $ahead dirty $dirty"
-    [ "$count" -eq 0 ] || log_info "  files: [$files]"
+    if [ "${lb_timeout[$idx]}" = 1 ]; then
+      log_info "  files: (scan timed out)"
+    elif [ -n "$files" ]; then
+      log_info "  files: [$files]"
+    fi
     if [ -z "$hint" ] && [ "$ahead" != - ] && [ "$ahead" -gt 0 ]; then
       printf -v hint '  hint: git -C %q push' "$repo"
     fi
@@ -1054,8 +1109,13 @@ _burn_left_behind() {
       "$(json_str "$repo")" "$(json_str "$branch")" \
       "$(if [ "$ahead" = - ]; then json_str -; else printf '%s' "$ahead"; fi)" "$dirty" "$files")"
     entries="${entries}${entries:+,}${entry}"
+    shown=$((shown + 1))
   done
   [ -z "$hint" ] || log_info "$hint"
+  if [ "$over" -gt 0 ]; then
+    local roots_desc; roots_desc="$(IFS=', '; printf '%s' "${roots[*]}")"
+    log_info "  … and $over more repositories under $roots_desc"
+  fi
   printf '[%s]' "$entries"
   return 0
 }
