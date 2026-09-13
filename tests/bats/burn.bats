@@ -891,6 +891,74 @@ STUB
   true
 }
 
+# --- #61 P2-7 (round-1 review): the earliest-reset tracking added alongside
+# the reroute fix (_burn_dry_epoch + the earliest_epoch/earliest_reset pair,
+# burn.sh:404-412/2709-2716) was correct but UNTESTED — the PR's own fixture
+# only ever sent one dry tank through the walk, so "track the earliest
+# across every hop" and the old "${reset:-}" (this hop's own) produce
+# byte-identical output on one hop; nothing distinguished them. Three tanks,
+# resets visited out of order, pin the actual logic instead of a case it
+# happens to also satisfy.
+_stub_codex_dry_resets() {
+  # $1/$2/$3 = the reset clause (after "Try again at ") for T1/T2/T3 — each
+  # always reports dry (unconditionally, no .dry marker needed: the fixture
+  # IS three dry tanks, there is no live outcome to also stub).
+  git init -q "$BATS_TEST_TMPDIR"
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<STUB
+#!/usr/bin/env bash
+tank="\${CODEX_HOME##*/}"
+case "\$tank" in
+  T1) echo "You've hit your usage limit. Try again at $1." ;;
+  T2) echo "You've hit your usage limit. Try again at $2." ;;
+  T3) echo "You've hit your usage limit. Try again at $3." ;;
+esac
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+}
+
+@test "burn #61 P2-7: earliest parseable reset wins across three dry tanks, visited out of order" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  # Visit order T1 -> T2 -> T3; resets Jul 9 / Jul 7 / Jul 8 — the EARLIEST
+  # (Jul 7) is the SECOND hop, not the first or the last, so picking "this
+  # hop's own" or "the last hop's" would both silently pass a naive fixture.
+  _stub_codex_dry_resets "Jul 9th, 2026 2:17 PM" "Jul 7th, 2026 2:17 PM" "Jul 8th, 2026 2:17 PM"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || { echo "$output"; false; }
+}
+
+@test "burn #61 P2-7: an unparseable reset mid-walk is skipped — earliest of the PARSEABLE ones wins" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  # T2 (the earliest-VISITED, were it parseable) reports dry with a reset
+  # clause limit_codex_reset can still extract (non-empty, so the tank is
+  # still correctly classified dry — round-4 review P2-2's contract) but
+  # limit_reset_epoch cannot turn into an epoch. It must be skipped for
+  # RANKING purposes without being misread as a task failure: T3 (Jul 8,
+  # parseable) must win over both T1 (Jul 9) and T2 (unparseable).
+  _stub_codex_dry_resets "Jul 9th, 2026 2:17 PM" "some undetermined future time" "Jul 8th, 2026 2:17 PM"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":"Try again at Jul 8th, 2026 2:17 PM"'* ]] || { echo "$output"; false; }
+}
+
+@test "burn #61 P2-7: every dry tank's reset is unparseable -> reset is null, not a stale/wrong phrase" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _stub_codex_dry_resets "some undetermined time" "whenever it feels like it" "not a real date at all"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":null'* ]] || { echo "$output"; false; }
+}
+
 @test "burn without --json prints no JSON at all" {
   # The result object must not leak into the human surface.
   _stub_codex
