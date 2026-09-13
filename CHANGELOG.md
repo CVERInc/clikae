@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A tank with no transcripts at all — every freshly `clikae init`'d tank, and
+  the first screen a new user sees — is no longer permanently stale. The
+  publisher and the freshness check computed the snapshot fingerprint from two
+  different byte streams that could only agree when the tank held at least one
+  file, so an empty tank rebuilt and published a new generation on every
+  frame, forever, 2.2x slower than doing nothing. There is one fingerprint
+  function now and both sides call it (#62).
 - The home board's per-tank snapshot generations no longer share inodes. A
   rebuild used to `cp -al` the previous generation's `sids/`/`recent/` entries
   and then write through those hard links, rewriting a generation the board

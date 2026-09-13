@@ -643,3 +643,54 @@ _b8_tank() {
   [ -n "$(board_find claude "$B8_TANK" session-0)" ]
 }
 
+@test "board (P1-2): a tank with zero transcripts is never stale — one generation after five renders" {
+  # Round-7 P1-2: the publisher hashed `printf '%s\n' "$stat_rows"` (one
+  # newline for an empty tank, because `$( )` had already stripped the real
+  # trailing newline) and board_stale hashed the pipeline's own output (zero
+  # bytes). cksum("\n") can never equal cksum(""), so a freshly `clikae
+  # init`'d tank published a whole new generation on EVERY frame, forever.
+  clikae init claude empty1 >/dev/null
+  clikae init codex empty2 >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  local pair eng tank dir root i
+  for pair in "claude empty1" "codex empty2"; do
+    set -- $pair; eng="$1"; tank="$2"
+    dir="$CLIKAE_HOME/profiles/$eng/$tank"
+    root="$(board_root "$dir")"
+    for ((i = 0; i < 5; i++)); do
+      _board_gen_cache_clear
+      board_generation "$eng" "$dir" >/dev/null 2>&1 || true
+    done
+    [ "$(ls -d "$root"/generation.* | wc -l | tr -d ' ')" -eq 1 ]
+    # the canonical empty-set value, on both sides
+    local gen saved live
+    gen="$root/$(cat "$root/current")"
+    saved="$(cat "$gen/transcripts-fp")"
+    live="$(_board_transcript_fingerprint "$eng" "$dir")"
+    [ "$saved" = "$live" ]
+    [ "$saved" = "$(printf '' | cksum)" ]
+    run board_stale "$eng" "$dir" "$gen"
+    [ "$status" -ne 0 ]
+    # and the empty manifest exists, so the next refresh takes the incremental
+    # path instead of cold-building forever
+    [ -f "$gen/manifest" ]
+  done
+}
+
+@test "board (P1-2): publish and board_stale fingerprint the SAME bytes, empty set included" {
+  _b8_tank
+  local dir="$B8_TANK" root gen
+  root="$(board_root "$dir")"
+  # zero files, then one, then two: the two sides must agree at every step
+  local i
+  for i in 0 1 2; do
+    [ "$i" -eq 0 ] || printf '{"type":"ai-title","aiTitle":"T"}\n' > "$B8_PROJ/session-$i.jsonl"
+    _board_gen_cache_clear
+    board_state_refresh claude "$dir"
+    gen="$root/$(cat "$root/current")"
+    [ "$(cat "$gen/transcripts-fp")" = "$(_board_transcript_fingerprint claude "$dir")" ]
+  done
+}
+

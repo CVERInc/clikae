@@ -284,13 +284,30 @@ _board_stat_rows() {
   fi | LC_ALL=C sort
 }
 
-# _board_transcript_fingerprint <engine> <dir> -> a `cksum` over
-# `_board_stat_rows`. Equality between this, recomputed on every read, and
-# what `board_state_refresh` last recorded IS the entire staleness signal for
-# every engine (round-5 fix review design decision — see this file's own
-# header).
+# _board_fingerprint_rows -> the fingerprint OF a stat-row stream on stdin.
+#
+# Round-7 fix review P1-2: there used to be two spellings of this. The reader
+# (`board_stale`) piped `_board_stat_rows` straight into `cksum`; the writer
+# captured the same rows in `$(…)` — which strips trailing newlines — and
+# re-emitted them with `printf '%s\n'`. For a tank with at least one
+# transcript the two byte streams happen to agree. For a tank with NONE they
+# cannot: the pipeline sends ZERO bytes, `printf '%s\n' ""` sends ONE newline,
+# so the saved fingerprint was cksum("\n") = "3515105045 1" and the live one
+# cksum("") = "4294967295 0", every read said STALE, and a freshly `clikae
+# init`'d tank rebuilt and published a whole new generation on EVERY frame,
+# forever, never self-healing — 2.2x slower than main at doing nothing, and it
+# is the very first screen a new user sees.
+#
+# There is ONE function now and both sides call it, so "the empty set" has one
+# canonical value by construction rather than by two authors agreeing. The
+# writer no longer goes through `$( )` at all: `board_state_refresh` spools the
+# rows to a file and hands this that file, so the bytes hashed at publish are
+# the exact bytes `_board_stat_rows` produced, empty set included.
+_board_fingerprint_rows() {
+  cksum
+}
 _board_transcript_fingerprint() {
-  _board_stat_rows "$1" "$2" | cksum
+  _board_stat_rows "$1" "$2" | _board_fingerprint_rows
 }
 
 # board_stale <engine> <dir> <generation-path> -> success (0) when the
@@ -649,9 +666,14 @@ board_state_refresh() (
   # is a single `find … -exec stat … {} +`, no bash loop of its own — is
   # both the staleness fingerprint and, below, the ONLY listing of this
   # tank's files this function ever does. No second `find` anywhere here.
-  local stat_rows
-  stat_rows="$(_board_stat_rows "$engine" "$dir")"
-  printf '%s\n' "$stat_rows" | cksum > "$gen/transcripts-fp"
+  # Spooled to a FILE, never captured in `$( )`: command substitution strips
+  # trailing newlines, and that alone is what made a zero-transcript tank
+  # permanently stale (see _board_fingerprint_rows' own header). A file also
+  # lets the classifier awk below read the rows directly instead of through a
+  # process substitution that re-materialises them.
+  local rows_f="$gen/.tmp/rows"
+  _board_stat_rows "$engine" "$dir" > "$rows_f"
+  _board_fingerprint_rows < "$rows_f" > "$gen/transcripts-fp"
   date +%s > "$gen/updated"
 
   # P2-2 (2026-09-12 round-3 fix review): antigravity's cwd lives IN the
@@ -700,7 +722,7 @@ board_state_refresh() (
       all_path[i]="$fpv"; all_mtime[i]="$mtv"; all_size[i]="$szv"
       case "${fpv##*/}" in agent-*) ;; *) path_idx+=("$i") ;; esac
       i=$((i + 1))
-    done <<< "$stat_rows"
+    done < "$rows_f"
     printf '%s\n' "$count" > "$gen/count"
     if [ "${#path_idx[@]}" -gt 0 ]; then
       while read -r mt idx; do
@@ -748,6 +770,13 @@ board_state_refresh() (
     for ((j = 0; j < i; j++)); do
       manifest_lines+=("${all_mtime[j]}"$'\036'"${all_size[j]}"$'\036'"${all_sid[j]-}"$'\036'"${all_scope[j]-}"$'\036'"${all_reading[j]-}"$'\036'"${all_path[j]}")
     done
+    # Round-7 fix review P1-2 (second half): this used to SKIP the manifest
+    # when the tank had no files, which meant `board_state_refresh`'s own
+    # `[ -f "$oldgen/manifest" ]` gate below then treated the generation it
+    # had just published as unusable and cold-built again on the next frame —
+    # pouring fuel on the never-self-healing loop above. An empty tank has an
+    # empty manifest; that is a fact about the tank, not a missing file.
+    : > "$gen/manifest"
     [ "${#manifest_lines[@]}" -eq 0 ] || printf '%s\n' "${manifest_lines[@]}" > "$gen/manifest"
   else
     # Incremental rebuild (round-6 fix review P1-2): a previous generation's
@@ -803,7 +832,7 @@ board_state_refresh() (
       END {
         for (p in om) if (!(p in cur)) { split(om[p], g, OFS); print p FS7 g[3] FS7 g[4] > removed_out }
       }
-    ' "$oldgen/manifest" <(printf '%s\n' "$stat_rows")
+    ' "$oldgen/manifest" "$rows_f"
 
     count=0
     [ -f "$unchanged_f" ] && count=$((count + $(wc -l < "$unchanged_f")))
