@@ -2449,6 +2449,22 @@ cmd_burn() {
         printf '} 2>/dev/null\n'
       } >> "$wrapper_script"
 
+      # P2-3 (clikae#97 review round 1). The restore above puts the CALLER's
+      # PATH back verbatim — for an unattended `clikae burn` (cron, CI, a
+      # plain shell that never ran through tmux_spawn_session, which is
+      # burn's actual home turf) that PATH has no guard on it at all. Because
+      # this restore runs FIRST in the wrapper, it clobbers whatever
+      # tmux_spawn_session (below) put on the session's own PATH before the
+      # engine this wrapper goes on to exec ever sees it. Re-prepend AFTER
+      # the restore, idempotently, so the engine's PATH always has the guard
+      # first regardless of what the caller's own PATH looked like.
+      {
+        printf 'case "$PATH" in\n'
+        printf '  %q:*) : ;;\n' "$CLIKAE_LIB/shims"
+        printf '  *) PATH=%q":$PATH"; export PATH ;;\n' "$CLIKAE_LIB/shims"
+        printf 'esac\n'
+      } >> "$wrapper_script"
+
       {
         declare -f _clikae_mtime _burn_size _burn_snapshot _burn_capture_stderr
         printf 'stderr_file=%q\n' "$stderr_file"
