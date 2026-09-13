@@ -379,21 +379,26 @@ know the epoch yet) returns 0 and prints the events, the same reader a
 cockpit already blocks on for `clikae burn` — that's what a cron job or
 Stop hook calling `--once` actually has to consume, not the JSONL log.
 
-The cursor (the newest update seen, lagged 300s to absorb GitHub search's
-own indexing delay) persists at
+The cursor (the last update this poll actually processed, lagged 300s to
+absorb GitHub search's own indexing delay) persists at
 `$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small seen-file next to
 it de-dupes by (repo, issue number, updated timestamp), capped at the last
 5,000. Cold start (no cursor yet) bounds to the last 24 hours by default —
-`--since` overrides that bound — and each query paginates up to 500 rows
-(5 pages of 100) so a busy org's backlog can't outrun a poll.
+`--since` overrides that bound — and each query paginates ascending
+(oldest-unseen-first) up to 500 rows (5 pages of 100) per poll. A busy org's
+backlog therefore can't outrun this permanently: a poll cut short by the cap
+still leaves the cursor at the end of what it read, so the next poll picks
+up exactly there — the trade-off is a backlogged cold start crawls forward
+from `--since`/24h-ago instead of surfacing today's newest activity first.
 
 Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
-`issues/<n>/timeline?per_page=1&direction=desc` — to learn who actually did
-it (a reply, a review, a label, an assignee change) and whether that was
-you. Bounded to 50 such lookups per poll, spent newest-first, and stopped
-early once GitHub's own `X-RateLimit-Remaining` drops under 100. A
-candidate beyond that bound is still reported — never silently dropped —
-just as `by unknown` instead of a real login.
+`issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
+label, an assignee change) and whether that was you. Bounded to 50 such
+lookups per poll, spent oldest-unseen-first (the order the asc-paginated
+search results stream in), and stopped early once GitHub's own
+`X-RateLimit-Remaining` drops under 100. A candidate beyond that bound is
+still reported — never silently dropped — just as `by unknown` instead of a
+real login.
 
 Rate limits: normally 2 search requests per poll (more when paginating),
 plus up to 50 activity lookups against the core API's much larger budget.
@@ -401,8 +406,10 @@ On a genuine rate limit (429, or a 403 the response attributes to it, or a
 5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
 never advanced past a page that failed to read, so nothing is silently
 skipped — a poll cut short by the 5-page cap prints "truncated: continuing
-next poll" and pins the cursor to the OLDEST row it actually read (not the
-newest), so the next poll picks up exactly there. A PERMANENT failure —
+next poll" and it does: pagination runs oldest-unseen-first, so the cursor
+lands at the end of what this poll actually read, and the next poll's query
+starts exactly there. No backlog, however large, can stall this
+permanently. A PERMANENT failure —
 missing OAuth scope, SAML enforcement, a bad org name — is retried once,
 then reported and the command exits 1; it never enters back-off, since no
 amount of retrying fixes those. `--once` returns 0 only when a poll

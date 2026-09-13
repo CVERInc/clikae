@@ -88,7 +88,9 @@
 #     the one endpoint whose events carry an actor for every activity shape
 #     that bumps `updated_at` — a comment, a review, a label, an assignee
 #     change (`repos/.../comments`, round 1's endpoint, only ever covers the
-#     first of those). Bounded to 50 lookups/poll, newest-first, and stopped
+#     first of those). Bounded to 50 lookups/poll, oldest-unseen-first (P1-2,
+#     2026-09-13 fix-round-3 review — the org/mentions queries paginate
+#     ascending now, see CURSOR MONOTONICITY / BACKLOG above), and stopped
 #     early once `X-RateLimit-Remaining` drops below 100 (_wg_lookup_and_count,
 #     P2-4) — a candidate beyond the budget is NEVER dropped, it is emitted
 #     with actor "unknown" and kind's best guess instead (fail-open: a false
@@ -112,11 +114,36 @@
 # let repo-B's brand-new #12 read as a "comment" on repo-A's #12, and would
 # silently DROP repo-B's #12 outright on any updated_at collision.
 #
-# CURSOR MONOTONICITY / BACKLOG. `sort=updated -f order=desc` + pagination
-# (P2-7, 2026-09-13 fix-round-1 review) means page 1 is always the NEWEST
-# items first, so a cold start (or a poll that fell behind) surfaces today's
-# events immediately instead of crawling forward from the org's oldest
-# history — see _wg_poll_one_query.
+# CURSOR MONOTONICITY / BACKLOG. `sort=updated -f order=asc` (P1-2,
+# 2026-09-13 fix-round-3 review — round 1/2 used `order=desc`; see the 🔴
+# note right below for why that was a permanent-stall bug, not just a
+# less-fresh cold start) means page 1 is always the OLDEST unseen item —
+# everything `>= since`, working forward. A poll that finds a full page
+# keeps paginating (up to 5/poll); the cursor then advances to the LAST row
+# this poll actually processed (which, in ascending order, is simply
+# $__WG_MAX_UPDATED — see _wg_poll), whether or not this poll got truncated.
+# That is the whole fix: truncation no longer needs a special "pin to the
+# oldest row read" case, because in ascending order the last row read IS the
+# frontier to resume from — the next poll's `updated:>=` picks up exactly
+# past it. Trade-off, stated plainly: a cold start on a backlogged org now
+# crawls forward from `--since`/24h-ago instead of surfacing today's newest
+# activity on poll #1 — see _wg_poll_one_query.
+#
+# 🔴 PERMANENT STALL, FIXED (P1-2, 2026-09-13 fix-round-3 review — read
+# before reverting to `order=desc`). Round 2's fix pinned a truncated poll's
+# cursor to "the oldest row of the LAST page read" — correct arithmetic, but
+# still under `order=desc`, so every poll's page 1 was, again, the newest
+# 100 rows. A busy org with >=500 rows inside the polling window therefore
+# re-read the SAME newest 500 rows every single poll, got truncated at page
+# 5 every single time, and recomputed the exact same cursor every single
+# time — permanently stuck, forever reporting "truncated: continuing next
+# poll" while never actually continuing. Proven with an HONEST stub (filters
+# by `updated:>=` and re-paginates for real, not a canned per-call fixture):
+# 501 rows, cursor identical after 3 consecutive polls, row #501 delivered
+# zero times. `order=asc` fixes this structurally — the cursor can only ever
+# move forward, past whatever this poll actually read, so a backlog of any
+# size drains in bounded polls, never stalls, and needs no special-casing
+# for the truncated vs. non-truncated case.
 #
 # ⚠️ FORMERLY A KNOWN GAP, FIXED (P1-2, 2026-09-13 fix-round-2 review): round
 # 1 shipped `-author:<self>` in the org query as a "locked design decision",
@@ -259,13 +286,16 @@ _wg_query_mentions() {
 # external `jq` binary required, unlike lib/core/fleet_mcp.sh's merge
 # (which genuinely needs the real jq for --slurpfile).
 #
-# `order=desc` + `per_page=100` (P2-7, 2026-09-13 fix-round-1 review): the
-# old call took whatever the API's own default page (30, oldest-first via
-# `order=asc`) handed back — a busy org's backlog could outrun a single
-# poll forever. desc + 100/page + the pagination loop in _wg_poll (up to 5
-# pages = 500 rows/poll/query) means the NEWEST items are always seen
-# first, so a cold start (or a poll that falls behind) still surfaces
-# today's events on poll #1 instead of queueing behind history.
+# `order=asc` + `per_page=100` (P2-7, 2026-09-13 fix-round-1 review; order
+# flipped desc->asc in P1-2, 2026-09-13 fix-round-3 review — see CURSOR
+# MONOTONICITY / BACKLOG in the file header for why desc could stall a busy
+# org forever). The original call took whatever the API's own default page
+# (30, oldest-first) handed back — a busy org's backlog could outrun a
+# single poll. asc + 100/page + the pagination loop in _wg_poll (up to 5
+# pages = 500 rows/poll/query) means page 1 is always the OLDEST unseen
+# item, working forward — a poll that gets truncated still leaves the
+# cursor exactly at the end of what it read, so the NEXT poll continues
+# from there instead of re-reading the same top of the window forever.
 #
 # 🔴 `--method GET` IS NOT OPTIONAL. `gh api`'s own default HTTP method
 # flips from GET to POST the moment ANY `-f`/`-F` is given (its docs say so
@@ -277,7 +307,7 @@ _wg_query_mentions() {
 # a URL.
 _wg_fetch() {
   local query="$1" page="$2" errfile="$3"
-  gh api search/issues --method GET -f q="$query" -f sort=updated -f order=desc \
+  gh api search/issues --method GET -f q="$query" -f sort=updated -f order=asc \
     -f per_page=100 -f page="$page" \
     --jq '.items[]? | [(.number|tostring), .updated_at, .user.login, (.repository_url|split("/")|.[-1]), .html_url, (if .pull_request then "1" else "0" end), .title, (.comments|tostring)] | @tsv' \
     2>"$errfile"
@@ -418,9 +448,9 @@ _wg_latest_actor() {
 }
 
 # _wg_lookup_budget_ok -> 0 while this poll may still spend a lookup: fewer
-# than 50 done so far (P2-4, bounded, newest-first — candidates arrive in
-# the order the desc-sorted search results streamed them, so the budget is
-# naturally spent on the newest activity first), AND the last observed
+# than 50 done so far (P2-4, bounded — candidates arrive in the order the
+# asc-sorted search results streamed them, i.e. oldest-unseen-first as of
+# P1-2, 2026-09-13 fix-round-3 review), AND the last observed
 # X-RateLimit-Remaining (if any) is not already under 100.
 _wg_lookup_budget_ok() {
   [ "${__WG_LOOKUPS_DONE:-0}" -lt 50 ] || return 1
@@ -657,12 +687,13 @@ _wg_events_rotate() {
 # --- one poll ---------------------------------------------------------------
 
 # _wg_poll_one_query <kind_query> <org> <since> <seen_file> <events_file> ->
-# paginate ONE query (org or mentions) up to 5 pages of 100 (P2-7), stopping
-# early on a short page (the normal case: fewer than per_page rows means
-# there is no next page) or once a page's oldest row is already <= <since>
-# (defensive — the query itself already filters `updated:>=since`, so every
-# row returned should already satisfy this; kept as the brief's own stated
-# stop condition rather than trusting the filter silently). On a failed
+# paginate ONE query (org or mentions) up to 5 pages of 100 (P2-7), ASCENDING
+# (P1-2, 2026-09-13 fix-round-3 review — see CURSOR MONOTONICITY / BACKLOG in
+# the file header), stopping on a short page — fewer than per_page rows means
+# we've reached the newest matching row, i.e. "now", and there is no next
+# page (the query itself already filters `updated:>=since`, so a short page
+# is a reliable end-of-results signal in ascending order; no separate
+# lower-bound check is needed the way desc order needed one). On a failed
 # page (P2-5/P2-6): sets $__WG_OK=0 always; a rate-limit-classified failure
 # also sets $__WG_BACKOFF=1, a permanent one (missing scope, SAML, bad org
 # — see _wg_classify_error) sets $__WG_PERMANENT=1/$__WG_PERMANENT_REASON
@@ -671,9 +702,20 @@ _wg_events_rotate() {
 # $__WG_MAX_UPDATED via _wg_process, so a failure on page 3 still leaves the
 # cursor able to advance to what pages 1-2 saw (never past a page that
 # failed to read).
+#
+# 🔴 Truncation (page 6+ exists) sets $__WG_TRUNCATED=1 for the WARN/summary
+# wording ONLY — it does NOT need a special cursor formula any more. In
+# ascending order, $__WG_MAX_UPDATED (folded in by _wg_process from every
+# row this poll actually read, truncated or not) already IS "the last row
+# this poll processed" — see _wg_poll's cursor computation, which now uses
+# the SAME formula in both cases. That symmetry is the fix: round 2 needed
+# an $__WG_TRUNCATED_OLDEST override specifically because desc order made
+# $__WG_MAX_UPDATED equal to page 1's NEWEST row, which was wrong to resume
+# from; asc order never has that problem, so the override is gone, not
+# renamed.
 _wg_poll_one_query() {
   local kind_query="$1" org="$2" since="$3" seen_file="$4" events_file="$5"
-  local q page=1 tsv page_n oldest
+  local q page=1 tsv page_n
   if [ "$kind_query" = "org" ]; then q="$(_wg_query_org "$org" "$since")"
   else                               q="$(_wg_query_mentions "$org" "$since")"
   fi
@@ -714,31 +756,15 @@ _wg_poll_one_query() {
     _wg_process "$kind_query" "$tsv" "$org" "$seen_file" "$events_file"
 
     page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
-    [ "$page_n" -gt 0 ] || return 0        # empty page: nothing more to read
-    [ "$page_n" -ge 100 ] || return 0      # short page: that WAS the last page
-
-    oldest="$(printf '%s\n' "$tsv" | tail -n1 | cut -f2)"
-    local LC_ALL=C   # fixed-width ISO8601 sorts lexicographically; pin the
-                      # collation so this never depends on the caller's locale
-    if [ -n "$oldest" ] && [ -n "$since" ] && [[ "$oldest" < "$since" ]]; then
-      return 0   # already reached (or passed) the requested lower bound
-    fi
+    [ "$page_n" -ge 100 ] || return 0      # empty or short page: caught up to now
 
     page=$((page + 1))
     if [ "$page" -gt 5 ]; then
       log_warn "github:$org — $kind_query query has +more, will catch up next poll."
-      # P1-1 (2026-09-13 fix-round-2 review): the cursor must never advance
-      # past the OLDEST row this poll actually read — $oldest, just above,
-      # is exactly that (desc order: every page is older than the last, so
-      # the last page's own oldest row is the poll-wide oldest read so far).
-      # Advancing to the max (the old behaviour) made everything past page 5
-      # PERMANENTLY unreachable: the next poll's `updated:>=` started at the
-      # NEWEST row seen, not the oldest, so page 6+ fell below the window
-      # forever, with no error and no WARN — see the review's E4 repro.
+      # See the 🔴 note above the function: no special cursor handling
+      # needed here any more — $__WG_MAX_UPDATED already reflects the last
+      # row this poll read, and _wg_poll's cursor formula uses it either way.
       __WG_TRUNCATED=1
-      if [ -z "$__WG_TRUNCATED_OLDEST" ] || [[ "$oldest" < "$__WG_TRUNCATED_OLDEST" ]]; then
-        __WG_TRUNCATED_OLDEST="$oldest"
-      fi
       return 0
     fi
   done
@@ -764,10 +790,10 @@ _wg_poll() {
   __WG_SUMMARY_LINES=""
   __WG_EVENT_JSON_LINES=""
   __WG_TRUNCATED=0
-  __WG_TRUNCATED_OLDEST=""
   # P2-4: the per-poll activity-lookup budget (_wg_lookup_and_count) — shared
   # across BOTH queries below, spent in the order results streamed in
-  # (newest-first, per the search API's own desc sort).
+  # (oldest-first, per the search API's own asc sort — P1-2, 2026-09-13
+  # fix-round-3 review).
   __WG_LOOKUPS_DONE=0
   __WG_LOOKUPS_SKIPPED=0
   __WG_LOOKUP_RATE_REMAINING=""
@@ -834,17 +860,23 @@ _wg_poll() {
   # Never advance past an event a failed page might have contained. The new
   # cursor lags 300s behind the max updated_at actually seen this poll —
   # `>=` in the query plus the seen-file dedup absorb the resulting overlap.
+  #
+  # P1-2 (2026-09-13 fix-round-3 review): a SINGLE formula now, truncated or
+  # not — $__WG_MAX_UPDATED is the last row this poll actually processed
+  # EITHER WAY, because pagination runs ascending (see CURSOR MONOTONICITY /
+  # BACKLOG in the file header). Round 2 needed a separate
+  # $__WG_TRUNCATED_OLDEST override here specifically because desc order
+  # made $__WG_MAX_UPDATED equal to page 1's newest row on a truncated poll —
+  # wrong to resume from, and the actual cause of the permanent stall this
+  # round fixes. That override is gone, not renamed.
   if [ "$__WG_OK" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
-    local max_epoch new_cursor base_updated="$__WG_MAX_UPDATED"
-    # P1-1: truncation overrides "the max seen" with "the oldest actually
-    # read" — see the note at _wg_poll_one_query's `page -gt 5` branch.
-    [ "$__WG_TRUNCATED" -eq 1 ] && [ -n "$__WG_TRUNCATED_OLDEST" ] && base_updated="$__WG_TRUNCATED_OLDEST"
-    max_epoch="$(_limit_iso_epoch "$base_updated" "")"
+    local max_epoch new_cursor
+    max_epoch="$(_limit_iso_epoch "$__WG_MAX_UPDATED" "")"
     new_cursor=""
     if [ -n "$max_epoch" ]; then
       new_cursor="$(_wg_iso_from_epoch "$((max_epoch - 300))")"
     fi
-    [ -n "$new_cursor" ] || new_cursor="$base_updated"   # unparseable: no lag, still forward progress
+    [ -n "$new_cursor" ] || new_cursor="$__WG_MAX_UPDATED"   # unparseable: no lag, still forward progress
     printf '%s\n' "$new_cursor" > "${cursor_file}.tmp" 2>/dev/null && mv -f "${cursor_file}.tmp" "$cursor_file" 2>/dev/null || true
   fi
 
@@ -894,17 +926,19 @@ de-dupes (repo, issue number, updated_at) triples.
                      2026-09-01T00:00:00Z), used ONLY when there is no
                      persisted cursor yet. Default: 24 hours ago.
 
-Each query paginates up to 5 pages of 100 (order=desc, newest first), so a
-cold start or a poll that fell behind still surfaces today's events first
-instead of crawling forward from the org's oldest history. A page beyond
-that cap prints "+more, will catch up next poll" rather than blocking.
+Each query paginates up to 5 pages of 100 (order=asc, oldest unseen first),
+so a poll that falls behind a busy org always makes forward progress:
+a page cut short by the cap still leaves the cursor at the end of what it
+actually read, so the NEXT poll picks up exactly there — no row is ever
+permanently unreachable. A page beyond that cap prints "+more, will catch
+up next poll" rather than blocking.
 
 Every issue/PR update ALREADY SEEN before (a reply, review, label, or
 assignee change) costs one more request to learn who actually did it and
-whether it was you — bounded to 50 such lookups per poll, newest-first, and
-stopped early if GitHub's own rate limit drops under 100 remaining. Past
-that bound, the event is still reported (never silently dropped), just with
-"by unknown" instead of a real login.
+whether it was you — bounded to 50 such lookups per poll, oldest-unseen-
+first, and stopped early if GitHub's own rate limit drops under 100
+remaining. Past that bound, the event is still reported (never silently
+dropped), just with "by unknown" instead of a real login.
 
 Rate limits: normally 2 search requests per poll (up to 10 when paginating
 both queries to the cap; the search API allows 30/min authenticated), plus
@@ -916,8 +950,10 @@ the cursor is never advanced past a page that failed to read, and is kept
 300s behind the newest update actually seen (GitHub's search index itself
 lags real writes by some minutes) — a small seen-file de-dupes the
 resulting overlap between polls. A poll cut short by the 5-page cap prints
-"truncated: continuing next poll" — true now: the cursor pins to the oldest
-row actually read, not the newest, so the next poll picks up exactly there.
+"truncated: continuing next poll" — true now: pagination runs oldest-unseen
+first, so the cursor lands at the end of what this poll actually read, and
+the next poll's query starts exactly there. No backlog, however large, can
+stall this permanently — it drains in bounded, forward-only polls.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this

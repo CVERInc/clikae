@@ -166,6 +166,113 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${8:-0}"
 }
 
+# --- an HONEST server (P1-2, 2026-09-13 fix-round-3 review) --------------
+#
+# Every other stub in this file answers "the Nth call gets canned response
+# N" — which is exactly what let round 2's own truncation regression test
+# pass while the real bug (permanent stall under desc pagination) sat right
+# next to it: that test fed page 6 back as a hand-picked SECOND-POLL fixture,
+# not as the honest continuation a real re-paginating query would produce.
+# This stub is different in kind: it holds one corpus of rows and actually
+# FILTERS by the `updated:>=` clause in the query string and ORDERS by
+# `order=asc|desc`, then slices out whichever `page` was asked for — so a
+# multi-poll test against it proves the real query behaviour, not just the
+# cursor arithmetic in isolation. See _gh_stub_install_honest_corpus below.
+_gh_stub_install_honest_corpus() {
+  GH_STUB_DIR="$TEST_HOME/.ghstub"
+  mkdir -p "$GH_STUB_DIR"
+  export GH_STUB_DIR
+  cat <<'STUB' > "$TEST_HOME/.testbin/gh"
+#!/usr/bin/env bash
+set -u
+dir="${GH_STUB_DIR:?}"
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  rc=0
+  [ -f "$dir/auth_rc" ] && rc="$(cat "$dir/auth_rc")"
+  exit "$rc"
+fi
+
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+  cat "$dir/login" 2>/dev/null
+  exit 0
+fi
+
+if [ "${1:-}" = "repo" ] && [ "${2:-}" = "view" ]; then
+  [ -f "$dir/repo_owner" ] && cat "$dir/repo_owner"
+  exit 0
+fi
+
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "search/issues" ]; then
+  shift 2
+  q="" page="" order="asc" per_page=100
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f) shift
+          case "${1:-}" in
+            q=*) q="${1#q=}" ;;
+            page=*) page="${1#page=}" ;;
+            order=*) order="${1#order=}" ;;
+            per_page=*) per_page="${1#per_page=}" ;;
+          esac
+          ;;
+    esac
+    shift
+  done
+  queue="org"
+  case "$q" in *mentions:*) queue="mentions" ;; esac
+  cf="$dir/$queue.calls"
+  n=0; [ -f "$cf" ] && n="$(cat "$cf")"; n=$((n + 1)); printf '%s' "$n" > "$cf"
+  printf '%s\n' "$q" > "$dir/$queue.$n.sent_query"
+  printf '%s\n' "$page" > "$dir/$queue.$n.sent_page"
+  # `updated:>=<ts>` -> the ts (a fixed-width ISO8601 token, no spaces).
+  since="$(printf '%s' "$q" | grep -oE 'updated:>=[^ ]+' | head -n1 | cut -d= -f2)"
+  corpus="$dir/honest_corpus.tsv"
+  [ -f "$corpus" ] || exit 0
+  sortflag=""
+  [ "$order" = "desc" ] && sortflag="-r"
+  filtered="$(awk -F'\t' -v s="$since" '$2>=s' "$corpus" | sort -t "$(printf '\t')" -k2,2 $sortflag)"
+  start=$(( (page - 1) * per_page + 1 ))
+  end=$(( page * per_page ))
+  printf '%s\n' "$filtered" | sed -n "${start},${end}p"
+  exit 0
+fi
+
+case "${1:-}/${2:-}" in
+  api/repos/*/issues/*/timeline)
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: 5000\r\n'
+    printf '\r\n'
+    printf '[]\n'
+    exit 0
+    ;;
+esac
+
+exit 1
+STUB
+  chmod +x "$TEST_HOME/.testbin/gh"
+  printf '0\n' > "$GH_STUB_DIR/auth_rc"
+  printf 'me\n' > "$GH_STUB_DIR/login"
+}
+
+# _honest_corpus_write <n> <start_iso> <step_s> -> write $n rows to
+# honest_corpus.tsv, numbers 2000+1..2000+n, updated_at = start_iso +
+# i*step_s (ascending), repo "reef", login "alice", title "issue <i>".
+_honest_corpus_write() {
+  local n="$1" start_iso="$2" step="$3" base
+  base="$(date -u -d "$start_iso" +%s 2>/dev/null \
+    || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$start_iso" +%s)"
+  local i ts
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  for i in $(seq 1 "$n"); do
+    ts="$(date -u -d "@$((base + i * step))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -r "$((base + i * step))" +%Y-%m-%dT%H:%M:%SZ)"
+    _row "$((2000 + i))" "$ts" alice reef "https://x/$((2000 + i))" 0 "issue $i" \
+      >> "$GH_STUB_DIR/honest_corpus.tsv"
+    printf '\n' >> "$GH_STUB_DIR/honest_corpus.tsv"
+  done
+}
+
 @test "watch github: gh auth status failing exits 1 with a clear line" {
   _gh_stub_install
   printf '1\n' > "$GH_STUB_DIR/auth_rc"
@@ -765,57 +872,63 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [ "$(wc -l < "$events")" -eq 100 ]
 }
 
-# --- P1-1 (2026-09-13 fix-round-2 review): pagination truncation must pin
-# the cursor to the OLDEST row actually read, never the max seen — the old
-# code let the cursor race straight to page 1's newest row, making every
-# row past the 5-page cap permanently unreachable with no error and no WARN.
+# --- P1-2 (2026-09-13 fix-round-3 review): ascending pagination can never
+# permanently stall — the round-2 fix ("pin the cursor to the oldest row
+# READ") was correct arithmetic under `order=desc`, but desc order itself
+# meant EVERY poll's page 1 was the same newest 100 rows: a busy org with
+# >=500 rows in the window got truncated at page 5, computed the SAME
+# cursor, every single poll, forever. Proven here with an HONEST stub (see
+# _gh_stub_install_honest_corpus above) that actually filters/re-paginates,
+# not a canned per-call fixture — 501 rows, three consecutive `--once`
+# polls, every row delivered exactly once, and the cursor genuinely moves
+# forward each time (not stuck).
 
-_wgt_epoch_iso() { # <epoch> -> ISO8601 Z, GNU first then BSD
-  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
-}
-
-@test "watch github --once: pagination truncation pins the cursor to the oldest row READ, not the max (P1-1)" {
-  _gh_stub_install
+@test "watch github --once: ascending pagination can never stall — 501 rows delivered exactly once over three honest polls (P1-2)" {
+  _gh_stub_install_honest_corpus
   local state_dir="$CLIKAE_HOME/state/watch-github"
   mkdir -p "$state_dir"
-  printf '2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.cursor"
+  # Cursor set just before row 1 (10s apart), so poll 1's query is `>=` a
+  # value every one of the 501 rows already satisfies.
+  local start_iso='2026-09-01T00:00:00Z'
+  _honest_corpus_write 501 "$start_iso" 10
+  printf '%s\n' "$start_iso" > "$state_dir/CVERInc.cursor"
 
-  local base
-  base="$(date -u -d '2026-09-07T05:00:00Z' +%s 2>/dev/null \
-    || date -u -jf '%Y-%m-%dT%H:%M:%SZ' '2026-09-07T05:00:00Z' +%s)"
-
-  local page i idx ts
-  for page in 1 2 3 4 5; do
-    local -a rows=()
-    for i in $(seq 0 99); do
-      idx=$(( (page - 1) * 100 + i ))
-      ts="$(_wgt_epoch_iso "$((base - idx))")"
-      rows+=("$(_row "$((900 + idx))" "$ts" alice reef "https://x/$((900 + idx))" 0 "issue $idx")")
-    done
-    _gh_stub_page org "$page" "${rows[@]}"
-  done
-
+  # --- poll 1: 5 full pages (500 rows), truncated, cursor moves forward
+  # (NOT stuck at page 1's window — that's the whole bug this replaces).
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"+more, will catch up next poll"* ]] || false
   [[ "$output" == *"500 new event(s) this poll. (truncated: continuing next poll)"* ]] || false
-  # Only 5 calls made — page 6 was never fetched (the truncation itself).
-  [ "$(cat "$GH_STUB_DIR/org.calls")" = "5" ]
-  # Page 5's own oldest row is idx 499 (100 rows/page, page 5 = idx 400..499)
-  # — the cursor must land on THAT row minus the 300s lag, not on idx 0's
-  # (page 1's newest, the old buggy formula).
-  local expect_cursor; expect_cursor="$(_wgt_epoch_iso "$((base - 499 - 300))")"
-  [ "$(cat "$state_dir/CVERInc.cursor")" = "$expect_cursor" ]
+  [[ "$output" == *"github CVERInc/reef#2001 opened by alice: issue 1"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#2500 opened by alice: issue 500"* ]] || false
+  [[ "$output" != *"#2501"* ]] || false
+  local cursor1; cursor1="$(cat "$state_dir/CVERInc.cursor")"
+  [ -n "$cursor1" ]
+  [ "$cursor1" != "$start_iso" ]   # forward progress — round-2's bug left this stuck
 
-  # poll 2: the row that lived on the never-fetched page 6 (idx 500 — older
-  # than page 5's oldest, so under the OLD (max-based) cursor it would sit
-  # below the window forever) must now be reachable.
-  local six_ts; six_ts="$(_wgt_epoch_iso "$((base - 500))")"
-  _gh_stub_page org 6 "$(_row 1400 "$six_ts" bob reef "https://x/1400" 0 "page six issue")"
+  # --- poll 2: cursor moved past row 501's window, so this poll actually
+  # delivers the one row that lived on the never-fetched page 6.
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
-  [[ "$output" == *"github CVERInc/reef#1400 opened by bob: page six issue"* ]] || false
-  [[ "$(cat "$GH_STUB_DIR/org.6.sent_query")" == *"updated:>=${expect_cursor}"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#2501 opened by alice: issue 501"* ]] || false
+  local cursor2; cursor2="$(cat "$state_dir/CVERInc.cursor")"
+  [ "$cursor2" != "$cursor1" ]     # still moving forward, not re-reading the same window
+  [[ "$output" != *"+more, will catch up next poll"* ]] || false   # caught up — no more truncation
+
+  # --- poll 3: fully caught up now — 0 new events, no truncation, cursor
+  # stable (the corpus has nothing newer to deliver).
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  [[ "$output" != *"+more, will catch up next poll"* ]] || false
+
+  # The whole point: all 501 rows reached the durable log exactly once —
+  # round 2's own bug delivered 500 and then NEVER the 501st, on any poll.
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 501 ]
+  [ "$(grep -c '"number":2001' "$events")" -eq 1 ]
+  [ "$(grep -c '"number":2501' "$events")" -eq 1 ]
+  [ "$(grep -oE '"number":[0-9]+' "$events" | sort -u | wc -l)" -eq 501 ]
 }
 
 # --- P2-3 (2026-09-13 fix-round-2 review): end to end, `clikae wait --latest

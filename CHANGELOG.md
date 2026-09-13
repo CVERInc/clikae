@@ -76,13 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needed — see below) resolves and blocks on it exactly like a burn.
   Self-exclusion is per EVENT ACTOR, checked against `issues/<n>/timeline`
   for any issue/PR already seen before (bounded to 50 such lookups/poll,
-  newest-first, stopped early under GitHub's own rate limit; a candidate
-  past that bound is still reported, as `by unknown`, never dropped) — never
-  against who opened the issue, so a collaborator's reply on your own issue
-  reaches you. A cursor + capped seen-file de-dupe by (repo, issue number,
-  updated timestamp); a poll cut short by the 5-page/query cap pins the
-  cursor to the OLDEST row it actually read, not the newest, and says so
-  ("truncated: continuing next poll"). On a genuine rate limit (429, a 403
+  oldest-unseen-first, stopped early under GitHub's own rate limit; a
+  candidate past that bound is still reported, as `by unknown`, never
+  dropped) — never against who opened the issue, so a collaborator's reply
+  on your own issue reaches you. Each query paginates ASCENDING (oldest
+  unseen first) — a cursor + capped seen-file de-dupe by (repo, issue
+  number, updated timestamp); a poll cut short by the 5-page/query cap pins
+  the cursor to the last row it actually read, and the NEXT poll continues
+  exactly there, so a backlog of any size drains in bounded polls and can
+  never stall permanently ("truncated: continuing next poll" — and it does).
+  On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
   permanent — retried once, then reported, never backed off. No daemon, no
