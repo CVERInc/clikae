@@ -1308,12 +1308,16 @@ _limit_codex_window_label() {
 }
 
 # _limit_codex_rate_limits <config_dir> -> "<p_used>\037<p_window_min>\037
-# <p_resets_at>\037<s_used>\037<s_window_min>\037<s_resets_at>", from the
-# NEWEST `token_count` event (by its own timestamp) across this tank's
-# rollouts that carries a non-null primary or secondary — or 1 + nothing if
-# none ever did. Every field here is the VENDOR's own number (percent and an
-# ABSOLUTE epoch the server computed), never something clikae derives — same
-# "relay, don't guess" rule as every other reset in this file.
+# <p_resets_at>\037<s_used>\037<s_window_min>\037<s_resets_at>\037<event_ts>",
+# from the NEWEST `token_count` event (by its own timestamp) across this
+# tank's rollouts that carries a non-null primary or secondary — or 1 +
+# nothing if none ever did. Every field but the last is the VENDOR's own
+# number (percent and an ABSOLUTE epoch the server computed), never
+# something clikae derives — same "relay, don't guess" rule as every other
+# reset in this file. <event_ts> (P2-4, round-1 review) is that winning
+# event's OWN timestamp — when codex itself wrote this reading, not when
+# clikae happened to read it — so a caller (adapter_usage) can cache it
+# honestly instead of stamping a week-old rollout "just now".
 #
 # P1-2 (2026-09-12 round-1 review): this used to read `transcript_tail`'s
 # fixed 512 KiB window — fine for a small rollout, but a codex session
@@ -1401,8 +1405,7 @@ EOF
   IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
 $out
 EOF
-  : "$ts"
-  printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr"
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$ts"
 }
 
 # limit_codex_status_note <p_used> <p_window_min> <p_resets_at> <s_used>
@@ -1487,9 +1490,13 @@ _limit_codex_status_render() {
 # per burn, not per redraw, so the cost is a non-issue there. The redraw path
 # (home.sh) calls limit_codex_status_cached instead — see its header.
 limit_codex_status() {
-  local dir="$1" now="$2" fields pu pw pr su sw sr
+  local dir="$1" now="$2" fields pu pw pr su sw sr ts
   fields="$(_limit_codex_rate_limits "$dir" 2>/dev/null)" || return 1
-  IFS=$'\037' read -r pu pw pr su sw sr <<EOF
+  # P2-4 (round-1 review): _limit_codex_rate_limits now returns a 7th field
+  # (the winning event's own timestamp, for adapter_usage's cached_at) — name
+  # it here too (unused) so plain `read`'s "extra fields glom onto the last
+  # variable" rule doesn't silently append it onto $sr.
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
 $fields
 EOF
   _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"

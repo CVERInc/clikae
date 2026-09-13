@@ -168,7 +168,7 @@ STUB
   [ "$status" -eq 0 ]
 }
 
-@test "network failure is unknown; Codex status windows use ISO resets" {
+@test "network failure is unknown; Codex status windows are honestly source:transcript" {
   usage_fixture
   printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 7\n' > "$TEST_HOME/.testbin/curl"
   run clikae usage claude work --json
@@ -179,5 +179,14 @@ STUB
   printf '%s\n' '{"timestamp":"2026-09-10T09:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":10,"window_minutes":300,"resets_at":4102444800},"secondary":{"used_percent":96,"window_minutes":10080,"resets_at":4103049600}}}}' > "$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/10/rollout-usage.jsonl"
   run clikae usage codex work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.source == "vendor" and .window_pct == 10 and .weekly_pct == 96 and .window_resets_at == "2100-01-01T00:00:00Z"'
+  # P2-4 (round-1 review): no `codex` process ever runs for this — it's read
+  # straight from the rollout transcript above, so source is honestly
+  # "transcript", never "vendor" (#72's own acceptance criteria named
+  # "transcript" as a real value; nothing in the repo ever produced it
+  # before this fix).
+  echo "$output" | jq -e '.source == "transcript" and .window_pct == 10 and .weekly_pct == 96 and .window_resets_at == "2100-01-01T00:00:00Z"'
+  # cached_at is the rollout event's OWN timestamp (2026-09-10T09:00:00Z),
+  # not "now" — a week-old-in-test-time reading must not read as freshly
+  # polled. epoch("2026-09-10T09:00:00Z") = 1789030800.
+  jq -e '.cached_at == 1789030800' "$CLIKAE_HOME/state/usage/codex/work.json"
 }

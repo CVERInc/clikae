@@ -23,16 +23,27 @@ usage_read() (
     fi
   fi
   [ -n "$reading" ] || reading="$(usage_unknown)"
+  # P2-4 (round-1 review): a reading can be honest evidence without a LIVE
+  # vendor call behind it (codex's is derived from a rollout transcript it
+  # already wrote) — pull out the event's own timestamp BEFORE whitelisting
+  # discards it, so the cache can be stamped with when the reading actually
+  # happened, not "now". Only trusted for source:"transcript"; a vendor
+  # reading's cached_at is always the fetch time (the two coincide there).
+  local event_epoch=""
+  event_epoch="$(printf '%s' "$reading" | jq -r '
+    if .source == "transcript" and (.event_epoch|type) == "number"
+    then .event_epoch else empty end' 2>/dev/null)"
   # Whitelist fields: never cache a vendor error body or credentials.
   reading="$(printf '%s' "$reading" | jq -ce '
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})$") then . else null end;
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
-     source:(if .source == "vendor" then "vendor" else "unknown" end)}')" || reading="$(usage_unknown)"
+     source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)}')" || { reading="$(usage_unknown)"; event_epoch=""; }
   umask 077
   if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
-    if printf '%s' "$reading" | jq -c --argjson now "$now" '. + {cached_at:$now}' > "$tmp"; then
+    if printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" \
+         '. + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end)}' > "$tmp"; then
       mv -f "$tmp" "$cache"
     else rm -f "$tmp"; fi
   fi
@@ -53,7 +64,7 @@ usage_cache_peek() {
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   jq -er '
-    select(.source == "vendor") |
+    select(.source == "vendor" or .source == "transcript") |
     select(.window_pct != null and .weekly_pct != null) |
     [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
 }
@@ -83,7 +94,7 @@ usage_cached_fields() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson ttl "$ttl" '
     def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
-    select(.source == "vendor" and .cached_at <= $now and ($now-.cached_at < $ttl)) |
+    select((.source == "vendor" or .source == "transcript") and .cached_at <= $now and ($now-.cached_at < $ttl)) |
     select(.window_pct != null and .weekly_pct != null) |
     select(all([.window_resets_at,.weekly_resets_at][];
       . == null or ((try (norm_stamp | fromdateiso8601) catch ($now+1)) > $now))) |

@@ -244,31 +244,58 @@ evidence retains the existing TTL behavior.
 Run `clikae usage [engine] [tank] [--json]` to read usage. JSON output is one
 object per tank: `engine`, `tank`, `window_pct`, `weekly_pct`,
 `window_resets_at`, `weekly_resets_at`, and `source`. Percentages are used
-quota (0–100); unavailable fields are null and unavailable readings have
-`source: "unknown"`. The optional adapter hook is `adapter_usage <config-dir>`.
-Claude reads OAuth usage; Codex uses the same local status evidence as
-`limit_codex_status`; Antigravity currently returns unknown. Parsing requires
-jq; without it readings are unknown.
+quota (0–100); unavailable fields are null. `source` is `"vendor"` (a live
+call actually answered), `"transcript"` (derived from local evidence the
+engine already wrote — currently Codex's `rate_limits`, scanned from
+rollouts modified in the last 7 days, the same `-mmin -10080` window
+`limit_codex_status` uses), or `"unknown"` (no usable reading). The optional
+adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
+usage endpoint; Codex never runs a `codex` process for this — it reads the
+same rollout transcript evidence `limit_codex_status` does, so its source is
+`"transcript"` and its `cached_at` is that reading's own newest event
+timestamp, not the time it was read (round-1 review, P2-4: a week-old
+rollout must not be stamped "just now"); Antigravity currently returns
+unknown. Parsing requires jq; without it readings are unknown.
 
 Readings live at `$CLIKAE_HOME/state/usage/<engine>/<tank>.json`, including
 `cached_at` epoch seconds. TTL defaults to 120 seconds; `CLIKAE_USAGE_TTL`
 overrides it and `--fresh` bypasses it. Errors are cached too. Writes are
-atomic. The board only reads this cache, so redraws never make network calls.
-Run usage to populate or refresh it; burn also refreshes eligible candidates.
-Concurrent cache misses can each fetch; there is no background refresh.
+atomic. The board only reads this cache — `usage_cached_fields` reads the
+cache file directly and never forks the adapter or `date` more than once per
+redraw (round-1 review, P2-1) — so redraws never make network calls or pay a
+vendor-cache read proportional to how many rows a tank appears in.
 
-For a current vendor reading, the higher used percentage determines the dot:
-90% or more red, 60% or more yellow, otherwise green. The note shows both
+`clikae usage [engine] [tank] [--fresh]` (a bare `clikae usage --fresh`
+covers every tank) is the *only* thing that calls the vendor. Burn never
+does (round-1 review, P2-2): `_burn_next_same_engine`'s candidate ranking
+reads whatever is already on disk (`usage_cache_peek` — stale allowed,
+missing = unranked) and never triggers a fetch, so a cold burn never pays a
+serialized vendor round-trip (`--max-time 8` each) just to launch.
+
+For a current reading, the higher used percentage determines the dot: 90%
+or more red, 60% or more yellow, otherwise green. The note shows both
 window and weekly percentages. Missing, expired, or unknown readings fall
 through to the existing transcript logic, including `reset passed · unverified`.
-Burn ranks eligible same-engine reserves by lowest maximum utilization,
-retaining live-session, busy-burn, solo, and dried-account exclusions. Initial
-selection changes only with known readings for both tanks and rerouting enabled.
-Unknown usage keeps the existing transcript-based launch and reroute behavior.
 
-Claude calls the OAuth usage endpoint only when usage is requested or burn
-checks candidates. It reads the tank credential file or tank-specific macOS
-Keychain service. The bearer token is passed solely through curl configuration
-on stdin, with shell tracing disabled, never through argv or an exported
-variable. Curl defaults are disabled and timeouts bound failures; HTTP errors
-and network failures become unknown without printing response bodies.
+The tank a caller names is always the one burn launches — there is no
+pre-launch substitution (round-1 review, P1-2/P1-3/P1-4). Headroom
+preference only governs which tank a *dry* burn reroutes to *next*:
+eligible same-engine reserves are ranked by lowest maximum utilization,
+with unknown readings ranked ahead of any known reading ≥90% (P2-9 — a tank
+we know nothing about should not lose to one the vendor just called nearly
+exhausted), tanks sharing a vendor account ranked and picked as one — never
+as two consecutive hops of the same reroute (P2-6) — and the existing
+live-session, busy-burn, solo, and dried-account exclusions retained.
+`--to` always wins outright over this ordering, and every hop it produces —
+including the very first, off a tank that just went dry — is recorded in
+`rerouted_from`. Unknown usage keeps the existing transcript-based launch
+and reroute behavior otherwise.
+
+Claude reads the tank credential file or tank-specific macOS Keychain
+service, guarded by `command -v security` and a bounded wait when
+`timeout`/`gtimeout` is available (mirroring the credential-migration
+hook's own guard; round-1 review, P2-7). The bearer token is passed solely
+through curl configuration on stdin, with shell tracing disabled, never
+through argv or an exported variable. Curl defaults are disabled and
+timeouts bound failures; HTTP errors and network failures become unknown
+without printing response bodies.
