@@ -2,6 +2,7 @@
 # Translate a click-pair swipe. Args: release row, pane id, pane_in_mode.
 # Invoked by tmux run-shell; no clikae state or engine initialization needed.
 y2=${1:-}; TS_PANE_ID=${2:-}; inmode=${3:-0}
+case "$inmode" in ''|*[!0-9]*) inmode=0 ;; esac
 # TS_PANE_ID is #{pane_id} from the binding (`%3`): an ID, already exact. tmux
 # 3.4 rejects `=%3` (can't find pane), so the exact-target lint names this
 # variable as an exception instead of the `=` prefix it wants for names.
@@ -26,10 +27,16 @@ if [ "$distance" -ge 2 ]; then
   multiplier=$((10#$multiplier))
   [ "$multiplier" -gt 0 ] || multiplier=2
   lines=$((distance * multiplier))
-  [ "$inmode" = 1 ] || tmux copy-mode -t "$TS_PANE_ID" || exit 0
+  # #{pane_in_mode} is a COUNT of stacked mode layers, not a boolean: a
+  # run-shell that produces output stacks its own view-mode over an existing
+  # copy-mode, so a pane already in copy-mode can read inmode=2 (P2-2, 2026-09
+  # R1 review, measured in choose-tree). `= 1` was false for that count and
+  # re-entered copy-mode on top of itself; `-gt 0` treats any nonzero depth as
+  # "already in a mode".
+  [ "$inmode" -gt 0 ] || tmux copy-mode -t "$TS_PANE_ID" || exit 0
   direction=scroll-down
   [ "$dy" -le 0 ] || direction=scroll-up
   tmux send-keys -t "$TS_PANE_ID" -X -N "$lines" "$direction"
-elif [ "$inmode" = 1 ]; then
+elif [ "$inmode" -gt 0 ]; then
   tmux send-keys -t "$TS_PANE_ID" -X cancel
 fi

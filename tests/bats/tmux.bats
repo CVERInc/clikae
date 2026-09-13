@@ -81,6 +81,22 @@ release() {
   [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
 }
 
+@test "touch: pane_in_mode is a COUNT — 2 (stacked view-mode) is still already-in-mode" {
+  # P2-2: `= 1` was false for a real, measured count of 2 (a run-shell that
+  # prints output stacks its own view-mode over an existing copy-mode) and
+  # re-entered copy-mode on top of itself; a tap fell through and did nothing.
+  release 16 %7 2
+  [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
+  : > "$TOUCH_ACTIONS"
+  release 20 %7 2
+  [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><cancel>' ]
+}
+
+@test "touch: a stray, non-numeric pane_in_mode does not crash the comparison" {
+  release 16 %7 garbage
+  [ "$(cat "$TOUCH_ACTIONS")" = $'<copy-mode><-t><%7>\n<send-keys><-t><%7><-X><-N><8><scroll-up>' ]
+}
+
 @test "touch: tap in copy-mode cancels including one-row movement" {
   release 20 %7 1
   [ "$(cat "$TOUCH_ACTIONS")" = '<send-keys><-t><%7><-X><cancel>' ]
