@@ -666,6 +666,7 @@ de-dupes (repo, issue number, updated_at) triples.
   --org <org>       GitHub org to watch. Default: inferred from this
                      directory's GitHub remote (`gh repo view`).
   --interval <dur>  Poll interval: bare seconds, or Ns/Nm/Nh/Nd. Default 10m.
+                     Must be > 0; 0, negative, or unparseable exits 2.
   --once            Poll exactly once — for cron or a Stop hook, not a live
                      pane. No daemon, no tmux window of its own.
   --since <ts>      Cold-start lower bound (ISO8601, e.g.
@@ -680,11 +681,12 @@ that cap prints "+more, will catch up next poll" rather than blocking.
 Rate limits: normally 2 requests per poll (up to 10 when paginating both
 queries to the cap; the search API allows 30/min authenticated). On a
 genuine rate limit (429, or a 403 the response itself attributes to the
-rate limit, or a 5xx) the interval backs off ×2 up to 1h and one line is
-printed; the cursor is never advanced past a page that failed to read, and
-is kept 300s behind the newest update actually seen (GitHub's search index
-itself lags real writes by some minutes) — a small seen-file de-dupes the
-resulting overlap between polls.
+rate limit, or a 5xx) the interval backs off ×2 up to 1h — from a floor of
+60s, regardless of --interval — and one line is printed; the cursor is
+never advanced past a page that failed to read, and is kept 300s behind
+the newest update actually seen (GitHub's search index itself lags real
+writes by some minutes) — a small seen-file de-dupes the resulting overlap
+between polls.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this
@@ -731,9 +733,25 @@ cmd_watch_github() {
       || log_fail "--since: not an ISO8601 timestamp: $since_flag  (e.g. 2026-09-01T00:00:00Z)"
   fi
 
+  # P2-12 (2026-09-13 fix-round-1 review): _burn_parse_duration alone
+  # accepts "0" as a perfectly valid duration (zero seconds) — it has no
+  # opinion on whether zero makes SENSE for this particular caller. A live
+  # loop's `sleep 0` would poll a 30 req/min endpoint at full speed, and
+  # the same bug that let it through also let the back-off arithmetic
+  # divide-by-nothing (`0 * 2 = 0` forever — see the floor below). Garbage
+  # and negative values already failed _burn_parse_duration itself; both
+  # paths now refuse with rc 2, not clikae's usual rc 1 (log_fail), so a
+  # caller scripting around this can tell "bad flag" from "any other
+  # failure" the same way `clikae wait`'s own exit codes are stratified.
   local interval_s
-  interval_s="$(_burn_parse_duration "$interval_dur")" \
-    || log_fail "--interval: not a duration: $interval_dur  (use e.g. 60, 60s, 10m, 1h)"
+  if ! interval_s="$(_burn_parse_duration "$interval_dur")"; then
+    log_err "--interval: not a duration: $interval_dur  (use e.g. 60, 60s, 10m, 1h)"
+    return 2
+  fi
+  if [ "$interval_s" -le 0 ]; then
+    log_err "--interval: must be greater than 0: $interval_dur"
+    return 2
+  fi
 
   command -v gh >/dev/null 2>&1 || log_fail "clikae watch github needs the 'gh' CLI on PATH."
   if ! gh auth status >/dev/null 2>&1; then
@@ -785,7 +803,15 @@ cmd_watch_github() {
       return 1
     fi
     if [ "$__WG_BACKOFF" -eq 1 ]; then
-      cur=$((cur * 2))
+      # P2-12: back off from a FLOOR of 60s, not from whatever (possibly
+      # tiny) --interval the caller set. Two reasons: `0 * 2 = 0` would
+      # never back off at all if a zero interval ever reached here (now
+      # impossible — see the --interval > 0 refusal above — but this stays
+      # as a second, independent guard on the exact arithmetic that broke);
+      # and a caller who set --interval 5s to watch something urgent still
+      # deserves a back-off that actually throttles a rate-limited endpoint,
+      # not 5/10/20/40s of continuing to hammer it.
+      if [ "$cur" -lt 60 ]; then cur=60; else cur=$((cur * 2)); fi
       [ "$cur" -le 3600 ] || cur=3600
     else
       cur="$interval_s"

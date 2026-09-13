@@ -428,11 +428,35 @@ _row() { # number updated login repo html_url is_pr title [comments=0]
   [[ "$output" == *"1 new event(s)"* ]] || false
 }
 
-@test "watch github: rejects a bad --interval" {
+@test "watch github: rejects garbage --interval with rc=2 (P2-12)" {
   _gh_stub_install
   run clikae watch github --org CVERInc --interval notaduration --once
-  [ "$status" -ne 0 ]
+  # P2-12 (2026-09-13 fix-round-1 review): a bad --interval is now
+  # distinguishable from clikae's usual rc=1 (log_fail) — rc=2 specifically,
+  # like a caller scripting around `clikae wait`'s own exit codes.
+  [ "$status" -eq 2 ]
   [[ "$output" == *"--interval"* ]] || false
+}
+
+@test "watch github: rejects --interval 0 with rc=2 (P2-12)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --interval 0 --once
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval"* ]] || false
+  [[ "$output" == *"greater than 0"* ]] || false
+}
+
+@test "watch github: rejects --interval -5 with rc=2 (P2-12)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --interval -5 --once
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval"* ]] || false
+}
+
+@test "watch github: accepts a valid --interval like 30m (P2-12, positive control)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --interval 30m --once
+  [ "$status" -eq 0 ]
 }
 
 @test "watch: still dispatches to the engine path for a non-github first argument" {
