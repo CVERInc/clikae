@@ -450,6 +450,7 @@ _burn_next_same_engine() {
   # it the same way `clikae usage --fresh` does, just once per candidate,
   # here, instead of leaving it to whenever a human last ran that command.
   local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=()
+  local _refreshed=0   # P3-4 (round-3 review): cap live refreshes — see below
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -479,7 +480,14 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
-    declare -F usage_read >/dev/null && usage_read "$cli" "$t" 1 >/dev/null 2>&1
+    # P3-4 (round-3 review): total reroute wall-clock is candidates *
+    # curl's own --max-time 8, unbounded as the fleet grows. Cap the LIVE
+    # refresh to the first 3 eligible candidates by listing order; later
+    # ones still rank, on whatever reading is already on disk.
+    if [ "$_refreshed" -lt 3 ]; then
+      declare -F usage_read >/dev/null && usage_read "$cli" "$t" 1 >/dev/null 2>&1
+      _refreshed=$((_refreshed + 1))
+    fi
     local up="" uw="" peak="" fields
     if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
       IFS=$'\t' read -r up uw peak <<< "$fields"

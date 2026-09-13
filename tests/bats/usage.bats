@@ -225,7 +225,12 @@ live_usage() {
 }
 
 @test "P2-6a: same-account tanks rank as one, using the worst shared reading" {
-  usage_fixture
+  # No usage_fixture here (round-3 review, P3-4): it plants an unrelated
+  # "work" tank that reaches the SAME refresh stage as xxx/yyy/zzz below —
+  # with all four eligible, P3-4's cap-to-3-by-listing-order refresh would
+  # give zzz's slot to "work" (alphabetically ahead of zzz), leaving zzz an
+  # unrefreshed "unknown" and silently breaking this test's own premise.
+  # multi_curl_stub is all this test needs.
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/log.sh"
   source "$CLIKAE_LIB/core/profile_store.sh"

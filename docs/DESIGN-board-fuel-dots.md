@@ -277,7 +277,10 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   (bounded to candidates only — never a tank already skipped as
   live/busy/solo/same-account — reusing the adapter's own existing
   `--max-time`, no new bound invented). This is the one moment a stale
-  number would cost burn a wrong hop.
+  number would cost burn a wrong hop. Round-3 review, P3-4: candidates *
+  `--max-time 8` has no TOTAL bound as a fleet grows, so the live refresh
+  is capped to the first 3 eligible candidates by listing order; later
+  candidates still rank, on whatever reading is already on disk.
 - **(c)** the board NEVER fetches. It reads whatever is already on disk,
   however old, via `usage_board_fields` — silently within the TTL, WITH its
   age alongside it ("window 44% · weekly 20% · 3h ago") once past the TTL,

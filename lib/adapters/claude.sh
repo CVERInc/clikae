@@ -773,7 +773,12 @@ adapter_usage() (
       command -v security >/dev/null 2>&1 || exit 1
       service="$(_claude_keychain_service "$dir")" || exit 1
       local _tbin=""
-      declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin 2>/dev/null)"
+      # P3-3 (round-3 review): `2>/dev/null` here swallowed _burn_timeout_bin's
+      # own honest warning (lib/core/timeout_bin.sh:25) when all three arms
+      # are missing, so a stock-macOS box with none of timeout/gtimeout/perl
+      # ran the Keychain read UNBOUNDED, silently. burn.sh's own call sites
+      # (:741, :2476) already leave stderr unsuppressed for this reason.
+      declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
       if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
         "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
           jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
