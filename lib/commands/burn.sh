@@ -2563,12 +2563,19 @@ KV
     # fine: a signal past that tail was invisible to both dry and infra
     # detection). Use the untruncated variant here; only the display tail
     # still bounds itself. See _burn_redact_full's comment.
+    #
+    # #81 round-1 fix review: $out ALREADY carries stderr merged in — both
+    # capture paths above run the engine with `2>&1` (the direct path here,
+    # and the tmux wrapper script's own redirection into $log_file), and
+    # _burn_capture_stderr (further up this file) tees fd 2 to $stderr_file
+    # while still restoring it to fd 2 for that same merge. So codex's
+    # stderr-only "ERROR: You've hit your usage limit …" line was already
+    # reaching this classifier before #81 — a second `cat "$stderr_file"`
+    # appended here was dead weight (A/B-tested: removing it changes
+    # nothing) that re-slurped the whole stream unbounded and re-ran
+    # _burn_redact_full on it. #81's actual cause was limit.sh:130's anchor
+    # not accepting codex's "ERROR:" transport prefix — fixed there.
     local out_for_class; out_for_class="$(_burn_redact_full "$out")"
-    # JSON stdout can omit a limit reported only on stderr (#81). Redact the
-    # same prompt echoes before giving stderr to the same classifier.
-    if [ "$cli" = codex ] && [ -s "$stderr_file" ]; then
-      out_for_class="$out_for_class"$'\n'"$(_burn_redact_full "$(cat "$stderr_file")")"
-    fi
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry

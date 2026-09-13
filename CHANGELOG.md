@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Codex burn now detects usage limits reported only on stderr, preserves the
-  reset phrase in JSON and the dry marker, and reports dry with `--no-reroute`
-  instead of a missing-artifact failure (#81).
+- Codex burn now detects a usage-limit line prefixed with codex's own
+  `ERROR:` transport tag (captured stderr already reached the classifier
+  merged with stdout before this fix — the anchor regex was the gap), and
+  preserves the reset phrase in JSON and the dry marker, reporting dry with
+  `--no-reroute` instead of a missing-artifact failure (#81, also #68).
 
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
