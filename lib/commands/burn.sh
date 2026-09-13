@@ -2460,9 +2460,26 @@ cmd_burn() {
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
 
-    local launch_sid=""
+    local launch_sid="" _launch_has_identity=0
     local -a _attempt_cmd=("${cmd[@]}")
-    if declare -F adapter_new_session_args >/dev/null 2>&1; then
+    # #74 round-1 P1-3: switch.sh:222-228's own gate, mirrored here. burn's
+    # own extra args (anything the caller put after --, e.g. `-- -p … --resume
+    # <sid>`, or a hand-typed `-- --session-id <uuid>`) can ALREADY carry
+    # resume/session identity. Appending --session-id unconditionally (the
+    # previous shape) fought claude's own rule — "--session-id can only be
+    # used with --continue or --resume if --fork-session is also specified"
+    # (verified live, claude 2.1.267) — and broke every one of those launches
+    # (rc=1, no artifact, no run at all). adapter_sid_from_args is the one
+    # place switch.sh already trusts for this answer; ask it here too instead
+    # of re-deriving it. A caller-supplied sid also becomes THE sid burn
+    # records (P1-2's "or the one the user passed" case) — it is exactly as
+    # proven as a minted one, since it is what the engine was actually told.
+    if declare -F adapter_sid_from_args >/dev/null 2>&1; then
+      if launch_sid="$(adapter_sid_from_args "${cmd[@]}" 2>/dev/null)"; then
+        _launch_has_identity=1
+      fi
+    fi
+    if [ "$_launch_has_identity" -eq 0 ] && declare -F adapter_new_session_args >/dev/null 2>&1; then
       launch_sid="$(uuidgen 2>/dev/null || true)"
       if [ -z "$launch_sid" ] && command -v python3 >/dev/null 2>&1; then
         launch_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"

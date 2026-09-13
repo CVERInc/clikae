@@ -311,3 +311,74 @@ STUB
   _burn codex T1
   _assert_sidecar codex T1 "$STUB_SID"
 }
+
+# --- #74 round-1 P1-3: burn used to append --session-id unconditionally, even
+# when the caller's own extra args already carried resume/session identity —
+# fighting claude's own rule ("--session-id can only be used with --continue
+# or --resume if --fork-session is also specified", verified live 2.1.267)
+# and turning a previously-working launch shape into rc=1 with no artifact. --
+
+@test "burn claude does not clash --session-id onto a caller-supplied --resume (was rc=1)" {
+  _fixture
+  clikae init claude T1
+  local existing_sid="33333333-3333-4333-8333-333333333333"
+  cat > "$TEST_HOME/bin/claude" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+case " \$* " in
+  *' --resume '*' --session-id '*|*' --session-id '*' --resume '*)
+    echo "error: --session-id can only be used with --continue or --resume if --fork-session is also specified" >&2
+    exit 1
+    ;;
+esac
+sid=""
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = --resume ]; then sid="\$2"; break; fi
+  shift
+done
+if [ -n "\$sid" ]; then
+  slug="\$(printf '%s' "\$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "\$CLAUDE_CONFIG_DIR/projects/\$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"resumed"}}\n' "\$PWD" > "\$CLAUDE_CONFIG_DIR/projects/\$slug/\$sid.jsonl"
+fi
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$existing_sid"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$STUB_ARTIFACT" ]
+  [[ "$output" != *"--session-id"* ]] || false
+  _assert_sidecar claude T1 "$existing_sid"
+}
+
+@test "burn claude does not clash --session-id onto a caller-supplied --session-id" {
+  _fixture
+  clikae init claude T1
+  local existing_sid="44444444-4444-4444-8444-444444444444"
+  cat > "$TEST_HOME/bin/claude" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+n=0
+for a in "\$@"; do [ "\$a" = --session-id ] && n=\$((n + 1)); done
+if [ "\$n" -gt 1 ]; then
+  echo "error: --session-id specified more than once" >&2
+  exit 1
+fi
+sid=""
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = --session-id ]; then sid="\$2"; break; fi
+  shift
+done
+if [ -n "\$sid" ]; then
+  slug="\$(printf '%s' "\$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "\$CLAUDE_CONFIG_DIR/projects/\$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"own id"}}\n' "\$PWD" > "\$CLAUDE_CONFIG_DIR/projects/\$slug/\$sid.jsonl"
+fi
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --session-id "$existing_sid"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$STUB_ARTIFACT" ]
+  _assert_sidecar claude T1 "$existing_sid"
+}
