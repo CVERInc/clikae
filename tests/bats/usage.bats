@@ -14,7 +14,10 @@ config="$(cat)"
 [[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
 [[ "$config" == *'anthropic-beta: oauth-2025-04-20'* ]] || exit 2
 [ "${USAGE_FAIL:-0}" = 0 ] || { echo '{"error":"unauthorized"}'; exit 22; }
-echo '{"five_hour":{"utilization":65,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"utilization":92,"resets_at":"2099-01-07T00:00:00Z"}}'
+# P2-3 (round-1 review): the vendor's real shape is microseconds + a numeric
+# UTC offset, never a bare "…Z" — the old fixture used "2099-01-01T00:00:00Z"
+# and so never exercised the format the vendor actually sends.
+echo '{"five_hour":{"utilization":65,"resets_at":"2099-01-01T00:00:00.189940+00:00"},"seven_day":{"utilization":92,"resets_at":"2099-01-07T00:00:00.189960+00:00"}}'
 STUB
   chmod +x "$TEST_HOME/.testbin/curl"
 }
@@ -124,6 +127,45 @@ STUB
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "unknown"'
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
+}
+
+@test "P2-3: real vendor reset-instant shape expires correctly (negative control proves the old guard failed open)" {
+  usage_fixture
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/usage.sh"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local now=1789300000 past future
+  past="2020-01-01T00:00:00.189940+00:00"     # real shape, well before $now
+  future="2099-01-01T00:00:00.189940+00:00"   # real shape, well after $now
+
+  # Negative control: the PRE-FIX regex (sub("\.[0-9]+Z$";"Z")) is a no-op on
+  # this shape (no bare "Z" to match — it's "…mmmmmm+00:00"), so
+  # fromdateiso8601 throws and `catch` used to report "still valid" no
+  # matter what the timestamp actually said. Prove it fails open on a
+  # timestamp from 2020 — if THIS assertion ever fails, the negative
+  # control itself is broken, not the fix below.
+  run jq -cn --arg ts "$past" --argjson now "$now" \
+    '($ts | (try (sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) catch ($now+1))) > $now'
+  [ "$output" = true ]   # old regex: a 2020 timestamp reads as "not yet expired"
+
+  # Fixed guard, same past timestamp, real shape, through usage_cached_fields:
+  # an already-passed reset must NOT be trusted as a live reading. (jq 1.7's
+  # `-e` reports a totally-empty stream as rc=4, not rc=1 — every caller in
+  # this repo tests truthiness via `if usage_cached_fields ...; then`, which
+  # treats any nonzero the same, so this asserts -ne 0 rather than a specific
+  # code the jq version can change out from under.)
+  jq -cn --arg ts "$past" --argjson now "$now" \
+    '{window_pct:50,weekly_pct:50,window_resets_at:$ts,weekly_resets_at:null,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/work.json"
+  run usage_cached_fields claude work "$now"
+  [ "$status" -ne 0 ]
+
+  # Same fix, a real-shape FUTURE timestamp -> accepted.
+  jq -cn --arg ts "$future" --argjson now "$now" \
+    '{window_pct:50,weekly_pct:50,window_resets_at:$ts,weekly_resets_at:null,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/work.json"
+  run usage_cached_fields claude work "$now"
+  [ "$status" -eq 0 ]
 }
 
 @test "network failure is unknown; Codex status windows use ISO resets" {

@@ -63,6 +63,18 @@ usage_cache_peek() {
 # passed in (epoch seconds) so a caller doing several lookups in one redraw
 # forks `date` once, not once per lookup (P2-1, round-1 review) — see
 # lib/commands/home.sh's _home_fuel_dotv memoization.
+#
+# P2-3 (round-1 review): the vendor's real reset instant is
+# "2026-09-13T14:50:00.189940+00:00" — microseconds AND a "+00:00" offset,
+# never the bare "…Z" jq's fromdateiso8601 requires. The old guard fed the
+# raw string straight in, the `catch` swallowed the resulting parse error,
+# and the select() below fell open ("not yet expired") on every real
+# reading — dead code that had never once fired against an actual vendor
+# response (tests/bats/usage.bats's fixture used "2099-01-01T00:00:00Z",
+# a shape the vendor never sends). `norm_stamp` is the one place both
+# fields go through: drop fractional seconds, then turn a UTC-zero
+# "+00:00"/"-00:00" offset into "Z" (any other offset still fails to parse
+# and still fails open — unchanged, and no real vendor sends one).
 usage_cached_fields() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json" ttl="${CLIKAE_USAGE_TTL:-120}" now="${3:-}"
   [ -f "$cache" ] || return 1
@@ -70,9 +82,10 @@ usage_cached_fields() {
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson ttl "$ttl" '
+    def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
     select(.source == "vendor" and .cached_at <= $now and ($now-.cached_at < $ttl)) |
     select(.window_pct != null and .weekly_pct != null) |
     select(all([.window_resets_at,.weekly_resets_at][];
-      . == null or ((try (sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) catch ($now+1)) > $now))) |
+      . == null or ((try (norm_stamp | fromdateiso8601) catch ($now+1)) > $now))) |
     [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
 }
