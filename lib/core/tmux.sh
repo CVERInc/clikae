@@ -731,24 +731,26 @@ tmux_status_fuelv() {
 # largest `reason` — so the lane this loop means to skip cheaply used to be
 # the most expensive one to even ask.
 #
-# 🔴 A DEAD PID SELF-CLEARS AFTER 6h (P2-1, same review). Before this, a burn
-# SIGKILLed (or OOM-killed, or the host lost power) mid-run left its last
-# write saying `running` with a now-dead pid — and NOTHING but the next
-# `clikae burn` (which runs `_burn_sweep_old_logs`, 7-day retention) ever
-# cleared it. Measured: a dead pid pins `!1` on EVERY session's row, and if
-# the operator never runs `clikae burn` again, forever. The dry arm already
-# self-clears via `dry_store`'s own `CLIKAE_DRY_TTL` (6h) without deleting
-# anything; this reuses the same constant so a dead lane ages out of the
-# COUNT the same way, on the same clock, without the underlying status.json
-# being touched — `_burn_sweep_old_logs`'s 7-day physical cleanup is
-# unaffected and still the only thing that removes the file itself.
+# 🔴 A DEAD PID IS RED, HOWEVER LONG THE LANE RAN (P2-3, 2026-09-14 round-2
+# review). Round 1 (P2-1) made a dead pid self-clear once `updated_at` was
+# CLIKAE_DRY_TTL (6h) old, calling it "the same clock" as a stale dry marker.
+# It is not the same clock: dry's stamp is the moment a limit was OBSERVED,
+# but burn writes `running`/`waiting-reset` once at the START of an attempt
+# (lib/commands/burn.sh has no periodic write while the engine runs), so
+# `updated_at` is when the attempt began, not a heartbeat. Measured: a lane
+# that ran 7h and died a second ago counted `!0`; a `waiting-reset` lane
+# SIGKILLed after sleeping a day toward a weekly reset counted `!0` — the lanes
+# most likely to die unattended were exactly the ones this could never report.
 #
-# 🔴 THE ASYMMETRY THAT REMAINS: dry's marker can be `rm -f`'d by the next
-# `dry_store_read` once stale (peek alone never deletes, same as here); burn's
-# status.json is never deleted by anything on this read path, staleness or
-# not — only `_burn_sweep_old_logs` (mtime, 7 days, `clikae burn`-only) ever
-# removes it. Both arms now stop COUNTING at 6h; only the physical cleanup
-# path and its 7-day/`clikae burn`-only trigger still differ.
+# So liveness decides: a live pid is never red, a dead one is. `updated_at`
+# only bounds HOW LONG a dead lane stays red, and the bound is the retention
+# the file itself lives under — `CLIKAE_BURN_LOG_RETENTION_DAYS` (7d), the
+# same number `_burn_sweep_old_logs` removes the run directory at. The count
+# can therefore never outlive the evidence, and a host that never runs
+# `clikae burn` again still goes quiet after a week instead of never (round
+# 1's P2-1, still closed). The price, stated rather than hidden: a lane whose
+# single attempt started more than 7 days before it died is not reported.
+# Nothing here deletes anything; the sweep is still the only remover.
 #
 # 🔴 CI RED IS NOT COUNTED, and that is a gap, not a decision to leave
 # undocumented. Issue #77 lists "CI red seen by the Stop hook" as a third
@@ -763,9 +765,12 @@ tmux_status_fuelv() {
 # recycled pid makes this UNDERCOUNT (we believe the lane is alive and stay
 # quiet), which is the safe direction for a row that must never cry wolf.
 tmux_status_alertsv() {
-  local now="${1:-}" n=0 f e t d s json st pid upd dead_age
+  local now="${1:-}" n=0 f e t d s json st pid upd dead_age keep_s
   _TSTAT_ALERTS=0
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
+  keep_s="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$keep_s" in ''|*[!0-9]*|0) keep_s=7 ;; esac
+  keep_s=$(( keep_s * 86400 ))
 
   if declare -F dry_store_peekv >/dev/null 2>&1; then
     for f in "${CLIKAE_HOME:-$HOME/.clikae}"/dry/*/*; do
@@ -791,15 +796,16 @@ tmux_status_alertsv() {
       case "$st" in running|waiting-reset) ;; *) continue ;; esac
       burn_status_fieldv "$json" pid; pid="$_BSF"
       case "$pid" in ''|*[!0-9]*) continue ;; esac
-      kill -0 "$pid" 2>/dev/null && continue     # still alive — not news
-      # P2-1: a dead pid whose marker hasn't been touched in CLIKAE_DRY_TTL
-      # (6h, dry's own threshold — see the header block above) self-clears
-      # from the COUNT, same as a stale dry marker does.
+      kill -0 "$pid" 2>/dev/null && continue     # still alive — not news, however old
+      # P2-3 (round-2 review): pid liveness decides, not age. A dead writer is
+      # red; `updated_at` only bounds how long, and the bound is the log
+      # retention the file itself lives under — see the header block above
+      # for why it is not CLIKAE_DRY_TTL any more.
       burn_status_fieldv "$json" updated_at; upd="$_BSF"
       case "$upd" in ''|*[!0-9]*) upd="" ;; esac
       if [ -n "$upd" ]; then
         dead_age=$(( now - upd ))
-        [ "$dead_age" -ge "${CLIKAE_DRY_TTL:-21600}" ] && continue
+        [ "$dead_age" -ge "$keep_s" ] && continue
       fi
       n=$((n + 1))
     done

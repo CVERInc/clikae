@@ -75,8 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a fresh one, and percentages clamp to 0-100 so a corrupt cache cannot
   blow the row's width. `!N` counts tanks the live catchers marked dry and
   burn lanes whose writer died before reaching a terminal state; it is not
-  drawn at all when N is 0, and a dead-pid lane now self-clears from the count
-  after 6h (dry's own TTL) instead of pinning red for up to 7 days. Below 100
+  drawn at all when N is 0. A lane whose pid is dead is red however long it
+  ran (its `updated_at` is the attempt's start, not a heartbeat), and leaves
+  the count once that stamp is older than the burn log retention (7 days, the
+  same knob that removes the file), so it can neither hide nor pin red
+  forever on a host that never runs `clikae burn` again. Below 100
   columns the `ssh <host> -t ` prefix is dropped -- the only variable-width
   part of the row, and dropped rather than cut because half a hostname is not
   a command. Measured at 14 ms per redraw idle, up to 24 ms under load.

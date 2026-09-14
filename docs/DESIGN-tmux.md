@@ -534,16 +534,27 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      永遠，因為唯一會清掉它的是 `_burn_sweep_old_logs`（7 天、只在下一次
      `clikae burn` 才跑）。量過：`run dir` 的 mtime 改成 30 天前，紅燈完全不理會
      年齡。dry 那一半本來就有 `CLIKAE_DRY_TTL`（6 小時）讓一個沒人再看的標記自己
-     退出新鮮度判定，燒的是 6 小時後轉綠而不是靠人手動清；燒那一半沒有這個。現在
-     兩邊共用同一個常數：死 pid 的 lane 一旦 `updated_at` 超過 `CLIKAE_DRY_TTL`
-     就不再計入 `!N`，跟 dry 標記變陳舊的判定同一把尺。
-     **仍然存在、而且是刻意留著的不對稱**：dry 的標記檔本身會被下一次
-     `dry_store_read`（不是 peek）懶惰刪除；burn 的 `status.json` 不會被這條讀路徑
-     刪除——唯一會真的刪除它的仍然是 `_burn_sweep_old_logs`，7 天、只在
-     `clikae burn` 才跑。兩邊現在在「算不算紅」這件事上同步了；「這份紀錄本身什麼
-     時候從磁碟消失」仍然是兩條不同的路，因為 burn 的 `status.json` 除了
-     alert-count 之外還有 `clikae wait` 這個真的需要它留著的讀者，不能像 dry 標記
-     那樣隨便早刪。
+     退出新鮮度判定，燒的是 6 小時後轉綠而不是靠人手動清；燒那一半沒有這個。
+     ~~round 1 的修法：死 pid 的 lane 一旦 `updated_at` 超過 `CLIKAE_DRY_TTL` 就不再
+     計入 `!N`，「跟 dry 標記變陳舊的判定同一把尺」。~~
+
+     🔴 **P2-3（2026-09-14 round-2 review）：那不是同一把尺。** dry 的時間戳是「觀察到
+     乾涸的那一刻」；burn 的 `updated_at` 對 `running`／`waiting-reset` 而言是**這次
+     attempt 開始的那一刻**——`lib/commands/burn.sh` 在引擎跑的期間沒有任何週期性改寫，
+     它不是心跳。量到：跑了 7 小時才死的 lane → `!0`；等 weekly reset 等了一天才被
+     SIGKILL 的 `waiting-reset` → `!0`。**最可能無人看顧地死掉的 lane，正好是這條規則
+     永遠報不出來的那種。** 現在的規則：**pid 活著就不紅、死了就紅，不論年齡**；
+     `updated_at` 只用來界定「死掉的 lane 最多紅多久」，而那個上限是它自己那份檔案的
+     保存期限 `CLIKAE_BURN_LOG_RETENTION_DAYS`（7 天，`_burn_sweep_old_logs` 刪 run dir
+     用的同一個旋鈕）——計數永遠不會比證據活得久，從此不再跑 `clikae burn` 的機器也會在
+     一週後安靜下來（round 1 的 P2-1 仍然是關的）。代價明說：單一 attempt 開始超過 7 天
+     之後才死的 lane 報不出來。沒有加心跳：burn 在引擎執行期間本來就沒有週期性寫入點，
+     為這一列發明一個不是小改動。
+     **仍然存在的不對稱**：dry 的標記檔本身會被下一次 `dry_store_read`（不是 peek）
+     懶惰刪除；burn 的 `status.json` 不會被這條讀路徑刪除——唯一會真的刪除它的仍然是
+     `_burn_sweep_old_logs`，7 天、只在 `clikae burn` 才跑，因為 burn 的 `status.json`
+     除了 alert-count 之外還有 `clikae wait` 這個真的需要它留著的讀者。兩邊「算不算紅」
+     的時鐘也**不是**同一個：dry 是 6 小時的觀察新鮮度，burn 是 pid 存活＋7 天保存期限。
   6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是

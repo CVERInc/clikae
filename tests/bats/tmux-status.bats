@@ -293,10 +293,11 @@ _dead_pid() { printf '2147483647'; }
 
 # P2-1 (2026-09-14 round-1 fix review): before this fix, nothing but the next
 # `clikae burn` (7-day sweep) ever cleared this — a SIGKILLed lane pinned
-# every session's row red, potentially forever. Self-clears at the SAME TTL
-# the dry arm already uses (CLIKAE_DRY_TTL, 6h) once `updated_at` is that old,
-# without deleting the file — only the count changes.
-@test "alerts: a dead pid's !N self-clears after CLIKAE_DRY_TTL, even a 30-day-old dir" {
+# every session's row red, potentially forever. P2-3 (round-2 review) moved
+# the bound from CLIKAE_DRY_TTL (6h) to the log retention (7d): `updated_at`
+# is the attempt's START, so 6h hid every long lane that died. Still without
+# deleting the file — only the count changes.
+@test "alerts: a dead pid's !N self-clears past the log retention, even a 30-day-old dir" {
   _src
   _burn_status burn-1 running "$(_dead_pid)" 2592000   # 30 days
   run tmux_status_render claude wrasse '' '' 120
@@ -309,6 +310,43 @@ _dead_pid() { printf '2147483647'; }
   _burn_status burn-1 running "$(_dead_pid)" 60   # 1 minute — nowhere near 6h
   run tmux_status_render claude wrasse '' '' 120
   [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
+}
+
+# P2-3 (2026-09-14 round-2 review): `updated_at` for `running`/`waiting-reset`
+# is when the attempt STARTED — burn does not rewrite it while the engine runs.
+# Round 1 aged a dead pid out at 6h on that stamp, so a lane that ran 7h and
+# then died, or a waiting-reset lane killed a day into its sleep, was never
+# reported. Liveness decides; age only bounds it at the 7-day log retention.
+@test "alerts: a lane that ran 7h and then died is red; the same lane alive is not" {
+  _src
+  _burn_status burn-1 running "$(_dead_pid)" 25200   # attempt started 7h ago
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "dead after 7h not reported: $output"; false; }
+
+  _burn_status burn-1 running "$$" 25200             # same age, writer alive
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "a live lane was counted: $output"; false; }
+}
+
+@test "alerts: a waiting-reset lane killed a day into its sleep is red" {
+  _src
+  _burn_status burn-1 waiting-reset "$(_dead_pid)" 86400
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
+}
+
+@test "alerts: a dead lane stays red until the log retention, and not past it" {
+  _src
+  _burn_status burn-1 running "$(_dead_pid)" $(( 7 * 86400 - 60 ))
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "just under 7d: $output"; false; }
+  _burn_status burn-1 running "$(_dead_pid)" $(( 7 * 86400 + 60 ))
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "just over 7d: $output"; false; }
+  # The bound IS the sweep's own knob, not a second copy of the number.
+  CLIKAE_BURN_LOG_RETENTION_DAYS=30
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "retention 30d: $output"; false; }
 }
 
 # P3-1 (2026-09-14 round-1 fix review): the alerts loop reads status.json with
