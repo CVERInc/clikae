@@ -651,8 +651,10 @@ _switch_run_ephemeral() {
   # Cleanup on exit, with literal paths captured now (survives scope). The parent
   # ignores INT so Ctrl-C reaches the engine; cleanup fires on the parent's exit.
   # Restore order: stashed own memory first; else re-link a Soul-shared slot.
+  # #61 round-4 P2-1: this replaces bin/clikae's own EXIT trap, so it chains
+  # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'" EXIT
+  trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'; _tank_adoption_warn_sentinel_cleanup" EXIT
   # A hard terminal close (SIGHUP) or a SIGTERM would otherwise kill the parent
   # WITHOUT running the EXIT trap, leaving memory pointed at the throwaway we're
   # about to delete (dangling) and the real memory stranded in the stash — the

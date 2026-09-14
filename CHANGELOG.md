@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The read-only-store warn sentinel's own cleanup (`bin/clikae`'s `EXIT`
+  trap) used to recompute its path from scratch on every single exit —
+  forking `ps`/`date` (two or three processes) to `rm -f` a file that a
+  writable store never creates in the first place, adding ~16ms to every
+  ordinary command including `--version`. It now records the path it
+  actually created (if any) and the trap just removes that: zero forks on
+  the common case. The board (`clikae`'s bare/default screen, by far the
+  most-run command) replaces this trap outright to restore the terminal on
+  abnormal exit — its own trap, and demo's/switch --ephemeral's, now chain
+  the same cleanup, AND every point inside the board's interactive picker
+  that clears the trap for good (quitting, launching a tank, relaying,
+  opening the cross-tank resume picker) explicitly runs the cleanup too —
+  `trap - EXIT INT TERM` throws the trap away outright, and an exec into
+  another program never runs a bash `EXIT` trap at all, so chaining onto the
+  trap alone left the sentinel behind on every one of those paths (#61).
 - Codex burn now detects a usage-limit line prefixed with codex's own
   `ERROR:` transport tag (captured stderr already reached the classifier
   merged with stdout before this fix — the anchor regex was the gap), and

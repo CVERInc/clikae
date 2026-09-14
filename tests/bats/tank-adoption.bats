@@ -233,6 +233,52 @@ _unadopt() {
   chmod u+w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
 }
 
+# --- #61 round-4 P2-1: the sentinel PATH is now recorded by
+# _tank_adoption_warn_once into a global, and the EXIT trap just `rm -f`s
+# it — no recomputing it (and forking `ps`/`date` to do so) on every exit,
+# including the overwhelming majority where nothing was ever created. ------
+
+_stub_ps_date_counters() {
+  local bin="$BATS_TEST_TMPDIR/psdatebin"
+  mkdir -p "$bin"
+  local real_ps real_date
+  real_ps="$(command -v ps)"
+  real_date="$(command -v date)"
+  cat > "$bin/ps" <<STUB
+#!/usr/bin/env bash
+printf 'x\n' >> "$BATS_TEST_TMPDIR/ps.calls"
+exec "$real_ps" "\$@"
+STUB
+  chmod +x "$bin/ps"
+  cat > "$bin/date" <<STUB
+#!/usr/bin/env bash
+printf 'x\n' >> "$BATS_TEST_TMPDIR/date.calls"
+exec "$real_date" "\$@"
+STUB
+  chmod +x "$bin/date"
+  PATH="$bin:$PATH"; export PATH
+}
+
+@test "#61 round-4 P2-1: --version on a writable store forks neither ps nor date (sentinel path is only computed when a sentinel is actually created)" {
+  _stub_ps_date_counters
+  run clikae --version
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/ps.calls" ] || { echo "ps called: $(cat "$BATS_TEST_TMPDIR/ps.calls")"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/date.calls" ] || { echo "date called: $(cat "$BATS_TEST_TMPDIR/date.calls")"; false; }
+}
+
+@test "#61 round-4 P2-1: --version on a read-only store forks ps exactly once (to name the sentinel it creates), never on the way out again" {
+  _unadopt
+  mkdir -p "$CLIKAE_HOME/profiles/claude/ro5"
+  chmod a-w "$CLIKAE_HOME/profiles/claude/ro5" "$CLIKAE_HOME/state" 2>/dev/null || true
+  _stub_ps_date_counters
+  run clikae --version
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/ps.calls" 2>/dev/null || echo 0)" -eq 1 ] || \
+    { echo "ps.calls: $(cat "$BATS_TEST_TMPDIR/ps.calls" 2>/dev/null)"; false; }
+  chmod u+w "$CLIKAE_HOME/profiles/claude/ro5" "$CLIKAE_HOME/state" 2>/dev/null || true
+}
+
 @test "adoption warn sentinel path: keyed by more than bare pid when this platform can report a start time" {
   # White-box: on any platform where `ps -o lstart=` + `date` parse (macOS
   # and this suite's own Linux host both do — round-3 review measured a

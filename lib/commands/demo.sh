@@ -84,9 +84,11 @@ EOF
 
   local sb
   sb="$(mktemp -d "${TMPDIR:-/tmp}/clikae-demo.XXXXXX")"
-  # Always clean up the sandbox, even on an early exit.
+  # Always clean up the sandbox, even on an early exit. #61 round-4 P2-1:
+  # this replaces bin/clikae's own EXIT trap, so it chains the same
+  # sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "rm -rf '$sb'" EXIT
+  trap "rm -rf '$sb'; _tank_adoption_warn_sentinel_cleanup" EXIT
 
   log_bold "clikae demo — a guided tour in a throwaway sandbox"
   log_dim  "Everything below runs in a temporary sandbox, gone when the tour ends."

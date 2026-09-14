@@ -580,11 +580,30 @@ _tank_adoption_warn_sentinel_path() {
 # #61 round-2 P2-1: the previous version printed unconditionally, every
 # single call, and scan_clis' 15-adapter fan-out turned ONE read-only tank
 # into 32 identical lines (two read-only tanks: 64).
+#
+# #61 round-4 P2-1: records the sentinel path it just created into
+# $_CLIKAE_ADOPT_WARN_SENTINEL so the EXIT trap can `rm -f` it directly
+# instead of recomputing (and forking `ps`/`date` for) a path that's empty
+# on every invocation that never gets here — see
+# _tank_adoption_warn_sentinel_cleanup below.
+_CLIKAE_ADOPT_WARN_SENTINEL=""
 _tank_adoption_warn_once() {
   local sentinel; sentinel="$(_tank_adoption_warn_sentinel_path)"
   [ -e "$sentinel" ] && return 0
   : > "$sentinel" 2>/dev/null || true
+  _CLIKAE_ADOPT_WARN_SENTINEL="$sentinel"
   log_warn "This store's tanks aren't adopted yet and the flag can't be written (read-only store?) — recognising them in memory this run only. \`clikae doctor --adopt\` explains more; fix permissions on $(dirname "$(tanks_adopted_flag_path)") to persist it."
+}
+
+# _tank_adoption_warn_sentinel_cleanup -> the other half of
+# _tank_adoption_warn_once: `rm -f` the sentinel it actually created, zero
+# forks when nothing was (the common case — a writable store never creates
+# one). Meant to run from every EXIT trap in the process, including the
+# TUI's (home.sh/demo.sh/switch.sh replace bin/clikae's own EXIT trap
+# outright, since bash keeps only one), so chain a call to this into
+# whichever trap ends up installed last.
+_tank_adoption_warn_sentinel_cleanup() {
+  rm -f "${_CLIKAE_ADOPT_WARN_SENTINEL:-}" 2>/dev/null || true
 }
 
 _CLIKAE_INMEM_ADOPTED=$'\n'

@@ -1933,6 +1933,22 @@ _home_welcome_beside() {
 # parses the output at worst. Nothing to restore when nobody is watching.
 _home_tty_leave() { stty echo 2>/dev/null || true; [ -t 1 ] && tui_screen_leave; return 0; }
 
+# _home_tty_leave_final -> the SAME `_home_tty_leave` every other exit point
+# uses, but for the ones that are leaving the picker for good: it also drops
+# the EXIT/INT/TERM trap `_home_pick` installed (nothing left to restore it
+# on abnormal termination) and, #61 round-4 P2-1, runs the sentinel cleanup
+# that trap was ALSO chained to (profile_store.sh's
+# _tank_adoption_warn_sentinel_cleanup) EXPLICITLY here — `trap - EXIT INT
+# TERM` throws the trap away outright, so anything chained to it silently
+# stops running for the rest of this process's life otherwise, including the
+# exec-into-another-program call sites below, which never run a bash EXIT
+# trap in the first place (exec replaces the image, it doesn't "exit").
+_home_tty_leave_final() {
+  _home_tty_leave
+  trap - EXIT INT TERM
+  _tank_adoption_warn_sentinel_cleanup
+}
+
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
 #   agent  -> the CLI's own binary, default config (no tank)
@@ -2021,8 +2037,10 @@ EOF
   done
 
   tui_screen_enter >&3
+  # #61 round-4 P2-1: also replaces bin/clikae's own EXIT trap, so it chains
+  # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
+  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null; _tank_adoption_warn_sentinel_cleanup" EXIT INT TERM
   while :; do
     {
       printf '\033[H\033[2J'
@@ -2892,8 +2910,12 @@ EOF
 _home_pick() {
   local items="$1" dry="$2"
 
-  # Restore the terminal on any abnormal exit.
-  trap '_home_tty_leave' EXIT
+  # Restore the terminal on any abnormal exit. This replaces bin/clikae's own
+  # EXIT trap outright (bash keeps only one), so it also chains
+  # _tank_adoption_warn_sentinel_cleanup — #61 round-4 P2-1: without it, the
+  # board (the most-run command of all) never ran the cleanup bin/clikae
+  # installs for read-only stores, leaking one sentinel file per run.
+  trap '_home_tty_leave; _tank_adoption_warn_sentinel_cleanup' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true
   tui_screen_enter   # enter alt screen, hide cursor
@@ -3064,7 +3086,7 @@ _home_pick() {
         local _lang
         _lang="$(_home_choose "$T_LANG_PICK    $T_PICKER_HINT" "$(_i18n_locales)" "$(clikae_lang)")" || _lang=""
         [ -n "$_lang" ] && i18n_set "$_lang"
-        trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        trap '_home_tty_leave; _tank_adoption_warn_sentinel_cleanup' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
         tui_screen_enter
         _home_refresh
@@ -3091,7 +3113,7 @@ _home_pick() {
         local _lvl _cur; _cur="$(autonomy_get)"
         _lvl="$(_home_choose "$T_AUTONOMY_PICK" "$(printf 'ask\nsafe\nfull')" "$_cur")" || _lvl=""
         [ -n "$_lvl" ] && [ "$_lvl" != "$_cur" ] && autonomy_set "$_lvl"
-        trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        trap '_home_tty_leave; _tank_adoption_warn_sentinel_cleanup' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
         tui_screen_enter
         ;;
@@ -3101,10 +3123,10 @@ _home_pick() {
       enter)
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           _home_resume_action "$sel_row" "$dry" || {
-            trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+            trap '_home_tty_leave; _tank_adoption_warn_sentinel_cleanup' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             stty -echo 2>/dev/null || true
             tui_screen_enter
             { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
@@ -3112,14 +3134,14 @@ _home_pick() {
           }
           return 0
         fi
-        _home_tty_leave; trap - EXIT INT TERM
+        _home_tty_leave_final
         { exec 3<&-; } 2>/dev/null || true
         _home_launch "$sel_row"
         return 0
         ;;
       r)
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           _home_relay "$items" "$sel_row"
           return 0
@@ -3130,7 +3152,7 @@ _home_pick() {
         # idiom every other launch in this board uses): cmd_resume lives in
         # resume.sh, which isn't sourced in the home process — and can't be sourced
         # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
-        _home_tty_leave; trap - EXIT INT TERM
+        _home_tty_leave_final
         { exec 3<&-; } 2>/dev/null || true
         exec "$CLIKAE_BIN" resume
         ;;
@@ -3139,7 +3161,7 @@ _home_pick() {
         # (--ephemeral). A clean, amnesiac session: this run's long-term memory
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
         fi
@@ -3206,7 +3228,7 @@ EOF
   done
 
   { exec 3<&-; } 2>/dev/null || true
-  _home_tty_leave; trap - EXIT INT TERM
+  _home_tty_leave_final
   # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"
 }

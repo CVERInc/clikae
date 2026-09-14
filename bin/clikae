@@ -45,10 +45,17 @@ source "$CLIKAE_LIB/core/profile_store.sh"
 # itself can't be written to), so nothing else ever removes it. Without
 # this, every invocation against a read-only store leaves one 0-byte file
 # in $TMPDIR forever. Runs on every ordinary exit (including one that never
-# called the warn function — `rm -f` on a nonexistent path is silent);
-# doesn't fire on SIGKILL, which is exactly why the sentinel's own name is
-# ALSO keyed to this process's start time, not just its pid.
-trap 'rm -f "$(_tank_adoption_warn_sentinel_path 2>/dev/null)" 2>/dev/null || true' EXIT
+# called the warn function — `rm -f` on an empty/nonexistent path is
+# silent); doesn't fire on SIGKILL, which is exactly why the sentinel's own
+# name is ALSO keyed to this process's start time, not just its pid.
+#
+# #61 round-4 P2-1: calls _tank_adoption_warn_sentinel_cleanup, which `rm
+# -f`s the path _tank_adoption_warn_once actually created (if any) instead
+# of recomputing it here — the old form forked `ps`/`date` on EVERY exit to
+# delete a file that a writable store never creates. The TUI (home.sh,
+# demo.sh, switch.sh) replaces this trap outright, since bash keeps only
+# one EXIT trap; each of those chains a call to the same cleanup function.
+trap '_tank_adoption_warn_sentinel_cleanup' EXIT
 
 # shellcheck source=../lib/core/tmux.sh
 source "$CLIKAE_LIB/core/tmux.sh"
