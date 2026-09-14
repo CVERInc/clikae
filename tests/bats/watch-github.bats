@@ -933,6 +933,35 @@ STUB
   [ -s "$state_dir/CVERInc.cursor" ]
 }
 
+# P3-4 (2026-09-14 fix-round-7 review): a poll killed mid-read left its
+# mkdir lock behind (release only ran on the normal path), so a re-run
+# within 300s waited 30s and failed "could not acquire the poll lock".
+# The stub signals the poll's own process (pid from the lock) from inside
+# the search call — deterministic, no `timeout`, which macOS lacks.
+@test "watch github --once: SIGTERM in the middle of a poll releases the poll lock (P3-4, fix-round-7)" {
+  _gh_stub_install
+  _gh_stub_page org 1 "$(_row 800 2026-09-07T04:00:00Z alice reef https://x/800 0 "one")"
+  _gh_stub_page org 2 "$(_row 800 2026-09-07T04:00:00Z alice reef https://x/800 0 "one")"
+  mv "$TEST_HOME/.testbin/gh" "$TEST_HOME/.testbin/gh.real"
+  cat > "$TEST_HOME/.testbin/gh" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "api search/issues" ] && [ ! -e "$GH_STUB_DIR/killed" ]; then
+  : > "$GH_STUB_DIR/killed"
+  kill -TERM "$(cat "$CLIKAE_HOME/state/watch-github/CVERInc.lock/pid")"
+fi
+exec "$(dirname "$0")/gh.real" "$@"
+STUB
+  chmod +x "$TEST_HOME/.testbin/gh"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 143 ] || { echo "status=$status $output"; false; }
+  [ -e "$GH_STUB_DIR/killed" ]
+  [ ! -d "$CLIKAE_HOME/state/watch-github/CVERInc.lock" ]
+  # The very next poll gets the lock at once.
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"could not acquire"* ]] || false
+}
+
 @test "watch github --once: a stale poll lock is reclaimed, not blocked on forever (P2-11)" {
   _gh_stub_install
   local lock="$CLIKAE_HOME/state/watch-github/CVERInc.lock"

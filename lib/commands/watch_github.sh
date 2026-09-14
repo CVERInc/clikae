@@ -1387,6 +1387,17 @@ _wg_poll() {
     log_warn "github:$org — could not acquire the poll lock (another watch github --once running concurrently?); skipping this poll."
     return 0
   fi
+  # P3-4 (2026-09-14 fix-round-7 review): a poll killed mid-read (Ctrl-C,
+  # cron's own timeout) used to leave the lock behind, so a re-run within
+  # 300s waited 30s and failed. Release it on the way out, then die with
+  # the conventional 128+signal status; the traps are cleared again at the
+  # normal release below, so a live loop's `sleep` keeps default signals.
+  # No other trap exists on this code path to be overwritten.
+  __WG_LOCK_ORG="$org"
+  trap '_wg_lock_release "$__WG_LOCK_ORG"; trap - EXIT; exit 130' INT
+  trap '_wg_lock_release "$__WG_LOCK_ORG"; trap - EXIT; exit 143' TERM
+  trap '_wg_lock_release "$__WG_LOCK_ORG"; trap - EXIT; exit 129' HUP
+  trap '_wg_lock_release "$__WG_LOCK_ORG"' EXIT
 
   mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
 
@@ -1505,6 +1516,7 @@ _wg_poll() {
   fi
 
   _wg_lock_release "$org"
+  trap - INT TERM HUP EXIT
 }
 
 # --- the command --------------------------------------------------------------
