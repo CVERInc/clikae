@@ -1056,8 +1056,11 @@ _burn_lb_bounded() {
 # (resolved once, below, via the `command -v git` already needed to decide
 # whether git exists at all) is passed as `$1` instead: an absolute path is
 # never a builtin, so `_burn_lb_bounded` backgrounds git itself on every
-# bash this runs on, and the path lookup still gives the same
-# function/alias-shadowing immunity `command` was there for.
+# bash this runs on. See P3-1 (round-4 review) on `BURN_LB_GIT`'s own
+# assignment below for why that resolution is `type -P`, not `command -v` —
+# `command -v` alone does NOT give the function/alias-shadowing immunity
+# this comment used to claim: it happily returns a shadowing function's own
+# bare name instead of a path.
 _burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
@@ -1091,7 +1094,17 @@ _burn_left_behind() {
   # (defined outside this function, called only from inside it) reads this
   # as a global. See `_burn_lb_git`'s own comment for why an absolute path
   # replaces `command git`.
-  BURN_LB_GIT="$(command -v git)" || { printf '[]'; return 0; }
+  # P3-1 (round-4 review): `command -v git` finds an absolute path for a
+  # real executable, but when the CALLER has `export -f`'d a shell function
+  # named `git` (measured: a real burn called it 6 times), `command -v`
+  # returns the bare string "git" — not a path, and not the immunity from
+  # function/alias shadowing `command` is supposed to give here. `type -P`
+  # only ever resolves an executable file on `$PATH`, never a function or
+  # alias, on both bash 5 and bash 3.2.57 (verified in a real
+  # `bash:3.2.57` container: `command -v git` => `git`, `type -P git` =>
+  # `/usr/bin/git`), so it's what actually delivers the guarantee the
+  # comment on `_burn_lb_git` above claims.
+  BURN_LB_GIT="$(type -P git)" || { printf '[]'; return 0; }
   # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
   # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
   # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
