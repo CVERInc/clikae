@@ -106,14 +106,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minutes had no re-read of the indexing-lag margin at all, and a `--once`
   poll from cron never knew `--interval` to begin with. Fixed 2026-09-14
   fix-round-5 review: the schedule (every 5 polls / after truncation) is
-  unchanged, but the window is now the real wall-clock gap between the two
+  unchanged, but the window became the real wall-clock gap between the two
   most recent polls times how many polls elapsed since the last sweep —
   measured every poll and persisted beside the cursor, so cron's `--once`
   is covered without needing to be told an interval, and a live loop's own
   back-off widens the next estimate for free. An every-poll schedule was
   tried first and reverted: it collided with the canned-response-by-
   call-number `gh` test stub, which cannot tell a sweep's own search call
-  from the next poll's main query.)
+  from the next poll's main query. That multiplication assumed every one
+  of those polls was as evenly spaced as the single most recent one —
+  false the instant a live loop's own back-off recovers, which resets its
+  interval in one step, not a gradual climb-down, so the short
+  post-recovery gap got multiplied into a window narrower than the real
+  elapsed span, silently losing a row with rc=0 and no warning. Fixed
+  2026-09-14 fix-round-6 review: the window is now `now - <the epoch the
+  last sweep actually completed at>`, persisted beside the cursor and read
+  back directly — measured, not inferred from any poll's own gap. A `0`
+  (the sentinel a `date` failure's own fallback writes) or a future value
+  in either that epoch or `.lastrun`'s own now reads as "missing", never
+  as a real span to subtract `now` from.)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
