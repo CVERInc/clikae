@@ -478,6 +478,32 @@ STUB
   [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
 }
 
+@test "#74 round-4 P2-1: raw '-- <cmd...>' codex burn WITHOUT -C, one candidate's cwd unreadable, records nothing and the human stays visible" {
+  _fixture
+  clikae init codex T1
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+mkdir -p "\$CODEX_HOME/sessions/2026/09/13"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$STUB_SID" "\$PWD" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$STUB_SID.jsonl"
+# A concurrent human's rollout whose header line has an id but no cwd field
+# yet (the real race: codex creates the file before it flushes cwd into the
+# first line) — adapter_session_cwd returns EMPTY for this one, same as
+# _burn_launch_cwd in this raw/no-C run. Before this fix, empty == empty
+# made it the sole "match".
+printf '{"type":"session_meta","payload":{"id":"%s"}}\n' "$HUMAN_SID" > "\$CODEX_HOME/sessions/2026/09/13/rollout-2026-09-13T00-00-01-$HUMAN_SID.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" -- exec -s workspace-write 'go'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"could not attribute session"* ]] || false
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || false
+}
+
 @test "#74 round-3 P1-1: burn --help's own raw -C example shape still records the single new session" {
   _fixture
   clikae init codex T1

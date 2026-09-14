@@ -2773,9 +2773,15 @@ KV
           # $PWD became the sole "match" instead, getting recorded and hidden.
           local -a _snap_cwd_match=()
           local _snap_cf _snap_ccwd
+          # R4 review P2-1: empty == empty is not a match. An empty
+          # _burn_launch_cwd (raw mode, no -C found) means "unknown", not
+          # "matches a candidate whose own cwd also failed to read" — both
+          # sides must actually have a value, or the gate below correctly
+          # finds zero matches instead of one bogus one.
           for _snap_cf in "${_snap_new[@]}"; do
             _snap_ccwd="$(adapter_session_cwd "$_snap_cf" 2>/dev/null || true)"
-            [ "${_snap_ccwd%/}" = "${_burn_launch_cwd%/}" ] && _snap_cwd_match+=("$_snap_cf")
+            [ -n "$_burn_launch_cwd" ] && [ -n "$_snap_ccwd" ] \
+              && [ "${_snap_ccwd%/}" = "${_burn_launch_cwd%/}" ] && _snap_cwd_match+=("$_snap_cf")
           done
           if [ "${#_snap_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
             sid_to_record="$(adapter_sid_canonical "${_snap_cwd_match[0]}" 2>/dev/null || true)"
