@@ -66,21 +66,26 @@
 #      backwards: the observed failure mode is `model=""`, which hits the
 #      unconditional "carried no model" refusal — every model, haiku
 #      included, wrongly BLOCKED, for the wrong stated reason).
-# Neither field is pre-sliced anymore. `tool_name`, `model`, and `prompt` are
-# all read with `json_field_str` straight off the FULL `$payload` — cost is
-# bounded only by however big the payload actually is (measured 200 kB and
-# 1 MB in REPORT-cockpit63-fix2.md; a huge prompt is no longer free, and this
-# docstring says so plainly rather than repeating the round-1 "well under
+# Neither field is pre-sliced anymore. `tool_name` and `model` are always
+# read with `json_field_str` straight off the FULL `$payload`; `prompt` is
+# too, but only once the model gate below says this call is one the guard
+# actually inspects (#63 P3-2, round 3 — see the comment by the `model`
+# read). Cost is bounded only by however big the payload actually is
+# (measured 200 kB and 1 MB in REPORT-cockpit63-fix2.md; a huge prompt is no
+# longer free on the models it applies to, and this docstring says so
+# plainly rather than repeating the round-1 "well under
 # 50ms" claim past the point it stopped being true). `prompt`'s DECODED,
-# UNTRUNCATED length feeds the length tripwire; only a COPY truncated to its
-# first 8,192 CHARACTERS (not bytes — sliced after decoding, under the locale
-# pinned below, so the cut always lands on a character boundary) is handed to
-# the keyword heuristic, which never needed more than that to begin with.
+# UNTRUNCATED length feeds the length tripwire below (#63 P3-1, round 3: an
+# earlier draft also truncated a COPY to 8,192 characters for the keyword
+# heuristic, but that copy can never see more than 1,500 characters anyway —
+# the length tripwire already refuses anything longer, on the only models the
+# heuristic runs for, before the heuristic is reached. Removed as dead code
+# rather than documenting a cap that can't fire).
 #
 # LOCALE: pinned to C.UTF-8 (falling back to en_US.UTF-8, then a documented-
-# degraded C) right below, specifically so `${#prompt}` and the character
-# slice above count/cut the SAME WAY regardless of the caller's own
-# environment — the round-2 review's single clearest repro of the bug above
+# degraded C) right below, specifically so `${#prompt}` counts CHARACTERS the
+# SAME WAY regardless of the caller's own environment — the round-2 review's
+# single clearest repro of the bug above
 # was `LC_ALL=C` passing while the operator's ordinary `en_US.UTF-8` shell
 # refused correctly: same bytes, same script, different verdict, entirely by
 # accident of environment. See _ckpt_pick_locale below for what "documented
@@ -192,23 +197,16 @@ if [ "${payload:$((${#payload}-1)):1}" != "}" ]; then
   allow "cockpit-guard: tool_input payload looks truncated or malformed — allowing"
 fi
 
-# `model` and `prompt` are both read straight off the FULL `$payload` now —
-# #63 P2-1/P1-1 fix2, see the docstring at the top of this file for why the
-# old `tail -c 8192` / `head -c 8192` windows were wrong, not just slow.
+# `model` is read straight off the FULL `$payload` now — #63 P2-1/P1-1 fix2,
+# see the docstring at the top of this file for why the old `tail -c 8192` /
+# `head -c 8192` windows were wrong, not just slow. `prompt` is NOT read here
+# (#63 P3-2, round 3): it costs ~92% of a 1 MB payload's total parse time
+# (610 ms of 663 ms measured), so extracting it unconditionally made every
+# model this guard is documented to leave "untouched" — haiku, fable, any
+# non-opus/sonnet id — pay almost the same latency as the model it actually
+# inspects. It is now read only inside the `opus|sonnet…)` arm below, after
+# the model gate has already decided this call is guarded.
 model="$(json_field_str "$payload" model 2>/dev/null || true)"
-prompt="$(json_field_str "$payload" prompt 2>/dev/null || true)"
-# The UNTRUNCATED, decoded length — this is what the length tripwire below
-# checks. Computed BEFORE the heuristic-input copy is truncated, so a huge
-# prompt can never zero out the one check that exists specifically to catch
-# "too long to bother reading closely", regardless of content.
-prompt_len_full="${#prompt}"
-# The heuristic only ever needs the first 8,192 CHARACTERS of the prompt.
-# Slicing the DECODED string (this line) rather than the raw JSON bytes
-# (round 1's bug) cannot land mid-character: under the locale pinned above,
-# `${prompt:0:8192}` always advances by whole characters, so a CJK prompt
-# truncates exactly like an ASCII one — no silent, boundary-dependent miss.
-prompt="${prompt:0:8192}"
-
 # _ckpt_refuse [model] [reason] -> print the refusal (reason + reserve + the
 # burn shape) to stderr and exit 2. Best-effort enrichment (the reserve
 # listing): its own failure must never turn a refusal into a silent allow,
@@ -276,10 +274,12 @@ case "$model_lc" in
   # `claude-opus-*`/`claude-sonnet-*` id, plus `opusplan` (a real value, not
   # a family — matched literally).
   opus|sonnet|opusplan|claude-opus-*|claude-sonnet-*)
-    # Length tripwire: independent of any keyword, and independent of the
-    # 8,192-character heuristic cap above — this reads $prompt_len_full, the
-    # UNTRUNCATED count, specifically so a prompt long enough to BE the
-    # tripwire's whole reason to exist can never be the thing that defeats it.
+    # #63 P3-2: extracted here, not up top — see the comment by the `model`
+    # extraction above. `prompt_len_full` is the UNTRUNCATED decoded length,
+    # so a prompt long enough to BE the length tripwire's whole reason to
+    # exist can never be the thing that defeats it.
+    prompt="$(json_field_str "$payload" prompt 2>/dev/null || true)"
+    prompt_len_full="${#prompt}"
     if [ "$prompt_len_full" -gt 1500 ]; then
       _ckpt_refuse "$model" long
     fi

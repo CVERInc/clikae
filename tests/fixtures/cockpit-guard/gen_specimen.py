@@ -86,12 +86,27 @@ def brief(seed):
     by `seed` characters of ASCII padding so each of the 100 lands its
     straddle point (if any) somewhere different -- the sliding-cut-point
     idea from the round-2 review's own 109-trial sweep, turned into a fixed
-    regression corpus instead of a one-off manual sweep."""
+    regression corpus instead of a one-off manual sweep.
+
+    #63 P3-3 (round-3 review): this used to skip the self-check straddle_cjk()
+    has -- only 50/100 seeds actually landed byte[8192] on a continuation
+    byte, so the OTHER 50 tested nothing but the (separate) length tripwire.
+    Now it searches, like straddle_cjk(), until the straddle lands, then
+    asserts it: 100/100 exercise the actual multi-byte-cut bug, not 50/100."""
     lead = "Please act as REVIEWER: set up a worktree, run the full test suite, then git commit and git push. "
-    pad = "z" * (seed % 97)
-    body = pad + _tile(9000 + (seed * 37) % 4000)
-    payload = (PREFIX_TMPL % lead) + body + SUFFIX
-    sys.stdout.write(payload)
+    base_pad = seed % 97
+    body_tile = _tile(9000 + (seed * 37) % 4000)
+    target = 8192
+    for extra in range(0, 200):
+        body = ("z" * (base_pad + extra)) + body_tile
+        payload = (PREFIX_TMPL % lead) + body + SUFFIX
+        pb = payload.encode("utf-8")
+        if target < len(pb) and 0x80 <= pb[target] <= 0xBF:
+            assert 0x80 <= pb[target] <= 0xBF, "self-check: not a continuation byte"
+            sys.stdout.write(payload)
+            return
+    print("FAILED: could not construct a straddling brief for seed %d" % seed, file=sys.stderr)
+    sys.exit(1)
 
 
 def long_plain(seed=0):
