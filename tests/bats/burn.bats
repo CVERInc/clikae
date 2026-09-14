@@ -2168,6 +2168,30 @@ STUB
 # 466-472 ms; with the round-5 regression put back (perl's single pass
 # bypassed, the per-match `substr(t, i)` awk loop classifying) dense went to
 # 9124-9243 ms — ~13x its own baseline, red. macOS's BWK awk is the slower one.
+#
+# 🔴 THE MARGIN, WIDENED (P1-1, 2026-09-14 round-3 review). The round-3 review
+# re-measured the ratio and put a number on how much room it actually has:
+# clean baseline 621 ms, injected-regression dense 9679 ms, ceiling 6080 ms —
+# 1.59x. That is the margin with a GOOD baseline sample. With a bad one there
+# is none: a single 1210 ms baseline (a runner hiccup, well inside ordinary
+# noise on a shared box) raises the ceiling to 9680 ms and the regression walks
+# straight through it, silently, exactly the way round 1's 45 s constant
+# switched this guard off. A one-sample baseline is the fragile part, not the
+# multiplier. So the baseline is now the MEDIAN OF THREE runs of the same
+# shape, on three separate tanks (each run marks its tank dry): one slow sample
+# can no longer set the ceiling, and three runs cost about two seconds.
+#
+# The absolute 60 s ceiling below is a SECOND, coarser bound, not a replacement
+# for the ratio. The ratio is the sensitive instrument — it is what catches a
+# 26.5 s regression against a ~2 s baseline, and nothing absolute at 60 s would.
+# The absolute one catches only what the ratio structurally cannot: a baseline
+# so slow that 8x of it no longer excludes the regression. It sits ~100x above
+# every healthy measurement here (dense 466-486 ms, baseline 605-647 ms) and
+# above the two 45 s 8 MB guards in this file, so a slow-awk platform cannot
+# trip it on ordinary slowness. macOS's BWK awk remains UNMEASURED by anyone —
+# fix2 inferred it is slower, round 3 agreed it is an inference — which is
+# exactly why this guard now rests on two different kinds of bound instead of
+# one thin one.
 _burn_now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000'; }
 
 _stub_dense_capture() {
@@ -2189,24 +2213,35 @@ STUB
   _stub_burn_transport
   clikae init codex T1
   clikae init codex T2
-  local t0 t1 base_ms dense_ms ceiling_ms
+  clikae init codex T3
+  clikae init codex T4
+  local t0 t1 base_ms dense_ms ceiling_ms tank
+  local samples=""
 
   # Baseline: identical shape and size, but the path on every line is NOT the
   # -C needle, so the redaction pass runs over the whole capture with 0 hits.
+  # THREE runs, one per tank (each run marks its own tank dry), and the MEDIAN
+  # is the baseline — a single slow sample must not be allowed to set the
+  # ceiling. See the margin note above.
   _stub_dense_capture /home/build/workspace/unrelated-other-directory
-  t0="$(_burn_now_ms)"
-  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
-    -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
-  t1="$(_burn_now_ms)"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
-  base_ms=$((t1 - t0))
+  for tank in T1 T2 T3; do
+    t0="$(_burn_now_ms)"
+    run clikae burn codex "$tank" --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+      -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
+    t1="$(_burn_now_ms)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+    samples="$samples$((t1 - t0))
+"
+  done
+  base_ms="$(printf '%s' "$samples" | sort -n | sed -n 2p)"
+  case "$base_ms" in ''|*[!0-9]*) echo "no median baseline from [$samples]"; false ;; esac
 
-  # The case under test: the needle on every line (20000 hits). A separate
-  # tank, because the baseline just marked T1 dry.
+  # The case under test: the needle on every line (20000 hits). A fourth tank,
+  # because the three baselines just marked T1-T3 dry.
   _stub_dense_capture /home/build/workspace/project-checkout-dir
   t0="$(_burn_now_ms)"
-  run clikae burn codex T2 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+  run clikae burn codex T4 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
     -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
   t1="$(_burn_now_ms)"
   [ "$status" -ne 0 ]
@@ -2217,7 +2252,13 @@ STUB
   [ "$base_ms" -ge 500 ] || base_ms=500
   ceiling_ms=$((base_ms * 8))
   [ "$dense_ms" -le "$ceiling_ms" ] || {
-    echo "dense-needle classification took ${dense_ms}ms, over 8x the no-needle baseline (${ceiling_ms}ms) — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline)"
+    echo "dense-needle classification took ${dense_ms}ms, over 8x the MEDIAN no-needle baseline (${ceiling_ms}ms, from [$samples]) — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline)"
+    false; }
+  # The coarse second bound: only for the case the ratio cannot see, a baseline
+  # so slow that 8x of it stops excluding the regression. ~100x above every
+  # healthy measurement, so slowness alone never trips it.
+  [ "$dense_ms" -le 60000 ] || {
+    echo "dense-needle classification took ${dense_ms}ms — past the absolute sanity ceiling (60000ms). The ratio (baseline ${base_ms}ms) is the sensitive half of this guard; this half exists for a baseline too slow for the ratio to mean anything."
     false; }
 }
 
