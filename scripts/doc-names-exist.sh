@@ -193,7 +193,13 @@ opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-featu
 while IFS= read -r opt; do
   [ -n "$opt" ] || continue
   [ -f "$ALLOW_OPT" ] && grep -qE "^${opt}[[:space:]]" "$ALLOW_OPT" && continue
-  grep -qE "set-option.*\b${opt}\b" lib/core/tmux.sh 2>/dev/null \
+  # 🔴 P2-5 (2026-09-14 round-2 review): this VERIFY half used `\b${opt}\b`
+  # after the extract half above was fixed, and `-` is a non-word character,
+  # so `status-left` was "set" by the `status-left-length` line: deleting the
+  # real `status-left` (or `status-right`) line left the gate green — the row
+  # itself and its clock, vouched for by their longer siblings. The boundary
+  # is now "not a name character, `-` included", on both sides.
+  grep -qE "set-option.*(^|[^A-Za-z0-9_-])${opt}([^A-Za-z0-9_-]|\$)" lib/core/tmux.sh 2>/dev/null \
     || say_fail "$opt — named in DESIGN-tmux, never set in lib/core/tmux.sh"
 done <<OPTS
 $opts

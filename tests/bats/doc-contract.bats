@@ -102,6 +102,35 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   [[ "$output" == *"window-size"* ]] || { echo "$output"; false; }
 }
 
+# P2-5 (2026-09-14 round-2 review): the verify half matched `\bstatus-left\b`
+# inside `status-left-length`, so two of the seven status options were vouched
+# for by their longer siblings. Every one of the seven is deleted in turn from
+# a copy, and the gate must go red NAMING that option — including the two that
+# only ever exist in the source as a prefix of another option once deleted.
+@test "doc gate: deleting the line that sets any status-* option turns the gate red" {
+  local opt line
+  for opt in status-left status-right status-left-length status-right-length \
+             status-justify status-interval status-format; do
+    _copy_repo
+    # The exact text of the setting line, up to the option name and the
+    # character after it — `status-left ` does not match `status-left-length`.
+    case "$opt" in
+      status-format) line="set-option -t \"=\$session:\" 'status-format[0]'" ;;
+      *)             line="set-option -t \"=\$session:\" $opt " ;;
+    esac
+    grep -vF -- "$line" "$REPO/lib/core/tmux.sh" > "$REPO/tmux.sh.new"
+    mv "$REPO/tmux.sh.new" "$REPO/lib/core/tmux.sh"
+    # The copy must really have lost that line — a no-op edit would make this
+    # test green for the wrong reason.
+    ! grep -qE "set-option.*[\"' ]${opt}[\"' []" "$REPO/lib/core/tmux.sh" \
+      || { echo "$opt: fixture edit did not remove the line"; false; }
+    run _gate_in_copy
+    [ "$status" -ne 0 ] || { echo "$opt: deleted, and the gate stayed green"; false; }
+    [[ "$output" == *"$opt — named in DESIGN-tmux, never set"* ]] || { echo "$opt: $output"; false; }
+    rm -rf "$REPO"
+  done
+}
+
 @test "doc gate: fires on a name whose prefix is not in the legacy list" {
   # 🔴 Until 2026-08-16 check 1 extracted names by a hand-written prefix list —
   # a guess at what the docs name. Measured: 20 real functions were named in the
