@@ -282,6 +282,116 @@ live_usage() {
   [ "$output" = rrr ]
 }
 
+# --- P2 (2026-09-14 round-4 review): the reroute refresh cap took the first
+# 3 candidates by LISTING (alphabetical) order, ran BEFORE ranking existed,
+# so the vendor calls landed on tanks that could never win while the tank
+# that DID win was the one candidate left unverified with a stale, flattering
+# on-disk reading. Rank first (on whatever's known), spend the live budget
+# only on candidates that ranking says could win, bounded by the same cap. ---
+
+@test "P2 (round-4 review): the review's 6-candidate scenario — cap spent on a plausible winner, not the alphabet" {
+  # Reproduces the review's exact fixture shape: 6 same-engine candidates,
+  # cap=3. d4 has an on-disk reading from 5 minutes ago (inside the age
+  # ceiling, so Pass 3's snapshot legitimately ranks it tier-0) claiming 5%
+  # used — but its REAL vendor value is 99%. a1/b2/c3/e5/f6 have never been
+  # fetched (unknown on disk). On 9da32cd: Pass 1 refreshes the first 3
+  # candidates BY LISTING ORDER (a1, b2, c3) regardless of what's already on
+  # disk, d4 is never touched this call, and its stale 5% — lower than
+  # anything a1/b2/c3's REAL headroom turns out to be — wins outright.
+  # After the fix: d4's on-disk tier-0 reading gets it verified FIRST (it's
+  # the one candidate that looks like it could win), revealing the true 99%;
+  # the remaining 2 slots (cap=3 total) go to a1 and b2 in listing order
+  # (c3 is never reached — an accepted, disclosed cap-bound limit, same as
+  # today's), and the best VERIFIED reading (b2, 40%) wins.
+  clikae init claude a1; clikae init claude b2; clikae init claude c3
+  clikae init claude d4; clikae init claude e5; clikae init claude f6
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage a1 70; live_usage b2 40; live_usage c3 10
+  live_usage e5 99; live_usage f6 99
+  live_usage d4 99   # d4's REAL vendor value — only reached if it's refreshed
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local d4_at; d4_at=$(( $(date +%s) - 300 ))   # 5 minutes ago
+  jq -cn --argjson at "$d4_at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/d4.json"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = b2 ]
+}
+
+@test "P2 (round-4 review): a stale-but-good-looking on-disk reading is verified before it can win" {
+  # 4 candidates, cap=3. zstale's on-disk 5% (10 minutes old, inside the
+  # ceiling) looks best of all four with nothing refreshed yet, so it is the
+  # FIRST one the fix spends a vendor call on — revealing 99%. The remaining
+  # 2 slots go to aaa and fresh50 (next in listing order); mmm is never
+  # reached. The best VERIFIED reading (fresh50, 50%) wins — never zstale's
+  # never-verified-on-9da32cd 5%.
+  clikae init claude aaa; clikae init claude fresh50
+  clikae init claude mmm; clikae init claude zstale
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage aaa 80; live_usage fresh50 50; live_usage mmm 70
+  live_usage zstale 99   # zstale's REAL vendor value
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local stale_at; stale_at=$(( $(date +%s) - 600 ))   # 10 minutes ago
+  jq -cn --argjson at "$stale_at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/zstale.json"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = fresh50 ]
+}
+
+@test "P2 (round-4 review): a same-account sibling never spends a second refresh slot" {
+  # sib1/sib2 share an account; lone is independent — 3 tanks total, same as
+  # the cap. On 9da32cd, Pass 1 refreshes ALL THREE before Pass 2 ever
+  # collapses the siblings (2 of the 3 calls land on the SAME account). After
+  # the fix, Pass 2's collapse runs before any live call, so sib2 is never a
+  # ranking candidate at all — only sib1 (the representative) and lone are
+  # ever refreshed: 2 calls, not 3.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  export USAGE_CALLS="$TEST_HOME/calls"
+  # multi_curl_stub's own stub doesn't count calls; wrap it so this test can.
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+tok="$(printf '%s' "$config" | sed -n 's/.*Bearer \([^"]*\)".*/\1/p')"
+line="$(awk -v t="$tok" '$1==t{print; exit}' "$CLIKAE_TEST_PCTMAP" 2>/dev/null)"
+if [ -z "$line" ]; then echo '{"error":"unauthorized"}'; exit 22; fi
+read -r _ window weekly <<< "$line"
+printf '{"five_hour":{"utilization":%s,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":%s,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}\n' "$window" "$weekly"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  live_usage sib1 20; live_usage sib2 25; live_usage lone 60
+  printf '{"emailAddress":"shared@acct"}\n' > "$CLIKAE_HOME/profiles/claude/sib1/.claude.json"
+  printf '{"emailAddress":"shared@acct"}\n' > "$CLIKAE_HOME/profiles/claude/sib2/.claude.json"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = sib1 ]
+  [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" -eq 2 ]
+}
+
 @test "cached vendor thresholds pick the right glyph" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
@@ -562,7 +672,19 @@ STUB
   [ "$status" -eq 0 ]
 }
 
-@test "the 'stale allowed' design: a 3-day-old reading still ranks (unlike usage_cached_fields' fresh-only gate)" {
+@test "P2 (round-4 review): usage_cache_peek trusts a reading up to its age ceiling, unknown past it" {
+  # Round-3's version of this test was named "the 'stale allowed' design"
+  # and asserted a 3-DAY-old reading still ranks — that was exactly the
+  # design the round-4 review's P2 found costing burn a wrong hop (a stale
+  # but flattering on-disk reading, never re-verified, wins a ranking a
+  # freshly-verified worse-looking candidate should have won). The new
+  # contract: a reading survives up to _USAGE_CACHE_PEEK_MAX_AGE_SEC old
+  # (stale-but-recent still beats no reading — burn's ranking still needs
+  # SOME signal when nothing has refreshed a tank yet this call), unknown
+  # once it's older than that — never a 3-day-old number pretending to be
+  # current. See this file's own 6-candidate P2 scenario (above,
+  # "_burn_next_same_engine" tests) for this mattering end-to-end, not just
+  # at this function's own boundary.
   usage_fixture
   clikae init claude old
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
@@ -571,21 +693,28 @@ STUB
   source "$CLIKAE_LIB/core/adapter_loader.sh"
   source "$CLIKAE_LIB/core/limit.sh"
   source "$CLIKAE_LIB/core/usage.sh"
-  local now old_at
-  now="$(date +%s)"; old_at=$((now - 259200))   # 3 days ago
+  local now recent_at stale_at
+  now="$(date +%s)"
+  recent_at=$((now - 600))    # 10 minutes ago — inside the 900s ceiling
+  stale_at=$((now - 1200))    # 20 minutes ago — past it
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
   # A reading whose window has NOT reset (resets_at still in the future) —
-  # 3 days stale by the clock, but the number is still the best evidence
-  # burn has. usage_cache_peek's own header: "a STALE reading is still
-  # returned here (stale headroom beats no headroom for ranking purposes)".
-  jq -cn --argjson pct 30 --argjson at "$old_at" \
+  # 10 minutes stale by the clock, still trusted.
+  jq -cn --argjson pct 30 --argjson at "$recent_at" \
     '{window_pct:$pct,weekly_pct:$pct,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/old.json"
-  run usage_cache_peek claude old
+  run usage_cache_peek claude old "$now"
   [ "$status" -eq 0 ]
   [ "$output" = $'30\t30\t30' ]
-  # The TTL-gated function, by contrast, correctly refuses it — the two
-  # functions' different contracts are the point, not a bug in either.
+  # Same shape, 20 minutes old this time — past the ceiling, "unknown".
+  jq -cn --argjson pct 30 --argjson at "$stale_at" \
+    '{window_pct:$pct,weekly_pct:$pct,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/old.json"
+  run usage_cache_peek claude old "$now"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+  # The TTL-gated function, by contrast, refuses BOTH (120s default) — the
+  # two functions' different contracts are the point, not a bug in either.
   run usage_cached_fields claude old "$now"
   [ "$status" -ne 0 ]
 }

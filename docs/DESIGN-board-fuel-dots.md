@@ -272,15 +272,33 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   after the run's own artifact check (so it can never delay judging that
   run's outcome), never before launching (the launch itself still pays
   zero vendor round-trips — round-1 review, P1-2/P1-3/P1-4, unchanged).
-- **(b)** when the named tank is dry and burn must reroute, it refreshes
-  each surviving CANDIDATE's reading once, right before ranking them
-  (bounded to candidates only — never a tank already skipped as
-  live/busy/solo/same-account — reusing the adapter's own existing
-  `--max-time`, no new bound invented). This is the one moment a stale
-  number would cost burn a wrong hop. Round-3 review, P3-4: candidates *
-  `--max-time 8` has no TOTAL bound as a fleet grows, so the live refresh
-  is capped to the first 3 eligible candidates by listing order; later
-  candidates still rank, on whatever reading is already on disk.
+- **(b)** when the named tank is dry and burn must reroute, this is the one
+  moment a stale number would cost burn a wrong hop — so surviving
+  CANDIDATES are ranked FIRST, on whatever is already known (their cache,
+  through `usage_cache_peek`'s own age ceiling — see below), and ONLY THEN
+  does burn spend live vendor calls verifying the candidates that ranking
+  says could actually win, most-plausible first, bounded by
+  `_BURN_REROUTE_REFRESH_CAP` (3 by default; named once in
+  `lib/commands/burn.sh`, never re-typed). Round-3 review, P3-4, found
+  `candidates * --max-time 8` has no total bound as a fleet grows — the cap
+  answers that — but round-4 review, P2, found the round-3 shape spent that
+  cap on the first 3 candidates by LISTING (alphabetical) order, refreshed
+  BEFORE ranking existed: the calls landed on tanks that could never win
+  while the tank that DID win was routinely the one candidate left
+  unverified with a stale, flattering on-disk reading. Ranking first and
+  spending the budget on the winning candidate(s) closes that: a same-account
+  sibling was already collapsed to one candidate before any live call (Pass
+  2, below), so this can never spend two calls on one account either — one
+  refresh per account, reusing that one reading. A candidate the cap never
+  reaches keeps whatever `usage_cache_peek` already returned for it (fresh,
+  aged, or unknown past the ceiling) — never a live call, same as today.
+  `usage_cache_peek`'s own age ceiling (`_USAGE_CACHE_PEEK_MAX_AGE_SEC`,
+  `lib/core/usage.sh`, 15 minutes by default) is the second half of the
+  round-4 fix: a reading older than that is "unknown" for ranking purposes,
+  never a flattering-but-stale percentage — belt-and-suspenders with the
+  reorder above, since a reading young enough to survive the ceiling can
+  still legitimately outrank an unverified tier and get prioritised for a
+  live call, the same as any other tier-0 candidate would.
 - **(c)** the board NEVER fetches. It reads whatever is already on disk,
   however old, via `usage_board_fields` — silently within the TTL, WITH its
   age alongside it ("window 44% · weekly 20% · 3h ago") once past the TTL,

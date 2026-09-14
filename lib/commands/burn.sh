@@ -399,6 +399,12 @@ _burn_output_tail() {
   printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
+# P2 (round-4 review): the reroute refresh budget — see _burn_next_same_engine
+# below. Named once, used at every site that used to hardcode "3" (the cap
+# check itself, its own comment, and docs/DESIGN-board-fuel-dots.md's prose)
+# so the three copies can't drift from each other again.
+_BURN_REROUTE_REFRESH_CAP=${_BURN_REROUTE_REFRESH_CAP:-3}
+
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto — the reserve is not
 # naive (the 2026-06-04 "burn-out" dogfood):
@@ -437,20 +443,19 @@ _burn_next_same_engine() {
   last_hop="${tried##* }"
   case "$last_hop" in "$cli/"*) last_acct="$(_limit_tank_account "$cli" "${last_hop#*/}" 2>/dev/null || true)" ;; esac
 
-  # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays.
-  # peak/up/uw empty = no usable reading (unknown).
-  # P2-1(b) (round-2 review): this is THE one moment a stale headroom number
-  # costs burn a wrong hop — we are about to CHOOSE among these candidates —
-  # so unlike a plain cache peek, each ELIGIBLE candidate's reading is
-  # refreshed with one real vendor call before it is read (bounded by the
-  # adapter's own existing --max-time; no new bound invented). Never for a
-  # candidate that got `continue`d above (solo/in-use/same-account/busy):
-  # bounded to candidates only, not the whole fleet. usage_read is still the
-  # ONLY writer of this cache (see lib/core/usage.sh's header) — this calls
-  # it the same way `clikae usage --fresh` does, just once per candidate,
-  # here, instead of leaving it to whenever a human last ran that command.
+  # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays,
+  # read CACHE-ONLY (usage_cache_peek never forks the adapter or calls the
+  # vendor — see lib/core/usage.sh's header). peak/up/uw empty = no usable
+  # reading (unknown). P2 (round-4 review): this pass used to spend the live
+  # vendor budget HERE, on listing-order candidates, before ranking existed —
+  # so the calls landed on whoever sorted first alphabetically, not on
+  # whoever could actually win, and the tank that DID win was routinely the
+  # one unverified candidate left holding a stale, flattering number
+  # (usage_cache_peek's own contract: "A STALE reading is still returned
+  # here"). Rank first (Pass 3, on-disk readings only); the live budget is
+  # spent AFTER that ranking exists, only on candidates it says could win —
+  # see Pass 4 below.
   local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=()
-  local _refreshed=0   # P3-4 (round-3 review): cap live refreshes — see below
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -480,14 +485,6 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
-    # P3-4 (round-3 review): total reroute wall-clock is candidates *
-    # curl's own --max-time 8, unbounded as the fleet grows. Cap the LIVE
-    # refresh to the first 3 eligible candidates by listing order; later
-    # ones still rank, on whatever reading is already on disk.
-    if [ "$_refreshed" -lt 3 ]; then
-      declare -F usage_read >/dev/null && usage_read "$cli" "$t" 1 >/dev/null 2>&1
-      _refreshed=$((_refreshed + 1))
-    fi
     local up="" uw="" peak="" fields
     if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
       IFS=$'\t' read -r up uw peak <<< "$fields"
@@ -531,11 +528,71 @@ EOF
     fi
   done
 
-  # Pass 3 — pick the best surviving (non-skipped) candidate, three tiers.
-  # P2-3 (round-2 review): WITHIN a tier, ordered by window_pct (the 5-hour
-  # clock a burn starting now actually runs against) first, weekly_pct only
-  # breaking a tie — swapped from the round-1 shape, which ordered by
-  # weekly_pct first. See this function's own header for why.
+  # Pass 3 — freeze a tier for every surviving (non-skipped) candidate on
+  # WHATEVER is already known (cache, age-penalised by usage_cache_peek's own
+  # ceiling — see lib/core/usage.sh) — a snapshot taken once, before any live
+  # call this invocation makes, so Pass 4 can decide who is worth a vendor
+  # call without one candidate's fresh reading shadowing another's untested
+  # one. tier 0 = known <90% (best), 1 = unknown, 2 = known >=90% (worst) —
+  # same three tiers Pass 5's final ranking below uses.
+  local -a c_tier0=()
+  for (( i = 0; i < n; i++ )); do
+    if [ -z "${c_peak[i]}" ]; then c_tier0[i]=1
+    elif [ "${c_peak[i]}" -ge 90 ]; then c_tier0[i]=2
+    else c_tier0[i]=0
+    fi
+  done
+
+  # Pass 4 — P2 (round-4 review): spend the live budget on the candidates
+  # that Pass 3's on-disk snapshot says could actually win — not on whoever
+  # sorted first alphabetically. That was the bug: 3 vendor calls landed on
+  # the first 3 candidates BY LISTING ORDER, so a 4th candidate holding a
+  # stale but flattering on-disk number could win the whole ranking without
+  # ever being verified this call (usage_cache_peek's own contract: "A STALE
+  # reading is still returned here"). Selection-sort the top
+  # _BURN_REROUTE_REFRESH_CAP candidates OFF THE FROZEN SNAPSHOT (never off
+  # each other's just-refreshed numbers, so a same-tier sibling that hasn't
+  # been checked yet is never skipped just because the one picked first
+  # happened to verify well), refresh each with one real vendor call. A
+  # same-account sibling was already collapsed to one candidate in Pass 2
+  # (c_skip), so this can never spend two calls on one account — one refresh
+  # per account, reusing that one reading.
+  local -a c_picked=()
+  for (( i = 0; i < n; i++ )); do c_picked[i]=0; done
+  local calls=0 pick pick_tier pick_up pick_uw
+  while [ "$calls" -lt "$_BURN_REROUTE_REFRESH_CAP" ]; do
+    pick=-1; pick_tier=9; pick_up=999999; pick_uw=999999
+    for (( i = 0; i < n; i++ )); do
+      [ "${c_skip[i]}" = 0 ] || continue
+      [ "${c_picked[i]}" = 0 ] || continue
+      local tier up uw
+      tier="${c_tier0[i]}"
+      if [ "$tier" = 1 ]; then up=0; uw=0; else up="${c_up[i]}"; uw="${c_uw[i]}"; fi
+      if [ "$tier" -lt "$pick_tier" ] ||
+         { [ "$tier" -eq "$pick_tier" ] && { [ "$up" -lt "$pick_up" ] ||
+           { [ "$up" -eq "$pick_up" ] && [ "$uw" -lt "$pick_uw" ]; }; }; }; then
+        pick=$i; pick_tier=$tier; pick_up=$up; pick_uw=$uw
+      fi
+    done
+    [ "$pick" -ge 0 ] || break
+    c_picked[pick]=1
+    declare -F usage_read >/dev/null && usage_read "$cli" "${c_tank[pick]}" 1 >/dev/null 2>&1 || true
+    calls=$((calls + 1))
+    local up="" uw="" peak="" fields
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "${c_tank[pick]}")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
+      c_up[pick]="$up"; c_uw[pick]="$uw"; c_peak[pick]="$peak"
+    fi
+  done
+
+  # Pass 5 — pick the best surviving candidate, three tiers, using whatever
+  # is now known: freshly-verified where Pass 4 spent the budget, the Pass 3
+  # snapshot everywhere else. P2-3 (round-2 review): WITHIN a tier, ordered
+  # by window_pct (the 5-hour clock a burn starting now actually runs
+  # against) first, weekly_pct only breaking a tie — swapped from the
+  # round-1 shape, which ordered by weekly_pct first. See this function's
+  # own header for why.
   local best="" best_tier=9 best_uw=999999 best_up=999999
   for (( i = 0; i < n; i++ )); do
     [ "${c_skip[i]}" = 0 ] || continue

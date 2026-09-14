@@ -86,7 +86,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had ever refreshed the cache before), the board shows a stale-but-recent
   reading with its age instead of hiding it, a reset instant already past
   reads as 0% used rather than a stale percentage, and intra-tier ordering
-  is window_pct first, weekly_pct only the tie-break).
+  is window_pct first, weekly_pct only the tie-break; round-3 review: the
+  Keychain read's own timeout warning is no longer swallowed, the reroute's
+  live vendor calls are capped so a growing fleet has a bounded wall-clock
+  cost, and a real bash 3.2 interpreter (not just a grep for known
+  constructs) gates every shipped file in CI; round-4 review: that round-3
+  cap spent its live-verify budget on candidates by listing order, before
+  ranking existed — so the calls could land on tanks that could never win
+  while the tank that DID win was the one candidate left unverified with a
+  stale, flattering on-disk reading. Candidates are now ranked FIRST on
+  whatever's already known, and the live budget is spent only on the
+  candidates that ranking says could win; a stale-but-recent on-disk
+  reading still counts (up to a new 15-minute age ceiling — past it it's
+  "unknown", never a flattering stale percentage), and a same-account
+  sibling can no longer burn a second refresh slot on the same real quota).
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

@@ -129,26 +129,53 @@ _USAGE_NORM_STAMP_JQ='
   def expired: if . == null then false else ((try norm_stamp catch ($now+1)) <= $now) end;
 '
 
+# P2 (round-4 review): how old a reading can be and still be trusted for
+# burn's ranking, named once and used at usage_cache_peek's one call site
+# below. Age is (a plain cache peek's only clock) `scanned_at` — "when
+# usage_read last actually looked" (see the (a)/(b)/`scanned_at` vs
+# `cached_at` note above), never `cached_at` alone: a codex transcript
+# reading's `cached_at` is deliberately the EVENT's own old timestamp
+# (P2-4, round-1 review) even when it was scanned moments ago, and ranking
+# by that would make almost every codex candidate "unknown". 15 minutes is
+# a small fraction of the 5-hour window burn ranks against (P2-3's "the
+# 5-hour clock a burn starting now actually runs against") — long enough
+# that a tank refreshed by a recent `clikae usage`, burn's own run-end
+# refresh (a), or a reroute's Pass 4 candidate refresh (b, lib/commands/
+# burn.sh's `_burn_next_same_engine`) still counts, short enough that the
+# reset-instant-passed branch below can't be
+# won by a reading old enough to predate the reset it's claiming to know
+# about.
+_USAGE_CACHE_PEEK_MAX_AGE_SEC=${_USAGE_CACHE_PEEK_MAX_AGE_SEC:-900}
+
 # Cache-only peek: never calls the vendor, never forks the adapter, never
 # writes. burn's candidate ranking needs a headroom number to order tanks by
 # — but burn's launch/reroute path must not pay a vendor round-trip just to
 # pick one (that bound is (b) above's job, done once per reroute, not here).
-# A STALE reading is still returned here (stale headroom beats no headroom
-# for ranking purposes) — EXCEPT a window/weekly whose own reset instant has
-# already passed, which reads as 0% used, never as its last stale reading
-# (P2-1(d) above). Only a missing cache, missing jq, or a non-vendor/
-# incomplete reading is "unknown": empty stdout, rc=4 (jq -er's exit status
-# when the pipeline produces no output at all, not rc=1 — rc=1 is "last
-# value was false/null", which never happens here since select() either
-# produces a value or nothing).
+# A reading up to _USAGE_CACHE_PEEK_MAX_AGE_SEC old is still returned here
+# (stale-but-recent headroom beats no headroom for ranking purposes) —
+# EXCEPT a window/weekly whose own reset instant has already passed, which
+# reads as 0% used, never as its last stale reading (P2-1(d) above). Past
+# the age ceiling the reading is "unknown", not "0% used because the reset
+# passed": P2 (round-4 review) — a reading old enough to be unverifiable is
+# also old enough to have crossed a reset instant it never recorded, and an
+# unrefreshed candidate's number only gets systematically MORE flattering
+# with age (window/weekly readings only fall or reset, never rise), so
+# trusting an old "0%" here is exactly backwards from what "stale beats
+# nothing" was meant to buy. Only a missing cache, missing jq, a reading
+# older than the ceiling, or a non-vendor/incomplete reading is "unknown":
+# empty stdout, rc=4 (jq -er's exit status when the pipeline produces no
+# output at all, not rc=1 — rc=1 is "last value was false/null", which
+# never happens here since select() either produces a value or nothing).
 usage_cache_peek() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json" now="${3:-}"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   [ -n "$now" ] || now="$(date +%s)"
-  jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
+  jq -er --argjson now "$now" --argjson max_age "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript") |
     select(.window_pct != null and .weekly_pct != null) |
+    ((.scanned_at // .cached_at)) as $scanned |
+    select($scanned != null and $scanned <= $now and ($now - $scanned) <= $max_age) |
     (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
     (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
     [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
