@@ -1,5 +1,50 @@
 # shellcheck shell=bash
 
+# _settings_lock_acquire -> take the ONE lock that serializes a cockpit role
+# transition (lib/commands/cockpit.sh: move, repair, --off) and a `settings
+# apply` write: a `mkdir` in $CLIKAE_HOME/state (atomic on every filesystem,
+# bash 3.2, no flock on macOS). Waits up to CLIKAE_SETTINGS_LOCK_WAIT_S
+# seconds (default 20), then refuses. Never breaks a lock on its own: a holder
+# whose pid is gone is named, with the exact removal command, because a
+# crashed transition is also the moment to look at `clikae doctor` first.
+#
+# #63 round-5 P2-4: without it, two moves interleaved — A→B wrote state=B and
+# paused; B→A installed A, wrote state=A, removed B; A→B resumed and removed
+# A. Both returned 0 and neither tank was guarded. A `settings apply` holding
+# a snapshot taken before an install could likewise write the guard away.
+_settings_lock_acquire() {
+  local d="$CLIKAE_HOME/state" lock pid tries=0 max="${CLIKAE_SETTINGS_LOCK_WAIT_S:-20}"
+  case "$max" in ''|*[!0-9]*) max=20 ;; esac
+  lock="$d/settings.lock"
+  mkdir -p "$d" 2>/dev/null || { log_err "Could not create $d"; return 1; }
+  [ ! -L "$d" ] || { log_err "Refusing to lock: $d is a symlink"; return 1; }
+  while ! mkdir "$lock" 2>/dev/null; do
+    pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      log_err "A clikae cockpit/settings change died holding $lock (pid $pid is not running). Nothing was changed. Check clikae doctor, then remove the lock: rm -rf '$lock'"
+      return 1
+    fi
+    if [ "$tries" -ge $((max * 10)) ]; then
+      log_err "Another clikae cockpit/settings change is in progress (pid ${pid:-unknown}; lock $lock). Nothing was changed — try again when it finishes."
+      return 1
+    fi
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  printf '%s\n' "$$" > "$lock/pid" || { rmdir "$lock" 2>/dev/null; log_err "Could not write $lock/pid"; return 1; }
+  _SETTINGS_LOCK_HELD="$lock"
+}
+
+# _settings_lock_release -> drop the lock, only if this process holds it.
+_settings_lock_release() {
+  local lock="${_SETTINGS_LOCK_HELD:-}"
+  [ -n "$lock" ] || return 0
+  _SETTINGS_LOCK_HELD=""
+  [ "$(head -n 1 "$lock/pid" 2>/dev/null)" = "$$" ] || return 0
+  rm -f "$lock/pid" 2>/dev/null
+  rmdir "$lock" 2>/dev/null || true
+}
+
 # _settings_write_file <file> <content> <label>  ->  write <content> to <file>
 # atomically: a temp file seeded with the live file's owner/mode, a backup of
 # the live file made right before it is replaced, then a rename into place.
@@ -177,15 +222,27 @@ HELP
   command -v jq >/dev/null 2>&1 || { log_err 'settings apply requires jq; permissions template not applied'; return 3; }
   if [ -n "$tank" ]; then
     profile_exists "$engine" "$tank" || { log_err "Tank does not exist: $engine/$tank"; return 1; }
-    _settings_tank "$engine" "$tank" "$mode" "$template"
-    return $?
   fi
-  local found=0
-  for d in "$(profiles_root)/$engine"/*; do
-    [ -d "$d" ] || continue
-    found=1
-    _settings_tank "$engine" "${d##*/}" "$mode" "$template" || rc=1
-  done
-  [ "$found" -eq 1 ] || printf 'No %s tanks found.\n' "$engine"
-  return "$rc"
+  # #63 round-5 P2-4: a writing apply holds the cockpit's lock (see
+  # _settings_lock_acquire), inside a subshell so its traps never replace a
+  # caller's (clikae init runs this too). Read-only modes take no lock.
+  (
+    if [ "$mode" = apply ]; then
+      _settings_lock_acquire || exit 1
+      trap '_settings_lock_release' EXIT
+      trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+    fi
+    if [ -n "$tank" ]; then
+      _settings_tank "$engine" "$tank" "$mode" "$template"
+      exit $?
+    fi
+    found=0
+    for d in "$(profiles_root)/$engine"/*; do
+      [ -d "$d" ] || continue
+      found=1
+      _settings_tank "$engine" "${d##*/}" "$mode" "$template" || rc=1
+    done
+    [ "$found" -eq 1 ] || printf 'No %s tanks found.\n' "$engine"
+    exit "$rc"
+  )
 }

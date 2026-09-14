@@ -462,14 +462,32 @@ any live --allow-agents allowance.
 EOF
 }
 
+# _cockpit_locked <fn> [args…] -> run one role transition while holding the
+# settings lock (#63 round-5 P2-4: read state, install, record, disarm is ONE
+# transaction; a second `clikae cockpit` waits, then refuses). Released on
+# every exit, log_fail and signals included; a SIGKILL leaves a lock whose
+# pid is gone, which the next run names instead of silently breaking.
+_cockpit_locked() {
+  # shellcheck source=./settings.sh
+  source "$CLIKAE_LIB/commands/settings.sh"
+  _settings_lock_acquire || exit 1
+  trap '_settings_lock_release' EXIT
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+  local rc=0
+  "$@" || rc=$?
+  _settings_lock_release
+  trap - EXIT HUP INT TERM
+  return "$rc"
+}
+
 cmd_cockpit() {
   case "${1:-}" in
     -h|--help) _cockpit_help; return 0 ;;
-    --off)     shift; [ $# -eq 0 ] || log_fail "Unexpected argument: $1"; _cockpit_off ;;
+    --off)     shift; [ $# -eq 0 ] || log_fail "Unexpected argument: $1"; _cockpit_locked _cockpit_off ;;
     --allow-agents)
       shift; [ $# -eq 1 ] || log_fail "--allow-agents needs exactly one duration (e.g. 4h)"
       _cockpit_allow_agents "$1" ;;
     '') _cockpit_show ;;
-    *) _cockpit_move "$@" ;;
+    *) _cockpit_locked _cockpit_move "$@" ;;
   esac
 }

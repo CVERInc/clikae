@@ -173,6 +173,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     unguarded recorded cockpit or an empty record before. `clikae doctor`
     now scans for guards even when no cockpit is recorded, and names an
     unsafe or malformed state file.
+  - A role transition (move, repair, `--off`) holds one `mkdir` lock in the
+    state directory from reading the record to disarming the old tank;
+    `clikae settings apply` holds the same lock while it writes. A second
+    transition waits (`CLIKAE_SETTINGS_LOCK_WAIT_S`, default 20 s), then
+    refuses. Before, two interleaved moves both returned 0 and left neither
+    tank guarded. A lock whose holder died is named with its removal
+    command, never broken silently; `clikae doctor` reports it.
 
 ### Added
 

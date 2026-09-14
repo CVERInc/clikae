@@ -249,6 +249,15 @@ _doctor_cockpit() {
   if ! _cockpit_state_path_ok; then
     printf '  %-16s %s\n' "cockpit" "state file $state_file (or its directory) is a symlink or not a regular file — it is ignored, and clikae cockpit refuses to change the role until it is removed"
   fi
+  # #63 round-5 P2-4: a transition killed while holding the settings lock
+  # leaves it behind, and every later `clikae cockpit` refuses — name it here.
+  local lock="$CLIKAE_HOME/state/settings.lock" lock_pid
+  if [ -d "$lock" ]; then
+    lock_pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      printf '  %-16s %s\n' "cockpit" "stale settings lock $lock (pid $lock_pid is not running) — a cockpit/settings change died mid-way; check the lines below, then: rm -rf '$lock'"
+    fi
+  fi
   local cur; cur="$(_cockpit_state_read)"
   local cur_engine="" cur_tank=""
   case "$cur" in

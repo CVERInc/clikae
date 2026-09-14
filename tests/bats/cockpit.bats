@@ -316,6 +316,93 @@ _no_unguarded_cockpit() {
   [[ "$output" == *"is a symlink or not a regular file"* ]] || false
 }
 
+_wait_for_file() {
+  local i
+  for i in $(seq 1 400); do [ -e "$1" ] && return 0; sleep 0.05; done
+  return 1
+}
+
+@test "two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)" {
+  # codex review schedule, with the real functions: P1 (A→B) installs B,
+  # writes the record, pauses; P2 (B→A) runs start to finish; P1 resumes.
+  # On f20a603 both returned 0 and neither A nor B was guarded.
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  local pd="$BATS_TEST_TMPDIR/pause"; mkdir -p "$pd"
+  BASH_ENV="$(_state_probe_env)" CKPT_PROBE=pause CKPT_PAUSE_DIR="$pd" \
+    "$CLIKAE_BIN" cockpit claude B > "$BATS_TEST_TMPDIR/p1.out" 2>&1 &
+  local p1=$!
+  _wait_for_file "$pd/paused" || { : > "$pd/go"; wait "$p1" || true; echo "P1 never reached the state write" >&2; false; }
+  local p2_status=0
+  CLIKAE_SETTINGS_LOCK_WAIT_S=1 "$CLIKAE_BIN" cockpit claude A > "$BATS_TEST_TMPDIR/p2.out" 2>&1 || p2_status=$?
+  : > "$pd/go"
+  local p1_status=0
+  wait "$p1" || p1_status=$?
+  cat "$BATS_TEST_TMPDIR/p1.out" "$BATS_TEST_TMPDIR/p2.out" >&2
+  [ "$p1_status" -eq 0 ]
+  [ "$p2_status" -ne 0 ]
+  grep -q "in progress" "$BATS_TEST_TMPDIR/p2.out"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/B" ]
+  _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  _no_unguarded_cockpit
+  [ ! -e "$CLIKAE_HOME/state/settings.lock" ]
+}
+
+@test "a waiting move proceeds once the running one finishes (#63 r5 P2-4)" {
+  clikae init claude A
+  clikae init claude B
+  clikae init claude C
+  clikae cockpit claude A
+  local pd="$BATS_TEST_TMPDIR/pause"; mkdir -p "$pd"
+  BASH_ENV="$(_state_probe_env)" CKPT_PROBE=pause CKPT_PAUSE_DIR="$pd" \
+    "$CLIKAE_BIN" cockpit claude B > "$BATS_TEST_TMPDIR/p1.out" 2>&1 &
+  local p1=$!
+  _wait_for_file "$pd/paused" || { : > "$pd/go"; wait "$p1" || true; false; }
+  CLIKAE_SETTINGS_LOCK_WAIT_S=30 "$CLIKAE_BIN" cockpit claude C > "$BATS_TEST_TMPDIR/p2.out" 2>&1 &
+  local p2=$!
+  sleep 0.5
+  : > "$pd/go"
+  wait "$p1"
+  wait "$p2"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/C" ]
+  _guard_installed "$CLIKAE_HOME/profiles/claude/C/settings.json"
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+}
+
+@test "--off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)" {
+  clikae init claude A
+  clikae cockpit claude A
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  printf '%s\n' "$$" > "$CLIKAE_HOME/state/settings.lock/pid"   # this live test process
+  CLIKAE_SETTINGS_LOCK_WAIT_S=1 run clikae cockpit --off
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"in progress"* ]] || false
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  CLIKAE_SETTINGS_LOCK_WAIT_S=1 run clikae settings apply claude A
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"in progress"* ]] || false
+  rm -rf "$CLIKAE_HOME/state/settings.lock"
+}
+
+@test "a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)" {
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  local dead; dead="$(sh -c 'echo $$')"
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  printf '%s\n' "$dead" > "$CLIKAE_HOME/state/settings.lock/pid"
+  run clikae cockpit claude B
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pid $dead is not running"* ]] || false
+  [[ "$output" == *"rm -rf"* ]] || false
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+  run clikae doctor
+  [[ "$output" == *"stale settings lock"* ]] || false
+}
+
 @test "moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)" {
   # codex review repro: with A armed, replace B's directory with a symlink
   # to A. On f20a603 the move returned 0, state became claude/B, and the
