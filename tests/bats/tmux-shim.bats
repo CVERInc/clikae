@@ -166,8 +166,18 @@ EOF
   # ever terminate the leapfrog. `timeout` bounds it so a regression reads as
   # a failure (rc 124), not a hang, exactly like the round-1 self-skip test.
   # Absolute path to `timeout` itself: `env PATH=... timeout` would resolve
-  # `timeout` through the very restricted PATH this test is building.
-  local timeout_bin; timeout_bin="$(command -v timeout)"
+  # `timeout` through the very restricted PATH this test is building. Stock
+  # macOS ships neither `timeout` nor `gtimeout` (same gap `_burn_timeout_bin`
+  # in lib/commands/burn.sh already documents) — skip rather than fail the
+  # runner for a tool this test needs but the platform doesn't have.
+  local timeout_bin
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="$(command -v timeout)"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="$(command -v gtimeout)"
+  else
+    skip "no timeout/gtimeout on this runner's PATH to bound the hop-ceiling probe"
+  fi
   run -127 env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.guard2bin" "$timeout_bin" 10 "$(SHIM)" -V
   [[ "$output" == *"gave up after"* ]] || { echo "expected the hop-ceiling message, got: $output"; false; }
 }
