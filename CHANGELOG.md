@@ -110,7 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Review round 3: an empty `-t` no longer counts as naming a session —
   `kill-session -t ''` (what `-t "$SESS"` becomes with `$SESS` unset) let
   tmux pick a session itself and killed the other one, or the whole server
-  when only one existed; it is now refused like a bare `kill-session`.
+  when only one existed; it is now refused like a bare `kill-session`. The
+  shim's hop counter is now bound to the process that set it (`<pid>:<n>`),
+  so a copy frozen into a tmux server no longer makes every `new-window`,
+  split or wake pane on it skip the next tmux wrapper — host guard
+  included — on its first call.
 
 ## [0.29.0] — 2026-09-11
 

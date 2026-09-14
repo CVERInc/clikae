@@ -258,9 +258,29 @@ fi
 # the one situation where "keep looking for a real binary" is both safe and
 # necessary. It is dropped again once resolution finishes — see the note
 # just above the final `exec` below for exactly when that is safe to do.
-_hops="${_CLIKAE_TMUX_SHIM_HOPS:-0}"
+#
+# 🔴 THE COUNT IS BOUND TO A PID (P2-A, clikae#97 review round 3). A bare
+# number rides along into whatever the chain finally reaches. If that is a
+# script wrapper which then execs a real tmux that forks a new server, the
+# number is frozen into the SERVER's global environment. Every pane born
+# there by anything other than `tmux_spawn_session` (`new-window`, a split,
+# clikae's own wake window) then started at "hop 1", skipped the wrapper on
+# its first call, and skipped host guard v3 with it. Measured: `unset TMUX;
+# tmux kill-server` from such a pane killed the server, rc 0. So the count
+# is stored as `<pid>:<n>` and believed only when that pid is THIS process
+# (an exec chain keeps its pid, which is exactly the leapfrog shape) or its
+# direct PARENT (a wrapper that runs `tmux` as a child instead of exec'ing
+# still loops, and must still hit the ceiling). A server, a pane, or a child
+# of a pane is a different pid, so a leaked value reads as no count at all.
+# Anything else, including an old bare number, `garbage` or an oversized
+# value, also means "no count" instead of aborting under `set -u` (P3-5,
+# same review). Pure `case` matching: no arithmetic on untrusted text.
+_hops=0
+case "${_CLIKAE_TMUX_SHIM_HOPS:-}" in
+  "$$:"[1-9]|"$PPID:"[1-9]) _hops="${_CLIKAE_TMUX_SHIM_HOPS#*:}" ;;
+esac
 _hops=$((_hops + 1))
-_CLIKAE_TMUX_SHIM_HOPS="$_hops"
+_CLIKAE_TMUX_SHIM_HOPS="$$:$_hops"
 export _CLIKAE_TMUX_SHIM_HOPS
 
 # 🔴 A HARD CEILING, OR "PREFER A BINARY" CAN ITSELF LOOP FOREVER. Measured:

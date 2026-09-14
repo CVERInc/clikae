@@ -307,6 +307,77 @@ EOF
   esac
 }
 
+# ── P2-A: the counter must not leak through the SERVER either (review round 3).
+# `env -u` above only cleans the pane `tmux_spawn_session` itself starts. A
+# server forked through a wrapper script keeps the counter in its GLOBAL
+# table, and every other pane on it (`new-window`, a split, clikae's own wake
+# window) inherits that. With a bare number it read as "already mid-cycle":
+# the pane's first `tmux` skipped the wrapper, and with host guard v3 as the
+# wrapper, `unset TMUX; tmux kill-server` from that pane killed the server.
+
+@test "launch: a new-window pane on a server born through a wrapper script goes through that wrapper on its FIRST tmux call" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  local real_tmux; real_tmux="$(command -v tmux)"
+  local bash_bin; bash_bin="$(command -v bash)"
+  mkdir -p "$TEST_HOME/.wrapperbin"
+  cat > "$TEST_HOME/.wrapperbin/tmux" <<EOF
+#!$bash_bin
+printf 'WRAP argv=%s\n' "\$*" >> "$TEST_HOME/wrap.log"
+exec "$real_tmux" "\$@"
+EOF
+  chmod +x "$TEST_HOME/.wrapperbin/tmux"
+  # shim -> wrapper script -> real tmux, and the server is born by this call.
+  PATH="$TEST_HOME/.wrapperbin:$PATH"
+  tmux_spawn_session --session newwinprobe97 -- 'sleep 30'
+  run "$real_tmux" show-environment -g _CLIKAE_TMUX_SHIM_HOPS
+  [ "$status" -eq 0 ] || { tmux kill-session -t '=newwinprobe97' 2>/dev/null || true
+    echo "premise broken: the server was not born carrying the counter: $output"; false; }
+  : > "$TEST_HOME/wrap.log"
+  # A CLEAN client (no counter of its own) opens the window, as the review
+  # measured, so the only counter the new pane can hold is the server's.
+  local out="$TEST_HOME/newwin-pane.out"
+  env -u _CLIKAE_TMUX_SHIM_HOPS "$real_tmux" new-window -d -t '=newwinprobe97:' \
+    "bash -c 'echo \"inherited=\${_CLIKAE_TMUX_SHIM_HOPS-<unset>}\" > $out; tmux -V >> $out 2>&1; echo done >> $out; sleep 30'"
+  local i=0
+  while ! grep -qx done "$out" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  tmux kill-session -t '=newwinprobe97' 2>/dev/null || true
+  grep -qx done "$out" || { echo "the new-window pane never finished: $(cat "$out" 2>/dev/null)"; false; }
+  # Premise: that pane really did inherit a counter from the server, so the
+  # assertion below is about ignoring it, not about it never being there.
+  ! grep -qx 'inherited=<unset>' "$out" || { echo "premise broken: pane inherited no counter: $(cat "$out")"; false; }
+  grep -q '^tmux ' "$out" || { echo "pane's tmux -V did not run: $(cat "$out")"; false; }
+  grep -qx 'WRAP argv=-V' "$TEST_HOME/wrap.log" || {
+    echo "the pane's first tmux call skipped the wrapper"; echo "pane: $(cat "$out")"; echo "wrap.log: $(cat "$TEST_HOME/wrap.log")"; false; }
+}
+
+@test "shim: a wrapper that runs tmux as a CHILD (not exec) still hits the hop ceiling" {
+  local bash_bin; bash_bin="$(command -v bash)"
+  mkdir -p "$TEST_HOME/.forkguard"
+  # Like the self-skip guard above, but it forks the next tmux instead of
+  # exec'ing it, so every bounce is a new pid. It carries its own depth cap
+  # so a regression reads as a failure, never as a runaway process chain.
+  cat > "$TEST_HOME/.forkguard/tmux" <<EOF
+#!$bash_bin
+_FG_DEPTH=\$(( \${_FG_DEPTH:-0} + 1 )); export _FG_DEPTH
+[ "\$_FG_DEPTH" -le 20 ] || { echo "forkguard: depth cap hit" >&2; exit 99; }
+_IFS_SAVE="\$IFS"; IFS=:
+for _d in \$PATH; do
+  IFS="\$_IFS_SAVE"
+  [ -n "\$_d" ] || continue
+  [ -x "\$_d/tmux" ] || continue
+  [ "\$_d/tmux" -ef "\$0" ] && continue
+  "\$_d/tmux" "\$@"
+  exit \$?
+done
+exit 127
+EOF
+  chmod +x "$TEST_HOME/.forkguard/tmux"
+  run -127 env -u TMUX -u _CLIKAE_TMUX_SHIM_HOPS PATH="$CLIKAE_LIB/shims:$TEST_HOME/.forkguard" "$bash_bin" "$(SHIM)" -V
+  [[ "$output" == *"gave up after"* ]] || { echo "expected the hop-ceiling message, got: $output"; false; }
+  [[ "$output" != *"depth cap hit"* ]] || { echo "the shim never recognised the forked bounce: $output"; false; }
+}
+
 @test "launch: a bare kill-server run AS the pane's own process is refused (rc 86), the throwaway server survives" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   [ -r /proc/self/environ ] || skip "no /proc on this platform"

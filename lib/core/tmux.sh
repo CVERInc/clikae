@@ -332,9 +332,17 @@ tmux_spawn_session() {
   # future pane on it is born believing it is already mid-cycle. This is the
   # one place clikae controls unconditionally for every session it creates
   # (the same reasoning that put `PATH=` here for P1-1): strip the counter
-  # from the PANE's own process the same way PATH is forced onto it, so
-  # whatever leaked into the server's table never reaches anything clikae
-  # itself, or anything the pane goes on to fork, actually reads.
+  # from the PANE's own process the same way PATH is forced onto it.
+  #
+  # 🔴 THIS ONLY COVERS THE PANE THIS FUNCTION SPAWNS (review round 3,
+  # P2-A). The earlier claim here, that a leaked counter "never reaches
+  # anything clikae itself reads", was measured false: `new-window`, a split,
+  # and clikae's own wake window (lib/core/wake.sh) inherit the server's
+  # table, not this command line. What actually closes the leak is in the
+  # shim: the counter is `<pid>:<n>` and only believed by that same pid or
+  # its direct child, so a copy frozen into a server is ignored by every
+  # pane. This `-u` stays because it costs nothing and keeps the pane's
+  # environment clean.
   cmd="env -u _CLIKAE_TMUX_SHIM_HOPS PATH=$(printf '%q' "$PATH") $cmd"
   # 🔴 CONSTRAINS EVERY FUTURE CALLER: `$cmd` MUST BE A SIMPLE COMMAND (P3,
   # clikae#97 review round 2). `env … $cmd` only ever wraps the FIRST word —
