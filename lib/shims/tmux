@@ -179,6 +179,18 @@ if [ -n "${TMUX:-}" ]; then
           -t=)           : ;;
           -t*)           _seg_has_target=1 ;;
           -a|-aC|-Ca)    _seg_has_a=1 ;;
+          # P3-新2 (clikae#97 review round 4): `t` clustered with kill-
+          # session's OTHER short options (`-at`, `-Ct`, `-aCt`, …) named a
+          # target exactly like a lone `-t` does — tmux's own getopt-style
+          # parser treats a value-taking short option the same whether it is
+          # alone or glued into a cluster — but only bare `-t`/`-t*` was
+          # recognised here, so `kill-session -at cur` was refused even
+          # though it plainly names `cur`. `-t*` above already covers `-ta`
+          # (the value is the rest of THAT token); this covers the cluster
+          # sitting BEFORE `t`, where the value is the NEXT token instead —
+          # matched by ending in a literal `t` that isn't just `-t` alone
+          # (already caught above) or `-t=` (also already caught above).
+          -*t)           _want_tval=1 ;;
         esac
       elif [ "$_global_phase" -eq 1 ]; then
         case "$_tok" in

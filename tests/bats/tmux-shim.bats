@@ -712,3 +712,40 @@ EOF
   [[ "$output" == *"kill-server"* ]] || { echo "message doesn't name the verb: $output"; false; }
   [[ "$output" == *"$sock"* ]] || { echo "message doesn't name the socket: $output"; false; }
 }
+
+# ── P3-新2: `t` clustered with kill-session's other short options (review
+# round 4) ───────────────────────────────────────────────────────────────
+# `-t`/`-t*` were recognised as naming a target; `t` glued into a cluster
+# with kill-session's OTHER short options (`-at`, `-Ct`, `-aCt`, …) was not
+# — tmux's own getopt-style parser treats a value-taking short option the
+# same whether alone or clustered, so `kill-session -at cur` plainly names
+# `cur` but was refused anyway, with a message claiming no target was named.
+
+@test "shim: t clustered with kill-session's other short options still counts as a named target (P3-新2)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  local bad=""
+  _tg_expect2() { # _tg_expect2 <86|0> <label> args...
+    local want="$1" label="$2"; shift 2
+    rm -f "$TEST_HOME/recorder.log"
+    local rc=0
+    env TMUX="$TEST_HOME/fake,1,0" PATH="$p" "$bash_bin" "$(SHIM)" "$@" >/dev/null 2>&1 || rc=$?
+    local reached=no; [ -e "$TEST_HOME/recorder.log" ] && reached=yes
+    if [ "$want" -eq 86 ]; then
+      { [ "$rc" -eq 86 ] && [ "$reached" = no ]; } || bad="$bad
+  expected refusal:     $label (rc=$rc reached=$reached)"
+    else
+      { [ "$rc" -eq 0 ] && [ "$reached" = yes ]; } || bad="$bad
+  expected pass-through: $label (rc=$rc reached=$reached)"
+    fi
+  }
+  _tg_expect2 0  "-at cur (was refused)"   kill-session -at cur
+  _tg_expect2 0  "-Ct cur"                 kill-session -Ct cur
+  _tg_expect2 0  "-aCt cur"                kill-session -aCt cur
+  _tg_expect2 0  "-tcur (already worked)"  kill-session -tcur
+  _tg_expect2 0  "-ta (already worked)"    kill-session -ta
+  # -a alone still names nothing: unchanged.
+  _tg_expect2 86 "-a alone (unchanged)"    kill-session -a
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
