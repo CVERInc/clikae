@@ -946,14 +946,51 @@ _agy_log() { # <line>
             grep -oE "^      '?[A-Za-z/?]'?\)" |
             tr -d "')" | tr -d ' ')"
 
-  for key in $labels; do
+  # R4 review P3-5: `$labels` contains a literal `?` — unquoted word-splitting
+  # here runs it through pathname expansion. On a clean cwd `?` just expands
+  # to itself (a false red: `?` isn't a real _home_pick case, so it prints as
+  # "missing"), but with any single-char file sitting in cwd it silently
+  # expands to that filename INSTEAD and disappears from the loop — the `?`
+  # guard below then never fires, and the real `?` key quietly stops being
+  # checked. Reading `$labels` line-by-line (one key per grep -o match, one
+  # match per line already) sidesteps word-splitting and globbing entirely.
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
     # `?` opens the overlay itself — listing it inside would be noise.
     [ "$key" = "?" ] && continue
     case "$legend" in
       *"$key"*) ;;
       *) missing="$missing $key" ;;
     esac
-  done
+  done <<< "$labels"
+  [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
+}
+
+@test "the ? overlay key-legend scan survives a stray single-char file in cwd" {
+  # R4 review P3-5: pin the failure mode directly, not just the fix — an
+  # unquoted `for key in $labels` would let pathname expansion swap a real
+  # label (most dangerously `?` itself) for a filename sitting in cwd.
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+  local stray_dir="$TEST_HOME/stray"; mkdir -p "$stray_dir"
+  : > "$stray_dir/h"
+  : > "$stray_dir/x"
+  cd "$stray_dir"
+
+  local legend labels key missing=""
+  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
+  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
+            grep -oE "^      '?[A-Za-z/?]'?\)" |
+            tr -d "')" | tr -d ' ')"
+
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    [ "$key" = "?" ] && continue
+    case "$legend" in
+      *"$key"*) ;;
+      *) missing="$missing $key" ;;
+    esac
+  done <<< "$labels"
   [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
 }
 

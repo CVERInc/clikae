@@ -189,6 +189,16 @@ adapter_sid_from_args() {
 # none appear — codex then runs in $PWD like every other engine, and the
 # caller (burn.sh) treats that as "no override" rather than guessing $PWD
 # itself (an unresolved raw launch must match nothing, not something).
+#
+# R4 review P3-1: real codex 0.154.0 (clap) also accepts the `=`-joined long
+# and short forms, `--cd=<dir>` and `-C=<dir>` — measured against the actual
+# binary, not inferred. Without these two cases, `--cd=<dir>` fell all the
+# way through to `return 1` (empty launch cwd, which the burn.sh P2-1 fix
+# now correctly treats as "unknown" rather than misattributing), and
+# `-C=<dir>` matched the looser `-C?*` case below and returned "=<dir>"
+# verbatim — a value that can never equal a real cwd, so it silently never
+# matched anything either. Both are handled explicitly now, ahead of the
+# looser glob.
 adapter_cwd_from_args() {
   local prev="" a
   for a in "$@"; do
@@ -196,7 +206,9 @@ adapter_cwd_from_args() {
       printf '%s' "$a"; return 0
     fi
     case "$a" in
-      -C?*) printf '%s' "${a#-C}"; return 0 ;;
+      --cd=*) printf '%s' "${a#--cd=}"; return 0 ;;
+      -C=*)   printf '%s' "${a#-C=}";   return 0 ;;
+      -C?*)   printf '%s' "${a#-C}";    return 0 ;;
     esac
     prev="$a"
   done

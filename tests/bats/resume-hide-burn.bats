@@ -611,6 +611,47 @@ STUB
   [[ "$output" == *"$HUMAN_SID"* ]] || false
 }
 
+# #74 round-4 P3-3: once the triple gate above rejects a --resume of an
+# EXISTING sid, control used to fall through to the before/after snapshot
+# diff further down — and that diff's own "exactly one new candidate ->
+# record it unconditionally" branch has no rc check of its own. A DIFFERENT
+# concurrent session minted during the same failed attempt was the sole "new"
+# transcript, so it got recorded (and hidden) despite the gate's own verdict
+# having nothing to do with it. The gate's rejection must be final: it must
+# not hand the decision to a heuristic that knows nothing about why it fired.
+@test "#74 round-4 P3-3: codex burn --resume <existing sid> that the triple gate rejects does not fall through and record a DIFFERENT concurrent session" {
+  _fixture
+  clikae init codex T1
+  local existing_sid="77777777-7777-4777-8777-777777777777"
+  local human_new_sid="66666666-6666-4666-8666-666666666666"
+  local sdir="$CLIKAE_HOME/profiles/codex/T1/sessions/2026/09/13"
+  mkdir -p "$sdir"
+  # The resumed sid's rollout already exists BEFORE launch (that's what makes
+  # this a --resume of an EXISTING sid, arming the triple gate).
+  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$existing_sid" "$PWD" \
+    > "$sdir/rollout-2026-09-13T00-00-00-$existing_sid.jsonl"
+  cat > "$TEST_HOME/bin/codex" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+# The engine fails WITHOUT touching the resumed transcript (gate condition 1
+# and 2 both fail: rc != 0, and it never grew) — but, independent of that
+# failure, a concurrent human mints a brand-new session during the same
+# window. That new session is the ONLY "new" transcript in the before/after
+# diff; it must stay unrecorded, because the gate's rejection was about the
+# --resume target, not a verdict this second session ever earned.
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$human_new_sid" "\$PWD" \
+  > "$sdir/rollout-2026-09-13T00-00-01-$human_new_sid.jsonl"
+exit 1
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  run clikae burn codex T1 --artifact "$STUB_ARTIFACT" -- exec --skip-git-repo-check resume "$existing_sid" go
+  [ "$status" -ne 0 ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/codex/T1" ]
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$human_new_sid"* ]] || false
+}
+
 @test "burn claude does not clash --session-id onto a caller-supplied --session-id" {
   _fixture
   clikae init claude T1

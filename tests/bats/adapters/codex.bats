@@ -158,3 +158,49 @@ seed_rollout() {
   [ "$status" -eq 0 ]
   [ "$output" = "$from_recent" ]
 }
+
+# --- #74 round-4 P3-1: adapter_cwd_from_args argv shapes, measured against a
+# real codex 0.154.0 binary (clap accepts `=`-joined long AND short forms). --
+
+@test "codex adapter_cwd_from_args recognises -C <dir> (spaced)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C /tmp/one -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/one ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C<dir> (attached)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C/tmp/two -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/two ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd <dir> (spaced long alias)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd /tmp/three -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/three ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd=<dir> (clap long = form)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd=/tmp/four -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/four ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C=<dir> (clap short = form) without leaking the '='" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C=/tmp/five -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/five ]
+  [[ "$output" != =* ]] || false
+}
+
+@test "codex adapter_cwd_from_args returns empty (rc 1) with no -C/--cd at all" {
+  _setup_codex
+  run adapter_cwd_from_args exec -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

@@ -2690,7 +2690,7 @@ KV
     # back to exactly one; otherwise this run's own session can't be told
     # apart from a human's concurrent one, and "never hide what is not
     # proven" outranks "always record something".
-    local sid_to_record="$launch_sid"
+    local sid_to_record="$launch_sid" _burn_resume_gate_rejected=0
     if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1; then
       # #74 round-2 P2-2: "proven" means a transcript path came back, not
       # that the exit code was 0 — codex/grok's adapter_find_session both
@@ -2740,10 +2740,18 @@ KV
         fi
         if [ "$rc" -ne 0 ] || [ "$_burn_resume_grew" -ne 1 ] || [ "$_burn_resume_open_elsewhere" -eq 1 ]; then
           sid_to_record=""
+          # R4 review P3-3: the triple gate's "no" is a verdict, not a mere
+          # "try the next heuristic" — falling through to the before/after
+          # snapshot diff below let its unconditional single-candidate
+          # branch record the very session the gate just rejected. The
+          # gate ran ONLY because this was a --resume of an EXISTING sid
+          # (_burn_resume_pre_stamp, above), so its rejection is final.
+          _burn_resume_gate_rejected=1
         fi
       fi
     fi
-    if [ -z "$sid_to_record" ] && declare -F adapter_all_transcripts >/dev/null 2>&1; then
+    if [ -z "$sid_to_record" ] && [ "${_burn_resume_gate_rejected:-0}" -ne 1 ] \
+       && declare -F adapter_all_transcripts >/dev/null 2>&1; then
       local -a _snap_post=() _snap_new=()
       while IFS= read -r _snap_line; do
         [ -n "$_snap_line" ] && _snap_post+=("$_snap_line")
