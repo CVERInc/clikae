@@ -370,6 +370,69 @@ _seed_codex_injected_transcript() {
   [[ "$output" != *"cwd=/x"* ]] || false
 }
 
+@test "#33 round-4 review P2-1: content_item_kinds=user.text is authoritative — a human prompt that itself opens with a bare tag is never dropped by the per-part prefix filter" {
+  # Round-4 review found the per-part prefix filter above ran UNCONDITIONALLY,
+  # even on a part content_item_kinds already said was "user.text" — so a
+  # human pasting a front-end snippet that happens to start with a lowercase
+  # tag (<div>, <template>, <script setup>) or a Markdown heading lost the
+  # whole prompt, plus a false "matched 0" mismatch line when it was the only
+  # prompt in the file. content_item_kinds must win: when present and it says
+  # user.text, the prefix filter must not run at all.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/tag-prefixed-human.jsonl"
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<div>fix this layout</div>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<template>\n  <div/>\n</template> why no render"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<script setup>const x = 1</script> broken"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text","user.text"],"content":[{"type":"input_text","text":"look at this:"},{"type":"input_text","text":"<table><tr><td>x</td></tr></table>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"# Heading\nplease fix"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<div>fix this layout</div>"* ]] || false
+  [[ "$output" == *"<template>"*"why no render"* ]] || false
+  [[ "$output" == *"<script setup>const x = 1</script> broken"* ]] || false
+  [[ "$output" == *"look at this: <table><tr><td>x</td></tr></table>"* ]] || false
+  [[ "$output" == *"# Heading please fix"* ]] || false
+  # Every prompt in the file was preserved, so the loud mismatch line — the
+  # regression's other symptom — never fires either.
+  [[ "$output" != *"matched 0"* ]] || false
+}
+
+@test "#33 round-4 review P2-1: without content_item_kinds, the fallback filter is a closed list of known injected tags — a human <div> prompt survives, a known injected tag is still dropped" {
+  # Fix #2 from the round-4 review: the pre-fix fallback matched ANY
+  # `^<[a-z_ ]+>`, which is indistinguishable from a human pasting arbitrary
+  # markup on a rollout with no content_item_kinds field (an older/other
+  # shape). Narrowed to the exact injected tag names this adapter documents.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/no-kinds-tag-prefixed.jsonl"
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<div>fix this layout, no kinds field</div>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>AGENTS.md contents here</user_instructions>"},{"type":"input_text","text":"old human prompt"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<div>fix this layout, no kinds field</div>"* ]] || false
+  [[ "$output" == *"old human prompt"* ]] || false
+  [[ "$output" != *"AGENTS.md contents here"* ]] || false
+}
+
+@test "#33 round-4 review P2-1: a response_item filtered down to nothing but known injected tags does not starve matched and trigger a false mismatch diagnostic" {
+  # A message whose parts were ALL removed by the tag filter (no real human
+  # text alongside them) is the filter doing its job, not a shape the
+  # anchors failed to recognize — it must not print the loud "matched 0"
+  # line, same reasoning as the round-3 P3-3 empty-value fix above.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/all-filtered.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nlist"},{"type":"input_text","text":"<environment_context>\ncwd=/x\n</environment_context>"}]}}' > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 _seed_codex_agent_message_transcript() {
   # Round-2 review P2-1: the repo-documented event_msg/agent_message shape
   # (the SAME shape lib/core/limit.sh's whole codex family reads,

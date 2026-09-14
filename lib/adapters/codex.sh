@@ -386,17 +386,29 @@ adapter_handoff_extract() {
       # "user."-prefixed kind is skipped WHOLE, before scanned/matched even
       # see it — same "recognized and filtered, not a mismatch" spirit as
       # round-2 P3-2 below, not "the anchors are looking at the wrong keys".
+      #
+      # round-4 review P2-1: `has_kinds` records whether THIS line carried
+      # content_item_kinds at all. When it did, kinds is authoritative — a
+      # part that survives to the per-part loop below already passed the
+      # "user."-prefix check above, so the per-part prefix filter (which
+      # exists only to guess at rollouts with no metadata) must not run on
+      # it. Without this, a human prompt that itself opens with a bare tag
+      # (`<div>`, `<template>`, `<script setup>`, a Markdown `# ` heading)
+      # was silently dropped even though content_item_kinds said "user.text".
+      has_kinds = 0
       if (match($0, kinds_re)) {
         kinds = substr($0, RSTART, RLENGTH)
         if (kinds !~ /"user\./) next
+        has_kinds = 1
       }
       scanned++
-      rest = $0; res = ""
+      rest = $0; res = ""; have_part = 0
       while (match(rest, part_keyre)) {
         rest = substr(rest, RSTART + RLENGTH)
         if (!match(rest, /^([^"\\]|\\.)*/)) break
         seg = substr(rest, 1, RLENGTH)
         rest = substr(rest, RLENGTH + 2)
+        have_part = 1
         # round-3 review P2-1, per-part fallback: parts USED to be joined
         # into one line BEFORE the line-anchored `<environment_context>`
         # filter below ever saw them, so a real rollout whose first part is
@@ -408,7 +420,19 @@ adapter_handoff_extract() {
         # and it also covers a shape with no content_item_kinds field at
         # all (older/other rollouts) — the case the metadata check above
         # has no way to decide.
-        if (seg ~ /^<[a-z_ ]+>/ || seg ~ /^# AGENTS\.md instructions/) continue
+        #
+        # round-4 review P2-1: this fallback is a GUESS for the no-metadata
+        # case only — `!has_kinds` skips it entirely when content_item_kinds
+        # already answered the question above, since a human `user.text`
+        # part is never filtered by prefix. And even in the no-metadata
+        # case, the pattern is narrowed from "any bracketed lowercase tag"
+        # (which swallowed a human prompt pasting `<div>`, `<template>`,
+        # `<script setup>`, `<table>`, …) to the closed set of injected
+        # shapes this file documents by name: `<recommended_plugins>`,
+        # `<environment_context>`, `<user_instructions>`,
+        # `<permissions instructions>`, and the `# AGENTS.md instructions`
+        # heading.
+        if (!has_kinds && (seg ~ /^<(recommended_plugins|environment_context|user_instructions|permissions instructions)>/ || seg ~ /^# AGENTS\.md instructions/)) continue
         res = (res == "" ? seg : res " " seg)
       }
       # round-3 review P2-2: the event_msg and response_item rules above are
@@ -424,6 +448,15 @@ adapter_handoff_extract() {
       # since a handoff brief cares about what was said, not how many times.
       if (res != "" && (!have_prev || res != prev)) {
         print res; matched++; prev = res; have_prev = 1
+      } else if (res == "" && have_part) {
+        # round-4 review P2-1: at least one part matched the shape anchor —
+        # the extractor worked — but the injected-tag filter above removed
+        # every part (a turn that really is ALL machine-injected context,
+        # with no human text alongside it). That is the filter doing its
+        # job, not the anchors looking at the wrong keys, so it must not
+        # starve `matched` and trigger the loud line at the bottom of this
+        # script — same reasoning as the round-3 P3-3 empty-value fix above.
+        matched++
       }
     }
     END {
