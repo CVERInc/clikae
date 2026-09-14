@@ -459,6 +459,17 @@ amount of retrying fixes those. `--once` returns 0 only when a poll
 actually succeeded (events or none); 1 on any failure, so a cron job can
 tell "quiet today" from "I've been failing silently".
 
+**Known limits.** The one case the cursor above can still get stuck on:
+≥500 issue/PR updates sharing the exact same `updated_at` second (the
+5-page cap) pins the cursor at that second forever, since it can never
+read past all of them in one poll — extremely unlikely given GitHub's own
+secondary rate limits, but not impossible, so it's named here rather than
+covered by the "no backlog, however large" claim above. Within one poll,
+events the tail sweep finds are appended in `updated_at`-descending order
+(newest first), after the main query's ascending ones — so `events.jsonl`
+is no longer strictly non-decreasing the moment a sweep delivers anything;
+no consumer this feature ships relies on that ordering today.
+
 Requires `gh` already logged in — this feature never reads or writes a token
 itself, it uses whatever account `gh auth login` already set up, and refuses
 immediately (exit 1) if `gh auth status` fails.
