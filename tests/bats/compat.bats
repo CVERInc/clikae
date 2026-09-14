@@ -71,10 +71,17 @@ scan() {
 # fail) and asserted against a lower bound derived from the real tree
 # (`lib/**/*.sh` alone, ignoring bin/ and non-.sh — a true floor, never a
 # number that needs bumping by hand as files are added).
-@test "bash 3.2 can parse every shipped lib/ + bin/ file (docker bash -n)" {
-  command -v docker >/dev/null 2>&1 ||
-    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
-  run docker run --rm -v "$CLIKAE_TEST_ROOT:/src:ro" bash:3.2 bash -c \
+#
+# P3-7 (round-5 review): this exact docker command used to be copy-pasted
+# THREE times (the real gate below, plus its own empty-tree and negative-
+# control test) — a change to the gate's `find` (say, its exclusion list)
+# only ever reached the copy the real test used; the two controls kept
+# testing whatever the LAST edited copy happened to say, silently, since
+# nothing forced all three to stay identical. One helper, called by name
+# three times, so the controls can only ever exercise the real gate.
+_bash32_parse_gate() {
+  local mount="$1"
+  docker run --rm -v "$mount:/src:ro" bash:3.2 bash -c \
     'rc=0; n=0
      while IFS= read -r -d "" f; do
        n=$((n+1))
@@ -82,10 +89,28 @@ scan() {
      done < <(find /src/bin /src/lib -type f -not -path "/src/lib/templates/*" -print0)
      echo "checked=$n"
      exit $rc'
+}
+
+# P3-8 (round-5 review): the gate's OWN `find` excludes `lib/templates/`
+# (files meant to be parsed by a TARGET engine's runtime, not by clikae's own
+# bash 3.2), but the floor computed here used to count `lib/templates/*.sh`
+# toward the lower bound anyway — a margin of exactly 1 file in this repo
+# today (measured: `checked=93`, `floor=92`). Two `.sh` files landing in
+# `lib/templates/` would make this floor assertion fail for the WRONG
+# reason (a template the gate correctly never looked at, not a real parse
+# regression). The floor must exclude the same directory the gate does.
+_bash32_gate_floor() {
+  find "$CLIKAE_TEST_ROOT/lib" -name '*.sh' -type f -not -path '*/lib/templates/*' | wc -l | tr -d ' '
+}
+
+@test "bash 3.2 can parse every shipped lib/ + bin/ file (docker bash -n)" {
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  run _bash32_parse_gate "$CLIKAE_TEST_ROOT"
   [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
   local checked floor
   checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
-  floor="$(find "$CLIKAE_TEST_ROOT/lib" -name '*.sh' -type f | wc -l | tr -d ' ')"
+  floor="$(_bash32_gate_floor)"
   [ -n "$checked" ] || { echo "gate printed no checked= count: $output" >&2; false; }
   [ "$checked" -ge "$floor" ] || { echo "checked=$checked < $floor lib/**/*.sh files — the gate scanned less than the real tree"; false; }
 }
@@ -98,19 +123,12 @@ scan() {
   # floor assertion, this "passed" (checked=0, rc=0) — reporting nothing
   # checked as a clean bill of health, exactly the gap P3-2 found.
   local probe="$TEST_HOME/emptytree"; mkdir -p "$probe/lib" "$probe/bin"
-  run docker run --rm -v "$probe:/src:ro" bash:3.2 bash -c \
-    'rc=0; n=0
-     while IFS= read -r -d "" f; do
-       n=$((n+1))
-       bash -n "$f" || rc=1
-     done < <(find /src/bin /src/lib -type f -not -path "/src/lib/templates/*" -print0)
-     echo "checked=$n"
-     exit $rc'
+  run _bash32_parse_gate "$probe"
   [ "$status" -eq 0 ]
   local checked; checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
   [ "$checked" = 0 ]
   # An empty tree must fail THIS repo's own floor (>=1 real lib/**/*.sh file).
-  local floor; floor="$(find "$CLIKAE_TEST_ROOT/lib" -name '*.sh' -type f | wc -l | tr -d ' ')"
+  local floor; floor="$(_bash32_gate_floor)"
   [ "$floor" -gt 0 ]
   [ "$checked" -lt "$floor" ]
 }
@@ -130,14 +148,7 @@ scan() {
   mkdir -p "$probe/lib/adapters" "$probe/bin"
   ( cd "$CLIKAE_TEST_ROOT" && git show c673adb:lib/adapters/claude.sh ) > "$probe/lib/adapters/claude.sh" \
     || skip "c673adb:lib/adapters/claude.sh not reachable from this checkout"
-  run docker run --rm -v "$probe:/src:ro" bash:3.2 bash -c \
-    'rc=0; n=0
-     while IFS= read -r -d "" f; do
-       n=$((n+1))
-       bash -n "$f" || rc=1
-     done < <(find /src/bin /src/lib -type f -not -path "/src/lib/templates/*" -print0)
-     echo "checked=$n"
-     exit $rc'
+  run _bash32_parse_gate "$probe"
   [ "$status" -ne 0 ]
   [[ "$output" == *"unexpected EOF while looking for matching"* ]] || { echo "expected the verbatim bash 3.2 parse error, got: $output" >&2; false; }
 }
