@@ -493,7 +493,7 @@ _burn_sweep_old_logs() {
   [ -d "$base" ] || return 0
   local d n=0
   while IFS= read -r -d '' d; do
-    # 🔴 P2-2/P2-3 (2026-09-14 watch-github fix-round-7 review): the
+    # 🔴 P2-3 (2026-09-14 watch-github fix-round-7 review): the
     # `watch-github-*` glob also matched the org's DURABLE log
     # `watch-github-<org>/events.jsonl`, whose directory mtime never moves
     # on append — every burn/clean eight days after a watcher started

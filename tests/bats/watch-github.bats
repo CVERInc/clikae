@@ -1558,7 +1558,7 @@ STUB
 # sweep_n * $__WG_POLL_GAP), $__WG_POLL_GAP being the gap since the SINGLE
 # most recent poll — assumes every one of the <sweep_n> gaps since the
 # last sweep was that same length. True under steady polling; false the
-# instant a live loop's own back-off recovers, since `:1525` resets `cur`
+# instant a live loop's own back-off recovers, since `cur="$interval_s"` resets `cur`
 # straight back to `$interval_s` in ONE step, not a gradual climb-down —
 # the poll right after a long back-off has a short gap while the polls
 # before it were long ones, so round 5's formula UNDER-counts the real

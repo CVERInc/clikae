@@ -358,7 +358,8 @@ _wg_iso_from_epoch() {
 #
 # 🔴 REPLACED (P2-1, 2026-09-14 fix-round-6 review — read before touching
 # _wg_tail_sweep's own window again). A live loop's own back-off breaks
-# that even-spacing assumption BY DESIGN: `:1525`'s recovery resets `cur`
+# that even-spacing assumption BY DESIGN: cmd_watch_github's recovery
+# (`cur="$interval_s"` on the first successful poll) resets `cur`
 # straight back to `$interval_s` in ONE step the instant a poll succeeds,
 # not a gradual climb-down — so the poll right after a long back-off has
 # a short gap while the four polls before it were long ones. round-5's
@@ -379,8 +380,9 @@ _wg_iso_from_epoch() {
 # per-poll gap is still useful on its own), but neither feeds the window
 # any more. The very first sweep an org ever has (or a `.sweepat` a
 # sanity check below treats as missing) has no prior sweep to measure
-# from — window stays at the 300s floor, same as before. Still costs at
-# most ONE extra request per poll, the same bound as before.
+# from — window stays at the 300s floor, same as before. (This note
+# originally said "at most ONE extra request per poll"; since fix-round-6
+# P2-2 paginates the sweep it is at most 5 — P3-2, fix-round-7.)
 #
 # 🔴 OVERLAP (P2-1, 2026-09-14 fix-round-7 review): that measured window
 # still ended exactly where the previous sweep began, and an active org's
@@ -1545,7 +1547,7 @@ you is not covered (no lookup happens for a fresh number; see docs/usage.md
 for the full story), only a reply on something already seen.
 
 Rate limits: normally 1 search request per poll (up to 5 when paginating to
-the cap, plus up to 1 more for the tail sweep below, no more often than
+the cap, plus up to 5 more for the tail sweep below, no more often than
 every 5th poll or right after a truncated one; the search API allows
 30/min authenticated), plus up to 50 activity lookups (above, up to 2
 requests each against the core API's much larger budget). On a genuine

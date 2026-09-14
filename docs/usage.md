@@ -453,7 +453,7 @@ OPENING text mentions you is not covered by this — no lookup happens for a
 fresh number, so there is no body text to check).
 
 Rate limits: normally 1 search request per poll (up to 5 when paginating,
-plus up to 1 more for the tail sweep above), plus up to 50 activity lookups
+plus up to 5 more for the tail sweep above), plus up to 50 activity lookups
 (each up to 2 requests) against the core API's much larger budget.
 On a genuine rate limit (429, or a 403 the response attributes to it, or a
 5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
