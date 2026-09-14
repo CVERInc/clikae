@@ -99,6 +99,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `claude-sonnet-4-5-20250929`) to a family-prefix match; `clikae cockpit
   <tank>` (moving the role, not just `--off`) now sweeps past a broken OLD
   tank's settings.json instead of aborting the whole move.
+  **Correction (round-4 review):** the 8,192-character truncated copy this
+  entry describes is gone — round 3 (below) deleted it. The keyword
+  heuristic now reads the full, untruncated `$prompt`, exactly like the
+  length tripwire already did.
+
+- `clikae cockpit` round 3 (#63, `REVIEW-cockpit63-r3.md`): the 8,192-
+  character truncated copy round 2 introduced (above) turned out to be
+  dead code — the search loop and its own length check already bounded
+  what the heuristic could match, so the slice changed nothing about any
+  classification (709 synthetic specimens, byte-for-byte identical verdicts
+  with and without it) while still costing a full JSON-decode-and-slice on
+  every call. Deleted; the heuristic now runs on the full decoded `$prompt`
+  directly. Separately, `prompt` extraction (the expensive field — ~92% of
+  a 1 MB payload's parse time) moved from unconditional to INSIDE the
+  `opus|sonnet…)` model-match arm, so haiku/fable/every other model this
+  guard is documented to leave untouched now pays close to nothing instead
+  of the same cost as the model it actually inspects (measured ~3–4x faster
+  on 200 kB–1 MB payloads; the protected opus/sonnet path is unchanged).
+  Also: `gen_specimen.py`'s straddle generator now actually lands the CJK
+  multi-byte boundary it claims to (was 50/100 before this round, 100/100
+  after — see `REVIEW-cockpit63-r3.md` P3-3 for the count and round 4 below
+  for what was still wrong with how it checked itself).
+
+- `clikae cockpit` round 4 (#63, `REVIEW-cockpit63-r4.md`): moving the role
+  used to write state (`_cockpit_state_write`) AFTER both guard writes
+  (install the new tank, remove the old one). A state-write failure at that
+  point — state file mode 444, or symlinked to an unwritable path, both
+  reproduced — landed after the swap had already happened, leaving state
+  pointing at the OLD tank while the OLD tank's guard was already gone and
+  the NEW tank's guard was live and unrecorded; neither `clikae cockpit`
+  (which only checks the named tank exists, never that it's armed) nor
+  `clikae doctor` (no cockpit awareness at all) said anything. State is now
+  written immediately after the new tank's guard is installed and BEFORE
+  the old tank is touched, so a state-write failure can only ever leave the
+  OLD cockpit exactly as it was; the new failure mode this introduces (the
+  new tank's guard installed but unrecorded) is rolled back in the same
+  step instead of being left as an unlisted stray. `clikae doctor` gained a
+  cockpit line: it reads the recorded cockpit and reports, loudly, when the
+  named tank doesn't actually carry the guard, or when some OTHER tank
+  carries one. `gen_specimen.py`'s straddle self-check used to restate the
+  same predicate its own search loop already used, so it could never fire —
+  moving the boundary constant to 8193 made the corpus silently miss its
+  target while the check stayed green; the check is now an independent
+  computation of the same byte offset. `clikae burn`'s automatic reroute
+  (picking another idle same-engine tank when the current one runs dry) had
+  no cockpit awareness at all and could route dispatched work onto the
+  cockpit tank itself if it happened to be idle with no interactive session
+  attached; it now excludes the cockpit explicitly rather than relying on
+  the live-session check to happen to cover it.
 
 ### Added
 
