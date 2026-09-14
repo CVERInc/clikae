@@ -252,10 +252,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same knob that removes the file), so it can neither hide nor pin red
   forever on a host that never runs `clikae burn` again. A dry marker whose
   timestamp cannot be read (truncated, empty, no TAB) is expired, not fresh
-  forever -- on the board as well as the row. Below 100
-  columns the `ssh <host> -t ` prefix is dropped -- the only variable-width
-  part of the row, and dropped rather than cut because half a hostname is not
-  a command. Measured at 14 ms per redraw idle, up to 24 ms under load.
+  forever -- on the board as well as the row. Width is a yield
+  ladder with a fixed order, because three parts of the row are
+  variable-width, not one: the `ssh <host> -t ` prefix goes first (dropped
+  whole, never cut -- half a hostname is not a command), then the fuel age
+  suffix, then the tank name elided from the middle (`aver...name`, floor 8
+  columns, `validate_name` caps a tank name's character set and not its
+  length), then the engine word, and last the fuel segment entirely. The alert
+  count and the clock are never cut: at 80 columns what is guaranteed is the
+  whole `!N`, the whole clock, and at least 8 columns of the tank name.
+  Measured at 14 ms per redraw idle, up to 24 ms under load.
 
   Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
   (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion

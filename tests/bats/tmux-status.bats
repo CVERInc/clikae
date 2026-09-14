@@ -541,9 +541,19 @@ _dead_pid() { printf '2147483647'; }
 _row_cols() {
   local p
   p="$(printf '%s' "$1" | sed 's/#\[[^]]*\]//g')"
-  p="${p//·/.}"; p="${p//│/|}"; p="${p//○/o}"
+  # 🔴 never `~` as a replacement: bash 5.2 tilde-expands it into $HOME.
+  p="${p//·/.}"; p="${p//│/|}"; p="${p//○/o}"; p="${p//…/.}"
   printf '%s' "${#p}"
 }
+
+# _tank <n> — an n-character tank name. `validate_name`
+# (lib/core/profile_store.sh) caps a tank name's character set, not its length,
+# which is the whole reason the ladder below has rungs 3 and 4.
+_tank() { printf '%0*d' "$1" 0 | tr 0 t; }
+
+# The dim separator tmux_status_rowv puts between segments, spelled once here
+# so the ladder table can assert whole rows verbatim.
+_SEP=' #[fg=colour244]│#[default] '
 
 @test "width: at 100 columns the ssh prefix yields to the fuel age, never the clock" {
   _src
@@ -566,6 +576,109 @@ _row_cols() {
   _usage_cache claude wrasse 100.0 100.0 0
   run tmux_status_render claude wrasse '' "$h30" 100
   [[ "$output" == *"ssh $h30 -t "* ]] || { echo "$output"; false; }
+}
+
+# ── the yield ladder (P2-1, 2026-09-14 round-3 review) ──────────────────────
+#
+# Round 2 fixed the ssh prefix and left `clikae <engine> <tank>` — the THIRD
+# variable-width element — unmentioned. Measured on real tmux 3.4 at 80 columns
+# with a 23h-old cache, on 25a35ff: a 24-character claude tank cut the CLOCK
+# (`!10 1:43`), and a 27-character antigravity tank cut the ALERT COUNT itself
+# (`!10` → `!`, clock gone). tmux_status_rowv is the ladder that fixes it, and
+# it is a PURE function — no file, no clock, no tmux — so the ladder is a table
+# here rather than a story about a terminal.
+#
+# The order is fixed and the table asserts each rung in turn. Delete any rung
+# from lib/core/tmux.sh and a row of this table goes red at 80 columns.
+
+@test "width ladder: rung by rung, at a width that forces exactly that rung" {
+  _src
+  local t24 t27 t42 row
+  t24="$(_tank 24)"; t27="$(_tank 27)"; t42="$(_tank 42)"
+
+  # rung 0 — nothing gives: 120 columns, prefix included.
+  tmux_status_rowv 120 reefbox claude "$t24" '' '5h 100% · 7d 100%' '23h ago' 10
+  [ "$_TSTAT_ROW" = "ssh reefbox -t clikae claude ${t24}${_SEP}5h 100% · 7d 100% · 23h ago${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "rung0: $_TSTAT_ROW"; false; }
+
+  # rung 1 — the ssh prefix, dropped whole (it is never even offered under 100).
+  tmux_status_rowv 100 a-rather-long-hostname claude "$t24" '' '5h 100% · 7d 100%' '23h ago' 10
+  [[ "$_TSTAT_ROW" != *"ssh "* ]] || { echo "rung1: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" == *"23h ago"* ]] || { echo "rung1 gave too much: $_TSTAT_ROW"; false; }
+
+  # rung 2 — the fuel AGE suffix. The percentages stay.
+  tmux_status_rowv 80 '' claude "$t24" '' '5h 100% · 7d 100%' '23h ago' 10
+  [[ "$_TSTAT_ROW" != *"23h ago"* ]] || { echo "rung2: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" == *"clikae claude $t24"*"5h 100% · 7d 100%"*"!10"* ]] || { echo "rung2: $_TSTAT_ROW"; false; }
+
+  # rung 3 — the tank name, elided from the MIDDLE, with a visible `…`.
+  tmux_status_rowv 80 '' antigravity "$t42" '' '5h 100% · 7d 100%' '23h ago' 10
+  [[ "$_TSTAT_ROW" == *"clikae antigravity tttttttttttttt…ttttttttttttt "* ]] || { echo "rung3: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" == *"5h 100% · 7d 100%"*"!10"* ]] || { echo "rung3: $_TSTAT_ROW"; false; }
+
+  # rung 4 — the engine word. The tank is already at its 8-column floor.
+  tmux_status_rowv 50 '' antigravity "$t42" '' '5h 100% · 7d 100%' '23h ago' 10
+  [[ "$_TSTAT_ROW" == "clikae tttt…ttt"* ]] || { echo "rung4: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" == *"5h 100% · 7d 100%"*"!10"* ]] || { echo "rung4: $_TSTAT_ROW"; false; }
+
+  # rung 5 — the fuel segment, whole. The floor guard.
+  tmux_status_rowv 40 '' antigravity "$t42" '' '5h 100% · 7d 100%' '23h ago' 10
+  [ "$_TSTAT_ROW" = "clikae tttt…ttt${_SEP}#[fg=red]!10#[default] " ] || { echo "rung5: $_TSTAT_ROW"; false; }
+}
+
+@test "width ladder: the alert count and the clock are never cut, at any width or name length" {
+  # The invariant the ladder exists for, asserted mechanically instead of
+  # trusted: every cell keeps the WHOLE `!N` and leaves the clock its 6
+  # columns. 28 is the arithmetic floor (`clikae <8> │ !10 ` + clock); the
+  # spec only promises 80.
+  _src
+  local w n row plain floor
+  for w in 28 40 60 80 100 120; do
+    for n in 3 8 20 24 27 42 90; do
+      tmux_status_rowv "$w" a-rather-long-hostname antigravity "$(_tank "$n")" '' \
+        '5h 100% · 7d 100%' '23h ago' 10
+      row="$_TSTAT_ROW"
+      [[ "$row" == *"!10#[default] " ]] || { echo "w=$w n=$n lost the count: $row"; false; }
+      [ "$(_row_cols "$row")" -le "$(( w - 6 ))" ] \
+        || { echo "w=$w n=$n is $(_row_cols "$row") cols: $row"; false; }
+      # …and at least 8 columns of the tank name survive (all of it, when the
+      # name is shorter than the floor).
+      floor="$n"; [ "$floor" -gt 8 ] && floor=8
+      plain="${row%%"$_SEP"*}"
+      [ "${#plain}" -ge "$(( 7 + floor ))" ] || { echo "w=$w n=$n left no tank: $row"; false; }
+    done
+  done
+}
+
+@test "width ladder: an elided name is marked, and a resume row has nothing to elide" {
+  _src
+  # 42 characters down to the 8-column floor: 4 + `…` + 3, never a bare
+  # prefix that would read as a DIFFERENT tank that exists.
+  tmux_status_rowv 40 '' claude "$(_tank 42)" '' '' '' 1
+  [[ "$_TSTAT_ROW" == *"…"* ]] || { echo "elided without a mark: $_TSTAT_ROW"; false; }
+
+  # A session id makes the command fixed-width: rungs 3 and 4 have no subject,
+  # and the row must not invent one.
+  tmux_status_rowv 40 '' claude "$(_tank 42)" a52bdc12 '5h 1% · 7d 2%' '23h ago' 7
+  [ "$_TSTAT_ROW" = "clikae resume a52bdc12${_SEP}#[fg=red]!7#[default] " ] || { echo "$_TSTAT_ROW"; false; }
+}
+
+@test "width ladder: at 80 columns the review's own two tanks keep the count and the clock" {
+  # The exact cells REVIEW-status77-r3.md measured red on 25a35ff, through the
+  # whole render (cache 23h old, ten dry markers) rather than the pure function.
+  _src
+  _usage_cache claude "$(_tank 24)" 100.0 100.0 82800
+  _usage_cache antigravity "$(_tank 27)" 100.0 100.0 82800
+  local d; for d in 1 2 3 4 5 6 7 8 9 10; do _dry_marker codex "t$d"; done
+  run tmux_status_render claude "$(_tank 24)" '' '' 80
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"!10"* ]] || { echo "claude/24 lost the count: $output"; false; }
+  [ "$(_row_cols "$output")" -le 74 ] || { echo "claude/24 is $(_row_cols "$output") cols: $output"; false; }
+
+  run tmux_status_render antigravity "$(_tank 27)" '' '' 80
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"!10"* ]] || { echo "antigravity/27 lost the count: $output"; false; }
+  [ "$(_row_cols "$output")" -le 74 ] || { echo "antigravity/27 is $(_row_cols "$output") cols: $output"; false; }
 }
 
 @test "width: a width tmux could not tell us is not a crash" {
