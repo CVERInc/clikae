@@ -875,7 +875,7 @@ _twelve_sessions_sharing_a_prefix() {
   [[ "$output" == *"c0000000-0012-"* ]] || { echo "the newest was cut: $output"; false; }
   [[ "$output" == *"and 2 more, older"* ]] || { echo "$output"; false; }
   [[ "$output" == *"type more of the id"* ]] || { echo "$output"; false; }
-  [[ "$output" == *'`clikae resume`'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'`clikae resume --all`'* ]] || { echo "$output"; false; }
 }
 
 @test "resume: the same id in two tanks is ONE candidate, not an ambiguity" {

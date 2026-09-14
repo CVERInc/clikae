@@ -981,8 +981,10 @@ cmd_resume() {
         if [ "$shown" -ge 10 ]; then
           # P3-7 (2026-09-14 round-2 review): the list is newest first, so
           # the cut hides the OLDEST — and there is no flag that prints them.
-          # Say which ones are missing and the two ways to reach one.
-          log_dim "  … and $((cn - shown)) more, older — type more of the id to narrow it, or run \`clikae resume\` to browse"
+          # Say which ones are missing and the two ways to reach one. `--all`
+          # (#74), not the bare picker: candidates here include burn-started
+          # sessions, which the bare picker hides.
+          log_dim "  … and $((cn - shown)) more, older — type more of the id to narrow it, or browse them all with \`clikae resume --all\`"
           break
         fi
         log_dim "  clikae resume $c_sid    ($c_engine/$c_tank)"
