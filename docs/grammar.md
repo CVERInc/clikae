@@ -135,7 +135,8 @@ fuel words forced on them.
 
 | Command | Purpose |
 |---|---|
-| `clikae init <engine> <tank>` | Create a tank. (`--alias` also writes a shell alias.) |
+| `clikae init <engine> <tank>` | Create a tank. (`--alias` also writes a shell alias; `--no-template` skips the claude permissions template.) |
+| `clikae init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. Doesn't touch the directory's content; incompatible with `--alias`/`--no-template`. |
 | `clikae remove <engine> <tank>` | Remove a tank (dir, alias, .app). |
 | `clikae rename <engine> <old> <new>` | Rename a tank (dir, alias, login carried over). |
 | `clikae git-id <engine> <tank> [--name N --email E \| --unset]` | Give a tank an optional **git commit identity**. When set, `clikae env` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*` so commits in that shell are stamped with the identity you meant — not the engine's account email (issue #22). A plain metadata verb (create/inspect tank state), no fuel metaphor. Honest limit: env vars beat `git config` but not an explicit `git -c user.email=…`; future commits only. |
