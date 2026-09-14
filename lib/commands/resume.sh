@@ -28,6 +28,11 @@ clikae tank has its own config dir, so the session isn't in the engine's default
 home; clikae finds the tank and resumes it there.
 
   clikae resume <id>        find the tank holding <id> and resume it
+  clikae resume <prefix>    the first few characters are enough, as long as
+                            they name exactly one session (8 is what the
+                            tmux status line shows you); a prefix that
+                            matches more than one is refused, with the
+                            candidates listed
   clikae resume             no id → pick from recent sessions across ALL tanks
                             (by title, newest first — no UUID to copy). Picking
                             one asks "Resume on which tank?" whenever the engine
@@ -108,6 +113,50 @@ _resume_engines() {
   done <<EOF
 $(list_adapters)
 EOF
+}
+
+# _resume_prefix_candidates <prefix> -> "sid\tengine\ttank" for every DISTINCT
+# session id that starts with <prefix>, newest first. Nothing when <prefix> is
+# empty or matches none.
+#
+# WHY A PREFIX RESOLVES AT ALL (#77). The tmux status line's whole left segment
+# is the command that brings you back here — `clikae resume a52bdc12` — and it
+# is eight characters because a 36-character UUID would own the row. That is
+# only honest if `resume` really accepts those eight characters, so this is the
+# other half of that feature, not a convenience bolted on beside it.
+#
+# 🔴 DISTINCT ids, not matching FILES. A relay copies one session into a second
+# tank (see _resume_locate's header), so the same id legitimately exists twice
+# on disk. Counting files would call that ambiguous and refuse a prefix that
+# names exactly one conversation — which is what the operator asked for. The
+# per-tank choice among copies is _resume_locate's job and it already makes it
+# (newest wins).
+#
+# One enumerator: _resume_all_sessions, the same scan the picker and
+# `clikae clean` use. Ids come from _resume_session_fields, the same decoder —
+# so a prefix works for every engine the picker can show, by construction,
+# including codex's dash-suffixed rollout names.
+_resume_prefix_candidates() {
+  local prefix="$1" mt f seen=""
+  [ -n "$prefix" ] || return 0
+  while read -r mt f; do
+    [ -n "$f" ] || continue
+    : "$mt"
+    _resume_session_fields "$f"
+    [ -n "$_rs_sid" ] || continue
+    case "$_rs_sid" in "$prefix"*) ;; *) continue ;; esac
+    # bash 3.2 has no associative arrays; a delimited string is the seen-set,
+    # and it is built without a single fork (this loop runs once per transcript
+    # on the machine). The `|` delimiters are load-bearing: without them `abc`
+    # would suppress `abcd`. `|` cannot occur in an id — every engine's decoder
+    # yields a UUID or a hex run.
+    case "$seen" in *"|$_rs_sid|"*) continue ;; esac
+    seen="$seen|$_rs_sid|"
+    printf '%s\t%s\t%s\n' "$_rs_sid" "$_rs_engine" "$_rs_tank"
+  done <<EOF
+$(_resume_all_sessions)
+EOF
+  return 0
 }
 
 # _resume_locate <sid> -> "engine\ttank\tdir\tpath" for every tank holding <sid>.
@@ -810,6 +859,35 @@ cmd_resume() {
   matches="$(_resume_locate "$sid")"
   local n
   n="$(printf '%s\n' "$matches" | grep -c . || true)"
+
+  # Nothing under that exact id — so read it as a PREFIX (#77). Exact first,
+  # always: a full id can never be made ambiguous by a longer one that happens
+  # to start with it, and the common case pays no extra scan.
+  if [ "$n" -eq 0 ]; then
+    local cands cn
+    cands="$(_resume_prefix_candidates "$sid")"
+    cn="$(printf '%s\n' "$cands" | grep -c . || true)"
+    if [ "$cn" -eq 1 ]; then
+      sid="${cands%%$'\t'*}"
+      matches="$(_resume_locate "$sid")"
+      n="$(printf '%s\n' "$matches" | grep -c . || true)"
+    elif [ "$cn" -gt 1 ]; then
+      # REFUSE, and say what the choices are. Picking the newest here would be
+      # the same shape as resuming a conversation the operator did not name:
+      # an id is how you say WHICH one, and a prefix that names two has not
+      # said it yet. Every candidate is printed in full so one of them can be
+      # copied straight back onto the command line.
+      log_err "'$sid' matches $cn sessions — say which:"
+      local c_sid c_engine c_tank
+      while IFS=$'\t' read -r c_sid c_engine c_tank; do
+        [ -n "$c_sid" ] || continue
+        log_dim "  clikae resume $c_sid    ($c_engine/$c_tank)"
+      done <<EOF
+$cands
+EOF
+      exit 1
+    fi
+  fi
 
   if [ "$n" -eq 0 ]; then
     log_err "No session '$sid' in any tank."
