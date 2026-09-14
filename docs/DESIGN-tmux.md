@@ -470,9 +470,35 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
      `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
      樁，並斷言它們的 tripwire 檔沒有出現。
-     整條路徑只剩兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
+     固定成本只有兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
      由 `tmux_status_render` 呼叫一次、交給油量與警示兩邊共用——不只省一個 fork，
      也讓兩半不會對「現在幾點」有不同答案。
+
+     🔴 P2-3（2026-09-14 round-1 fix review）：上面這句直到這次修正之前都是錯的。
+     `dry_store_peekv`（警示那一半，掃 `$CLIKAE_HOME/dry/*/*` 每個乾涸標記各呼叫
+     一次）內部用 `f="$(dry_store_path "$engine" "$tank")"` 重算路徑——一個
+     `$( )`，每個標記一個 fork，跟標記數線性成長，不是「兩個」。
+     `strace -f -e trace=clone,clone3,vfork,execve` 對真 helper（含 burn 那一半）
+     跑一次 render，量到的 clone 數（這條 lane 自己的沙箱，隔離的 `TMUX_TMPDIR`，
+     跟上面 14.2/24 ms 那組數字不是同一次量測，基線因此不同——量的是「隨標記數
+     怎麼變」，不是絕對值）：
+
+     ```
+     dry marker 數   clone（修前）   clone（修後）
+           0              12              11
+           3              15              11
+          33              45              11
+     ```
+
+     修前每多一個標記多一個 clone（+1/marker，跟先前 round-1 審查量到的斜率一致）；
+     burn 那一半（`burn_status_dirsv`/`burn_status_fieldv`）完全不隨標記數變，
+     fork-free 的部分本來就是真的。修法是把 `dry_store_path` 的函式本體
+     （`printf '%s/dry/%s/%s\n' "$CLIKAE_HOME" "$1" "$2"`）直接內聯成
+     `f="$CLIKAE_HOME/dry/$engine/$tank"`，不再透過會 fork 的函式呼叫——
+     跟 `burn_status_dirs`／`burn_status_dir` 已經在用的「兩份字面值放同一段，
+     好過其中一份是從另一份 derive 出來」是同一個取捨（見那兩個函式的註解）。
+     `dry_store_mark`／`dry_store_read`／`dry_store_clear`／`dry_store_epoch` 仍然呼叫 `dry_store_path`——
+     它們都不在 5 秒一次的熱路徑上，那個 fork 從來不是問題。
   4. **🔴 這條路上也不准「寫」。** `dry_store_read` 順手刪掉過期標記對「問一次」的
      呼叫者是對的，對一個每五秒問一次的狀態列則會讓「這個標記什麼時候消失的」變成
      「剛好有沒有人在看狀態列」的函數。所以狀態列走 `dry_store_peekv`（唯讀孿生，
@@ -489,7 +515,27 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      🔴 **CI 紅燈沒有被數進去，這是缺口不是決定**：issue #77 把它列為第三個來源，
      而這個 repo 唯一的 Stop hook（`scripts/harness-stop-hook.sh`）只把報告閘門的
      BLOCKED/ALLOWED 記進 `state/harness-hook.log`，從來沒有記過 CI 的判決。要數它
-     得先發明那個狀態，那是另一個改動。
+     得先發明那個狀態，那是另一個改動。（P2-2，2026-09-14 round-1 fix review：PR
+     #102 本文曾經在這句話的反面下錯注——寫著「CI-red seen by the Stop hook」是
+     `!N` 的來源之一，跟這裡、跟 CHANGELOG 都不一致。已經改成 PR 本文照這裡走，不
+     是這裡照 PR 本文走：這段話本來就是對的，錯的是本文那一行。）
+
+     🔴 **P2-1（同一輪 fix review）：死掉的 burn lane 現在會自己從計數裡消失，跟
+     dry 那一半用同一個時鐘。** 修之前：一條被 SIGKILL（或 OOM、斷電）的 lane 最後
+     一次寫的是 `running` 加一個已經不在的 pid，而在這之前，`!N` 會把它算進去——
+     永遠，因為唯一會清掉它的是 `_burn_sweep_old_logs`（7 天、只在下一次
+     `clikae burn` 才跑）。量過：`run dir` 的 mtime 改成 30 天前，紅燈完全不理會
+     年齡。dry 那一半本來就有 `CLIKAE_DRY_TTL`（6 小時）讓一個沒人再看的標記自己
+     退出新鮮度判定，燒的是 6 小時後轉綠而不是靠人手動清；燒那一半沒有這個。現在
+     兩邊共用同一個常數：死 pid 的 lane 一旦 `updated_at` 超過 `CLIKAE_DRY_TTL`
+     就不再計入 `!N`，跟 dry 標記變陳舊的判定同一把尺。
+     **仍然存在、而且是刻意留著的不對稱**：dry 的標記檔本身會被下一次
+     `dry_store_read`（不是 peek）懶惰刪除；burn 的 `status.json` 不會被這條讀路徑
+     刪除——唯一會真的刪除它的仍然是 `_burn_sweep_old_logs`，7 天、只在
+     `clikae burn` 才跑。兩邊現在在「算不算紅」這件事上同步了；「這份紀錄本身什麼
+     時候從磁碟消失」仍然是兩條不同的路，因為 burn 的 `status.json` 除了
+     alert-count 之外還有 `clikae wait` 這個真的需要它留著的讀者，不能像 dry 標記
+     那樣隨便早刪。
   6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是

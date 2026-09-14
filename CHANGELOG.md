@@ -66,14 +66,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `clikae resume <8 chars> | 5h 42% . 7d 65% | !2` with the clock at the right
   edge, and the window list, the truncated pane title and the date are gone
   (#77). The reconnect command is a real command: `clikae resume` now resolves
-  a unique session-id prefix and refuses an ambiguous one with the candidates
-  listed. Fuel comes from #72's usage cache only -- the row never calls a
-  vendor, and falls back to the board's dry/no-reading glyph when there is no
-  cached reading. `!N` counts tanks the live catchers marked dry and burn lanes
-  whose writer died before reaching a terminal state; it is not drawn at all
-  when N is 0. Below 100 columns the `ssh <host> -t ` prefix is dropped -- the
-  only variable-width part of the row, and dropped rather than cut because half
-  a hostname is not a command. Measured at 14 ms per redraw.
+  a unique session-id prefix (case-insensitively, and an ambiguous match's
+  candidate list caps at 10 with a count for the rest) and refuses an
+  ambiguous one with the candidates listed. Fuel comes from #72's usage cache
+  only -- the row never calls a vendor, and falls back to the board's
+  dry/no-reading glyph when there is no cached reading; a reading between 1h
+  and 24h old now carries a `. Nh ago` suffix instead of rendering identically
+  to a fresh one, and percentages clamp to 0-100 so a corrupt cache cannot
+  blow the row's width. `!N` counts tanks the live catchers marked dry and
+  burn lanes whose writer died before reaching a terminal state; it is not
+  drawn at all when N is 0, and a dead-pid lane now self-clears from the count
+  after 6h (dry's own TTL) instead of pinning red for up to 7 days. Below 100
+  columns the `ssh <host> -t ` prefix is dropped -- the only variable-width
+  part of the row, and dropped rather than cut because half a hostname is not
+  a command. Measured at 14 ms per redraw idle, up to 24 ms under load.
+
+  Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
+  (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion
+  prefix-strip that retries its glob at every byte offset, which turned a
+  FAILED lane's redacted stderr (`reason`, up to 64 KB by this repo's own
+  `_BURN_REDACT_TAIL_BYTES` default) into the everyday cost of finding
+  `state`/`pid` after it in the same object -- measured 1,910 ms at 64 KB,
+  didn't finish in 90s at 1 MB. A single `[[ =~ ]]` regex match replaces it,
+  still fork-free and linear: 2-3 ms at 64 KB, 32-34 ms at 1 MB. Also fixed
+  that round: `dry_store_peekv` forked once per dry marker (now flat
+  regardless of marker count); the PR description's claim that `!N` counted
+  "CI-red seen by the Stop hook" was false and has been corrected (that
+  source remains an intentionally documented gap, not a shipped one).
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
