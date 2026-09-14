@@ -370,3 +370,200 @@ EOF
   [[ "$output" == *"claude: permissions template missing (installation incomplete)"* ]] || false
   [[ "$output" != *"invalid JSON"* ]] || false
 }
+
+# --- tmux guard shim reporting (CVERInc/clikae#97) -----------------------------
+# The guard (lib/shims/tmux) only protects a session whose PANE PROCESS has it
+# FIRST on its real PATH — tmux_spawn_session (Rule 10, lib/core/tmux.sh) is
+# the only place that arranges that, and a session's PATH is fixed at birth
+# (DESIGN-tmux Rule 8), so a session spawned some other way, or before the
+# guard shipped, stays unprotected for its whole life.
+#
+# 🔴 P1-2 (clikae#97 review round 1): this used to construct both the "with"
+# and "without" cases via `tmux new-session -e "PATH=…"` and read
+# `show-environment -t` back — the same write-and-read-back-the-same-table
+# loop `_doctor_pane_path` replaced doctor's own probe to stop doing. That
+# probe could not structurally go red for a real `tmux_spawn_session`
+# session, guarded or not: it only ever proved what `-e` had been asked to
+# write. These two now use the actual code paths — a bare `tmux new-session`
+# (no guard, the pre-#97 shape) and the real `tmux_spawn_session` (the
+# guard, as clikae itself spawns it) — and read the PANE PROCESS back via
+# `/proc`, the same probe doctor itself now uses.
+
+_tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
+
+@test "doctor reports a live session whose PANE PROCESS lacks the guard on PATH" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  # A bare `tmux new-session`, not tmux_spawn_session — the shape of a
+  # session that predates the guard, or whose spawn path drifted around
+  # Rule 10. Its pane process never gets the shim.
+  tmux new-session -d -s "$sess" 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tmux guard"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$sess"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor stays silent when the live session's PANE PROCESS actually has the guard first on PATH" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  # The real production spawn path (Rule 10) — this is what actually gives
+  # the pane process the guard, per P1-1.
+  tmux_spawn_session --session "$sess" -- 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tmux guard"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor changes nothing on disk when checking the tmux guard (read-only)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -e "PATH=/usr/bin:/bin" -s "$sess" 'sleep 60'
+  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  run clikae doctor
+  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ "$before" = "$after" ]
+}
+
+# --- macOS pane-path fallback + set -eo pipefail survival (P2-4, review round 2) --
+# `_doctor_pane_path`'s Darwin branch (`ps eww`) and its two callers were never
+# exercised anywhere: GitHub's macos bats runner has no tmux at all (the guard
+# probe's own `command -v tmux` short-circuits before either is ever reached),
+# and every Linux run takes the `/proc` branch instead. These probe the two
+# code paths directly rather than waiting for a platform this suite cannot run.
+
+@test "_doctor_pane_path (macOS ps eww fallback) reads the LAST PATH= token, not the command line's own" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  chmod +x "$TEST_HOME/.osbin/uname"
+  # Simulates BSD `ps eww -o command=`: the pane's own COMMAND legitimately
+  # contains "PATH=..." (Rule 10's `env PATH=... <cmd>`, lib/core/tmux.sh)
+  # BEFORE its real ENVIRONMENT's own PATH= is appended after it.
+  cat > "$TEST_HOME/.osbin/ps" <<'STUB'
+#!/bin/sh
+printf 'env PATH=/SHIM/intended:/usr/bin sleep 60 PATH=/REAL/env:/usr/bin OTHER=1\n'
+STUB
+  chmod +x "$TEST_HOME/.osbin/ps"
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [ "$output" = "/REAL/env:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+@test "doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # A session name live_session_names claims exists but tmux does not: the
+  # shape of the race between the listing and the -F probe two lines later.
+  cat > "$TEST_HOME/probe.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+live_session_names() { printf 'clikae-codex-ghost97\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/probe.sh"
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"AFTER-GUARD-CHECK"* ]] || { echo "aborted before completing: $output"; false; }
+}
+
+@test "doctor's tmux guard check survives an unreadable pane environment (set -eo pipefail)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  cat > "$TEST_HOME/probe2.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+# Simulates an unreadable /proc/<pid>/environ (or a failing macOS ps eww):
+# the real, per-pid probe returning nonzero, not just an empty string.
+_doctor_pane_path() { return 1; }
+live_session_names() { printf '$sess\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/probe2.sh"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"AFTER-GUARD-CHECK"* ]] || { echo "aborted before completing: $output"; false; }
+}
+
+# --- "could not read" is not "no guard" (P3-4, review round 3) -----------------
+# Three ways doctor can fail to look at a session's pane process at all. Each
+# one used to print "not first on PATH" plus "restart the tank" about a
+# session nobody had actually read. The case table stubs only what it has to
+# (the session listing, and `tmux list-panes` where the case needs a pid), so
+# the real `_doctor_pane_path` runs on every platform, tmux installed or not.
+
+_tg_unknown_case() { # _tg_unknown_case <case> -> writes and runs a set -eo pipefail probe
+  local case="$1" stub
+  case "$case" in
+    # B: list-panes hands back a pid that has already exited.
+    pid-gone)       stub="tmux() { case \"\$1\" in list-panes) echo 999999999 ;; *) return 1 ;; esac; }" ;;
+    # C: the session is listed, but list-panes fails (it ended in between).
+    list-panes-fails) stub="tmux() { return 1; }" ;;
+    # D: a pid whose environment this user cannot read (pid 1, non-root).
+    environ-unreadable) stub="tmux() { case \"\$1\" in list-panes) echo 1 ;; *) return 1 ;; esac; }" ;;
+  esac
+  cat > "$TEST_HOME/unknown-$case.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+$stub
+live_session_names() { printf 'clikae-codex-unknown97\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/unknown-$case.sh"
+}
+
+@test "doctor reports 'could not verify', never 'not first on PATH' / 'restart the tank', when it cannot read the pane" {
+  local bad="" c
+  for c in pid-gone list-panes-fails environ-unreadable; do
+    if [ "$c" = environ-unreadable ] && [ -r /proc/1/environ ]; then
+      # Premise does not hold here (running as root): pid 1 is readable.
+      continue
+    fi
+    _tg_unknown_case "$c"
+    { [ "$status" -eq 0 ] \
+      && [[ "$output" == *"AFTER-GUARD-CHECK"* ]] \
+      && [[ "$output" == *"could not verify: clikae-codex-unknown97"* ]] \
+      && [[ "$output" != *"not first on PATH"* ]] \
+      && [[ "$output" != *"restart the tank"* ]]; } || bad="$bad
+--- case $c (status=$status):
+$output"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "_doctor_pane_path returns nonzero, not an empty PATH, when it cannot read the process" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_path 999999999
+  [ "$status" -ne 0 ] || { echo "status=$status output='$output'"; false; }
+  # macOS branch: `ps` failing with no output (a locked-down host).
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  printf '#!/bin/sh\nexit 1\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/uname" "$TEST_HOME/.osbin/ps"
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
+  [ "$status" -ne 0 ] || { echo "Darwin branch: status=$status output='$output'"; false; }
+}
