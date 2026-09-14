@@ -452,20 +452,32 @@ STUB
   # A stub codex that dumps its OWN process's PATH — the engine burn's
   # wrapper script actually execs, downstream of the `compgen -e` restore
   # that P2-3 (review round 1) found clobbers whatever tmux_spawn_session put
-  # there. This bats process's own PATH (below) deliberately has NO shim on
-  # it — the shape of an unattended `clikae burn` (cron, CI, a plain shell
-  # that never ran through tmux_spawn_session), which is burn's actual home
-  # turf and exactly what `compgen -e` captures and restores.
+  # there. This test's own PATH (below) deliberately has NO shim on it — the
+  # shape of an unattended `clikae burn` (cron, CI, a plain shell that never
+  # ran through tmux_spawn_session), which is burn's actual home turf and
+  # exactly what `compgen -e` captures and restores.
+  #
+  # 🔴 STRIP IT, DON'T SKIP ON IT (P3, clikae#97 review round 2). A `skip`
+  # gated on "the caller's PATH happens not to have the shim" is a premise
+  # that only holds by ACCIDENT of how this suite is invoked today (bats'
+  # own helpers.bash and this file each prepend their own bin dir ahead of
+  # it) — and the one direction this PR actually points, running the suite
+  # from inside a clikae tank, is exactly the direction that accident stops
+  # holding. A self-skipping premise check silently stops covering the
+  # regression the moment it would start firing. Stripping the shim entry
+  # instead of trusting it was never there keeps this test exercising the
+  # `compgen -e` restore unconditionally, whichever PATH invoked bats.
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat << 'STUB' > "$BATS_TEST_TMPDIR/bin/codex"
 #!/usr/bin/env bash
 printf '%s' "$PATH" > "$STUB_ARTIFACT"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/codex"
-  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-  case "$PATH" in
-    "$CLIKAE_LIB/shims:"*) skip "premise broken: shim already on the caller's PATH" ;;
+  local caller_path="$PATH"
+  case "$caller_path" in
+    "$CLIKAE_LIB/shims:"*) caller_path="${caller_path#"$CLIKAE_LIB/shims:"}" ;;
   esac
+  export PATH="$BATS_TEST_TMPDIR/bin:$caller_path"
 
   run clikae burn codex T1 --artifact "$A" --prompt "dump my PATH"
   [ "$status" -eq 0 ]
