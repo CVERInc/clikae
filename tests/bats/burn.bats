@@ -276,6 +276,30 @@ STUB
   [[ "$output" == *"Done on agy/work"* ]] || false
 }
 
+# #63 round-6 P3-1 (G5b, r6 review): the automatic dry-walk hop used to pass
+# --force-cockpit straight through to the gate it asks for the NEXT tank,
+# even though the operator only named it for the STARTING target — so
+# `burn agy default --force-cockpit`, with default dry and work the
+# recorded cockpit, actually launched on agy/work. Help (burn.sh:101-102)
+# and fix5's own report both promise auto-reroute never picks the cockpit,
+# with or without this flag; this closes the one path where it did.
+@test "burn agy: an automatic dry-walk hop still SKIPS the cockpit even with --force-cockpit (#63 r6 P3-1, G5b)" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # default(active) + work
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"   # default is dry -> walk would hop to work
+  mkdir -p "$CLIKAE_HOME/state"; printf 'antigravity/work\n' > "$CLIKAE_HOME/state/cockpit"   # work is the cockpit
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing" --force-cockpit
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"skipping agy/work"* ]] || false
+  [[ "$output" == *"it is the cockpit"* ]] || false
+  [[ "$output" != *"Done on agy/work"* ]] || false
+  [ ! -f "$A" ]
+}
+
 @test "burn requires --artifact" {
   run clikae burn codex T1 -- run x
   [ "$status" -ne 0 ]
@@ -354,6 +378,171 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   _seed_email claude a one@example.com; _seed_email claude b two@example.com
   live_dir_users() { :; }
   run _burn_next_same_engine claude "claude/a" "one@example.com" CLAUDE_CONFIG_DIR 0
+  [ "$output" = "b" ]
+}
+
+# --- cockpit exclusion (#63 P3-5, round-4 review) ---
+# The cockpit used to be protected only BY ACCIDENT, through P0: a cockpit
+# tank normally has an interactive session sitting on it, so the live-
+# session check happened to catch it. cockpit-guard.sh is a Claude Code
+# PreToolUse hook — it never fires for a headless `clikae burn` run at all
+# — so the moment that session isn't there, nothing stopped auto-reroute
+# from dispatching straight onto the tank that's supposed to be doing the
+# dispatching. These simulate NO live session anywhere (the accident-cover
+# gone) to isolate the new, explicit rule from the old, accidental one.
+
+@test "_burn_next_same_engine: refuses when the cockpit is the ONLY idle same-engine tank left (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"
+  live_dir_users() { :; }   # nobody interactive anywhere -- P0's accidental cover is gone
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0 2>/dev/null)"
+  [ -z "$out" ]             # only 'b' remains in the reserve and it's the cockpit
+}
+
+@test "_burn_next_same_engine: --allow-active does NOT rescue the cockpit tank (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"
+  live_dir_users() { :; }
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 1 2>/dev/null)"
+  [ -z "$out" ]             # unlike P0, this exclusion is unconditional
+}
+
+@test "_burn_next_same_engine: a tank that is NOT the cockpit is still picked normally (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b; clikae init claude c
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"   # b is the cockpit; c is not
+  live_dir_users() { :; }
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0 2>/dev/null)"
+  [ "$out" = "c" ]
+}
+
+# --- launch gate (#63 round-5 P2-1) ---
+# The exclusion above only ever covered AUTOMATIC reroute. The codex review
+# reproduced `clikae burn claude <cockpit> --no-reroute …` entering the stub
+# engine, writing the artifact, rc=0. Every launch now asks one gate.
+
+@test "burn refuses an EXPLICIT target that is the recorded cockpit: rc≠0, engine never entered, no artifact (#63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --json --prompt 'review worktree' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused — claude/A is the recorded cockpit"* ]] || false
+  [[ "$output" == *"--force-cockpit"* ]] || false
+  [ ! -e "$L" ]      # the stub engine was never started
+  [ ! -e "$art" ]
+}
+
+@test "burn --force-cockpit runs on the cockpit and says so on stderr (#63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --force-cockpit --prompt 'review worktree' --artifact "$art"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--force-cockpit: burning claude/A even though it is the recorded cockpit"* ]] || false
+  [ -s "$L" ]
+  [ -e "$art" ]
+}
+
+@test "burn refuses a --to hop onto the cockpit after a dry tank, engine entered only for the first tank (#63 r5 P2-1)" {
+  _stub_codex
+  clikae init codex T1
+  clikae init codex H
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  mkdir -p "$CLIKAE_HOME/state"; printf 'codex/H\n' > "$CLIKAE_HOME/state/cockpit"
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/argv.log"
+  STUB_ARGV_LOG="$L" run clikae burn codex T1 --artifact "$A" --to codex/H -- run "$A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused — codex/H is the recorded cockpit"* ]] || false
+  [ "$(wc -l < "$L" | tr -d ' ')" = 1 ]   # T1 only
+  [ ! -e "$A" ]
+}
+
+@test "burn refuses a tank that is a symlink alias of the cockpit (physical identity, #63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  ln -s "$CLIKAE_HOME/profiles/claude/A" "$CLIKAE_HOME/profiles/claude/alias"
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude alias --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+# #63 round-6 P3-2 (G6, r6 review): a state file that EXISTS but does not
+# read back cleanly used to make _cockpit_state_read return EMPTY —
+# byte-for-byte identical to "no cockpit was ever recorded" — so the gate
+# waved every burn through, including straight onto the tank the corrupt
+# file was failing to protect. Three ways a state file stops parsing
+# cleanly: unreadable (mode 000), an unsafe path (symlink), and malformed
+# content (a stray CR). All three must now refuse EVERY burn, not just one
+# naming the tank the file happened to (fail to) record.
+
+@test "burn refuses ALL burns when the state file exists but is unreadable (mode 000, #63 r6 P3-2)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  chmod 000 "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  chmod 600 "$CLIKAE_HOME/state/cockpit"   # so bats' own cleanup can remove it
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [[ "$output" == *"state/cockpit"* ]] || false
+  [[ "$output" == *"clikae doctor"* ]] || false
+  [[ "$output" == *"cockpit --off"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn refuses ALL burns when the state file is a symlink (#63 r6 P3-2)" {
+  _stub_claude
+  clikae init claude A
+  clikae init claude decoy
+  mkdir -p "$CLIKAE_HOME/state"
+  ln -s "$CLIKAE_HOME/profiles/claude/decoy/settings.json" "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn refuses ALL burns when the state file's content has a stray CR (#63 r6 P3-2)" {
+  _stub_codex
+  clikae init codex H
+  mkdir -p "$CLIKAE_HOME/state"; printf 'codex/H\r\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARGV_LOG="$L" run clikae burn codex H --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn is unaffected when the state file simply does not exist (#63 r6 P3-2, no regression)" {
+  _stub_claude
+  clikae init claude A
+  # no $CLIKAE_HOME/state/cockpit at all
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -eq 0 ]
+  [ -e "$L" ]
+  [ -e "$art" ]
+}
+
+@test "_burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  live_dir_users() { :; }
+  run _burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0
   [ "$output" = "b" ]
 }
 

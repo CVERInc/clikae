@@ -58,9 +58,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the existing dry behavior (#75).
 - `clikae status`'s fuel-note lookup no longer re-scans every tank's
   transcripts once per rendered row (was O(n²) on tank count; #75 round 1).
+- `clikae cockpit` round 1 (#63): `json_field_str` tolerates whitespace
+  around a `:` (pretty-printed JSON silently went unmatched before); the
+  guard now distinguishes "field absent" from "payload looks truncated or
+  malformed" and fails open with a stderr note on the latter instead of
+  refusing with a misleading reason; `--off` sweeps every tank and never
+  aborts partway through a broken one, clearing the guard, state, and any
+  live `--allow-agents` allowance regardless, and reports which tanks (if
+  any) it couldn't clean up; `_settings_write_file` refuses to write empty
+  content (a jq failure mid-pipeline used to silently blank a live
+  settings.json) and caps backups at the newest 5 per tank; the prompt
+  heuristic is widened (bare `commit`/`push`/`review`/`grade`/"run
+  tests"/"make CI", plus a 1,500-character length tripwire) and documented
+  as a tripwire, not a classifier; a large prompt was capped to its first 8
+  KiB before the heuristic ran (superseded in round 2 below — that cap
+  itself turned out to be unsafe); installing from a git checkout now warns
+  that the guard's path isn't stable; `clikae cockpit` names a stale
+  recorded tank instead of showing it as if nothing were wrong. Installing
+  or removing the guard round-trips the tank's settings.json through jq
+  (same mechanism as `clikae settings apply`): key order gets normalized
+  and CRLF becomes LF, but content — a hand-written hooks block, any other
+  key in the file — survives intact (also documented in `docs/usage.md` and
+  `clikae cockpit --help`).
+- `clikae cockpit` round 2 (#63, `REVIEW-cockpit63-r2.md`): round 1's fixed
+  8 KiB window — `head -c`/`tail -c` slicing the RAW PAYLOAD before ever
+  reading `tool_input.model`/`.prompt` — could land mid multi-byte UTF-8
+  character (routine on a Chinese-language prompt) or mid JSON-escape, which
+  silently blinded BOTH the prompt heuristic AND the 1,500-character length
+  tripwire at once (`exit 0`, zero stderr), and separately could miss
+  `model` entirely — wrongly refusing every model, haiku included — on a
+  payload shape where `model` precedes a large `prompt` in `tool_input`.
+  Fixed: `tool_name`/`model`/`prompt` are all read from the full payload
+  (cost scales with payload size — no longer flat, see the hook's own
+  docstring for measured numbers); only a copy of the prompt truncated to
+  its first 8,192 CHARACTERS (sliced after JSON-decoding, under a locale
+  pinned to `C.UTF-8`/`en_US.UTF-8`/`C` so the cut can't land mid-character)
+  feeds the keyword heuristic, while the length tripwire reads the
+  UNTRUNCATED decoded length. Also: the model check widened from an exact
+  `opus`/`sonnet` match (silently missed every real API model id, e.g.
+  `claude-sonnet-4-5-20250929`) to a family-prefix match; `clikae cockpit
+  <tank>` (moving the role, not just `--off`) now sweeps past a broken OLD
+  tank's settings.json instead of aborting the whole move.
+  **Correction (round-4 review):** the 8,192-character truncated copy this
+  entry describes is gone — round 3 (below) deleted it. The keyword
+  heuristic now reads the full, untruncated `$prompt`, exactly like the
+  length tripwire already did.
+
+- `clikae cockpit` round 3 (#63, `REVIEW-cockpit63-r3.md`): the 8,192-
+  character truncated copy round 2 introduced (above) turned out to be
+  dead code — the search loop and its own length check already bounded
+  what the heuristic could match, so the slice changed nothing about any
+  classification (709 synthetic specimens, byte-for-byte identical verdicts
+  with and without it) while still costing a full JSON-decode-and-slice on
+  every call. Deleted; the heuristic now runs on the full decoded `$prompt`
+  directly. Separately, `prompt` extraction (the expensive field — ~92% of
+  a 1 MB payload's parse time) moved from unconditional to INSIDE the
+  `opus|sonnet…)` model-match arm, so haiku/fable/every other model this
+  guard is documented to leave untouched now pays close to nothing instead
+  of the same cost as the model it actually inspects (measured ~3–4x faster
+  on 200 kB–1 MB payloads; the protected opus/sonnet path is unchanged).
+  Also: `gen_specimen.py`'s straddle generator now actually lands the CJK
+  multi-byte boundary it claims to (was 50/100 before this round, 100/100
+  after — see `REVIEW-cockpit63-r3.md` P3-3 for the count and round 4 below
+  for what was still wrong with how it checked itself).
+
+- `clikae cockpit` round 4 (#63, `REVIEW-cockpit63-r4.md`): moving the role
+  used to write state (`_cockpit_state_write`) AFTER both guard writes
+  (install the new tank, remove the old one). A state-write failure at that
+  point — state file mode 444, or symlinked to an unwritable path, both
+  reproduced — landed after the swap had already happened, leaving state
+  pointing at the OLD tank while the OLD tank's guard was already gone and
+  the NEW tank's guard was live and unrecorded; neither `clikae cockpit`
+  (which only checks the named tank exists, never that it's armed) nor
+  `clikae doctor` (no cockpit awareness at all) said anything. State is now
+  written immediately after the new tank's guard is installed and BEFORE
+  the old tank is touched, so a state-write failure can only ever leave the
+  OLD cockpit exactly as it was; the new failure mode this introduces (the
+  new tank's guard installed but unrecorded) is rolled back in the same
+  step instead of being left as an unlisted stray. `clikae doctor` gained a
+  cockpit line: it reads the recorded cockpit and reports, loudly, when the
+  named tank doesn't actually carry the guard, or when some OTHER tank
+  carries one. `gen_specimen.py`'s straddle self-check used to restate the
+  same predicate its own search loop already used, so it could never fire —
+  moving the boundary constant to 8193 made the corpus silently miss its
+  target while the check stayed green; the check is now an independent
+  computation of the same byte offset. `clikae burn`'s automatic reroute
+  (picking another idle same-engine tank when the current one runs dry) had
+  no cockpit awareness at all and could route dispatched work onto the
+  cockpit tank itself if it happened to be idle with no interactive session
+  attached; it now excludes the cockpit explicitly rather than relying on
+  the live-session check to happen to cover it.
+
+- `clikae cockpit` round 5 (#63, codex security review):
+  - `clikae burn` refuses to launch on the recorded cockpit — the tank you
+    name, a `--to` hop, agy's walk, or a symlink alias of the cockpit's
+    directory — with the guard's own sentence, before any lock, `--fresh`
+    deletion or engine start. Round 4 only covered automatic reroute; an
+    explicit `clikae burn claude <cockpit>` ran to completion. This extends
+    #63's in-session tripwire to the launch path. `--force-cockpit` is the
+    operator override, and it says what it is doing on stderr.
+  - Moving the role compares physical tank identity, not names: a
+    destination whose directory is a symlink alias of the current cockpit
+    (or whose settings.json is the same file) is refused as the same tank.
+    Before, the move returned 0, recorded the alias, and removed the only
+    guard from the shared settings.json.
+  - The cockpit record is written atomically: a fresh file in the state
+    directory, checked for every byte, renamed into place. A symlinked
+    state file or state directory is refused before any guard is written.
+    The new tank's guard is rolled back only when the record, re-read from
+    disk, still names the old cockpit; otherwise it stays (over-guarded is
+    the safe direction). Three reproductions (a real RLIMIT_FSIZE short
+    write, SIGKILL after the old in-place truncation, a state path
+    symlinked at the new tank's settings.json) each ended with an
+    unguarded recorded cockpit or an empty record before. `clikae doctor`
+    now scans for guards even when no cockpit is recorded, and names an
+    unsafe or malformed state file.
+  - A role transition (move, repair, `--off`) holds one `mkdir` lock in the
+    state directory from reading the record to disarming the old tank;
+    `clikae settings apply` holds the same lock while it writes. A second
+    transition waits (`CLIKAE_SETTINGS_LOCK_WAIT_S`, default 20 s), then
+    refuses. Before, two interleaved moves both returned 0 and left neither
+    tank guarded. A lock whose holder died is named with its removal
+    command, never broken silently; `clikae doctor` reports it.
+  - The guard hook fails closed. A 65 KiB-and-up pretty-printed Agent call
+    used to be allowed as "payload has no tool_input field": the presence
+    test was `printf | grep -q`, and grep's early exit killed printf with
+    SIGPIPE under pipefail. The test is a pattern match on the payload
+    variable now, and every path that is not a decision about a readable
+    call refuses (empty payload, no tool_name, no tool_input, malformed
+    JSON, a missing library, an internal error). The escape hatches are
+    read before the payload, so a refusal can always be lifted.
+  - The guard hook parses the call with jq instead of a regex scan that
+    decoded five escapes. Equivalent valid encodings of a refused call —
+    `"\u0073onnet"`, `"\u0041gent"`, `"\u0072eview"`, an escaped letter in
+    the `tool_input` key, trailing space/tab/CRLF — were allowed; each now
+    refuses with the plain form's exact message. Surrogate pairs count as
+    one character for the length tripwire, `tool_input.model` is read by
+    path (a `model` key elsewhere no longer stands in for it), and anything
+    that is not exactly one JSON object is refused. `json_field_str`, whose
+    only caller was the hook, is removed.
+  - Model ids: Bedrock, Vertex and `[1m]` spellings are placed in their
+    family, and an id the guard does not recognise is checked like
+    opus/sonnet instead of allowed with no output. A refusal names the id
+    as unrecognised; a pass prints one line saying so.
+  - The hook command in settings.json is stored shell-quoted. An install
+    under a path with a space split there when Claude Code ran it (exit
+    127, non-blocking: every spawn allowed). An older unquoted entry is
+    repaired on the next `clikae cockpit <tank>`.
+  - settings.json writers (the cockpit guard, `clikae settings apply`)
+    resolve the tank directory once and read the file once, through a
+    no-follow snapshot; the JSON parse and the `.clikae.bak.*` backup both
+    come from that snapshot. Swapping settings.json for a symlink between
+    the read and the backup used to copy the link's target into the backup.
+    A directory swapped in at the destination is refused instead of
+    receiving the file. Read-only callers (doctor, `--check`, `--dry-run`)
+    make no snapshot.
 
 ### Added
 
+- `clikae cockpit <tank>` marks the tank that STEERS — the coordinating
+  session that dispatches build/review lanes to worker tanks with `clikae
+  burn` instead of spawning them in its own context (which spends the
+  cockpit's own weekly budget on work meant for a worker; broke for real
+  2026-09-10). Installs a PreToolUse hook (`lib/hooks/cockpit-guard.sh`) on
+  that one tank's settings.json that refuses an in-session `Agent` spawn
+  whose model is missing, or opus/sonnet with a prompt that reads as a
+  build/review lane (worktree, a git commit/push, REVIEWER/adversarial
+  review, a test run) — naming the current idle reserve and the exact `burn`
+  shape to use instead. Moving the role removes the hook from the old tank
+  and installs it on the new one (`--off` removes it everywhere); a human's
+  own hooks on that tank are identified by marker and never touched. Escape
+  hatch for "burn the cockpit tank tonight": `CLIKAE_COCKPIT_ALLOW_AGENTS=1`,
+  or a timed `clikae cockpit --allow-agents <dur>`. The settings.json edit
+  rides #76/#85's write mechanism (union merge, backup, atomic rename) rather
+  than a one-off jq edit (#63).
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is

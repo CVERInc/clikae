@@ -227,6 +227,93 @@ _doctor_memory() {
   return 0
 }
 
+# _doctor_cockpit -> say something ONLY when the recorded cockpit and the
+# guard actually on disk disagree (#63 round-4 review, P3-7 + the other half
+# of P2-1). Nothing else checks this: `clikae cockpit` (_cockpit_show) only
+# asks whether the NAMED tank exists, never whether it's armed, so a state
+# write that races a guard write (P2-1) — or any other cause of drift, a
+# hand-edited settings.json, a `--off` that died partway through — left a
+# cockpit that reported healthy and stayed silent forever after. Read-only:
+# this names the mismatch, it does not repair it (`clikae cockpit --off`
+# sweeps every guard regardless of what state says).
+_doctor_cockpit() {
+  declare -F _cockpit_state_file >/dev/null 2>&1 || {
+    # shellcheck source=./cockpit.sh
+    source "$CLIKAE_LIB/commands/cockpit.sh"
+  }
+  local state_file; state_file="$(_cockpit_state_file)"
+  # #63 round-5 P2-3: this used to return right here when state was absent or
+  # empty — exactly the state a crash mid-write left behind (both tanks
+  # guarded, nothing recorded), so doctor said nothing. The guard scan below
+  # now always runs; only the "is the recorded tank armed" half needs a record.
+  if ! _cockpit_state_path_ok; then
+    printf '  %-16s %s\n' "cockpit" "state file $state_file (or its directory) is a symlink or not a regular file — it is ignored, and clikae cockpit refuses to change the role until it is removed"
+  fi
+  # #63 round-5 P2-4: a transition killed while holding the settings lock
+  # leaves it behind, and every later `clikae cockpit` refuses — name it here.
+  local lock="$CLIKAE_HOME/state/settings.lock" lock_pid
+  if [ -d "$lock" ]; then
+    lock_pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      printf '  %-16s %s\n' "cockpit" "stale settings lock $lock (pid $lock_pid is not running) — a cockpit/settings change died mid-way; check the lines below, then: rm -rf '$lock'"
+    elif [ -z "$lock_pid" ]; then
+      # #63 round-6 P3-3: a crash between the `mkdir` and the pid-file write
+      # leaves a lock dir with no pid file at all — the check above requires
+      # a NON-EMPTY dead pid to speak up, so this shape went unreported:
+      # every waiting command silently timed out (CLIKAE_SETTINGS_LOCK_WAIT_S,
+      # default 20s) and said "in progress (pid unknown)" with no hint doctor
+      # already knew something was wrong.
+      printf '  %-16s %s\n' "cockpit" "settings lock $lock has no pid file — a cockpit/settings change likely died between taking the lock and recording its pid; every waiting command times out until it clears. If nothing is actually mid-transition: rm -rf '$lock'"
+    fi
+  fi
+  local cur; cur="$(_cockpit_state_read)"
+  local cur_engine="" cur_tank=""
+  case "$cur" in
+    '') ;;
+    */*) cur_engine="${cur%%/*}"; cur_tank="${cur#*/}" ;;
+    *) printf '  %-16s %s\n' "cockpit" "state file $state_file does not name an <engine>/<tank> (reads: $cur) — fix: clikae cockpit --off"
+       cur="" ;;
+  esac
+
+  local cli profile path
+  local named_exists=0 named_has_guard=0 strays=""
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_exists=1
+    fi
+    [ -f "$path/settings.json" ] || continue
+    grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_has_guard=1
+    else
+      strays="$strays $cli/$profile"
+    fi
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+
+  if [ -z "$cur" ]; then
+    if [ -n "$strays" ]; then
+      printf '  %-16s %s\n' "cockpit" "guard found on tank(s) but no cockpit is recorded:$strays"
+      log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+    fi
+    return 0
+  fi
+
+  if [ "$named_exists" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur no longer exists — fix: clikae cockpit --off"
+  elif [ "$named_has_guard" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur has NO guard installed — the in-session dispatch rule is NOT being enforced"
+    log_dim "                   fix: clikae cockpit $cur_engine $cur_tank"
+  fi
+  if [ -n "$strays" ]; then
+    printf '  %-16s %s\n' "cockpit" "guard also found on tank(s) that are not the recorded cockpit:$strays"
+    log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+  fi
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -269,6 +356,7 @@ EOF
   echo ""
   _doctor_legacy_prefix
   _doctor_memory
+  _doctor_cockpit
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"
