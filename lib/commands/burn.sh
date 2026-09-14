@@ -949,9 +949,12 @@ _agy_burn() {
 # macOS ships neither (see `_burn_timeout_bin`'s own comment), and its
 # `perl` fallback is explicitly skipped there because an alarm-killed
 # perl's exit code isn't reliably 124. `_burn_lb_bounded` needs no external
-# binary at all — background, poll `kill -0`, TERM+KILL past the deadline —
-# so it bounds git and find identically on every platform bash itself runs
-# on. Backgrounding here is safe specifically BECAUSE this whole scan
+# binary at all — background, blocking `wait` (not a `kill -0` poll loop —
+# see that tradeoff below), TERM+KILL past the deadline — so it bounds git
+# and find identically on every platform bash itself runs on (P2-1, round-3
+# review: identically requires never backgrounding a builtin — see
+# `_burn_lb_git`'s own comment). Backgrounding here is safe specifically
+# BECAUSE this whole scan
 # already runs inside `_burn_left_behind`'s own `$(...)` subshell (see the
 # P1 note below): the "&" below can only ever background a child of THAT
 # subshell, so nothing it starts can outlive the one process substitution
@@ -959,6 +962,12 @@ _agy_burn() {
 _burn_lb_bounded() {
   local secs="$1"; shift
   local start=$SECONDS pid watcher rc
+  # $1 must never be a shell builtin (`command`, `builtin`, `eval`, a
+  # function) — on real bash 3.2 (not this repo's bash 5), backgrounding a
+  # builtin forks an intermediate subshell to run it, so `$!` below is that
+  # subshell, not whatever the builtin itself execs. Every caller passes an
+  # absolute path or a bare external command name for exactly this reason
+  # (P2-1, round-3 review; `_burn_lb_git`'s own comment has the repro).
   "$@" &
   pid=$!
   # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
@@ -1024,7 +1033,22 @@ _burn_lb_bounded() {
 # `.git/HEAD` replaced by a FIFO) gets 5s like the file-list `find` always
 # did, instead of blocking this function — and therefore `burn` itself —
 # indefinitely.
-_burn_lb_git() { _burn_lb_bounded 5 command git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+# P2-1 (round-3 review): `command git …` here defeated the bound it was
+# supposed to feed. `_burn_lb_bounded` records `$!` right after
+# backgrounding `"$@"`; on real bash 3.2.57 (macOS CI's own
+# `/usr/bin/env bash`, not the bash 5 this file was written and tested
+# against) `command <builtin-lookalike-name>` forks an intermediate subshell
+# to run the builtin machinery, so `$!` is THAT subshell, not git. Killing
+# `$!` kills the subshell; git is reparented to init and keeps running,
+# still holding `_burn_left_behind`'s own `$(...)` pipe open — measured:
+# `.git/HEAD` as a FIFO made a real `clikae burn` in a bash:3.2 container
+# hang past ten minutes instead of returning at the 5s bound. `$BURN_LB_GIT`
+# (resolved once, below, via the `command -v git` already needed to decide
+# whether git exists at all) is passed as `$1` instead: an absolute path is
+# never a builtin, so `_burn_lb_bounded` backgrounds git itself on every
+# bash this runs on, and the path lookup still gives the same
+# function/alias-shadowing immunity `command` was there for.
+_burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
 # .git may be a directory OR a worktree/submodule pointer file.
@@ -1053,7 +1077,11 @@ _burn_left_behind() {
   local -a repos=() roots=()
   local GIT_OPTIONAL_LOCKS=0
   export GIT_OPTIONAL_LOCKS
-  command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
+  # P2-1 (round-3 review): resolved once here, not `local` — `_burn_lb_git`
+  # (defined outside this function, called only from inside it) reads this
+  # as a global. See `_burn_lb_git`'s own comment for why an absolute path
+  # replaces `command git`.
+  BURN_LB_GIT="$(command -v git)" || { printf '[]'; return 0; }
   # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
   # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
   # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
