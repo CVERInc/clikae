@@ -993,7 +993,17 @@ _burn_lb_bounded() {
   # finally exited. `>/dev/null 2>&1` on the watchdog gives it (and
   # anything it forks) a redirected fd 1 from the start, so an orphaned
   # `sleep` holds no reference to the real pipe.
-  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  # P2-3 (round-3 review): 1/2 being redirected wasn't enough — the watchdog
+  # (and its orphaned `sleep`, same reasoning as above) still inherited every
+  # OTHER fd open in the caller, including fd 4, which `cmd_burn` holds open
+  # as `--json`'s real stdout for the whole run. Every failed burn call
+  # measured a fixed ~5s gap between the process exiting and the caller's
+  # `$(clikae burn --json …)`/`| jq` actually seeing EOF — the orphaned
+  # `sleep` was the last writer-side holder of that pipe. `3>&- 4>&-` closes
+  # the two fds this file itself is known to open (fd 3: `_burn_run_and_tee`;
+  # fd 4: the json result pipe) so the watchdog can't hold either past its
+  # own exit.
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 3>&- 4>&- &
   watcher=$!
   # This whole function runs under the caller's `set -eo pipefail`
   # (bin/clikae:6, same as every other git call in this file). `wait`'s
