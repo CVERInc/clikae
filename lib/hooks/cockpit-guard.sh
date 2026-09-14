@@ -26,9 +26,11 @@
 # lane" from "merely mentions one of these words" — see docs/usage.md's
 # cockpit section for the measured hit rate and the specific misses in both
 # directions. `--allow-agents`/CLIKAE_COCKPIT_ALLOW_AGENTS is the real door;
-# this tripwire is cheap insurance, not a permission gate. Everything else —
-# haiku, fable, any model with a prompt that doesn't match, and every OTHER
-# tool — is untouched. This is a check on MODEL, never on `subagent_type`:
+# this tripwire is cheap insurance, not a permission gate. Untouched: the
+# haiku and fable families (named, below), any checked model whose prompt
+# doesn't trip, and every OTHER tool. A model id the guard does not recognise
+# is CHECKED like opus/sonnet, never waved through (#63 round-5 P3-2, see
+# _ckpt_model_class). This is a check on MODEL, never on `subagent_type`:
 # the guard doesn't read that field at all, so an opus/sonnet `Explore` spawn
 # is checked exactly like any other opus/sonnet spawn (#63 P3-2).
 #
@@ -212,13 +214,14 @@ model="$ck_model"
 # listing): its own failure must never turn a refusal into anything else,
 # so it is wrapped separately from the traps above.
 _ckpt_refuse() {
-  local why
+  local why who="a ${1:-}-model Agent spawn"
+  [ "${3:-}" = unknown ] && who="an Agent spawn with an unrecognised model id (${1:-}, checked like opus/sonnet)"
   if [ -z "${1:-}" ]; then
     why="the Agent tool call carried no model (a bare in-session spawn)"
   elif [ "${2:-}" = "long" ]; then
-    why="a $1-model Agent spawn whose prompt is over the 1,500-character length tripwire"
+    why="$who whose prompt is over the 1,500-character length tripwire"
   else
-    why="a $1-model Agent spawn whose prompt reads as a build/review lane"
+    why="$who whose prompt reads as a build/review lane"
   fi
   {
     printf 'cockpit-guard: refused — %s.\n' "$why"
@@ -264,30 +267,59 @@ fi
 # not a classifier.
 _CKPT_HEURISTIC='worktree|git commit|git push|REVIEWER|adversarial review|bats |npm test|vitest|run the (full )?tests?|\bcommit\b|\bpush\b|open a pr|\breview\b|\bgrade\b|run (the )?tests|make ci'
 
-model_lc="$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')"
-case "$model_lc" in
-  # #63 P3-1: an EXACT match against the two short aliases used to silently
-  # allow (rc=0, zero stderr) every real API model id this guard exists to
-  # catch — `claude-sonnet-4-5-20250929`, `claude-opus-4-5`, `opusplan` all
-  # measured straight through. Today's captured traffic uses the short
-  # aliases (n=2), so this wasn't yet a live miss, but it's a one-character-
-  # format-change away from becoming one, with nothing to notice when it
-  # does. Family-prefix match instead: the two short aliases plus every
-  # `claude-opus-*`/`claude-sonnet-*` id, plus `opusplan` (a real value, not
-  # a family — matched literally).
-  opus|sonnet|opusplan|claude-opus-*|claude-sonnet-*)
+# _ckpt_model_class <model> -> "exempt", "checked" or "unknown".
+#
+# #63 round-5 P3-2: until this round, any id outside the opus/sonnet match
+# was allowed with ZERO stderr — `us.anthropic.claude-sonnet-4-5-v1:0`
+# (Bedrock), `sonnet[1m]`, `inherit`, a typo, a model family that did not
+# exist when this was written. The choice here is to CHECK unknown ids, not
+# to allow them visibly: this guard exists to protect the cockpit's budget,
+# an id it cannot place is most likely a newer (and not cheaper) model, and
+# every other unreadable input already fails closed. Refusing unknown ids
+# outright was rejected: it would block every harmless spawn the day a new
+# alias appears, which is how a guard gets deleted instead of obeyed. An
+# unknown id runs the same length tripwire and heuristic; a refusal names it
+# as unrecognised, and a pass prints one stderr line saying so.
+#
+# Provider spellings are normalised before matching: lowercase; a `[...]`
+# suffix (`sonnet[1m]`); a Vertex `@version`; a Bedrock `<region>.anthropic.`
+# prefix and `-v<n>[:<n>]` suffix. Exempt stays exactly the families the
+# guard always left alone (haiku, fable).
+_ckpt_model_class() {
+  local m
+  m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  m="${m%%\[*}"
+  m="${m%%@*}"
+  case "$m" in *anthropic.*) m="${m##*anthropic.}" ;; esac
+  case "$m" in *-v[0-9]|*-v[0-9]:[0-9]|*-v[0-9][0-9]|*-v[0-9]:[0-9][0-9]) m="${m%-v[0-9]*}" ;; esac
+  case "$m" in
+    haiku|claude-haiku-*|claude-*-haiku|claude-*-haiku-*|fable|claude-fable-*) printf 'exempt' ;;
+    # #63 P3-1: family-prefix match — the short aliases, every
+    # `claude-opus-*`/`claude-sonnet-*` id (and the older
+    # `claude-3-5-sonnet-*` word order), and `opusplan` (a real value).
+    opus|sonnet|opusplan|claude-opus-*|claude-sonnet-*|claude-*-opus|claude-*-opus-*|claude-*-sonnet|claude-*-sonnet-*) printf 'checked' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+model_class="$(_ckpt_model_class "$model")"
+case "$model_class" in
+  checked|unknown)
     # `ck_prompt_len` is the UNTRUNCATED decoded length (jq's codepoint
     # count), so a prompt long enough to BE the length tripwire's whole
     # reason to exist can never be the thing that defeats it.
     if [ "$ck_prompt_len" -gt 1500 ]; then
-      _ckpt_refuse "$model" long
+      _ckpt_refuse "$model" long "$model_class"
     fi
     prompt="$ck_prompt"
     # A here-string, not `printf | grep -q`: the same early-exit pipe P2-5
     # removed above (the prompt is at most 1,500 characters here, but a
     # SIGPIPE must never be able to decide this branch either).
     if grep -qiE "$_CKPT_HEURISTIC" <<<"$prompt"; then
-      _ckpt_refuse "$model"
+      _ckpt_refuse "$model" "" "$model_class"
+    fi
+    if [ "$model_class" = unknown ]; then
+      allow "cockpit-guard: allowed an Agent spawn with an unrecognised model id ($model) — it was checked like opus/sonnet and its prompt did not trip the build/review tripwire."
     fi
     ;;
 esac

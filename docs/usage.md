@@ -183,11 +183,14 @@ current idle reserve and the exact `clikae burn <engine> <tank>
 --prompt-file <f> --artifact <path>` shape to use instead. It also refuses an
 opus/sonnet spawn outright when the prompt is over 1,500 characters,
 regardless of content. **The guard never reads `subagent_type`** — `model` is
-the only thing that decides whether a spawn gets examined at all. A spawn
-whose model isn't opus/sonnet (haiku, for instance) is untouched regardless
-of `subagent_type` or prompt content; an opus/sonnet spawn — `Explore`
-included — is checked against the prompt heuristic below exactly like any
-other. The hook **fails closed**: a call it cannot read (an empty or
+the only thing that decides whether a spawn gets examined at all. A haiku or
+fable spawn is untouched regardless of `subagent_type` or prompt content; an
+opus/sonnet spawn — `Explore` included — is checked against the prompt
+heuristic below exactly like any other. Provider spellings are placed in
+their family (`us.anthropic.claude-sonnet-4-5-v1:0`, `claude-sonnet-4-5@…`,
+`sonnet[1m]`). A model id the guard does not recognise is **checked like
+opus/sonnet**, not waved through: a refusal names it as unrecognised, and a
+spawn that passes prints one line saying the id was unrecognised. The hook **fails closed**: a call it cannot read (an empty or
 malformed payload, no tool input object) is refused with the reason, and the
 escape hatches below are checked before the payload, so that refusal can
 always be lifted. This is not a general permission gate. The role, and the hook, live on

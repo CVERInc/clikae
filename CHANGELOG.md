@@ -197,6 +197,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     path (a `model` key elsewhere no longer stands in for it), and anything
     that is not exactly one JSON object is refused. `json_field_str`, whose
     only caller was the hook, is removed.
+  - Model ids: Bedrock, Vertex and `[1m]` spellings are placed in their
+    family, and an id the guard does not recognise is checked like
+    opus/sonnet instead of allowed with no output. A refusal names the id
+    as unrecognised; a pass prints one line saying so.
 
 ### Added
 

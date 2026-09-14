@@ -480,10 +480,38 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
     run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"make a worktree and implement the feature"}}' "$m")"
     [ "$status" -eq 2 ] || { echo "expected refuse for model=$m" >&2; false; }
   done
-  # A model that merely CONTAINS "sonnet" as a substring must NOT match --
-  # this is a family-PREFIX match, not a substring search.
+  # A model that merely CONTAINS "sonnet" is not matched AS sonnet -- but
+  # since round 5 (P3-2) an id the guard cannot place is checked like
+  # opus/sonnet rather than waved through, and the refusal says so.
   run _guard '{"tool_name":"Agent","tool_input":{"model":"not-a-sonnet-clone","prompt":"make a worktree and implement the feature"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unrecognised model id (not-a-sonnet-clone"* ]] || false
+}
+
+@test "provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)" {
+  local lane='make a worktree and implement the feature' m
+  # checked families, in provider spellings
+  for m in us.anthropic.claude-sonnet-4-5-v1:0 anthropic.claude-opus-4-1-v1:0 'claude-sonnet-4-5@20250929' 'sonnet[1m]' claude-3-5-sonnet-20241022; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
+    [[ "$output" != *"unrecognised"* ]] || { echo "$m should be recognised: $output" >&2; false; }
+  done
+  # exempt families, in provider spellings: silent allow
+  for m in haiku us.anthropic.claude-haiku-4-5-v1:0 'claude-haiku-4-5@20251001' claude-3-5-haiku-20241022 fable; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 0 ] || { echo "expected allow for $m" >&2; false; }
+    [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
+  done
+  # unknown ids: refused on the tripwire, named as unrecognised...
+  for m in unexpected inherit; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
+    [[ "$output" == *"unrecognised model id ($m"* ]] || false
+  done
+  # ...and allowed with a visible line when the prompt does not trip.
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"unexpected","prompt":"summarize these three files"}}'
   [ "$status" -eq 0 ]
+  [[ "$output" == *"allowed an Agent spawn with an unrecognised model id (unexpected)"* ]] || false
 }
 
 # --- #63 P2-7: large-payload timing (re-measured for fix2's full-payload
