@@ -180,6 +180,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refuses. Before, two interleaved moves both returned 0 and left neither
     tank guarded. A lock whose holder died is named with its removal
     command, never broken silently; `clikae doctor` reports it.
+  - The guard hook fails closed. A 65 KiB-and-up pretty-printed Agent call
+    used to be allowed as "payload has no tool_input field": the presence
+    test was `printf | grep -q`, and grep's early exit killed printf with
+    SIGPIPE under pipefail. The test is a pattern match on the payload
+    variable now, and every path that is not a decision about a readable
+    call refuses (empty payload, no tool_name, no tool_input, malformed
+    JSON, a missing library, an internal error). The escape hatches are
+    read before the payload, so a refusal can always be lifted.
 
 ### Added
 

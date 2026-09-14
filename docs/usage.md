@@ -187,7 +187,10 @@ the only thing that decides whether a spawn gets examined at all. A spawn
 whose model isn't opus/sonnet (haiku, for instance) is untouched regardless
 of `subagent_type` or prompt content; an opus/sonnet spawn — `Explore`
 included — is checked against the prompt heuristic below exactly like any
-other. This is not a general permission gate. The role, and the hook, live on
+other. The hook **fails closed**: a call it cannot read (an empty or
+malformed payload, no tool input object) is refused with the reason, and the
+escape hatches below are checked before the payload, so that refusal can
+always be lifted. This is not a general permission gate. The role, and the hook, live on
 exactly one tank at a time; moving it with `clikae cockpit` arms the new
 tank first and only cleans up the old one once the new one is armed and
 recorded, so a failure partway through never leaves you with no cockpit

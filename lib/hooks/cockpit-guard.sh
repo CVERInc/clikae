@@ -32,21 +32,25 @@
 # the guard doesn't read that field at all, so an opus/sonnet `Explore` spawn
 # is checked exactly like any other opus/sonnet spawn (#63 P3-2).
 #
-# FAIL OPEN, same tier as scripts/harness-pretool-hook.sh: this runs on every
-# single Agent call, so a broken guard must never brick the session. Any parse
-# failure, missing dependency, or unexpected shape falls through to `allow`
-# with one stderr line — never a silent hang, never a wrongful block. This
-# means the guard treats "field absent because the JSON is well-formed but
-# doesn't have it" and "field absent because the payload looks truncated or
-# malformed" as two DIFFERENT signals (#63 P1-2): a payload with no
-# `tool_name` at all, or no readable `tool_input`, allows with a stderr note;
-# only a well-formed `tool_input` object that genuinely lacks `model` refuses
-# (a bare in-session spawn is exactly the thing this guard exists to catch).
+# FAIL CLOSED (#63 round-5 P2-5). Rounds 1-4 failed OPEN: any parse failure,
+# missing dependency or unexpected shape allowed with one stderr line. The
+# codex security review turned that into a bypass without touching the
+# guard: a large pretty-printed payload made the tool_input presence test
+# (`printf … | grep -q`) die of SIGPIPE under pipefail, and the guard allowed
+# "payload has no tool_input field". Every path out of this hook that is not
+# a decision about a call it could read now REFUSES (exit 2) with the reason
+# and the escape hatch: an empty payload, no tool_name, no readable
+# tool_input, a truncated or malformed payload, a missing library, an
+# internal error. An EXIT trap turns any other exit code (a `set -u` abort, a
+# stray exit 1 — non-blocking to Claude Code, i.e. an allow) into a refusal.
+# Timing out is the one exit this script cannot convert: Claude Code treats a
+# hook that overruns its timeout as non-blocking.
 #
 # Escape hatch (the operator sometimes rules "burn the cockpit tank tonight"):
 # CLIKAE_COCKPIT_ALLOW_AGENTS=1 in the environment, or a timed allowance
 # written by `clikae cockpit --allow-agents <dur>` (state/cockpit-allow) — a
-# guard nobody can lift gets deleted instead of obeyed.
+# guard nobody can lift gets deleted instead of obeyed. Both are checked
+# BEFORE the payload is parsed, so a fail-closed refusal can always be lifted.
 #
 # #63 P1-1/P2-1 fix2 (round-2 review, REVIEW-cockpit63-r2.md): round 1 capped
 # cost by slicing the RAW PAYLOAD to a fixed 8 KiB BYTE window before ever
@@ -92,8 +96,22 @@
 # degradation" means when neither UTF-8 locale is installed.
 set -uo pipefail
 
-allow() { [ -n "${1:-}" ] && printf '%s\n' "$1" >&2; exit 0; }
-trap 'allow "cockpit-guard: internal error — allowing (fail-open)"' ERR
+allow() { if [ -n "${1:-}" ]; then printf '%s\n' "$1" >&2; fi; trap - EXIT; exit 0; }
+# _ckpt_fail_closed <why> -> refuse a call this guard could not read.
+_ckpt_fail_closed() {
+  trap - EXIT
+  {
+    printf 'cockpit-guard: refused — %s. The guard fails closed: a call it cannot read is not let through.\n' "$1"
+    printf 'Escape hatch: CLIKAE_COCKPIT_ALLOW_AGENTS=1, or `clikae cockpit --allow-agents <dur>`.\n'
+  } >&2
+  exit 2
+}
+trap '_ckpt_fail_closed "internal error"' ERR
+_ckpt_on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then _ckpt_fail_closed "internal error (exit $rc)"; fi
+}
+trap _ckpt_on_exit EXIT
 
 # _ckpt_pick_locale -> echoes the first of C.UTF-8 / en_US.UTF-8 that
 # `locale -a` actually lists, or fails. Checked against the installed list
@@ -134,40 +152,44 @@ _ckpt_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 
-_dir="$(_ckpt_self_dir)" || allow "cockpit-guard: could not resolve own path — allowing"
-# shellcheck source=../core/json.sh
-source "$_dir/../core/json.sh" 2>/dev/null || allow "cockpit-guard: could not load json.sh — allowing"
-
 CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}"
 
+# `|| true`: a read error leaves whatever arrived, and an empty result is
+# refused just below — never allowed.
 payload="$(cat 2>/dev/null)" || true
-[ -n "$payload" ] || allow "cockpit-guard: empty payload — allowing"
-
-# rc=1 here means json_field_str found no `"tool_name"` pair anywhere in the
-# full payload — a shape this guard has never seen, not just "some other
-# tool ran" (that case is the ordinary `tool_name != Agent` branch below, and
-# stays silent). #63 P1-2: distinguish the two rather than treating both as a
-# plain, silent exit 0 — a payload this malformed is worth one stderr line.
-if ! tool_name="$(json_field_str "$payload" tool_name 2>/dev/null)"; then
-  allow "cockpit-guard: payload has no tool_name field — allowing"
-fi
-[ "$tool_name" = "Agent" ] || exit 0   # matcher is "Agent" already; belt & suspenders
 
 # --- escape hatch 1: env opt-out -------------------------------------------
-[ "${CLIKAE_COCKPIT_ALLOW_AGENTS:-}" = "1" ] && allow "cockpit-guard: allowed via CLIKAE_COCKPIT_ALLOW_AGENTS=1"
+if [ "${CLIKAE_COCKPIT_ALLOW_AGENTS:-}" = "1" ]; then
+  allow "cockpit-guard: allowed via CLIKAE_COCKPIT_ALLOW_AGENTS=1"
+fi
 
 # --- escape hatch 2: a timed allowance from `clikae cockpit --allow-agents` -
 _allow_file="$CLIKAE_HOME/state/cockpit-allow"
 if [ -f "$_allow_file" ]; then
-  _exp="$(head -n 1 "$_allow_file" 2>/dev/null | tr -dc '0-9')"
+  _exp="$(head -n 1 "$_allow_file" 2>/dev/null | tr -dc '0-9' || true)"
   _now="$(date +%s 2>/dev/null || echo 0)"
   if [ -n "$_exp" ] && [ "$_now" -lt "$_exp" ]; then
-    _hhmm="$(date -d "@$_exp" '+%H:%M' 2>/dev/null || date -r "$_exp" '+%H:%M' 2>/dev/null)"
+    _hhmm="$(date -d "@$_exp" '+%H:%M' 2>/dev/null || date -r "$_exp" '+%H:%M' 2>/dev/null || true)"
     allow "cockpit-guard: allowed until ${_hhmm:-$_exp}"
   fi
   # expired — fall through to the normal check rather than delete the file;
   # this hook is read-only by design (a stale marker costs nothing to leave).
 fi
+
+[ -n "$payload" ] || _ckpt_fail_closed "the hook received an empty payload"
+
+_dir="$(_ckpt_self_dir)" || _ckpt_fail_closed "the guard could not resolve its own path"
+# shellcheck source=../core/json.sh
+source "$_dir/../core/json.sh" 2>/dev/null || _ckpt_fail_closed "the guard could not load json.sh"
+
+# rc=1 here means json_field_str found no `"tool_name"` pair anywhere in the
+# full payload — a shape this guard has never seen, not just "some other
+# tool ran" (that case is the ordinary `tool_name != Agent` branch below, and
+# stays silent).
+if ! tool_name="$(json_field_str "$payload" tool_name 2>/dev/null)"; then
+  _ckpt_fail_closed "the payload has no tool_name field"
+fi
+[ "$tool_name" = "Agent" ] || allow   # matcher is "Agent" already; belt & suspenders
 
 # #63 P1-2: a well-formed `tool_input` that genuinely lacks `model` is the
 # refusal case below ("a bare in-session spawn"). But `json_field_str` gives
@@ -183,9 +205,16 @@ fi
 #      that legitimately ends elsewhere (rare, and only in the fail-OPEN
 #      direction — never a wrongful block) is the accepted cost of a cheap
 #      check over an exact one.
-if ! printf '%s' "$payload" | grep -q '"tool_input"'; then
-  allow "cockpit-guard: payload has no tool_input field — allowing"
-fi
+#
+# #63 round-5 P2-5: check 1 used to be `printf '%s' "$payload" | grep -q …`.
+# grep -q exits at its first match while printf is still writing a large
+# payload; printf dies of SIGPIPE, pipefail fails the pipeline, and the
+# negated test allowed a pretty-printed 65 KiB call as "no tool_input". The
+# test is a bash pattern match on the variable now — no pipe, no early reader.
+case "$payload" in
+  *'"tool_input"'*) ;;
+  *) _ckpt_fail_closed "the payload has no tool_input field" ;;
+esac
 # Last character must be `}`. No trim needed first: `payload="$(cat)"` above
 # is a command substitution, and bash strips ALL trailing newlines from a
 # command substitution's result — there is no trailing-whitespace case left
@@ -194,7 +223,7 @@ fi
 # pattern matching against a long string is not the O(1) operation it looks
 # like; plain arithmetic-offset substring expansion is.)
 if [ "${payload:$((${#payload}-1)):1}" != "}" ]; then
-  allow "cockpit-guard: tool_input payload looks truncated or malformed — allowing"
+  _ckpt_fail_closed "the payload looks truncated or malformed"
 fi
 
 # `model` is read straight off the FULL `$payload` now — #63 P2-1/P1-1 fix2,
@@ -242,9 +271,10 @@ PROFILES
       else
         printf 'No idle tank in the reserve right now.\n'
       fi
-    ) 2>/dev/null
+    ) 2>/dev/null || true
     printf 'Escape hatch: CLIKAE_COCKPIT_ALLOW_AGENTS=1, or `clikae cockpit --allow-agents <dur>`.\n'
   } >&2
+  trap - EXIT
   exit 2
 }
 
@@ -283,10 +313,13 @@ case "$model_lc" in
     if [ "$prompt_len_full" -gt 1500 ]; then
       _ckpt_refuse "$model" long
     fi
-    if printf '%s' "$prompt" | grep -qiE "$_CKPT_HEURISTIC"; then
+    # A here-string, not `printf | grep -q`: the same early-exit pipe P2-5
+    # removed above (the prompt is at most 1,500 characters here, but a
+    # SIGPIPE must never be able to decide this branch either).
+    if grep -qiE "$_CKPT_HEURISTIC" <<<"$prompt"; then
       _ckpt_refuse "$model"
     fi
     ;;
 esac
 
-exit 0
+allow

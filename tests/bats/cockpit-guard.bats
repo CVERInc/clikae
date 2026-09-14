@@ -90,10 +90,11 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" == *"clikae burn <engine> <tank>"* ]] || false
 }
 
-@test "no tool_name field at all allows with a stderr note (#63 P1-2, distinct from an ordinary non-Agent tool)" {
+@test "no tool_name field at all REFUSES, fail-closed (#63 P1-2, r5 P2-5)" {
   run _guard '{"foo":"bar"}'
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"no tool_name field"* ]] || false
+  [[ "$output" == *"fails closed"* ]] || false
 }
 
 @test "an ordinary non-Agent tool call stays silent (no stderr note, unlike a truly malformed payload)" {
@@ -102,20 +103,18 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [ -z "$output" ]
 }
 
-@test "tool_input entirely absent allows with a stderr note rather than refusing (#63 P1-2)" {
+@test "tool_input entirely absent REFUSES with its own reason, fail-closed (#63 P1-2, r5 P2-5)" {
   run _guard '{"tool_name":"Agent"}'
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"no tool_input field"* ]] || false
 }
 
-@test "truncated tool_input JSON allows with a stderr note instead of a wrongful refuse (#63 P1-2)" {
-  # The exact repro from the round-1 review: a truncated payload used to hit
-  # the "carried no model" refusal path — the wrong contract entirely (the
-  # docstring promises fail-open on malformed JSON, not a block with a
-  # misleading reason).
+@test "truncated tool_input JSON REFUSES as malformed, not as a model-less spawn (#63 P1-2, r5 P2-5)" {
+  # The round-1 repro hit the "carried no model" reason — the wrong one.
+  # Round 5 keeps the reason right and the verdict closed.
   run _guard '{"tool_name":"Agent","tool_input":{"prompt":"x"'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"looks truncated or malformed"* ]] || false
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"truncated or malformed"* ]] || false
   [[ "$output" != *"carried no model"* ]] || false
 }
 
@@ -153,14 +152,65 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" != *"claude/cockpit-tank"* ]] || false
 }
 
-@test "fails open on an empty payload" {
+@test "fails CLOSED on an empty payload (#63 r5 P2-5)" {
   run _guard ''
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"empty payload"* ]] || false
 }
 
-@test "fails open on malformed JSON rather than blocking" {
+@test "fails CLOSED on malformed JSON (#63 r5 P2-5)" {
   run _guard 'not json at all, just noise'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"fails closed"* ]] || false
+}
+
+@test "the escape hatches still lift a fail-closed refusal: they are read before the payload (#63 r5 P2-5)" {
+  CLIKAE_COCKPIT_ALLOW_AGENTS=1 run _guard 'not json at all'
   [ "$status" -eq 0 ]
+  mkdir -p "$CLIKAE_HOME/state"
+  printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$CLIKAE_HOME/state/cockpit-allow"
+  run _guard ''
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"allowed until"* ]] || false
+}
+
+@test "an internal failure (json.sh missing next to the hook) refuses instead of allowing (#63 r5 P2-5)" {
+  local d="$BATS_TEST_TMPDIR/lonely/hooks"; mkdir -p "$d"
+  cp "$GUARD" "$d/cockpit-guard.sh"
+  run bash -c 'printf %s "$1" | bash "$2"' _ '{"tool_name":"Agent","tool_input":{"model":"haiku","prompt":"hi"}}' "$d/cockpit-guard.sh"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"fails closed"* ]] || false
+}
+
+# --- #63 round-5 P2-5: SIGPIPE on large pretty-printed payloads --------------
+# codex review: at 65,536 / 131,073 / 1,048,576 filler characters the compact
+# form refused and the pretty form (json.dumps indent=2) ALLOWED — the
+# tool_input presence test was `printf | grep -q`, and grep's early exit
+# killed printf with SIGPIPE under pipefail. Filler is varied prose, not one
+# repeated byte, and carries no heuristic keyword (the prompt's own "review"
+# is the only one).
+_big_payload() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+n, form = int(sys.argv[1]), sys.argv[2]
+words = "alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike "
+filler = (words * (n // len(words) + 1))[:n]
+obj = {"tool_name": "Agent", "tool_input": {"model": "sonnet", "prompt": "review " + filler}}
+sys.stdout.write(json.dumps(obj, indent=2) if form == "pretty" else json.dumps(obj))
+PY
+}
+
+@test "large payloads refuse in BOTH compact and pretty-printed form: 65,536 / 131,073 / 1,048,576 (#63 r5 P2-5)" {
+  local n form f
+  for n in 65536 131073 1048576; do
+    for form in compact pretty; do
+      f="$BATS_TEST_TMPDIR/big-$n-$form.json"
+      _big_payload "$n" "$form" > "$f"
+      run _guard_file "$f"
+      [ "$status" -eq 2 ] || { echo "n=$n form=$form status=$status output=$output" >&2; false; }
+      [[ "$output" == *"length tripwire"* ]] || { echo "n=$n form=$form: $output" >&2; false; }
+    done
+  done
 }
 
 @test "runs comfortably inside the 50ms budget" {
