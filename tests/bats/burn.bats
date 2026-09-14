@@ -174,6 +174,47 @@ STUB
   [ "$status" -eq 2 ] || { echo "got rc=$status, want 2 (CLIKAE_BURN_RC_NO_TANK)"; echo "$output"; false; }
 }
 
+# --- #61 round-3 P1-2 end-to-end: the one-time adoption sweep must close on
+# the FIRST command run against the store, not just the first one that
+# happens to walk it. Reproduces the review's own repro: an upgrade whose
+# FIRST command is a successful burn (never walks the store — no reroute
+# needed) must still close the window right there, so a directory dropped in
+# afterward is never swept up and rerouted onto — issue #61's exact original
+# symptom ("burned a few minutes failing to log in, reported as an
+# indistinguishable generic task failure"), reproduced with a stub engine.
+@test "burn #61 P1-2: a directory dropped in AFTER the first command is never rerouted onto" {
+  _stub_codex
+  # A pre-marker real tank — the shape an upgrade actually finds, not
+  # `clikae init` (which stamps a marker immediately and would close the
+  # window itself, hiding the bug this test exists to catch).
+  mkdir -p "$CLIKAE_HOME/profiles/codex/A"
+  printf 'x\n' > "$CLIKAE_HOME/profiles/codex/A/auth.json"
+  rm -f "$CLIKAE_HOME/state/tanks-adopted-v1"
+  [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+
+  # Step 1: the upgrade's first command — an ordinary successful burn. It
+  # never walks the store (A is live, no reroute needed), but the hoist at
+  # the top of bin/clikae still runs the sweep here, closing the window.
+  run clikae burn codex A --artifact "$BATS_TEST_TMPDIR/out1.md" -- run "$BATS_TEST_TMPDIR/out1.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$BATS_TEST_TMPDIR/out1.md" ]
+  [ -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+  [ -f "$CLIKAE_HOME/profiles/codex/A/.clikae-tank" ]
+
+  # Step 2: something else drops a stray directory in — AFTER the window closed.
+  mkdir -p "$CLIKAE_HOME/profiles/codex/hello"
+
+  # Step 3: A runs dry; burn needs to reroute. `hello` is the only other
+  # directory under codex/ but was never adopted — reroute must exhaust
+  # (no-tank-available), never land on `hello`.
+  : > "$CLIKAE_HOME/profiles/codex/A/.dry"
+  run clikae burn codex A --json --artifact "$BATS_TEST_TMPDIR/out2.md" -- run "$BATS_TEST_TMPDIR/out2.md"
+  [ "$status" -eq 2 ] || { echo "reroute landed somewhere instead of exhausting: $output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/codex/hello/.clikae-tank" ]
+  [ ! -f "$BATS_TEST_TMPDIR/out2.md" ]
+}
+
 # --- agy burn: since the 2026-07-05 Keychain-carry restore, a tank switch is
 # non-interactive, so burn can auto-hop agy tanks on dry (sequential — agy still
 # can't run two tanks in parallel, unlike other engines that's fine for burn's

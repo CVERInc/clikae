@@ -89,6 +89,24 @@ source "$CLIKAE_LIB/core/state_version.sh"
 # state is current or absent; read-only safe — see lib/core/state_version.sh).
 state_version_check
 
+# #61 round-2/3 P1-1/P1-2: the ONE-TIME inclusive tank-adoption sweep (see
+# lib/core/profile_store.sh) — "the first command run against a store with no
+# adoption flag" means literally the first, not just the first one that
+# happens to list tanks. Without this here, `clikae init` (which creates its
+# OWN tank directly and never walks the store) — or `clikae settings apply
+# <engine> <tank>` (#76), which requires a marker on a NAMED path without
+# ever calling the enumerator — could be a real upgrade's first command and
+# leave the flag unwritten, so a stray directory created between then and
+# the first `doctor`/`tanks`/board call would still fall inside the adoption
+# window; round-3's own review reproduced #61's exact original symptom
+# through exactly that gap (a successful burn as the first command, then a
+# stray dropped in, then a reroute that adopted and burned it). A no-op
+# single `[ -f ]` stat once the flag exists, for every command including
+# ones that never touch a tank. `_tank_adoption_ensure` itself bails before
+# any write when `profiles_root` doesn't exist yet, so a command that must
+# create NO clikae state before refusing (three burn.bats tests) still does.
+_tank_adoption_ensure
+
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
 #   2. an installed engine (an adapter) -> the BARE SWITCH, `clikae <engine>

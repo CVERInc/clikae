@@ -125,7 +125,16 @@ _unadopt() {
   chmod u+w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
   run clikae doctor --adopt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"flag written"* ]] || { echo "$output"; false; }
+  # #61 round-3 P1-2: bin/clikae's own hoisted _tank_adoption_ensure call now
+  # runs before doctor's dispatcher ever sees "--adopt" — by the time this
+  # process reaches doctor's own explicit retry, the store is ALREADY
+  # writable (chmod u+w above ran before `run` did), so the hoist itself
+  # does the write and doctor's case reports "Already adopted" instead of
+  # "flag written". Either wording is correct: what matters is that this
+  # SAME command, given a store that just became writable, ends with the
+  # flag persisted and the tank marked — not which call inside the process
+  # narrates doing it.
+  [[ "$output" == *"flag written"* || "$output" == *"Already adopted"* ]] || { echo "$output"; false; }
   [ -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
   [ -f "$CLIKAE_HOME/profiles/claude/ro1/.clikae-tank" ]
 }
@@ -163,4 +172,44 @@ _unadopt() {
   [ ! -e "$CLIKAE_HOME/profiles/claude/zzempty/.clikae-tank" ]
   run clikae tanks
   [[ "$output" != *"zzempty"* ]] || { echo "$output"; false; }
+}
+
+# --- #61 round-3 P1-2: the sweep must close on the FIRST command run against
+# the store, not just the first one that happens to WALK the whole store
+# (list_all_profiles). `init` creates its own tank directly and never walks;
+# a real upgrade's first command is very often something else entirely —
+# `settings apply <engine> <tank>` (#76) requires a marker on a NAMED path
+# without ever calling the enumerator, so on a genuinely pre-marker store
+# (the exact shape an upgrade finds) it used to say "Not a tank" about a
+# tank that has been real the whole time, main included.
+@test "settings apply #61 P1-2: a pre-marker real tank passes as the very first command run" {
+  _unadopt
+  mkdir -p "$CLIKAE_HOME/profiles/claude/real"
+  printf '{}\n' > "$CLIKAE_HOME/profiles/claude/real/.claude.json"
+  [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+  [ ! -f "$CLIKAE_HOME/profiles/claude/real/.clikae-tank" ]
+
+  run clikae settings apply claude real
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"Not a tank"* ]] || { echo "$output"; false; }
+
+  # The hoist ran on this very first command — the window is now closed.
+  [ -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+  [ -f "$CLIKAE_HOME/profiles/claude/real/.clikae-tank" ]
+}
+
+# --- #61 round-3 P1-2: the same guard must not touch a store that has no
+# profiles/ directory yet at all — the three burn.bats "refuses before
+# creating any clikae state" tests depend on this: a refusal that runs
+# before ANY tank exists must create nothing, not even the state/ dir the
+# adoption flag would live in.
+@test "adoption #61 P1-2: a store with no profiles/ dir yet is left untouched by the hoist" {
+  rm -rf "$CLIKAE_HOME"
+  [ ! -e "$CLIKAE_HOME" ]
+  run clikae doctor
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # doctor itself creates $CLIKAE_HOME (it's a normal command), but the
+  # adoption flag must not appear as a side effect of a store that had
+  # nothing to adopt.
+  [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
 }

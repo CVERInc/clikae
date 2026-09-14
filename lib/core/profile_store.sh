@@ -569,22 +569,30 @@ _tank_adoption_ensure() {
   fi
   local root cli_dir cli name path
   root="$(profiles_root)"
+  # #61 round-3 P1-2: bin/clikae now calls this unconditionally on every
+  # invocation (see the hoist near its top) — including ones that must
+  # create NO clikae state at all when they refuse before ever touching a
+  # tank (three burn.bats "refuses before creating any clikae state" tests
+  # rely on `$HOME/.clikae` not existing afterward). A store with no
+  # profiles/ dir yet has nothing to adopt; bail out before ANY write (not
+  # just before the walk below) so a genuinely fresh or nonexistent store is
+  # left untouched. A later command that actually creates profiles/ (init,
+  # a real burn, …) runs the sweep then, same as always.
+  [ -d "$root" ] || return 0
   _CLIKAE_INMEM_ADOPTED=$'\n'
-  if [ -d "$root" ]; then
-    for cli_dir in "$root"/*/; do
-      [ -d "$cli_dir" ] || continue
-      cli="${cli_dir%/}"; cli="${cli##*/}"
-      tank_engine_known "$cli" || continue
-      while IFS=$'\t' read -r name path; do
-        [ -n "$name" ] || continue
-        _tank_shape_excluded "$name" && continue
-        _CLIKAE_INMEM_ADOPTED="$_CLIKAE_INMEM_ADOPTED$cli"$'\t'"$name"$'\n'
-        tank_dir_is_tank "$cli" "$path" && continue   # already marked
-        tank_marker_write "$cli" "$path"
-        _CLIKAE_ADOPT_LAST_COUNT=$((_CLIKAE_ADOPT_LAST_COUNT + 1))
-      done < <(_tank_candidates "${cli_dir%/}")
-    done
-  fi
+  for cli_dir in "$root"/*/; do
+    [ -d "$cli_dir" ] || continue
+    cli="${cli_dir%/}"; cli="${cli##*/}"
+    tank_engine_known "$cli" || continue
+    while IFS=$'\t' read -r name path; do
+      [ -n "$name" ] || continue
+      _tank_shape_excluded "$name" && continue
+      _CLIKAE_INMEM_ADOPTED="$_CLIKAE_INMEM_ADOPTED$cli"$'\t'"$name"$'\n'
+      tank_dir_is_tank "$cli" "$path" && continue   # already marked
+      tank_marker_write "$cli" "$path"
+      _CLIKAE_ADOPT_LAST_COUNT=$((_CLIKAE_ADOPT_LAST_COUNT + 1))
+    done < <(_tank_candidates "${cli_dir%/}")
+  done
   _CLIKAE_INMEM_ADOPTED_ACTIVE=1
   if tanks_adopted_flag_write "$flag"; then
     _CLIKAE_ADOPT_LAST_FLAG_OK=1
