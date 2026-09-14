@@ -80,6 +80,13 @@ EOF
       log_fail "clikae init --adopt does not apply to agy — it has no marker-based tanks (see: clikae agy --help)."
     fi
     load_adapter "$cli"
+    # #61 round-4 P3-2: the same shapes the one-time sweep refuses BY NAME,
+    # regardless of content (_tank_shape_excluded — dotdirs, lock/sidecar
+    # suffixes) — a directory `--adopt` should never be able to hand a
+    # marker to something the sweep itself would have skipped past on sight.
+    if _tank_shape_excluded "$profile"; then
+      log_fail "Refusing to adopt $cli/$profile — that name shape (dotdir, or a lock/sidecar suffix like .lock/.tmp/.bak) can never be a tank."
+    fi
     local d
     d="$(profile_dir "$cli" "$profile")"
     if [ ! -d "$d" ]; then

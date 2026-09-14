@@ -455,7 +455,10 @@ tank_dir_is_tank() {
 # 3c02eb2 rejected by NAME before the marker existed; a directory clikae
 # itself creates can never look like this (validate_name forbids a leading
 # dot). Used ONLY by the one-time adoption sweep below — once a directory
-# has a marker, tank_dir_is_tank never re-checks its name again.
+# has a marker, tank_dir_is_tank never re-checks its name again. #61
+# round-4 P3-2: also checked directly by `init --adopt` — a NAMED, explicit
+# adopt request still can't hand a marker to a shape the sweep would have
+# skipped past on sight.
 _tank_shape_excluded() {
   case "$1" in
     .*) return 0 ;;

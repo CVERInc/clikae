@@ -236,6 +236,17 @@ load '../helpers'
   [ ! -f "$CLIKAE_HOME/profiles/claude/restored4/.clikae-tank" ]
 }
 
+@test "#61 round-4 P3-2: init --adopt refuses a hello.lock-shaped name even with real content" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/hello.lock"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/hello.lock/.claude.json"
+  run clikae init claude hello.lock --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"can never be a tank"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/hello.lock/.clikae-tank" ]
+  run clikae tanks
+  [[ "$output" != *"hello.lock"* ]] || { echo "hello.lock listed as a tank: $output"; false; }
+}
+
 @test "doctor's Next: line for a stray directory names --adopt, and it actually works" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/restored2"
   printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored2/.claude.json"
