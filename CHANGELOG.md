@@ -248,7 +248,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus a 10s global scan budget; the 25-repo cap ranks unpushed commits
   ahead of file mtime and its push hint prints even past the cap; nested
   repos at any depth are discovered and files attribute to the innermost
-  repo; `--json` gains `left_behind_truncated`.
+  repo; `--json` gains `left_behind_truncated`. Round-3 review of #87: the
+  per-call 5s bound now actually catches a hung git call on real bash 3.2
+  (`command git` defeated it there — `$!` was a subshell, not git); the
+  global scan budget now covers repo discovery too, not just the per-repo
+  loop, and a repo whose discovery hangs is counted rather than dropped
+  silently; a failed `--json` burn's stdout no longer waits an extra ~5s
+  for an orphaned watchdog to release its held-open fd.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
