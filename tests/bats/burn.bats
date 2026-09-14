@@ -2301,6 +2301,21 @@ STUB
   [ -d "$HOME/.clikae/logs/burn-88888" ]
 }
 
+# P3-3 (2026-09-13 fix-round-3 review): `watch-github-*` run dirs had ONLY
+# a 200-directory count cap (_wg_runs_rotate), no day-based retention —
+# this sweep now globs them too, same policy as burn's own.
+@test "burn #43/P3-3: a stale watch-github-* run directory is ALSO swept (same sweep, same policy)" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  printf '{"ok":true}' > "$HOME/.clikae/logs/watch-github-CVERInc-99999/status.json"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out" -- run "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ]
+  [ ! -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]
+}
+
 @test "burn #43: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the sweep" {
   _stub_burn_transport
   clikae init codex T1

@@ -229,6 +229,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]`
+  — a second source under `watch` (alongside the existing dry-tank watcher):
+  polls GitHub's search API for every issue/PR update in an org — including
+  replies on issues YOU opened — and turns each new one into
+  a wake line (`github <org>/<repo>#<n> opened|comment|review|activity|mention
+  by <login>: <title>`; `mention` when a fetched comment/review's own text
+  @-mentions you, checked locally from the timeline lookup already made for
+  actor resolution — no separate `mentions:<self>` search query), printed
+  live and appended as flat JSON to
+  `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a durable trail. The
+  actual wake a cron job or Stop hook calling `--once` consumes: every poll
+  finding ≥1 new event writes a burn-status-shaped `status.json` to
+  `$HOME/.clikae/logs/watch-github-<org>-<epoch>/` — burn's own directory
+  layout, so `clikae wait watch-github-<org>-<epoch>` (the run_id printed
+  inside the file) or `clikae wait --latest watch-github-<org>` (no epoch
+  needed — see below) resolves and blocks on it exactly like a burn.
+  Self-exclusion is per EVENT ACTOR, checked against `issues/<n>/timeline`
+  for any issue/PR already seen before (bounded to 50 such lookups/poll,
+  oldest-unseen-first, stopped early under GitHub's own rate limit; a
+  candidate past that bound is still reported, as `by unknown`, never
+  dropped) — never against who opened the issue, so a collaborator's reply
+  on your own issue reaches you. Each query paginates ASCENDING (oldest
+  unseen first) — a cursor + capped seen-file de-dupe by (repo, issue
+  number, updated timestamp); a poll cut short by the 5-page/query cap pins
+  the cursor to the EXACT last row it actually read (no lag — an earlier
+  version of this entry claimed the cursor lagged 300s behind the newest
+  row seen, to absorb GitHub search's own indexing delay; that lag was
+  itself a permanent-stall bug — any 300-second window holding ≥500 rows
+  pinned the cursor back inside the very page a poll had just re-read,
+  forever, on a busy-enough org, fixed 2026-09-14 fix-round-4 review), and
+  the NEXT poll continues exactly there, so a backlog drains in bounded
+  polls ("truncated: continuing next poll" — and it does), unless ≥500
+  updates share one exact `updated_at` second, which the 5-page cap can
+  never read past (see docs/usage.md, Known limits). The 300s indexing-lag margin is instead bought
+  by a separate, bounded "tail sweep": once every 5 polls, or right after a
+  truncated one, one or more requests, oldest-first, re-read a window below
+  the cursor and deliver anything the main query may have missed while
+  still indexing, without ever touching the cursor itself — a window still
+  not fully covered within the same 5-page/100-per-page budget the main
+  query uses is reported "lag window truncated" and dropped rather than
+  read further, so this too can never stall. (An earlier version
+  of this entry had the sweep use a FIXED 300s window regardless of
+  spacing — that only ever covered the gap between sweeps when
+  `--interval <= 60s`; the 10m default never met it, so 45 of every 50
+  minutes had no re-read of the indexing-lag margin at all, and a `--once`
+  poll from cron never knew `--interval` to begin with. Fixed 2026-09-14
+  fix-round-5 review: the schedule (every 5 polls / after truncation) is
+  unchanged, but the window became the real wall-clock gap between the two
+  most recent polls times how many polls elapsed since the last sweep —
+  measured every poll and persisted beside the cursor, so cron's `--once`
+  is covered without needing to be told an interval, and a live loop's own
+  back-off widens the next estimate for free. An every-poll schedule was
+  tried first and reverted: it collided with the canned-response-by-
+  call-number `gh` test stub, which cannot tell a sweep's own search call
+  from the next poll's main query. That multiplication assumed every one
+  of those polls was as evenly spaced as the single most recent one —
+  false the instant a live loop's own back-off recovers, which resets its
+  interval in one step, not a gradual climb-down, so the short
+  post-recovery gap got multiplied into a window narrower than the real
+  elapsed span, silently losing a row with rc=0 and no warning. Fixed
+  2026-09-14 fix-round-6 review: the window is now `now - <the epoch the
+  last sweep actually completed at>`, persisted beside the cursor and read
+  back directly — measured, not inferred from any poll's own gap. A `0`
+  (the sentinel a `date` failure's own fallback writes) or a future value
+  in either that epoch or `.lastrun`'s own now reads as "missing", never
+  as a real span to subtract `now` from. The same round also fixed the
+  sweep's own read direction — it re-read the window NEWEST-first, so a
+  busy org's own already-seen recent activity filled the one page before
+  ever reaching the window's older rows, where the most overdue
+  late-indexed ones sit (late rows are spread across the whole window, so
+  a truncated sweep can still miss newer ones); it now reads oldest-first, paginating within the
+  main query's own 5-page budget, and reports "lag window truncated" only
+  when that budget is actually exhausted. `review_requested` — added to the
+  set of event types allowed to supply the `mention`-detecting body text in
+  fix-round-5, reasoned to "possibly carry a body" — never carries one;
+  left in that list, a review-request event with an earlier commented
+  event on the same page still picked up the COMMENT's body and
+  misattributed its @-mention to whoever requested the review, reopening
+  the exact fix-round-5 bug one whitelist entry at a time. Removed
+  (2026-09-14 fix-round-6 review, P2-3). That measured window still had no
+  overlap with the previous sweep: a row updated just before a sweep but
+  indexed just after it sat behind an active org's cursor AND just below
+  the next sweep's lower bound, lost for good (11 of 40 rows at
+  `--interval 60` with a 4-minute index lag). Fixed 2026-09-14 fix-round-7
+  review, P2-1: the window is now `now - <the epoch the last sweep
+  STARTED at> + 300s`, so consecutive sweeps overlap by a fixed 300s.
+  The same round stopped the day-based log retention in `clikae burn`/
+  `clikae clean`, and the 200-run count cap, from deleting an org's
+  durable `watch-github-<org>/events.jsonl` directory: only directories
+  holding a run's `status.json` are swept, and each poll touches the
+  durable directory.)
+  On a genuine rate limit (429, a 403
+  the response attributes to it, or a 5xx) the interval backs off ×2 up to
+  1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
+  permanent — retried once, then reported, never backed off. No daemon, no
+  tmux window of its own — a foreground loop (Ctrl-C to stop) or a one-shot
+  poll (#46).
+- `clikae wait` gains `--latest <prefix>`: resolves to the newest (by mtime)
+  run directory under `$HOME/.clikae/logs` whose name starts with `<prefix>`
+  and already has a `status.json` — for a caller (like `watch github` above)
+  that knows a run's prefix but not the epoch suffix a not-yet-finished poll
+  will pick. Composes with plain targets and `--any`/`--all`/`--timeout`
+  normally (#46).
 - `clikae cockpit <tank>` marks the tank that STEERS — the coordinating
   session that dispatches build/review lanes to worker tanks with `clikae
   burn` instead of spawning them in its own context (which spends the
