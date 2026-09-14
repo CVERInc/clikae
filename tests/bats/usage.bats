@@ -615,6 +615,27 @@ STUB
   [ "$wall" -le 20 ]
 }
 
+@test "P3-2 (codex security review, round-5): an oversized response body is rejected, not fully parsed" {
+  # Neither curl's --max-time (transfer TIME, not bytes) nor the small final
+  # cache shape bounded how much a faulty/hostile upstream could make this
+  # adapter buffer and hand to jq. A response padded well past the new byte
+  # cap must come back unknown, not get silently truncated into a "valid"
+  # partial JSON parse or fully accepted.
+  usage_fixture
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+pad="$(printf 'x%.0s' $(seq 1 200000))"
+printf '{"five_hour":{"utilization":1,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":2,"resets_at":"2099-01-07T00:00:00.000000+00:00"},"pad":"%s"}' "$pad"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
+}
+
 @test "P3-4 (round-5 review): a stale-but-evidenced candidate is verified before confident fresh ones, and P3-3 stops early on a verified 0%" {
   # Reproduces the review's exact board shape: alpha's on-disk 5% is 30
   # minutes old (past the 15-minute ceiling — usage_cache_peek reads it as

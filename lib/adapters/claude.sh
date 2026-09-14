@@ -793,9 +793,25 @@ adapter_usage() (
   )" || return 1
   # Restrict to bearer-token characters; reject curl-config injection.
   case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) return 1 ;; esac
-  response="$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
-    curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
-      https://api.anthropic.com/api/oauth/usage 2>/dev/null)" || return 1
+  # P3-2 (codex security review, round-5): the whole body used to land in
+  # this variable, and jq's own parsing/copying work, with no upper bound —
+  # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
+  # final cache shape protects against a faulty or hostile upstream sending
+  # a huge body (measured: a 16MiB synthetic body was fully accepted and
+  # normalized). `--max-filesize` aborts a response whose Content-Length
+  # announces itself too large; `head -c` bounds it too even when the length
+  # isn't announced up front (chunked/streamed) — capture curl's OWN exit
+  # status via PIPESTATUS since `head` closing early would otherwise hide a
+  # real curl failure behind head's always-zero status.
+  local _claude_usage_max_bytes=65536
+  response="$(
+    printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
+      curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
+        --max-filesize "$_claude_usage_max_bytes" \
+        https://api.anthropic.com/api/oauth/usage 2>/dev/null |
+      head -c "$_claude_usage_max_bytes"
+    exit "${PIPESTATUS[1]}"
+  )" || return 1
   token=""
   printf '%s' "$response" | jq -ce '
     select(.five_hour.utilization|type == "number") |
