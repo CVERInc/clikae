@@ -360,7 +360,14 @@ _burn_redact_full() {
       }
       s/(?<![A-Za-z0-9_])(?:$pat)(?![A-Za-z0-9_])/$r/g if length($pat);
     '
-    return 0
+    # P3-1 (round-3 fix review, this PR): this used to `return 0` no matter
+    # what — a huge needle_list (e.g. a >128 KiB --prompt-file, #99) can make
+    # the exec of perl ITSELF fail (E2BIG, rc=126), which prints nothing on
+    # stdout; the caller then read an empty string as "redacted to nothing"
+    # and said so, when really nothing was redacted at all — the tool
+    # crashed. Report that distinctly via a non-zero return instead.
+    [ "${PIPESTATUS[1]}" -eq 0 ] && return 0
+    return 1
   fi
   local n
   for n in "${needles[@]}"; do
@@ -374,7 +381,13 @@ _burn_redact() {
   if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
     text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
   fi
-  _burn_redact_full "$text" "$repl"
+  # P3-1 (round-3 fix review, this PR): _burn_redact_full can now return 1
+  # when its own redaction tool fails to run (see its comment) — this
+  # wrapper's contract has always been "best-effort text back, never abort
+  # the caller under bin/clikae's `set -e`", so swallow that here; the one
+  # call site that needs to tell "redacted to nothing" apart from "the tool
+  # crashed" calls _burn_redact_full directly and checks its own rc.
+  _burn_redact_full "$text" "$repl" || true
 }
 
 # Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
@@ -2563,7 +2576,23 @@ KV
     # fine: a signal past that tail was invisible to both dry and infra
     # detection). Use the untruncated variant here; only the display tail
     # still bounds itself. See _burn_redact_full's comment.
-    local out_for_class; out_for_class="$(_burn_redact_full "$out")"
+    #
+    # #81 round-1 fix review: $out ALREADY carries stderr merged in — both
+    # capture paths above run the engine with `2>&1` (the direct path here,
+    # and the tmux wrapper script's own redirection into $log_file), and
+    # _burn_capture_stderr (further up this file) tees fd 2 to $stderr_file
+    # while still restoring it to fd 2 for that same merge. So codex's
+    # stderr-only "ERROR: You've hit your usage limit …" line was already
+    # reaching this classifier before #81 — a second `cat "$stderr_file"`
+    # appended here was dead weight (A/B-tested: removing it changes
+    # nothing) that re-slurped the whole stream unbounded and re-ran
+    # _burn_redact_full on it. #81's actual cause was limit.sh:130's anchor
+    # not accepting codex's "ERROR:" transport prefix — fixed there.
+    # P3-1 (round-3 fix review, this PR): `|| true` — a non-zero rc here
+    # (the redaction tool itself failing to run) must not abort the burn
+    # under `set -e`; this call site doesn't need to tell that apart from
+    # "redacted to nothing", it only needs SOME text to classify against.
+    local out_for_class; out_for_class="$(_burn_redact_full "$out")" || true
 
     # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
     # A burn that FINISHED — the artifact is fresh — was being discarded as dry
@@ -2603,10 +2632,23 @@ KV
       # marker as-is (never clear a tank that may still be genuinely dry).
       # The reset phrase, when there is one, already reaches the caller via
       # `_burn_result`'s "reset" field below — unchanged by this.
+      #
+      # P1-1 (round-2 fix review, this PR): this branch's own guard above was
+      # sound — a limit line found ANYWHERE in the reply already skips
+      # dry_store_clear — but limit_codex_output_dry fed it was windowed to
+      # the last 20 lines (limit.sh), and THIS is the one call site where the
+      # vendor's limit line is most likely to sit far from the end (the run
+      # kept going and finished the artifact afterward): a real limit line
+      # >20 lines from the tail read as "no limit here" and cleared a marker
+      # that should have survived. Fixed at the source (limit.sh now scans
+      # the whole reply); the extra `rc == 0` below is this call site's own
+      # belt: a fresh artifact with a NON-ZERO engine exit and no limit line
+      # is not the "real success" this clear exists for either — leave any
+      # existing marker alone in that case too, same as the limit-line arm.
       local live_reset=""
       if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
         log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
-      else
+      elif [ "$rc" -eq 0 ]; then
         dry_store_clear "$cli" "$cur"   # a real success recovered this tank
         # codex's hard-limit text above is the only DRY signal; a HEALTHY
         # codex run still has something worth showing — its own 5h/weekly
@@ -2658,7 +2700,7 @@ KV
 
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
-      # this stdout and would otherwise vanish. Only for engines whose dry state is
+      # captured output and would otherwise vanish. Only for engines whose dry state is
       # NOT already scannable from disk (claude=transcript, agy=log self-clear);
       # writing a store marker for those would mask their real recovery.
       limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$reset"
@@ -2683,9 +2725,61 @@ KV
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       local failure_reason="no fresh artifact and no limit" stderr_first=""
       if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
-        stderr_first="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$stderr_file")"
-        stderr_first="$(_burn_sanitize_reason "$stderr_first")"
-        failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+        # P3-2 (#81 round-1 fix review): this used to go straight from the
+        # RAW stderr line to _burn_sanitize_reason (which only escapes
+        # control bytes for valid JSON, never redacts) — an engine that
+        # echoes the task's own prompt back on stderr (codex does, on
+        # several failure shapes) put the operator's prompt text verbatim
+        # into `reason` in both `--json` and status.json. out_for_class
+        # above already redacts the SAME stderr through _burn_redact_full
+        # for classification; give `reason` the same treatment before it
+        # is sanitized for JSON and truncated.
+        #
+        # P2-2 (round-2 fix review, this PR): that fix used _burn_redact_full's
+        # DEFAULT replacement — an empty string — and only ever looked at
+        # stderr's FIRST line. When that first line IS, in its entirety, the
+        # thing being redacted (codex echoing the whole prompt back as its
+        # own first stderr line is one of the "several failure shapes" the
+        # comment above already names), redacting it to "" and stopping left
+        # `reason` an empty string — not the missing-leak the redaction
+        # promised, but a genuinely uninformative field (and, on the #99
+        # shape — a >128 KiB prompt that makes _burn_redact_full's own perl
+        # invocation fail closed and hand back "" regardless of content —
+        # every attempt looks "entirely redacted" even though the real
+        # stderr never leaked at all, worked, or was even touched). Redact
+        # with the SAME "[prompt: …]" placeholder burn.sh:385 already uses
+        # for the human-facing tail (never a bare "", which is
+        # indistinguishable from "nothing was here"), then walk the
+        # redacted lines — not just the first — and keep the first one that
+        # ISN'T entirely that placeholder (or blank): the prompt-echo line
+        # is skipped, a real diagnostic on the next line is kept. If every
+        # line is placeholder or blank (a stderr that is ONLY the prompt,
+        # or the #99 shape above), say so in plain words — `reason` must
+        # never be "" or null.
+        local _reason_placeholder="" _reason_redacted _reason_candidate _redact_rc=0
+        [ -n "${saved_prompt:-}" ] && _reason_placeholder="[prompt: $saved_prompt]"
+        _reason_redacted="$(_burn_redact_full "$(head -c "$_BURN_REDACT_TAIL_BYTES" "$stderr_file")" "$_reason_placeholder")" || _redact_rc=$?
+        # P3-1 (round-3 fix review, this PR): a non-zero _redact_rc means the
+        # redaction tool itself failed to run (perl exec E2BIG, #99 shape) —
+        # nothing was redacted, so say THAT, not "output redacted" (which
+        # implies redaction happened and just found nothing worth keeping).
+        if [ "$_redact_rc" -ne 0 ]; then
+          failure_reason="engine exited rc=$rc, output could not be redacted"
+        else
+        while IFS= read -r _reason_candidate; do
+          _reason_candidate="$(printf '%s' "$_reason_candidate" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$_reason_candidate" ] || continue
+          [ -n "$_reason_placeholder" ] && [ "$_reason_candidate" = "$_reason_placeholder" ] && continue
+          stderr_first="$_reason_candidate"
+          break
+        done <<< "$_reason_redacted"
+        if [ -n "$stderr_first" ]; then
+          stderr_first="$(_burn_sanitize_reason "$stderr_first")"
+          failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+        else
+          failure_reason="engine exited rc=$rc, output redacted"
+        fi
+        fi
       fi
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
       _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"

@@ -376,3 +376,27 @@ print(d['captured'], d['dry'], s['A'], s['B'])
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *'"out_dir"'* ]] || { echo "$output"; false; }
 }
+
+# --- P1-1 (round-2 fix review, this PR): limit_codex_output_dry used to be
+# fed only the last 20 lines of a leg's captured output — conduct.sh has no
+# concept of an artifact at all, so a limit line more than 20 lines from the
+# end (the run kept going after it) read as CAPTURED, reporting a dried-out
+# leg as having a usable answer. The window is gone: the whole leg's output
+# is scanned. exit rc is deliberately non-zero (real codex exits 0 dry, but
+# this leg's own classification must not depend on that).
+
+@test "conduct: a limit line far from the tail is still caught as dry, not CAPTURED (P1-1)" {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+for i in $(seq 1 25); do echo "    at codex::exec::run (src/exec.rs:$i)"; done
+exit 3
+STUB
+  chmod +x "$bin/codex"; PATH="$bin:$PATH"; export PATH
+  clikae init codex A
+  run clikae conduct --prompt "x" --leg codex/A --out-dir "$BATS_TEST_TMPDIR/out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex/A — ran dry"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"0 captured · 1 dry"* ]] || { echo "$output"; false; }
+}

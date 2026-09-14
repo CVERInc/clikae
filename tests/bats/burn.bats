@@ -563,8 +563,14 @@ STUB
   declare -F adapter_burn_flags >/dev/null   # claude HAS it
   declare -F adapter_audit_flags >/dev/null
   load_adapter gh
-  ! declare -F adapter_burn_flags >/dev/null # gh must NOT have inherited it
-  ! declare -F adapter_audit_flags >/dev/null
+  run declare -F adapter_burn_flags # gh must NOT have inherited it
+  [ "$status" -ne 0 ]
+  # P3-5 (#81 round-1 fix review): matches the line above — `! cmd` (like a
+  # bare `[[ ]]`) is exempt from `set -e`, so a failing bare assertion here
+  # would be silently ignored mid-body, not just stylistically inconsistent
+  # with its neighbour.
+  run declare -F adapter_audit_flags
+  [ "$status" -ne 0 ]
 }
 
 # P1-1 (2026-09-12 round-2 review): adapter_meta_permission_modes (claude.sh,
@@ -1826,6 +1832,53 @@ STUB
   [ "$status" -ne 0 ]
 }
 
+# --- P3-1 (round-3 fix review, this PR): `_burn_redact_full` used to
+# `return 0` regardless of whether its own `perl` invocation actually ran —
+# a needle list too large for perl's exec to accept at all (E2BIG, the #99
+# shape: a >128 KiB --prompt-file) prints NOTHING on stdout and now returns
+# 1 instead, so a caller can tell "redacted to nothing" apart from "the
+# redaction tool itself crashed". A real E2BIG needs an OS-specific argv
+# ceiling to reproduce; a `perl` stub that fails to run proves the SAME
+# code path (PIPESTATUS[1] != 0) without depending on that ceiling.
+
+@test "_burn_redact_full: perl failing to run is reported via a non-zero return, not a silent empty success (P3-1 r3)" {
+  _src_burn
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  cat > "$BATS_TEST_TMPDIR/fakebin/perl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/fakebin/perl"
+  PATH="$BATS_TEST_TMPDIR/fakebin:$PATH"
+  prompt="this-is-the-secret-needle-value"
+  cmd=()
+  run _burn_redact_full "some text with this-is-the-secret-needle-value inside"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "burn #99 (P3-1 r3): when redaction itself fails, the fast-failure reason says so distinctly, not 'output redacted'" {
+  _stub_burn_transport
+  mkdir -p "$BATS_TEST_TMPDIR/fakebin"
+  cat > "$BATS_TEST_TMPDIR/fakebin/perl" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/fakebin/perl"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "some ordinary diagnostic line, unrelated to any prompt echo" >&2
+exit 3
+STUB
+  clikae init codex T1
+  PATH="$BATS_TEST_TMPDIR/fakebin:$PATH" run clikae burn codex T1 --json --no-reroute \
+    --artifact "$BATS_TEST_TMPDIR/out" --prompt "this-is-the-secret-needle-value-in-the-prompt" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"engine exited rc=3, output could not be redacted"'* ]] || false
+  [[ "$output" != *'"reason":"engine exited rc=3, output redacted"'* ]] || false
+}
+
 # --- P1-2 (2026-09-08 ROUND-3 review): pre-classification redaction ran bash's
 # super-linear ${text//needle/repl} over the WHOLE captured output — measured
 # 129x main's time on an 8 MB raw-argv capture (240s vs 1.9s), entirely AFTER
@@ -1854,6 +1907,35 @@ STUB
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
   local elapsed=$((t1 - t0))
   [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
+}
+
+# P1-1 (round-3 fix review, this PR): the guard above only exercises the
+# HIT path (an anchor line found near the tail) — every healthy run with NO
+# limit line anywhere pays the SAME cost on the way to deciding that (the
+# fallback that tests every adjacent line pair for a split anchor phrase).
+# Round-2's `${line%$'\r'}` per-line CR strip was O(n^2) on both paths;
+# measured 727x slower at 2 MB even near-idle load (REVIEW-stderr81-r3.md
+# P1-1). This is the everyday case — a task that just finishes — so it must
+# stay fast even though nothing was ever going to match.
+@test "burn #44: an 8MB HEALTHY capture (no limit line at all) still classifies fast (P1-1 r3 timing guard)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 8000000 /dev/zero | tr '\0' 'x'
+printf '\ndone.\n'
+STUB
+  clikae init codex T1
+  local t0 t1
+  t0="$(date +%s)"
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C "$BATS_TEST_TMPDIR" -s workspace-write "refactor the parser"
+  t1="$(date +%s)"
+  # No artifact was written and no limit line is in the reply — a real task
+  # failure, not dry. The behavioral shape isn't the point of this guard,
+  # the WALL TIME is.
+  [[ "$output" == *'"ok":false'* ]] || false
+  local elapsed=$((t1 - t0))
+  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — expected single-digit seconds"; false; }
 }
 
 # --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
@@ -2362,6 +2444,32 @@ STUB
   [[ "$output" == *'"reason":"error:  file    not found  (rc=3)"'* ]] || { echo "$output"; false; }
 }
 
+# --- P3-2 (#81 round-1 fix review): the fast-failure `reason` above went
+# straight from raw stderr to _burn_sanitize_reason (JSON-escaping only,
+# never redaction) — an engine that echoes the operator's own prompt back
+# on stderr put it verbatim into --json/status.json's `reason`, the same
+# class of leak #43 already closed for the diagnostic tail.
+
+@test "burn #81: a prompt fragment echoed to stderr never reaches --json's reason (P3-2)" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'fatal: %s\n' "${@: -1}" >&2
+exit 7
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  # The human-readable "preview:" line legitimately echoes the operator's own
+  # prompt — only the JSON `reason` field is the thing #66 promises never
+  # carries raw, unredacted engine stderr.
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" == *'fatal:'* ]] || { echo "$reason_field"; false; }
+}
+
 # --- #66 round-1 review fixes ---
 
 @test "burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd" {
@@ -2513,7 +2621,8 @@ STUB
   export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=1234
   run clikae burn claude t1 --artifact "$A" -- -p "raw prompt" --allowedTools "Bash,Agent"
   [ "$status" -eq 0 ]
-  ! grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  run grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  [ "$status" -ne 0 ]
   grep -q -- "--allowedTools Bash,Agent" "$BATS_TEST_TMPDIR/argv.log"
   grep -q "^BG_WAIT=1234$" "$BATS_TEST_TMPDIR/env.log"
 }
@@ -2525,5 +2634,257 @@ STUB
   export STUB_ARTIFACT="$A" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
   run clikae burn codex T1 --artifact "$A" --prompt "do it"
   [ "$status" -eq 0 ]
-  ! grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  # P3-5 (#81 round-1 fix review): same `! cmd` set -e exemption as above —
+  # bring this in line with the equivalent assertion earlier in this file.
+  run grep -q -- "disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  [ "$status" -ne 0 ]
+}
+
+_stub_codex_stderr81() {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$STUB_STDERR81" >&2
+exit 0
+STUB
+}
+
+@test "burn #81: stderr-only codex limit exits zero but reports dry and stores reset" {
+  _stub_codex_stderr81
+  export STUB_STDERR81
+  STUB_STDERR81="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  [[ "$output" != *'no fresh artifact and no limit'* ]] || false
+  [[ "$output" == *'Dry, and --no-reroute is set. Stopping.'* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+}
+
+@test "burn #81: ordinary codex stderr preserves the no-artifact failure" {
+  _stub_codex_stderr81
+  export STUB_STDERR81="ERROR: could not open input file"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'produced no fresh artifact and shows no limit'* ]] || false
+  # P3-6 (#81 round-1 fix review): this used to accept EITHER reason string,
+  # so a real regression in #66's stderr-reason plumbing (the actual thing
+  # this test's own title promises to guard) could never turn it red. Only
+  # the shape this stub actually produces.
+  [[ "$output" == *'"reason":"ERROR: could not open input file"'* ]] || false
+  [[ "$output" == *'"reset":null'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
+}
+
+# --- P2-2 (#81 round-1 fix review): limit_codex_output_dry matched the exact
+# vendor sentence ANYWHERE in the reply, not just when it terminates the run —
+# so a HEALTHY codex asked to write about this very issue, that happens to
+# quote the real sentence verbatim mid-transcript and then keeps working, was
+# misread as dry. A genuine vendor limit line is never followed by pages of
+# ordinary output (it IS the end of the run), so the anchor now only counts
+# inside the last 20 lines.
+
+@test "burn #81: the vendor sentence QUOTED mid-transcript, run finishes with an artifact, is not dry (P2-2)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 99); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 101 200); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'"reason":"artifact produced"'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
+}
+
+@test "burn #81: the vendor sentence as the LAST line, no artifact, is still dry (P2-2 control)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+for i in $(seq 1 199); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+}
+
+# --- P1-1 (round-2 fix review, this PR): the `tail -n 20` window this
+# function's P2-2 fix (above) was tested against hid the anchor from the
+# other two real callers — burn.sh's NO-ARTIFACT branch (a real limit line
+# followed by a stack trace longer than 20 lines read as "no limit here", an
+# exact #81 recurrence) and burn.sh's ARTIFACT-PRODUCED branch (below). The
+# window is gone: the classifier now scans the whole captured reply.
+
+@test "burn #81 fix2: a limit line followed by a >20-line stack trace, no artifact, is dry — not a task failure (P1-1)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 1 25); do printf '    at codex::exec::run (src/exec.rs:%s)\n' "$i"; done
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
+  [[ "$output" != *'no fresh artifact and no limit'* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  local reset
+  reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+}
+
+# --- P1-1(b) (round-2 fix review, this PR): burn.sh's artifact-wins branch
+# already refused to clear a marker when limit_output_dry fired on the SAME
+# reply — but limit_output_dry was fed the windowed tail, so on the path
+# most likely to have the vendor's limit line far from the end (the run kept
+# GOING and finished the artifact afterward), the window hid it and a real,
+# pre-existing dry marker was silently cleared. The 2026-09-08 round-2 P2-2
+# receipt, restored: a marker that predates this run must survive it.
+
+@test "burn #81 fix2: a pre-existing dry marker survives an artifact-producing run whose SAME reply still shows a limit far from the tail (P1-1b)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf "ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\n"
+for i in $(seq 1 25); do printf 'line %s of the runbook I am writing.\n' "$i"; done
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [[ "$output" == *'not marking it dry'* ]] || false
+  [ -f "$CLIKAE_HOME/dry/codex/T1" ]
+  [ "$(cat "$CLIKAE_HOME/dry/codex/T1")" = "$(printf '1700000000\ttry again earlier today')" ]
+}
+
+# --- P1-1 rc-gate (round-2 fix review, this PR): the artifact-wins branch's
+# clear was gated only on "no limit line in this reply" — add the belt this
+# review's own design decision calls for: a fresh artifact with a NON-ZERO
+# engine exit is not the "real success" dry_store_clear exists for either,
+# even with no limit line in the reply.
+
+@test "burn #81 fix2: a fresh artifact with a non-zero engine exit does not clear a pre-existing marker (P1-1 rc-gate)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'partial output, then a crash\n'
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 9
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ -f "$CLIKAE_HOME/dry/codex/T1" ]
+  [ "$(cat "$CLIKAE_HOME/dry/codex/T1")" = "$(printf '1700000000\ttry again earlier today')" ]
+}
+
+@test "burn #81 fix2: a fresh artifact with rc==0 and no limit line still clears a pre-existing marker (P1-1 rc-gate control)" {
+  _stub_codex
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'all clear, task complete\n'
+[ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '1700000000\ttry again earlier today\n' > "$CLIKAE_HOME/dry/codex/T1"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn codex T1 --json --artifact "$A" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"ok":true'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
+}
+# --- P2-2 (round-2 fix review, this PR): the fast-failure `reason` field's
+# redaction used _burn_redact_full's DEFAULT replacement — an empty string —
+# and only ever looked at stderr's first line. When that first line IS, in
+# its entirety, the thing being redacted (codex echoing the whole prompt
+# back as its own first stderr line), redacting it to "" and stopping left
+# `reason` empty, even though a real diagnostic sat right there on the next
+# line.
+
+@test "burn #99/P2-2 fix2: a stderr first line that IS the prompt does not empty reason — the real diagnostic on the next line survives" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" >&2
+printf 'error: real diagnostic follows\n' >&2
+exit 7
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [ -n "$reason_field" ]
+  [ "$reason_field" != '"reason":""' ]
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" == *'real diagnostic follows'* ]] || { echo "$reason_field"; false; }
+}
+
+@test "burn #99/P2-2 fix2: when every stderr line is placeholder or blank, reason falls back to a plain message — never empty or null" {
+  _stub_burn_transport
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" >&2
+printf '\n' >&2
+printf '%s\n' "${@: -1}" >&2
+exit 9
+STUB
+  clikae init codex T1
+  local prompt="please write about PRIVATE-PROMPT-FRAGMENT-XYZ today"
+  run clikae burn codex T1 --json --artifact "$BATS_TEST_TMPDIR/out" --prompt "$prompt"
+  [ "$status" -eq 1 ]
+  local reason_field
+  reason_field="$(printf '%s' "$output" | grep -o '"reason":"[^"]*"')"
+  [ -n "$reason_field" ]
+  [ "$reason_field" != '"reason":""' ]
+  [[ "$reason_field" == *'engine exited rc=9, output redacted'* ]] || { echo "$reason_field"; false; }
+  [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
 }

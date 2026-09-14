@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Codex burn now detects a usage-limit line prefixed with codex's own
+  `ERROR:` transport tag (captured stderr already reached the classifier
+  merged with stdout before this fix — the anchor regex was the gap), and
+  preserves the reset phrase in JSON and the dry marker, reporting dry with
+  `--no-reroute` instead of a missing-artifact failure (#81, also #68).
+
+  Round-3 review found the CR strip added to close round-2's P3-2 (a CRLF
+  capture) turned the classifier's per-line loop O(n²) on a long unbroken
+  line — an 8 MB capture went from 3s to 2107s on this host and 2266s on
+  CI's own dedicated ubuntu runner, CPU-bound the whole time (an earlier
+  "host contention" explanation for the same failing test was wrong; three
+  independent measurements on unrelated hosts converge on the same
+  quadratic curve). The classifier now strips every `\r` from the whole
+  buffer with one `tr -d '\r'` and reads the matched line back out with
+  `sed -n`, never a bash array or a per-line loop.
+
+  Also restored: leading whitespace/tab tolerance ahead of the three named
+  transport prefixes (`origin/main` allowed this; round-2's anchor rewrite
+  dropped it, a coverage regression for an indented or tab-prefixed vendor
+  line — the exact class of transport noise #81 was filed against,
+  recurring in a new shape).
+
+  A fresh artifact whose engine exited non-zero with no limit line in its
+  reply now leaves an existing dry marker alone — the same treatment the
+  limit-line arm already gets, and the same tank-with-fuel case dry_store's
+  own header promises never to write a fresh marker for. This shipped in
+  round-2 but was never written down here until now.
+
+  Also: `_burn_redact_full`'s own redaction tool (`perl`) can fail to
+  RUN at all on a needle list too large for its exec to accept (the #99
+  shape, a >128 KiB `--prompt-file`) — this used to be silently read as
+  "redacted to nothing" and reported as `"reason":"engine exited rc=N,
+  output redacted"`, which implies redaction happened and found nothing
+  worth keeping. It now says `output could not be redacted` instead,
+  since nothing was redacted — the tool crashed. #99 itself (the
+  underlying `Argument list too long`) is still open, tracked separately.
+
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or
