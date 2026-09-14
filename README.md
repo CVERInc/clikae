@@ -95,7 +95,9 @@ its tank, so shutting the laptop — or an ssh connection dropping on the train 
 doesn't end the conversation. Type the same `clikae claude work` from wherever
 you land next and you're back in it, at that screen's size, mid-thought. If
 tmux isn't installed, or you're in a pipe, it just runs the engine directly:
-same command, no persistence, nothing to configure either way.
+same command, no persistence, nothing to configure either way. Over ssh from
+a phone with no scroll wheel (a-Shell/iPhone), tmux 3.1+ also gets you swipe
+scrolling — see [`docs/usage.md`](docs/usage.md#touch-scrolling-over-ssh).
 
 **You hit the limit at 2am.** The session isn't gone — it's sitting at its
 prompt with the whole conversation in it, waiting for you to come back at 3:50

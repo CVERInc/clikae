@@ -273,3 +273,167 @@ _codex_reply_line() {
   run limit_line_is_real claude "$line" "" 0
   [ "$status" -ne 0 ]
 }
+
+@test "codex #81: ERROR stderr report parses dated ordinal reset in observer zone" {
+  _src_limit
+  local line reset
+  line="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  reset="$(limit_codex_output_dry "$line")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+  TZ=Asia/Tokyo run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789233180" ]
+}
+
+@test "codex #81: ERROR prefix does not admit quoted limit prose" {
+  _src_limit
+  run limit_codex_output_dry "ERROR: See docs for You've hit your usage limit. try again at 2:13 AM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-3 (#81 round-1 fix review): the reset phrase used to come from
+# grep's first hit ANYWHERE in the buffer, not the line that anchored the
+# dry verdict — so an earlier, unrelated "resets …"/"try again at …" in the
+# engine's own prose won the marker over the genuine vendor line.
+
+@test "codex reset: a prose decoy earlier in the buffer does not win over the anchored line's own reset (P2-3)" {
+  _src_limit
+  local out
+  out=$'the schedule resets Monday morning, so try again at 9:00 PM if unsure.\nERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+  [[ "$output" != *"Monday morning"* ]] || false
+}
+
+@test "codex reset: a sentence wrapped across two lines still yields the full, parseable reset (P2-3)" {
+  _src_limit
+  local out reset
+  out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  reset="$(limit_codex_output_dry "$out")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+}
+
+# --- P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing
+# prefix the anchor accepted, rejecting a real ISO timestamp or a single
+# bracketed tag ahead of it — narrow to codex's one current wording rather
+# than the class of transport noise it should be.
+
+@test "codex output_dry: an ISO timestamp ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "2026-09-13T02:13:00Z ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: a bracketed tag ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "[codex] ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: free prose ahead of ERROR: (warn: ERROR: ...) is still rejected (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "warn: ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-1 (round-2 fix review, this PR): the prior "ISO timestamp" allowance
+# was `(\S+T\S+ )?` under `grep -i` — read as "any non-space token with a t
+# or T anywhere in its middle", not "an ISO-8601 stamp". Every one of these
+# decoys satisfies that (a `t` sandwiched inside a real word), so a task that
+# merely echoed codex's own sentence back while genuinely failing for an
+# unrelated reason came out dry. Rewritten as an exact ISO-8601 literal,
+# matched case-sensitively — none of these are it.
+
+@test "codex output_dry: prefix decoys with a letter-embedded 't' are rejected, not accepted via case-folding (P2-1)" {
+  _src_limit
+  local line
+  for line in \
+    "agent: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "context: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "stderr: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "output: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "note: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "attempt You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -ne 0 ] || { echo "wrongly dry: $line"; false; }
+  done
+}
+# --- P3-1 (round-2 fix review, this PR): the forward-join used to glue the
+# next line onto an anchor line with no trailing punctuation UNCONDITIONALLY
+# — meant for a vendor sentence the terminal wrapped mid-RESET-PHRASE, but it
+# fired just as readily when the next line was unrelated prose that happened
+# to carry its OWN "resets …" text, donating that decoy's reset to the
+# genuine anchor. limit_codex_reset used to have this exact bug at the
+# buffer level (P2-3, fixed by isolating the anchor line) — this is the same
+# shape one line-join later.
+
+@test "codex output_dry: a decoy reset phrase on the NEXT line is not donated to an anchor line missing its own (P3-1)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit\nthe schedule resets Monday morning, so try again at 9:00 PM if unsure.'
+  run limit_codex_output_dry "$out"
+  # Conservative and correct: the anchor line itself carries no reset
+  # phrase, and the next line's reset belongs to unrelated prose, not this
+  # event — so this is NOT dry (same as before P2-3 ever existed).
+  [ "$status" -ne 0 ]
+}
+
+@test "codex output_dry: a genuine wrapped reset (no decoy reset on the next line) still joins (P3-1 control)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+}
+
+# --- P3-2 (round-2 fix review, this PR): `while read -r` does not strip a
+# trailing `\r` — a CRLF capture left one on the end of every line, so the
+# "does this line already end in terminal punctuation" check never matched
+# and every anchor line tried to glue its neighbour on, whether wrapped or
+# not.
+
+@test "codex output_dry: a CRLF capture's reset stays byte-clean, no stray \\r (P3-2)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\r\ntrailer line\r'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "try again at Sep 13th, 2026 2:13 AM" ]] || { echo "$output" | od -c; false; }
+}
+
+# --- P2-1 (round-3 fix review, this PR): the anchor's `^` was followed
+# directly by the three named prefixes with no whitespace allowance at all
+# — origin/main's noise class accepted leading space/tab, and a real
+# transport routinely indents a wrapped/quoted error block, so this was a
+# coverage regression vs main (#81's own symptom, recurring). Restored as a
+# bounded `[[:space:]]{0,8}` ahead of the three prefixes.
+
+@test "codex output_dry: leading spaces/tab ahead of a bare vendor sentence still fire dry (P2-1 r3)" {
+  _src_limit
+  local line
+  for line in \
+    "   You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "$(printf '\tYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.')" \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -eq 0 ] || { echo "wrongly not-dry: $line"; false; }
+  done
+}
+
+@test "codex output_dry: leading space ahead of ERROR: still fires dry (P2-1 r3)" {
+  _src_limit
+  run limit_codex_output_dry "  ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: an over-long indent (16 spaces) is still rejected — bounded, not a generic noise class (P2-1 r3 control)" {
+  _src_limit
+  run limit_codex_output_dry "$(printf '%16sYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.' '')"
+  [ "$status" -ne 0 ]
+}

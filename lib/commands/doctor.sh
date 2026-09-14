@@ -269,6 +269,18 @@ EOF
   echo ""
   _doctor_legacy_prefix
   _doctor_memory
+  # shellcheck source=./settings.sh
+  source "$CLIKAE_LIB/commands/settings.sh"
+  local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"
+  if [ -f "$claude_template" ]; then
+    local settings_dir
+    for settings_dir in "$(profiles_root)/claude"/*; do
+      [ -d "$settings_dir" ] || continue
+      _settings_tank claude "${settings_dir##*/}" doctor "$claude_template" || true
+    done
+  else
+    printf 'claude: permissions template missing (installation incomplete); skipping\n'
+  fi
 
   _doctor_keychain
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a

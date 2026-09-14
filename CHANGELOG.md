@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A tank whose fuel dot said "full" while the account was out of fuel now says
+  what is true. The board's rate-limit scan was bounded by a COUNT (the newest
+  `CLIKAE_HOME_RECENT_MAX` transcripts per project directory) while the thing
+  that count approximates — the rolling limit window — is a TIME, so a limit
+  sitting in a session that had gone quiet behind a dozen newer neighbours was
+  invisible, and `clikae burn` dispatched into a tank that had none left. Every
+  transcript inside the window is scanned now, however many share a directory,
+  in one batched read rather than one parser fork per file (#62).
+- A project directory whose name is not ASCII no longer answers with a
+  neighbouring directory's sessions. Board entries were named by folding every
+  byte outside `[A-Za-z0-9._-]` to `_`, so two sibling directories of the same
+  byte length — two Chinese characters is six bytes, and so is two others —
+  shared one Resume list: one of them listed the other's sessions and the other
+  listed none. The name is an injective escape now, and the list is grouped by
+  the directory itself, so a name that two directories could still share reads
+  as a miss rather than as someone else's sessions (#62).
+- A second `clikae` reading the board while the first publishes no longer loses
+  its Resume list. Snapshot generations resolve entries through their
+  ancestors, and the per-publish GC protected only the chain the CURRENT
+  generation walks — so a generation another process was still holding lost its
+  oldest ancestors to a single further publish, and most of its sessions
+  stopped resolving while it still existed and still read as fresh. The GC
+  keeps whole chains now, not whole directories (#62).
 - The antigravity workspace index clears what it loaded last and is namespaced
   by tank, so a long-lived board no longer accumulates one entry per session
   id it has ever seen, keeps answering for ids that have left `history.jsonl`,
@@ -30,8 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for every file inside the engine's window). The entry name is now computed
   without a process; claude's session id comes from the filename and codex's
   and grok's from ONE batched bounded read instead of one parse per file; and
-  the rate-limit scan is bounded to the newest `CLIKAE_HOME_RECENT_MAX` files
-  per project directory rather than every file in the window (#62).
+  the rate-limit scan reads every transcript inside the engine's window in ONE
+  batched pass instead of forking a parser per file (#62).
 - A render that rebuilds a tank's board snapshot walks and stats that tank
   once, not twice: the freshness check hands its stat rows to the rebuild it
   triggers instead of both collecting their own (26 ms of a 127 ms rebuild at
@@ -59,6 +82,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by walking that chain, which is bounded (it materialises a real copy before
   it can grow past 8) and which `clikae clean`'s sweep and the per-publish GC
   both now protect from keep-N (#62).
+- Codex burn now detects a usage-limit line prefixed with codex's own
+  `ERROR:` transport tag (captured stderr already reached the classifier
+  merged with stdout before this fix — the anchor regex was the gap), and
+  preserves the reset phrase in JSON and the dry marker, reporting dry with
+  `--no-reroute` instead of a missing-artifact failure (#81, also #68).
+
+  Round-3 review found the CR strip added to close round-2's P3-2 (a CRLF
+  capture) turned the classifier's per-line loop O(n²) on a long unbroken
+  line — an 8 MB capture went from 3s to 2107s on this host and 2266s on
+  CI's own dedicated ubuntu runner, CPU-bound the whole time (an earlier
+  "host contention" explanation for the same failing test was wrong; three
+  independent measurements on unrelated hosts converge on the same
+  quadratic curve). The classifier now strips every `\r` from the whole
+  buffer with one `tr -d '\r'` and reads the matched line back out with
+  `sed -n`, never a bash array or a per-line loop.
+
+  Also restored: leading whitespace/tab tolerance ahead of the three named
+  transport prefixes (`origin/main` allowed this; round-2's anchor rewrite
+  dropped it, a coverage regression for an indented or tab-prefixed vendor
+  line — the exact class of transport noise #81 was filed against,
+  recurring in a new shape).
+
+  A fresh artifact whose engine exited non-zero with no limit line in its
+  reply now leaves an existing dry marker alone — the same treatment the
+  limit-line arm already gets, and the same tank-with-fuel case dry_store's
+  own header promises never to write a fresh marker for. This shipped in
+  round-2 but was never written down here until now.
+
+  Also: `_burn_redact_full`'s own redaction tool (`perl`) can fail to
+  RUN at all on a needle list too large for its exec to accept (the #99
+  shape, a >128 KiB `--prompt-file`) — this used to be silently read as
+  "redacted to nothing" and reported as `"reason":"engine exited rc=N,
+  output redacted"`, which implies redaction happened and found nothing
+  worth keeping. It now says `output could not be redacted` instead,
+  since nothing was redacted — the tool crashed. #99 itself (the
+  underlying `Argument list too long`) is still open, tracked separately.
 
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
@@ -75,6 +134,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Versioned Claude permissions template and `clikae settings apply` with union
+  merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
+  template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
+  set; doctor reports missing rules per tank. A missing template or missing
+  `jq` degrades instead of failing `init` (#76).
+- Touch scrolling for click-pair swipes in tmux (a-Shell over ssh): swipe up
+  to read history, swipe down toward live output, and tap to leave copy-mode.
+  `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
+  (default 2). Desktop wheel and drag bindings are unchanged.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
