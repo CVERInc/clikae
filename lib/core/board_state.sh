@@ -150,23 +150,47 @@ _BOARD_GEN_MAX_DEPTH="${CLIKAE_BOARD_GEN_MAX_DEPTH:-8}"
 # pure parameter expansion here, one `gsub` in the cold build's awk, ONE rule
 # written twice and pinned by a bats test that compares the two.
 #
-# It is a sanitisation, not a hash, and that is deliberate:
-#   * A filename must be safe. Every character outside [A-Za-z0-9._-] folds to
-#     `_`, so `/`, `..`, NUL-adjacent tricks and an empty string cannot escape
-#     the entry directory. (`.`/`..` are folded whole.)
+# It is an ESCAPE, not a hash and not a fold, and that is the whole point:
+#   * A filename must be safe. Every byte outside [A-Za-z0-9._-] becomes
+#     `%XX`, so `/`, `..`, NUL-adjacent tricks and an empty string cannot
+#     escape the entry directory. (`.`/`..`/"" are wrapped in `%`, which no
+#     escaped string can ever spell, since every `%` it contains starts a
+#     three-byte escape.)
+#   * It is INJECTIVE: distinct inputs get distinct names, by construction,
+#     for every input short enough not to be truncated. That is the round-8
+#     fix review's P1-2, and it was not theoretical. Round 8 folded every
+#     non-ASCII byte to `_`, and `_board_scope_raw` hands this the raw `$PWD`
+#     for every engine but claude — so two CJK sibling directories of the same
+#     BYTE LENGTH (`專案一` / `專案二`, `~/Developer/專案` / `~/Developer/文件`
+#     — ordinary, not exotic; this repo's own maintainer works in such paths)
+#     got the SAME `recent/` entry. Not a miss: a WRONG ANSWER. The cold build
+#     grouped both scopes into one file under the first one's `#scope` header,
+#     so one directory's Resume list listed the neighbour's sessions and the
+#     neighbour's went silently empty. Measured on the front door: 4 rows where
+#     main showed 2, and 2 where main showed 2.
 #   * A name over 100 characters keeps its first 60 and last 40 plus the
 #     original length, so two long paths that merely share a prefix do not
-#     land on the same entry.
-#   * Collisions are HANDLED, not assumed away, and they are handled the same
-#     way they already were: the raw sid is line 1 of a `sids/` entry and the
-#     raw scope is the `#scope` header of a `recent/` entry, and board_find /
+#     land on the same entry. This is the ONE place a collision is still
+#     possible, and it is handled rather than assumed away — the same way it
+#     already was: the raw sid is line 1 of a `sids/` entry and the raw scope
+#     is the `#scope` header of a `recent/` entry, and board_find /
 #     board_recent compare them back. A collision reads as a MISS, never as
-#     another session's transcript.
-#   * It collides far less than what it replaces. A real sid is a uuid, so
-#     every character survives and two distinct sids cannot land on one name;
-#     `board_key`'s 32-bit cksum has a ~0.3% chance of at least one colliding
-#     pair in a 5,000-session tank — one silently missing Resume entry per
-#     ~345 tanks that size.
+#     another session's transcript. The cold build's `recent/` grouping keys
+#     on the RAW SCOPE (not on the name) so that stays true at the WRITE end
+#     too: two scopes that did land on one name overwrite each other's entry
+#     instead of being merged into it, and the loser reads as a miss.
+#
+# DEVIATION, measured. The round-9 brief asked for the name to be `cksum` of
+# the raw bytes (`board_key`, the repo's existing helper). Built that way
+# first: the reader can call `board_key` outright, but the COLD build names
+# every entry from inside one awk pass, so awk needs its own CRC-32 — and a
+# table-driven POSIX cksum in awk, byte-exact against `cksum` on ASCII and
+# CJK alike (verified), costs 177 ms for 5,000 sids on this host's gawk,
+# against a cold build that has to fit inside #62's one second and is ~500 ms
+# without it. The escape below costs 3 ms for the same input, needs no second
+# implementation anywhere (the reader runs this same awk source, which is the
+# property round 8 paid for), and does not merely make the collision rare —
+# it removes the class.
 # `board_key` itself stays exactly as it was: it still names the per-tank root
 # (`board_root`), where it runs once per tank, not once per file.
 #
@@ -197,12 +221,25 @@ _BOARD_GEN_MAX_DEPTH="${CLIKAE_BOARD_GEN_MAX_DEPTH:-8}"
 # file, still pays none: it runs this same source inline in the awk it was
 # already running.
 _BOARD_EKEY_AWK='
-function ekey(s,   t, n) {
+function _ekinit(   i, safe) {
+  safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+  for (i = 1; i < 256; i++) _EKHEX[sprintf("%c", i)] = sprintf("%%%02X", i)
+  for (i = 1; i <= length(safe); i++) _EKSAFE[substr(safe, i, 1)] = 1
+  _EKREADY = 1
+}
+function ekey(s,   t, n, i, c, out) {
+  if (s in _EKMEMO) return _EKMEMO[s]
   t = s
-  gsub(/[^A-Za-z0-9._-]/, "_", t)
-  if (t == "" || t == "." || t == "..") t = "_" t "_"
+  if (t ~ /[^A-Za-z0-9._-]/) {
+    if (!_EKREADY) _ekinit()
+    n = length(t); out = ""
+    for (i = 1; i <= n; i++) { c = substr(t, i, 1); out = out ((c in _EKSAFE) ? c : _EKHEX[c]) }
+    t = out
+  }
+  if (t == "" || t == "." || t == "..") t = "%" t "%"
   n = length(t)
   if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
+  _EKMEMO[s] = t
   return t
 }'
 _board_entry_key_out=""
@@ -664,9 +701,10 @@ board_gc_generations() {
 # previously-uncapped session invisible; nothing here re-derives full scope
 # membership to cover that narrow case.
 _board_merge_recent_row() {
-  local gen="$1" scope="$2" sid="$3" mt="$4" n="$5" key src hdr rmt rsid
+  local gen="$1" scope="$2" sid="$3" mt="$4" n="$5" key src hdr hmark hscope rmt rsid
   _board_entry_key "$scope"; key="$_board_entry_key_out"
   local -a rows=()
+  hdr="#scope"$'\037'"$scope"
   # Round-8: the row this merges against is whatever the CHAIN resolves for
   # this scope — this generation's own copy if an earlier call in this same
   # refresh already wrote one, otherwise the nearest ancestor's. The result is
@@ -674,16 +712,20 @@ _board_merge_recent_row() {
   # (_board_gen_put): the ancestor's file is never opened for writing, which
   # is the round-7 P1-1 defect (`> "$base"` through a `cp -al` hard link
   # rewrote a generation `current` still pointed at).
+  # Round-8 P1-2: the rows are carried forward only when the entry this name
+  # resolves to is THIS scope's. An entry belonging to a colliding scope is a
+  # miss — merging into it is how a name collision turns from "one of the two
+  # is invisible" into "one of them answers with the other's sessions".
   if _board_gen_entry "$gen" "recent/$key"; then
     src="$_board_gen_entry_out"
-    IFS= read -r hdr < "$src"
-    while IFS=$'\037' read -r rmt rsid; do
-      [ -n "$rsid" ] || continue
-      [ "$rsid" = "$sid" ] && continue
-      rows+=("$rmt"$'\037'"$rsid")
-    done < <(tail -n +2 "$src")
-  else
-    hdr="#scope"$'\037'"$scope"
+    IFS=$'\037' read -r hmark hscope < "$src"
+    if [ "$hmark" = "#scope" ] && [ "$hscope" = "$scope" ]; then
+      while IFS=$'\037' read -r rmt rsid; do
+        [ -n "$rsid" ] || continue
+        [ "$rsid" = "$sid" ] && continue
+        rows+=("$rmt"$'\037'"$rsid")
+      done < <(tail -n +2 "$src")
+    fi
   fi
   rows+=("$mt"$'\037'"$sid")
   {
@@ -698,11 +740,17 @@ _board_merge_recent_row() {
 # own header, but a stale row copied forward into `recent/` would keep
 # LISTING a deleted session until something else in the same scope changed).
 _board_purge_recent_row() {
-  local gen="$1" scope="$2" sid="$3" key src hdr
+  local gen="$1" scope="$2" sid="$3" key src hdr hmark hscope
   _board_entry_key "$scope"; key="$_board_entry_key_out"
   _board_gen_entry "$gen" "recent/$key" || return 0
   src="$_board_gen_entry_out"
   IFS= read -r hdr < "$src"
+  # Round-8 P1-2: same guard as the merge above — an entry under this name
+  # that belongs to a colliding scope is not ours to rewrite.
+  IFS=$'\037' read -r hmark hscope <<EOF_HDR
+$hdr
+EOF_HDR
+  { [ "$hmark" = "#scope" ] && [ "$hscope" = "$scope" ]; } || return 0
   { printf '%s\n' "$hdr"; tail -n +2 "$src" | awk -F$'\037' -v s="$sid" '$2 != s'; } \
     | _board_gen_put "$gen" "recent/$key"
 }
@@ -1040,24 +1088,34 @@ board_state_refresh() (
       END { printf "" > man_out }
     ' "$ss_f" "$rows_f"
 
-    # recent/: newest <n> sessions per scope. One `sort` (scope key asc, mtime
+    # recent/: newest <n> sessions per scope. One `sort` (RAW SCOPE asc, mtime
     # desc) then one awk that writes each scope's entry in a single pass.
+    #
+    # Grouped by the raw scope, NOT by the entry name (round-8 fix review
+    # P1-2): if two scopes ever did land on one name, grouping by the name
+    # merges their sessions into a single file under whichever scope's
+    # `#scope` header came first, and board_recent's header check then lets
+    # THAT scope through holding the other's rows — a wrong answer, which is
+    # exactly what the entry-name header above promises can never happen.
+    # Grouped by scope, the second group reopens the name with `>` and
+    # truncates it, so the loser reads as a MISS, which is what that promise
+    # actually says.
     if [ -s "$rec_f" ]; then
-      LC_ALL=C sort -t$'\037' -k1,1 -k3,3rn "$rec_f" | awk -v gen="$gen" -v n="$n" '
+      LC_ALL=C sort -t$'\037' -k2,2 -k3,3rn "$rec_f" | awk -v gen="$gen" -v n="$n" '
         BEGIN { S = sprintf("%c", 31) }
         {
           i = index($0, S); k = substr($0, 1, i - 1); rest = substr($0, i + 1)
           j = index(rest, S); sc = substr(rest, 1, j - 1); rest = substr(rest, j + 1)
           j = index(rest, S); mt = substr(rest, 1, j - 1); sid = substr(rest, j + 1)
-          if (k != cur) {
-            if (cur != "") close(gen "/recent/" cur)
-            cur = k; c = 0
-            f = gen "/recent/" k
-            print "#scope" S sc > f
+          if (sc != cur) {
+            if (curf != "") close(curf)
+            cur = sc; c = 0
+            curf = gen "/recent/" k
+            print "#scope" S sc > curf
           }
-          if (c < n) { print mt S sid > f; c++ }
+          if (c < n) { print mt S sid > curf; c++ }
         }
-        END { if (cur != "") close(gen "/recent/" cur) }
+        END { if (curf != "") close(curf) }
       '
     fi
 

@@ -789,6 +789,76 @@ _b8_tank() {
   [ "$a" != "$b" ]
 }
 
+@test "board (round-8 P1-2): non-ASCII sibling scopes keep their OWN Resume list, never a neighbour's" {
+  # Round-8 P1-2. `_board_scope_raw` hands the raw `$PWD` to every engine but
+  # claude, and round 8 named each entry by folding every byte outside
+  # [A-Za-z0-9._-] to `_` — so two sibling directories with the same BYTE
+  # LENGTH got the same `recent/` entry, the cold build merged both scopes'
+  # sessions into it under the FIRST scope's `#scope` header, and one
+  # directory's Resume list answered with the other's sessions while the
+  # other's went silently empty. Two CJK characters are six bytes; so are two
+  # others. This is an ordinary project path, not an exotic one.
+  clikae init codex cjk >/dev/null
+  mkdir -p "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  _board_source
+  load_adapter codex >/dev/null 2>&1 || true
+  local dir="$CLIKAE_HOME/profiles/codex/cjk" sd i j scope sid
+  sd="$dir/sessions/2026/09/14"
+  mkdir -p "$sd"
+  local -a scopes=("$TEST_HOME/專案一" "$TEST_HOME/專案二" "$TEST_HOME/café" "$TEST_HOME/cafè")
+  for ((i = 0; i < ${#scopes[@]}; i++)); do
+    mkdir -p "${scopes[i]}"
+    for j in 0 1; do
+      sid="s$i-$j"
+      printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$sid" "${scopes[i]}" \
+        > "$sd/rollout-2026-09-14T0$i-0$j-$sid.jsonl"
+    done
+  done
+  rm -rf "$CLIKAE_HOME/state/board" "$CLIKAE_HOME/state/readings"
+  _board_gen_cache_clear
+  board_state_refresh codex "$dir"
+
+  # each scope's own two sessions, and nobody else's — cold
+  local rows
+  for ((i = 0; i < ${#scopes[@]}; i++)); do
+    cd "${scopes[i]}" || return 1
+    _board_gen_cache_clear
+    rows="$(board_recent codex "$dir" 10)"
+    [ "$(printf '%s\n' "$rows" | grep -c .)" -eq 2 ] \
+      || { echo "[${scopes[i]}] got: $rows"; false; }
+    # every row is this scope's own (sids are "s<scope index>-<n>")
+    [ "$(printf '%s\n' "$rows" | grep -c "s$i-")" -eq 2 ] \
+      || { echo "[${scopes[i]}] listed a sibling's session: $rows"; false; }
+  done
+
+  # distinct scopes must have distinct entry names in the first place
+  local root gen ka kb
+  root="$(board_root "$dir")"
+  gen="$root/$(cat "$root/current")"
+  _board_entry_key "${scopes[0]}"; ka="$_board_entry_key_out"
+  _board_entry_key "${scopes[1]}"; kb="$_board_entry_key_out"
+  [ "$ka" != "$kb" ] || { echo "two scopes, one entry name: $ka"; false; }
+  [ -f "$gen/recent/$ka" ] && [ -f "$gen/recent/$kb" ]
+
+  # and the INCREMENTAL path does not merge one scope's row into another's
+  # entry either: append to one rollout, rebuild, re-check every scope
+  printf '{"timestamp":"2026-09-14T00:00:00Z","type":"agent_message"}\n' \
+    >> "$sd/rollout-2026-09-14T00-00-s0-0.jsonl"
+  cd "$TEST_HOME/work" || return 1
+  _board_gen_cache_clear
+  board_state_refresh codex "$dir"
+  for ((i = 0; i < ${#scopes[@]}; i++)); do
+    cd "${scopes[i]}" || return 1
+    _board_gen_cache_clear
+    rows="$(board_recent codex "$dir" 10)"
+    [ "$(printf '%s\n' "$rows" | grep -c .)" -eq 2 ] \
+      || { echo "[${scopes[i]}] after rebuild got: $rows"; false; }
+    [ "$(printf '%s\n' "$rows" | grep -c "s$i-")" -eq 2 ] \
+      || { echo "[${scopes[i]}] after rebuild listed a sibling: $rows"; false; }
+  done
+}
+
 @test "board (round-8 P1-1): a cold build scans the whole WINDOW, nothing outside it, and does not fork per file" {
   # Round-7 P2-2 measured 35.6 s at 5,000 files against #62's "under 1 s
   # cold", and rounds 7-8 bought that back partly by scanning FEWER files
