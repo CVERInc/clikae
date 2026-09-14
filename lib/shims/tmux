@@ -275,13 +275,27 @@ for _d in $PATH; do
     # guard (or a test's fake `tmux`) sitting right after us be exec'd into
     # normally; it is not yet known to be part of a cycle.
     _real_tmux="$_d/tmux"
-  elif [ "$(head -c 2 "$_d/tmux" 2>/dev/null)" = '#!' ]; then
-    # A cycle was detected (see above): now avoid handing off to ANOTHER
-    # script, which is how we got back here in the first place. Remember it
-    # as a last resort only — see the fallback note below.
-    [ -z "$_fallback_tmux" ] && _fallback_tmux="$_d/tmux"
   else
-    _real_tmux="$_d/tmux"
+    # 🔴 A BUILTIN READ, NOT `head` (P2-3, clikae#97 review round 2). `head`
+    # is itself resolved through the very PATH this shim exists to distrust —
+    # measured: shim + one other guard + no coreutils anywhere on PATH (a
+    # bare-bones PATH is exactly the shape a hop ceiling exists to survive)
+    # made every `$(head -c 2 …)` here return empty, which reads as "not a
+    # script" no matter what the file actually is — so the ceiling below
+    # never sees a script to fall back to, and the two guards bounce forever
+    # (5040 measured). `read -n 2` is a shell builtin: no PATH lookup, no
+    # fork, and it doubles as the fix for P3 (a `cd`/`pwd -P`-per-candidate
+    # subshell already measured ~21ms added to every tmux call here).
+    _tg_sig=""
+    IFS= read -r -n 2 _tg_sig < "$_d/tmux" 2>/dev/null
+    if [ "$_tg_sig" = '#!' ]; then
+      # A cycle was detected (see above): now avoid handing off to ANOTHER
+      # script, which is how we got back here in the first place. Remember it
+      # as a last resort only — see the fallback note below.
+      [ -z "$_fallback_tmux" ] && _fallback_tmux="$_d/tmux"
+    else
+      _real_tmux="$_d/tmux"
+    fi
   fi
   IFS=:
 done
@@ -311,7 +325,12 @@ fi
 # by anything in the review this responds to. A destination that is itself a
 # script might still bounce back to us, so the count has to survive into it;
 # only a genuine binary is guaranteed not to call back into this chain.
-if [ "$(head -c 2 "$_real_tmux" 2>/dev/null)" != '#!' ]; then
+#
+# Builtin `read`, not `head` — same reasoning as the resolution loop above
+# (P2-3, clikae#97 review round 2): no PATH lookup, no fork.
+_tg_sig=""
+IFS= read -r -n 2 _tg_sig < "$_real_tmux" 2>/dev/null
+if [ "$_tg_sig" != '#!' ]; then
   unset _CLIKAE_TMUX_SHIM_HOPS
 fi
 exec "$_real_tmux" "$@"

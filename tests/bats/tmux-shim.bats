@@ -25,6 +25,7 @@
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
 
 load '../helpers'
+bats_require_minimum_version 1.5.0   # for `run -<expected-code>`
 
 SHIM() { printf '%s/lib/shims/tmux\n' "$CLIKAE_TEST_ROOT"; }
 
@@ -132,6 +133,43 @@ _src_tmux() {
   run env -u TMUX PATH="$shimdir:$shimdir:$PATH" timeout 15 "$(SHIM)" -V
   [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   [[ "$output" == tmux* ]] || { echo "expected a tmux version banner, got: $output"; false; }
+}
+
+# ── P2-3: the hop ceiling must not depend on `head` being resolvable
+# (review round 2). Measured: shim + one other self-skip guard + NO real
+# tmux + NO coreutils anywhere on PATH hung indefinitely (5040 bounces) —
+# `$(head -c 2 …)` silently returned empty with no `head` to run, which read
+# as "not a script", so the ceiling's own fallback path never triggered.
+
+@test "shim: the hop ceiling fires even with no coreutils (not even head) on PATH" {
+  local bash_bin; bash_bin="$(command -v bash)"
+  mkdir -p "$TEST_HOME/.guard2bin"
+  # A second, independent self-skip guard (same technique as
+  # tests/stubs/tmux-guard) with an ABSOLUTE shebang, so launching it needs no
+  # PATH lookup either — the whole point is a PATH with nothing resolvable on
+  # it but the shim and this file.
+  cat > "$TEST_HOME/.guard2bin/tmux" <<EOF
+#!$bash_bin
+_IFS_SAVE="\$IFS"; IFS=:
+for _d in \$PATH; do
+  IFS="\$_IFS_SAVE"
+  [ -n "\$_d" ] || continue
+  [ -x "\$_d/tmux" ] || continue
+  [ "\$_d/tmux" -ef "\$0" ] && continue
+  exec "\$_d/tmux" "\$@"
+done
+IFS="\$_IFS_SAVE"
+exit 127
+EOF
+  chmod +x "$TEST_HOME/.guard2bin/tmux"
+  # No coreutils anywhere on this PATH — not even head — and no real tmux to
+  # ever terminate the leapfrog. `timeout` bounds it so a regression reads as
+  # a failure (rc 124), not a hang, exactly like the round-1 self-skip test.
+  # Absolute path to `timeout` itself: `env PATH=... timeout` would resolve
+  # `timeout` through the very restricted PATH this test is building.
+  local timeout_bin; timeout_bin="$(command -v timeout)"
+  run -127 env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.guard2bin" "$timeout_bin" 10 "$(SHIM)" -V
+  [[ "$output" == *"gave up after"* ]] || { echo "expected the hop-ceiling message, got: $output"; false; }
 }
 
 @test "shim: an unknown/no-op verb is never touched, \$TMUX set or not" {
