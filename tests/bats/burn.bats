@@ -3443,14 +3443,27 @@ assert rows[0]["ahead"] == 1, rows
 # `_burn_lb_bounded`'s 5s per-call bound must catch this and let the whole
 # `clikae burn` process finish — this test's real assertion IS that `run`
 # below returns at all; the wall-clock check just makes "how bounded" concrete.
+# P3-3 (round-3 review): the assertion above was never backed by anything —
+# a regression that hangs `burn` itself hangs `run` right along with it, and
+# a bats test that never returns doesn't fail, it wedges the whole suite
+# (reproduced: 10+ minutes on real bash 3.2 before P2-1's own fix, in a
+# pre-push hook that would have looked exactly like a stuck terminal). An
+# external `timeout -s KILL` around the real binary — NOT around the
+# `clikae` bats helper function above, which `timeout` cannot see or signal
+# — gives this test its own hard ceiling independent of whatever the bound
+# under test does.
 @test "burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget" {
+  # Stock macOS ships neither `timeout` nor `gtimeout` (`_burn_timeout_bin`'s
+  # own comment) — this test's own safety net needs one regardless of what
+  # burn.sh falls back to, so skip rather than wedge the runner without it.
+  command -v timeout >/dev/null 2>&1 || skip "no \`timeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   rm -f "$STUB_LEFT_REPO/.git/HEAD"
   mkfifo "$STUB_LEFT_REPO/.git/HEAD"
   local t0 t1
   t0="$(date +%s)"
-  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  run timeout -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   t1="$(date +%s)"
   # Generous ceiling (5s bound + a few other fast calls + engine overhead) —
   # the point is "finishes", not "finishes in exactly N seconds".
