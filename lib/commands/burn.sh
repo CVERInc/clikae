@@ -478,15 +478,27 @@ _burn_size() {
 # Also sweeps `watch-github-*` run dirs (P3-3, 2026-09-13 fix-round-3
 # review): those had ONLY _wg_runs_rotate's 200-directory count cap, no
 # day-based retention — same directory, same shape, same policy belongs.
+#
+# <dry_run> (P3-2, 2026-09-14 fix-round-4 review): `clikae clean --dry-run`
+# skips the actual `rm -rf` (unchanged) but now names what it WOULD have
+# swept — round 3 wired this sweep into `clean` and left its own preview
+# silently incomplete ("the sweep itself has none"), the one command whose
+# whole point is a caller checking before the real run.
+# shellcheck disable=SC2120  # called with an arg from clean.sh, a separate
+# sourced file shellcheck's per-invocation call-site scan doesn't see.
 _burn_sweep_old_logs() {
-  local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  local dry_run="${1:-0}" base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
   case "$days" in ''|*[!0-9]*) return 0 ;; esac
   [ "$days" -gt 0 ] || return 0
   [ -d "$base" ] || return 0
-  local d
+  local d n=0
   while IFS= read -r -d '' d; do
-    rm -rf "$d" 2>/dev/null || true
+    n=$((n + 1))
+    [ "$dry_run" -eq 1 ] || rm -rf "$d" 2>/dev/null || true
   done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*' \) -mtime "+$days" -print0 2>/dev/null)
+  if [ "$dry_run" -eq 1 ] && [ "$n" -gt 0 ]; then
+    log_info "clean --dry-run: would also sweep $n old burn/watch-github log director$([ "$n" -eq 1 ] && printf y || printf ies) (older than ${days}d)."
+  fi
 }
 
 # Capture evidence beside the engine, before publishing completion. Consumers

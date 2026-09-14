@@ -446,6 +446,9 @@ PSSTUB
   run clikae clean --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]   # --dry-run: not yet
+  # P3-2 (2026-09-14 fix-round-4 review): the preview now NAMES this sweep
+  # instead of silently doing nothing about it.
+  [[ "$output" == *"would also sweep 1 old burn/watch-github log directory"* ]] || false
   run clikae clean
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]
