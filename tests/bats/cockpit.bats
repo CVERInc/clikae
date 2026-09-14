@@ -174,6 +174,67 @@ _guard_installed() {
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/mmm" ]
 }
 
+@test "state file mode 444 fails the state write, old cockpit stays armed, new guard is rolled back (#63 r4 P2-1)" {
+  # round-4 review: both guard writes (install B, remove A) already happen
+  # BEFORE the state write on f83bd9f -- so when the THIRD write (state)
+  # fails, both guards had already moved and nothing rolled them back. That
+  # left exactly the shape this feature exists to prevent: state names A,
+  # A has no guard, B does. Red on f83bd9f (state ends up "claude/aaa" but
+  # aaa's guard is gone); green after moving the state write up to right
+  # after B's install, with a rollback of B's guard on failure.
+  clikae init claude aaa
+  clikae init claude bbb
+  clikae cockpit claude aaa
+  _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  chmod 444 "$CLIKAE_HOME/state/cockpit"
+  run clikae cockpit claude bbb
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not record the new cockpit"* ]] || false
+  [[ "$output" == *"claude/aaa is still the cockpit"* ]] || false
+  # The OLD cockpit (aaa) must still be armed and still be what state names.
+  _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/aaa" ]
+  # The NEW tank's guard (installed before the failed state write) must have
+  # been rolled back -- not left behind as an unrecorded stray.
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+}
+
+@test "state file symlinked to a read-only target fails the state write the same way (#63 r4 P2-1)" {
+  # Second of the reviewer's two independent reproductions -- same shape,
+  # different trigger (the state PATH itself resolves through a symlink to
+  # a file this process cannot write, rather than the path being 444
+  # directly). Must fail exactly the same safe way.
+  clikae init claude aaa
+  clikae init claude bbb
+  clikae cockpit claude aaa
+  local target="$CLIKAE_HOME/state/cockpit-real"
+  cp "$CLIKAE_HOME/state/cockpit" "$target"
+  chmod 444 "$target"
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  ln -s "$target" "$CLIKAE_HOME/state/cockpit"
+  run clikae cockpit claude bbb
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not record the new cockpit"* ]] || false
+  [[ "$output" == *"claude/aaa is still the cockpit"* ]] || false
+  _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/aaa" ]
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+}
+
+@test "moving to a cockpit-less state (no prior cockpit) rolls back cleanly on a state-write failure (#63 r4 P2-1)" {
+  # Same failure, no old cockpit to preserve -- the "no cockpit is set"
+  # branch of the rollback message, and nothing left armed anywhere.
+  clikae init claude bbb
+  mkdir -p "$CLIKAE_HOME/state"
+  : > "$CLIKAE_HOME/state/cockpit"
+  chmod 444 "$CLIKAE_HOME/state/cockpit"
+  run clikae cockpit claude bbb
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not record the new cockpit"* ]] || false
+  [[ "$output" == *"no cockpit is set"* ]] || false
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+}
+
 @test "--off with nothing set is an idempotent no-op" {
   run clikae cockpit --off
   [ "$status" -eq 0 ]

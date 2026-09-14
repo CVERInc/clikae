@@ -243,12 +243,38 @@ _cockpit_move() {
   # returned above at :218. A failed install now leaves the old guard, the
   # old state, and the new tank all exactly as they were — a true no-op.
   _cockpit_hook_install "$engine" "$tank" || log_fail "cockpit: could not install the guard on $engine/$tank"
+
+  # #63 P2-1 (round-4 review): write the state HERE — right after the new
+  # tank's guard is armed, before the old tank is touched at all — not after
+  # both guard writes. The order above (install, then remove, then state)
+  # put the state write third: if it failed (state file mode 444, or
+  # symlinked to an unwritable path — the round-4 reproductions), both guard
+  # writes had already happened and nothing rolled them back. That left
+  # exactly the shape this whole feature exists to prevent — state still
+  # naming the OLD tank, the OLD tank's guard already removed, the NEW
+  # tank's guard installed and unrecorded — and both `clikae cockpit` (which
+  # only checks the named tank EXISTS, not that it's armed) and `clikae
+  # doctor` (no cockpit awareness at all before this round) stayed silent.
+  # Doing the write before the old guard is removed means a state-write
+  # failure can only ever leave the OLD cockpit intact; the one new failure
+  # mode it introduces — the new tank's guard now installed but unrecorded —
+  # is rolled back below rather than left as an unlisted stray.
+  if ! _cockpit_state_write "$engine" "$tank"; then
+    local rollback_msg="its guard was rolled back"
+    _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 \
+      || rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it"
+    if [ -n "$cur_engine" ]; then
+      log_fail "cockpit: could not record the new cockpit ($engine/$tank) — $rollback_msg; $cur_engine/$cur_tank is still the cockpit, unchanged"
+    else
+      log_fail "cockpit: could not record the new cockpit ($engine/$tank) — $rollback_msg; no cockpit is set, unchanged"
+    fi
+  fi
+
   if [ -n "$cur_engine" ] && profile_exists "$cur_engine" "$cur_tank"; then
     _cockpit_hook_remove "$cur_engine" "$cur_tank" || log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it."
   elif [ -n "$cur_engine" ]; then
     log_warn "cockpit: recorded cockpit $cur_engine/$cur_tank no longer exists; dropping the record."
   fi
-  _cockpit_state_write "$engine" "$tank"
 }
 
 # --off sweeps every tank (not just the one the state file names) so a state
