@@ -393,6 +393,76 @@ _seed_codex_agent_message_transcript() {
   [[ "$output" == *"Done: all green now."* ]] || false
 }
 
+_seed_codex_dual_shape_same_turn() {
+  # Round-3 review P2-2, shape B2: the SAME turn recorded in BOTH shapes,
+  # back to back -- the union rule (no dedup) printed every prompt/note
+  # TWICE on exactly this input; adjacent dedup must collapse each pair to
+  # one line without touching the OTHER turn's lines.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/14"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-14T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.500Z","type":"event_msg","payload":{"type":"user_message","message":"prompt one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.500Z","type":"event_msg","payload":{"type":"agent_message","message":"reply one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt two"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.500Z","type":"event_msg","payload":{"type":"user_message","message":"prompt two"}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply two"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.500Z","type":"event_msg","payload":{"type":"agent_message","message":"reply two"}}'
+  } > "$d/rollout-2026-09-14T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-3 review P2-2 (B2 shape): same turn recorded in both event_msg AND response_item prints each prompt/note ONCE, not twice" {
+  clikae init codex work7
+  local work="$TEST_HOME/work-codex-dualshape"; mkdir -p "$work"
+  _seed_codex_dual_shape_same_turn work7 "$work" "77777777-2222-2222-2222-222222222222"
+  cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work7/sessions/2026/09/14/rollout-2026-09-14T00-00-00-77777777-2222-2222-2222-222222222222.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'prompt one\nprompt two')" ]
+  run adapter_handoff_extract "$rollout" assistant
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'reply one\nreply two')" ]
+}
+
+_seed_codex_shape_switch_mid_file() {
+  # Round-3 review P2-2, shape B1: DIFFERENT turns, each recorded in only
+  # ONE shape (a file that switches shape mid-way, e.g. a version upgrade
+  # mid-session) -- adjacent dedup must not eat a turn just because the
+  # line before it happens to come from a DIFFERENT shape's rule.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/14"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-14T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"old prompt 1"}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"old reply 1"}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new prompt 2"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"new reply 2"}]}}'
+  } > "$d/rollout-2026-09-14T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-3 review P2-2 (B1 shape): a file that switches shape mid-way loses nothing (different turns, different shapes)" {
+  clikae init codex work8
+  local work="$TEST_HOME/work-codex-shapeswitch"; mkdir -p "$work"
+  _seed_codex_shape_switch_mid_file work8 "$work" "88888888-2222-2222-2222-222222222222"
+  cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work8/sessions/2026/09/14/rollout-2026-09-14T00-00-00-88888888-2222-2222-2222-222222222222.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'old prompt 1\nnew prompt 2')" ]
+  run adapter_handoff_extract "$rollout" assistant
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'old reply 1\nnew reply 2')" ]
+}
+
 @test "#33 round-2 review P3-3: a non-text content part's own \"text\" key doesn't leak into the digest" {
   clikae init codex work4
   local work="$TEST_HOME/work-codex-reasoning"; mkdir -p "$work"

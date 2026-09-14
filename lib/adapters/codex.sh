@@ -350,7 +350,7 @@ adapter_handoff_extract() {
       role_re = "\"role\": *\"" role "\""
       part_keyre = "\"type\": *\"" part_type "\", *\"text\": *\""
       kinds_re = "\"content_item_kinds\": *\\[[^]]*\\]"
-      scanned = 0; matched = 0
+      scanned = 0; matched = 0; have_prev = 0; prev = ""
     }
     $0 ~ event_re {
       scanned++
@@ -359,7 +359,9 @@ adapter_handoff_extract() {
         rest = substr(rest, RSTART + RLENGTH)
         if (match(rest, /^([^"\\]|\\.)*/)) {
           seg = substr(rest, 1, RLENGTH)
-          if (seg != "") { print seg; matched++ }
+          if (seg != "" && (!have_prev || seg != prev)) {
+            print seg; matched++; prev = seg; have_prev = 1
+          }
         }
       }
       next
@@ -398,7 +400,20 @@ adapter_handoff_extract() {
         if (seg ~ /^<[a-z_ ]+>/ || seg ~ /^# AGENTS\.md instructions/) continue
         res = (res == "" ? seg : res " " seg)
       }
-      if (res != "") { print res; matched++ }
+      # round-3 review P2-2: the event_msg and response_item rules above are
+      # a UNION with no dedup, so a turn recorded in both shapes (a prior
+      # report called this a "fallback", but the code is an unconditional
+      # union) printed every prompt/note twice. Adjacent dedup (compare
+      # only to the immediately PRECEDING printed line, shared across both
+      # rules via one `prev`) fixes shape B2 (same turn, both shapes, back
+      # to back) and leaves shape B1 (different turns, each in its own
+      # shape) alone; the one-sentence trade-off: two turns with
+      # byte-identical text that really ARE consecutive (the user typing
+      # "continue" twice in a row) collapse into one line too — accepted,
+      # since a handoff brief cares about what was said, not how many times.
+      if (res != "" && (!have_prev || res != prev)) {
+        print res; matched++; prev = res; have_prev = 1
+      }
     }
     END {
       if (scanned > 0 && matched == 0) {
