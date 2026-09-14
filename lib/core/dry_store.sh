@@ -104,7 +104,13 @@ dry_store_peekv() {
   _DRY_PEEK=none; _DRY_PEEK_RESET=""
   f="$CLIKAE_HOME/dry/$engine/$tank"   # dry_store_path's own body, inlined — see above
   [ -f "$f" ] || return 1
-  IFS= read -r line < "$f" 2>/dev/null || return 1
+  # P3-2 (2026-09-14 round-2 review): `read` returns non-zero on a last line
+  # with no trailing newline even though it filled `line`, and this used to
+  # `return 1` on that — a marker written without `\n` was not counted at all.
+  # Same fix tmux.sh's two status.json/usage readers got in round 1: keep what
+  # was read, fail only when nothing was.
+  line=""
+  IFS= read -r line < "$f" 2>/dev/null || [ -n "$line" ] || return 1
   stamp="${line%%$'\t'*}"
   _DRY_PEEK_RESET="${line#*$'\t'}"
   [ "$_DRY_PEEK_RESET" = "$line" ] && _DRY_PEEK_RESET=""   # no TAB in the line → no phrase
@@ -165,7 +171,8 @@ dry_store_clear() {
 dry_store_epoch() {
   local f line stamp; f="$(dry_store_path "$1" "$2")"
   [ -f "$f" ] || return 1
-  IFS= read -r line < "$f" 2>/dev/null || return 1
+  line=""
+  IFS= read -r line < "$f" 2>/dev/null || [ -n "$line" ] || return 1   # P3-2: a last line with no `\n` still counts
   stamp="${line%%$'\t'*}"
   case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$stamp"

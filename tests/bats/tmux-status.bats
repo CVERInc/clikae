@@ -391,6 +391,26 @@ _dead_pid() { printf '2147483647'; }
   [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "padded: rc=$status $output"; false; }
 }
 
+# P3-2 (2026-09-14 round-2 review): dry_store_peekv kept `read ... || return 1`
+# after round 1 fixed the same shape in tmux.sh — a marker with no trailing
+# newline returned 1 and was silently not counted (the under-report direction).
+@test "alerts: a dry marker with no trailing newline still counts, with its phrase" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  printf '%s\tresets 3pm' "$(date +%s)" > "$CLIKAE_HOME/dry/codex/goby"
+  dry_store_peekv codex goby "$(date +%s)" || { echo "peek rc=1 on a marker with no newline"; false; }
+  [ "$_DRY_PEEK" = fresh ] || { echo "peek=$_DRY_PEEK"; false; }
+  [ "$_DRY_PEEK_RESET" = "resets 3pm" ] || { echo "phrase=[$_DRY_PEEK_RESET]"; false; }
+  run dry_store_epoch codex goby
+  [ "$status" -eq 0 ] && [ -n "$output" ] || { echo "epoch: rc=$status [$output]"; false; }
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
+  # An empty file is still no marker.
+  : > "$CLIKAE_HOME/dry/codex/goby"
+  run dry_store_peekv codex goby "$(date +%s)"
+  [ "$status" -eq 1 ] || { echo "empty file: rc=$status"; false; }
+}
+
 @test "alerts: they add up across both sources" {
   _src
   _dry_marker codex goby
