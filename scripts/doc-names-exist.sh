@@ -54,7 +54,11 @@ $(list_src)
 SRCLIST
 # A copy of the tree that happens to sit inside some OTHER repo answers
 # `is-inside-work-tree` yes and `ls-files` nothing. Fall back rather than die.
-if [ "${#SRC[@]:-0}" -eq 0 ]; then
+# P3-6 (round-2 review of #102): `${#SRC[@]:-0}` is a bad substitution on
+# bash 4+/5 (bash 3.2 happens to accept it), so on bash 5 this fallback and the
+# "no source/docs found" guard below never ran. `${#arr[@]}` is already safe
+# under `set -u` on an empty array, 3.2 included.
+if [ "${#SRC[@]}" -eq 0 ]; then
   list_src() { find lib bin -type f ! -name '*.bak' ! -name '*.orig' \
     ! -name '*.rej' ! -name '*~' 2>/dev/null | sort; }
   list_doc() { { find docs -name '*.md' ! -name '*.bak' ! -path 'docs/proposals/*' 2>/dev/null | sort
@@ -66,7 +70,7 @@ fi
 while IFS= read -r f; do [ -n "$f" ] && DOCS+=("$f"); done <<DOCLIST
 $(list_doc)
 DOCLIST
-[ "${#SRC[@]:-0}" -gt 0 ] && [ "${#DOCS[@]:-0}" -gt 0 ] || { echo "no source/docs found" >&2; exit 1; }
+[ "${#SRC[@]}" -gt 0 ] && [ "${#DOCS[@]}" -gt 0 ] || { echo "no source/docs found" >&2; exit 1; }
 # The subsets each check needs, filtered from the same tracked list.
 CMDS=(); CORE=()
 for f in "${SRC[@]}"; do
