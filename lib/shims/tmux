@@ -61,16 +61,6 @@ set -u
 
 if [ -n "${TMUX:-}" ]; then
   _sock="${TMUX%%,*}"
-  _has_sock=0
-  _has_target=0
-  _has_a=0
-  for _a in "$@"; do
-    case "$_a" in
-      -S|-S*|-L|-L*) _has_sock=1 ;;
-      -t|-t*)        _has_target=1 ;;
-      -a)            _has_a=1 ;;
-    esac
-  done
 
   # Verb resolution (P2-1, clikae#97 review round 1): the literal-string
   # check this replaced only ever matched argv[1] read verbatim, and tmux
@@ -88,69 +78,115 @@ if [ -n "${TMUX:-}" ]; then
   # Measured bypasses under the old check (review out-16-bypass.txt), each
   # one a real disposable server actually killed: `kill-serv`, `kill-ses`,
   # `-f /dev/null kill-server`, `list-sessions \; kill-server`.
+  #
+  # 🔴 PER-SEGMENT, NOT PER-ARGV (P2-2, clikae#97 review round 2). `-S`/`-L`/
+  # `-t`/`-a` used to be scanned once over the WHOLE argv, before the verb
+  # loop even ran — so `capture-pane -S -3 -p \; kill-server` let capture-
+  # pane's OWN `-S` (a start line, nothing to do with a socket) satisfy
+  # kill-server's socket check three commands later, and `list-panes -t x \;
+  # kill-session` did the same for `-t`. Both measured as a real disposable
+  # server killed. `-S`/`-L`/`-t`/`-a` are now read as belonging to whichever
+  # SEGMENT they physically sit in — `_has_sock` only while still in the
+  # global phase (the one place tmux itself accepts -S/-L), `_seg_has_target`
+  # / `_seg_has_a` only for the CURRENT segment's own verb, reset at every
+  # `;` boundary.
+  #
+  # 🔴 A GLUED `;` ENDS A SEGMENT TOO. `tmux ls\; kill-server`, typed with no
+  # space before the backslash, reaches the shell as ONE argv token: `ls;`.
+  # tmux's own parser still treats that trailing `;` as ending the command —
+  # the review's own words for it: "the glued-together spelling is the one a
+  # human actually types" — but the old `[ "$_a" = ";" ]` check only matched
+  # a semicolon that was ITS OWN token. `"$@" ";"` below appends one final,
+  # synthetic, always-standalone `;` so the LAST segment closes the same way
+  # every earlier one does — no separate close-out pass needed after the loop.
   _global_phase=1
   _skip_next=0
+  _has_sock=0
   _seg_verb=""
-  for _a in "$@"; do
+  _seg_has_target=0
+  _seg_has_a=0
+  for _a in "$@" ";"; do
     if [ "$_skip_next" -eq 1 ]; then
       _skip_next=0
       continue
     fi
-    if [ "$_a" = ";" ]; then
-      # A `\;` command list: everything after this starts a NEW command, and
-      # only the very first command in the whole invocation can carry global
-      # options ahead of its verb.
+
+    _tok="$_a"
+    _seg_end=0
+    case "$_tok" in
+      ";") _seg_end=1; _tok="" ;;
+      *\;) _tok="${_tok%;}"; _seg_end=1 ;;
+    esac
+
+    if [ -n "$_tok" ]; then
+      if [ -n "$_seg_verb" ]; then
+        # This segment's verb is already known — everything else here is
+        # that command's own flags/args. Only -t/-a matter to the refusal.
+        case "$_tok" in
+          -t|-t*) _seg_has_target=1 ;;
+          -a)     _seg_has_a=1 ;;
+        esac
+      elif [ "$_global_phase" -eq 1 ]; then
+        case "$_tok" in
+          # Global options that take a value (man tmux: -c, -f, -L, -S, -T) —
+          # meaningful only ahead of the first command, which is the only
+          # place tmux itself accepts them. -S/-L specifically name a socket.
+          -c|-f|-T)     _skip_next=1 ;;
+          -c*|-f*|-T*)  : ;;
+          -S|-L)        _has_sock=1; _skip_next=1 ;;
+          -S*|-L*)      _has_sock=1 ;;
+          # Global options that take no value (-2 -C -D -l -N -u -V -v), or
+          # anything else dash-prefixed sitting where a global option could
+          # be.
+          -*)           : ;;
+          *)            _seg_verb="$_tok" ;;
+        esac
+      else
+        _seg_verb="$_tok"
+      fi
+    fi
+
+    if [ "$_seg_end" -eq 1 ]; then
+      # An unambiguous prefix of either destructive verb is treated exactly
+      # like the verb itself. ≥6 chars: short enough to catch real
+      # abbreviations (tmux's own minimum for these two is 8, where
+      # "kill-ser" vs "kill-ses" first diverge), long enough that nothing
+      # this short is ever a prefix of some OTHER, harmless tmux command —
+      # `case` below only matches when it truly is a literal prefix of the
+      # 11/12-char verb, so a too-low floor could only make this MORE
+      # cautious, never less.
+      if [ -n "$_seg_verb" ] && [ "${#_seg_verb}" -ge 6 ]; then
+        # shellcheck disable=SC2194  # subject is deliberately the literal
+        # verb: this checks whether $_seg_verb is a PREFIX of it, not the
+        # reverse.
+        case kill-server in
+          "$_seg_verb"*)
+            if [ "$_has_sock" -eq 0 ]; then
+              printf 'tmux-guard: refusing `tmux %s` — $TMUX names a socket (%s) and this would kill its whole server. Name yours: tmux -S <path> kill-server\n' "$_seg_verb" "$_sock" >&2
+              exit 86
+            fi
+            ;;
+        esac
+        # shellcheck disable=SC2194  # same reason as the kill-server case above.
+        case kill-session in
+          "$_seg_verb"*)
+            if [ "$_seg_has_target" -eq 0 ]; then
+              if [ "$_seg_has_a" -eq 1 ]; then
+                printf 'tmux-guard: refusing `tmux %s` — with no -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+              else
+                printf 'tmux-guard: refusing `tmux %s` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+              fi
+              exit 86
+            fi
+            ;;
+        esac
+      fi
+      # Only the FIRST segment in the whole invocation can carry global
+      # options ahead of its verb — every later one gets its own verb first.
       _global_phase=0
       _seg_verb=""
-      continue
-    fi
-    # Once this segment's verb is known, later tokens in it (its own flags
-    # and arguments) are none of this loop's business.
-    [ -n "$_seg_verb" ] && continue
-    if [ "$_global_phase" -eq 1 ]; then
-      case "$_a" in
-        # Global options that take a value (man tmux: -c, -f, -L, -S, -T) —
-        # meaningful only ahead of the first command, which is the only place
-        # tmux itself accepts them.
-        -c|-f|-L|-S|-T) _skip_next=1; continue ;;
-        -c*|-f*|-L*|-S*|-T*) continue ;;
-        # Global options that take no value (-2 -C -D -l -N -u -V -v), or
-        # anything else dash-prefixed sitting where a global option could be.
-        -*) continue ;;
-      esac
-    fi
-    _seg_verb="$_a"
-    # An unambiguous prefix of either destructive verb is treated exactly
-    # like the verb itself. ≥6 chars: short enough to catch real
-    # abbreviations (tmux's own minimum for these two is 8, where "kill-ser"
-    # vs "kill-ses" first diverge), long enough that nothing this short is
-    # ever a prefix of some OTHER, harmless tmux command — `case` below only
-    # matches when it truly is a literal prefix of the 11/12-char verb, so a
-    # too-low floor could only make this MORE cautious, never less.
-    if [ "${#_seg_verb}" -ge 6 ]; then
-      # shellcheck disable=SC2194  # subject is deliberately the literal verb:
-      # this checks whether $_seg_verb is a PREFIX of it, not the reverse.
-      case kill-server in
-        "$_seg_verb"*)
-          if [ "$_has_sock" -eq 0 ]; then
-            printf 'tmux-guard: refusing `tmux %s` — $TMUX names a socket (%s) and this would kill its whole server. Name yours: tmux -S <path> kill-server\n' "$_seg_verb" "$_sock" >&2
-            exit 86
-          fi
-          ;;
-      esac
-      # shellcheck disable=SC2194  # same reason as the kill-server case above.
-      case kill-session in
-        "$_seg_verb"*)
-          if [ "$_has_target" -eq 0 ]; then
-            if [ "$_has_a" -eq 1 ]; then
-              printf 'tmux-guard: refusing `tmux %s` — with no -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
-            else
-              printf 'tmux-guard: refusing `tmux %s` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
-            fi
-            exit 86
-          fi
-          ;;
-      esac
+      _seg_has_target=0
+      _seg_has_a=0
     fi
   done
 fi

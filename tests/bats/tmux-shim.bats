@@ -330,6 +330,49 @@ EOF
   tmux -S "$sock" kill-server 2>/dev/null || true
 }
 
+# ── P2-2: the option scan is per-SEGMENT, not per-argv (review round 2) ────
+# Each row measured as a real bypass — a disposable server actually killed —
+# under the old check, which scanned -S/-L/-t/-a once over the whole argv
+# before the verb loop ran at all.
+
+@test 'shim: a `;` glued onto the previous word (ls\; kill-server, no space) still ends the segment' {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-glued.sock"
+  tmux -S "$sock" new-session -d -s bypassglued 'sleep 60'
+  # No space before the backslash: the shell hands the shim ONE token, "ls;".
+  run env TMUX="$sock,1,0" bash "$(SHIM)" ls\; kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypassglued" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test "shim: another command's -S (capture-pane -S <line>) does not satisfy kill-server's socket check" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-capS.sock"
+  tmux -S "$sock" new-session -d -s bypasscaps 'sleep 60'
+  # capture-pane's `-S -3` is a start LINE, not a socket — it belongs to a
+  # DIFFERENT segment than kill-server and must not satisfy its guard.
+  run env TMUX="$sock,1,0" bash "$(SHIM)" capture-pane -S -3 -p \; kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypasscaps" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
+@test "shim: another command's -t (list-panes -t x) does not satisfy kill-session's target check" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-listt.sock"
+  tmux -S "$sock" new-session -d -s bypasslistt 'sleep 60'
+  # list-panes' `-t x` names ITS target, not kill-session's — a DIFFERENT
+  # segment's -t must not satisfy kill-session's guard.
+  run env TMUX="$sock,1,0" bash "$(SHIM)" list-panes -t x \; kill-session
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypasslistt" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
 @test "shim: kill-session -t =<name> is still allowed (naming the target is the whole ask)" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   local sock="$TEST_HOME/allowed-eqtarget.sock"
