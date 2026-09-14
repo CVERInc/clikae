@@ -886,7 +886,17 @@ _agy_burn() {
       case " ${agy_tried[*]} " in *" $_agy_cand "*) continue ;; esac
       # #63 round-5 P2-1: the same launch gate cmd_burn asks, applied to agy's
       # own walk — the cockpit is skipped, never launched.
-      if ! _burn_cockpit_gate agy "$_agy_cand" "${force_cockpit:-0}"; then
+      # #63 round-6 P3-1: `_agy_burn`'s automatic walk (picking the NEXT
+      # tank after a dry one) always passed force_cockpit through, so
+      # `burn agy default --force-cockpit` — a flag the operator gave for
+      # the NAMED target — also let the WALK land on the cockpit, exactly
+      # what the help text (`--force-cockpit … Auto-reroute never picks the
+      # cockpit, with or without this flag`) and fix5's own report both
+      # promised would never happen. Pass 0 here, unconditionally: the walk
+      # is automatic, never named by the operator, so nothing it picks is
+      # ever "forced" onto the cockpit — same rule _burn_next_same_engine
+      # already follows for claude/codex's own auto-reroute.
+      if ! _burn_cockpit_gate agy "$_agy_cand" 0; then
         log_warn "skipping agy/$_agy_cand — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
         continue
       fi

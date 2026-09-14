@@ -276,6 +276,30 @@ STUB
   [[ "$output" == *"Done on agy/work"* ]] || false
 }
 
+# #63 round-6 P3-1 (G5b, r6 review): the automatic dry-walk hop used to pass
+# --force-cockpit straight through to the gate it asks for the NEXT tank,
+# even though the operator only named it for the STARTING target — so
+# `burn agy default --force-cockpit`, with default dry and work the
+# recorded cockpit, actually launched on agy/work. Help (burn.sh:101-102)
+# and fix5's own report both promise auto-reroute never picks the cockpit,
+# with or without this flag; this closes the one path where it did.
+@test "burn agy: an automatic dry-walk hop still SKIPS the cockpit even with --force-cockpit (#63 r6 P3-1, G5b)" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1   # default(active) + work
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"   # default is dry -> walk would hop to work
+  mkdir -p "$CLIKAE_HOME/state"; printf 'antigravity/work\n' > "$CLIKAE_HOME/state/cockpit"   # work is the cockpit
+
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --prompt "do the thing" --force-cockpit
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"skipping agy/work"* ]] || false
+  [[ "$output" == *"it is the cockpit"* ]] || false
+  [[ "$output" != *"Done on agy/work"* ]] || false
+  [ ! -f "$A" ]
+}
+
 @test "burn requires --artifact" {
   run clikae burn codex T1 -- run x
   [ "$status" -ne 0 ]
