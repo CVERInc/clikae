@@ -381,3 +381,68 @@ EOF
   [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   [[ "$output" == *"AFTER-GUARD-CHECK"* ]] || { echo "aborted before completing: $output"; false; }
 }
+
+# --- "could not read" is not "no guard" (P3-4, review round 3) -----------------
+# Three ways doctor can fail to look at a session's pane process at all. Each
+# one used to print "not first on PATH" plus "restart the tank" about a
+# session nobody had actually read. The case table stubs only what it has to
+# (the session listing, and `tmux list-panes` where the case needs a pid), so
+# the real `_doctor_pane_path` runs on every platform, tmux installed or not.
+
+_tg_unknown_case() { # _tg_unknown_case <case> -> writes and runs a set -eo pipefail probe
+  local case="$1" stub
+  case "$case" in
+    # B: list-panes hands back a pid that has already exited.
+    pid-gone)       stub="tmux() { case \"\$1\" in list-panes) echo 999999999 ;; *) return 1 ;; esac; }" ;;
+    # C: the session is listed, but list-panes fails (it ended in between).
+    list-panes-fails) stub="tmux() { return 1; }" ;;
+    # D: a pid whose environment this user cannot read (pid 1, non-root).
+    environ-unreadable) stub="tmux() { case \"\$1\" in list-panes) echo 1 ;; *) return 1 ;; esac; }" ;;
+  esac
+  cat > "$TEST_HOME/unknown-$case.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+$stub
+live_session_names() { printf 'clikae-codex-unknown97\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/unknown-$case.sh"
+}
+
+@test "doctor reports 'could not verify', never 'not first on PATH' / 'restart the tank', when it cannot read the pane" {
+  local bad="" c
+  for c in pid-gone list-panes-fails environ-unreadable; do
+    if [ "$c" = environ-unreadable ] && [ -r /proc/1/environ ]; then
+      # Premise does not hold here (running as root): pid 1 is readable.
+      continue
+    fi
+    _tg_unknown_case "$c"
+    { [ "$status" -eq 0 ] \
+      && [[ "$output" == *"AFTER-GUARD-CHECK"* ]] \
+      && [[ "$output" == *"could not verify: clikae-codex-unknown97"* ]] \
+      && [[ "$output" != *"not first on PATH"* ]] \
+      && [[ "$output" != *"restart the tank"* ]]; } || bad="$bad
+--- case $c (status=$status):
+$output"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "_doctor_pane_path returns nonzero, not an empty PATH, when it cannot read the process" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_path 999999999
+  [ "$status" -ne 0 ] || { echo "status=$status output='$output'"; false; }
+  # macOS branch: `ps` failing with no output (a locked-down host).
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  printf '#!/bin/sh\nexit 1\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/uname" "$TEST_HOME/.osbin/ps"
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
+  [ "$status" -ne 0 ] || { echo "Darwin branch: status=$status output='$output'"; false; }
+}

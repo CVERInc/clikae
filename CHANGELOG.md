@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a copy frozen into a tmux server no longer makes every `new-window`,
   split or wake pane on it skip the next tmux wrapper — host guard
   included — on its first call.
+  `clikae doctor` no longer reports a session it could not read (pane
+  already gone, `list-panes` failing, environment unreadable) as "not
+  first on PATH" with advice to restart the tank; it prints "unknown,
+  could not verify" for those instead.
 
 ## [0.29.0] — 2026-09-11
 
