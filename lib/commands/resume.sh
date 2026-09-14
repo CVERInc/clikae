@@ -137,14 +137,23 @@ EOF
 # so a prefix works for every engine the picker can show, by construction,
 # including codex's dash-suffixed rollout names.
 _resume_prefix_candidates() {
-  local prefix="$1" mt f seen=""
+  local prefix="$1" mt f seen="" prefix_l
   [ -n "$prefix" ] || return 0
+  # P3-5 (2026-09-14 round-1 fix review): session ids are always lowercase
+  # hex/UUID, so an uppercase-typed prefix (the status row itself only ever
+  # prints lowercase, but a human copying an id from somewhere else — a UUID
+  # generator, an editor's find/replace — will not always match case) used to
+  # match nothing and read as "no such session" instead of resolving. One
+  # fork (`tr`), once per `clikae resume` invocation — this is not the 5-
+  # second tmux hot path burn_status.sh/dry_store.sh are, so the usual
+  # fork-free discipline does not apply here.
+  prefix_l="$(printf '%s' "$prefix" | tr '[:upper:]' '[:lower:]')"
   while read -r mt f; do
     [ -n "$f" ] || continue
     : "$mt"
     _resume_session_fields "$f"
     [ -n "$_rs_sid" ] || continue
-    case "$_rs_sid" in "$prefix"*) ;; *) continue ;; esac
+    case "$_rs_sid" in "$prefix_l"*) ;; *) continue ;; esac
     # bash 3.2 has no associative arrays; a delimited string is the seen-set,
     # and it is built without a single fork (this loop runs once per transcript
     # on the machine). The `|` delimiters are load-bearing: without them `abc`
@@ -878,10 +887,21 @@ cmd_resume() {
       # said it yet. Every candidate is printed in full so one of them can be
       # copied straight back onto the command line.
       log_err "'$sid' matches $cn sessions — say which:"
-      local c_sid c_engine c_tank
+      # P3-4 (2026-09-14 round-1 fix review): an uncapped list scrolls the
+      # "matches N sessions" header itself off screen on a real session store
+      # (12 candidates already did it) — the one line that says what the
+      # operator needs to do next is the first thing lost. Ten is enough to
+      # scan on an 80-column terminal without the header scrolling away, and
+      # the remainder is a count, not silence.
+      local c_sid c_engine c_tank shown=0
       while IFS=$'\t' read -r c_sid c_engine c_tank; do
         [ -n "$c_sid" ] || continue
+        if [ "$shown" -ge 10 ]; then
+          log_dim "  … and $((cn - shown)) more"
+          break
+        fi
         log_dim "  clikae resume $c_sid    ($c_engine/$c_tank)"
+        shown=$((shown + 1))
       done <<EOF
 $cands
 EOF
