@@ -90,17 +90,20 @@ stay green while the code is wrong. We close that gap two ways:
    ```
 
 3. **The same exemption applies to a bare `! cmd`** — a command prefixed with
-   `!` never triggers `set -e` on its own, in ANY position, not just mid-body
-   (round-1 review of PR #87/#84, P3-1: this convention only documented
-   `[[ … ]]` until then, and a bare `! cmd` assertion sitting anywhere but the
-   test's last statement was a silent no-op — found once already fixed
-   elsewhere in the same PR, then found AGAIN one test over, unfixed). Same
-   fix, same shape:
+   `!` never triggers `set -e` on its own (round-1 review of PR #87/#84,
+   P3-1: this convention only documented `[[ … ]]` until then, and a bare
+   `! cmd` assertion sitting mid-body was a silent no-op — found once already
+   fixed elsewhere in the same PR, then found AGAIN one test over, unfixed).
+   Unlike `[[ … ]]`, though, this only matters **mid-body**: bats itself
+   fails a test on its last command's exit status regardless of `set -e`
+   (round-4 review: `@test { ! true; }` alone *does* fail — verified against
+   bats 1.10.0), so a bare `! cmd` as the test's own last statement needs no
+   `|| false`. Mid-body it still does:
 
    ```bash
-   ! grep -q "some text" <<<"$output" || false    # ✅ fails the test if found
-   ! grep -q "some text" <<<"$output"               # ❌ silently ignored, ALWAYS —
-                                                     #    even as the last statement
+   ! grep -q "some text" <<<"$output" || false    # ✅ fails the test if found, mid-body
+   ! grep -q "some text" <<<"$output"               # ❌ silently ignored — but only
+                                                     #    when NOT the last statement
    ```
 
 **When you add a `[[ … ]]` or `! cmd` assertion, append `|| false`.** Plain
