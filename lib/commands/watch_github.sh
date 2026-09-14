@@ -1022,14 +1022,17 @@ _wg_status_write() {
 _wg_runs_rotate() {
   local org="$1" base="$HOME/.clikae/logs" d keep=200 i=0
   [ -d "$base" ] || return 0
+  # Only run directories, i.e. ones holding status.json (fix-round-7 P2-3):
+  # for org foo the glob below also matches the DURABLE log dir of org
+  # foo-bar, which has none and the oldest mtime of all, so it would be
+  # the first one rotated out. (Kept out of the process substitution
+  # below: bash 3.2 re-parses that body at run time and chokes on an
+  # apostrophe inside a comment there, though `bash -n` passes.)
   while IFS= read -r d; do
     i=$((i + 1))
     if [ "$i" -gt "$keep" ]; then rm -rf "$d" 2>/dev/null; fi
   done < <(
     for d in "$base/watch-github-$org-"*; do
-      # Only run directories (fix-round-7 P2-3): for org `foo`, this glob
-      # also matches org `foo-bar`'s DURABLE log dir, which has no
-      # status.json and the oldest mtime of all — first to be rotated out.
       [ -f "$d/status.json" ] || continue
       printf '%s\t%s\n' "$(file_mtime "$d" 2>/dev/null || echo 0)" "$d"
     done | sort -rn | cut -f2-
