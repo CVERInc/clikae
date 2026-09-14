@@ -2,14 +2,16 @@
 # lib/commands/init.sh — `clikae init <engine> <tank> [--alias]`
 
 cmd_init() {
-  local with_alias=0 cli="" profile="" no_template=0
+  local with_alias=0 cli="" profile="" no_template=0 adopt=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --alias) with_alias=1; shift ;;
       --no-template) no_template=1; shift ;;
+      --adopt) adopt=1; shift ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae init <engine> <tank> [--alias] [--no-template]
+       clikae init <engine> <tank> --adopt
 
 Create a new tank (account/config) for an engine.
 
@@ -22,9 +24,18 @@ Options:
                    <engine>-<tank>   (e.g. claude-work)
   --no-template  Skip applying the permissions template to a new claude tank.
                  Same effect as CLIKAE_NO_PERMISSIONS_TEMPLATE=1.
+  --adopt        Mark an EXISTING directory a tank instead of creating one.
+                 Refuses unless the directory already looks like a <engine>
+                 tank (has that engine's own config file) — the one-time
+                 adoption sweep (#61) only ever runs once per store; this is
+                 the way back for a directory that landed there afterward (a
+                 restored backup, a stray you've since confirmed is real).
+                 Does not touch the directory's content, and is a harmless
+                 no-op if it's already a tank.
 
 Example:
   clikae init claude work --alias       # then:  clikae claude work
+  clikae init claude restored --adopt   # mark an existing dir a tank
 EOF
         return 0
         ;;
@@ -44,6 +55,35 @@ EOF
   [ -n "$profile" ] || log_fail "Missing <tank>. See: clikae init --help"
   validate_name cli "$cli"
   validate_name profile "$profile"
+
+  # #61 round-3 P2-1: --adopt marks an EXISTING directory a tank instead of
+  # creating a new one. Refuses unless the directory already looks like the
+  # named engine's own content (the same read-only fingerprint signal
+  # `doctor` already uses to explain a stray directory) — least-new-surface:
+  # no new flag shape, reuses profile_dir/tank_dir_is_tank/
+  # _tank_fingerprint_match exactly as adoption and doctor already do.
+  if [ "$adopt" -eq 1 ]; then
+    if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
+      log_fail "clikae init --adopt does not apply to agy — it has no marker-based tanks (see: clikae agy --help)."
+    fi
+    load_adapter "$cli"
+    local d
+    d="$(profile_dir "$cli" "$profile")"
+    if [ ! -d "$d" ]; then
+      log_fail "No such directory: $cli/$profile  ($d) — nothing to adopt. Use \`clikae init $cli $profile\` to create a new tank instead."
+    fi
+    if tank_dir_is_tank "$cli" "$d"; then
+      log_pass "Already a tank: $cli/$profile  ($d) — nothing to do."
+      return 0
+    fi
+    if ! _tank_fingerprint_match "$cli" "$d" 2>/dev/null; then
+      log_fail "Refusing to adopt $cli/$profile  ($d) — it doesn't look like a $cli tank (no $cli-shaped content found). If you're certain, add the marker yourself: printf '%s\n' $cli > \"$d/.clikae-tank\""
+    fi
+    tank_marker_write "$cli" "$d"
+    profiles_cache_reset 2>/dev/null || true
+    log_done "Adopted existing directory as tank: $cli/$profile  ($d)"
+    return 0
+  fi
 
   # agy is opt-in symlink-swap, not an env adapter — it has no lib/adapters file,
   # so handle it before load_adapter (which would fail). See docs/grammar.md §6.

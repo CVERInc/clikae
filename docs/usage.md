@@ -123,6 +123,7 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 | Command | What it does |
 |---|---|
 | `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. |
+| `init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; `clikae doctor` names any candidate. |
 | `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
 | `migrate [<engine>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
@@ -149,7 +150,12 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > directory that shows up later with no marker is not a tank. If that flag
 > can't be written (a read-only or shared store), clikae keeps recognising
 > your tanks in memory on every run and says so once; `clikae doctor` names
-> the state and `clikae doctor --adopt` retries the write.
+> the state and `clikae doctor --adopt` retries the write. **A directory that
+> shows up AFTER the sweep closes** — a restored backup, one you've since
+> confirmed is real — has no automatic way back through `init` (it refuses
+> any existing directory): use `clikae init <engine> <tank> --adopt` instead,
+> which marks it a tank without touching its content, and refuses unless it
+> already looks like that engine's own content.
 
 ### Keep burning when a tank runs dry
 

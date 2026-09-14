@@ -291,7 +291,16 @@ EOF
     # #61 round-2 P3: an actionable next step, not just a name — clikae never
     # re-adopts after the one-time sweep, and `init` refuses an existing
     # directory, so there is genuinely no automatic way back for these.
-    log_dim "    Next: move any content you want to keep, then \`clikae init <engine> <name>\` to make it a real tank."
+    # #61 round-3 P2-1: this used to name `clikae init <engine> <name>`,
+    # which ALWAYS fails here — `init` refuses any existing directory,
+    # marker or not — leaving no automatic way back, contradicted by the
+    # `(has … content)` line right above it inviting exactly that read.
+    # `init --adopt` is a real command: it refuses unless the directory
+    # looks like that engine's own content (the same signal this row's
+    # "(has $cli-shaped content)" suffix reports), so it's safe to name
+    # unconditionally — a directory with no recognisable content gets a
+    # true refusal instead of a false promise.
+    log_dim "    Next: if this looks like real <engine> content, \`clikae init <engine> <name> --adopt\` marks it a tank without touching it (refuses anything that doesn't look like <engine>). Otherwise move what you want to keep, then \`clikae init <engine> <name>\` to start fresh."
     echo ""
   fi
   return 0

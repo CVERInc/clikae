@@ -171,3 +171,58 @@ load '../helpers'
   [[ "$out_content" == *"Created tank: claude/b"* ]] || false
   [[ "$out_content" == *"joined the shared memory group"* || "$out_content" == *"could not join the memory group"* ]] || false
 }
+
+# --- #61 round-3 P2-1: `init --adopt` — a real path back to a tank for a
+# directory that predates the one-time adoption sweep and now falls outside
+# it: the sweep only ever runs once, and `init` (without --adopt) refuses
+# ANY existing directory regardless of whether it looks like a tank — so
+# doctor's own "Not a tank directory" listing used to name a `Next:` step
+# (`clikae init <engine> <name>`) that always failed with "Tank already
+# exists", with no automatic way back at all.
+@test "init --adopt marks an existing engine-shaped directory a tank, untouched" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored/.claude.json"
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank" ]
+
+  run clikae init claude restored --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank" ]
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank")" = "claude" ]
+  # Content is untouched — adopt only ever adds the marker.
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/restored/.claude.json")" = '{"stub":true}' ]
+  run clikae tanks
+  [[ "$output" == *"restored"* ]] || { echo "$output"; false; }
+}
+
+@test "init --adopt refuses a directory that doesn't look like the named engine" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/empty"
+  run clikae init claude empty --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"doesn't look like"* || "$output" == *"no claude-shaped content"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/empty/.clikae-tank" ]
+}
+
+@test "init --adopt refuses a directory that does not exist" {
+  run clikae init claude nosuchdir --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No such directory"* ]] || { echo "$output"; false; }
+  [ ! -d "$CLIKAE_HOME/profiles/claude/nosuchdir" ]
+}
+
+@test "init --adopt on an already-adopted tank is a harmless no-op" {
+  clikae init claude already
+  run clikae init claude already --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"Already a tank"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor's Next: line for a stray directory names --adopt, and it actually works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored2"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored2/.claude.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"restored2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"--adopt"* ]] || { echo "doctor's Next: line doesn't mention --adopt: $output"; false; }
+  run clikae init claude restored2 --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
