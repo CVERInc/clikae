@@ -361,6 +361,44 @@ _honest_corpus_append() {
   done
 }
 
+# _honest_corpus_add_row <number> <updated_iso> <login> <title> -> append ONE
+# arbitrary row (any number, any timestamp — unlike _honest_corpus_append,
+# which only ever appends LATER rows with sequential numbers) to the
+# existing honest_corpus.tsv. Used to simulate a row GitHub's search index
+# only surfaces LATE: its own updated_at can be BELOW the cursor a poll
+# already advanced past, since it is written to the corpus (= "becomes
+# visible in the index") only between two polls, not before the first one.
+_honest_corpus_add_row() {
+  local number="$1" ts="$2" login="$3" title="$4"
+  _row "$number" "$ts" "$login" reef "https://x/$number" 0 "$title" \
+    >> "$GH_STUB_DIR/honest_corpus.tsv"
+  printf '\n' >> "$GH_STUB_DIR/honest_corpus.tsv"
+}
+
+# _fake_wallclock_install -> installs a `date` on PATH ahead of the real one
+# (P2-1, 2026-09-14 fix-round-5 review) that answers bare `date +%s` from
+# $FAKE_NOW when set, and forwards every other invocation (ISO<->epoch
+# conversions, `-24 hours`, etc.) to the real `date` — captured BEFORE this
+# overwrite, same pattern the P3-10 test above uses for its own single fixed
+# epoch. Letting the test control $FAKE_NOW between `run` calls is what lets
+# a `--once` poll simulate "a real N seconds have passed since the last
+# poll" without an actual sleep — the thing _wg_tail_sweep_window's own gap
+# calculation reads (it calls plain `date +%s`, intercepted here) and cron
+# actually relies on: the real gap between two invocations of this command,
+# which --interval never tells it.
+_fake_wallclock_install() {
+  local real_date; real_date="$(command -v date)"
+  cat > "$TEST_HOME/.testbin/date" <<STUB
+#!/usr/bin/env bash
+if [ "\$#" -eq 1 ] && [ "\$1" = "+%s" ] && [ -n "\${FAKE_NOW:-}" ]; then
+  printf '%s\n' "\$FAKE_NOW"
+  exit 0
+fi
+exec "$real_date" "\$@"
+STUB
+  chmod +x "$TEST_HOME/.testbin/date"
+}
+
 @test "watch github: gh auth status failing exits 1 with a clear line" {
   _gh_stub_install
   printf '1\n' > "$GH_STUB_DIR/auth_rc"
@@ -1325,6 +1363,130 @@ _honest_corpus_append() {
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
   [ "$(wc -l < "$events")" -eq 620 ]
   [ "$(grep -c '"number":2620' "$events")" -eq 1 ]
+}
+
+# --- P2-1 (2026-09-14 fix-round-5 review): the tail sweep's fixed 300s
+# window and its fixed "every 5 polls" schedule only ever met at
+# --interval <= 60s (5 * interval <= 300s) — the default is 10m, and
+# `--once` run from cron never knew --interval to begin with, so a row
+# indexed late by GitHub (updated_at below the cursor, only visible from
+# the NEXT poll on) went unrecovered at the default interval, forever. The
+# SCHEDULE (every 5 polls, or right after a truncated one) is unchanged by
+# this fix — only the window is — so both tests below drive 5 `--once`
+# polls to reach the poll that actually sweeps, then a 6th to confirm the
+# row is not re-announced. A FAKE wall clock (_fake_wallclock_install)
+# spaces those polls apart in real seconds without an actual sleep: the
+# live loop's own spacing (--interval 600, the default) and cron's blind
+# spacing (--once, no --interval at all, 3600s apart) — the two shapes the
+# review named. Each late row sits further below the cursor than the OLD
+# fixed 300s window ever covered, but well within 5x the real per-poll
+# gap — the window this fix computes once the schedule actually fires.
+
+@test "watch github --once: --interval 600, 5 polls apart, recovers a late-indexed row via the tail sweep (P2-1)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local cursor0='2026-09-01T00:50:00Z'
+  printf '%s\n' "$cursor0" > "$state_dir/CVERInc.cursor"
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  _honest_corpus_add_row 3001 2026-09-01T01:00:00Z alice "issue one"
+
+  local anchor=1757289000
+  export FAKE_NOW="$anchor"
+  run clikae watch github --org CVERInc --interval 600 --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 new event(s) this poll."* ]] || false
+  local cursor1; cursor1="$(cat "$state_dir/CVERInc.cursor")"
+  [ "$cursor1" = "2026-09-01T01:00:00Z" ]
+
+  # This row's own updated_at (00:26:40) is 2000s BELOW cursor1 — well past
+  # the OLD fixed 300s window, but well within 5 * 600s = 3000s, the
+  # window this fix computes once poll 5 actually sweeps. GitHub's search
+  # index only surfaces it now, between poll 1 and poll 2 (the index-lag
+  # margin the tail sweep exists to cover).
+  _honest_corpus_add_row 9999 2026-09-01T00:26:40Z zed "late indexed issue"
+
+  # Polls 2-4: same 600s spacing (--interval 600's own cadence); the
+  # schedule hasn't reached poll 5 yet, so no sweep fires — 0 new events
+  # each time (row 3001 is a re-read of an already-seen row).
+  local i
+  for i in 2 3 4; do
+    export FAKE_NOW=$((anchor + (i - 1) * 600))
+    run clikae watch github --org CVERInc --interval 600 --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+    [[ "$output" == *"0 new event(s) this poll."* ]] || { echo "poll $i: $output"; false; }
+  done
+
+  # Poll 5: the schedule fires (sweep_n reaches 5). The most recent single
+  # poll gap is still 600s, so window = max(300, 5*600) = 3000s — enough
+  # to reach the late row 2000s below the cursor.
+  export FAKE_NOW=$((anchor + 4 * 600))
+  run clikae watch github --org CVERInc --interval 600 --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#9999 opened by zed: late indexed issue"* ]] || false
+  [[ "$output" == *"1 new event(s) this poll."* ]] || false
+
+  # Poll 6, same spacing: the row is not re-announced — "recovered exactly
+  # once" (seen-file dedup, same as any other row this feature finds
+  # twice).
+  export FAKE_NOW=$((anchor + 5 * 600))
+  run clikae watch github --org CVERInc --interval 600 --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(grep -c '"number":9999' "$events")" -eq 1 ]
+}
+
+@test "watch github --once: 5 polls 3600s apart under a fake clock, no --interval given at all, recovers a late-indexed row (P2-1)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local cursor0='2026-09-01T09:50:00Z'
+  printf '%s\n' "$cursor0" > "$state_dir/CVERInc.cursor"
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  _honest_corpus_add_row 4001 2026-09-01T10:00:00Z alice "issue one"
+
+  local anchor=1757300000
+  export FAKE_NOW="$anchor"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 new event(s) this poll."* ]] || false
+  local cursor1; cursor1="$(cat "$state_dir/CVERInc.cursor")"
+  [ "$cursor1" = "2026-09-01T10:00:00Z" ]
+
+  # 2h46m40s (10000s) below cursor1 — a row `--once` from cron (no
+  # --interval on its command line, ever) only sees once it's visible in
+  # the index. Past the OLD fixed 300s window, well within 5 * 3600s.
+  _honest_corpus_add_row 8888 2026-09-01T07:13:20Z carol "hourly-cron late issue"
+
+  # Polls 2-4, an hourly cron's own spacing (3600s) — schedule hasn't
+  # reached poll 5 yet, no sweep, 0 new events each time.
+  local i
+  for i in 2 3 4; do
+    export FAKE_NOW=$((anchor + (i - 1) * 3600))
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+    [[ "$output" == *"0 new event(s) this poll."* ]] || { echo "poll $i: $output"; false; }
+  done
+
+  # Poll 5: the schedule fires. Most recent single-poll gap is 3600s, so
+  # window = max(300, 5*3600) = 18000s — enough to reach the late row
+  # 10000s below the cursor. The whole point: --once never receives
+  # --interval, and recovery must not depend on it.
+  export FAKE_NOW=$((anchor + 4 * 3600))
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#8888 opened by carol: hourly-cron late issue"* ]] || false
+  [[ "$output" == *"1 new event(s) this poll."* ]] || false
+
+  export FAKE_NOW=$((anchor + 5 * 3600))
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(grep -c '"number":8888' "$events")" -eq 1 ]
 }
 
 # --- P2-3 (2026-09-13 fix-round-2 review): end to end, `clikae wait --latest

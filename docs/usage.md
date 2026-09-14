@@ -406,12 +406,19 @@ in earlier rounds of this feature and turned out to permanently stall a
 busy org (any 300-second window holding ≥500 rows pinned the cursor
 forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
 once every 5 polls, or right after a truncated one: ONE more request,
-newest-first, re-reading the 300s just below the cursor, delivering
-anything the main query may have missed while it was still indexing. It
-never advances the cursor itself, so it cannot re-create that stall; a
-window holding 100+ updates is reported as "lag window truncated" and
-dropped rather than paginated, so it costs at most one extra request per
-poll.
+newest-first, re-reading a window just below the cursor and delivering
+anything the main query may have missed while it was still indexing.
+That window is at least 300s, and wider when polls themselves land
+further apart — the real wall-clock gap between the two most recent
+polls, times how many polls have actually elapsed since the last sweep,
+tracked next to the cursor rather than assumed from `--interval` (an
+earlier version of this feature used a flat 300s window regardless of
+spacing, which only ever covered the gap between sweeps when
+`--interval <= 60s`; the default is 10m, and a `--once` poll run from
+cron never knows `--interval` at all — see CHANGELOG). It never advances
+the cursor itself, so it cannot re-create that stall; a window holding
+100+ updates is reported as "lag window truncated" and dropped rather
+than paginated, so it costs at most one extra request per poll.
 
 Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
 `issues/<n>/timeline` — to learn who actually did it (a reply, a review, a

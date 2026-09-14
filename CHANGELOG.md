@@ -95,11 +95,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded polls and can never stall permanently ("truncated: continuing
   next poll" — and it does). The 300s indexing-lag margin is instead bought
   by a separate, bounded "tail sweep": once every 5 polls, or right after a
-  truncated one, ONE more request re-reads the 300s below the cursor
-  (newest first) and delivers anything the main query may have missed while
-  still indexing, without ever touching the cursor itself — a window
+  truncated one, ONE more request re-reads a window below the cursor
+  (newest first) and delivers anything the main query may have missed
+  while still indexing, without ever touching the cursor itself — a window
   holding ≥100 updates is reported "lag window truncated" and dropped
-  rather than paginated, so this too can never stall.
+  rather than paginated, so this too can never stall. (An earlier version
+  of this entry had the sweep use a FIXED 300s window regardless of
+  spacing — that only ever covered the gap between sweeps when
+  `--interval <= 60s`; the 10m default never met it, so 45 of every 50
+  minutes had no re-read of the indexing-lag margin at all, and a `--once`
+  poll from cron never knew `--interval` to begin with. Fixed 2026-09-14
+  fix-round-5 review: the schedule (every 5 polls / after truncation) is
+  unchanged, but the window is now the real wall-clock gap between the two
+  most recent polls times how many polls elapsed since the last sweep —
+  measured every poll and persisted beside the cursor, so cron's `--once`
+  is covered without needing to be told an interval, and a live loop's own
+  back-off widens the next estimate for free. An every-poll schedule was
+  tried first and reverted: it collided with the canned-response-by-
+  call-number `gh` test stub, which cannot tell a sweep's own search call
+  from the next poll's main query.)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is

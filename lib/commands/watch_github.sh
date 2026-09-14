@@ -321,6 +321,50 @@ _wg_iso_from_epoch() {
 # window. The 300s margin against index lag is instead bought by
 # _wg_tail_sweep, a SEPARATE bounded re-read of the last 300s that never
 # feeds back into this cursor — see that function's own comment.
+#
+# 🔴 TAIL SWEEP WINDOW, FIXED AGAIN (P2-1, 2026-09-14 fix-round-5 review —
+# read before touching _wg_tail_sweep's own schedule or window again).
+# Round 4's fix above bought back the 300s index-lag margin with
+# _wg_tail_sweep on a fixed "every 5 polls" schedule and a fixed 300s
+# window — but those two numbers only ever meet when 5 * interval <= 300s
+# (--interval <= 60s). The default --interval is 10m: 5 * 600 = 3000s >>
+# 300s, so 45 of every 50 minutes had nothing re-reading the index-lag
+# margin at all; `--once` run from cron doesn't know --interval to begin
+# with, so the old schedule was arithmetic that happened to work at one
+# specific interval, not a general fix. Proven with the review's own
+# two-arm probe: a row indexed late by 30s, ongoing activity every 600s —
+# never recovered in 12 polls; the identical row, activity every 60s —
+# recovered on poll 5.
+#
+# FIRST ATTEMPT (reverted): sweep on EVERY poll instead of every 5th, one
+# of the two shapes the round-5 brief allowed. Broke 9 pre-existing bats
+# tests: `_gh_stub_install`'s `gh` stub answers canned responses by a
+# single per-call-number counter shared by every `search/issues` call —
+# main query AND sweep alike, since the stub has no notion of `order=asc`
+# vs `desc`. A sweep on poll 1 silently consumed the canned response the
+# test had queued for poll 2's own main query, so poll 2 saw an empty
+# page and reported 0 events where the test expected 1. The schedule
+# staying poll-count-based (not "does this poll issue a sweep request")
+# is what every one of those tests already assumed.
+#
+# ACTUAL FIX: keep the every-5-polls-or-truncated SCHEDULE exactly as
+# round 4 left it — only the WINDOW changes. _wg_poll now measures the
+# real wall-clock gap since the IMMEDIATELY PRECEDING poll on every single
+# poll (_wg_poll_measure_gap, $__WG_POLL_GAP, persisted beside the cursor
+# — not only on polls that sweep), and when the schedule does fire,
+# _wg_tail_sweep_window multiplies that most-recent-single-poll gap by
+# <sweep_n> (how many polls actually elapsed since the last sweep — the
+# same counter the schedule already tracks) to estimate the total real
+# span since the sweep last covered this ground: window = max(300s,
+# sweep_n * gap). A live loop's own back-off is covered for free — a
+# backed-off poll's own gap IS the backed-off interval, so it flows
+# straight into the next estimate; cron's `--once` is covered the same
+# way, since this never needs to know --interval at all, only the real
+# gap between the last two times this command ran. The very first poll
+# this org has ever seen has no prior gap to measure — window stays at
+# the 300s floor, same as the original constant. Still costs at most ONE
+# extra request per poll, the same bound as before — see
+# _wg_tail_sweep_window's own comment.
 
 # _wg_query_org <org> <since> -> the search string for "issues/PRs updated
 # since <since>" in <org> — EVERY one, including issues you opened yourself
@@ -956,43 +1000,115 @@ _wg_poll_one_query() {
 }
 
 # _wg_tail_sweep_counter_file <org> -> path tracking how many polls have run
-# since the last tail sweep (P1-1, 2026-09-14 fix-round-4 review).
+# since the last tail sweep (P1-1, 2026-09-14 fix-round-4 review). Schedule
+# UNCHANGED by the round-5 window fix below — read the 🔴 TAIL SWEEP WINDOW
+# note above CURSOR SEMANTICS before touching either this or the window fix:
+# an EVERY-POLL schedule was tried first and reverted (broke every
+# multi-poll test built on the canned-response-by-call-number `gh` stub —
+# `_gh_stub_install`'s single "org" call counter has no notion of a sweep
+# call vs a main-query call, so a sweep on every poll silently consumed the
+# NEXT poll's canned response). The schedule staying poll-count-based, not
+# request-count-based, is why that collision cannot recur.
 _wg_tail_sweep_counter_file() { printf '%s/%s.sweepn\n' "$(_wg_state_dir)" "$1"; }
 
-# _wg_tail_sweep <org> <cursor> <seen_file> <events_file> -> ONE bounded,
-# separate re-read of the 300s BELOW <cursor> (P1-1, 2026-09-14 fix-round-4
-# review — read the 🔴 note in the file header before touching this).
+# _wg_poll_lastrun_file <org> -> path recording the epoch of the PREVIOUS
+# poll (any poll, not only ones that swept), persisted BESIDE the cursor
+# (P2-1, 2026-09-14 fix-round-5 review). Feeds _wg_tail_sweep_window's
+# effective-interval measurement below.
+_wg_poll_lastrun_file() { printf '%s/%s.lastrun\n' "$(_wg_state_dir)" "$1"; }
+
+# _wg_poll_measure_gap <org> -> sets $__WG_POLL_GAP to the real wall-clock
+# seconds since the PREVIOUS poll of this org (any poll — main query ran,
+# whether or not it swept), or empty on the very first poll ever (no prior
+# timestamp to compare against). Always updates the lastrun file to now,
+# so the NEXT poll's own gap is measured against THIS one. Called
+# unconditionally, once per _wg_poll, near the top — see
+# _wg_tail_sweep_window for why this has to be measured every poll rather
+# than only when a sweep fires.
+_wg_poll_measure_gap() {
+  local org="$1" lastrun_file now prev
+  lastrun_file="$(_wg_poll_lastrun_file "$org")"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  __WG_POLL_GAP=""
+  if [ -f "$lastrun_file" ]; then
+    prev="$(cat "$lastrun_file" 2>/dev/null)"
+    case "$prev" in ''|*[!0-9]*) prev="" ;; esac
+    if [ -n "$prev" ] && [ "$now" -gt "$prev" ]; then
+      __WG_POLL_GAP=$((now - prev))
+    fi
+  fi
+  printf '%s\n' "$now" > "${lastrun_file}.tmp" 2>/dev/null && mv -f "${lastrun_file}.tmp" "$lastrun_file" 2>/dev/null || true
+}
+
+# _wg_tail_sweep_window <sweep_n> -> the lag-window size in seconds for
+# THIS sweep (stdout). window = max(300s, <sweep_n> * $__WG_POLL_GAP) —
+# <sweep_n> is however many polls actually ran since the last sweep (the
+# SAME counter the schedule above already tracks, so no separate estimate
+# of "how many polls" is needed), and $__WG_POLL_GAP (set this poll by
+# _wg_poll_measure_gap) is the real wall-clock gap since the immediately
+# PRECEDING poll — their product estimates the total real time since the
+# sweep last covered this ground, without needing to know --interval:
+# `--once` from cron measures it the same way a live loop does, and a
+# back-off that widened the most recent poll's own gap widens this
+# estimate for free (P2-1, 2026-09-14 fix-round-5 review — read the 🔴 TAIL
+# SWEEP WINDOW note above CURSOR SEMANTICS in the file header before
+# touching this again). $__WG_POLL_GAP empty (the very first poll this
+# org has ever seen) means no measurement exists yet — window stays at the
+# 300s floor, matching the original fixed margin.
+_wg_tail_sweep_window() {
+  local sweep_n="$1" window=300 est
+  if [ -n "${__WG_POLL_GAP:-}" ]; then
+    est=$((sweep_n * __WG_POLL_GAP))
+    [ "$est" -gt "$window" ] && window="$est"
+  fi
+  printf '%s' "$window"
+}
+
+# _wg_tail_sweep <org> <cursor> <seen_file> <events_file> <sweep_n> -> ONE
+# bounded, separate re-read of the window BELOW <cursor> (P1-1, 2026-09-14
+# fix-round-4 review; window sizing revised P2-1, 2026-09-14 fix-round-5
+# review — read the 🔴 notes in the file header before touching this).
 # order=desc, ONE page, per_page=100: catches a row whose updated_at is
 # old enough to sit behind the main cursor but only just became visible in
 # GitHub's search index (documented indexing lag) — WITHOUT lagging the
 # main cursor itself, which is what let a >=500-row/300s window pin it
-# forever (see CURSOR MONOTONICITY / BACKLOG). Run by _wg_poll, ALWAYS
-# after the main cursor is already computed and persisted from THIS poll's
-# own $__WG_MAX_UPDATED alone — this function's own use of
-# $__WG_MAX_UPDATED (folded in by _wg_process, same as any other query) is
-# scratch, discarded by the caller, never fed back into the cursor file.
-# Found rows go through the same seen-file/_wg_process dedup as any other
-# row, so they are announced and logged exactly once, whichever query
-# finds them first. A full page (>=100 rows in the window) means more rows
-# exist than fit — reported as "lag window truncated" and dropped, never
-# paginated further, so this can cost at most ONE extra request per poll
-# and can never itself stall anything.
+# forever (see CURSOR MONOTONICITY / BACKLOG). Run by _wg_poll, once every
+# N=5 polls or right after a truncated one — schedule UNCHANGED by this
+# round's fix, only the window is; ALWAYS after the main cursor is already
+# computed and persisted from THIS poll's own $__WG_MAX_UPDATED alone —
+# this function's own use of $__WG_MAX_UPDATED (folded in by _wg_process,
+# same as any other query) is scratch, discarded by the caller, never fed
+# back into the cursor file. Found rows go through the same
+# seen-file/_wg_process dedup as any other row, so they are announced and
+# logged exactly once, whichever query finds them first. A full page
+# (>=100 rows in the window) means more rows exist than fit — reported as
+# "lag window truncated" and dropped, never paginated further, so this can
+# cost at most ONE extra request per poll and can never itself stall
+# anything. A sweep failure classified as rate-limit counts toward
+# back-off exactly like a main-query failure would (P3-4, 2026-09-14
+# fix-round-5 review) — an org already being rate-limited otherwise kept
+# taking one more doomed request every time the schedule fired, back-off
+# or not.
 _wg_tail_sweep() {
-  local org="$1" cursor="$2" seen_file="$3" events_file="$4"
-  local epoch since q tsv page_n
+  local org="$1" cursor="$2" seen_file="$3" events_file="$4" sweep_n="${5:-5}"
+  local epoch since q tsv page_n window
   epoch="$(_limit_iso_epoch "$cursor" "")"
   [ -n "$epoch" ] || return 0
-  since="$(_wg_iso_from_epoch "$((epoch - 300))")"
+  window="$(_wg_tail_sweep_window "$sweep_n")"
+  since="$(_wg_iso_from_epoch "$((epoch - window))")"
   [ -n "$since" ] || return 0
   q="$(_wg_query_org "$org" "$since")"
   if ! _wg_fetch_classified "$q" 1 desc; then
+    case "$__WG_LAST_KIND" in
+      rate-limit) __WG_BACKOFF=1 ;;
+    esac
     log_warn "github:$org — lag sweep failed, skipping this poll's sweep: $__WG_LAST_REASON"
     return 0
   fi
   tsv="$__WG_LAST_TSV"
   _wg_process "$tsv" "$org" "$seen_file" "$events_file"
   page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
-  [ "$page_n" -ge 100 ] && log_warn "github:$org — lag window truncated (>=100 updates in the last 300s); skipping the rest, not stalling."
+  [ "$page_n" -ge 100 ] && log_warn "github:$org — lag window truncated (>=100 updates in the last ${window}s); skipping the rest, not stalling."
   return 0
 }
 
@@ -1043,6 +1159,13 @@ _wg_poll() {
   fi
 
   mkdir -p "$(_wg_state_dir)" "$(_wg_log_dir "$org")" 2>/dev/null || true
+
+  # P2-1 (2026-09-14 fix-round-5 review): measured EVERY poll, whether or
+  # not this one ends up sweeping — see _wg_tail_sweep_window's own comment
+  # for why the estimate it feeds needs the most recent single-poll gap,
+  # not only a gap measured on sweep polls.
+  _wg_poll_measure_gap "$org"
+
   local seen_file events_file cursor_file since
   seen_file="$(_wg_seen_file "$org")"
   events_file="$(_wg_events_file "$org")"
@@ -1076,10 +1199,19 @@ _wg_poll() {
 
   # TAIL SWEEP (P1-1, 2026-09-14 fix-round-4 review): once every N=5 polls,
   # or right after a truncated one (more likely to have left recent rows
-  # behind an index-lag boundary) — see _wg_tail_sweep's own comment. Never
-  # touches $new_cursor above, so it can never re-create the stall it
-  # replaces. Skipped entirely on a failed poll: $new_cursor would be
-  # either empty or stale, neither a sound base for the sweep's own window.
+  # behind an index-lag boundary) — see _wg_tail_sweep's own comment.
+  # SCHEDULE unchanged by the round-5 fix (P2-1, 2026-09-14 fix-round-5
+  # review — read the 🔴 TAIL SWEEP WINDOW note in the file header before
+  # touching this again): an every-poll schedule was tried first and
+  # reverted, because it broke every multi-poll bats test built on the
+  # canned-response-by-call-number `gh` stub (a sweep is a real
+  # search/issues call too, and that stub's call counter cannot tell one
+  # apart from the next poll's own main query). What actually changes this
+  # round is the WINDOW _wg_tail_sweep computes once this schedule decides
+  # to fire — see _wg_tail_sweep_window. Never touches $new_cursor above,
+  # so it can never re-create the stall it replaces. Skipped entirely on a
+  # failed poll: $new_cursor would be either empty or stale, neither a
+  # sound base for the sweep's own window.
   if [ "$__WG_OK" -eq 1 ] && [ -n "$new_cursor" ]; then
     local sweep_count_file sweep_n=0
     sweep_count_file="$(_wg_tail_sweep_counter_file "$org")"
@@ -1087,7 +1219,7 @@ _wg_poll() {
     case "$sweep_n" in ''|*[!0-9]*) sweep_n=0 ;; esac
     sweep_n=$((sweep_n + 1))
     if [ "$__WG_TRUNCATED" -eq 1 ] || [ "$sweep_n" -ge 5 ]; then
-      _wg_tail_sweep "$org" "$new_cursor" "$seen_file" "$events_file"
+      _wg_tail_sweep "$org" "$new_cursor" "$seen_file" "$events_file" "$sweep_n"
       sweep_n=0
     fi
     printf '%s\n' "$sweep_n" > "$sweep_count_file" 2>/dev/null || true
@@ -1187,7 +1319,8 @@ you is not covered (no lookup happens for a fresh number; see docs/usage.md
 for the full story), only a reply on something already seen.
 
 Rate limits: normally 1 search request per poll (up to 5 when paginating to
-the cap, plus up to 1 more for the tail sweep below; the search API allows
+the cap, plus up to 1 more for the tail sweep below, no more often than
+every 5th poll or right after a truncated one; the search API allows
 30/min authenticated), plus up to 50 activity lookups (above, up to 2
 requests each against the core API's much larger budget). On a genuine
 rate limit (429, or a 403 the response itself attributes to the rate
@@ -1204,13 +1337,22 @@ has already re-read.
 GitHub's search index itself lags real writes by some minutes; rather than
 lagging the cursor above (which is what let a single dense poll pin it
 forever — see CHANGELOG), that margin is covered by a separate, bounded
-"tail sweep": once every 5 polls, or right after a truncated one, ONE more
-request re-reads the last 300s below the cursor (newest first) and
+"tail sweep": once every 5 polls, or right after a truncated one, ONE
+more request re-reads the window below the cursor (newest first) and
 delivers anything a poll may have missed while it was still indexing — a
-small seen-file de-dupes whichever query finds a row first. If that window
-itself holds 100+ updates, the sweep reports "lag window truncated" and
-moves on rather than paginating — bounded to one extra request per poll,
-so it can never stall anything either.
+small seen-file de-dupes whichever query finds a row first. The window
+is at least 300s, wider when polls themselves are spaced further apart —
+sized off the real wall-clock gap between the two most recent polls
+times how many polls have actually elapsed since the last sweep, cron's
+`--once` included: it needs no configured --interval to size this
+correctly, only how long it's actually been since this command last ran.
+So a widely-spaced schedule (a 10m --interval, an hourly cron, a
+back-off that stretched a live loop's own spacing to 1h) still re-reads
+enough to cover the gap by the time the sweep fires, not a fixed span
+too narrow for it. If that window itself holds 100+ updates, the sweep
+reports "lag window truncated" and moves on rather than paginating —
+bounded to one extra request per poll, so it can never stall anything
+either.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this
