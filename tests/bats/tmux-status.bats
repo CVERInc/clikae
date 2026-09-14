@@ -20,6 +20,8 @@ _src() {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/duration.sh"
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
 }
 
@@ -40,12 +42,22 @@ _dry_marker() {
   printf '%s\tresets 3pm\n' "$(( $(date +%s) - age ))" > "$CLIKAE_HOME/dry/$engine/$tank"
 }
 
-# _burn_status <run> <state> <pid> — #41's status.json for one run directory.
+# _burn_status <run> <state> <pid> [age_seconds] [reason] — #41's status.json
+# for one run directory. `updated_at` is `now - age_seconds` (default 0 —
+# freshly written), matching `_usage_cache`/`_dry_marker`'s own `[age]`
+# convention in this file (P2-1, 2026-09-14 round-1 fix review: this used to
+# hardcode `updated_at:2` — epoch second 2, i.e. 1970 — which every existing
+# caller here got away with only because nothing read `updated_at` before
+# that review; a self-clearing alert count needs a real one to age against).
+# `reason` (default "") lets P1-1's sized test put a realistic redacted-
+# stderr-sized string in the field that sits right before `state`/`pid` in
+# the real object (`_burn_status_write`'s own field order).
 _burn_status() {
-  local run="$1" state="$2" pid="$3"
+  local run="$1" state="$2" pid="$3" age="${4:-0}" reason="${5:-}" upd
+  upd=$(( $(date +%s) - age ))
   mkdir -p "$HOME/.clikae/logs/$run"
-  printf '{"ok":null,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"","reset":null,"rerouted_from":[],"elapsed_s":3,"run_id":"%s","state":"%s","started_at":1,"updated_at":2,"pid":%s,"log":"/x","reset_at":null}\n' \
-    "$run" "$state" "$pid" > "$HOME/.clikae/logs/$run/status.json"
+  printf '{"ok":null,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":3,"run_id":"%s","state":"%s","started_at":1,"updated_at":%s,"pid":%s,"log":"/x","reset_at":null}\n' \
+    "$reason" "$run" "$state" "$upd" "$pid" > "$HOME/.clikae/logs/$run/status.json"
 }
 
 # _manifest — every path under clikae's own state, with size and mtime.
@@ -124,6 +136,75 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
 }
 
+# P2-5 (2026-09-14 round-1 fix review): before this fix, "just now", 1h old and
+# 23h old all rendered pixel-for-pixel identical — only the 24h ceiling itself
+# visibly differed. Under 1h stays bare (recent enough that annotating it is
+# noise); past 1h gets the board's own age formatter.
+@test "fuel: a reading under 1h old carries no age suffix" {
+  _src
+  _usage_cache claude wrasse 42.0 65.0 1800   # 30m
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"ago"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: a reading between 1h and 24h old carries a '· Nh ago' suffix" {
+  _src
+  _usage_cache claude wrasse 42.0 65.0 10800   # 3h
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"5h 42% · 7d 65% · 3h ago"* ]] || { echo "$output"; false; }
+}
+
+# P3-3 (same review): a corrupt cache must not blow the row's width budget.
+@test "fuel: percentages clamp to 100, a corrupt cache cannot blow the width budget" {
+  _src
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"window_pct":999999,"weekly_pct":888888,"cached_at":%s}\n' "$(date +%s)" \
+    > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"5h 100% · 7d 100%"* ]] || { echo "$output"; false; }
+}
+
+# P3-2 / P2-5 (same review): `cached_at` PRESENT but not a shape this reader
+# understands (an ISO string, here — a future writer's guess, since #89's own
+# writer emits epoch numbers) must fail SAFE — treated as untrusted, not as
+# "must be current forever". Before this fix "we cannot judge what we cannot
+# read" was applied to this case too, which is backwards: the field IS there.
+@test "fuel: cached_at present but unparseable (ISO string) is untrusted, not shown as current" {
+  _src
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"window_pct":42,"weekly_pct":65,"cached_at":"2026-09-14T10:00:00Z"}\n' \
+    > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"42%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"·"* ]] || { echo "$output"; false; }
+}
+
+# The documented decision this reader keeps: cached_at TRULY ABSENT (an older
+# cache shape) is still not aged out — "we cannot judge what we cannot read"
+# is correct for a field that plain isn't there.
+@test "fuel: cached_at truly absent (older cache shape) is still not aged out" {
+  _src
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"window_pct":42,"weekly_pct":65,"source":"vendor"}\n' \
+    > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"ago"* ]] || { echo "$output"; false; }
+}
+
+# P3-1 (same review): `read` without `-d ''` silently drops a final line with
+# no trailing newline — a cache written without one used to read as completely
+# empty. `printf '%s'` below deliberately omits the trailing `\n`.
+@test "fuel: a cache file with no trailing newline still reads" {
+  _src
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"window_pct":42,"weekly_pct":65,"cached_at":%s}' "$(date +%s)" \
+    > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+}
+
 @test "fuel: a cache with null percentages is no reading, not 0%" {
   _src
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
@@ -175,6 +256,42 @@ _dead_pid() { printf '2147483647'; }
 @test "alerts: a waiting-reset lane whose writer is gone counts too" {
   _src
   _burn_status burn-1 waiting-reset "$(_dead_pid)"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
+}
+
+# P2-1 (2026-09-14 round-1 fix review): before this fix, nothing but the next
+# `clikae burn` (7-day sweep) ever cleared this — a SIGKILLed lane pinned
+# every session's row red, potentially forever. Self-clears at the SAME TTL
+# the dry arm already uses (CLIKAE_DRY_TTL, 6h) once `updated_at` is that old,
+# without deleting the file — only the count changes.
+@test "alerts: a dead pid's !N self-clears after CLIKAE_DRY_TTL, even a 30-day-old dir" {
+  _src
+  _burn_status burn-1 running "$(_dead_pid)" 2592000   # 30 days
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "$output"; false; }
+  [ -f "$HOME/.clikae/logs/burn-1/status.json" ] || { echo "the status file was deleted — this fix must not touch it, only the count"; false; }
+}
+
+@test "alerts: a dead pid under the TTL still counts (the self-clear has a floor)" {
+  _src
+  _burn_status burn-1 running "$(_dead_pid)" 60   # 1 minute — nowhere near 6h
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
+}
+
+# P3-1 (2026-09-14 round-1 fix review): the alerts loop reads status.json with
+# the same `read`-without-`-d ''` shape the fuel loop had; a file with no
+# trailing newline used to silently read as empty here too — which would have
+# UNDERCOUNTED a real dead lane, the unsafe direction for a row that must
+# never cry wolf but also must not go quiet on a real one.
+@test "alerts: a status.json with no trailing newline still counts" {
+  _src
+  _burn_status burn-1 running "$(_dead_pid)"
+  # _burn_status's printf ends in \n; strip it to reproduce the P3-1 shape.
+  printf '%s' "$(cat "$HOME/.clikae/logs/burn-1/status.json")" \
+    > "$HOME/.clikae/logs/burn-1/status.json.tmp"
+  mv "$HOME/.clikae/logs/burn-1/status.json.tmp" "$HOME/.clikae/logs/burn-1/status.json"
   run tmux_status_render claude wrasse '' '' 120
   [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
 }
@@ -513,6 +630,43 @@ INNER
   [[ "$output" == *"matches 2 sessions"* ]] || { echo "$output"; false; }
   [[ "$output" == *"a52bdc12-1111-2222-3333-444455556666"* ]] || { echo "$output"; false; }
   [[ "$output" == *"a52bdc12-9999-8888-7777-666655554444"* ]] || { echo "$output"; false; }
+}
+
+# P3-5 (2026-09-14 round-1 fix review): session ids are always lowercase, but
+# a human copying one from somewhere else won't always match case — an
+# uppercase-typed prefix used to match nothing and read as "no such session".
+@test "resume: an uppercase-typed prefix still resolves" {
+  _two_sessions_sharing_a_prefix
+  run env CLIKAE_NO_INTERACTIVE=1 "$CLIKAE_BIN" resume B0000000
+  [[ "$output" == *"claude/beta"* ]] || { echo "$output"; false; }
+  [ -f "$TEST_HOME/claude-argv.log" ] || { echo "the engine never ran: $output"; false; }
+  grep -qx 'b0000000-1111-2222-3333-444455556666' "$TEST_HOME/claude-argv.log" || {
+    echo "engine argv was:"; cat "$TEST_HOME/claude-argv.log"; false; }
+}
+
+# P3-4 (2026-09-14 round-1 fix review): an uncapped candidate list scrolls the
+# "matches N sessions" header itself off an 80-column terminal — the one line
+# that says what to do next was the first thing lost. 12 candidates, one
+# shared prefix, all in one tank (only the count and the cap are under test).
+_twelve_sessions_sharing_a_prefix() {
+  clikae init claude solo >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/claude/solo/projects/-tmp-p"
+  local i suffix
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    suffix="$(printf '%04d' "$i")"
+    printf '{"cwd":"/tmp"}\n' \
+      > "$CLIKAE_HOME/profiles/claude/solo/projects/-tmp-p/c0000000-$suffix-2222-3333-444455556666.jsonl"
+  done
+}
+
+@test "resume: an ambiguous prefix's candidate list caps at 10, with a count for the rest" {
+  _twelve_sessions_sharing_a_prefix
+  run "$CLIKAE_BIN" resume c0000000
+  [ "$status" -ne 0 ] || { echo "an ambiguous prefix was accepted: $output"; false; }
+  [[ "$output" == *"matches 12 sessions"* ]] || { echo "$output"; false; }
+  local shown; shown="$(grep -c 'clikae resume c0000000-' <<<"$output")"
+  [ "$shown" -eq 10 ] || { echo "printed $shown full candidates, want 10:"; echo "$output"; false; }
+  [[ "$output" == *"and 2 more"* ]] || { echo "$output"; false; }
 }
 
 @test "resume: the same id in two tanks is ONE candidate, not an ambiguity" {
