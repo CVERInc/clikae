@@ -588,7 +588,18 @@ _wg_last_actor_in_body() {
     [ -n "$actor" ] || continue
     event="$(printf '%s' "$evline" | grep -oE '"event":"[^"]*"' | head -n1 | sed -E 's/.*"event":"([^"]*)"$/\1/')"
     __WG_LOOKUP_ACTOR="$actor"
-    __WG_LOOKUP_BODY="$(printf '%s' "$evline" | grep -oE '"body":"([^"\\]|\\.)*"' | head -n1 | sed -E 's/^"body":"//; s/"$//')"
+    # P3-1 (2026-09-14 fix-round-4 review): matched against the WHOLE
+    # unsplit $flat, never $evline — a body containing a literal `},{`
+    # (pasted JSON, for instance) breaks $evline's own `},{` -> newline
+    # split right through the middle of this event's body, truncating it
+    # before the actual `@self` mention text. The quote-aware pattern
+    # below only stops at a real (unescaped) closing quote either way, so
+    # scanning the unsplit text for the LAST body field is both safe (a
+    # literal `},{` inside quotes is just two ordinary characters to it)
+    # and correct in practice: the event this loop just picked is the
+    # newest one carrying an actor, which is also the newest one carrying
+    # a body (only a comment/review has either field at all).
+    __WG_LOOKUP_BODY="$(printf '%s' "$flat" | grep -oE '"body":"([^"\\]|\\.)*"' | tail -n1 | sed -E 's/^"body":"//; s/"$//')"
     case "$event" in
       commented) __WG_LOOKUP_KIND="comment" ;;
       reviewed)  __WG_LOOKUP_KIND="review" ;;

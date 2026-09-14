@@ -969,6 +969,27 @@ _honest_corpus_append() {
   [[ "$output" != *"mention"* ]] || false
 }
 
+@test "watch github --once: a body containing a literal '},{' still reads kind=mention, not truncated to 'comment' (P3-1)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|203|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  printf 'me\n' > "$GH_STUB_DIR/login"
+  # The event's own body has a literal `},{` in it (pasted JSON) BEFORE the
+  # @mention — the naive split this used to use turns that into a fake
+  # event boundary, truncating $__WG_LOOKUP_BODY right before "@me" and
+  # downgrading this to kind=comment. actor resolution is unaffected
+  # (actor is matched before the split point either way) — only the
+  # mention check was blind to text past the literal `},{`.
+  _gh_stub_timeline_page reef 203 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"json },{ paste then @me"}]'
+  _gh_stub_page org 1 \
+    "$(_row 203 2026-09-07T06:05:00Z alice reef https://x/203 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#203 mention by zed: some issue"* ]] || false
+}
+
 @test "watch github --once: a fresh issue whose OWN opening text @-mentions self still reads 'opened', not 'mention' (P2-2 scope)" {
   _gh_stub_install
   _gh_stub_page org 1 \
