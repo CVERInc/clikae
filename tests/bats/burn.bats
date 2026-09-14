@@ -3456,14 +3456,17 @@ assert rows[0]["ahead"] == 1, rows
   # Stock macOS ships neither `timeout` nor `gtimeout` (`_burn_timeout_bin`'s
   # own comment) — this test's own safety net needs one regardless of what
   # burn.sh falls back to, so skip rather than wedge the runner without it.
-  command -v timeout >/dev/null 2>&1 || skip "no \`timeout\` on PATH to bound this test itself"
+  # `gtimeout` (coreutils via Homebrew) covers a macOS box that installed it.
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   rm -f "$STUB_LEFT_REPO/.git/HEAD"
   mkfifo "$STUB_LEFT_REPO/.git/HEAD"
   local t0 t1
   t0="$(date +%s)"
-  run timeout -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   t1="$(date +%s)"
   # Generous ceiling (5s bound + a few other fast calls + engine overhead) —
   # the point is "finishes", not "finishes in exactly N seconds".
