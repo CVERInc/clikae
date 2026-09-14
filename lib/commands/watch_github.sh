@@ -1590,10 +1590,11 @@ regardless of --interval — and one line is printed; the cursor is never
 advanced past a page that failed to read. A poll cut short by the 5-page
 cap prints "truncated: continuing next poll" — true: pagination runs
 oldest-unseen first, so the cursor lands EXACTLY at the last row this poll
-actually read, and the next poll's query starts exactly there. No backlog,
-however large, can stall this permanently — it drains in bounded,
-forward-only polls, because the cursor never regresses into a window it
-has already re-read.
+actually read, and the next poll's query starts exactly there. A backlog
+drains in bounded, forward-only polls, because the cursor never regresses
+into a window it has already re-read — the one exception is >=500 updates
+sharing the exact same updated_at second, which the 5-page cap can never
+read past (see docs/usage.md, Known limits).
 
 GitHub's search index itself lags real writes by some minutes; rather than
 lagging the cursor above (which is what let a single dense poll pin it

@@ -91,9 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself a permanent-stall bug — any 300-second window holding ≥500 rows
   pinned the cursor back inside the very page a poll had just re-read,
   forever, on a busy-enough org, fixed 2026-09-14 fix-round-4 review), and
-  the NEXT poll continues exactly there, so a backlog of any size drains in
-  bounded polls and can never stall permanently ("truncated: continuing
-  next poll" — and it does). The 300s indexing-lag margin is instead bought
+  the NEXT poll continues exactly there, so a backlog drains in bounded
+  polls ("truncated: continuing next poll" — and it does), unless ≥500
+  updates share one exact `updated_at` second, which the 5-page cap can
+  never read past (see docs/usage.md, Known limits). The 300s indexing-lag margin is instead bought
   by a separate, bounded "tail sweep": once every 5 polls, or right after a
   truncated one, one or more requests, oldest-first, re-read a window below
   the cursor and deliver anything the main query may have missed while

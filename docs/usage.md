@@ -461,7 +461,8 @@ never advanced past a page that failed to read, so nothing is silently
 skipped — a poll cut short by the 5-page cap prints "truncated: continuing
 next poll" and it does: pagination runs oldest-unseen-first, so the cursor
 lands EXACTLY at the last row this poll actually read, and the next poll's
-query starts exactly there. No backlog, however large, can stall this
+query starts exactly there. No backlog, however large (short of the one
+case under Known limits below), can stall this
 permanently — the cursor only ever advances, never regressing into a
 window it has already re-read. A PERMANENT failure —
 missing OAuth scope, SAML enforcement, a bad org name — is retried once,
