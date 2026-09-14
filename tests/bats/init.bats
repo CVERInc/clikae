@@ -216,6 +216,26 @@ load '../helpers'
   [[ "$output" == *"Already a tank"* ]] || { echo "$output"; false; }
 }
 
+@test "#61 round-4 P3-1: init --adopt --alias refuses instead of silently writing no alias" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored3"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored3/.claude.json"
+  run clikae init claude restored3 --adopt --alias
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not write shell aliases"* ]] || { echo "$output"; false; }
+  # Refused loudly, not silently — no marker written, no alias written.
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored3/.clikae-tank" ]
+  [ ! -f "$RC_FILE" ] || { echo "alias leaked into shell rc: $(cat "$RC_FILE")"; false; }
+}
+
+@test "#61 round-4 P3-1: init --adopt --no-template refuses instead of silently doing nothing" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored4"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored4/.claude.json"
+  run clikae init claude restored4 --adopt --no-template
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"never applies a permissions template"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored4/.clikae-tank" ]
+}
+
 @test "doctor's Next: line for a stray directory names --adopt, and it actually works" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/restored2"
   printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored2/.claude.json"

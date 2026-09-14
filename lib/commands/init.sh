@@ -31,7 +31,8 @@ Options:
                  the way back for a directory that landed there afterward (a
                  restored backup, a stray you've since confirmed is real).
                  Does not touch the directory's content, and is a harmless
-                 no-op if it's already a tank.
+                 no-op if it's already a tank. Incompatible with --alias and
+                 --no-template (run `clikae alias` separately if you want one).
 
 Example:
   clikae init claude work --alias       # then:  clikae claude work
@@ -63,6 +64,18 @@ EOF
   # no new flag shape, reuses profile_dir/tank_dir_is_tank/
   # _tank_fingerprint_match exactly as adoption and doctor already do.
   if [ "$adopt" -eq 1 ]; then
+    # #61 round-4 P3-1: --adopt only ever writes the marker file (see its
+    # --help text: "Does not touch the directory's content") — --alias and
+    # --no-template belong to the CREATE path below and silently doing
+    # nothing with them here used to look like success while writing no
+    # alias and applying no skip. Refuse the combination instead of
+    # guessing; both have their own one-line follow-up command.
+    if [ "$with_alias" -eq 1 ]; then
+      log_fail "clikae init --adopt does not write shell aliases. Run \`clikae alias $cli $profile\` after adopting."
+    fi
+    if [ "$no_template" -eq 1 ]; then
+      log_fail "clikae init --adopt never applies a permissions template — --no-template has nothing to skip here."
+    fi
     if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
       log_fail "clikae init --adopt does not apply to agy — it has no marker-based tanks (see: clikae agy --help)."
     fi
