@@ -440,9 +440,20 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   設了 status-format[0] 的那一列： LEFTSEG-…                （沒有視窗清單）
   沒設的同一個 session：          LEFTSEG 0:sleep* 1:wake   （視窗清單在）
 
-  # 4. helper 的成本（20 次，開發機 reefbox）
-  real 0m0.284s  ->  14.2 ms / 次，預算是 30 ms
+  # 4. helper 的成本（每次 20 連發，開發機 reefbox，16 核）
+  閒置時              0m0.284s  ->  14.2 ms / 次
+  load 6.15 時        0m0.612s / 0m0.331s / 0m0.415s  ->  16.6 ~ 30.6 ms / 次
+  （30.6 那一次超出預算，所以把 burn 掃描僅剩的那個 $( ) 也拿掉：
+    burn_status_dirsv 改成填陣列，整條路徑只剩 date 與 tmux 兩個 fork）
+  拿掉之後，對著**活著的** tmux server（production 的條件），load 9.7~10.5：
+                      0m0.298s / 0m0.346s / 0m0.471s  ->  14.9 ~ 23.6 ms / 次
   ```
+  🔴 **這台機器不是中立的量測場**：上面每一組數字都是在同時跑著五條 sibling
+  lane 的 reefbox 上量的，load 從 6 跑到 10。把它讀成「14 ms」是騙自己；誠實的
+  說法是「閒置 14 ms、滿載 24 ms，預算 30 ms」，而且**超出預算的那一次是真的
+  發生過**，不是雜訊——它就是拿掉最後一個 fork 的理由。成本的組成也量過：
+  裸 bash 5.2 ms、加上四個 source 7.1 ms，其餘全是 `date` 與 `tmux show-options`
+  這兩個 fork。
 - **規範**：
   1. **這一列只在一個地方組出來**：`lib/core/tmux.sh` 的 `tmux_status_render`
      （內容）與 `tmux_status_line`（唯一寫 `status-left`／`status-right`／
@@ -459,6 +470,9 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
      `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
      樁，並斷言它們的 tripwire 檔沒有出現。
+     整條路徑只剩兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
+     由 `tmux_status_render` 呼叫一次、交給油量與警示兩邊共用——不只省一個 fork，
+     也讓兩半不會對「現在幾點」有不同答案。
   4. **🔴 這條路上也不准「寫」。** `dry_store_read` 順手刪掉過期標記對「問一次」的
      呼叫者是對的，對一個每五秒問一次的狀態列則會讓「這個標記什麼時候消失的」變成
      「剛好有沒有人在看狀態列」的函數。所以狀態列走 `dry_store_peekv`（唯讀孿生，

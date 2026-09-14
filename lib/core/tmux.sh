@@ -708,9 +708,10 @@ tmux_status_alertsv() {
     done
   fi
 
-  if declare -F burn_status_dirs >/dev/null 2>&1 \
+  if declare -F burn_status_dirsv >/dev/null 2>&1 \
      && declare -F burn_status_fieldv >/dev/null 2>&1; then
-    while IFS= read -r d; do
+    burn_status_dirsv
+    for d in "${_BSDIRS[@]:-}"; do
       [ -n "$d" ] || continue
       s="$d/status.json"
       [ -f "$s" ] || continue
@@ -723,9 +724,7 @@ tmux_status_alertsv() {
       case "$pid" in ''|*[!0-9]*) continue ;; esac
       kill -0 "$pid" 2>/dev/null && continue     # still alive — not news
       n=$((n + 1))
-    done <<EOF
-$(burn_status_dirs)
-EOF
+    done
   fi
 
   _TSTAT_ALERTS="$n"

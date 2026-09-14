@@ -87,10 +87,28 @@ burn_status_dir() { printf '%s/.clikae/logs/%s\n' "$HOME" "$1"; }
 # than two in different files — and if this layout ever moves, both lines are
 # on the same screen.
 burn_status_dirs() {
+  burn_status_dirsv
+  [ "${#_BSDIRS[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${_BSDIRS[@]}"
+}
+
+# shellcheck disable=SC2034  # _BSDIRS is an output slot, read by lib/core/tmux.sh.
+# burn_status_dirsv -> the same list into the $_BSDIRS ARRAY, with NO fork at
+# all — not even the command substitution that reading the printing form costs.
+#
+# The …v suffix is this repo's existing name for "sets a variable instead of
+# printing, because the caller is on a hot path": tmux_sessv, _home_fuel_dotv,
+# dry_store_peekv. Here the hot path is #77's status row, which walks this list
+# every five seconds per attached client, and a `$( )` around it was measurably
+# a third of the remaining budget on a loaded host.
+#
+# Indexed array assignment by length, not `+=`: bash 3.2.
+burn_status_dirsv() {
   local d
+  _BSDIRS=()
   for d in "$HOME"/.clikae/logs/burn-*; do
     [ -d "$d" ] || continue
-    printf '%s\n' "$d"
+    _BSDIRS[${#_BSDIRS[@]}]="$d"
   done
 }
 
