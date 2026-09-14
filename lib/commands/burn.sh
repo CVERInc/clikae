@@ -953,7 +953,13 @@ _agy_burn() {
 # see that tradeoff below), TERM+KILL past the deadline — so it bounds git
 # and find identically on every platform bash itself runs on (P2-1, round-3
 # review: identically requires never backgrounding a builtin — see
-# `_burn_lb_git`'s own comment). Backgrounding here is safe specifically
+# `_burn_lb_git`'s own comment). P3-3 (round-4 review): "identically" also
+# assumes `"$@"` execs into a single process — TERM+KILL only ever reaches
+# the one pid `$!` names; a shim that forks a child and does NOT exec (or
+# traps TERM) leaves that child running past the deadline, still holding
+# `_burn_left_behind`'s pipe open. Real git and find don't do this, and
+# neither do the shims this repo has actually run into (asdf/mise/xcrun all
+# exec). Backgrounding here is safe specifically
 # BECAUSE this whole scan
 # already runs inside `_burn_left_behind`'s own `$(...)` subshell (see the
 # P1 note below): the "&" below can only ever background a child of THAT
