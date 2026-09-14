@@ -1258,6 +1258,17 @@ _burn_left_behind() {
     # superproject's own push never carries the submodule's changes, so
     # attributing them to it overstates what pushing the superproject
     # would actually save).
+    # P3-5 (round-3 review, documented not fixed): this is git's own count,
+    # not this function's — a NESTED repo's working-tree directory (already
+    # attributed to its own `repos[]` entry, not double-counted in `files`
+    # below, see P2-3's innermost-attribution fix) still shows up here as
+    # ONE untracked entry in ITS PARENT's `git status`, because from the
+    # parent's perspective an inner `.git` is just an untracked directory.
+    # `dirty` and `files` therefore use different scopes on purpose: `dirty`
+    # is "what `git status` on this repo says", `files` is "what changed
+    # inside this repo's own boundary". Reconciling them (e.g. `-uno` or
+    # walking status output to drop nested-repo paths) is unfixed; this repo
+    # note is the fix.
     dirty="$(_burn_lb_git -C "$repo" status --porcelain --ignore-submodules=all 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
     [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
     # P2-1/P2-2 (round-1 review): the old version forked _clikae_mtime (a
