@@ -411,9 +411,11 @@ below the cursor and delivering anything the main query may have missed
 while it was still indexing — oldest-first matters here because the
 late-indexed rows this sweep exists to catch sit at the OLD end of that
 window, and a busy org's own already-seen recent activity would otherwise
-fill a newest-first page before ever reaching them. That window is at
-least 300s, and wider the longer it's actually been since the last sweep
-COMPLETED — an epoch persisted next to the cursor and read back directly,
+fill a newest-first page before ever reaching them. That window is the
+time since the last sweep STARTED (at least 300s) plus a fixed 300s
+overlap with the previous sweep, so a row updated just before one sweep
+but indexed just after it is still re-read by the next — an epoch
+persisted next to the cursor and read back directly,
 not inferred from `--interval` or from how many polls elapsed times any
 single one of their gaps (an earlier version of this feature used a flat
 300s window regardless of spacing, which only ever covered the gap

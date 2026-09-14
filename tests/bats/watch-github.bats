@@ -1656,6 +1656,55 @@ STUB
   [ "$(grep -c '"number":9999' "$events")" -eq 1 ]
 }
 
+# --- P2-1 (2026-09-14 fix-round-7 review): STEADY/RECOVERED above both put
+# the late row in the MIDDLE of two sweeps, so neither could see the SEAM.
+# A sweep at S1 reads what the index shows at S1; a row updated just
+# before S1 but indexed just after it is behind the main cursor (an active
+# org's cursor is ~now) and is left for the NEXT sweep — whose lower bound
+# used to be cursor - (S2 - S1) ~= S1, i.e. just above that row, forever.
+# The 300s floor meant to buy index-lag margin stopped applying the moment
+# now - sweepat > 300s (every sweep at the default 10m interval). Here the
+# GitHub timestamps share the fake wall clock, so the cursor really is ~now,
+# the shape a busy org actually has.
+
+_iso_from_epoch() {
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
+}
+
+@test "watch github --once: SEAM — a row updated 10s before a sweep but indexed 10s after it is delivered exactly once by the next sweep (P2-1, fix-round-7)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local anchor=1757289000 i now s1=""
+  printf '%s\n' "$(_iso_from_epoch $((anchor - 3600)))" > "$state_dir/CVERInc.cursor"
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+
+  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+    now=$((anchor + (i - 1) * 600))
+    export FAKE_NOW="$now"
+    # Ongoing activity 5s before every poll: the cursor tracks ~now.
+    _honest_corpus_add_row $((3000 + i)) "$(_iso_from_epoch $((now - 5)))" alice "activity $i"
+    # The seam row: updated at S1-10s, first visible in the index at S1+10s
+    # — i.e. after poll 5's sweep has already read the index.
+    [ "$i" -ne 6 ] || _honest_corpus_add_row 9999 "$(_iso_from_epoch $((s1 - 10)))" zed "late at the seam"
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+    [ "$i" -ne 5 ] || s1="$now"
+    if [ "$i" -ge 6 ] && [ "$i" -le 9 ]; then
+      [[ "$output" != *"#9999"* ]] || { echo "poll $i found it without a sweep: $output"; false; }
+    fi
+    if [ "$i" -eq 10 ]; then
+      [[ "$output" == *"github CVERInc/reef#9999 opened by zed: late at the seam"* ]] || { echo "poll 10: $output"; false; }
+    fi
+  done
+
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(grep -c '"number":9999' "$events")" -eq 1 ]
+  # Every activity row exactly once too — the overlap costs no duplicates.
+  [ "$(wc -l < "$events")" -eq 12 ]
+}
+
 # --- P3 (2026-09-14 fix-round-6 review): `.lastrun`/`.sweepat` sanity — a
 # `0` (the exact sentinel a `date` failure's own fallback writes) or a
 # future value must read as "missing", never as a real span to subtract

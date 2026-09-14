@@ -138,7 +138,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event on the same page still picked up the COMMENT's body and
   misattributed its @-mention to whoever requested the review, reopening
   the exact fix-round-5 bug one whitelist entry at a time. Removed
-  (2026-09-14 fix-round-6 review, P2-3).)
+  (2026-09-14 fix-round-6 review, P2-3). That measured window still had no
+  overlap with the previous sweep: a row updated just before a sweep but
+  indexed just after it sat behind an active org's cursor AND just below
+  the next sweep's lower bound, lost for good (11 of 40 rows at
+  `--interval 60` with a 4-minute index lag). Fixed 2026-09-14 fix-round-7
+  review, P2-1: the window is now `now - <the epoch the last sweep
+  STARTED at> + 300s`, so consecutive sweeps overlap by a fixed 300s.)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is

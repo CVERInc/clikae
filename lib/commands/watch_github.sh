@@ -382,6 +382,14 @@ _wg_iso_from_epoch() {
 # from — window stays at the 300s floor, same as before. Still costs at
 # most ONE extra request per poll, the same bound as before.
 #
+# 🔴 OVERLAP (P2-1, 2026-09-14 fix-round-7 review): that measured window
+# still ended exactly where the previous sweep began, and an active org's
+# cursor is ~now — so a row updated just before sweep S1 but indexed just
+# after it fell between the two sweeps for good. window is now
+# max(300s, now - sweepat) + 300s, with sweepat = when the last sweep
+# STARTED; see _wg_tail_sweep_window for why that bounds every row with
+# <= 300s index lag regardless of local clock skew.
+#
 # 🔴 SANITY (P3, 2026-09-14 fix-round-6 review): `.lastrun`/`.sweepat`
 # both hold a bare epoch a future poll subtracts `now` from — `0` (the
 # exact sentinel `date +%s 2>/dev/null || echo 0` itself writes on a
@@ -1090,8 +1098,9 @@ _wg_poll_lastrun_file() { printf '%s/%s.lastrun\n' "$(_wg_state_dir)" "$1"; }
 # _wg_sweep_at_file <org> -> path recording the epoch the last TAIL SWEEP
 # actually completed at (never written on a failure, see _wg_tail_sweep
 # below), persisted beside the cursor (P2-1, 2026-09-14 fix-round-6
-# review). Read directly by _wg_tail_sweep_window: window = max(300s, now
-# - sweepat) — a MEASURED span, replacing round-5's sweep_n *
+# review; since fix-round-7 P2-1 the epoch the sweep STARTED at). Read
+# directly by _wg_tail_sweep_window: window = max(300s, now - sweepat) +
+# 300s overlap — a MEASURED span, replacing round-5's sweep_n *
 # one-poll's-own-gap INFERENCE (see the 🔴 TAIL SWEEP WINDOW note above
 # CURSOR SEMANTICS in the file header for why that inference collapsed
 # the moment polling wasn't evenly spaced — a back-off recovery poll, or
@@ -1147,6 +1156,24 @@ _wg_poll_measure_gap() {
 # again). No `.sweepat` yet (the very first sweep this org has ever had,
 # or one _wg_sane_epoch rejects) means no measurement exists — window
 # stays at the 300s floor, matching the original fixed margin.
+#
+# 🔴 PLUS A FIXED 300s OVERLAP (P2-1, 2026-09-14 fix-round-7 review — read
+# before trimming the `+ 300` below as "double counting the floor"). The
+# previous sweep at S1 read what the index showed AT S1; a row updated just
+# before S1 but indexed just after it is already behind the main cursor, so
+# only the NEXT sweep can find it. Without the overlap that sweep's lower
+# bound is cursor - (S2 - S1), and an active org's cursor is ~S2 — so the
+# bound lands at ~S1, just ABOVE that row, and it is gone for good (proven
+# in the review: 11/40 rows delivered at --interval 60 with 240s index lag;
+# the SEAM test in watch-github.bats). The floor never helped there: it only
+# applies while now - sweepat <= 300s. The overlap makes every sweep's
+# lower bound <= S1 - 300s in GitHub's own clock, whatever the local clock
+# says: the cursor is a GitHub timestamp no later than GitHub's "now", and
+# now - sweepat is a DURATION, identical on both clocks. So every row whose
+# index lag is <= 300s is re-read by at least one sweep after it became
+# visible. Re-reads cost no duplicate events (the seen-file dedups them),
+# only the rows in that extra 300s — at most one extra page per sweep while
+# an org does <= 100 updates per 5 minutes.
 _wg_tail_sweep_window() {
   local org="$1" now sweepat_file sweepat window=300 elapsed
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -1159,7 +1186,7 @@ _wg_tail_sweep_window() {
       [ "$elapsed" -gt "$window" ] && window="$elapsed"
     fi
   fi
-  printf '%s' "$window"
+  printf '%s' "$((window + 300))"
 }
 
 # _wg_tail_sweep <org> <cursor> <seen_file> <events_file> -> a bounded,
@@ -1203,9 +1230,14 @@ _wg_tail_sweep_window() {
 # every time the schedule fired, back-off or not.
 _wg_tail_sweep() {
   local org="$1" cursor="$2" seen_file="$3" events_file="$4"
-  local epoch since q tsv page_n window page=1 truncated=0
+  local epoch since q tsv page_n window page=1 truncated=0 started
   epoch="$(_limit_iso_epoch "$cursor" "")"
   [ -n "$epoch" ] || return 0
+  # The instant this sweep starts reading — what `.sweepat` records below
+  # (P2-1, fix-round-7): a row that becomes visible while pages 2..5 are
+  # still being fetched was NOT necessarily covered by page 1, so the next
+  # sweep must measure from here, not from when this one finished.
+  started="$(date +%s 2>/dev/null || echo 0)"
   window="$(_wg_tail_sweep_window "$org")"
   since="$(_wg_iso_from_epoch "$((epoch - window))")"
   [ -n "$since" ] || return 0
@@ -1234,7 +1266,7 @@ _wg_tail_sweep() {
   # never covered; the NEXT sweep's window still needs to reach back to
   # the last one that actually completed.
   local sweepat_file; sweepat_file="$(_wg_sweep_at_file "$org")"
-  printf '%s\n' "$(date +%s 2>/dev/null || echo 0)" > "${sweepat_file}.tmp" 2>/dev/null \
+  printf '%s\n' "$started" > "${sweepat_file}.tmp" 2>/dev/null \
     && mv -f "${sweepat_file}.tmp" "$sweepat_file" 2>/dev/null || true
   return 0
 }
@@ -1472,8 +1504,10 @@ late-indexed ones, which sit at the window's old end) are read before a
 busy org's own already-seen recent activity can fill the page — and
 deliver anything a poll may have missed while it was still indexing; a
 small seen-file de-dupes whichever query finds a row first. The window is
-at least 300s, wider the longer it's actually been since the last sweep
-COMPLETED — measured directly (an epoch persisted beside the cursor), not
+the time since the last sweep STARTED (at least 300s) plus a fixed 300s
+overlap with that sweep, so a row updated just before one sweep but
+indexed just after it is re-read by the next — measured directly (an
+epoch persisted beside the cursor), not
 inferred from --interval or from how many polls elapsed, so cron's
 `--once` is covered without needing to be told an interval, and a live
 loop's own back-off (or recovery from one) is covered exactly, not
