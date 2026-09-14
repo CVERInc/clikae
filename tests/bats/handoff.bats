@@ -228,13 +228,19 @@ STUB
 # codex's ASSISTANT turns wrap as a "response item" (OpenAI Responses API
 # shape): `role` is present but `content` is an ARRAY of typed parts, not a
 # string — the claude-shaped `"role":"user","content":"` anchor never
-# matches it. codex's USER turns are event_msg/user_message (round-1 review
-# P2-2 — see codex.sh's own comment: a response_item/role:user turn is
-# machine-injected context, not something the human typed; a separate test
-# below covers that filtering). grok's chat_history.jsonl has no `role` key
-# at all: the message kind IS the top-level `type` ("user"/"assistant"),
-# with the same array-of-parts `content`. Both fixtures also carry one
-# garbage line (malformed JSON) to prove a bad line is skipped, not fatal.
+# matches it. codex's USER turns are the UNION of event_msg/user_message and
+# response_item/role:user (round-2 review P2-1 made the assistant side read
+# both too, for the same reason): on a real 0.154.0 codex_exec rollout,
+# event_msg/user_message never appears at all, and a human-typed prompt only
+# exists as response_item/role:user — but that shape ALSO carries
+# machine-injected context (AGENTS.md dumps, environment_context, plugin
+# recommendations) recorded the same way, which round-3 review P2-1 filters
+# out (per part, and via the real files' own content_item_kinds field — see
+# codex.sh's own comment; a separate test below covers that filtering).
+# grok's chat_history.jsonl has no `role` key at all: the message kind IS
+# the top-level `type` ("user"/"assistant"), with the same array-of-parts
+# `content`. Both fixtures also carry one garbage line (malformed JSON) to
+# prove a bad line is skipped, not fatal.
 
 _seed_codex_transcript() {
   local profile="$1" dir="$2" sid="$3"
@@ -507,6 +513,21 @@ _seed_codex_shape_switch_mid_file() {
   [[ "$output" == *"scanned 1 assistant lines, matched 0"* ]] || false
 }
 
+@test "#33 round-3 review P3-3: a legitimately empty agent_message counts as matched (no loud diagnostic, even though it prints nothing)" {
+  # {"payload":{"type":"agent_message","message":""}} is a shape that
+  # WORKED -- the key was found, the value is just "" -- not a mismatch
+  # (codex.sh:324's old `if (seg != "")` guard starved `matched` on this
+  # exact case and fired "scanned 1 assistant lines, matched 0" for a
+  # value that was never wrong, just empty).
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/empty-agent-message.jsonl"
+  echo '{"type":"event_msg","payload":{"type":"agent_message","message":""}}' > "$t"
+  run adapter_handoff_extract "$t" assistant
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 _seed_grok_transcript() {
   local profile="$1" dir="$2" sid="$3"
   local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
@@ -704,6 +725,38 @@ _seed_grok_whitespace_transcript() {
     echo '{"type":"user","message":{"role":"user","content":"<local-command-stdout>SHOULD NOT APPEAR local command output</local-command-stdout>"},"timestamp":"2026-05-31T01:00:05.000Z"}'
     echo '{"type":"user","message":{"role":"user","content":"second real prompt with 中文 too"},"timestamp":"2026-05-31T01:05:00.000Z"}'
     echo '{"type":"user","message":{"role":"user","content":"third real prompt with a quote \"hi\" and a newline\nhere"},"timestamp":"2026-05-31T01:05:01.000Z"}'
+    # Round-3 review P3-1: the golden mutation table found 5 MORE of
+    # claude.sh's 12 pipeline stages deletable with this test staying
+    # green (7/12 caught a mutation, brief wants 12/12). Each line below is
+    # the ONE thing that would leak if that one specific stage were the
+    # only thing standing in its way.
+    # (a) toolUseResult with STRING content — the existing toolUseResult
+    # line above has ARRAY content, which the user anchor (":user","content":"
+    # requires a STRING) never matches anyway, so deleting the toolUseResult
+    # filter alone changed nothing; this one reaches the anchor.
+    echo '{"type":"user","toolUseResult":true,"message":{"role":"user","content":"SHOULD NOT APPEAR tool result"},"timestamp":"2026-05-31T01:00:06.000Z"}'
+    # (b) isMeta:true with NON-tag content — the existing isMeta line above
+    # is ALSO <command-name>-tagged, so the <command- filter backs it up;
+    # this one has nothing else standing in its way.
+    echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"SHOULD NOT APPEAR isMeta content"},"timestamp":"2026-05-31T01:00:07.000Z"}'
+    # (c) <command-name> WITHOUT isMeta — the mirror of (b): the existing
+    # <command-name> line above is ALSO isMeta, so removing the <command-
+    # filter alone changed nothing; this one has no isMeta backup.
+    echo '{"type":"user","message":{"role":"user","content":"<command-name>SHOULD NOT APPEAR bare command</command-name>"},"timestamp":"2026-05-31T01:00:08.000Z"}'
+    # (d) a user turn and an assistant turn whose ENTIRE value is "\n" —
+    # unescapes to a single space, which only the trailing blank-line
+    # filter on each branch catches; no prior fixture line was ever
+    # whitespace-only after unescaping, so those two filters were dead.
+    echo '{"type":"user","message":{"role":"user","content":"\n"},"timestamp":"2026-05-31T01:00:09.000Z"}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\n"}]},"timestamp":"2026-05-31T01:00:10.000Z"}'
+    # (e) a user turn with ARRAY content whose part carries its OWN
+    # "text":"…" key (the shape a real claude turn uses for image+text) —
+    # not a string content, so it never touches the USER anchor, but it
+    # DOES carry a "text":"…" key the ASSISTANT branch's own value regex
+    # would match if its role:assistant anchor were ever swapped for a
+    # bare `cat` (which the golden test previously couldn't tell apart —
+    # no other non-assistant line in this fixture had its own "text" key).
+    echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"SHOULD NOT APPEAR user text part"}]},"timestamp":"2026-05-31T01:00:11.000Z"}'
   } > "$t"
   # _handoff_clean_tail is the FULL digest pipeline (both roles, header lines
   # included) — the same function handoff_render feeds a summarizer, so this

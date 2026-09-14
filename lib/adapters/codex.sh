@@ -239,14 +239,18 @@ adapter_transcript_path() {
 # this repo) records replies as event_msg/agent_message showed as EMPTY
 # here while limit.sh read the same file fine.
 #
-# ` *` (a literal space, starred), not `[ \t]*`/`[[:space:]]*`: a real
-# rollout writes `"type": "user_message"` (space after the colon — every
-# codex event on this machine does, confirmed by `lib/core/limit.sh`'s whole
-# codex family: :281, :322, :1160, :1183, and
+# ` *` (a literal space, starred), not `[ \t]*`/`[[:space:]]*`: `lib/core/
+# limit.sh`'s whole codex family (:281, :322, :1160, :1183, and
 # tests/bats/limit-codex-status.bats:215's "confirmed against a real
-# rollout" fixture). Matching that exact idiom keeps this the SAME
-# whitespace convention as every other codex scanner in the repo, not a
-# fourth one (round-1 review P1-1).
+# rollout" fixture) matches a SPACED `"type": "user_message"`, so ` *`
+# tolerates that idiom too — the SAME whitespace convention as every other
+# codex scanner in the repo, not a fourth one (round-1 review P1-1).
+# Round-3 review: that confirmation was against an older/other rollout,
+# NOT what this machine's real files look like — the two real 0.154.0
+# `codex_exec` rollouts on this box are COMPACT JSON (zero `"type": "`
+# occurrences, all `"type":"`, no space after the colon). ` *` matches
+# both forms either way, so behaviour is unaffected; this comment used to
+# overstate the evidence as "every codex event on this machine does".
 _CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
 _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 
@@ -359,8 +363,15 @@ adapter_handoff_extract() {
         rest = substr(rest, RSTART + RLENGTH)
         if (match(rest, /^([^"\\]|\\.)*/)) {
           seg = substr(rest, 1, RLENGTH)
+          # round-3 review P3-3: finding the key AND its (possibly empty)
+          # value body is a MATCH regardless of whether the value itself is
+          # "" — a legitimately empty agent_message is a shape that worked,
+          # not a mismatch, so it must not starve `matched` and trigger the
+          # loud line below. Only an EMPTY-STRING value is skipped from
+          # print+dedup (nothing to show, nothing to compare against).
+          matched++
           if (seg != "" && (!have_prev || seg != prev)) {
-            print seg; matched++; prev = seg; have_prev = 1
+            print seg; prev = seg; have_prev = 1
           }
         }
       }

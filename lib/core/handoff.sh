@@ -108,10 +108,16 @@ _handoff_default_extract() {
 # No count/cap here — callers `tail -n` the amount they want.
 #
 # 🔴 Do NOT redirect the hook's stderr to /dev/null (round-1 review P3-2): the
-# codex/grok hooks print a loud `handoff: <engine> extractor matched 0 <role>
-# lines in <file>` line when they come up empty (see their own comments), and
-# swallowing it here would put us right back to the silent-miss failure mode
-# #33 exists to fix, just one layer further out.
+# codex hook prints `handoff: codex extractor scanned N <role> lines,
+# matched 0` (see its own comment) — but ONLY when it saw N>0 lines
+# structurally shaped like this role's turn and pulled a value out of none
+# of them (round-2 review P3-2). A role with genuinely no turns yet, or one
+# whose only turns were correctly filtered out as machine-injected (round-3
+# review P2-1), stays SILENT on purpose — that combination isn't a
+# mismatch, so training a reader to expect noise there would be the same
+# swallow-the-real-signal failure mode #33 exists to fix, just one layer
+# further out. Redirecting this hook's stderr to /dev/null would erase the
+# one case it DOES fire for: the anchors looking at the wrong keys.
 _handoff_extract() {
   local t="$1" role="$2"
   if declare -F adapter_handoff_extract >/dev/null 2>&1; then
