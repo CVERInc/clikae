@@ -610,15 +610,38 @@ _wg_latest_actor() {
 # Portable reverse (no `tac`, which macOS doesn't ship): the classic
 # `sed '1!G;h;$!d'` idiom.
 #
-# `$__WG_LOOKUP_BODY` (P2-2, 2026-09-13 fix-round-3 review): the matched
-# event's own `body` field, unescaped-quote-aware (`([^"\\]|\\.)*` — a
-# comment/review body legitimately contains `"` characters, escaped as `\"`
-# in the JSON; the simpler `[^"]*` pattern this file uses for short fields
-# like a login would truncate early on those). Empty when the event shape
-# carries no `body` at all (a label/assignee/rename `activity`) — fed to
-# _wg_process's own `_wg_body_mentions_self` check, never printed anywhere
-# (see the P2-2 note in _wg_process for why only the row's own `title` is
-# ever shown in the wake line).
+# `$__WG_LOOKUP_BODY` (P2-2, 2026-09-13 fix-round-3 review; 🔴 FIXED AGAIN,
+# P2-2, 2026-09-14 fix-round-5 review — read before touching this again):
+# the matched event's own `body` field, unescaped-quote-aware
+# (`([^"\\]|\\.)*` — a comment/review body legitimately contains `"`
+# characters, escaped as `\"` in the JSON; the simpler `[^"]*` pattern this
+# file uses for short fields like a login would truncate early on those).
+# Empty when the SELECTED event's own type carries no `body` at all — fed
+# to _wg_process's own `_wg_body_mentions_self` check, never printed
+# anywhere (see the P2-2 note in _wg_process for why only the row's own
+# `title` is ever shown in the wake line).
+#
+# 🔴 Round-3's own comment above claimed "the event this loop just picked
+# is the newest one carrying an actor, which is also the newest one
+# carrying a body (only a comment/review has either field at all)" — that
+# parenthetical is false: `labeled`/`closed`/`assigned`/`renamed` all carry
+# `actor` and never carry `body`. A timeline shaped
+# [commented by zed (body @self), labeled by carol] picks carol (the last
+# actor-carrying event, by design — that IS who most recently touched the
+# item), but round 3's code then took the LAST `body` field anywhere in
+# the page regardless of which event that was — zed's — and used it to
+# decide `kind`, printing "mention by carol": a real @self mention, by
+# zed, misattributed to carol, who only added a label. Fixed by gating the
+# body extraction on the SELECTED event's own type, same `case` this
+# function already classifies `kind` from: `commented`/`reviewed`/
+# `review_requested` are the shapes that can carry a body at all (the
+# search API's own timeline schema — anything else gets "" (matching
+# round 3's original, now-corrected intent). This does NOT change actor
+# selection — carol is still reported as the row's actor, same as any
+# other non-mentioning activity (see the control case right below this
+# comment in the tests) — it only stops a body that belongs to a
+# DIFFERENT, earlier event from upgrading that unrelated actor's own kind
+# to `mention`.
 _wg_last_actor_in_body() {
   local body="$1" flat events evline actor event
   flat="$(printf '%s' "$body" | tr -d '\n')"
@@ -638,12 +661,20 @@ _wg_last_actor_in_body() {
     # split right through the middle of this event's body, truncating it
     # before the actual `@self` mention text. The quote-aware pattern
     # below only stops at a real (unescaped) closing quote either way, so
-    # scanning the unsplit text for the LAST body field is both safe (a
-    # literal `},{` inside quotes is just two ordinary characters to it)
-    # and correct in practice: the event this loop just picked is the
-    # newest one carrying an actor, which is also the newest one carrying
-    # a body (only a comment/review has either field at all).
-    __WG_LOOKUP_BODY="$(printf '%s' "$flat" | grep -oE '"body":"([^"\\]|\\.)*"' | tail -n1 | sed -E 's/^"body":"//; s/"$//')"
+    # scanning the unsplit text for the LAST body field is safe (a literal
+    # `},{` inside quotes is just two ordinary characters to it) — but only
+    # CORRECT when the selected event ($event, below) is itself one of the
+    # types that can carry a body; see the 🔴 P2-2 fix-round-5 note above
+    # this function for why "the newest actor-carrying event is also the
+    # newest body-carrying event" is false in general (a label/close/
+    # assign after a comment is the exact counterexample) and why the body
+    # extraction below is gated on $event's own type instead of assumed.
+    case "$event" in
+      commented|reviewed|review_requested)
+        __WG_LOOKUP_BODY="$(printf '%s' "$flat" | grep -oE '"body":"([^"\\]|\\.)*"' | tail -n1 | sed -E 's/^"body":"//; s/"$//')"
+        ;;
+      *) __WG_LOOKUP_BODY="" ;;
+    esac
     case "$event" in
       commented) __WG_LOOKUP_KIND="comment" ;;
       reviewed)  __WG_LOOKUP_KIND="review" ;;

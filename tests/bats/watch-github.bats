@@ -1041,6 +1041,76 @@ STUB
   [[ "$output" != *"mention"* ]] || false
 }
 
+# --- P2-2 (2026-09-14 fix-round-5 review): `1e1cb13` (this round's own
+# P3-1 fix, right above) took `__WG_LOOKUP_BODY` from the LAST `body` field
+# anywhere on the fetched timeline page, regardless of which event that
+# body belonged to — reasoning (in the code comment it left behind) that
+# "the newest actor-carrying event is also the newest body-carrying event,
+# since only a comment/review has either field at all". False:
+# labeled/closed/assigned/renamed all carry `actor`, none carry `body`. A
+# timeline shaped [commented by zed, body @me], [labeled by carol] picks
+# carol as the row's actor (correct — she's who most recently touched the
+# issue) but then, pre-fix, took zed's body (the only body on the page) to
+# decide `kind`, printing "mention by carol" — a real @-mention by zed,
+# credited to carol, who only added a label. Three arms, only the body
+# content differing (mirrors the review's own r5-30/r5-47 probes):
+#   1. a self-mention in the LATEST actor-carrying event — already covered
+#      above ("a comment by someone else that @-mentions self reads
+#      kind=mention", unchanged by this fix: the selected event IS the
+#      commented one, so its own body is exactly what gets checked).
+#   2. label after a self-mentioning comment (the bug) — this block.
+#   3. label after a comment with NO mention (control — same shape, proves
+#      the difference is the body content, not the fix breaking labels).
+
+@test "watch github --once: a label added after a self-mentioning comment is not misattributed as a mention by the labeler (P2-2, fix-round-5)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|204|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # zed's comment @-mentions self; carol's later label is the LAST
+  # actor-carrying event on the page, so carol is (correctly) the row's
+  # actor — but carol never wrote a word, so this must NOT read "mention".
+  _gh_stub_timeline_page reef 204 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"cc @me please look"},{"event":"labeled","actor":{"login":"carol"},"label":{"name":"bug"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 204 2026-09-07T06:05:00Z alice reef https://x/204 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#204 activity by carol: some issue"* ]] || false
+  [[ "$output" != *"mention by carol"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: control — label after a NON-mentioning comment also reads activity by carol (P2-2, fix-round-5)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|205|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 205 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"no mention here"},{"event":"labeled","actor":{"login":"carol"},"label":{"name":"bug"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 205 2026-09-07T06:05:00Z alice reef https://x/205 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#205 activity by carol: some issue"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: a literal '},{' in the earlier mentioning comment still does not leak into a later labeler's kind (P2-2/P3-1 combined, fix-round-5)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|206|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 206 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"json },{ paste then @me"},{"event":"labeled","actor":{"login":"carol"},"label":{"name":"bug"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 206 2026-09-07T06:05:00Z alice reef https://x/206 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#206 activity by carol: some issue"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
 @test "watch github: rejects garbage --interval with rc=2 (P2-12)" {
   _gh_stub_install
   run clikae watch github --org CVERInc --interval notaduration --once
