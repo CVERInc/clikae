@@ -115,6 +115,53 @@ _field() {
   [[ "$(_field "$f" rerouted_from)" == *"codex/T1"* ]] || false
 }
 
+# P1-1 (2026-09-14 round-1 fix review): `burn_status_fieldv`'s prefix-strip
+# parser was O(n²) — measured (this review) 64,338 bytes / last field: 1,910 ms
+# old, 2-3 ms new; 1,000,338 bytes: old never finished in 90s, new 32-34 ms.
+# `tests/bats/tmux-status.bats:370`'s existing cost test uses `_usage_cache`'s
+# ~150-byte object and cannot see this at all — this is the "sized" test the
+# round-1 review asked for, unit-testing the reader directly rather than
+# through the whole `clikae burn` pipeline. `reason` (the field that grows —
+# burn.sh redacts a failed run's stderr up to `_BURN_REDACT_TAIL_BYTES`,
+# default 65536) sits BEFORE `state`/`pid` in the real object
+# (`_burn_status_write`'s own field order), so asking for `state` here is
+# exactly the everyday FAILED-lane cost, not a synthetic worst case.
+#
+# The 1000 ms ceiling is not a stopwatch on a specific number (this machine is
+# not a neutral place to measure — see docs/DESIGN-tmux.md Rule 10's own
+# caveat) — new measures 2-3 ms here, old measures ~1,900 ms; 1000 ms sits
+# comfortably below the old number and >100x above the new one, so this is a
+# GUARD against the O(n²) curve coming back, not a precision claim.
+@test "burn-status: burn_status_fieldv stays fast on a 64KB reason field (P1-1 sized test)" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local reason json t0 t1 elapsed_ms
+  reason="$(head -c 64000 /dev/zero | tr '\0' 'x')"
+  json="$(printf '{"ok":false,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":12,"run_id":"burn-1","state":"fail","started_at":1,"updated_at":2,"pid":123,"log":"/x","reset_at":null}' "$reason")"
+
+  t0="$(date +%s%N)"
+  burn_status_fieldv "$json" state
+  t1="$(date +%s%N)"
+  [ "$_BSF" = '"fail"' ] || { echo "state: got [$_BSF]"; false; }
+
+  burn_status_fieldv "$json" pid
+  [ "$_BSF" = "123" ] || { echo "pid: got [$_BSF]"; false; }
+
+  burn_status_fieldv "$json" reason
+  [ "${#_BSF}" -eq $((64000 + 2)) ] || { echo "reason length: got ${#_BSF}, want $((64000 + 2)) (quotes included)"; false; }
+
+  # prefix trap: artifact vs artifact_bytes, still correct at this size
+  burn_status_fieldv "$json" artifact
+  [ "$_BSF" = '"/x"' ] || { echo "artifact: got [$_BSF]"; false; }
+  burn_status_fieldv "$json" artifact_bytes
+  [ "$_BSF" = "null" ] || { echo "artifact_bytes: got [$_BSF]"; false; }
+
+  elapsed_ms=$(( (t1 - t0) / 1000000 ))
+  [ "$elapsed_ms" -le 1000 ] || {
+    echo "burn_status_fieldv on a 64KB reason (asking for a field AFTER it) took ${elapsed_ms}ms — the O(n^2) prefix-strip regression this guards against"
+    false; }
+}
+
 @test "burn-status: every burn writes a status file even without --json" {
   # #41 is "every burn", not "every --json burn" — the whole point is that a
   # cockpit reading a DIFFERENT process never needs the burn to have opted in.

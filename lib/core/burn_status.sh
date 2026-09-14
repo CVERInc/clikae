@@ -32,26 +32,52 @@ burn_status_field() {
 # burn_tank_busy walks every run directory on the machine before a burn may
 # start, and the tmux status line (lib/core/tmux.sh's tmux_status_render) does
 # the same walk every 5 seconds inside tmux's own server, under a 30 ms budget
-# that four processes per field cannot meet. The parse is pure bash 3.2
-# parameter expansion, which is exactly as honest as the grep was: this reads
-# the flat single-line object _burn_status_write itself produces and nothing
-# else (see this file's header), so "the first `"<field>":` in the string" is
-# the whole grammar either way.
+# that four processes per field cannot meet.
+#
+# 🔴 P1-1 (2026-09-14 round-1 fix review). The FIRST fork-free shape here was
+# `rest="${json#*\"$field\":}"` — a bash parameter-expansion prefix strip.
+# That is O(n²) on this input, not O(n): bash's shortest-match search for a
+# pattern beginning with `*` retries the glob at every byte offset, so asking
+# for a field that sits AFTER a large one (exactly `state`/`pid`, which sit
+# after `reason` in `_burn_status_write`'s own field order — see that
+# function) pays for scanning the large field's bytes at EVERY offset it
+# tries, not once. Measured on this box (bash 5.2, single field, last-field
+# worst case): 1,338 B → 2 ms, 8,338 B → 33 ms, 64,338 B → 1,910 ms, 1,000,338
+# B → didn't finish in 90 s. `reason` is exactly the field that grows: burn.sh
+# redacts a failed run's stderr to `_BURN_REDACT_TAIL_BYTES` (default 65536)
+# and writes it into `reason` — so an ordinary FAILED lane, the one case this
+# function is on the hot path for, was the worst case, and every lane skipped
+# by state in tmux_status_alertsv still paid to find out its state.
+#
+# The replacement is a single `[[ =~ ]]` regex match — still one process (no
+# fork, no subshell: `[[` and `BASH_REMATCH` are shell builtins), but glibc's
+# regex engine walks the string once. Re-measured, single field, same worst
+# case: 1,338 B → 1 ms, 8,338 B → 1 ms, 64,338 B → 2-3 ms, 1,000,338 B →
+# 32-34 ms — linear, and inside the 30 ms budget for every size this repo's
+# own `_BURN_REDACT_TAIL_BYTES` ceiling can actually produce.
+#
+# Three alternatives, tried in the order that resolves ties the way the old
+# reader did (see below): a quoted string (re-quoted like the old reader),
+# the `rerouted_from` array (bracket-delimited, first `]` — same "no nesting"
+# assumption the header above already makes), or a bare token cut at the
+# next `,` or `}` (null/true/false/number). POSIX ERE alternation is
+# leftmost-LONGEST, not first-alternative-wins — but for every shape this
+# reader is ever asked to read, the bare alternative's `[^,}]*` matches
+# exactly the same span as the quoted alternative would (the value's own
+# closing quote is immediately followed by the field-terminating `,`/`}`, so
+# there is nothing after it for `[^,}]*` to keep consuming), so the two
+# alternatives tie and the earlier one in the pattern — quoted — wins,
+# matching the old reader's own re-quoting. Verified field-by-field against
+# every one of `_burn_status_write`'s 16 fields, real values: SAME.
 #
 # The `"` and `:` around the name are load-bearing and are why a prefix cannot
 # be confused with a longer name: asking for `artifact` cannot match
 # `"artifact_bytes":`.
 # shellcheck disable=SC2034  # _BSF is an output slot, read by lib/core/tmux.sh.
 burn_status_fieldv() {
-  local json="$1" field="$2" rest
+  local json="$1" field="$2"
   _BSF=""
-  rest="${json#*\"$field\":}"
-  [ "$rest" = "$json" ] && return 0          # no such field
-  case "$rest" in
-    '"'*)  rest="${rest#\"}"; _BSF="\"${rest%%\"*}\"" ;;   # a quoted string, re-quoted
-    '['*)  _BSF="${rest%%]*}]" ;;                           # the rerouted_from array
-    *)     _BSF="${rest%%,*}"; _BSF="${_BSF%%\}*}" ;;       # null/true/false/number
-  esac
+  [[ $json =~ \"$field\":(\"[^\"]*\"|\[[^]]*\]|[^,}]*) ]] && _BSF="${BASH_REMATCH[1]}"
   return 0
 }
 
