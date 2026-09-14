@@ -42,6 +42,9 @@ Make & manage tanks:
   solo <engine> <tank>             make a tank standalone (out of relay/burn/share)
   settings apply [engine] [tank]   merge permissions template (--check or --dry-run)
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
+  cockpit [engine] <tank>          mark the tank that dispatches build/review
+                                   lanes with `burn` instead of spawning them
+                                   in-session (--off removes it; bare = show)
 
 Keep burning when a tank runs dry:
   to [target]                      carry your session to the next tank (bare = next

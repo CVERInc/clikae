@@ -353,6 +353,34 @@ _agy_log() { # <line>
   [[ "$output" == *"Newer session"*"Older session"* ]] || false
 }
 
+# #74 round-1 P2-5: the board's Continue list is a SEPARATE query from
+# `clikae resume`'s picker (this dir's newest across engines, not the whole
+# store) and had no burn filter at all — a lane's one-shot session, being by
+# definition the newest thing in the dir it just ran in, kept showing up on
+# the board's first screen even with resume's own hiding "fixed".
+@test "the continue list hides a burn session by default, and a real session takes its slot" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"Human session","sessionId":"human0000"}\n' \
+    > "$d/human0000-0000-0000-0000-000000000000.jsonl"
+  sleep 1
+  printf '{"type":"ai-title","aiTitle":"Lane one-shot","sessionId":"burn0000"}\n' \
+    > "$d/burn0000-0000-0000-0000-000000000000.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'burn0000-0000-0000-0000-000000000000\trun-1\t1700000000\n' \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Human session"* ]] || false
+  [[ "$output" != *"Lane one-shot"* ]] || false
+  CLIKAE_RESUME_ALL=1 run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lane one-shot"* ]] || false
+}
+
 @test "a session's recap is shown under its continue row, hint stripped" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"
@@ -936,14 +964,51 @@ _agy_log() { # <line>
             grep -oE "^      '?[A-Za-z/?]'?\)" |
             tr -d "')" | tr -d ' ')"
 
-  for key in $labels; do
+  # R4 review P3-5: `$labels` contains a literal `?` — unquoted word-splitting
+  # here runs it through pathname expansion. On a clean cwd `?` just expands
+  # to itself (a false red: `?` isn't a real _home_pick case, so it prints as
+  # "missing"), but with any single-char file sitting in cwd it silently
+  # expands to that filename INSTEAD and disappears from the loop — the `?`
+  # guard below then never fires, and the real `?` key quietly stops being
+  # checked. Reading `$labels` line-by-line (one key per grep -o match, one
+  # match per line already) sidesteps word-splitting and globbing entirely.
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
     # `?` opens the overlay itself — listing it inside would be noise.
     [ "$key" = "?" ] && continue
     case "$legend" in
       *"$key"*) ;;
       *) missing="$missing $key" ;;
     esac
-  done
+  done <<< "$labels"
+  [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
+}
+
+@test "the ? overlay key-legend scan survives a stray single-char file in cwd" {
+  # R4 review P3-5: pin the failure mode directly, not just the fix — an
+  # unquoted `for key in $labels` would let pathname expansion swap a real
+  # label (most dangerously `?` itself) for a filename sitting in cwd.
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+  local stray_dir="$TEST_HOME/stray"; mkdir -p "$stray_dir"
+  : > "$stray_dir/h"
+  : > "$stray_dir/x"
+  cd "$stray_dir"
+
+  local legend labels key missing=""
+  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
+  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
+            grep -oE "^      '?[A-Za-z/?]'?\)" |
+            tr -d "')" | tr -d ' ')"
+
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    [ "$key" = "?" ] && continue
+    case "$legend" in
+      *"$key"*) ;;
+      *) missing="$missing $key" ;;
+    esac
+  done <<< "$labels"
   [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
 }
 

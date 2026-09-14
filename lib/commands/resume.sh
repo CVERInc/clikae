@@ -40,6 +40,8 @@ home; clikae finds the tank and resumes it there.
                             session is carried there (a real cross-tank resume,
                             not a fresh start). Press `c` in the picker to free
                             disk space (opens `clikae clean`, then comes back).
+  clikae resume --all       include headless "burn" sessions in the picker
+                            (they are hidden by default to avoid clutter).
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
   clikae resume ask-tank [always|dry-only]
                             show or set whether resuming from the home board
@@ -63,8 +65,11 @@ _resume_split() {
   _rs_engine="${tmp%%$'\x1f'*}"; tmp="${tmp#*$'\x1f'}"
   _rs_tank="${tmp%%$'\x1f'*}";   tmp="${tmp#*$'\x1f'}"
   _rs_sid="${tmp%%$'\x1f'*}";    tmp="${tmp#*$'\x1f'}"
-  _rs_f="${tmp%%$'\x1f'*}"
-  _rs_mt="${tmp##*$'\x1f'}"
+  _rs_f="${tmp%%$'\x1f'*}";      tmp="${tmp#*$'\x1f'}"
+  _rs_mt="${tmp%%$'\x1f'*}"
+  _rs_is_burn="${tmp##*$'\x1f'}"
+  [ "$_rs_is_burn" = "$_rs_mt" ] && _rs_is_burn=0
+  return 0
 }
 
 # _resume_session_fields <path> — derive _rs_engine/_rs_tank/_rs_sid from a raw
@@ -81,7 +86,17 @@ _resume_session_fields() {
   if [ "$_rs_engine" = "antigravity" ]; then
     _rs_sid="${f%/.system_generated/*}"; _rs_sid="${_rs_sid##*/}"
   elif [ "$_rs_engine" = "codex" ]; then
-    _rs_sid="${filename%.jsonl}"; _rs_sid="${_rs_sid##*-}"
+    # #74 round-1 P1-1: a codex uuid embeds hyphens of its own (8-4-4-4-12), so
+    # `${_rs_sid##*-}` (the previous shape) kept only the uuid's OWN last
+    # segment — never what burn actually recorded (payload.id from the file
+    # body). A codex uuid is always exactly 36 characters — the same fact
+    # `_clean_session_is_live` (clean.sh) already trusts for its live-session
+    # guard, and now the one place both sides read it from. Mirrors
+    # lib/adapters/codex.sh's adapter_sid_canonical string-for-string (kept
+    # inline, not routed through load_adapter, so this per-session hot path —
+    # clean.sh's dedupe scan — never pays for an adapter (re)source).
+    _rs_sid="${filename%.jsonl}"
+    if [ "${#_rs_sid}" -gt 36 ]; then _rs_sid="${_rs_sid:$(( ${#_rs_sid} - 36 ))}"; fi
   else # claude
     _rs_sid="${filename%.jsonl}"
   fi
@@ -383,7 +398,7 @@ _resume_pick_draw_body() {
   # localized key labels are correct and de/es/fr legitimately need the room
   # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a $T_K_TOGGLE_ALL · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
   printf '\n'
 
@@ -397,6 +412,7 @@ _resume_pick_draw_body() {
     _resume_split "${sessions[s_idx]}"
     engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
     label="${cached_title[s_idx]}"
+    [ "$_rs_is_burn" = "1" ] && label="[burn] $label"
     rage="${cached_age[s_idx]}"
 
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -532,7 +548,7 @@ _resume_pick() {
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
-  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0
+  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0 trigger_all=0
 
   # Keys arrive pre-decoded by tui_read_key (lib/core/tui.sh) as symbolic names
   # — the byte-level ESC state machine that used to live here (and regressed
@@ -549,6 +565,7 @@ _resume_pick() {
       q|esc)            exit_loop=1 ;;
       /)                trigger_filter=1 ;;
       c)                trigger_clean=1 ;;
+      a)                trigger_all=1 ;;
       # `?` opens help on the board, so a user arrives here having just been
       # taught it — and it was dead: not bound, no feedback, byte-identical to an
       # unbound key. This picker also implements g/G, 1-9 and PgUp/PgDn without
@@ -613,6 +630,7 @@ _resume_pick() {
     trigger_select=0
     trigger_clean=0
     trigger_help=0
+    trigger_all=0
 
     _handle_key "$TUI_KEY"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
@@ -620,6 +638,29 @@ _resume_pick() {
 
     if [ "$exit_loop" -eq 1 ]; then
       break
+    fi
+
+    if [ "$trigger_all" -eq 1 ]; then
+      if [ "${CLIKAE_RESUME_ALL:-0}" -eq 1 ]; then
+        CLIKAE_RESUME_ALL=0
+      else
+        CLIKAE_RESUME_ALL=1
+      fi
+      # #74 round-1 P2-4: `a` used to skip the terminal-leaving cleanup `c`
+      # (right below) always does, going straight back to _resume_picker's
+      # rescan while still in the alt screen with `stty -echo` in effect. Not
+      # theoretical: toggling --all OFF on a store that is now all-burn makes
+      # `sessions` empty, which takes the "No sessions to resume yet" +
+      # `exit 0` path a few dozen lines down — those lines got printed INSIDE
+      # the alt screen, then the EXIT trap's `_home_tty_leave` wiped the whole
+      # screen on the way out, and the user saw nothing happen at all. Leave
+      # the alt screen the same way `c` does BEFORE rescanning, so anything
+      # the rescan prints (that message included) lands on the real screen.
+      { exec 3>&-; } 2>/dev/null || true
+      _home_tty_leave; trap - EXIT INT TERM
+      unset -f _handle_key
+      _RESUME_PICK_AGAIN=1
+      return 0
     fi
 
     if [ "$trigger_clean" -eq 1 ]; then
@@ -652,6 +693,7 @@ _resume_pick() {
       _home_help_row "1-9"           "$T_K_JUMP"
       _home_help_row "⏎ Enter"       "$T_RESUME"
       _home_help_row "/"             "$T_K_FILTER"
+      _home_help_row "a"             "$T_K_TOGGLE_BURN"
       _home_help_row "c"             "$T_K_CLEAN"
       _home_help_row "q / Esc"       "$T_K_QUIT"
       printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
@@ -770,20 +812,58 @@ _resume_picker() {
       if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
-    # 2. Build indexed array in Bash (zero process spawn)
-    local -a sessions=()
-    local -a cached_title=()
-    local -a cached_age=()
-    local -a cached_cwd=()
-
+    # 2. Build indexed array in Bash (zero process spawn), then classify every
+    # candidate against the sidecar in ONE PASS (#74 round-1 P2-2): the old
+    # shape did a `case` substring compare against the WHOLE accumulated
+    # sidecar blob PER SESSION — O(sessions × sidecar lines), 8170ms measured
+    # at 20,000 sidecar lines (the sidecar had no GC at all before this
+    # round; `clikae clean` now prunes it — see clean.sh). _burn_sids_file
+    # (home.sh) is the one store read; grep -n -F -x -f is the one process
+    # that answers "which of these candidate lines is a member" for every
+    # candidate at once, instead of a bash loop re-scanning the member set
+    # per candidate.
+    local -a _rf_engine=() _rf_tank=() _rf_sid=() _rf_f=() _rf_mt=()
     local mt f
     while read -r mt f; do
       [ -n "$f" ] || continue
       _resume_session_fields "$f"
-      sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt")
+      _rf_engine+=("$_rs_engine"); _rf_tank+=("$_rs_tank"); _rf_sid+=("$_rs_sid")
+      _rf_f+=("$f"); _rf_mt+=("$mt")
     done <<EOF
 $files
 EOF
+
+    local -a _is_burn=()
+    local idx
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do _is_burn[idx]=0; done
+    local burn_sids_file; burn_sids_file="$(_burn_sids_file 2>/dev/null || true)"
+    if [ -n "$burn_sids_file" ]; then
+      if [ "${#_rf_sid[@]}" -gt 0 ]; then
+        local _ln _rest
+        while IFS=: read -r _ln _rest; do
+          [ -n "$_ln" ] || continue
+          _is_burn[$((_ln - 1))]=1
+        done < <(printf '%s\n' "${_rf_sid[@]}" | grep -n -F -x -f "$burn_sids_file" 2>/dev/null || true)
+      fi
+      # #74 round-2 P3-5: this used to sit inside the ${#_rf_sid[@]} -gt 0
+      # branch — on the zero-candidate path (unreachable today: `files` empty
+      # exits earlier, at :743) _burn_sids_file's temp file would never be
+      # removed. Its own lifetime (created above) doesn't depend on there
+      # being any candidates to match it against.
+      rm -f "$burn_sids_file"
+    fi
+
+    local -a sessions=()
+    local -a cached_title=()
+    local -a cached_age=()
+    local -a cached_cwd=()
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do
+      local is_b="${_is_burn[idx]}"
+      if [ "$is_b" -eq 1 ] && [ "${CLIKAE_RESUME_ALL:-0}" -eq 0 ]; then
+        continue
+      fi
+      sessions+=("${_rf_engine[idx]}"$'\x1f'"${_rf_tank[idx]}"$'\x1f'"${_rf_sid[idx]}"$'\x1f'"${_rf_f[idx]}"$'\x1f'"${_rf_mt[idx]}"$'\x1f'"$is_b")
+    done
 
     if [ "${#sessions[@]}" -eq 0 ]; then
       # Same state, reached when every candidate file failed to decode. Same
@@ -802,6 +882,7 @@ EOF
         _resume_split "${sessions[idx]}"
         engine_t="$_rs_engine"; tank_t="$_rs_tank"; sid_t="$_rs_sid"
         label_t="${cached_title[idx]}"
+        [ "$_rs_is_burn" = "1" ] && label_t="[burn] $label_t"
         rage_t="${cached_age[idx]}"
         _lazy_parse_cwd "$idx"
         cwd_t="${cached_cwd[idx]}"
@@ -850,6 +931,7 @@ cmd_resume() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _resume_help; return 0 ;;
+      --all)     CLIKAE_RESUME_ALL=1; shift ;;
       --)        shift; passthru=("$@"); break ;;
       -*)        log_fail "Unknown flag: $1  (clikae resume [session-id] [-- args])" ;;
       *)         [ -z "$sid" ] || log_fail "Too many arguments. Usage: clikae resume [session-id]"

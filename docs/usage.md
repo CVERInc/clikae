@@ -55,7 +55,7 @@ plain, conventional verbs.
 | `<engine> <tank> --ephemeral` | Switch and run with **ephemeral memory** — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below. |
 | `<engine>` | One tank → use it; several → list them; none → offer to create. |
 | `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Source is auto-detected (env var, else this directory's most recent session). Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
-| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
+| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. Headless `burn` sessions are hidden by default (they're one-shot lane tasks, not conversations you'd want to reopen); `--all`, or `a` inside the picker, shows them too, labeled `[burn]`. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
 | `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
 **Your session outlives the terminal.** A bare switch runs the engine inside a
@@ -158,6 +158,114 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > supervised — agy has one global login and no per-tank signal. Nothing runs in the
 > background unless you launched it through clikae (no daemon) — deliberate.
 > `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
+
+### The cockpit role — dispatch, don't spawn
+
+A coordinating session ("the cockpit") should hand build/review work to worker
+tanks with `clikae burn` rather than spawning it through its own in-session
+Agent/Task tool — a spawn like that spends the cockpit's OWN weekly budget on
+work a worker tank was going to pay for anyway. That rule is easy to forget
+exactly when a session is busiest, so `clikae cockpit` makes it the machine's
+problem instead of memory's:
+
+| Command | What it does |
+|---|---|
+| `cockpit` | Show the current cockpit tank (or that none is set). |
+| `cockpit [<engine>] <tank>` | Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like `clikae <name>`. |
+| `cockpit --off` | Remove the guard everywhere and forget the role. |
+| `cockpit --allow-agents <dur>` | Temporarily lift the guard (e.g. `4h`) without removing it. |
+
+The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
+a spawn whose model is missing, or whose model is opus/sonnet (any family-
+prefixed form too — `claude-opus-*`, `claude-sonnet-*`, `opusplan`, or the
+bare alias) **and** whose prompt reads as a build/review lane — naming the
+current idle reserve and the exact `clikae burn <engine> <tank>
+--prompt-file <f> --artifact <path>` shape to use instead. It also refuses an
+opus/sonnet spawn outright when the prompt is over 1,500 characters,
+regardless of content. **The guard never reads `subagent_type`** — `model` is
+the only thing that decides whether a spawn gets examined at all. A haiku or
+fable spawn is untouched regardless of `subagent_type` or prompt content; an
+opus/sonnet spawn — `Explore` included — is checked against the prompt
+heuristic below exactly like any other. Provider spellings are placed in
+their family (`us.anthropic.claude-sonnet-4-5-v1:0`, `claude-sonnet-4-5@…`,
+`sonnet[1m]`). A model id the guard does not recognise is **checked like
+opus/sonnet**, not waved through: a refusal names it as unrecognised, and a
+spawn that passes prints one line saying the id was unrecognised. The hook **fails closed**: a call it cannot read (an empty or
+malformed payload, no tool input object) is refused with the reason, and the
+escape hatches below are checked before the payload, so that refusal can
+always be lifted. This is not a general permission gate. The role, and the hook, live on
+exactly one tank at a time; moving it with `clikae cockpit` arms the new
+tank first and only cleans up the old one once the new one is armed and
+recorded, so a failure partway through never leaves you with no cockpit
+guarded at all. A human's own hooks on that tank are marked apart from the
+guard's and are never touched — the settings.json write rides the same
+mechanism as `clikae settings apply` (below), so **the file round-trips
+through jq**: key order gets normalized and CRLF becomes LF. Content survives
+intact (a hand-written hooks block, extra keys, anything else in the file);
+byte-for-byte formatting does not.
+
+**The cockpit is never a burn target, either.** The hook only sees the
+cockpit's own in-session spawns; a headless `clikae burn` never passes
+through it. So `clikae burn` asks the same question before every engine
+launch — the tank you name, a `--to` hop, agy's own walk, a symlink alias of
+the cockpit's directory — and refuses with the guard's sentence
+(`cockpit-guard: refused — <engine>/<tank> is the recorded cockpit …`)
+before anything starts. Auto-reroute skips the cockpit. `--force-cockpit` is
+the operator override: the burn runs, and says on stderr that it is burning
+the cockpit.
+
+**The prompt heuristic is a tripwire, not a classifier — `--allow-agents` is
+the door.** It matches the issue's own phrases (`worktree`, a git commit/push,
+`REVIEWER`/an adversarial review, a test run) OR'd with a widened set of bare
+imperative verbs (`commit`, `push`, "open a PR", `review`, `grade`, "run
+tests", "make CI") because missing a real build/review lane is the expensive
+direction (that's the incident this guard exists for) and a false refusal is
+cheap (the escape hatches below exist precisely for this). Measured against a
+14-item corpus (`tests/bats/cockpit-guard.bats`) — 8 prompts that read as
+dispatchable work, 6 that don't — the heuristic gets 11/14 right. On THIS
+corpus, all 3 misses are false refusals, not false allows, and all 3 are
+structural: an innocuous prompt that merely **mentions** one of these words
+in passing (a question about `git push --force-with-lease`, about a
+`worktree` section in the docs, about what `npm test` does) gets refused
+exactly like a prompt that asks for the real thing, because a plain keyword
+match can't tell "explains X" from "do X" apart, and every attempt to narrow
+the pattern enough to allow the innocuous case would also let its
+should-refuse sibling in this same corpus through. If a refusal looks wrong,
+that's expected, not a bug — `--allow-agents` (below) is how you get past it.
+
+**"3 misses" is a property of this corpus, not a bound on the false-refusal
+rate.** A second, adversarially-innocuous 10-prompt corpus (round-2 review,
+`REVIEW-cockpit63-r2.md`, plus 4 more in the same spirit) scores 8/10
+refused — worse, not better, because these were chosen specifically to
+brush against a trigger word without asking for build/review work:
+
+| Prompt | Outcome |
+|---|---|
+| Find every file that mentions push notifications and list them | refused |
+| Review the attached spec and tell me if the wording is clear | refused |
+| What does the word "commit" mean in the context of database transactions? | refused |
+| Explain how git worktrees differ from clones, conceptually | refused |
+| Search the codebase for where we grade student submissions | refused |
+| Summarize the customer reviews in reviews.csv | **allowed** (`\breview\b` doesn't match "reviews") |
+| What does npm test actually run under the hood? | refused |
+| Can you explain what 'open a PR' means for someone new to GitHub? | refused |
+| List the files that were pushed in the last release | **allowed** |
+| Grade how readable this poem is, out of 10 | refused |
+
+Expect a false-refusal rate closer to this table's than the 14-item corpus's
+on real, adversarially-chosen prompts — that's still the cheap direction
+(`--allow-agents` exists precisely because false refusals are meant to be
+routine, not rare).
+
+Sometimes the right call is to spend the cockpit tank's own budget on purpose
+("burn the cockpit tank tonight") — a guard that cannot be lifted gets
+deleted instead of obeyed, so there's an escape hatch: set
+`CLIKAE_COCKPIT_ALLOW_AGENTS=1` in the environment, or run `clikae cockpit
+--allow-agents <dur>` for a timed allowance. `clikae cockpit --off` removes
+the guard everywhere and clears any live allowance; it sweeps every tank
+(not just the recorded one) and never aborts partway through — a tank with a
+broken settings.json is reported at the end, by name, but does not stop the
+rest of the sweep from being cleaned up.
 
 ### Inspect
 

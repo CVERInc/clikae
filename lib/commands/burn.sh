@@ -19,6 +19,8 @@
 source "$CLIKAE_LIB/commands/antigravity.sh"
 # shellcheck source=../core/duration.sh
 source "$CLIKAE_LIB/core/duration.sh"
+# shellcheck source=./cockpit.sh
+source "$CLIKAE_LIB/commands/cockpit.sh"
 
 _burn_help() {
   cat <<'EOF'
@@ -26,7 +28,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
-                   [--permission <acceptEdits|auto>]
+                   [--permission <acceptEdits|auto>] [--force-cockpit]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -91,6 +93,13 @@ Give the task in one of two ways:
                       the tank you're mid-conversation on would silently burn
                       that quota, and two burns on one tank collide on the tmux
                       session name) and tanks sharing an already-dry account.
+  --force-cockpit     operator override: burn the tank recorded by `clikae
+                      cockpit` anyway. Without it, every launch onto the
+                      cockpit — the tank you name, a --to hop, an agy walk — is
+                      refused before the engine starts (#63): a burn there
+                      spends the steering tank's own budget. With it, burn says
+                      on stderr that it is doing exactly that. Auto-reroute
+                      never picks the cockpit, with or without this flag.
   --wait-for-reset <dur>   (#38) when a tank runs dry AND its vendor-reported
                       reset falls within <dur> (e.g. `30m`, `2h`, `90s`, or a
                       bare integer of seconds), sleep until the reset and re-fire
@@ -399,6 +408,44 @@ _burn_output_tail() {
   printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
+# _burn_cockpit_gate <engine> <tank> <force_cockpit> -> 0 when a burn may launch
+# on <engine>/<tank>; 1 (sentence in $_BURN_COCKPIT_REFUSAL) when it is the
+# recorded cockpit and the operator did not pass --force-cockpit.
+#
+# #63 round-5 P2-1: cockpit-guard.sh is an in-session tripwire — a PreToolUse
+# hook on the cockpit's own Agent tool. It never sees a HEADLESS launch, and
+# before this gate the only launch-side protection was _burn_next_same_engine
+# skipping the cockpit during AUTOMATIC reroute: `clikae burn claude <cockpit>`
+# named explicitly (or reached with --to, or by agy's own walk) ran straight
+# through, rc=0. This extends the issue's tripwire to the launch path: ONE
+# predicate (_cockpit_is_recorded — by name or by physical tank identity),
+# asked before every engine launch, refusing with the guard's own sentence.
+# The override is explicit and loud, never silent.
+#
+# #63 round-6 P3-2: a state file that EXISTS but does not parse as a clean
+# "<engine>/<tank>" record (mode 000, a symlink, a stray CR) used to read
+# back as EMPTY — identical to no cockpit ever having been recorded — so
+# every launch sailed through onto whatever the corrupt file was failing to
+# protect. "Cannot read" is a reason to refuse EVERY burn (not just one
+# whose target happens to match), because clikae has no way to know which
+# tank the file meant; --force-cockpit does not override this, since there
+# is nothing named here to knowingly force. Absent state (never recorded)
+# is unaffected.
+_burn_cockpit_gate() {
+  _BURN_COCKPIT_REFUSAL=""
+  if _cockpit_state_unparseable; then
+    _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $(_cockpit_state_file) exists but does not read back as a clean <engine>/<tank> cockpit record, so clikae cannot tell whether $1/$2 is the recorded cockpit. Run \`clikae doctor\` to see what's wrong, then \`clikae cockpit --off\` to clear it (or \`clikae cockpit <engine> <tank>\` to re-record it) before burning."
+    return 1
+  fi
+  _cockpit_is_recorded "$1" "$2" || return 0
+  if [ "$3" = 1 ]; then
+    log_warn "--force-cockpit: burning $1/$2 even though it is the recorded cockpit (operator override — this spends the steering tank's own budget)."
+    return 0
+  fi
+  _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $1/$2 is the recorded cockpit (the tank that dispatches burns); burning it spends the steering tank's own budget. Dispatch to another tank, or pass --force-cockpit to override."
+  return 1
+}
+
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto, in listing order — but the
 # reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
@@ -406,6 +453,22 @@ _burn_output_tail() {
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
+#   · P0-cockpit (#63 P3-5, round-4 review) — SKIP the recorded cockpit tank,
+#     EXPLICITLY, unconditionally (not even --allow-active lifts this one).
+#     This used to be covered only BY ACCIDENT, through P0 above: a cockpit
+#     tank normally has an interactive session sitting on it, so the
+#     live-session check happened to catch it. But cockpit-guard.sh is a
+#     Claude Code PreToolUse hook — it only ever fires from inside a live
+#     Claude Code session — and a headless `clikae burn` run is exactly the
+#     kind of caller it can never see. The moment the cockpit's own session
+#     isn't there (the operator stepped away; the role outlives that one
+#     session), nothing else here would have stopped a dry-tank reroute from
+#     landing dispatched work directly on the tank that's supposed to be
+#     doing the dispatching — the guard that exists is architecturally
+#     unable to catch it from this caller. cockpit-guard.sh's OWN reserve
+#     listing (the one it prints in a refusal) already excludes the cockpit
+#     this same way; auto-reroute needed the identical rule, not a
+#     coincidence of P0.
 #   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
@@ -416,6 +479,10 @@ _burn_next_same_engine() {
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
     tank_is_solo "$cli" "$t" && continue   # solo tanks are out of the fleet — never an auto-reroute target
+    if _cockpit_is_recorded "$cli" "$t"; then
+      log_warn "skipping $cli/$t — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+      continue
+    fi
     tdir="$(profile_dir "$cli" "$t")"
     if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
        && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then
@@ -580,7 +647,7 @@ _burn_compose() {
 }
 
 # _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
-#           <wait_for_reset_s> <allow_active> <n_extra> <extra-agy-flags...> <add_dirs...>
+#           <wait_for_reset_s> <allow_active> <launch_cwd> <n_extra> <extra-agy-flags...> <add_dirs...>
 # The extras are whatever followed `--` on the command line. agy has no adapter,
 # so clikae cannot compose its flags for you; what it CAN do is stop dropping the
 # ones you asked for. Two that headless dispatch actually needs:
@@ -601,7 +668,8 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" n_extra="$9"; shift 9
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" launch_cwd="$9"; shift 9
+  local n_extra="$1"; shift
   local -a extra=()
   while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
@@ -660,15 +728,77 @@ _agy_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
+    local run_id="agy-${cur}-burn-$$"
     local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
     local artifact_fresh=0 artifact_bytes_snapshot=null
     art_pre="$(_clikae_mtime "$artifact")"
+    # #74 round-1 P1-2: a BEFORE snapshot, not a mtime cutoff. The old
+    # "newest transcript with mtime >= attempt start" heuristic had nothing
+    # tying it to THIS run's own process — a human's concurrent session in the
+    # same tank has a newer mtime too, and got its transcript recorded (and
+    # then hidden) as if it were the lane's. A file that didn't exist before
+    # launch and does after is proof; a mtime comparison is a guess.
+    load_adapter "antigravity" 2>/dev/null || true
+    local -a _agy_pre_snap=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_pre_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+    fi
     local out; out="$(
       "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
       _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
     )" || true
     read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
     rm -f "$evidence_file"
+
+    local sid_to_record=""
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _agy_post_snap=() _agy_new=()
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_post_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+      local _agy_pf _agy_bf _agy_is_new
+      for _agy_pf in "${_agy_post_snap[@]}"; do
+        _agy_is_new=1
+        for _agy_bf in "${_agy_pre_snap[@]}"; do
+          [ "$_agy_pf" = "$_agy_bf" ] && { _agy_is_new=0; break; }
+        done
+        [ "$_agy_is_new" -eq 1 ] && _agy_new+=("$_agy_pf")
+      done
+      # exactly one new transcript -> proven attribution. Zero -> a dry/failed
+      # run made nothing to hide (no ghost sid, P2-3). More than one -> only
+      # trust the count if cwd narrows it back to exactly one; otherwise this
+      # run's own session cannot be told apart from someone else's concurrent
+      # one, and recording ANY of them risks hiding a human's conversation —
+      # "never hide what is not proven" outranks "always record something".
+      case "${#_agy_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          local -a _agy_cwd_match=()
+          local _agy_cf _agy_ccwd
+          for _agy_cf in "${_agy_new[@]}"; do
+            _agy_ccwd="$(adapter_session_cwd "$_agy_cf" 2>/dev/null || true)"
+            [ "${_agy_ccwd%/}" = "${launch_cwd%/}" ] && _agy_cwd_match+=("$_agy_cf")
+          done
+          if [ "${#_agy_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_agy_new[@]} candidates)"
+          fi
+          ;;
+      esac
+    fi
+    if [ -n "$sid_to_record" ]; then
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/agy/$cur"
+      mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
+      printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
+    fi
 
     # Consume the run log once, then drop it on every path below — not just the
     # dry one — so a long reroute loop doesn't litter $TMPDIR.
@@ -768,6 +898,22 @@ _agy_burn() {
     while IFS= read -r _agy_cand; do
       [ -n "$_agy_cand" ] || continue
       case " ${agy_tried[*]} " in *" $_agy_cand "*) continue ;; esac
+      # #63 round-5 P2-1: the same launch gate cmd_burn asks, applied to agy's
+      # own walk — the cockpit is skipped, never launched.
+      # #63 round-6 P3-1: `_agy_burn`'s automatic walk (picking the NEXT
+      # tank after a dry one) always passed force_cockpit through, so
+      # `burn agy default --force-cockpit` — a flag the operator gave for
+      # the NAMED target — also let the WALK land on the cockpit, exactly
+      # what the help text (`--force-cockpit … Auto-reroute never picks the
+      # cockpit, with or without this flag`) and fix5's own report both
+      # promised would never happen. Pass 0 here, unconditionally: the walk
+      # is automatic, never named by the operator, so nothing it picks is
+      # ever "forced" onto the cockpit — same rule _burn_next_same_engine
+      # already follows for claude/codex's own auto-reroute.
+      if ! _burn_cockpit_gate agy "$_agy_cand" 0; then
+        log_warn "skipping agy/$_agy_cand — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+        continue
+      fi
       if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$_agy_cand" "$$"; then
         log_warn "skipping agy/$_agy_cand — another burn is already running on it (#40; --allow-active to override)."
         continue
@@ -1980,7 +2126,22 @@ cmd_burn() {
   local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
-  local wait_for_reset_raw="" wait_for_reset_s=""
+  local wait_for_reset_raw="" wait_for_reset_s="" force_cockpit=0
+  # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
+  # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
+  # caller that ever reads this default value directly, before any reset
+  # below — has no cwd-override flag at all, so $PWD IS its launch cwd).
+  # --prompt/--prompt-file mode resets it to add_dirs[0] at each
+  # _burn_compose call below (that argv IS what tells codex's `-C` where to
+  # run, adapter_burn_flags). Raw '-- <cmd...>' mode is NOT exempt from
+  # overriding the engine's cwd — the user's own argv can carry codex's `-C`
+  # (burn --help's own raw example, burn.sh:118, is exactly that) — so that
+  # path re-derives it from cmd[@] via adapter_cwd_from_args instead of
+  # trusting this default; empty when the adapter defines no such hook or the
+  # flag isn't present, so the multi-candidate tie-break below matches
+  # nothing rather than misattributing a concurrent session (never hide what
+  # is not proven).
+  local _burn_launch_cwd="$PWD"
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -2005,6 +2166,7 @@ cmd_burn() {
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
@@ -2140,6 +2302,15 @@ cmd_burn() {
   local status_engine="$cli"
   [ "$status_engine" = antigravity ] && status_engine=agy
 
+  # #63 round-5 P2-1: the named target, before any lock, --fresh deletion or
+  # engine launch. The status file is written first so `clikae wait burn-<pid>`
+  # reads a terminal refusal instead of stalling on a burn that never started.
+  if ! _burn_cockpit_gate "$status_engine" "$tank" "$force_cockpit"; then
+    _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+      "cockpit: $status_engine/$tank is the recorded cockpit (--force-cockpit to override)" ""
+    log_fail "$_BURN_COCKPIT_REFUSAL"
+  fi
+
   # #40: refuse to START a burn on a tank that already has one running —
   # detected from #41's own status files (a `state: running` row whose pid is
   # still alive), never from tmux session names: two burns on one tank
@@ -2270,7 +2441,7 @@ cmd_burn() {
       if [ "$permission_set" -eq 1 ]; then
         log_warn "$status_engine has no equivalent for --permission $burn_permission; keeping its existing burn flags."
       fi
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" \
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" "$_burn_launch_cwd" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
@@ -2290,8 +2461,20 @@ cmd_burn() {
       _burn_status_write fail false "$cli" "$tank" "$artifact" "$cli has no headless-write recipe (no adapter_burn_flags)" ""
       log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
     fi
+    _burn_launch_cwd="${add_dirs[0]}"
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
+  else
+    # #74 round-3 P1-1: raw '-- <cmd...>' mode — the user's own argv owns the
+    # engine's cwd (codex's `-C`/`--cd`; burn --help's raw example, burn.sh:118,
+    # uses exactly that). Ask the adapter to read it back out of cmd[@]; empty
+    # when the adapter has no such hook or the flag isn't there, so the
+    # multi-candidate tie-break below finds nothing to match rather than
+    # falling back to $PWD and re-catching a concurrent human session.
+    _burn_launch_cwd=""
+    if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+      _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+    fi
   fi
   _burn_claude_headless_guards
 
@@ -2410,7 +2593,68 @@ cmd_burn() {
     
     mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
     chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
-    
+
+    local launch_sid="" _launch_has_identity=0
+    local -a _attempt_cmd=("${cmd[@]}")
+    # #74 round-1 P1-3: switch.sh:222-228's own gate, mirrored here. burn's
+    # own extra args (anything the caller put after --, e.g. `-- -p … --resume
+    # <sid>`, or a hand-typed `-- --session-id <uuid>`) can ALREADY carry
+    # resume/session identity. Appending --session-id unconditionally (the
+    # previous shape) fought claude's own rule — "--session-id can only be
+    # used with --continue or --resume if --fork-session is also specified"
+    # (verified live, claude 2.1.267) — and broke every one of those launches
+    # (rc=1, no artifact, no run at all). adapter_sid_from_args is the one
+    # place switch.sh already trusts for this answer; ask it here too instead
+    # of re-deriving it. A caller-supplied sid also becomes THE sid burn
+    # records (P1-2's "or the one the user passed" case) — it is exactly as
+    # proven as a minted one, since it is what the engine was actually told.
+    if declare -F adapter_sid_from_args >/dev/null 2>&1; then
+      if launch_sid="$(adapter_sid_from_args "${cmd[@]}" 2>/dev/null)"; then
+        _launch_has_identity=1
+      fi
+    fi
+    if [ "$_launch_has_identity" -eq 0 ] && declare -F adapter_new_session_args >/dev/null 2>&1; then
+      launch_sid="$(uuidgen 2>/dev/null || true)"
+      if [ -z "$launch_sid" ] && command -v python3 >/dev/null 2>&1; then
+        launch_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"
+      fi
+      launch_sid="$(printf '%s' "$launch_sid" | LC_ALL=C tr 'A-Z' 'a-z')"
+      if [ -n "$launch_sid" ]; then
+        local _nsline
+        while IFS= read -r _nsline; do
+          [ -n "$_nsline" ] && _attempt_cmd+=("$_nsline")
+        done <<_NS_EOF
+$(adapter_new_session_args "$launch_sid" 2>/dev/null || true)
+_NS_EOF
+      fi
+    fi
+    # #74 round-2 P2-3: a caller-supplied --resume/--session-id names a sid
+    # whose transcript ALREADY EXISTS before this run even starts — "the
+    # transcript exists" (below) is a tautology for it, true whether or not
+    # the engine ran at all. Snapshot (mtime,size) of THAT specific file now,
+    # before launch, so a refusal that never touched it (engine_rc != 0, file
+    # untouched) can be told apart from an engine that read AND rewrote it.
+    local _burn_resume_pre_stamp=""
+    if [ -n "$launch_sid" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      local _burn_resume_pre_file
+      _burn_resume_pre_file="$(adapter_find_session "$dir" "$launch_sid" 2>/dev/null || true)"
+      if [ -n "$_burn_resume_pre_file" ]; then
+        _burn_resume_pre_stamp="$(_clikae_mtime "$_burn_resume_pre_file") $(_burn_size "$_burn_resume_pre_file")"
+      fi
+    fi
+    # #74 round-1 P1-2: a BEFORE snapshot of every transcript this profile
+    # already has, so codex's post-run attribution (below) can tell "the file
+    # THIS run created" from "the file a human's concurrent session created" —
+    # see antigravity's twin a few hundred lines up for the full rationale.
+    # Only codex defines adapter_all_transcripts (claude doesn't need this: it
+    # already knows $launch_sid before the engine ever runs), so this is a
+    # no-op — no snapshot taken, nothing to diff — on the claude path.
+    local -a _snap_pre=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_pre+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
+    fi
     art_pre="$(_clikae_mtime "$artifact")"
     rc=0
     if command -v tmux >/dev/null 2>&1; then
@@ -2469,7 +2713,7 @@ trap 'echo \$? > "$state_file"; exit' EXIT
 # outcome was still judged by the artifact, but the diagnostic rc was a lie.
 set -o pipefail
 ( engine_rc=0
-  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${_attempt_cmd[@]}") </dev/null || engine_rc=\$?
   _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
   exit "\$engine_rc"
 ) 2>&1 | tee "$log_file"
@@ -2507,7 +2751,7 @@ EOF
 $(adapter_export_env "$dir")
 KV
           engine_rc=0
-          _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
           _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
           exit "$engine_rc"
         )" || rc=$?
@@ -2526,7 +2770,7 @@ KV
 $(adapter_export_env "$dir")
 KV
         engine_rc=0
-        _burn_capture_stderr "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
         _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
         exit "$engine_rc"
       )" || rc=$?
@@ -2539,6 +2783,133 @@ KV
       read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
     fi
     rm -f "$state_file" "$evidence_file"
+
+    # #74 round-1 P1-2/P2-3: "proven", not "most recent". claude already KNOWS
+    # its sid (launch_sid, told to the engine via --session-id before it ever
+    # ran) — only record it if a transcript for that exact id actually exists,
+    # so a run the engine refused to start (P1-3's clash, or any other
+    # failure) never writes a ghost line. codex has no equivalent flag, so it
+    # falls back to the before/after snapshot diff (see the codex/antigravity
+    # adapter_all_transcripts hooks): candidates = transcripts that exist now
+    # and didn't before launch. Exactly one -> proven. Zero -> nothing to
+    # record. More than one -> only trust it if the recorded cwd narrows it
+    # back to exactly one; otherwise this run's own session can't be told
+    # apart from a human's concurrent one, and "never hide what is not
+    # proven" outranks "always record something".
+    local sid_to_record="$launch_sid" _burn_resume_gate_rejected=0
+    if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      # #74 round-2 P2-2: "proven" means a transcript path came back, not
+      # that the exit code was 0 — codex/grok's adapter_find_session both
+      # return 0 on a miss (empty stdout, no matching transcript on disk).
+      local _burn_found_transcript
+      _burn_found_transcript="$(adapter_find_session "$dir" "$sid_to_record" 2>/dev/null || true)"
+      [ -n "$_burn_found_transcript" ] || sid_to_record=""
+      # #74 round-2 P2-3 / round-3 P3-1,P3-2: for a --resume of an EXISTING sid
+      # (_burn_resume_pre_stamp set above), "the transcript exists" is true
+      # before the engine even ran — record it only when ALL THREE hold:
+      #   1. the engine itself exited 0 — round-2's own "rc==0 OR stamp
+      #      changed" was an OR, so a FAILED engine whose target transcript
+      #      merely changed anyway (a concurrent human still typing into the
+      #      SAME sid) still got recorded and hidden (R3 review P3-2, probe
+      #      r3out/49-probeD.log). rc==0 is now required outright, not an
+      #      alternative to the stamp check.
+      #   2. the transcript's byte size actually GREW across the run — a bare
+      #      (mtime,size)-changed check can't tell "the engine wrote to it"
+      #      from "someone else wrote to it" (P3-2's actual finding: it's a
+      #      "someone wrote" detector, not an "engine ran" detector); grew is
+      #      the one direction a resumed transcript's own append-only log
+      #      moves in.
+      #   3. no OTHER live process still has that transcript open — a human's
+      #      own concurrent `codex resume <sid>` / `claude --resume <sid>` on
+      #      the SAME sid holds the file open for the whole time burn's
+      #      attempt runs, so it can grow and rc can still land 0 purely from
+      #      burn's side while none of the growth is burn's. Checked with
+      #      fuser (preferred) or lsof; neither on PATH just skips this one
+      #      check and says so — rc==0 + grew still has to hold either way.
+      # A minted sid has no pre-stamp (nothing existed to snapshot), so none
+      # of this fires for that path — "found" is already proof there.
+      if [ -n "$sid_to_record" ] && [ -n "$_burn_resume_pre_stamp" ]; then
+        local _burn_resume_post_stamp _burn_resume_pre_size _burn_resume_post_size
+        local _burn_resume_grew=0 _burn_resume_open_elsewhere=0
+        _burn_resume_post_stamp="$(_clikae_mtime "$_burn_found_transcript") $(_burn_size "$_burn_found_transcript")"
+        _burn_resume_pre_size="${_burn_resume_pre_stamp#* }"
+        _burn_resume_post_size="${_burn_resume_post_stamp#* }"
+        case "$_burn_resume_pre_size" in ''|*[!0-9]*) _burn_resume_pre_size=0 ;; esac
+        case "$_burn_resume_post_size" in ''|*[!0-9]*) _burn_resume_post_size=0 ;; esac
+        [ "$_burn_resume_post_size" -gt "$_burn_resume_pre_size" ] && _burn_resume_grew=1
+        if command -v fuser >/dev/null 2>&1; then
+          fuser "$_burn_found_transcript" >/dev/null 2>&1 && _burn_resume_open_elsewhere=1
+        elif command -v lsof >/dev/null 2>&1; then
+          [ -n "$(lsof -- "$_burn_found_transcript" 2>/dev/null)" ] && _burn_resume_open_elsewhere=1
+        else
+          log_warn "burn: neither fuser nor lsof is on PATH — skipping the concurrent-open check for $_burn_found_transcript."
+        fi
+        if [ "$rc" -ne 0 ] || [ "$_burn_resume_grew" -ne 1 ] || [ "$_burn_resume_open_elsewhere" -eq 1 ]; then
+          sid_to_record=""
+          # R4 review P3-3: the triple gate's "no" is a verdict, not a mere
+          # "try the next heuristic" — falling through to the before/after
+          # snapshot diff below let its unconditional single-candidate
+          # branch record the very session the gate just rejected. The
+          # gate ran ONLY because this was a --resume of an EXISTING sid
+          # (_burn_resume_pre_stamp, above), so its rejection is final.
+          _burn_resume_gate_rejected=1
+        fi
+      fi
+    fi
+    if [ -z "$sid_to_record" ] && [ "${_burn_resume_gate_rejected:-0}" -ne 1 ] \
+       && declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _snap_post=() _snap_new=()
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_post+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
+      local _snap_pf _snap_bf _snap_is_new
+      for _snap_pf in "${_snap_post[@]}"; do
+        _snap_is_new=1
+        for _snap_bf in "${_snap_pre[@]}"; do
+          [ "$_snap_pf" = "$_snap_bf" ] && { _snap_is_new=0; break; }
+        done
+        [ "$_snap_is_new" -eq 1 ] && _snap_new+=("$_snap_pf")
+      done
+      case "${#_snap_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          # #74 round-2 P1-1: compare against the cwd the ENGINE was launched
+          # in (_burn_launch_cwd — codex's own -C), not this shell's $PWD.
+          # codex always runs with -C add_dirs[0], which defaults to
+          # dirname("$artifact") — the moment that differs from $PWD (any
+          # --add-dir, or an artifact outside the caller's cwd), burn's OWN
+          # session stopped matching here and a concurrent human session in
+          # $PWD became the sole "match" instead, getting recorded and hidden.
+          local -a _snap_cwd_match=()
+          local _snap_cf _snap_ccwd
+          # R4 review P2-1: empty == empty is not a match. An empty
+          # _burn_launch_cwd (raw mode, no -C found) means "unknown", not
+          # "matches a candidate whose own cwd also failed to read" — both
+          # sides must actually have a value, or the gate below correctly
+          # finds zero matches instead of one bogus one.
+          for _snap_cf in "${_snap_new[@]}"; do
+            _snap_ccwd="$(adapter_session_cwd "$_snap_cf" 2>/dev/null || true)"
+            [ -n "$_burn_launch_cwd" ] && [ -n "$_snap_ccwd" ] \
+              && [ "${_snap_ccwd%/}" = "${_burn_launch_cwd%/}" ] && _snap_cwd_match+=("$_snap_cf")
+          done
+          if [ "${#_snap_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_snap_new[@]} candidates)"
+          fi
+          ;;
+      esac
+    fi
+    if [ -n "$sid_to_record" ]; then
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/$cli/$cur"
+      mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
+      printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
+    fi
 
     # P2-1 (2026-09-08 review): the snapshot above is taken the instant the
     # engine's own process exits, inside the same subshell — precise, but
@@ -2832,13 +3203,31 @@ KV
         # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
         # exactly like the entry check did, so it needs the same refusal.
         _burn_check_codex_git_cwd
+        _burn_launch_cwd="${add_dirs[0]}"
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
         _burn_claude_headless_guards
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
       else
+        # #74 round-3 P1-1: raw mode keeps the same argv verbatim, but it now
+        # runs under a DIFFERENT engine's adapter — re-derive rather than
+        # keep whatever the previous engine's adapter_cwd_from_args read (or
+        # didn't), same rule as the entry-point derivation above.
+        _burn_launch_cwd=""
+        if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+          _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+        fi
         log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       fi
+    fi
+    # #63 round-5 P2-1: every hop — an explicit --to included — asks the same
+    # gate the named target did. An explicit hop onto the cockpit is refused,
+    # not skipped: the caller named it.
+    if ! _burn_cockpit_gate "$cli" "$nx_tank" "$force_cockpit"; then
+      _burn_status_write fail false "$cli" "$nx_tank" "$artifact" \
+        "cockpit: $cli/$nx_tank is the recorded cockpit (--force-cockpit to override)" ""
+      _burn_result false "$cli" "$nx_tank" "$artifact" "refused: $cli/$nx_tank is the recorded cockpit"
+      log_fail "$_BURN_COCKPIT_REFUSAL"
     fi
     cur="$nx_tank"
     infra_attempt=0; retry_delay="$infra_delay"

@@ -78,3 +78,23 @@ load '../helpers'
   [ "$(rc_block_count claude.work)" -eq 0 ]
   [ "$(rc_block_count claude.personal)" -eq 1 ]
 }
+
+# #74 round-1 P2-2: the burn sidecar is out-of-dir state keyed by tank NAME —
+# `rm -rf` on the tank dir never touches it.
+@test "remove deletes the tank's burn sidecar too" {
+  clikae init claude work
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/claude/work"
+  run clikae remove claude work --force
+  [ "$status" -eq 0 ]
+  [ ! -f "$CLIKAE_HOME/state/burn-sessions/claude/work" ]
+}
+
+@test "remove --keep-data leaves the burn sidecar alone (data kept)" {
+  clikae init claude work
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/claude/work"
+  run clikae remove claude work --force --keep-data
+  [ "$status" -eq 0 ]
+  [ -f "$CLIKAE_HOME/state/burn-sessions/claude/work" ]
+}

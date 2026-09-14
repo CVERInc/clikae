@@ -58,11 +58,42 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd agy's OWN argv carries — see codex.sh's twin for why
+# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). Moot
+# in practice — burn.sh:2315 refuses raw mode for agy outright, it only ever
+# runs through --prompt/--prompt-file — but defined for the same reason
+# claude.sh's twin is: `agy --help` (checked live) has no cwd-override flag,
+# so the honest answer is "no", not an absent function.
+adapter_cwd_from_args() {
+  return 1
+}
+
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1
   f="$dir/antigravity-cli/brain/$sid/.system_generated/logs/transcript.jsonl"
   [ -f "$f" ] && printf '%s\n' "$f"
+}
+
+# Optional hook: the canonical session id for a transcript PATH — see
+# claude.sh's twin for why this exists (#74 round-1 P1-1). agy's sid IS the
+# brain/<sid>/ directory name; already what every other agy hook in this file
+# derives, given here too so burn's sidecar writer and resume's picker read it
+# from one place instead of two copies that could drift apart.
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f%/.system_generated/*}"
+  printf '%s' "${sid##*/}"
+}
+
+# Optional hook: EVERY transcript path under this profile dir — see codex.sh's
+# twin (#74 P1-2). Used for burn's before/after snapshot diff.
+adapter_all_transcripts() {
+  local f
+  for f in "$1/antigravity-cli/brain"/*/.system_generated/logs/transcript.jsonl; do
+    [ -f "$f" ] && printf '%s\n' "$f"
+  done
+  return 0
 }
 
 adapter_session_cwd() {
@@ -150,10 +181,55 @@ adapter_recent_sids() {
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
   local -a afiles=()
+  local cache="$dir/antigravity-cli/cache/last_conversations.json"
+  # Burn needs the newest transcript even before the CLI refreshes its cache.
+  if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
+    local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
+    # #74 round-1 P1-4: json_value_for_key (lib/core/json.sh) ANCHORS the
+    # extraction to the matched "<cwd>": "<sid>" pair itself — the previous
+    # shape (`grep -E … | sed 's/.*:[[:space:]]*"//'`) grep'd the whole
+    # MATCHING LINE, then let sed's greedy `.*:` walk past it to whichever
+    # `: "` came LAST in that line. Every real agy install writes this cache
+    # compact/single-line (JSON.stringify's default), so once it holds more
+    # than one project's pointer, that greedy walk silently returned a
+    # DIFFERENT project's session — the board's Continue row (and its Enter
+    # key) resumed the wrong conversation, not just a wrong preview string.
+    sid="$(json_value_for_key "$cache" "$want_esc" 2>/dev/null | tail -n 1 || true)"
+    if [ -n "$sid" ]; then
+      f="$brain/$sid/.system_generated/logs/transcript.jsonl"
+      if [ -f "$f" ]; then
+        # #74 round-1 P2-1: the cache is a per-directory POINTER — at most one
+        # candidate for $want, ever — so it can only fully answer a limit=1
+        # ask (burn's own use, via the "disk"-bypassing 3rd arg aside). A
+        # caller wanting more than one (the board's Continue list, home.sh's
+        # exclusion-pass retries) used to get back exactly this one anyway: a
+        # cache hit returned immediately and the scan below — the only thing
+        # that can rank several sessions against each other — never ran.
+        # limit=1 keeps the original single-stat fast path unchanged; only a
+        # bigger ask falls through, and even then this hit is kept (not
+        # re-discovered) and excluded from the scan below so it isn't listed
+        # twice.
+        if [ "$limit" -le 1 ]; then
+          local mt
+          mt="$(_clikae_mtime "$f" 2>/dev/null || echo "?")"
+          printf '%s\037%s\n' "$mt" "$sid"
+          return 0
+        fi
+        afiles=("$f")
+      fi
+    fi
+  fi
+
+  local _seen _sf
   for sdir in "$brain"/*/; do
     [ -d "$sdir" ] || continue
     f="${sdir}.system_generated/logs/transcript.jsonl"
     [ -f "$f" ] || continue
+    _seen=0
+    if [ "${#afiles[@]}" -gt 0 ]; then
+      for _sf in "${afiles[@]}"; do [ "$_sf" = "$f" ] && { _seen=1; break; }; done
+    fi
+    [ "$_seen" -eq 1 ] && continue
     cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
     [ "${cwd%/}" = "$want" ] || continue
     afiles+=("$f")
