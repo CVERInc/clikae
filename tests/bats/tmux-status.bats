@@ -155,6 +155,37 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"5h 42% · 7d 65% · 3h ago"* ]] || { echo "$output"; false; }
 }
 
+# P2-2 (2026-09-14 round-2 review): the row calls the fork-free `_human_agev`,
+# and the board/resume still call the printing `_human_age`. One formatter, so
+# the two forms must agree at every step of the ladder.
+@test "fuel: _human_agev assigns exactly what _human_age prints" {
+  _src
+  local now=1700000000 d got want
+  for d in 0 1 59 60 61 3599 3600 3601 86399 86400 86401 172800 604800; do
+    want="$(_human_age "$(( now - d ))" "$now")"
+    got=""; _human_agev got "$(( now - d ))" "$now"
+    [ "$got" = "$want" ] || { echo "age $d: agev [$got] vs age [$want]"; false; }
+  done
+  # The ordinary names a caller reaches for (the old unprefixed locals among
+  # them) land in the caller's variable, not in a function local.
+  local v mt age suffix
+  for v in d mt now age suffix; do
+    local "$v"=""
+    _human_agev "$v" 1699992800 1700000000
+    [ "${!v}" = "2h ago" ] || { echo "var $v got [${!v}]"; false; }
+  done
+}
+
+@test "fuel: an aged reading costs the row no extra fork" {
+  # The call site must be the variable-setting form: `$(_human_age …)` is a
+  # subshell per render. Asserted on the source because a fork count needs
+  # strace, which CI does not have; the strace numbers are in Rule 10 §3.
+  # Code lines only: the comment explaining this fix quotes the forking form.
+  run grep -nE '^[^#]*\$\(_human_age' "$CLIKAE_TEST_ROOT/lib/core/tmux.sh" "$CLIKAE_TEST_ROOT/lib/core/status_line.sh"
+  [ "$status" -ne 0 ] || { echo "a forking call is back on the status path: $output"; false; }
+  grep -q '_human_agev suffix' "$CLIKAE_TEST_ROOT/lib/core/tmux.sh" || { echo "the row no longer calls _human_agev"; false; }
+}
+
 # P3-3 (same review): a corrupt cache must not blow the row's width budget.
 @test "fuel: percentages clamp to 100, a corrupt cache cannot blow the width budget" {
   _src

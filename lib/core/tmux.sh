@@ -671,8 +671,11 @@ tmux_status_fuelv() {
       [ "$age" -lt 0 ] && age=0   # a future cached_at is not "old" — floor it, don't invent a countdown
       if [ "$age" -ge 86400 ]; then
         fresh=0
-      elif [ "$age" -ge 3600 ] && declare -F _human_age >/dev/null 2>&1; then
-        suffix=" · $(_human_age "$ca" "$now")"
+      elif [ "$age" -ge 3600 ] && declare -F _human_agev >/dev/null 2>&1; then
+        # P2-2 (round-2 review): the `…v` form, not `$(_human_age …)` — that
+        # was one subshell fork per render on this 5-second path.
+        _human_agev suffix "$ca" "$now"
+        suffix=" · $suffix"
       fi
     elif [ -n "$ca_raw" ]; then
       fresh=0   # cached_at IS present, just not in a shape this reader understands — untrusted, not "current"

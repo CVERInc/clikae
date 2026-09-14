@@ -41,7 +41,8 @@ CK_CORE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ago" suffix. A leaf lib like every other one sourced here — see its own
 # header — so this stays true to "everything it sources is a leaf library
 # with no top-level side effects". Guarded like the rest: tmux_status_fuelv
-# checks `declare -F _human_age` before calling it, so a source failure here
+# checks `declare -F _human_agev` (the fork-free form, P2-2 round-2 review)
+# before calling it, so a source failure here
 # degrades to no suffix, not a broken row.
 . "$CK_CORE/duration.sh"     2>/dev/null || true
 # shellcheck source=live.sh

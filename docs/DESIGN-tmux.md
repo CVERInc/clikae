@@ -499,6 +499,14 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      好過其中一份是從另一份 derive 出來」是同一個取捨（見那兩個函式的註解）。
      `dry_store_mark`／`dry_store_read`／`dry_store_clear`／`dry_store_epoch` 仍然呼叫 `dry_store_path`——
      它們都不在 5 秒一次的熱路徑上，那個 fork 從來不是問題。
+
+     🔴 P2-2（2026-09-14 round-2 review）：同一輪修正在三行外又加回一個 fork——油量年齡
+     後綴寫成 `$(_human_age "$ca" "$now")`，一個包住 shell 函式的 `$( )` 就是一個
+     subshell。同一個 strace 量法、真 helper、一次 render：快取剛寫 11 個 clone、
+     **快取 2 小時前 12 個**（超過 1 小時是常態，不是邊角）。改成 `_human_agev suffix …`
+     （`lib/core/duration.sh`，呼叫端傳變數名、函式用 `printf -v` 賦值，bash 3.2 可用、
+     不用 nameref），修後兩者都是 **11**。`_human_age` 留成印出來的薄殼，給不在熱路徑上的
+     board／resume 呼叫點。
   4. **🔴 這條路上也不准「寫」。** `dry_store_read` 順手刪掉過期標記對「問一次」的
      呼叫者是對的，對一個每五秒問一次的狀態列則會讓「這個標記什麼時候消失的」變成
      「剛好有沒有人在看狀態列」的函數。所以狀態列走 `dry_store_peekv`（唯讀孿生，

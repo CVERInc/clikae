@@ -26,13 +26,33 @@
 # rule) still gets it. home.sh keeps calling this same function; it no
 # longer defines its own.
 _human_age() {
-  local mt="$1" now="${2:-}" d
-  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo "$mt")"
-  d=$(( now - mt ))
-  if   [ "$d" -lt 60 ];    then printf 'just now'
-  elif [ "$d" -lt 3600 ];  then printf '%dm ago' "$(( d / 60 ))"
-  elif [ "$d" -lt 86400 ]; then printf '%dh ago' "$(( d / 3600 ))"
-  else                          printf '%dd ago' "$(( d / 86400 ))"
+  local _ha_out
+  _human_agev _ha_out "$@"
+  printf '%s' "$_ha_out"
+}
+
+# _human_agev <varname> <epoch-mtime> [now-epoch] -> the same string, assigned
+# to <varname> instead of printed. NO FORK when <now> is given.
+#
+# 🔴 P2-2 (2026-09-14 round-2 review): the tmux status row called the printing
+# form as `$(_human_age …)` — a command substitution around a shell function
+# is a subshell fork, on a 5-second timer, one clone more per render whenever
+# the fuel reading is over an hour old (measured with strace on the real
+# helper: 11 clones fresh, 12 at 2h), in the same round that removed a fork
+# per dry marker from the same row. This is the repo's `…v` convention
+# (burn_status_fieldv, dry_store_peekv, tmux_sessv): the caller on the hot path
+# passes a variable NAME and `printf -v` assigns it — bash 3.1+, no nameref,
+# so bash 3.2 is fine. The locals are `_hav_`-prefixed because printf -v on a
+# name that is also a local here would write the local, not the caller's
+# variable — so a caller must not pass a `_hav_…` name.
+_human_agev() {
+  local _hav_var="$1" _hav_mt="$2" _hav_now="${3:-}" _hav_d
+  [ -n "$_hav_now" ] || _hav_now="$(date +%s 2>/dev/null || echo "$_hav_mt")"
+  _hav_d=$(( _hav_now - _hav_mt ))
+  if   [ "$_hav_d" -lt 60 ];    then printf -v "$_hav_var" 'just now'
+  elif [ "$_hav_d" -lt 3600 ];  then printf -v "$_hav_var" '%dm ago' "$(( _hav_d / 60 ))"
+  elif [ "$_hav_d" -lt 86400 ]; then printf -v "$_hav_var" '%dh ago' "$(( _hav_d / 3600 ))"
+  else                               printf -v "$_hav_var" '%dd ago' "$(( _hav_d / 86400 ))"
   fi
 }
 
