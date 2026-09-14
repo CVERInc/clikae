@@ -201,6 +201,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     family, and an id the guard does not recognise is checked like
     opus/sonnet instead of allowed with no output. A refusal names the id
     as unrecognised; a pass prints one line saying so.
+  - The hook command in settings.json is stored shell-quoted. An install
+    under a path with a space split there when Claude Code ran it (exit
+    127, non-blocking: every spawn allowed). An older unquoted entry is
+    repaired on the next `clikae cockpit <tank>`.
 
 ### Added
 

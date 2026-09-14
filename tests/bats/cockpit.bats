@@ -30,10 +30,38 @@ _guard_installed() {
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/L" ]
   run clikae cockpit
   [ "$output" = "cockpit: claude/L" ]
-  # the marker command points at the real guard script
-  jq -e --arg want "$CLIKAE_LIB/hooks/cockpit-guard.sh" \
+  # the marker command points at the real guard script, shell-quoted (r5 P3-1)
+  jq -e --arg want "'$CLIKAE_LIB/hooks/cockpit-guard.sh'" \
     '(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command) == $want' \
     "$CLIKAE_HOME/profiles/claude/L/settings.json" >/dev/null
+}
+
+@test "an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)" {
+  # codex review: installed from "install with space/lib", the stored command
+  # split at the space under `bash -c` and exited 127 — a non-blocking code,
+  # so every spawn would have been allowed.
+  local prefix="$BATS_TEST_TMPDIR/install with space/it's here"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  clikae init claude L
+  run "$prefix/bin/clikae" cockpit claude L
+  [ "$status" -eq 0 ]
+  local cmd
+  cmd="$(jq -r '.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command' "$CLIKAE_HOME/profiles/claude/L/settings.json")"
+  run bash -c "printf '%s' '{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"sonnet\",\"prompt\":\"review\"}}' | $cmd"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+}
+
+@test "an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)" {
+  clikae init claude L
+  clikae cockpit claude L
+  local f="$CLIKAE_HOME/profiles/claude/L/settings.json"
+  jq --arg c "$CLIKAE_LIB/hooks/cockpit-guard.sh" '(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command) = $c' "$f" > "$f.new" && mv "$f.new" "$f"
+  run clikae cockpit claude L
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cockpit guard installed"* ]] || false
+  [ "$(jq -r '.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command' "$f")" = "'$CLIKAE_LIB/hooks/cockpit-guard.sh'" ]
 }
 
 @test "marking the SAME tank twice is idempotent and says unchanged" {

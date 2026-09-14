@@ -132,6 +132,12 @@ _cockpit_hook_install() {
       if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
         then error("invalid settings") else . end |
       ($current[0] // {}) as $old |
+      # #63 round-5 P3-1: Claude Code runs `command` through a shell, so the
+      # path is stored single-quoted (@sh): an install under a directory
+      # with a space in it used to split there and exit 127 — non-blocking,
+      # i.e. every spawn allowed. An older unquoted entry reads as drift and
+      # is rewritten on the next `clikae cockpit <tank>`.
+      ($cmd | @sh) as $cmd |
       ($old.hooks.PreToolUse // []) as $pre |
       ($pre | map(select((._clikae // "") != "cockpit-guard"))) as $rest |
       (($pre | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
