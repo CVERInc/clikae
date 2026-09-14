@@ -656,15 +656,30 @@ _wg_latest_actor() {
 # decide `kind`, printing "mention by carol": a real @self mention, by
 # zed, misattributed to carol, who only added a label. Fixed by gating the
 # body extraction on the SELECTED event's own type, same `case` this
-# function already classifies `kind` from: `commented`/`reviewed`/
-# `review_requested` are the shapes that can carry a body at all (the
-# search API's own timeline schema — anything else gets "" (matching
-# round 3's original, now-corrected intent). This does NOT change actor
-# selection — carol is still reported as the row's actor, same as any
-# other non-mentioning activity (see the control case right below this
-# comment in the tests) — it only stops a body that belongs to a
-# DIFFERENT, earlier event from upgrading that unrelated actor's own kind
-# to `mention`.
+# function already classifies `kind` from: `commented`/`reviewed` are the
+# shapes that can carry a body at all (the search API's own timeline
+# schema — anything else gets "" (matching round 3's original,
+# now-corrected intent). This does NOT change actor selection — carol is
+# still reported as the row's actor, same as any other non-mentioning
+# activity (see the control case right below this comment in the tests)
+# — it only stops a body that belongs to a DIFFERENT, earlier event from
+# upgrading that unrelated actor's own kind to `mention`.
+#
+# 🔴 `review_requested` REMOVED FROM THIS LIST (P2-3, 2026-09-14
+# fix-round-6 review — read before adding it back). Round 5's own list
+# above added it on the reasoning that it "could carry a body" — it
+# never does (a review request has no comment text, only a
+# `requested_reviewer`); its own event object never has a `body` field.
+# With it in the list, a timeline shaped [commented by zed (body @self),
+# review_requested by carol] still selects carol as the actor (correct —
+# same as any other non-body event), but this `case` then let the SAME
+# whole-page-last-body scan run for her too, picking up zed's UNRELATED
+# body and printing "mention by carol" — carol only asked dan to review;
+# zed is the one who said "@self". The exact r5 P2-2 bug this file's own
+# fix-round-5 comment above describes, reopened by one extra name in a
+# whitelist that is load-bearing: get ONE member wrong and the whole
+# fix regresses silently, since `case` falls through to the SAME
+# whole-flat-string scan for anything left in the list, not to "".
 _wg_last_actor_in_body() {
   local body="$1" flat events evline actor event
   flat="$(printf '%s' "$body" | tr -d '\n')"
@@ -693,7 +708,7 @@ _wg_last_actor_in_body() {
     # assign after a comment is the exact counterexample) and why the body
     # extraction below is gated on $event's own type instead of assumed.
     case "$event" in
-      commented|reviewed|review_requested)
+      commented|reviewed)
         __WG_LOOKUP_BODY="$(printf '%s' "$flat" | grep -oE '"body":"([^"\\]|\\.)*"' | tail -n1 | sed -E 's/^"body":"//; s/"$//')"
         ;;
       *) __WG_LOOKUP_BODY="" ;;

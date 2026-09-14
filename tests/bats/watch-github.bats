@@ -1111,6 +1111,64 @@ STUB
   [[ "$output" != *"mention"* ]] || false
 }
 
+# --- P2-3 (2026-09-14 fix-round-6 review): `review_requested` was added to
+# the body-carrying whitelist in fix-round-5, reasoned to "possibly carry a
+# body" — it never does (a review request carries no comment text, only a
+# `requested_reviewer`). It DOES carry `actor`, though, so it can still be
+# the SELECTED (last actor-carrying) event on a page — with it in the
+# whitelist, that selection triggered the SAME whole-page-last-body scan
+# fix-round-5 exists to prevent, reopening the exact bug: zed's real
+# @-mention, credited to carol, who only asked someone to review.
+
+@test "watch github --once: a comment mentioning self followed by a review request is 'activity by carol', not 'mention by carol' (P2-3)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|500|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # carol never wrote a word — she only requested dan's review — but she IS
+  # the last actor-carrying event, same as any other non-body activity.
+  _gh_stub_timeline_page reef 500 1 \
+    '[{"event":"commented","user":{"login":"zed"},"body":"hey @me look at this"},{"event":"review_requested","actor":{"login":"carol"},"requested_reviewer":{"login":"dan"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 500 2026-09-07T06:05:00Z alice reef https://x/500 0 "Issue 500")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#500 activity by carol: Issue 500"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: a review with a body followed by a review request is 'activity by carol', not 'mention by carol' (P2-3, reviewed+review_requested pair)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|501|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 501 1 \
+    '[{"event":"reviewed","user":{"login":"zed"},"body":"please fix @me"},{"event":"review_requested","actor":{"login":"carol"},"requested_reviewer":{"login":"dan"}}]'
+  _gh_stub_page org 1 \
+    "$(_row 501 2026-09-07T06:05:00Z alice reef https://x/501 0 "Issue 501")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#501 activity by carol: Issue 501"* ]] || false
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: a review request followed by a self-mentioning comment still reads mention by the commenter (P2-3, positive control)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|502|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # carol's review request happened first; zed's mentioning comment is the
+  # LAST (selected) event — an earlier review_requested on the same page
+  # must not suppress a genuine later mention.
+  _gh_stub_timeline_page reef 502 1 \
+    '[{"event":"review_requested","actor":{"login":"carol"},"requested_reviewer":{"login":"dan"}},{"event":"commented","user":{"login":"zed"},"body":"hey @me look at this"}]'
+  _gh_stub_page org 1 \
+    "$(_row 502 2026-09-07T06:05:00Z alice reef https://x/502 0 "Issue 502")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#502 mention by zed: Issue 502"* ]] || false
+}
+
 @test "watch github: rejects garbage --interval with rc=2 (P2-12)" {
   _gh_stub_install
   run clikae watch github --org CVERInc --interval notaduration --once

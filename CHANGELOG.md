@@ -131,7 +131,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ever reaching the OLDEST rows the sweep exists to catch (the
   late-indexed ones); it now reads oldest-first, paginating within the
   main query's own 5-page budget, and reports "lag window truncated" only
-  when that budget is actually exhausted.)
+  when that budget is actually exhausted. `review_requested` — added to the
+  set of event types allowed to supply the `mention`-detecting body text in
+  fix-round-5, reasoned to "possibly carry a body" — never carries one;
+  left in that list, a review-request event with an earlier commented
+  event on the same page still picked up the COMMENT's body and
+  misattributed its @-mention to whoever requested the review, reopening
+  the exact fix-round-5 bug one whitelist entry at a time. Removed
+  (2026-09-14 fix-round-6 review, P2-3).)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
