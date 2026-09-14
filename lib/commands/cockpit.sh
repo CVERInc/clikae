@@ -312,7 +312,19 @@ _cockpit_resolve() {
 
 _cockpit_move() {
   local resolved engine tank
-  resolved="$(_cockpit_resolve "$@")"
+  # #63 round-6 P3-4: _cockpit_move runs as the RHS of `_cockpit_locked`'s
+  # `"$@" || rc=$?` — being an operand of `||` suppresses errexit for this
+  # function's ENTIRE body, so a plain `var="$(failing_cmd)"` here does NOT
+  # abort the way it would anywhere else in this codebase (log_fail's `exit
+  # 1` only ends the command-substitution SUBSHELL). Without this `|| exit
+  # 1`, an unknown or ambiguous name left $resolved empty and move fell
+  # through to validate_name for the real error — printing its own
+  # "cli name is empty" / "Invalid cli name: '  clikae cockpit …'" line
+  # first (the latter swallowing log_dim's suggestion text as a bogus
+  # "name"). State and the lock were never at risk (validate_name always
+  # caught it before anything was written) — but the next bare command
+  # substitution added to this function will no longer be so lucky.
+  resolved="$(_cockpit_resolve "$@")" || exit 1
   engine="$(printf '%s' "$resolved" | cut -f1)"
   tank="$(printf '%s' "$resolved" | cut -f2)"
   validate_name cli "$engine"

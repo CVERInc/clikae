@@ -88,6 +88,36 @@ _guard_installed() {
   [ ! -f "$CLIKAE_HOME/state/cockpit" ]
 }
 
+# #63 round-6 P3-4: _cockpit_move runs on the RHS of _cockpit_locked's
+# `"$@" || rc=$?`, which suppresses errexit for the whole function body —
+# so `resolved="$(_cockpit_resolve …)"` used to NOT stop the function on a
+# failed resolve (log_fail's `exit 1` only ends the command-substitution
+# subshell). Move fell through with $resolved empty and got caught later by
+# validate_name instead, printing an extra stray line first: "cli name is
+# empty" for an unknown name, or "Invalid cli name: '  clikae cockpit …'"
+# (log_dim's suggestion text swallowed as a bogus name) for an ambiguous
+# one. State was never at risk either way; this is about the message being
+# exactly one line, from the right place.
+@test "an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)" {
+  run clikae cockpit nonexistent-tank-zzz
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unknown tank: nonexistent-tank-zzz"* ]] || false
+  [[ "$output" != *"cli name is empty"* ]] || false
+  [[ "$output" != *"Invalid cli name"* ]] || false
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
+@test "an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)" {
+  clikae init claude dup2
+  clikae init codex dup2
+  run clikae cockpit dup2
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Ambiguous tank name: dup2"* ]] || false
+  [[ "$output" != *"cli name is empty"* ]] || false
+  [[ "$output" != *"Invalid cli name"* ]] || false
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
 @test "moving from A to B removes the guard from A and installs it on B" {
   clikae init claude A
   clikae init claude B
