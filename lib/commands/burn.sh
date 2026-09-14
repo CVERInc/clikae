@@ -3011,8 +3011,12 @@ KV
     # P1-2..P1-4 above) and AFTER the artifact check so it can never delay
     # judging this run's own outcome. Best-effort: a failed refresh leaves the
     # existing cache untouched (usage_read's own contract) and never affects
-    # $rc/$out.
-    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1
+    # $rc/$out. (r3 P3-5, confirmed still live in round-4: this is a bare
+    # AND-list under bin/clikae's `set -e` — usage_read's own exit status
+    # would end the whole burn if it were ever non-zero here; `|| true`
+    # makes "best-effort" structural instead of relying on usage_read
+    # happening to always end in a printf today.)
+    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1 || true
 
     # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
     # BEFORE classifying — not just at display time. _burn_output_tail already
