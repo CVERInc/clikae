@@ -1912,10 +1912,11 @@ STUB
   # ceiling, confirmed unrelated to #102's own change (that PR touches
   # burn_status.sh/tmux.sh, which this classification path never calls — grep
   # for dry_store_read/dry_store_peekv/burn_status_field/burn_status_dirs in
-  # lib/commands/burn.sh returns zero hits). 45s keeps ~20x headroom below the
-  # 240s-scale regression this guard exists to catch while not flaking on
-  # ordinary runner noise a single-digit ceiling has no room to absorb.
-  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected well under the regression scale (>100s) this guard exists to catch"; false; }
+  # lib/commands/burn.sh returns zero hits). 45s is still ~5x below the 240s
+  # this guard's regression measured at (and ~23x its 1.9s baseline), while not
+  # flaking on ordinary runner noise a single-digit ceiling has no room to
+  # absorb. (Round 2 corrected "~20x" here: 240/45 is 5.3.)
+  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on an 8MB capture — this guard's regression measured 240s (against 1.9s), so 45s is runner noise headroom, not the regression"; false; }
 }
 
 # P1-1 (round-3 fix review, this PR): the guard above only exercises the
@@ -1947,9 +1948,11 @@ STUB
   # P2-4 (2026-09-14 round-1 fix review of #102/#77): loosened from a 10s to a
   # 45s wall-clock ceiling — this exact test was the one seen red on macOS CI
   # (11s), on a shared runner, unrelated to #102 (see the sibling guard above
-  # for the grep that rules it out). Still ~20x below the 240s-scale regression
-  # this class of guard exists to catch.
-  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — expected well under the regression scale (>100s) this guard exists to catch"; false; }
+  # for the grep that rules it out). This guard's own regression is 727x its
+  # baseline (~3s here, so tens of minutes at 8MB), which 45s sits far below.
+  # Only this guard and the one above keep 45s — the dense-needle guard below
+  # is a ratio, because its regression (26.5s) is under 45s.
+  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — this guard's regression is 727x (measured at 2MB, REVIEW-stderr81-r3.md P1-1), not a few seconds of runner noise"; false; }
 }
 
 # --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
@@ -1962,32 +1965,71 @@ STUB
 # line (53774 hits) took 26.5s. The 8MB/0-hit guard above would NOT have
 # caught this — it exercises the "no match" path, not "many matches".
 
-@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
-  _stub_burn_transport
-  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+# 🔴 P1-1 (2026-09-14 round-2 review of #102/#77): round 1 loosened this guard
+# to the same 45s as the two above, and that switched it OFF — its regression
+# was measured at 26.5s, so 45s is ~1.7x ABOVE the thing it exists to catch,
+# not below it, and it had never flaked (0.56s against a 10s ceiling; the CI
+# red was the healthy-capture guard above). So this one is a RATIO, not a
+# constant: the same capture shape with the needle absent is timed in the same
+# test, on the same runner, under the same load, and the dense-needle run must
+# stay within 8x of it. A slow runner slows both halves; only the per-match
+# cost this guard is about slows one. The baseline is floored at 500 ms so a
+# near-zero baseline's scheduling jitter cannot become the ceiling. Measured on
+# reefbox (gawk, load ~2.5, 3 runs each): clean baseline 605-647 ms, dense
+# 466-472 ms; with the round-5 regression put back (perl's single pass
+# bypassed, the per-match `substr(t, i)` awk loop classifying) dense went to
+# 9124-9243 ms — ~13x its own baseline, red. macOS's BWK awk is the slower one.
+_burn_now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000'; }
+
+_stub_dense_capture() {
+  # <path mentioned on every line>
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
 #!/usr/bin/env bash
 i=0
-while [ "$i" -lt 20000 ]; do
-  printf 'line %d mentions /home/build/workspace/project-checkout-dir again\n' "$i"
-  i=$((i + 1))
+while [ "\$i" -lt 20000 ]; do
+  printf 'line %d mentions $1 again\n' "\$i"
+  i=\$((i + 1))
 done
 printf "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
 STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+}
+
+@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
+  command -v perl >/dev/null 2>&1 || skip "perl not installed (the ms clock)"
+  _stub_burn_transport
   clikae init codex T1
-  local t0 t1
-  t0="$(date +%s)"
+  clikae init codex T2
+  local t0 t1 base_ms dense_ms ceiling_ms
+
+  # Baseline: identical shape and size, but the path on every line is NOT the
+  # -C needle, so the redaction pass runs over the whole capture with 0 hits.
+  _stub_dense_capture /home/build/workspace/unrelated-other-directory
+  t0="$(_burn_now_ms)"
   run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
     -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
-  t1="$(date +%s)"
+  t1="$(_burn_now_ms)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  base_ms=$((t1 - t0))
+
+  # The case under test: the needle on every line (20000 hits). A separate
+  # tank, because the baseline just marked T1 dry.
+  _stub_dense_capture /home/build/workspace/project-checkout-dir
+  t0="$(_burn_now_ms)"
+  run clikae burn codex T2 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+    -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
+  t1="$(_burn_now_ms)"
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
-  local elapsed=$((t1 - t0))
-  # P2-4 (2026-09-14 round-1 fix review of #102/#77): same loosening as the two
-  # guards above, same reason — a shared-runner wall clock, not a regression
-  # threshold, and 45s is still ~1.7x below the 26.5s this specific regression
-  # measured at when it was real.
-  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on a dense-needle capture — expected well under the regression scale (>100s) this guard exists to catch"; false; }
+  dense_ms=$((t1 - t0))
+
+  [ "$base_ms" -ge 500 ] || base_ms=500
+  ceiling_ms=$((base_ms * 8))
+  [ "$dense_ms" -le "$ceiling_ms" ] || {
+    echo "dense-needle classification took ${dense_ms}ms, over 8x the no-needle baseline (${ceiling_ms}ms) — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline)"
+    false; }
 }
 
 # --- P2-1 (2026-09-08 ROUND-3 review): the raw `-- <argv>` redaction had no
