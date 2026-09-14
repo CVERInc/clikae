@@ -446,3 +446,6 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      - `kill-session -t <自己當前 session 的名字>`——合法但自殺式；帶著**一個有名字的 target**（a named target）就是「你指名了」，指名的就放行，這正是「命名你的目標就是全部要求」那條哲學,不在守備範圍。空的 `-t`（`-t ''`、`-t=`、`-t` 後面沒東西）什麼都沒指名，不算豁免，照樣擋（第 1 點）。
      - `kill-pane`／`kill-window`——爆炸半徑留在單一 session 內，不會帶走別的 lane，同樣不擋。🔴 副作用留一筆：一顆 server 上只剩一個 session 時，殺掉它最後一個 pane 會讓那顆 server 自己跟著結束（tmux 的 `exit-empty` 預設）——「不會帶走別的 lane」還是成立，但「爆炸半徑留在單一 session 內」不等於「這顆 server 沒事」。
      - PATH 上完全沒有真正的 tmux（也沒有任何 script 可以退而求其次）——回 127，什麼都沒殺，安全方向的失敗。
+  7. **已知、寧可多擋的缺口，排在 #106 後續處理**（clikae#97 review round 3, P3-1／P3-2；兩者都是安全方向的失敗，不會放行任何 kill）：
+     - `kill-session -C`（只清 alert、不殺任何東西）照樣被擋，`-C`／`-aC`／`-Ca`／`-a -C` 全部 rc 86。`-aC` 的訊息還說它「kills every OTHER session」，帶 `-C` 時這句不對。
+     - PATH 裡的**空項**（代表 `.`，例如 `PATH="<shim>:"`、`"<shim>::/x"`）被跳過，不會被當成目前目錄：cwd 裡有 `tmux` 也回 127。明寫 `<shim>:.` 就找得到。
