@@ -404,6 +404,24 @@ _burn_output_tail() {
 # check itself, its own comment, and docs/DESIGN-board-fuel-dots.md's prose)
 # so the three copies can't drift from each other again.
 _BURN_REROUTE_REFRESH_CAP=${_BURN_REROUTE_REFRESH_CAP:-3}
+# P3-6 (round-5 review): an EXPLICITLY-set non-numeric override used to fail
+# SILENTLY at the `while` check inside _burn_next_same_engine (`[: abc:
+# integer expression expected` on stderr, but the loop condition simply
+# never fires) — the whole live-verification mechanism went dark, zero
+# calls spent on every reroute from then on, with only that one
+# bash-internal stderr line as any trace. A loud, named warning plus a safe
+# default beats either that bash-internal message or a QUIET fallback
+# (`CLIKAE_USAGE_TTL`'s own pattern elsewhere in this codebase) — this knob
+# controls whether burn ever verifies a reroute target at all, worth
+# calling out by name. The unset/empty case above already resolved to the
+# default and is never "invalid" — only a value that's actually SET to
+# something non-numeric reaches this check.
+case "$_BURN_REROUTE_REFRESH_CAP" in
+  *[!0-9]*)
+    log_warn "_BURN_REROUTE_REFRESH_CAP=\"$_BURN_REROUTE_REFRESH_CAP\" is not a non-negative integer — using the default (3). A reroute's live verification budget silently drops to zero calls otherwise."
+    _BURN_REROUTE_REFRESH_CAP=3
+    ;;
+esac
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto — the reserve is not

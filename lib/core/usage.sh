@@ -163,7 +163,22 @@ _USAGE_NORM_STAMP_JQ='
 # `_burn_next_same_engine`) still counts, short enough that the
 # reset-instant-passed branch below can't be won by a reading old enough to
 # predate the reset it's claiming to know about.
+# P3-6 (round-5 review): a non-numeric override made every `--argjson
+# max_age` call below fail to even start (jq errors out on a non-numeric
+# arg), so every peek — cache-hit or not — silently read as "unknown", with
+# no stderr at all (`usage_cache_peek`'s own `2>/dev/null`). This knob
+# controls whether burn's ranking ever trusts ANY cached reading; a loud,
+# named warning plus a safe default beats going quietly blind.
 _USAGE_CACHE_PEEK_MAX_AGE_SEC=${_USAGE_CACHE_PEEK_MAX_AGE_SEC:-900}
+# The unset/empty case above already resolved to the default and is never
+# "invalid" — only a value that's actually SET to something non-numeric
+# reaches this check (same shape as _BURN_REROUTE_REFRESH_CAP's, burn.sh).
+case "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" in
+  *[!0-9]*)
+    declare -F log_warn >/dev/null && log_warn "_USAGE_CACHE_PEEK_MAX_AGE_SEC=\"$_USAGE_CACHE_PEEK_MAX_AGE_SEC\" is not a non-negative integer — using the default (900). Every cached usage reading silently reads as unknown otherwise."
+    _USAGE_CACHE_PEEK_MAX_AGE_SEC=900
+    ;;
+esac
 
 # Cache-only peek: never calls the vendor, never forks the adapter, never
 # writes. burn's candidate ranking needs a headroom number to order tanks by

@@ -873,3 +873,61 @@ STUB
   run usage_cached_fields claude old "$now"
   [ "$status" -ne 0 ]
 }
+
+@test "P3-6 (round-5 review): a non-numeric _USAGE_CACHE_PEEK_MAX_AGE_SEC warns loudly and falls back, instead of every peek silently going unknown" {
+  usage_fixture
+  clikae init claude work2
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  jq -cn --argjson pct 30 --argjson now "$(date +%s)" \
+    '{window_pct:$pct,weekly_pct:$pct,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$now,scanned_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/work2.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  run --separate-stderr bash -c '
+    export CLIKAE_LIB="'"$CLIKAE_LIB"'" CLIKAE_HOME="'"$CLIKAE_HOME"'"
+    source "$CLIKAE_LIB/core/log.sh"
+    export _USAGE_CACHE_PEEK_MAX_AGE_SEC=abc
+    source "$CLIKAE_LIB/core/usage.sh"
+    usage_cache_peek claude work2
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = $'30\t30\t30' ]   # fell back to the default (900) instead of going blind
+  [[ "$stderr" == *"_USAGE_CACHE_PEEK_MAX_AGE_SEC"*"not a non-negative integer"* ]] || { echo "stderr: $stderr"; false; }
+}
+
+@test "P3-6 (round-5 review): a non-numeric _BURN_REROUTE_REFRESH_CAP warns loudly and falls back, instead of silently spending zero reroute calls" {
+  clikae init claude a1; clikae init claude b2
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  multi_curl_stub
+  live_usage a1 70; live_usage b2 40
+  export USAGE_CALLS="$TEST_HOME/calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+tok="$(printf '%s' "$config" | sed -n 's/.*Bearer \([^"]*\)".*/\1/p')"
+line="$(awk -v t="$tok" '$1==t{print; exit}' "$CLIKAE_TEST_PCTMAP" 2>/dev/null)"
+if [ -z "$line" ]; then echo '{"error":"unauthorized"}'; exit 22; fi
+read -r _ window weekly <<< "$line"
+printf '{"five_hour":{"utilization":%s,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":%s,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}\n' "$window" "$weekly"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run --separate-stderr bash -c '
+    export CLIKAE_LIB="'"$CLIKAE_LIB"'" CLIKAE_HOME="'"$CLIKAE_HOME"'" CLIKAE_TEST_PCTMAP="'"$CLIKAE_TEST_PCTMAP"'" USAGE_CALLS="'"$USAGE_CALLS"'" PATH="'"$PATH"'" _BURN_REROUTE_REFRESH_CAP=abc
+    source "$CLIKAE_LIB/core/log.sh"
+    source "$CLIKAE_LIB/core/profile_store.sh"
+    source "$CLIKAE_LIB/core/adapter_loader.sh"
+    source "$CLIKAE_LIB/core/limit.sh"
+    source "$CLIKAE_LIB/core/usage.sh"
+    source "$CLIKAE_LIB/commands/burn.sh"
+    _burn_next_same_engine claude "" "" "" 1
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = b2 ]   # a live call actually happened and picked the real winner
+  [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" -ge 1 ]   # not zero — the old silent-off failure mode
+  [[ "$stderr" == *"_BURN_REROUTE_REFRESH_CAP"*"not a non-negative integer"* ]] || { echo "stderr: $stderr"; false; }
+}
