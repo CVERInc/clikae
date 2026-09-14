@@ -117,16 +117,16 @@ _cockpit_same_physical_tank() {
 # _cockpit_hook_install <engine> <tank> -> install OUR PreToolUse block on
 # this tank's settings.json (union merge, backup, idempotent — see
 # lib/commands/settings.sh's _settings_write_file). Prints one status line.
-_cockpit_hook_install() {
+#
+# A subshell, like _settings_tank: _settings_snapshot (#63 round-5 P3-3)
+# owns this subshell's EXIT trap for its snapshot directory.
+_cockpit_hook_install() (
   local engine="$1" tank="$2" file input new changed
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
-  file="$(profile_dir "$engine" "$tank")/settings.json"
-  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
-    printf '%s/%s: skipped — settings.json is not a regular, unlinked file\n' "$engine" "$tank"
-    return 1
-  fi
-  input="$file"; [ -e "$file" ] || input=/dev/null
+  _settings_snapshot "$(profile_dir "$engine" "$tank")" "$engine/$tank" || return 1
+  file="$_SETTINGS_FILE"
+  input="${_SETTINGS_SNAP:-/dev/null}"
   if ! new="$(jq -n --arg cmd "$CLIKAE_LIB/hooks/cockpit-guard.sh" --slurpfile current "$input" '
       def valid: type == "object";
       if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
@@ -167,7 +167,7 @@ _cockpit_hook_install() {
     printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
     return 1
   }
-  _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
+  _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
   # #63 P3-12: the hook command written above is $CLIKAE_LIB's OWN resolved
   # path (bin/clikae's `__resolve_self`) — for a real install (install.sh,
   # Homebrew) that's a stable location, but running `clikae` straight out of
@@ -181,24 +181,21 @@ _cockpit_hook_install() {
       "$engine" "$tank" "$CLIKAE_LIB" >&2
   fi
   printf '%s/%s: cockpit guard installed\n' "$engine" "$tank"
-}
+)
 
 # _cockpit_hook_remove <engine> <tank> -> remove ONLY our marked block. Empties
 # `hooks.PreToolUse` (and `hooks` itself) rather than leaving a dangling `[]`
 # when nothing else used them — so a tank that had no hooks before we visited
 # it comes back exactly as it was. Prints one status line.
-_cockpit_hook_remove() {
+_cockpit_hook_remove() (
   local engine="$1" tank="$2" file new changed
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
-  file="$(profile_dir "$engine" "$tank")/settings.json"
-  if [ ! -f "$file" ]; then
+  _settings_snapshot "$(profile_dir "$engine" "$tank")" "$engine/$tank" || return 1
+  file="$_SETTINGS_FILE"
+  if [ -z "$_SETTINGS_SNAP" ]; then
     printf '%s/%s: cockpit guard not installed here (unchanged)\n' "$engine" "$tank"
     return 0
-  fi
-  if [ -L "$file" ]; then
-    printf '%s/%s: skipped — settings.json is a symlink\n' "$engine" "$tank"
-    return 1
   fi
   if ! new="$(jq '
       ((.hooks.PreToolUse // []) | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
@@ -217,7 +214,7 @@ _cockpit_hook_remove() {
         ) as $out |
         { changed: true, settings: $out }
       end
-    ' "$file" 2>/dev/null)"; then
+    ' "$_SETTINGS_SNAP" 2>/dev/null)"; then
     printf '%s/%s: skipped — invalid JSON in settings.json\n' "$engine" "$tank"
     return 1
   fi
@@ -232,9 +229,9 @@ _cockpit_hook_remove() {
     printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
     return 1
   }
-  _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
+  _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
   printf '%s/%s: cockpit guard removed\n' "$engine" "$tank"
-}
+)
 
 _cockpit_show() {
   local cur; cur="$(_cockpit_state_read)"

@@ -212,7 +212,9 @@ load '../helpers'
   source "$CLIKAE_LIB/commands/settings.sh"
   for i in 1 2 3 4 5 6 7; do
     printf '%s\n' "{\"model\":\"m$i\"}" > "$d/settings.json"
-    run _settings_write_file "$d/settings.json" "{\"model\":\"m$((i + 1))\"}" "claude/work"
+    # through _settings_snapshot, the only way a writer gets a file and its
+    # snapshot (#63 r5 P3-3)
+    run eval '( _settings_snapshot "$d" claude/work && _settings_write_file "$_SETTINGS_FILE" "{\"model\":\"m$((i + 1))\"}" claude/work "$_SETTINGS_SNAP" )'
     [ "$status" -eq 0 ] || { echo "iter $i failed: $output" >&2; false; }
   done
   [ "$(find "$d" -name '*.clikae.bak.*' | wc -l | tr -d ' ')" -eq 5 ]

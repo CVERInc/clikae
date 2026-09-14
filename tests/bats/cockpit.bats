@@ -266,7 +266,7 @@ _no_unguarded_cockpit() {
   [ "$status" -eq 0 ]
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/bbb" ]
   _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
 }
 
 @test "a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)" {
@@ -283,7 +283,7 @@ _no_unguarded_cockpit() {
   [[ "$output" == *"is a symlink or not a regular file"* ]] || false
   _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
   [ "$(cat "$target")" = "claude/aaa" ]
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
 }
 
 @test "probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)" {
@@ -297,8 +297,8 @@ _no_unguarded_cockpit() {
   [ "$status" -ne 0 ]
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
   _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
   [[ "$output" == *"claude/A is still the cockpit"* ]] || false
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
   _no_unguarded_cockpit
 }
 
@@ -308,7 +308,7 @@ _no_unguarded_cockpit() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"no cockpit is set"* ]] || false
   [ -z "$(cat "$CLIKAE_HOME/state/cockpit" 2>/dev/null)" ]
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
 }
 
 @test "probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)" {
@@ -373,7 +373,7 @@ _wait_for_file() {
   grep -q "in progress" "$BATS_TEST_TMPDIR/p2.out"
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/B" ]
   _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
   _no_unguarded_cockpit
   [ ! -e "$CLIKAE_HOME/state/settings.lock" ]
 }
@@ -396,8 +396,8 @@ _wait_for_file() {
   wait "$p2"
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/C" ]
   _guard_installed "$CLIKAE_HOME/profiles/claude/C/settings.json"
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
 }
 
 @test "--off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)" {
@@ -458,6 +458,80 @@ _wait_for_file() {
   [[ "$output" == *"same physical tank"* ]] || false
   _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+}
+
+# _cp_swap_shim -> a `cp` on PATH that, the first time it is handed a matching
+# path, replaces the tank's live settings.json with a symlink to a sentinel
+# file and then runs the real cp. SHIM_WHEN=live matches the live
+# settings.json (on f20a603 that is the seed copy, right after the JSON
+# read — the codex review's probe); SHIM_WHEN=snapshot matches the private
+# snapshot (after the read, before the backup).
+_cp_swap_shim() {
+  local bin="$BATS_TEST_TMPDIR/shim" real
+  real="$(command -v cp)"
+  mkdir -p "$bin"
+  cat > "$bin/cp" <<SHIM
+#!/usr/bin/env bash
+# \$2 is the SOURCE in every clikae call shape (cp -p SRC DST, cp -RPp SRC DST).
+if [ ! -e "\$SHIM_DONE" ]; then
+  case "\$SHIM_WHEN:\${2-}" in
+    live:*/profiles/claude/L/settings.json|snapshot:*/.clikae-snap.*/settings.json)
+      : > "\$SHIM_DONE"
+      rm -f "\$SHIM_TARGET"; ln -s "\$SHIM_SENTINEL" "\$SHIM_TARGET" ;;
+  esac
+fi
+exec "$real" "\$@"
+SHIM
+  chmod +x "$bin/cp"
+  printf '%s' "$bin"
+}
+
+@test "probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)" {
+  clikae init claude L
+  local d="$CLIKAE_HOME/profiles/claude/L" sentinel="$BATS_TEST_TMPDIR/sentinel"
+  printf 'SYNTHETIC_SENTINEL\n' > "$sentinel"
+  printf '{"env":{"X":"1"}}\n' > "$d/settings.json"
+  local shim; shim="$(_cp_swap_shim)"
+  run env PATH="$shim:$PATH" SHIM_WHEN=live SHIM_DONE="$BATS_TEST_TMPDIR/done" \
+    SHIM_TARGET="$d/settings.json" SHIM_SENTINEL="$sentinel" "$CLIKAE_BIN" cockpit claude L
+  [ -e "$BATS_TEST_TMPDIR/done" ]                      # the swap really happened
+  local move_status="$status" move_output="$output"
+  # `run !`, never a bare `! cmd`: bats does not fail a test on a negated
+  # command in the middle of it.
+  run ! grep -rl SYNTHETIC_SENTINEL "$d"/settings.json.clikae.bak.* 2>/dev/null
+  [ "$move_status" -ne 0 ]
+  [[ "$move_output" == *"turned into a link or non-file while it was being read"* ]] || false
+  [ "$(cat "$sentinel")" = "SYNTHETIC_SENTINEL" ]
+  [ -z "$(find "$d" -name '.clikae-snap.*')" ]         # snapshot directory cleaned up
+}
+
+@test "probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)" {
+  clikae init claude L
+  local d="$CLIKAE_HOME/profiles/claude/L" sentinel="$BATS_TEST_TMPDIR/sentinel"
+  printf 'SYNTHETIC_SENTINEL\n' > "$sentinel"
+  printf '{"env":{"X":"1"}}\n' > "$d/settings.json"
+  cp "$d/settings.json" "$BATS_TEST_TMPDIR/original.json"
+  local shim; shim="$(_cp_swap_shim)"
+  run env PATH="$shim:$PATH" SHIM_WHEN=snapshot SHIM_DONE="$BATS_TEST_TMPDIR/done" \
+    SHIM_TARGET="$d/settings.json" SHIM_SENTINEL="$sentinel" "$CLIKAE_BIN" cockpit claude L
+  [ -e "$BATS_TEST_TMPDIR/done" ]
+  [ "$status" -eq 0 ]
+  run ! grep -rl SYNTHETIC_SENTINEL "$d"/settings.json.clikae.bak.* 2>/dev/null
+  cmp "$BATS_TEST_TMPDIR/original.json" "$d"/settings.json.clikae.bak.*
+  [ ! -L "$d/settings.json" ]
+  _guard_installed "$d/settings.json"
+  [ "$(jq -r .env.X "$d/settings.json")" = 1 ]
+  [ "$(cat "$sentinel")" = "SYNTHETIC_SENTINEL" ]
+}
+
+@test "a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)" {
+  clikae init claude L
+  mv "$CLIKAE_HOME/profiles/claude/L" "$BATS_TEST_TMPDIR/realL"
+  ln -s "$BATS_TEST_TMPDIR/realL" "$CLIKAE_HOME/profiles/claude/L"
+  run clikae cockpit claude L
+  [ "$status" -eq 0 ]
+  _guard_installed "$BATS_TEST_TMPDIR/realL/settings.json"
+  [ -L "$CLIKAE_HOME/profiles/claude/L" ]
 }
 
 @test "--off with nothing set is an idempotent no-op" {

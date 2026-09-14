@@ -205,6 +205,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     under a path with a space split there when Claude Code ran it (exit
     127, non-blocking: every spawn allowed). An older unquoted entry is
     repaired on the next `clikae cockpit <tank>`.
+  - settings.json writers (the cockpit guard, `clikae settings apply`)
+    resolve the tank directory once and read the file once, through a
+    no-follow snapshot; the JSON parse and the `.clikae.bak.*` backup both
+    come from that snapshot. Swapping settings.json for a symlink between
+    the read and the backup used to copy the link's target into the backup.
+    A directory swapped in at the destination is refused instead of
+    receiving the file. Read-only callers (doctor, `--check`, `--dry-run`)
+    make no snapshot.
 
 ### Added
 

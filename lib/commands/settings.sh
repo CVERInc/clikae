@@ -45,17 +45,59 @@ _settings_lock_release() {
   rmdir "$lock" 2>/dev/null || true
 }
 
-# _settings_write_file <file> <content> <label>  ->  write <content> to <file>
-# atomically: a temp file seeded with the live file's owner/mode, a backup of
-# the live file made right before it is replaced, then a rename into place.
-# <label> (e.g. "claude/work") prefixes every failure message.
+# _settings_snapshot <tank dir> <label> -> the ONE place a settings.json is
+# located and read (#63 round-5 P3-3). Sets:
+#   _SETTINGS_FILE  settings.json under the tank directory's PHYSICAL path
+#                   (resolved once, `cd -P`), used for every later step;
+#   _SETTINGS_SNAP  a private copy of it taken with a no-follow copy, or ""
+#                   when there is no settings.json yet.
+# Callers parse _SETTINGS_SNAP, and _settings_write_file backs up from it —
+# the live path is never read a second time. The codex review swapped
+# settings.json for a symlink between the JSON read and the backup `cp`,
+# and the backup copied the symlink's target (a stand-in for a credential
+# file). A link or non-file found at the path, or produced by a swap during
+# the copy itself, is refused.
+#
+# Call it from a subshell: it installs that subshell's EXIT trap to remove
+# the snapshot directory. `--no-copy` (a caller that will not write: doctor,
+# --check, --dry-run) resolves and checks the same way but reads the live
+# file in place, so a read-only command creates nothing in the tank.
+_settings_snapshot() {
+  local dir="$1" label="$2" no_copy="${3-}" phys
+  _SETTINGS_FILE=""; _SETTINGS_SNAP=""; _SETTINGS_SNAP_DIR=""
+  phys="$(cd -P "$dir" 2>/dev/null && pwd -P)" || { printf '%s: skipped — cannot resolve the tank directory\n' "$label"; return 1; }
+  _SETTINGS_FILE="$phys/settings.json"
+  if [ -L "$_SETTINGS_FILE" ] || { [ -e "$_SETTINGS_FILE" ] && [ ! -f "$_SETTINGS_FILE" ]; }; then
+    printf '%s: skipped — settings.json is not a regular, unlinked file\n' "$label"
+    return 1
+  fi
+  [ -e "$_SETTINGS_FILE" ] || return 0
+  if [ "$no_copy" = --no-copy ]; then _SETTINGS_SNAP="$_SETTINGS_FILE"; return 0; fi
+  _SETTINGS_SNAP_DIR="$(mktemp -d "$phys/.clikae-snap.XXXXXX" 2>/dev/null)" || { printf '%s: failed to create a snapshot directory\n' "$label"; return 1; }
+  trap '[ -z "$_SETTINGS_SNAP_DIR" ] || rm -rf "$_SETTINGS_SNAP_DIR"' EXIT
+  # -R -P: copy a symlink AS a symlink (never its target), on GNU and BSD cp.
+  cp -RPp "$_SETTINGS_FILE" "$_SETTINGS_SNAP_DIR/settings.json" 2>/dev/null \
+    || { printf '%s: failed to read settings.json\n' "$label"; return 1; }
+  if [ -L "$_SETTINGS_SNAP_DIR/settings.json" ] || [ ! -f "$_SETTINGS_SNAP_DIR/settings.json" ]; then
+    printf '%s: skipped — settings.json turned into a link or non-file while it was being read\n' "$label"
+    return 1
+  fi
+  _SETTINGS_SNAP="$_SETTINGS_SNAP_DIR/settings.json"
+}
+
+# _settings_write_file <file> <content> <label> <snapshot>  ->  write <content>
+# to <file> atomically: a temp file seeded with the snapshot's owner/mode, a
+# backup made FROM THE SNAPSHOT (never by re-reading <file>), then a rename
+# into place. <file> and <snapshot> come from _settings_snapshot; an empty
+# <snapshot> means there was no settings.json when it was read. <label>
+# (e.g. "claude/work") prefixes every failure message.
 #
 # The ONE write path every settings.json mutation in clikae goes through —
 # #76/#85's permissions-template apply below, and the cockpit guard's hook
 # install/remove (#63, lib/commands/cockpit.sh) — so a second writer never
 # hand-rolls its own jq-and-redirect with none of this safety.
 _settings_write_file() (
-  local file="$1" content="$2" label="$3" tmp=""
+  local file="$1" content="$2" label="$3" snap="${4-}" tmp=""
   # #63 P2-4: refuse to write nothing. `$content` is always built by a caller
   # as `"$(… | jq …)"` — if that jq dies mid-pipeline (OOM, disk full, killed
   # mid-upgrade), command substitution swallows its exit code AND turns the
@@ -65,24 +107,35 @@ _settings_write_file() (
   # the one place in the whole write path that can catch it: every caller
   # funnels through here.
   [ -n "$content" ] || { printf '%s: refusing to write empty content\n' "$label" >&2; return 1; }
+  [ "$#" -ge 4 ] || { printf '%s: internal error — no settings snapshot\n' "$label" >&2; return 1; }
+  if [ -z "$snap" ] && { [ -e "$file" ] || [ -L "$file" ]; }; then
+    printf '%s: skipped — settings.json appeared while it was being edited\n' "$label"
+    return 1
+  fi
   trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
   trap 'exit 1' HUP INT TERM
   tmp="$(mktemp "${file}.tmp.XXXXXX")" || { printf '%s: failed to create a temp file\n' "$label"; return 1; }
-  if [ -f "$file" ]; then
-    # Seed the temp file's owner/mode from the live file; the actual backup
-    # is the separate copy made below, right before the live file is touched.
-    cp -p "$file" "$tmp" || { printf '%s: failed to prepare the temp file\n' "$label"; return 1; }
+  if [ -n "$snap" ]; then
+    # Seed the temp file's owner/mode from the snapshot; the backup is the
+    # separate copy made below, right before the live file is replaced.
+    cp -p "$snap" "$tmp" || { printf '%s: failed to prepare the temp file\n' "$label"; return 1; }
   fi
   # Trailing newline: command substitution (how every caller builds $content
   # from `jq`) strips it, so add exactly one back — jq's own CLI output
   # always ends in one, and a write that quietly drops it would leave a
   # settings.json byte-different from anything jq itself would ever produce.
   printf '%s\n' "$content" > "$tmp" || { printf '%s: failed to write the temp file\n' "$label"; return 1; }
-  if [ -f "$file" ]; then
+  if [ -n "$snap" ]; then
     local backup
     backup="$(mktemp "${file}.clikae.bak.XXXXXX")" || { printf '%s: failed to create a backup file\n' "$label"; return 1; }
-    cp -p "$file" "$backup" || { printf '%s: failed to back up settings.json\n' "$label"; return 1; }
+    cp -p "$snap" "$backup" || { printf '%s: failed to back up settings.json\n' "$label"; return 1; }
     _settings_prune_backups "$file"
+  fi
+  # `mv -f tmp dir` would put the file INSIDE a directory swapped in at the
+  # destination instead of replacing it.
+  if [ -d "$file" ] && [ ! -L "$file" ]; then
+    printf '%s: skipped — settings.json is now a directory\n' "$label"
+    return 1
   fi
   mv -f "$tmp" "$file" || { printf '%s: failed to replace settings.json\n' "$label"; return 1; }
   tmp=""
@@ -113,13 +166,11 @@ _settings_tank() (
     printf '%s/%s: skipped — settings inspection requires jq\n' "$engine" "$tank"
     return 1
   }
-  file="$(profile_dir "$engine" "$tank")/settings.json"
-  input="$file"
-  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
-    printf '%s/%s: skipped — settings.json is not a regular, unlinked file\n' "$engine" "$tank"
-    return 1
-  fi
-  [ -e "$file" ] || input=/dev/null
+  local copy=--no-copy
+  [ "$mode" = apply ] && copy=""
+  _settings_snapshot "$(profile_dir "$engine" "$tank")" "$engine/$tank" $copy || return 1
+  file="$_SETTINGS_FILE"
+  input="${_SETTINGS_SNAP:-/dev/null}"
   # $HOME, not a hardcoded /home/<user>: this template also ships to macOS via
   # Homebrew, where $HOME is /Users/<user> and there is no /home at all.
   # ${HOME%/} strips a trailing slash so a caller with HOME=/x/ vs HOME=/x
@@ -156,7 +207,7 @@ _settings_tank() (
     ($old | .permissions.allow = ((.permissions.allow // []) + $a) |
            .permissions.deny = ((.permissions.deny // []) + $d)) as $merged |
     {allow: ($a | length), deny: ($d | length), settings: $merged}
-  ' 2>/dev/null)" || { [ "$input" != /dev/null ] && [ ! -s "$file" ]; }; then
+  ' 2>/dev/null)" || { [ "$input" != /dev/null ] && [ ! -s "$input" ]; }; then
     printf '%s/%s: skipped — invalid JSON or permissions shape in settings.json/template\n' "$engine" "$tank"
     return 1
   fi
@@ -178,7 +229,7 @@ _settings_tank() (
       printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
       return 1
     }
-    _settings_write_file "$file" "$settings_out" "$engine/$tank" || return 1
+    _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
   fi
   printf '%s/%s: +%s allow / +%s deny%s\n' "$engine" "$tank" "$allow" "$deny" "$( [ "$mode" != dry-run ] || printf ' (dry-run)' )"
 )
