@@ -1169,6 +1169,67 @@ STUB
   [[ "$output" == *"github CVERInc/reef#502 mention by zed: Issue 502"* ]] || false
 }
 
+# --- P2-2 (2026-09-14 fix-round-7 review): with review_requested gone, the
+# whitelist was `commented|reviewed` — but the body was still "the LAST
+# string body anywhere on the page", not the selected event's own. An
+# Approve with no text is a `reviewed` event whose body is NOT a string, so
+# that scan fell back to the previous comment's body: zed's "@me", credited
+# to carol. Real schema, checked read-only against cli/cli on 2026-09-14:
+# #14437's approve review is `"body":null` (pinned, de-identified, in
+# tests/fixtures/github-timeline-approve-null-body.json, real key order and
+# nesting — `user` not `actor`, `{/other_user}` braces inside URLs,
+# `_links` nested two deep); #14429's is `"body":""`. No body field at all
+# was not observed; covered anyway, since the schema doesn't promise it.
+# carol stays the row's actor (the last actor-carrying event, by design);
+# her review just has no text to mention anyone with.
+
+@test "watch github --once: a body:null approve (real GitHub shape) after a self-mentioning comment is 'review by carol', not 'mention by carol' (P2-2, fix-round-7)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|600|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 600 1 "$(cat "$BATS_TEST_DIRNAME/../fixtures/github-timeline-approve-null-body.json")"
+  _gh_stub_page org 1 \
+    "$(_row 600 2026-09-14T13:20:09Z alice reef https://x/600 1 "PR 600")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#600 review by carol: PR 600"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: a reviewed event with NO body field after a self-mentioning comment is 'review by carol' (P2-2, fix-round-7)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|601|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 601 1 \
+    '[{"event":"commented","user":{"login":"zed"},"body":"hey @me"},{"event":"reviewed","user":{"login":"carol"},"state":"approved"}]'
+  _gh_stub_page org 1 \
+    "$(_row 601 2026-09-07T06:05:00Z alice reef https://x/601 1 "PR 601")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#601 review by carol: PR 601"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"mention"* ]] || false
+}
+
+@test "watch github --once: control — the selected review's OWN body still decides mention, even with nested objects and '},{' around it (P2-2, fix-round-7)" {
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|602|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  # A later event's own body mentions self; the EARLIER comment has none.
+  # `labels:[{..},{..}]` and a body with a literal `},{` would both break a
+  # naive `},{` split of the page — the selected event must still be read
+  # whole.
+  _gh_stub_timeline_page reef 602 1 \
+    '[{"event":"commented","user":{"login":"zed"},"body":"no mention"},{"event":"reviewed","user":{"login":"carol"},"labels":[{"name":"a"},{"name":"b"}],"body":"json },{ then @me","_links":{"html":{"href":"h"}}}]'
+  _gh_stub_page org 1 \
+    "$(_row 602 2026-09-07T06:05:00Z alice reef https://x/602 1 "PR 602")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#602 mention by carol: PR 602"* ]] || { echo "$output"; false; }
+}
+
 @test "watch github: rejects garbage --interval with rc=2 (P2-12)" {
   _gh_stub_install
   run clikae watch github --org CVERInc --interval notaduration --once

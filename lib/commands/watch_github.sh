@@ -630,15 +630,68 @@ _wg_latest_actor() {
   return 1
 }
 
+# _wg_timeline_events <json-array-text> -> one line per top-level array
+# element, in order: <element's own top-level "body" string, still
+# JSON-escaped, empty when null/absent/not a string> \037 <element text>.
+# Quote-, escape- and depth-aware (P2-2, 2026-09-14 fix-round-7 review), so
+# a `},{` inside a string or a nested array of objects never splits an
+# element and a nested object's "body" key is never mistaken for the
+# event's own. awk, not jq: this file needs no external jq (see _wg_fetch).
+# LC_ALL=C: byte-wise substr, O(1) per character in every awk.
+_wg_timeline_events() {
+  printf '%s' "$1" | LC_ALL=C awk '
+    { s = s $0 }
+    END {
+      US = sprintf("%c", 31)
+      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0
+      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (instr) {
+          if (esc) { esc = 0; continue }
+          if (c == "\\") { esc = 1; continue }
+          if (c == "\"") {
+            instr = 0
+            if (depth == 2) {
+              str = substr(s, sstart, i - sstart)
+              if (isval && key == "body") body = str
+              if (!isval) laststr = str
+            }
+          }
+          continue
+        }
+        if (c == "\"") {
+          instr = 1; sstart = i + 1
+          if (depth == 2) { isval = want; want = 0 }
+          continue
+        }
+        if (c == " " || c == "\t" || c == "\r") continue
+        if (c == ":" && depth == 2) { key = laststr; want = 1; continue }
+        if (depth == 2) want = 0
+        if (c == "{" || c == "[") {
+          depth++
+          if (depth == 2 && c == "{") { estart = i; body = ""; key = ""; laststr = "" }
+          continue
+        }
+        if (c == "}" || c == "]") {
+          depth--
+          if (depth == 1 && c == "}" && estart > 0) {
+            print body US substr(s, estart, i - estart + 1)
+            estart = 0
+          }
+          continue
+        }
+      }
+    }'
+}
+
 # _wg_last_actor_in_body <compact-json-array-body> -> 0 with
 # $__WG_LOOKUP_ACTOR/$__WG_LOOKUP_KIND/$__WG_LOOKUP_BODY set to the LAST
 # array element that carries `actor.login` or `user.login`, scanning from
 # the end backward — or 1 if nothing in the page carries either (all
-# `committed`, or `[]`). `gh api` responses are compact (single line,
-# confirmed against the real API, not pretty-printed — see the PR report),
-# so array elements are split on `},{` boundaries; a GitHub timeline event's
-# own top-level fields never contain that literal substring unescaped.
-# Portable reverse (no `tac`, which macOS doesn't ship): the classic
+# `committed`, or `[]`). Array elements come from _wg_timeline_events
+# (fix-round-7; this used to split on `},{`, which a body or a nested
+# array of objects could contain). Portable reverse (no `tac`, which macOS doesn't ship): the classic
 # `sed '1!G;h;$!d'` idiom.
 #
 # `$__WG_LOOKUP_BODY` (P2-2, 2026-09-13 fix-round-3 review; 🔴 FIXED AGAIN,
@@ -688,37 +741,40 @@ _wg_latest_actor() {
 # whitelist that is load-bearing: get ONE member wrong and the whole
 # fix regresses silently, since `case` falls through to the SAME
 # whole-flat-string scan for anything left in the list, not to "".
+#
+# 🔴 BODY FROM THE SELECTED EVENT ONLY (P2-2, 2026-09-14 fix-round-7 review
+# — read before bringing back any whole-page body scan). Even with the list
+# down to `commented|reviewed`, the body was still the LAST string body on
+# the page, not the selected event's own: an Approve with no text is a
+# `reviewed` event with `"body":null` (real cli/cli data, 2026-09-14; see
+# tests/fixtures/github-timeline-approve-null-body.json), which that scan
+# skipped straight past to the previous comment's "@me" — credited to the
+# approver. The page is now split by _wg_timeline_events, a quote- and
+# depth-aware splitter, which also hands back each event's OWN top-level
+# body (empty for null/absent). That makes the `},{`-in-a-body fallback
+# (P3-1, fix-round-4) unnecessary: a `},{` inside a string or a nested
+# `labels:[{..},{..}]` no longer splits an event in the first place.
 _wg_last_actor_in_body() {
-  local body="$1" flat events evline actor event
+  local body="$1" flat events line evline evbody actor event us
+  us="$(printf '\037')"
   flat="$(printf '%s' "$body" | tr -d '\n')"
-  flat="${flat#\[}"; flat="${flat%\]}"
   [ -n "$flat" ] || return 1
-  events="$(printf '%s' "$flat" | sed -E 's/\},\{/}\n{/g')"
-  while IFS= read -r evline; do
-    [ -n "$evline" ] || continue
+  events="$(_wg_timeline_events "$flat")"
+  [ -n "$events" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    evbody="${line%%"$us"*}"
+    evline="${line#*"$us"}"
     actor="$(printf '%s' "$evline" | grep -oE '"actor":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
     [ -n "$actor" ] || actor="$(printf '%s' "$evline" | grep -oE '"user":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
     [ -n "$actor" ] || continue
     event="$(printf '%s' "$evline" | grep -oE '"event":"[^"]*"' | head -n1 | sed -E 's/.*"event":"([^"]*)"$/\1/')"
     __WG_LOOKUP_ACTOR="$actor"
-    # P3-1 (2026-09-14 fix-round-4 review): matched against the WHOLE
-    # unsplit $flat, never $evline — a body containing a literal `},{`
-    # (pasted JSON, for instance) breaks $evline's own `},{` -> newline
-    # split right through the middle of this event's body, truncating it
-    # before the actual `@self` mention text. The quote-aware pattern
-    # below only stops at a real (unescaped) closing quote either way, so
-    # scanning the unsplit text for the LAST body field is safe (a literal
-    # `},{` inside quotes is just two ordinary characters to it) — but only
-    # CORRECT when the selected event ($event, below) is itself one of the
-    # types that can carry a body; see the 🔴 P2-2 fix-round-5 note above
-    # this function for why "the newest actor-carrying event is also the
-    # newest body-carrying event" is false in general (a label/close/
-    # assign after a comment is the exact counterexample) and why the body
-    # extraction below is gated on $event's own type instead of assumed.
+    # $evbody is THIS event's own top-level body (see the 🔴 P2-2
+    # fix-round-7 note above) — never another event's. Still gated on the
+    # type (fix-round-5): only a comment or review is text its author wrote.
     case "$event" in
-      commented|reviewed)
-        __WG_LOOKUP_BODY="$(printf '%s' "$flat" | grep -oE '"body":"([^"\\]|\\.)*"' | tail -n1 | sed -E 's/^"body":"//; s/"$//')"
-        ;;
+      commented|reviewed) __WG_LOOKUP_BODY="$evbody" ;;
       *) __WG_LOOKUP_BODY="" ;;
     esac
     case "$event" in
