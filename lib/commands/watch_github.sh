@@ -1024,7 +1024,10 @@ _wg_runs_rotate() {
     if [ "$i" -gt "$keep" ]; then rm -rf "$d" 2>/dev/null; fi
   done < <(
     for d in "$base/watch-github-$org-"*; do
-      [ -d "$d" ] || continue
+      # Only run directories (fix-round-7 P2-3): for org `foo`, this glob
+      # also matches org `foo-bar`'s DURABLE log dir, which has no
+      # status.json and the oldest mtime of all — first to be rotated out.
+      [ -f "$d/status.json" ] || continue
       printf '%s\t%s\n' "$(file_mtime "$d" 2>/dev/null || echo 0)" "$d"
     done | sort -rn | cut -f2-
   )
@@ -1038,6 +1041,10 @@ _wg_runs_rotate() {
 _wg_events_rotate() {
   local f="$1" max=$((10 * 1024 * 1024)) sz tmp
   [ -f "$f" ] || return 0
+  # Every poll (fix-round-7 P2-3): an append never moves the directory's
+  # own mtime, and day-based retention reads exactly that. Belt to
+  # _burn_sweep_old_logs' own status.json check.
+  touch "${f%/*}" 2>/dev/null || true
   sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
   [ "$sz" -gt "$max" ] || return 0
   tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null)" || return 0

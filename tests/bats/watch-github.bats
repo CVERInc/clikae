@@ -1732,7 +1732,30 @@ _iso_from_epoch() {
   date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
 }
 
-@test "watch github --once: SEAM — a row updated 10s before a sweep but indexed 10s after it is delivered exactly once by the next sweep (P2-1, fix-round-7)" {
+# P2-3 (2026-09-14 fix-round-7 review), end to end: a watcher started 8
+# days ago keeps appending to its durable events.jsonl; appends don't move
+# the directory's mtime, and the retention sweep used to delete it.
+@test "watch github --once: 8-day-old org log dir + two real appends, then 'clikae clean' — events.jsonl survives (P2-3, fix-round-7)" {
+  _gh_stub_install
+  local dir="$CLIKAE_HOME/logs/watch-github-CVERInc" eight
+  eight="$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')"
+  mkdir -p "$dir"
+  printf '{"old":1}\n' > "$dir/events.jsonl"
+  touch -t "$eight" "$dir"
+  _gh_stub_page org 1 "$(_row 700 2026-09-07T04:00:00Z alice reef https://x/700 0 "one")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _gh_stub_page org 2 "$(_row 701 2026-09-07T04:05:00Z alice reef https://x/701 0 "two")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(wc -l < "$dir/events.jsonl")" -eq 3 ]
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$dir/events.jsonl" ]
+  [ "$(wc -l < "$dir/events.jsonl")" -eq 3 ]
+}
+
+@test "watch github --once: SEAM —a row updated 10s before a sweep but indexed 10s after it is delivered exactly once by the next sweep (P2-1, fix-round-7)" {
   _gh_stub_install_honest_corpus
   _fake_wallclock_install
   local state_dir="$CLIKAE_HOME/state/watch-github"
@@ -2047,6 +2070,27 @@ STUB
   [ ! -d "$base/watch-github-CVERInc-fake1" ]
   # ...the newest fake ones, and this poll's own real run, survive.
   [ -d "$base/watch-github-CVERInc-fake205" ]
+}
+
+@test "watch github --once: rotating org CVERInc's runs never removes org CVERInc-labs' durable log dir (P2-3 sibling, fix-round-7)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" i past
+  mkdir -p "$base/watch-github-CVERInc-labs"
+  printf '{"n":1}\n' > "$base/watch-github-CVERInc-labs/events.jsonl"
+  # Oldest of everything — the first thing a count cap would drop.
+  touch -t 202601010000 "$base/watch-github-CVERInc-labs"
+  for i in $(seq 1 205); do
+    mkdir -p "$base/watch-github-CVERInc-fake$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-fake$i"
+  done
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ -f "$base/watch-github-CVERInc-labs/events.jsonl" ]
+  [ ! -d "$base/watch-github-CVERInc-fake1" ]
 }
 
 @test "watch github --once: the durable events.jsonl rotates at 10MB (P3-12)" {

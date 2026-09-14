@@ -144,7 +144,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the next sweep's lower bound, lost for good (11 of 40 rows at
   `--interval 60` with a 4-minute index lag). Fixed 2026-09-14 fix-round-7
   review, P2-1: the window is now `now - <the epoch the last sweep
-  STARTED at> + 300s`, so consecutive sweeps overlap by a fixed 300s.)
+  STARTED at> + 300s`, so consecutive sweeps overlap by a fixed 300s.
+  The same round stopped the day-based log retention in `clikae burn`/
+  `clikae clean`, and the 200-run count cap, from deleting an org's
+  durable `watch-github-<org>/events.jsonl` directory: only directories
+  holding a run's `status.json` are swept, and each poll touches the
+  durable directory.)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is

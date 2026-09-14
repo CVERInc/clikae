@@ -493,9 +493,19 @@ _burn_sweep_old_logs() {
   [ -d "$base" ] || return 0
   local d n=0
   while IFS= read -r -d '' d; do
+    # 🔴 P2-2/P2-3 (2026-09-14 watch-github fix-round-7 review): the
+    # `watch-github-*` glob also matched the org's DURABLE log
+    # `watch-github-<org>/events.jsonl`, whose directory mtime never moves
+    # on append — every burn/clean eight days after a watcher started
+    # deleted its whole history. A run directory always has status.json
+    # (_wg_status_write); the durable one never does. The name alone can't
+    # tell them apart: an org may itself be called `foo-2024`.
+    case "${d##*/}" in
+      watch-github-*) [ -f "$d/status.json" ] || continue ;;
+    esac
     n=$((n + 1))
     [ "$dry_run" -eq 1 ] || rm -rf "$d" 2>/dev/null || true
-  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*' \) -mtime "+$days" -print0 2>/dev/null)
+  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*-[0-9]*' \) -mtime "+$days" -print0 2>/dev/null)
   if [ "$dry_run" -eq 1 ] && [ "$n" -gt 0 ]; then
     log_info "clean --dry-run: would also sweep $n old burn/watch-github log director$([ "$n" -eq 1 ] && printf y || printf ies) (older than ${days}d)."
   fi
