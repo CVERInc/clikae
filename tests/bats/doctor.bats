@@ -239,6 +239,77 @@ EOF
   cmp "$f" "$TEST_HOME/before"
 }
 
+# --- cockpit awareness (#63 round-4 review, P3-7 + the other half of P2-1) ---
+# Nothing else checks this: `clikae cockpit` only asks whether the recorded
+# tank EXISTS, never whether it's armed, so a cockpit that drifted (a failed
+# state write mid-move, a hand-edited settings.json, an interrupted --off)
+# used to report healthy forever. doctor must say so, in both directions.
+
+@test "doctor reports a recorded cockpit that has lost its guard" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  # Simulate drift: the guard is gone from disk but state still names aaa
+  # (the P2-1 failure shape, or any hand edit that has the same effect).
+  printf '{}\n' > "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/aaa"* ]] || false
+  [[ "$output" == *"NO guard installed"* ]] || false
+}
+
+@test "doctor says nothing about the cockpit when it really is armed" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"NO guard installed"* ]] || false
+  [[ "$output" != *"guard also found on tank"* ]] || false
+}
+
+@test "doctor reports a stray guard on a tank that is not the recorded cockpit" {
+  clikae init claude aaa
+  clikae init claude bbb
+  clikae cockpit claude aaa
+  cp "$CLIKAE_HOME/profiles/claude/aaa/settings.json" "$TEST_HOME/aaa-armed.json"
+  clikae cockpit claude bbb   # normal move: aaa's guard removed, bbb's installed, state=bbb
+  # Reintroduce a stray on aaa -- an incompletely-swept crash, or a hand
+  # restore of an old settings.json -- state still (correctly) says bbb.
+  cp "$TEST_HOME/aaa-armed.json" "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"guard also found on tank"* ]] || false
+  [[ "$output" == *"claude/aaa"* ]] || false
+}
+
+@test "doctor reports a recorded cockpit whose tank no longer exists" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  rm -rf "$CLIKAE_HOME/profiles/claude/aaa"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/aaa"* ]] || false
+  [[ "$output" == *"no longer exists"* ]] || false
+}
+
+@test "doctor stays silent about cockpit when none is set" {
+  clikae init claude aaa
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"NO guard installed"* ]] || false
+  [[ "$output" != *"guard also found on tank"* ]] || false
+}
+
+@test "doctor's cockpit check changes nothing on disk (read-only)" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  printf '{}\n' > "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  local before; before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  local after; after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  [ "$before" = "$after" ]
+}
+
 @test "doctor names a missing permissions template instead of blaming settings.json" {
   clikae init claude a --no-template
   local prefix="$BATS_TEST_TMPDIR/tap"

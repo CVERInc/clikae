@@ -227,6 +227,57 @@ _doctor_memory() {
   return 0
 }
 
+# _doctor_cockpit -> say something ONLY when the recorded cockpit and the
+# guard actually on disk disagree (#63 round-4 review, P3-7 + the other half
+# of P2-1). Nothing else checks this: `clikae cockpit` (_cockpit_show) only
+# asks whether the NAMED tank exists, never whether it's armed, so a state
+# write that races a guard write (P2-1) — or any other cause of drift, a
+# hand-edited settings.json, a `--off` that died partway through — left a
+# cockpit that reported healthy and stayed silent forever after. Read-only:
+# this names the mismatch, it does not repair it (`clikae cockpit --off`
+# sweeps every guard regardless of what state says).
+_doctor_cockpit() {
+  declare -F _cockpit_state_file >/dev/null 2>&1 || {
+    # shellcheck source=./cockpit.sh
+    source "$CLIKAE_LIB/commands/cockpit.sh"
+  }
+  local state_file; state_file="$(_cockpit_state_file)"
+  [ -f "$state_file" ] || return 0
+  local cur; cur="$(_cockpit_state_read)"
+  [ -n "$cur" ] || return 0
+  local cur_engine="${cur%%/*}" cur_tank="${cur#*/}"
+
+  local cli profile path
+  local named_exists=0 named_has_guard=0 strays=""
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    if [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_exists=1
+    fi
+    [ -f "$path/settings.json" ] || continue
+    grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    if [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_has_guard=1
+    else
+      strays="$strays $cli/$profile"
+    fi
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+
+  if [ "$named_exists" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur no longer exists — fix: clikae cockpit --off"
+  elif [ "$named_has_guard" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur has NO guard installed — the in-session dispatch rule is NOT being enforced"
+    log_dim "                   fix: clikae cockpit $cur_engine $cur_tank"
+  fi
+  if [ -n "$strays" ]; then
+    printf '  %-16s %s\n' "cockpit" "guard also found on tank(s) that are not the recorded cockpit:$strays"
+    log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+  fi
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -269,6 +320,7 @@ EOF
   echo ""
   _doctor_legacy_prefix
   _doctor_memory
+  _doctor_cockpit
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"
