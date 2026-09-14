@@ -431,6 +431,41 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"!1"* ]] || { echo "control: $output"; false; }
 }
 
+# P3-2 (2026-09-14 round-3 review): a `running` status.json whose pid is
+# present but unreadable was silently skipped — `{"state":"running","pid":"x"}`
+# counted `!0`. That made this the third reader of "present but unreadable" in
+# one render and the only one treating it as "nothing to see".
+@test "alerts: a running lane with no readable pid is counted, not shrugged off" {
+  _src
+  mkdir -p "$HOME/.clikae/logs/burn-torn"
+  local now; now="$(date +%s)"
+  # The exact shape the review measured, plus the other two ways a torn write
+  # loses the pid: an absent field and a truncated object.
+  printf '{"state":"running","pid":"x","updated_at":%s}\n' "$now" \
+    > "$HOME/.clikae/logs/burn-torn/status.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "unreadable pid: $output"; false; }
+
+  printf '{"state":"running","updated_at":%s}\n' "$now" \
+    > "$HOME/.clikae/logs/burn-torn/status.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "absent pid: $output"; false; }
+
+  # …and it is still BOUNDED by the same retention window as every other red
+  # here: a torn file older than the sweep's own horizon stops counting.
+  printf '{"state":"running","pid":"x","updated_at":%s}\n' "$(( now - 8 * 86400 ))" \
+    > "$HOME/.clikae/logs/burn-torn/status.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "an 8-day-old torn file still counts: $output"; false; }
+
+  # A lane that reached a terminal state is still not news, torn pid or not:
+  # `state` is read and switched on before `pid` is ever touched.
+  printf '{"state":"fail","pid":"x","updated_at":%s}\n' "$now" \
+    > "$HOME/.clikae/logs/burn-torn/status.json"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "a failed lane counted: $output"; false; }
+}
+
 # P2-2 (2026-09-14 round-3 review): round 2 implemented "unreadable => expired"
 # as "NON-NUMERIC => expired", and a truncated or doubled write is usually
 # still digits. An 11-digit stamp dates to the year 2537; `age` is hugely

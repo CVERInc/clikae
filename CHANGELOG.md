@@ -246,7 +246,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a fresh one, and percentages clamp to 0-100 so a corrupt cache cannot
   blow the row's width. `!N` counts tanks the live catchers marked dry and
   burn lanes whose writer died before reaching a terminal state; it is not
-  drawn at all when N is 0. A lane whose pid is dead is red however long it
+  drawn at all when N is 0. A `running` lane whose pid cannot be read at all
+  (a torn write) counts too: the writer always records one, so an unreadable
+  pid is itself evidence of a lane that stopped without finishing. A lane whose pid is dead is red however long it
   ran (its `updated_at` is the attempt's start, not a heartbeat) -- dead
   meaning gone from the process table, not merely un-signalable, since
   `kill -0` fails identically for a pid that belongs to another user -- and leaves

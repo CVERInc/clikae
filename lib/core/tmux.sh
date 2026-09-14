@@ -772,6 +772,28 @@ tmux_status_fuelv() {
 # recorded a CI verdict. Counting it would mean inventing the state first, which
 # is a different change; see docs/DESIGN-tmux.md Rule 10.
 #
+# 🔴 A `running` LANE WITH NO READABLE PID IS RED (P3-2, 2026-09-14 round-3
+# review). This used to `continue` on it — measured: `{"state":"running",
+# "pid":"x"}` counted `!0` — which made this the THIRD reader of the same
+# "present but unreadable" situation in one render, and the only one going the
+# other way (tmux_status_fuelv distrusts an unreadable `cached_at`,
+# dry_store_peekv expires an undateable stamp, and this one shrugged).
+#
+# The reason it is red, and not merely consistency: `_burn_status_write`
+# (lib/commands/burn.sh) writes `"pid":$$` unconditionally, so there is no
+# legitimate `running` object without a numeric pid. An unreadable one is a
+# truncated write, a half-finished `mv`, or a writer this reader does not
+# understand — and in ALL THREE the thing the row is trying to report, a lane
+# that stopped without reaching a terminal state, is exactly what a torn status
+# file is evidence OF. "I cannot prove this writer is alive" is news on a row
+# whose job is "what is unattended".
+#
+# It is bounded like every other red here: the same `updated_at` retention
+# window applies below, so a torn file stops counting once its own run
+# directory is old enough to be swept, and an unreadable `updated_at` is simply
+# no bound (it stays until the sweep removes the directory) rather than a
+# different clock.
+#
 # 🔴 LIVENESS IS `kill -0` PLUS ONE `ps`, AND ONLY FOR A PID THAT ALREADY
 # FAILED (P3-1, 2026-09-14 round-3 review). This deliberately is NOT
 # burn_status.sh's _burn_pid_matches_marker: that guard costs a `ps` per
@@ -824,11 +846,18 @@ tmux_status_alertsv() {
       st="${st#\"}"; st="${st%\"}"
       case "$st" in running|waiting-reset) ;; *) continue ;; esac
       burn_status_fieldv "$json" pid; pid="$_BSF"
-      case "$pid" in ''|*[!0-9]*) continue ;; esac
-      kill -0 "$pid" 2>/dev/null && continue     # still alive — not news, however old
-      # P3-1 (round-3 review): `kill -0` says 1 for BOTH "no such process" and
-      # "not yours". Only the first is dead. See the header block above.
-      ps -p "$pid" >/dev/null 2>&1 && continue   # alive, just someone else's
+      case "$pid" in
+        ''|*[!0-9]*)
+          # P3-2 (round-3 review): a `running` lane whose pid is ABSENT or
+          # unreadable. Counted, not skipped — see the header block above.
+          ;;
+        *)
+          kill -0 "$pid" 2>/dev/null && continue   # still alive — not news, however old
+          # P3-1 (round-3 review): `kill -0` says 1 for BOTH "no such process"
+          # and "not yours". Only the first is dead. See the header block above.
+          ps -p "$pid" >/dev/null 2>&1 && continue # alive, just someone else's
+          ;;
+      esac
       # P2-3 (round-2 review): pid liveness decides, not age. A dead writer is
       # red; `updated_at` only bounds how long, and the bound is the log
       # retention the file itself lives under — see the header block above
