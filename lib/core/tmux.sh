@@ -609,8 +609,27 @@ tmux_spawn_session() {
 # A reading older than 24h is treated as unread rather than shown as current —
 # the same ceiling docs/DESIGN-board-fuel-dots.md gives the board, and for the
 # same reason: a week-old percentage presented as now is worse than no number.
-# `cached_at` absent (an older cache shape) is not aged out; we cannot judge
-# what we cannot read.
+# `cached_at` TRULY ABSENT (an older cache shape) is not aged out; we cannot
+# judge what we cannot read — that decision stays. `cached_at` PRESENT but
+# unparseable (P2-5/P3-2, 2026-09-14 round-1 fix review: pretty-printed JSON,
+# an ISO string, any future writer shape this reader doesn't understand) is
+# the opposite case and is now treated as UNTRUSTED, not as "must be current":
+# collapsing "absent" and "present-but-garbled" into the same empty string (as
+# this used to) meant a writer that changed `cached_at`'s shape would silently
+# defeat the ceiling forever, on the reasoning "we cannot judge what we cannot
+# read" — which is backwards for a field that IS there and IS unreadable.
+#
+# 🔴 P2-5 (same review): a reading between 1h and 24h old rendered pixel-for-
+# pixel identical to one read a second ago — measured: `cached_at` "just now",
+# 1h old and 23h old all painted `5h 42% · 7d 65%`, only the 24h ceiling itself
+# (25h) visibly differed. Past 1h this now appends the board's own age
+# formatter (`_human_age`, moved to lib/core/duration.sh in this same commit
+# so a leaf-sourcing caller like this one doesn't have to pull in all of
+# lib/commands/home.sh to get it — see that file's header for the same move
+# already made for _burn_parse_duration) — "· 23h ago" — one shared
+# implementation of "how stale is old enough to say so" instead of a second
+# one invented here. Under 1h stays bare: that is recent enough that
+# annotating it would be noise on a row with no room to spare (Rule 10 §7).
 #
 # The fallback is the DRY MARKER, not the board's full transcript scan. The
 # board's dot costs ~4 ms of forks per call and is re-derived per redraw; this
@@ -619,29 +638,47 @@ tmux_spawn_session() {
 # wrote the moment they saw a limit, so it is the same fact, read the cheap way
 # — and `·` honestly says "no reading" rather than inventing a green dot.
 tmux_status_fuelv() {
-  local engine="$1" tank="$2" now="${3:-}" f json line w k ca age
+  local engine="$1" tank="$2" now="${3:-}" f json w k ca ca_raw age fresh suffix
   _TSTAT_FUEL=""
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
 
   f="${CLIKAE_HOME:-$HOME/.clikae}/state/usage/$engine/$tank.json"
   if [ -f "$f" ] && declare -F burn_status_fieldv >/dev/null 2>&1; then
-    json=""
-    # No `cat`: the cache is one small object and `read` costs no process.
-    while IFS= read -r line; do json="$json$line"; done < "$f"
+    # P3-1 (2026-09-14 round-1 fix review): `read` without `-d ''` returns
+    # non-zero (and skips the loop body) on a final line with NO trailing
+    # newline, silently dropping it — a cache written without a trailing `\n`
+    # read as completely empty. `read -r -d ''` reads to EOF regardless,
+    # still no fork, and the `|| true` is for its own non-zero "no NUL found"
+    # return, not an error.
+    IFS= read -r -d '' json < "$f" || true
     burn_status_fieldv "$json" window_pct; w="$_BSF"
     burn_status_fieldv "$json" weekly_pct; k="$_BSF"
-    burn_status_fieldv "$json" cached_at;  ca="$_BSF"
+    burn_status_fieldv "$json" cached_at;  ca_raw="$_BSF"
     # A vendor percentage arrives as 42 or 42.0; the board owns precision, this
     # row owns width. Anything that is not a number at all (null, absent) fails
     # this and falls through to the glyph.
     w="${w%%.*}"; k="${k%%.*}"
-    case "$w" in ''|*[!0-9]*) w="" ;; esac
-    case "$k" in ''|*[!0-9]*) k="" ;; esac
+    case "$w" in ''|*[!0-9]*) w="" ;; *) [ "$w" -gt 100 ] && w=100 ;; esac
+    case "$k" in ''|*[!0-9]*) k="" ;; *) [ "$k" -gt 100 ] && k=100 ;; esac
+    # P3-3: a corrupt cache ({"window_pct":999999}) must not blow the row's
+    # width budget — clamp AFTER the numeric check above so a non-number stays
+    # "" (falls through to the glyph) rather than being clamped into a fake 100.
+    ca="$ca_raw"
     case "$ca" in ''|*[!0-9]*) ca="" ;; esac
-    age=86401
-    [ -n "$ca" ] && age=$(( now - ca ))
-    if [ -n "$w" ] && [ -n "$k" ] && { [ -z "$ca" ] || [ "$age" -lt 86400 ]; }; then
-      _TSTAT_FUEL="5h $w% · 7d $k%"
+    fresh=1; suffix=""
+    if [ -n "$ca" ]; then
+      age=$(( now - ca ))
+      [ "$age" -lt 0 ] && age=0   # a future cached_at is not "old" — floor it, don't invent a countdown
+      if [ "$age" -ge 86400 ]; then
+        fresh=0
+      elif [ "$age" -ge 3600 ] && declare -F _human_age >/dev/null 2>&1; then
+        suffix=" · $(_human_age "$ca" "$now")"
+      fi
+    elif [ -n "$ca_raw" ]; then
+      fresh=0   # cached_at IS present, just not in a shape this reader understands — untrusted, not "current"
+    fi
+    if [ -n "$w" ] && [ -n "$k" ] && [ "$fresh" = 1 ]; then
+      _TSTAT_FUEL="5h ${w}% · 7d ${k}%${suffix}"
       return 0
     fi
   fi
@@ -681,6 +718,35 @@ tmux_status_fuelv() {
 #                                         and "failed", and only the first is
 #                                         news nobody has been told.
 #
+# 🔴 SKIPPED-BY-STATE LANES PAY NOTHING BEYOND READING THE FILE (P1-1,
+# 2026-09-14 round-1 fix review). `state` is parsed and switched on BEFORE
+# `pid` is ever touched — a `fail`/`dry`/`done`/`infra` lane's (often large,
+# see burn_status.sh's `reason` note) other fields are never read at all. This
+# was already true structurally; it only became CHEAP when burn_status_fieldv
+# stopped being O(n²), since `state` sits after `reason` in the object burn
+# writes (`_burn_status_write`) and a failed lane is exactly the one with the
+# largest `reason` — so the lane this loop means to skip cheaply used to be
+# the most expensive one to even ask.
+#
+# 🔴 A DEAD PID SELF-CLEARS AFTER 6h (P2-1, same review). Before this, a burn
+# SIGKILLed (or OOM-killed, or the host lost power) mid-run left its last
+# write saying `running` with a now-dead pid — and NOTHING but the next
+# `clikae burn` (which runs `_burn_sweep_old_logs`, 7-day retention) ever
+# cleared it. Measured: a dead pid pins `!1` on EVERY session's row, and if
+# the operator never runs `clikae burn` again, forever. The dry arm already
+# self-clears via `dry_store`'s own `CLIKAE_DRY_TTL` (6h) without deleting
+# anything; this reuses the same constant so a dead lane ages out of the
+# COUNT the same way, on the same clock, without the underlying status.json
+# being touched — `_burn_sweep_old_logs`'s 7-day physical cleanup is
+# unaffected and still the only thing that removes the file itself.
+#
+# 🔴 THE ASYMMETRY THAT REMAINS: dry's marker can be `rm -f`'d by the next
+# `dry_store_read` once stale (peek alone never deletes, same as here); burn's
+# status.json is never deleted by anything on this read path, staleness or
+# not — only `_burn_sweep_old_logs` (mtime, 7 days, `clikae burn`-only) ever
+# removes it. Both arms now stop COUNTING at 6h; only the physical cleanup
+# path and its 7-day/`clikae burn`-only trigger still differ.
+#
 # 🔴 CI RED IS NOT COUNTED, and that is a gap, not a decision to leave
 # undocumented. Issue #77 lists "CI red seen by the Stop hook" as a third
 # source; this repo's only Stop hook (`scripts/harness-stop-hook.sh`) records
@@ -694,7 +760,7 @@ tmux_status_fuelv() {
 # recycled pid makes this UNDERCOUNT (we believe the lane is alive and stay
 # quiet), which is the safe direction for a row that must never cry wolf.
 tmux_status_alertsv() {
-  local now="${1:-}" n=0 f e t d s json line st pid
+  local now="${1:-}" n=0 f e t d s json st pid upd dead_age
   _TSTAT_ALERTS=0
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
 
@@ -716,13 +782,22 @@ tmux_status_alertsv() {
       s="$d/status.json"
       [ -f "$s" ] || continue
       json=""
-      while IFS= read -r line; do json="$json$line"; done < "$s"
+      IFS= read -r -d '' json < "$s" || true   # P3-1: see tmux_status_fuelv's twin fix
       burn_status_fieldv "$json" state; st="$_BSF"
       st="${st#\"}"; st="${st%\"}"
       case "$st" in running|waiting-reset) ;; *) continue ;; esac
       burn_status_fieldv "$json" pid; pid="$_BSF"
       case "$pid" in ''|*[!0-9]*) continue ;; esac
       kill -0 "$pid" 2>/dev/null && continue     # still alive — not news
+      # P2-1: a dead pid whose marker hasn't been touched in CLIKAE_DRY_TTL
+      # (6h, dry's own threshold — see the header block above) self-clears
+      # from the COUNT, same as a stale dry marker does.
+      burn_status_fieldv "$json" updated_at; upd="$_BSF"
+      case "$upd" in ''|*[!0-9]*) upd="" ;; esac
+      if [ -n "$upd" ]; then
+        dead_age=$(( now - upd ))
+        [ "$dead_age" -ge "${CLIKAE_DRY_TTL:-21600}" ] && continue
+      fi
       n=$((n + 1))
     done
   fi
