@@ -392,6 +392,54 @@ STUB
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" -eq 2 ]
 }
 
+# --- P2-1 (2026-09-14 round-5 review): a candidate whose Pass-4 refresh call
+# FAILS (401/expired token/network error) writes source:"unknown" to its own
+# disk cache (usage_read's actual contract), but burn.sh:582-586 only updated
+# c_up/c_uw/c_peak on a SUCCESSFUL post-refresh peek — a failed peek left
+# Pass 1's stale in-memory tier-0 number alive, so the candidate that just
+# proved itself unreadable still won the ranking over a sibling that verified
+# clean this same call. Same failure shape as the round-4 P2, one call later:
+# the vendor call that was supposed to make the winner verified instead made
+# it silently unverifiable, and nothing downgraded it in memory. ---
+
+@test "P2-1 (round-5 review): a candidate whose live refresh call fails loses to one that verified" {
+  # zstale looks best of all three with nothing refreshed yet (5% on disk, 5
+  # minutes old — inside the age ceiling, tier-0 in Pass 3's snapshot), so
+  # it's the FIRST candidate the cap spends a call on. Its token is never
+  # registered in the pctmap, so the stub 401s — usage_read caches that as
+  # source:"unknown" and the post-refresh peek fails. Before this fix, the
+  # failed peek left zstale's stale 5% untouched in memory and it won
+  # outright, never having been read at all this call. After the fix, a
+  # failed peek demotes it to unknown, and the best VERIFIED reading (good,
+  # 40%) wins instead.
+  clikae init claude zstale
+  printf '{"claudeAiOauth":{"accessToken":"tok-zstale-invalid"}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/zstale/.credentials.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage good 40; live_usage other 70
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local stale_at; stale_at=$(( $(date +%s) - 300 ))   # 5 minutes ago
+  jq -cn --argjson at "$stale_at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/zstale.json"
+  # 3 runs stable (round-5 review: "連跑 3 次結果相同") — no ordering flake.
+  local i
+  for i in 1 2 3; do
+    run _burn_next_same_engine claude '' '' '' 1
+    [ "$status" -eq 0 ]
+    [ "$output" = good ] || { echo "run $i got: $output"; false; }
+    run usage_cache_peek claude zstale
+    [ "$status" -ne 0 ] || { echo "run $i: zstale's failed refresh should read back as unknown, got: $output"; false; }
+  done
+}
+
 @test "cached vendor thresholds pick the right glyph" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

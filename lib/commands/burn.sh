@@ -583,6 +583,14 @@ EOF
       IFS=$'\t' read -r up uw peak <<< "$fields"
       up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
       c_up[pick]="$up"; c_uw[pick]="$uw"; c_peak[pick]="$peak"
+    else
+      # The refresh this call just spent was PROOF this candidate isn't
+      # readable right now (usage_read already overwrote its cache with
+      # source:"unknown" — see lib/core/usage.sh). Leaving Pass 1's stale
+      # in-memory numbers in place would let this candidate win on a reading
+      # it just failed to reproduce, ahead of a sibling that verified clean
+      # this same call (round-5 review P2-1). Demote to unknown in memory too.
+      c_up[pick]=""; c_uw[pick]=""; c_peak[pick]=""
     fi
   done
 
@@ -3009,9 +3017,11 @@ KV
     # (nothing else ever wrote it; see lib/core/usage.sh's header). One vendor
     # call, here, off the launch path (the launch itself still pays zero — see
     # P1-2..P1-4 above) and AFTER the artifact check so it can never delay
-    # judging this run's own outcome. Best-effort: a failed refresh leaves the
-    # existing cache untouched (usage_read's own contract) and never affects
-    # $rc/$out. (r3 P3-5, confirmed still live in round-4: this is a bare
+    # judging this run's own outcome. Best-effort: a failed refresh overwrites
+    # this tank's cache with source:"unknown" (usage_read's actual contract —
+    # see lib/core/usage.sh; a stale-but-readable board dot for it disappears
+    # rather than surviving untouched) but never affects $rc/$out. (r3 P3-5,
+    # confirmed still live in round-4: this is a bare
     # AND-list under bin/clikae's `set -e` — usage_read's own exit status
     # would end the whole burn if it were ever non-zero here; `|| true`
     # makes "best-effort" structural instead of relying on usage_read

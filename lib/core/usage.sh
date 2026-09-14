@@ -71,10 +71,15 @@ usage_read() (
 #     P1-4), fired after the run's artifact check so it can never delay
 #     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn.
 # (b) when the named tank is dry and burn must reroute, `_burn_next_same_
-#     engine` refreshes each surviving CANDIDATE's reading once, right
-#     before ranking them (bounded to candidates only, reusing the
-#     adapter's own existing --max-time — no new bound invented) — because
-#     that is the one moment a stale number costs burn a wrong hop.
+#     engine` ranks every surviving candidate once on whatever is already on
+#     disk, then spends its live-call budget (`_BURN_REROUTE_REFRESH_CAP`,
+#     default 3) refreshing only the top candidates off THAT snapshot —
+#     never all of them, and never before the snapshot ranking runs (bounded
+#     to candidates only, reusing the adapter's own existing --max-time — no
+#     new bound invented). A refresh that fails to read back demotes that
+#     candidate to unknown in memory for the FINAL ranking (round-5 review
+#     P2-1) — it can never win on the stale number it just failed to
+#     reproduce.
 # (c) the board NEVER fetches (usage_cache_peek/usage_board_fields below are
 #     cache-only, always) and shows the reading's age next to the dot once
 #     it is older than the TTL ("3h ago"), or "unknown" once it is older
