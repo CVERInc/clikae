@@ -442,6 +442,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   6. **這個守衛不覆蓋的範圍**，全部是設計如此，不是漏掉：
      - `unset TMUX; tmux kill-server`——`$TMUX` 沒設就不開火，因為守衛只管「撞到繼承來的 server」這個形狀。reefbox 上沒有 `$TMUX`／`-S`／`TMUX_TMPDIR` 時的預設 socket**就是座艙那顆**，所以帶著 `unset TMUX` 的拋棄式 socket 寫法（本專案 fix lane brief 教的那種）本身要正確才安全，守衛不替它兜底。
      - 絕對路徑呼叫 `/usr/bin/tmux`、或某個 shell function／alias 把 `tmux`遮住——守衛靠 PATH 解析，繞過 PATH 解析就繞過守衛。
+     - **夾在另一個命令參數裡的 tmux 命令**（clikae#97 review round 3, P3-3）：shim 只看 argv 上每一段的動詞，不會打開別的命令拿來當參數的命令字串再解析一次。會夾帶命令的有 `if-shell`、`run-shell`、`source-file`（檔案內容）、`confirm-before`。實測（`$TMUX` 有設、拋棄式 server）：`tmux if-shell -F 1 kill-server` rc 0，**server 死掉**；`tmux source-file <內容是 kill-server 的檔案>` 同樣 rc 0、server 死掉；對照組裸的 `tmux kill-server` 同一個環境下 rc 86、server 活著。要擋這一類得在 shim 裡重做一份 tmux 的命令解析器（含 format 展開與 shell 字串），這不在守衛的目標裡；它擋的是「以為指名了、其實沒有」的裸指令，不是刻意把命令包起來的寫法。
      - `kill-session -t <自己當前 session 的名字>`——合法但自殺式；帶著**一個有名字的 target**（a named target）就是「你指名了」，指名的就放行，這正是「命名你的目標就是全部要求」那條哲學,不在守備範圍。空的 `-t`（`-t ''`、`-t=`、`-t` 後面沒東西）什麼都沒指名，不算豁免，照樣擋（第 1 點）。
      - `kill-pane`／`kill-window`——爆炸半徑留在單一 session 內，不會帶走別的 lane，同樣不擋。🔴 副作用留一筆：一顆 server 上只剩一個 session 時，殺掉它最後一個 pane 會讓那顆 server 自己跟著結束（tmux 的 `exit-empty` 預設）——「不會帶走別的 lane」還是成立，但「爆炸半徑留在單一 session 內」不等於「這顆 server 沒事」。
      - PATH 上完全沒有真正的 tmux（也沒有任何 script 可以退而求其次）——回 127，什麼都沒殺，安全方向的失敗。
