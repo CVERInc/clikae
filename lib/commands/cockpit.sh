@@ -232,12 +232,22 @@ _cockpit_move() {
   # guard, no state write, no hint what to do next. Same lesson as `--off`:
   # collect the failure, warn, and keep going. rc=1 is reserved for the one
   # failure that actually matters here — the NEW tank couldn't be armed.
+  #
+  # #63 P2-1 (round-3 review): install the NEW tank's guard FIRST, and only
+  # disarm the OLD one after that succeeds. The order above used to remove
+  # the old guard unconditionally and THEN try the install — when install
+  # failed, the old cockpit was already unarmed, state still pointed at it,
+  # and every later command (`clikae cockpit`, `clikae doctor`) reported a
+  # healthy cockpit that had no guard at all. Different tanks, so installing
+  # before removing has no interaction; the same-tank repair case already
+  # returned above at :218. A failed install now leaves the old guard, the
+  # old state, and the new tank all exactly as they were — a true no-op.
+  _cockpit_hook_install "$engine" "$tank" || log_fail "cockpit: could not install the guard on $engine/$tank"
   if [ -n "$cur_engine" ] && profile_exists "$cur_engine" "$cur_tank"; then
     _cockpit_hook_remove "$cur_engine" "$cur_tank" || log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it."
   elif [ -n "$cur_engine" ]; then
     log_warn "cockpit: recorded cockpit $cur_engine/$cur_tank no longer exists; dropping the record."
   fi
-  _cockpit_hook_install "$engine" "$tank" || log_fail "cockpit: could not install the guard on $engine/$tank"
   _cockpit_state_write "$engine" "$tank"
 }
 

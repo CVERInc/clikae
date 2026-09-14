@@ -153,6 +153,27 @@ _guard_installed() {
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/mmm" ]
 }
 
+@test "moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)" {
+  # round-3 review: the fix above (P2-2) reordered nothing -- it just made
+  # the OLD-tank cleanup non-fatal, so a broken NEW tank still ran through
+  # _cockpit_hook_remove on mmm FIRST, unarmed it, and THEN failed to arm
+  # aaa: state kept pointing at mmm, but mmm had no guard left, and nothing
+  # ever said so again (bare `clikae cockpit` reported a "healthy" mmm).
+  # Fail-unsafe. This is red on 84ae5de.
+  clikae init claude mmm
+  clikae init claude aaa
+  clikae cockpit claude mmm
+  _guard_installed "$CLIKAE_HOME/profiles/claude/mmm/settings.json"
+  printf '{"hooks":{"PreToolUse":[{"_clikae":"cockpit-guard" THIS IS NOT VALID JSON\n' \
+    > "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
+  run clikae cockpit claude aaa
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not install the guard on claude/aaa"* ]] || false
+  # Old cockpit: still armed, state unchanged -- a true no-op.
+  _guard_installed "$CLIKAE_HOME/profiles/claude/mmm/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/mmm" ]
+}
+
 @test "--off with nothing set is an idempotent no-op" {
   run clikae cockpit --off
   [ "$status" -eq 0 ]
