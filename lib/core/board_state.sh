@@ -647,36 +647,83 @@ board_find() {
 # "deterministic" even though mktemp's XXXXXX suffix is random, not ordered.
 #
 # Round-8: a generation is no longer self-contained (see the chain header at
-# the top of this file) — the current one resolves entries through up to
+# the top of this file) — a generation resolves entries through up to
 # _BOARD_GEN_MAX_DEPTH ancestors, and keep-N alone would happily unlink one of
 # them. An unlinked ancestor is not a dangling POINTER that a rebuild heals; it
 # is a silently EMPTY Resume list for every session that had not changed since
 # that ancestor recorded it, with `current` still valid and `board_stale` still
-# saying "fresh". So the chain from `current` is protected outright and the
-# keep-N window applies to what is left. `_board_gc_candidates` is the ONE
-# place that decides this: `clean.sh`'s own sweep (_clean_board_gc) calls it
-# too, rather than keeping a second copy of the rule that would have to be
+# saying "fresh".
+#
+# Round-8 fix review P2-2: protecting `current`'s chain is not enough, because
+# `current` is not the only generation anyone is still reading. `board_generation`
+# memoizes a generation PATH for the lifetime of the process, so a TUI frame,
+# a `clikae burn` or any second process holds a generation while another
+# publishes — and the moment that publish MATERIALISES, the chain breaks away
+# from `current` and keep-N deletes its oldest links. Measured: a held
+# generation at depth 7 lost three of its eight links to ONE further publish,
+# and 49 of its 50 entries stopped resolving while it still existed, `current`
+# was valid and `board_stale` still said "fresh" — the exact consequence the
+# paragraph above names, one defence short.
+#
+# So keep-N now counts CHAINS, not directories: the newest <keep> generations
+# (plus whatever `current` points at) are the ROOTS, and every ancestor any of
+# them still resolves through is protected with them. Everything else is a
+# candidate. The extra cost is at most keep x _BOARD_GEN_MAX_DEPTH `read`s of a
+# one-line `parent` file, all shell builtins; the chains overlap almost
+# entirely, so the on-disk count barely moves. `_board_gc_candidates` is the
+# ONE place that decides this: `clean.sh`'s own sweep (_clean_board_gc) calls
+# it too, rather than keeping a second copy of the rule that would have to be
 # taught about the chain separately.
 _board_gc_candidates() {
-  local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd gmt cur="" p prot=$'\n' d=0
+  local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}"
+  local gd gmt name cur="" p prot=$'\n' roots=$'\n' d=0 kept=0 sorted r
   [ -d "$root" ] || return 0
+  # Newest first, deterministic: several publishes inside one wall-clock second
+  # share an mtime (round-2 P3-1), so the directory name breaks the tie.
+  sorted="$(
+    for gd in "$root"/generation.*; do
+      [ -d "$gd" ] || continue
+      gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
+      printf '%s\037%s\n' "$gmt" "${gd##*/}"
+    done | sort -t$'\037' -k1,1rn -k2,2r
+  )"
+  [ -n "$sorted" ] || return 0
+  # roots = what `current` points at, plus the newest <keep> generations
   if [ -f "$root/current" ]; then
     IFS= read -r cur < "$root/current" 2>/dev/null || cur=""
+    case "$cur" in generation.*) roots="$roots$cur"$'\n' ;; esac
+  fi
+  while IFS=$'\037' read -r gmt name; do
+    [ -n "$name" ] || continue
+    [ "$kept" -lt "$keep" ] || break
+    kept=$((kept + 1))
+    case "$roots" in *$'\n'"$name"$'\n'*) continue ;; esac
+    roots="$roots$name"$'\n'
+  done <<EOF_SORTED
+$sorted
+EOF_SORTED
+  # …and everything each root still resolves entries through
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    cur="$r"; d=0
     while [ -n "$cur" ] && [ "$d" -lt "$_BOARD_GEN_MAX_DEPTH" ]; do
       case "$cur" in generation.*) ;; *) break ;; esac
-      prot="$prot$cur"$'\n'
+      case "$prot" in *$'\n'"$cur"$'\n'*) ;; *) prot="$prot$cur"$'\n' ;; esac
       p=""
       [ ! -f "$root/$cur/parent" ] || IFS= read -r p < "$root/$cur/parent" 2>/dev/null
       cur="$p"
       d=$((d + 1))
     done
-  fi
-  for gd in "$root"/generation.*; do
-    [ -d "$gd" ] || continue
-    case "$prot" in *$'\n'"${gd##*/}"$'\n'*) continue ;; esac
-    gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
-    printf '%s\037%s\n' "$gmt" "$gd"
-  done | sort -t$'\037' -k1,1rn -k2,2r | tail -n +"$((keep + 1))" | cut -d$'\037' -f2-
+  done <<EOF_ROOTS
+$roots
+EOF_ROOTS
+  while IFS=$'\037' read -r gmt name; do
+    [ -n "$name" ] || continue
+    case "$prot" in *$'\n'"$name"$'\n'*) continue ;; esac
+    printf '%s\n' "$root/$name"
+  done <<EOF_SWEEP
+$sorted
+EOF_SWEEP
 }
 board_gc_generations() {
   local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}" gd

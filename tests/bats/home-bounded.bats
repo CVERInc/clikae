@@ -685,6 +685,77 @@ _b8_tank() {
   [ -n "$(board_find claude "$B8_TANK" session-0)" ]
 }
 
+@test "board (round-8 P2-2): GC keeps the chain of every LIVE generation, not only current's" {
+  # Round-8 fix review P2-2. `board_generation` memoizes a generation PATH for
+  # the life of the process, so a TUI frame / a second `clikae` holds a
+  # generation while another publishes. Protection was drawn around `current`
+  # only: one further publish — the one that MATERIALISES and breaks the chain
+  # away from `current` — let keep-N unlink the held generation's oldest
+  # ancestors. It still existed, `current` was valid, `board_stale` still said
+  # "fresh", and 49 of its 50 entries stopped resolving.
+  _b8_tank
+  local i
+  for ((i = 0; i < 50; i++)); do
+    printf '{"type":"ai-title","aiTitle":"T%s"}\n' "$i" > "$B8_PROJ/session-$i.jsonl"
+  done
+  printf '{"type":"ai-title","aiTitle":"driver"}\n' > "$B8_PROJ/driver.jsonl"
+  rm -rf "$CLIKAE_HOME/state/board"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  local root depth=0 held
+  root="$(board_root "$B8_TANK")"
+  # drive the chain to its deepest link WITHOUT touching any of the 50: they
+  # can only still resolve through ancestors.
+  while [ "$depth" -lt "$((_BOARD_GEN_MAX_DEPTH - 1))" ]; do
+    printf '{"n":%s}\n' "$depth" >> "$B8_PROJ/driver.jsonl"
+    _board_gen_cache_clear
+    board_state_refresh claude "$B8_TANK"
+    depth="$(cat "$root/$(cat "$root/current")/depth")"
+  done
+  held="$root/$(cat "$root/current")"
+  [ "$(cat "$held/depth")" -eq "$((_BOARD_GEN_MAX_DEPTH - 1))" ]
+
+  # one more publish: this is the materialising one, and it is where the held
+  # generation's chain used to lose its oldest links
+  printf '{"n":"more"}\n' >> "$B8_PROJ/driver.jsonl"
+  _board_gen_cache_clear
+  board_state_refresh claude "$B8_TANK"
+  [ -d "$held" ] || { echo "the held generation itself is gone"; false; }
+
+  # every link of the HELD chain is still on disk …
+  local cur p n=0
+  cur="${held##*/}"
+  while [ -n "$cur" ]; do
+    [ -d "$root/$cur" ] || { echo "GC removed held chain link $cur"; false; }
+    n=$((n + 1))
+    p=""
+    [ ! -f "$root/$cur/parent" ] || p="$(cat "$root/$cur/parent")"
+    cur="$p"
+  done
+  [ "$n" -eq "$_BOARD_GEN_MAX_DEPTH" ] || { echo "held chain is $n links"; false; }
+
+  # … and all 50 entries still resolve FROM IT, which is what a reader holding
+  # it would do
+  local miss=0 key
+  for ((i = 0; i < 50; i++)); do
+    _board_entry_key "session-$i"; key="$_board_entry_key_out"
+    _board_gen_entry "$held" "sids/$key" || { miss=$((miss + 1)); continue; }
+    [ -s "$_board_gen_entry_out" ] || miss=$((miss + 1))
+  done
+  [ "$miss" -eq 0 ] || { echo "$miss of 50 entries unresolvable from the held generation"; false; }
+
+  # and `clikae clean`'s sweep, which shares the rule, does not undo it
+  source "$CLIKAE_LIB/commands/clean.sh"
+  _clean_board_gc 0 >/dev/null 2>&1 || true
+  cur="${held##*/}"
+  while [ -n "$cur" ]; do
+    [ -d "$root/$cur" ] || { echo "clean removed held chain link $cur"; false; }
+    p=""
+    [ ! -f "$root/$cur/parent" ] || p="$(cat "$root/$cur/parent")"
+    cur="$p"
+  done
+}
+
 @test "board (P1-2): a tank with zero transcripts is never stale — one generation after five renders" {
   # Round-7 P1-2: the publisher hashed `printf '%s\n' "$stat_rows"` (one
   # newline for an empty tank, because `$( )` had already stripped the real
