@@ -33,7 +33,17 @@ usage_read() (
   if [ -f "$CLIKAE_LIB/adapters/$engine.sh" ]; then
     load_adapter "$engine"
     if declare -F adapter_usage >/dev/null; then
-      reading="$(adapter_usage "$(profile_dir "$engine" "$tank")" 2>/dev/null)" || reading=""
+      # P3-3 (codex security review, round-5): this used to be `2>/dev/null`,
+      # which hid EVERY adapter's own diagnostics from the public `clikae
+      # usage` path — including claude.sh's honest "running WITHOUT a time
+      # bound" warning (lib/core/timeout_bin.sh) when a Keychain read can't
+      # be bounded (no timeout/gtimeout/perl on PATH), silently leaving an
+      # unbounded, possibly-hanging read with no way for anyone to know why.
+      # Every adapter_usage implementation already redirects its OWN
+      # vendor-body/secret-bearing subcalls internally (curl, jq, `security`
+      # all pipe through their own `2>/dev/null` above this call) — nothing
+      # but that kind of safe diagnostic ever reaches this level to leak.
+      reading="$(adapter_usage "$(profile_dir "$engine" "$tank")")" || reading=""
     fi
   fi
   [ -n "$reading" ] || reading="$(usage_unknown)"

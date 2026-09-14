@@ -615,6 +615,53 @@ STUB
   [ "$wall" -le 20 ]
 }
 
+@test "P3-3 (codex security review, round-5): the public usage path no longer hides the unbounded-Keychain warning" {
+  # Removing the INNER redirection around _burn_timeout_bin's own call
+  # (round-3 review) never mattered while lib/core/usage.sh's usage_read
+  # wrapped the WHOLE adapter_usage call in `2>/dev/null` — a stock-macOS box
+  # with none of timeout/gtimeout/perl on PATH ran the Keychain read fully
+  # unbounded AND silently through `clikae usage`, the one path anyone would
+  # actually run interactively. Shadow PATH to hide all three arms (same
+  # technique as the PERL-fallback test above, plus perl itself) so
+  # `_burn_timeout_bin` falls all the way to its honest warning.
+  usage_fixture
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/claude.sh"
+  local service
+  service="$(_claude_keychain_service "$CLIKAE_HOME/profiles/claude/work")"
+  rm "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  cat > "$TEST_HOME/.testbin/security" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = find-generic-password ] || exit 1
+[ "\$3" = '$service' ] || exit 1
+echo '{"claudeAiOauth":{"accessToken":"stub-secret-usage72"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/security"
+
+  local shadow="$BATS_TEST_TMPDIR/shadow" d f b
+  mkdir -p "$shadow"
+  ln -s "$TEST_HOME/.testbin/security" "$shadow/security"
+  local IFS=:
+  for d in $PATH; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -f "$f" ] && [ -x "$f" ] || continue
+      b="$(basename "$f")"
+      case "$b" in timeout|gtimeout|perl) continue ;; esac
+      [ -e "$shadow/$b" ] || ln -s "$f" "$shadow/$b" 2>/dev/null
+    done
+  done
+  unset IFS
+  [ -z "$(PATH="$shadow" command -v timeout 2>/dev/null)" ]
+  [ -z "$(PATH="$shadow" command -v gtimeout 2>/dev/null)" ]
+  [ -z "$(PATH="$shadow" command -v perl 2>/dev/null)" ]
+
+  PATH="$shadow" OSTYPE=darwin run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor"'
+  [[ "$stderr" == *"running WITHOUT a time bound"* ]] || { echo "stderr: $stderr"; false; }
+}
+
 @test "P3-1 (codex security review, round-5): a response holding multiple JSON documents is refused, not partially accepted" {
   # Multiple top-level JSON values in one body used to become multiple
   # readings — burn's shell `read` only ever consumes the FIRST TSV line,
