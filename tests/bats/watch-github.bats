@@ -1761,6 +1761,29 @@ _iso_from_epoch() {
   date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
 }
 
+# P3-5 (2026-09-14 fix-round-7 review): "a failed sweep never moves
+# .sweepat" had no test at all (`lag sweep failed` appeared 0 times in
+# tests/). A sweep that never read its window must not tell the next sweep
+# that the ground was covered.
+@test "watch github --once: a FAILED sweep leaves .sweepat where it was (P3-5, fix-round-7)" {
+  _gh_stub_install
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github" anchor=1757289000
+  mkdir -p "$state_dir"
+  printf '2026-09-07T03:00:00Z\n' > "$state_dir/CVERInc.cursor"
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+  printf '%s\n' "$((anchor - 1000))" > "$state_dir/CVERInc.sweepat"
+  _gh_stub_page org 1 "$(_row 810 2026-09-07T04:00:00Z alice reef https://x/810 0 "one")"
+  _gh_stub_fail org 2 1 'gh: HTTP 502: Bad Gateway (https://api.github.com/search/issues)'
+  export FAKE_NOW="$anchor"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"lag sweep failed"* ]] || { echo "$output"; false; }
+  # The sweep really was attempted (call 2), and really failed.
+  [ "$(cat "$GH_STUB_DIR/org.calls")" -eq 2 ]
+  [ "$(cat "$state_dir/CVERInc.sweepat")" = "$((anchor - 1000))" ]
+}
+
 # P3-3 (2026-09-14 fix-round-7 review): an org's FIRST sweep had no
 # .sweepat to measure from and fell back to the bare floor — narrower than
 # the ground the polls before it had covered. The first poll now records a
