@@ -468,10 +468,13 @@ immediately (exit 1) if `gh auth status` fails.
 > own login is unambiguously who did it; a self-authored new issue is
 > recorded as seen but is not itself an event. `kind` is `opened`,
 > `comment`, `review`, `activity` (any other timeline event — a label, an
-> assignee change, …), or `mention` (a fresh number whose own opening text
-> carries the @mention). Past the 50-lookup budget or the API's own rate
-> limit, an update's actor cannot be verified and is reported as `unknown`
-> rather than guessed — see the rate-limits paragraph above.
+> assignee change, …), or `mention` (an ALREADY-SEEN number whose latest
+> fetched activity's own body text @-mentions you — see the P2-2 paragraph
+> above; a fresh number's own OPENING text is not covered, so a brand-new
+> issue/PR that @-mentions you still reads `opened`, never `mention`).
+> Past the 50-lookup budget or the API's own rate limit, an update's actor
+> cannot be verified and is reported as `unknown` rather than guessed — see
+> the rate-limits paragraph above.
 
 ## What is running right now — the board's Live section
 
