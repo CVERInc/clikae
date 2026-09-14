@@ -615,6 +615,27 @@ STUB
   [ "$wall" -le 20 ]
 }
 
+@test "P3-1 (codex security review, round-5): a response holding multiple JSON documents is refused, not partially accepted" {
+  # Multiple top-level JSON values in one body used to become multiple
+  # readings — burn's shell `read` only ever consumes the FIRST TSV line,
+  # silently discarding whatever the LATER document said. Reject the whole
+  # body instead of picking a winner nobody asked for.
+  usage_fixture
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+printf '%s\n%s\n' \
+  '{"five_hour":{"utilization":1,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":2,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}' \
+  '{"five_hour":{"utilization":99,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":99,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
+}
+
 @test "P3-2 (codex security review, round-5): an oversized response body is rejected, not fully parsed" {
   # Neither curl's --max-time (transfer TIME, not bytes) nor the small final
   # cache shape bounded how much a faulty/hostile upstream could make this

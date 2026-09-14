@@ -813,7 +813,17 @@ adapter_usage() (
     exit "${PIPESTATUS[1]}"
   )" || return 1
   token=""
-  printf '%s' "$response" | jq -ce '
+  # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
+  # documents used to become multiple cached readings — burn's shell `read`
+  # only ever consumes the first TSV line, silently discarding whichever
+  # reading came later (measured: a two-document stub produced a second,
+  # tank-less 99%/99% reading that nothing downstream ever looked at, but
+  # that a different caller could). Slurp (`-s`) so exactly one JSON value —
+  # a single object — is ever accepted; anything else (0, 2+, or a
+  # non-object root) is `empty`, which `-e` turns into an honest failure
+  # rather than a partial or duplicated reading.
+  printf '%s' "$response" | jq -ce -s '
+    if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
     select(.five_hour.utilization|type == "number") |
     select(.seven_day.utilization|type == "number") |
     {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
