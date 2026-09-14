@@ -24,17 +24,59 @@
 _cockpit_state_file() { printf '%s/state/cockpit\n' "$CLIKAE_HOME"; }
 _cockpit_allow_file() { printf '%s/state/cockpit-allow\n' "$CLIKAE_HOME"; }
 
-# _cockpit_state_read -> "<engine>/<tank>" from the state file, or nothing.
+# _cockpit_state_path_ok -> 0 when the state file is safe to read and replace:
+# neither it nor its directory is a symlink, and it is a regular file if it
+# exists at all. #63 round-5 P2-3: a state path symlinked at B's settings.json
+# used to be followed by `printf > "$f"`, replacing B's freshly guarded JSON
+# with the text "claude/B" — rc=0, state named B, B unguarded and invalid.
+_cockpit_state_path_ok() {
+  local f d; f="$(_cockpit_state_file)"; d="${f%/*}"
+  [ ! -L "$d" ] && [ ! -L "$f" ] || return 1
+  [ ! -e "$f" ] || [ -f "$f" ]
+}
+
+# _cockpit_state_read -> "<engine>/<tank>" from the state file, or nothing —
+# nothing, too, when the path is not safe (_cockpit_state_path_ok): a symlink
+# is never followed to read someone else's bytes as the cockpit's name.
 _cockpit_state_read() {
   local f; f="$(_cockpit_state_file)"
+  _cockpit_state_path_ok || return 0
   [ -f "$f" ] || return 0
   head -n 1 "$f" 2>/dev/null | tr -d '\n' || true
 }
 
+# _cockpit_state_names <engine/tank or empty> -> 0 when the committed state,
+# re-read from disk, says exactly that ("" = no cockpit: absent or empty).
+_cockpit_state_names() {
+  _cockpit_state_path_ok || return 1
+  [ "$(_cockpit_state_read)" = "$1" ]
+}
+
+# _cockpit_state_write <engine> <tank> -> commit the record atomically.
+#
+# #63 round-5 P2-3: this used to be `printf … > "$f"` straight onto the live
+# file. The redirection truncates before a byte is written, so a crash there
+# left an EMPTY state (the review killed it mid-write: no cockpit recorded,
+# both tanks guarded, doctor silent), and a short write left a PREFIX (an
+# 8-byte RLIMIT_FSIZE made "claude/B\n" into "claude/B" — a valid name for a
+# tank the rollback then disarmed). Now: refuse an unsafe path, write a fresh
+# file in the same directory, check it holds every byte, and rename it over
+# the old one. Any failure leaves the previous committed state untouched.
 _cockpit_state_write() {
-  local f; f="$(_cockpit_state_file)"
-  mkdir -p "$(dirname "$f")" 2>/dev/null || { log_err "Could not create $(dirname "$f")"; return 1; }
-  printf '%s/%s\n' "$1" "$2" > "$f" || { log_err "Could not write $f"; return 1; }
+  local f d tmp want="$1/$2" size
+  f="$(_cockpit_state_file)"; d="${f%/*}"
+  mkdir -p "$d" 2>/dev/null || { log_err "Could not create $d"; return 1; }
+  _cockpit_state_path_ok || { log_err "Refusing to write $f: it, or $d, is a symlink or not a regular file"; return 1; }
+  tmp="$(mktemp "$d/.cockpit.XXXXXX" 2>/dev/null)" || { log_err "Could not create a temp file in $d"; return 1; }
+  if ! printf '%s/%s\n' "$1" "$2" > "$tmp"; then
+    rm -f "$tmp"; log_err "Could not write $f"; return 1
+  fi
+  size="$(wc -c < "$tmp" 2>/dev/null | tr -d ' ')"
+  if [ "$size" != "$(( ${#want} + 1 ))" ] || [ "$(head -n 1 "$tmp")" != "$want" ]; then
+    rm -f "$tmp"; log_err "Could not write $f (short write)"; return 1
+  fi
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; log_err "Could not replace $f"; return 1; }
+  _cockpit_state_names "$want" || { log_err "$f does not read back as $want"; return 1; }
 }
 
 _cockpit_state_clear() { rm -f "$(_cockpit_state_file)" 2>/dev/null || true; }
@@ -190,6 +232,9 @@ _cockpit_hook_remove() {
 
 _cockpit_show() {
   local cur; cur="$(_cockpit_state_read)"
+  if ! _cockpit_state_path_ok; then
+    printf 'warning: %s (or its directory) is a symlink or not a regular file; it is ignored — see clikae doctor.\n' "$(_cockpit_state_file)" >&2
+  fi
   if [ -z "$cur" ]; then
     printf 'No cockpit set.\n'
     printf 'clikae cockpit <tank>  marks the tank that dispatches build/review lanes via `clikae burn` instead of spawning them in-session — see clikae help cockpit.\n'
@@ -242,6 +287,9 @@ _cockpit_move() {
   validate_name profile "$tank"
   profile_exists "$engine" "$tank" || log_fail "Tank does not exist: $engine/$tank"
   command -v jq >/dev/null 2>&1 || log_fail "cockpit requires jq to edit settings.json"
+
+  # #63 round-5 P2-3: an unsafe state path is refused before any guard write.
+  _cockpit_state_path_ok || log_fail "cockpit: $(_cockpit_state_file) (or its directory) is a symlink or not a regular file — refusing to change the role; nothing was changed. Remove it (clikae doctor names it), then run clikae cockpit again."
 
   local cur cur_engine="" cur_tank=""
   cur="$(_cockpit_state_read)"
@@ -301,7 +349,16 @@ _cockpit_move() {
   # failure can only ever leave the OLD cockpit intact; the one new failure
   # mode it introduces — the new tank's guard now installed but unrecorded —
   # is rolled back below rather than left as an unlisted stray.
+  #
+  # #63 round-5 P2-3: the rollback below disarms the NEW tank, so it runs only
+  # when the state file, re-read from disk, still names the OLD cockpit (or
+  # still names none, when there was none). Anything else — the write landed
+  # after all, or the file now says something unexpected — keeps the new
+  # guard: over-guarded is recoverable, an unguarded recorded cockpit is not.
   if ! _cockpit_state_write "$engine" "$tank"; then
+    if ! _cockpit_state_names "$cur"; then
+      log_fail "cockpit: could not confirm the new cockpit record ($engine/$tank), and the state file no longer reads as ${cur:-empty} — $engine/$tank's guard was KEPT (over-guarded is the safe direction). Run \`clikae doctor\` to see what is guarded, then \`clikae cockpit --off\` and mark the right tank."
+    fi
     local rollback_msg="its guard was rolled back"
     _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 \
       || rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it"

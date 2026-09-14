@@ -299,6 +299,41 @@ EOF
   [[ "$output" != *"guard also found on tank"* ]] || false
 }
 
+@test "doctor scans for guards even when the state file is EMPTY (#63 r5 P2-3)" {
+  # The crash-after-truncation shape the codex review reproduced on f20a603:
+  # state emptied, both tanks guarded, doctor returned before scanning.
+  clikae init claude aaa
+  clikae init claude bbb
+  clikae cockpit claude aaa
+  cp "$CLIKAE_HOME/profiles/claude/aaa/settings.json" "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+  : > "$CLIKAE_HOME/state/cockpit"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no cockpit is recorded"* ]] || false
+  [[ "$output" == *"claude/aaa"* ]] || false
+  [[ "$output" == *"claude/bbb"* ]] || false
+}
+
+@test "doctor scans for guards even when the state file is ABSENT (#63 r5 P2-3)" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no cockpit is recorded: claude/aaa"* ]] || false
+}
+
+@test "doctor names a state file that is a symlink (#63 r5 P2-3)" {
+  clikae init claude aaa
+  clikae cockpit claude aaa
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  ln -s "$CLIKAE_HOME/profiles/claude/aaa/settings.json" "$CLIKAE_HOME/state/cockpit"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is a symlink or not a regular file"* ]] || false
+  [[ "$output" == *"no cockpit is recorded: claude/aaa"* ]] || false
+}
+
 @test "doctor's cockpit check changes nothing on disk (read-only)" {
   clikae init claude aaa
   clikae cockpit claude aaa

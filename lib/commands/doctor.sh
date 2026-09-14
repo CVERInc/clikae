@@ -242,21 +242,32 @@ _doctor_cockpit() {
     source "$CLIKAE_LIB/commands/cockpit.sh"
   }
   local state_file; state_file="$(_cockpit_state_file)"
-  [ -f "$state_file" ] || return 0
+  # #63 round-5 P2-3: this used to return right here when state was absent or
+  # empty — exactly the state a crash mid-write left behind (both tanks
+  # guarded, nothing recorded), so doctor said nothing. The guard scan below
+  # now always runs; only the "is the recorded tank armed" half needs a record.
+  if ! _cockpit_state_path_ok; then
+    printf '  %-16s %s\n' "cockpit" "state file $state_file (or its directory) is a symlink or not a regular file — it is ignored, and clikae cockpit refuses to change the role until it is removed"
+  fi
   local cur; cur="$(_cockpit_state_read)"
-  [ -n "$cur" ] || return 0
-  local cur_engine="${cur%%/*}" cur_tank="${cur#*/}"
+  local cur_engine="" cur_tank=""
+  case "$cur" in
+    '') ;;
+    */*) cur_engine="${cur%%/*}"; cur_tank="${cur#*/}" ;;
+    *) printf '  %-16s %s\n' "cockpit" "state file $state_file does not name an <engine>/<tank> (reads: $cur) — fix: clikae cockpit --off"
+       cur="" ;;
+  esac
 
   local cli profile path
   local named_exists=0 named_has_guard=0 strays=""
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
-    if [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
       named_exists=1
     fi
     [ -f "$path/settings.json" ] || continue
     grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
-    if [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
       named_has_guard=1
     else
       strays="$strays $cli/$profile"
@@ -264,6 +275,14 @@ _doctor_cockpit() {
   done <<EOF
 $(list_all_profiles 2>/dev/null || true)
 EOF
+
+  if [ -z "$cur" ]; then
+    if [ -n "$strays" ]; then
+      printf '  %-16s %s\n' "cockpit" "guard found on tank(s) but no cockpit is recorded:$strays"
+      log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+    fi
+    return 0
+  fi
 
   if [ "$named_exists" -eq 0 ]; then
     printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur no longer exists — fix: clikae cockpit --off"

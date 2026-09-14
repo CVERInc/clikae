@@ -162,6 +162,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (or whose settings.json is the same file) is refused as the same tank.
     Before, the move returned 0, recorded the alias, and removed the only
     guard from the shared settings.json.
+  - The cockpit record is written atomically: a fresh file in the state
+    directory, checked for every byte, renamed into place. A symlinked
+    state file or state directory is refused before any guard is written.
+    The new tank's guard is rolled back only when the record, re-read from
+    disk, still names the old cockpit; otherwise it stays (over-guarded is
+    the safe direction). Three reproductions (a real RLIMIT_FSIZE short
+    write, SIGKILL after the old in-place truncation, a state path
+    symlinked at the new tank's settings.json) each ended with an
+    unguarded recorded cockpit or an empty record before. `clikae doctor`
+    now scans for guards even when no cockpit is recorded, and names an
+    unsafe or malformed state file.
 
 ### Added
 

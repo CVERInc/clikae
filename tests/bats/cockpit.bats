@@ -174,36 +174,74 @@ _guard_installed() {
   [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/mmm" ]
 }
 
-@test "state file mode 444 fails the state write, old cockpit stays armed, new guard is rolled back (#63 r4 P2-1)" {
-  # round-4 review: both guard writes (install B, remove A) already happen
-  # BEFORE the state write on f83bd9f -- so when the THIRD write (state)
-  # fails, both guards had already moved and nothing rolled them back. That
-  # left exactly the shape this feature exists to prevent: state names A,
-  # A has no guard, B does. Red on f83bd9f (state ends up "claude/aaa" but
-  # aaa's guard is gone); green after moving the state write up to right
-  # after B's install, with a rollback of B's guard on failure.
+# _state_probe_env -> path of a BASH_ENV file that wraps `printf` for the ONE
+# call shaped like the state record ('%s/%s\n' with two args), so a probe can
+# act exactly at the state write while every other write stays real. Modes
+# (CKPT_PROBE): shortwrite — a child with RLIMIT_FSIZE=8 and SIGXFSZ ignored
+# writes the record, so the kernel really short-writes (the codex review's
+# probe); kill — SIGKILL this clikae process at the write, after its
+# redirection has opened the target; pause — write, then wait for
+# $CKPT_PAUSE_DIR/go (once).
+_state_probe_env() {
+  local f="$BATS_TEST_TMPDIR/probe-env.sh"
+  cat > "$f" <<'PROBE'
+printf() {
+  if [ "$#" -eq 3 ] && [ "$1" = '%s/%s\n' ]; then
+    case "${CKPT_PROBE-}" in
+      shortwrite)
+        python3 -c '
+import os, resource, signal, sys
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (8, 8))
+data = (sys.argv[1] + "/" + sys.argv[2] + "\n").encode()
+n = os.write(1, data)
+if n < len(data):
+    os.write(1, data[n:])
+' "$2" "$3"
+        return $? ;;
+      kill) kill -KILL $$ ;;
+      pause)
+        if [ ! -e "$CKPT_PAUSE_DIR/paused" ]; then
+          builtin printf "$@"; local rc=$?
+          : > "$CKPT_PAUSE_DIR/paused"
+          while [ ! -e "$CKPT_PAUSE_DIR/go" ]; do sleep 0.05; done
+          return "$rc"
+        fi ;;
+    esac
+  fi
+  builtin printf "$@"
+}
+PROBE
+  printf '%s' "$f"
+}
+
+# _no_unguarded_cockpit -> fail when the state file names a tank whose
+# settings.json carries no guard (the forbidden state these probes hunt).
+_no_unguarded_cockpit() {
+  local cur
+  [ ! -L "$CLIKAE_HOME/state/cockpit" ] || return 0
+  cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null || true)"
+  [ -n "$cur" ] || return 0
+  _guard_installed "$CLIKAE_HOME/profiles/$cur/settings.json" || {
+    echo "forbidden: state names $cur and $cur is unguarded" >&2; return 1; }
+}
+
+@test "a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)" {
+  # Round 4 treated a 444 state file as a write failure. The record is now a
+  # fresh file renamed over the old one, so the directory's permission is
+  # what matters — and the move goes through cleanly.
   clikae init claude aaa
   clikae init claude bbb
   clikae cockpit claude aaa
-  _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
   chmod 444 "$CLIKAE_HOME/state/cockpit"
   run clikae cockpit claude bbb
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"could not record the new cockpit"* ]] || false
-  [[ "$output" == *"claude/aaa is still the cockpit"* ]] || false
-  # The OLD cockpit (aaa) must still be armed and still be what state names.
-  _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
-  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/aaa" ]
-  # The NEW tank's guard (installed before the failed state write) must have
-  # been rolled back -- not left behind as an unrecorded stray.
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/bbb" ]
+  _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
 }
 
-@test "state file symlinked to a read-only target fails the state write the same way (#63 r4 P2-1)" {
-  # Second of the reviewer's two independent reproductions -- same shape,
-  # different trigger (the state PATH itself resolves through a symlink to
-  # a file this process cannot write, rather than the path being 444
-  # directly). Must fail exactly the same safe way.
+@test "a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)" {
   clikae init claude aaa
   clikae init claude bbb
   clikae cockpit claude aaa
@@ -213,26 +251,69 @@ _guard_installed() {
   rm -f "$CLIKAE_HOME/state/cockpit"
   ln -s "$target" "$CLIKAE_HOME/state/cockpit"
   run clikae cockpit claude bbb
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"could not record the new cockpit"* ]] || false
-  [[ "$output" == *"claude/aaa is still the cockpit"* ]] || false
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is a symlink or not a regular file"* ]] || false
   _guard_installed "$CLIKAE_HOME/profiles/claude/aaa/settings.json"
-  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/aaa" ]
+  [ "$(cat "$target")" = "claude/aaa" ]
   ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
 }
 
-@test "moving to a cockpit-less state (no prior cockpit) rolls back cleanly on a state-write failure (#63 r4 P2-1)" {
-  # Same failure, no old cockpit to preserve -- the "no cockpit is set"
-  # branch of the rollback message, and nothing left armed anywhere.
-  clikae init claude bbb
-  mkdir -p "$CLIKAE_HOME/state"
-  : > "$CLIKAE_HOME/state/cockpit"
-  chmod 444 "$CLIKAE_HOME/state/cockpit"
-  run clikae cockpit claude bbb
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"could not record the new cockpit"* ]] || false
+@test "probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)" {
+  # codex review probe 1. On f20a603: rc=1, state="claude/B" (8 bytes, no
+  # newline), A guarded, B unguarded — the recorded cockpit unguarded, while
+  # the error said A was "unchanged".
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  BASH_ENV="$(_state_probe_env)" CKPT_PROBE=shortwrite run clikae cockpit claude B
+  [ "$status" -ne 0 ]
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  [[ "$output" == *"claude/A is still the cockpit"* ]] || false
+  _no_unguarded_cockpit
+}
+
+@test "probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)" {
+  clikae init claude B
+  BASH_ENV="$(_state_probe_env)" CKPT_PROBE=shortwrite run clikae cockpit claude B
+  [ "$status" -ne 0 ]
   [[ "$output" == *"no cockpit is set"* ]] || false
-  ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
+  [ -z "$(cat "$CLIKAE_HOME/state/cockpit" 2>/dev/null)" ]
+  ! _guard_installed "$CLIKAE_HOME/profiles/claude/B/settings.json"
+}
+
+@test "probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)" {
+  # codex review probe 2. On f20a603 the redirection had already truncated
+  # the live file: state empty, A and B both guarded, doctor silent.
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  BASH_ENV="$(_state_probe_env)" CKPT_PROBE=kill run clikae cockpit claude B
+  [ "$status" -eq 137 ]
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  _no_unguarded_cockpit
+  run clikae doctor
+  [[ "$output" == *"guard also found on tank(s) that are not the recorded cockpit: claude/B"* ]] || false
+}
+
+@test "probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)" {
+  # codex review probe 3. On f20a603 the move installed B's guard, then
+  # `printf > state` followed the symlink and replaced B's JSON with the text
+  # "claude/B": rc=0, state named B, B unguarded and invalid.
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  printf '{}\n' > "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  ln -s "$CLIKAE_HOME/profiles/claude/B/settings.json" "$CLIKAE_HOME/state/cockpit"
+  run clikae cockpit claude B
+  [ "$status" -ne 0 ]
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/B/settings.json")" = "{}" ]
+  [ -L "$CLIKAE_HOME/state/cockpit" ]
+  run clikae doctor
+  [[ "$output" == *"is a symlink or not a regular file"* ]] || false
 }
 
 @test "moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)" {
