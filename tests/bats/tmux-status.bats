@@ -379,6 +379,43 @@ _dead_pid() { printf '2147483647'; }
   done
 }
 
+# P2-1 (2026-09-14 round-2 review): the fuel age made the rest of the row
+# variable-width, and at 100 columns a 30-character hostname plus `· 23h ago`
+# pushed the row into the clock — tmux cut the CLOCK (measured `!10 8:31` on a
+# real tmux 3.4), not the prefix. The prefix must yield exactly when it would
+# cost the clock: 29 characters still fits at 100 (measured `!10 18:32`), 30
+# does not. Glyphs become one ASCII byte each so the count is columns under
+# any locale.
+_row_cols() {
+  local p
+  p="$(printf '%s' "$1" | sed 's/#\[[^]]*\]//g')"
+  p="${p//·/.}"; p="${p//│/|}"; p="${p//○/o}"
+  printf '%s' "${#p}"
+}
+
+@test "width: at 100 columns the ssh prefix yields to the fuel age, never the clock" {
+  _src
+  _usage_cache claude wrasse 100.0 100.0 82800   # 23h: the widest suffix
+  local d; for d in 1 2 3 4 5 6 7 8 9 10; do _dry_marker codex "t$d"; done   # !10
+  local h29 h30
+  h29="$(printf '%029d' 0 | tr 0 h)"; h30="${h29}h"
+
+  run tmux_status_render claude wrasse '' "$h30" 100
+  [[ "$output" != *"ssh "* ]] || { echo "prefix kept at 30 chars: $output"; false; }
+  [[ "$output" == *"clikae claude wrasse"*"23h ago"*"!10"* ]] || { echo "$output"; false; }
+  [ "$(_row_cols "$output")" -le 94 ] || { echo "row is $(_row_cols "$output") cols: $output"; false; }
+
+  run tmux_status_render claude wrasse '' "$h29" 100
+  [[ "$output" == *"ssh $h29 -t clikae claude wrasse"* ]] || { echo "prefix dropped although it fits: $output"; false; }
+  [ "$(_row_cols "$output")" -le 94 ] || { echo "row is $(_row_cols "$output") cols: $output"; false; }
+
+  # Without the suffix the same 30-character host fits again — it is the
+  # measured width that decides, not the hostname alone.
+  _usage_cache claude wrasse 100.0 100.0 0
+  run tmux_status_render claude wrasse '' "$h30" 100
+  [[ "$output" == *"ssh $h30 -t "* ]] || { echo "$output"; false; }
+}
+
 @test "width: a width tmux could not tell us is not a crash" {
   _src
   run tmux_status_render claude wrasse '' reefbox ''

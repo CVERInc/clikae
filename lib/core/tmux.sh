@@ -834,7 +834,11 @@ tmux_status_alertsv() {
 # is the segment that gives, and it gives by being DROPPED rather than cut: half
 # a hostname is not a command anyone can run, whereas `clikae resume a52bdc12`
 # alone is still exactly right on the host where the row is being read. Below
-# 100 columns the rest of the row is ~50 characters and never truncates at all.
+# 100 columns the rest of the row is at most 59 characters (measured:
+# `clikae resume a52bdc12 │ 5h 100% · 7d 100% · 23h ago │ !10 `) and never
+# truncates at 80. At 100 and above the prefix is still the one that yields:
+# it is added only if the row with it leaves the clock its columns (P2-1,
+# round-2 review — see the body).
 tmux_status_render() {
   local engine="$1" tank="$2" sid="$3" host="$4" width="$5"
   case "$width" in ''|*[!0-9]*) width=80 ;; esac
@@ -849,15 +853,12 @@ tmux_status_render() {
   else
     cmd="clikae $engine $tank"
   fi
-  if [ -n "$host" ] && [ "$width" -ge 100 ]; then
-    cmd="ssh $host -t $cmd"
-  fi
 
   # The separator is dim so the segments read as segments and not as one
   # sentence; the alert count is the only thing that gets a colour, because it
   # is the only thing that is ever news.
   local sep=" #[fg=colour244]│#[default] "
-  local out="$cmd"
+  local rest=""
 
   # ONE `date` for the whole row, handed to both readers. They each know how to
   # ask for their own if nobody tells them (a test calling one directly), but
@@ -867,13 +868,40 @@ tmux_status_render() {
   # not the other.
   local now; now="$(date +%s 2>/dev/null || echo 0)"
 
+  # 🔴 P2-1 (2026-09-14 round-2 review): the segments are composed BEFORE the
+  # ssh prefix is decided, because the prefix is the one that yields and it can
+  # only yield to something that is already known. Round 1 added the fuel age
+  # (`· 23h ago`, 0 or 9-10 columns), which made the rest of the row variable-
+  # width too; with the prefix decided on `width >= 100` alone, a 30-character
+  # hostname at 100 columns pushed the row into the clock and tmux cut the
+  # CLOCK (`!10 8:31`), which Rule 10 §7 says never happens. Now the prefix is
+  # added only when the whole row, prefix included, still leaves the clock its
+  # 6 columns (`%H:%M `, status-right-length) — dropped whole, never cut, and
+  # dropped for exactly the width it would have cost.
+  local cols=0 fuel_cols
   tmux_status_fuelv "$engine" "$tank" "$now"
-  [ -n "$_TSTAT_FUEL" ] && out="$out$sep$_TSTAT_FUEL"
+  if [ -n "$_TSTAT_FUEL" ]; then
+    rest="$rest$sep$_TSTAT_FUEL"
+    # Columns, not bytes or locale characters: tmux runs this under whatever
+    # locale its server has, so the two non-ASCII glyphs the fuel segment can
+    # carry become one ASCII byte each before counting. No fork.
+    fuel_cols="${_TSTAT_FUEL//·/.}"; fuel_cols="${fuel_cols//○/o}"
+    cols=$(( cols + 3 + ${#fuel_cols} ))
+  fi
 
   tmux_status_alertsv "$now"
-  [ "$_TSTAT_ALERTS" -gt 0 ] && out="$out$sep#[fg=red]!$_TSTAT_ALERTS#[default]"
+  if [ "$_TSTAT_ALERTS" -gt 0 ]; then
+    rest="$rest$sep#[fg=red]!$_TSTAT_ALERTS#[default]"
+    cols=$(( cols + 3 + 1 + ${#_TSTAT_ALERTS} ))
+  fi
 
-  printf '%s ' "$out"
+  # +1 for the trailing space printed below, +6 for the clock on the right.
+  if [ -n "$host" ] && [ "$width" -ge 100 ] \
+     && [ $(( ${#host} + 8 + ${#cmd} + cols + 1 + 6 )) -le "$width" ]; then
+    cmd="ssh $host -t $cmd"
+  fi
+
+  printf '%s%s ' "$cmd" "$rest"
 }
 
 # tmux_status_line <session> <engine> <tank> — the ONE place clikae writes a
