@@ -470,7 +470,7 @@ STUB
   done
 }
 
-@test "P2-1(c): a stale-but-recent vendor reading is shown WITH its age; 24h+ falls back to unverified" {
+@test "P2-1(c) (round-5 review, P3-9: renamed — the 24h+ case no longer asserts unverified, see below): a stale-but-recent vendor reading is shown WITH its age; 24h+ shows no percentage at all" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/usage.sh"
