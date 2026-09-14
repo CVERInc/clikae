@@ -897,7 +897,10 @@ cmd_resume() {
       while IFS=$'\t' read -r c_sid c_engine c_tank; do
         [ -n "$c_sid" ] || continue
         if [ "$shown" -ge 10 ]; then
-          log_dim "  … and $((cn - shown)) more"
+          # P3-7 (2026-09-14 round-2 review): the list is newest first, so
+          # the cut hides the OLDEST — and there is no flag that prints them.
+          # Say which ones are missing and the two ways to reach one.
+          log_dim "  … and $((cn - shown)) more, older — type more of the id to narrow it, or run \`clikae resume\` to browse"
           break
         fi
         log_dim "  clikae resume $c_sid    ($c_engine/$c_tank)"

@@ -858,6 +858,26 @@ _twelve_sessions_sharing_a_prefix() {
   [[ "$output" == *"and 2 more"* ]] || { echo "$output"; false; }
 }
 
+# P3-7 (2026-09-14 round-2 review): the cut hides the OLDEST candidates, and
+# the "… and N more" line did not say so or how to reach them.
+@test "resume: the capped list hides the oldest, and says how to reach them" {
+  _twelve_sessions_sharing_a_prefix
+  local i suffix
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    suffix="$(printf '%04d' "$i")"
+    touch -t "2026010112$(printf '%02d' "$i")" \
+      "$CLIKAE_HOME/profiles/claude/solo/projects/-tmp-p/c0000000-$suffix-2222-3333-444455556666.jsonl"
+  done
+  run "$CLIKAE_BIN" resume c0000000
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"c0000000-0001-"* ]] || { echo "the oldest was shown: $output"; false; }
+  [[ "$output" != *"c0000000-0002-"* ]] || { echo "the second oldest was shown: $output"; false; }
+  [[ "$output" == *"c0000000-0012-"* ]] || { echo "the newest was cut: $output"; false; }
+  [[ "$output" == *"and 2 more, older"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"type more of the id"* ]] || { echo "$output"; false; }
+  [[ "$output" == *'`clikae resume`'* ]] || { echo "$output"; false; }
+}
+
 @test "resume: the same id in two tanks is ONE candidate, not an ambiguity" {
   # A relay copies a session into a second tank. That is one conversation, and
   # _resume_locate already knows how to choose between the copies.
