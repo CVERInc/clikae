@@ -365,6 +365,32 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
 }
 
+# P2-4 (2026-09-14 round-2 review): an unreadable dry stamp used to become 0,
+# which neither ageing arm accepts, so it read `fresh` forever — a permanent
+# `!1` on every session from one truncated write.
+@test "alerts: a dry marker whose stamp cannot be read is not red, and never was fresh" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  local body
+  for body in 'garbage\tresets 3pm' '\tresets 3pm' 'no tab at all' '0\tresets 3pm'; do
+    printf "$body\n" > "$CLIKAE_HOME/dry/codex/goby"
+    dry_store_peekv codex goby "$(date +%s)" || { echo "[$body] peek rc!=0"; false; }
+    [ "$_DRY_PEEK" = expired ] || { echo "[$body] peek=$_DRY_PEEK"; false; }
+    run tmux_status_render claude wrasse '' '' 120
+    [[ "$output" != *"!"* ]] || { echo "[$body] $output"; false; }
+    run tmux_status_render codex goby '' '' 120
+    [[ "$output" != *"○"* ]] || { echo "[$body] shown dry: $output"; false; }
+  done
+  # The control: the same file with a real stamp is still red.
+  printf '%s\tresets 3pm\n' "$(date +%s)" > "$CLIKAE_HOME/dry/codex/goby"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "control: $output"; false; }
+  # A zero-padded stamp is decimal, not an arithmetic error.
+  printf '0%s\tresets 3pm\n' "$(date +%s)" > "$CLIKAE_HOME/dry/codex/goby"
+  run dry_store_peekv codex goby "$(date +%s)"
+  [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "padded: rc=$status $output"; false; }
+}
+
 @test "alerts: they add up across both sources" {
   _src
   _dry_marker codex goby

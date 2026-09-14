@@ -79,7 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ran (its `updated_at` is the attempt's start, not a heartbeat), and leaves
   the count once that stamp is older than the burn log retention (7 days, the
   same knob that removes the file), so it can neither hide nor pin red
-  forever on a host that never runs `clikae burn` again. Below 100
+  forever on a host that never runs `clikae burn` again. A dry marker whose
+  timestamp cannot be read (truncated, empty, no TAB) is expired, not fresh
+  forever -- on the board as well as the row. Below 100
   columns the `ssh <host> -t ` prefix is dropped -- the only variable-width
   part of the row, and dropped rather than cut because half a hostname is not
   a command. Measured at 14 ms per redraw idle, up to 24 ms under load.

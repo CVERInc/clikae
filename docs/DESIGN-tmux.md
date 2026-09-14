@@ -555,6 +555,13 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      `_burn_sweep_old_logs`，7 天、只在 `clikae burn` 才跑，因為 burn 的 `status.json`
      除了 alert-count 之外還有 `clikae wait` 這個真的需要它留著的讀者。兩邊「算不算紅」
      的時鐘也**不是**同一個：dry 是 6 小時的觀察新鮮度，burn 是 pid 存活＋7 天保存期限。
+
+     🔴 **P2-4（同一輪 round-2 review）：dry 那一半原本也有一種永遠不會消失的紅燈。**
+     `dry_store_peekv` 把讀不懂的時間戳（非數字、空的、整行沒有 TAB）當成 0，而兩條
+     老化分支都要求 `stamp > 0`，於是落到 `fresh`——**永遠**。一次截斷的寫入就會在每個
+     session 的狀態列釘一個 `!1`，直到有人手動刪檔。現在讀不懂的時間戳（含
+     `dry_store_mark` 在 `date` 失敗時寫的 0）一律是 `expired`：跟 `cached_at` 同一條
+     「在，但讀不懂 ⇒ 不可信」的規則。
   6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是

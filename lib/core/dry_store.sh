@@ -108,12 +108,22 @@ dry_store_peekv() {
   stamp="${line%%$'\t'*}"
   _DRY_PEEK_RESET="${line#*$'\t'}"
   [ "$_DRY_PEEK_RESET" = "$line" ] && _DRY_PEEK_RESET=""   # no TAB in the line → no phrase
-  case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
+  # 🔴 P2-4 (2026-09-14 round-2 review): an unreadable stamp used to become 0,
+  # and both ageing arms below required `stamp > 0`, so it fell through to
+  # `fresh` — FOREVER. Measured: a non-numeric stamp, an empty one, a line
+  # with no TAB at all each pinned `!1` on every tmux session's status row
+  # (and a dry dot on the board) until someone deleted the file by hand. A
+  # truncated write, an interrupted `mv`, a future writer's format: any one of
+  # them was a permanent red. A stamp this reader cannot date cannot be judged
+  # fresh, so it is `expired` — the same "present but unreadable ⇒ untrusted"
+  # rule tmux_status_fuelv applies to `cached_at`. 0 is included: it is what
+  # dry_store_mark writes when `date` itself failed, i.e. no time at all.
+  case "$stamp" in ''|*[!0-9]*|0) _DRY_PEEK=expired; return 0 ;; esac
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
-  age=$(( now - stamp ))
-  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
+  age=$(( now - 10#$stamp ))   # 10#: a zero-padded stamp is not octal (`08` would be an error)
+  if [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
     _DRY_PEEK=expired
-  elif [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
+  elif [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
     _DRY_PEEK=stale
   else
     _DRY_PEEK=fresh
