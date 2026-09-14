@@ -88,11 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `kill-session` (no `-t`) while `$TMUX` is inherited — the shape that took
   down a live server twice (2026-09-10, 2026-09-13) — rc 86, naming the socket
   and the legal form; never refuses anything when `$TMUX` is unset. clikae
-  prepends the shim's directory to `PATH` in the one place a session is
-  created (`tmux_spawn_session`, `lib/core/tmux.sh`), so every session clikae
-  launches (and everything that session forks) inherits it for free — no copy,
-  no settings.json. `clikae doctor` reports a live session whose `PATH` does
-  not start with the shim directory (#97).
+  wraps the pane's own start command with `env PATH=<shim dir>:...` in the
+  one place a session is created (`tmux_spawn_session`, `lib/core/tmux.sh`) —
+  that reaches the pane's real process regardless of what tmux does with its
+  session environment tables, so every session clikae launches (and
+  everything that session forks) inherits it for free — no copy, no
+  settings.json. `clikae doctor` reads that pane process's own environment
+  and reports a live session whose `PATH` does not start with the shim
+  directory (#97).
+
+  Review round 2 hardened it further: the shim's own cycle counter no
+  longer leaks into a spawned pane's environment through an intermediate
+  wrapper script; the refusal scan now reads `-S`/`-L`/`-t`/`-a` per
+  `\;`-separated segment instead of once over the whole argv (closing three
+  more disposable-server-killing bypasses); the hop ceiling that stops two
+  guards leapfrogging forever no longer depends on `head` being resolvable
+  through the PATH it is validating; and `doctor`'s macOS pane-path probe
+  reads the last `PATH=` token instead of the first and no longer aborts
+  the whole report under `set -eo pipefail` on an ordinary race.
 
 ## [0.29.0] — 2026-09-11
 
