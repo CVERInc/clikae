@@ -119,6 +119,15 @@ if [ -n "${TMUX:-}" ]; then
   _seg_has_target=0
   _seg_has_a=0
   _want_tval=0
+  # P3-新1 (clikae#97 review round 4): once an unrecognised dash-option shows
+  # up ahead of the verb, `_seg_verb` can no longer be trusted to land on the
+  # real verb (see the note at the catch-all below) — so, for this segment
+  # only, fall back to a position-independent scan: did the literal text
+  # `kill-server`/`kill-session` (or an unambiguous ≥6-char prefix of either)
+  # show up ANYWHERE in the segment at all, verb slot or not.
+  _unknown_opt=""
+  _seg_saw_ks=0
+  _seg_saw_ksess=0
   for _a in "$@" ";"; do
     if [ "$_skip_next" -eq 1 ]; then
       _skip_next=0
@@ -131,6 +140,23 @@ if [ -n "${TMUX:-}" ]; then
       ";") _seg_end=1; _tok="" ;;
       *\;) _tok="${_tok%;}"; _seg_end=1 ;;
     esac
+
+    # Passive scan (P3-新1): recorded for every non-empty token regardless of
+    # which branch below ends up classifying it — this is the fallback used
+    # only when `_unknown_opt` got set (see the catch-all further down), so a
+    # token consumed as `-t`'s own value coincidentally matching is harmless
+    # (it only ever ADDS a refusal, never removes one).
+    if [ -n "$_tok" ]; then
+      # shellcheck disable=SC2194  # subject is deliberately the literal
+      # verb: this checks whether $_tok is a PREFIX of it, not the reverse.
+      case kill-server in
+        "$_tok"*) [ "${#_tok}" -ge 6 ] && _seg_saw_ks=1 ;;
+      esac
+      # shellcheck disable=SC2194  # same reason as the kill-server case above.
+      case kill-session in
+        "$_tok"*) [ "${#_tok}" -ge 6 ] && _seg_saw_ksess=1 ;;
+      esac
+    fi
 
     if [ "$_want_tval" -eq 1 ]; then
       # This token is the value of the `-t` just before it, whatever it
@@ -163,10 +189,31 @@ if [ -n "${TMUX:-}" ]; then
           -c*|-f*|-T*)  : ;;
           -S|-L)        _has_sock=1; _skip_next=1 ;;
           -S*|-L*)      _has_sock=1 ;;
-          # Global options that take no value (-2 -C -D -l -N -u -V -v), or
-          # anything else dash-prefixed sitting where a global option could
-          # be.
-          -*)           : ;;
+          # Global options that take no value (man tmux: -2 -C -D -l -N -u
+          # -V -v). This table is tmux 3.4's; see DESIGN-tmux.md Rule 10.
+          -2|-C|-D|-l|-N|-u|-V|-v) : ;;
+          # 🔴 ANYTHING ELSE DASH-PREFIXED IS UNKNOWN, NOT "NO VALUE" (P3-新1,
+          # clikae#97 review round 4). The old catch-all here (`-*) : ;;`)
+          # guessed every unrecognised dash-token took no value — so an
+          # unknown VALUE-taking global option (say a future tmux's `-X val`)
+          # let its own value fall into the verb slot below (`_seg_verb`
+          # became "val"), and the real verb sitting right after it — e.g.
+          # `kill-server` — was then read as an ARGUMENT of that fake verb
+          # and never checked at all: measured, `tmux -X val kill-server`
+          # reached a real disposable server, rc 0. There is no live gap
+          # against tmux 3.4 itself (its global-option usage line is exactly
+          # `-c`/`-f`/`-L`/`-S`/`-T` value-taking, `-2CDlNuVv` no-value, and
+          # anything outside that tmux refuses before this shim's opinion
+          # ever matters) — this only guards a FUTURE tmux version growing a
+          # new value-taking global option. Rather than keep guessing which
+          # slot is the verb once we can no longer trust the table, give up
+          # on the verb slot entirely and fall back to the position-
+          # independent `_seg_saw_ks`/`_seg_saw_ksess` scan above, checked at
+          # the end of this segment. An unknown NO-value option (`tmux -q
+          # -V`) still passes straight through when nothing forbidden shows
+          # up anywhere in the segment — this is fail-closed only on the two
+          # destructive verbs, not a ban on options this shim doesn't know.
+          -*)           _unknown_opt="$_tok" ;;
           *)            _seg_verb="$_tok" ;;
         esac
       else
@@ -175,6 +222,26 @@ if [ -n "${TMUX:-}" ]; then
     fi
 
     if [ "$_seg_end" -eq 1 ]; then
+      # 🔴 P3-新1 (clikae#97 review round 4): once an unrecognised global
+      # option showed up ahead of the verb, `_seg_verb` may have landed on
+      # THAT option's own value instead of the real verb — the check below
+      # keyed on `_seg_verb` would then silently miss a real `kill-server`/
+      # `kill-session` sitting right after it. Fall back to the position-
+      # independent scan instead: did the forbidden text show up ANYWHERE in
+      # this segment. `_seg_has_target`/`_seg_has_a` stay accurate even here
+      # (they only ever needed `_seg_verb` to be non-empty to start tracking
+      # -t/-a, not for it to be the TRUE verb), so the "named a target"
+      # nuance for kill-session is not lost.
+      if [ -n "$_unknown_opt" ]; then
+        if [ "$_seg_saw_ks" -eq 1 ] && [ "$_has_sock" -eq 0 ]; then
+          printf 'tmux-guard: refusing `tmux` invocation — unrecognised option %s came before the verb, so this shim no longer trusts the verb slot; `kill-server` appears in the command and $TMUX names a socket (%s). Name yours: tmux -S <path> kill-server\n' "$_unknown_opt" "$_sock" >&2
+          exit 86
+        fi
+        if [ "$_seg_saw_ksess" -eq 1 ] && [ "$_seg_has_target" -eq 0 ]; then
+          printf 'tmux-guard: refusing `tmux` invocation — unrecognised option %s came before the verb, so this shim no longer trusts the verb slot; `kill-session` appears in the command with no named -t this shim can verify. Name yours: tmux kill-session -t <target>\n' "$_unknown_opt" >&2
+          exit 86
+        fi
+      fi
       # An unambiguous prefix of either destructive verb is treated exactly
       # like the verb itself. ≥6 chars: short enough to catch real
       # abbreviations (tmux's own minimum for these two is 8, where
@@ -216,6 +283,9 @@ if [ -n "${TMUX:-}" ]; then
       _seg_has_target=0
       _seg_has_a=0
       _want_tval=0
+      _unknown_opt=""
+      _seg_saw_ks=0
+      _seg_saw_ksess=0
     fi
   done
 fi

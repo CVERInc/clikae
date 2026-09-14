@@ -657,3 +657,58 @@ EOF
   # downstream process the guard).
   grep -qF "PATH:$test_path" "$TEST_HOME/recorder.log" || { echo "PATH not intact: $(cat "$TEST_HOME/recorder.log")"; false; }
 }
+
+# ── P3-新1: an unknown value-taking global option must not desync the verb
+# slot (review round 4) ─────────────────────────────────────────────────────
+# The global-option table (-c/-f/-L/-S/-T take a value; -2/-C/-D/-l/-N/-u/-V/
+# -v do not) is tmux 3.4's exact usage line — see DESIGN-tmux.md Rule 10.
+# Before this fix, ANY unrecognised dash-token ahead of the verb was guessed
+# to take no value, so a FUTURE tmux's own value-taking global option (`-X
+# val`) let its value slide into the verb slot and the real verb right after
+# it — e.g. `kill-server` — was read as that fake verb's own argument and
+# never checked: `tmux -X val kill-server` reached a real disposable server,
+# rc 0. No real tmux needed: the refusal decision never resolves one.
+
+@test "shim: an unrecognised global option before the verb fails closed on kill-server/kill-session, and only on those (P3-新1)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  local bad=""
+  _tg_expect1() { # _tg_expect1 <86|0> <label> args...
+    local want="$1" label="$2"; shift 2
+    rm -f "$TEST_HOME/recorder.log"
+    local rc=0
+    env TMUX="$TEST_HOME/fake,1,0" PATH="$p" "$bash_bin" "$(SHIM)" "$@" >/dev/null 2>&1 || rc=$?
+    local reached=no; [ -e "$TEST_HOME/recorder.log" ] && reached=yes
+    if [ "$want" -eq 86 ]; then
+      { [ "$rc" -eq 86 ] && [ "$reached" = no ]; } || bad="$bad
+  expected refusal:     $label (rc=$rc reached=$reached)"
+    else
+      { [ "$rc" -eq 0 ] && [ "$reached" = yes ]; } || bad="$bad
+  expected pass-through: $label (rc=$rc reached=$reached)"
+    fi
+  }
+  # The bug itself: an unknown VALUE-taking option's value used to become
+  # the guessed verb, hiding the real `kill-server` right after it.
+  _tg_expect1 86 "-X val kill-server (was rc 0)"    -X val kill-server
+  # -S is a KNOWN global option and still bypasses normally — an unknown
+  # option elsewhere in the call must not shadow that documented escape.
+  _tg_expect1 0  "-S sock kill-server (-S bypass)"  -S "$TEST_HOME/some.sock" kill-server
+  # -L is KNOWN (takes a value); -V is a KNOWN no-value option. Neither is
+  # "unknown", and no forbidden verb ever appears.
+  _tg_expect1 0  "-L name -V"                        -L somename -V
+  # -q is unrecognised, but nothing forbidden follows it: fail closed means
+  # refusing kill-server/kill-session, not banning options this shim does
+  # not know.
+  _tg_expect1 0  "-q -V (unknown flag, no forbidden verb)" -q -V
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "shim: an unrecognised global option before the verb names itself in the refusal message (P3-新1)" {
+  local sock="$TEST_HOME/unknown-opt-msg.sock"
+  run env TMUX="$sock,1,0" bash "$(SHIM)" -X val kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"-X"* ]] || { echo "message doesn't name the unknown option: $output"; false; }
+  [[ "$output" == *"kill-server"* ]] || { echo "message doesn't name the verb: $output"; false; }
+  [[ "$output" == *"$sock"* ]] || { echo "message doesn't name the socket: $output"; false; }
+}
