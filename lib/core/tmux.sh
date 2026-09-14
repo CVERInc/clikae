@@ -668,7 +668,14 @@ tmux_status_fuelv() {
     fresh=1; suffix=""
     if [ -n "$ca" ]; then
       age=$(( now - ca ))
-      [ "$age" -lt 0 ] && age=0   # a future cached_at is not "old" — floor it, don't invent a countdown
+      # P3-4 (2026-09-14 round-2 review): a future cached_at renders as a
+      # reading taken now — bare percentages, no suffix, never a negative or
+      # huge age. Decided, not defaulted: #89's writer and this reader share
+      # one host clock, so a future stamp is skew on the order of seconds, and
+      # the percentages it carries are still the vendor's; the review's other
+      # option (untrusted, like an unparseable stamp) would blank a good
+      # reading for a clock step. tests/bats/tmux-status.bats pins it.
+      [ "$age" -lt 0 ] && age=0
       if [ "$age" -ge 86400 ]; then
         fresh=0
       elif [ "$age" -ge 3600 ] && declare -F _human_agev >/dev/null 2>&1; then

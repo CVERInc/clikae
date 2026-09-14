@@ -49,6 +49,10 @@ _human_agev() {
   local _hav_var="$1" _hav_mt="$2" _hav_now="${3:-}" _hav_d
   [ -n "$_hav_now" ] || _hav_now="$(date +%s 2>/dev/null || echo "$_hav_mt")"
   _hav_d=$(( _hav_now - _hav_mt ))
+  # P3-4 (2026-09-14 round-2 review): a stamp in the future is "just now" by
+  # decision, not by the accident of a negative number being < 60 — no
+  # formatter change below may turn clock skew into "-2h ago".
+  [ "$_hav_d" -lt 0 ] && _hav_d=0
   if   [ "$_hav_d" -lt 60 ];    then printf -v "$_hav_var" 'just now'
   elif [ "$_hav_d" -lt 3600 ];  then printf -v "$_hav_var" '%dm ago' "$(( _hav_d / 60 ))"
   elif [ "$_hav_d" -lt 86400 ]; then printf -v "$_hav_var" '%dh ago' "$(( _hav_d / 3600 ))"

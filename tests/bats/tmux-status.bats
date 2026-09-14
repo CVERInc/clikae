@@ -186,6 +186,25 @@ _dead_pid() { printf '2147483647'; }
   grep -q '_human_agev suffix' "$CLIKAE_TEST_ROOT/lib/core/tmux.sh" || { echo "the row no longer calls _human_agev"; false; }
 }
 
+# P3-4 (2026-09-14 round-2 review): a cached_at in the future renders as
+# "now" — the reading, no age suffix, nothing negative, nothing huge.
+@test "fuel: a cached_at in the future renders as a reading taken now" {
+  _src
+  local ahead
+  for ahead in 30 7200 90000; do
+    _usage_cache claude wrasse 42.0 65.0 "-$ahead"
+    run tmux_status_render claude wrasse '' '' 120
+    [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "+${ahead}s: $output"; false; }
+    [[ "$output" != *"ago"* ]] || { echo "+${ahead}s: $output"; false; }
+    [[ "$output" != *"-"[0-9]* ]] || { echo "+${ahead}s negative: $output"; false; }
+  done
+  local v now=1700000000
+  for ahead in 1 59 7200 90000 31536000; do
+    _human_agev v "$(( now + ahead ))" "$now"
+    [ "$v" = "just now" ] || { echo "_human_agev +${ahead}s: [$v]"; false; }
+  done
+}
+
 # P3-3 (same review): a corrupt cache must not blow the row's width budget.
 @test "fuel: percentages clamp to 100, a corrupt cache cannot blow the width budget" {
   _src
