@@ -96,6 +96,55 @@ dry_store_mark() {
 # dry_store_path's `printf` three lines up, and both are on the same screen.
 # dry_store_mark/_read/_clear/_epoch keep calling dry_store_path itself — none
 # of them are on a 5-second timer, so the fork there was never the problem.
+# _dry_stamp_okv <stamp> <now-epoch> -> 0 if this reader can DATE that stamp,
+# 1 if it cannot. The ONE place "readable" is defined, called by both readers
+# below so they cannot drift apart.
+#
+# 🔴 P2-2 (2026-09-14 round-3 review): round 2 wrote this rule as "NON-NUMERIC
+# => expired", which is not the same thing as "unreadable => expired", and the
+# gap was exactly the case round 2's own comment named first. A truncated or
+# doubled write is usually STILL DIGITS: one extra digit on a 2026 stamp is the
+# year 2537, `age` is hugely negative, neither ageing arm below fires, and the
+# marker is `fresh` -- forever. Measured on 25a35ff: an 11-digit stamp, a stamp
+# one hour in the future and a stamp ten years in the future each pinned `!1` on
+# every session's status row and a dry dot on the board, permanently. And this
+# is not decoration: dry_store_read runs the same parse, so burn's real "this
+# tank is dry" verdict would route around that tank forever, and nothing would
+# ever clean it up (only `expired` is removed; `fresh` is not).
+#
+# Three conditions, all necessary:
+#
+#   all digits         the shape dry_store_mark writes (`date +%s`).
+#   9 to 11 digits     a second-epoch has been 10 digits since 2001 and stays
+#                      10 until 2286; 9 admits a pre-2001 clock, 11 admits a
+#                      badly-set one. Anything outside that is not a length a
+#                      `date +%s` ever produced -- it is a truncated or doubled
+#                      write. (`0`, what dry_store_mark writes when `date`
+#                      itself failed, is one digit, so it is covered here too.)
+#   at most 60s ahead  a stamp from the future is a clock that moved, not an
+#                      observation. 60s of slack because writer and reader share
+#                      one host clock, so real skew is seconds; an NTP step is
+#                      not. DECIDED, and deliberately the OPPOSITE of the
+#                      decision tmux_status_fuelv makes for `cached_at` (which
+#                      clamps a future stamp to "now" and shows the reading):
+#                      that field carries a VENDOR's number that is still good
+#                      when the clock jumps, while this one carries only the
+#                      clock itself, and a wrong one here pins a tank red and
+#                      diverts burn. When the evidence IS the timestamp, an
+#                      untrustworthy timestamp is no evidence.
+#
+# Unreadable is `expired`, never `fresh` or `stale`: expired is the one verdict
+# whose every caller fails safe -- dry_store_read removes the file and reports
+# NOT dry, so burn keeps using the tank and the row goes quiet.
+_dry_stamp_okv() {
+  local stamp="$1" now="$2"
+  case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
+  case "${#stamp}" in 9|10|11) ;; *) return 1 ;; esac
+  # 10#: a zero-padded stamp is not octal (`08` would be an error).
+  [ $(( 10#$stamp - now )) -le 60 ] || return 1
+  return 0
+}
+
 # shellcheck disable=SC2034  # _DRY_PEEK / _DRY_PEEK_RESET are output slots, read
 # by lib/core/tmux.sh's status-line composer, which shellcheck analyses as a
 # separate file. Same shape as tmux.sh's CLIKAE_TMUX_SESS_EXISTS.
@@ -118,18 +167,20 @@ dry_store_peekv() {
   stamp="${line%%$'\t'*}"
   _DRY_PEEK_RESET="${line#*$'\t'}"
   [ "$_DRY_PEEK_RESET" = "$line" ] && _DRY_PEEK_RESET=""   # no TAB in the line → no phrase
-  # 🔴 P2-4 (2026-09-14 round-2 review): an unreadable stamp used to become 0,
-  # and both ageing arms below required `stamp > 0`, so it fell through to
-  # `fresh` — FOREVER. Measured: a non-numeric stamp, an empty one, a line
-  # with no TAB at all each pinned `!1` on every tmux session's status row
-  # (and a dry dot on the board) until someone deleted the file by hand. A
-  # truncated write, an interrupted `mv`, a future writer's format: any one of
-  # them was a permanent red. A stamp this reader cannot date cannot be judged
-  # fresh, so it is `expired` — the same "present but unreadable ⇒ untrusted"
-  # rule tmux_status_fuelv applies to `cached_at`. 0 is included: it is what
-  # dry_store_mark writes when `date` itself failed, i.e. no time at all.
-  case "$stamp" in ''|*[!0-9]*|0) _DRY_PEEK=expired; return 0 ;; esac
+  # 🔴 P2-4 (2026-09-14 round-2 review), completed by P2-2 (round-3): an
+  # unreadable stamp used to become 0, and both ageing arms below required
+  # `stamp > 0`, so it fell through to `fresh` — FOREVER. Measured: a
+  # non-numeric stamp, an empty one, a line with no TAB at all each pinned `!1`
+  # on every tmux session's status row (and a dry dot on the board) until
+  # someone deleted the file by hand. A truncated write, an interrupted `mv`, a
+  # future writer's format: any one of them was a permanent red. A stamp this
+  # reader cannot date cannot be judged fresh, so it is `expired` — the same
+  # "present but unreadable ⇒ untrusted" rule tmux_status_fuelv applies to
+  # `cached_at`. What counts as readable is _dry_stamp_okv above, and it is a
+  # SHAPE test plus a clock test, not just "is it a number": round 2 shipped
+  # only the second half.
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
+  _dry_stamp_okv "$stamp" "$now" || { _DRY_PEEK=expired; return 0; }
   age=$(( now - 10#$stamp ))   # 10#: a zero-padded stamp is not octal (`08` would be an error)
   if [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
     _DRY_PEEK=expired
@@ -173,12 +224,19 @@ dry_store_clear() {
 # dry_store_epoch <engine> <tank> -> echo the epoch this marker was recorded, or
 # return 1 if there's no usable marker. Feeds dry_seen_suffix for the board annotation.
 dry_store_epoch() {
-  local f line stamp; f="$(dry_store_path "$1" "$2")"
+  local f line stamp now; f="$(dry_store_path "$1" "$2")"
   [ -f "$f" ] || return 1
   line=""
   IFS= read -r line < "$f" 2>/dev/null || [ -n "$line" ] || return 1   # P3-2: a last line with no `\n` still counts
   stamp="${line%%$'\t'*}"
-  case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
+  # P2-2 (round-3 review): the SAME readability rule dry_store_peekv uses —
+  # this reader used to accept `0` and any number of digits, including a
+  # timestamp from the year 2537. Its callers fail safe on a refusal
+  # (lib/core/limit.sh clears the marker, lib/commands/home.sh drops the
+  # annotation), so refusing is the right direction here too. Not on the
+  # 5-second status path, so one `date` fork is affordable.
+  now="$(date +%s 2>/dev/null || echo 0)"
+  _dry_stamp_okv "$stamp" "$now" || return 1
   printf '%s' "$stamp"
 }
 

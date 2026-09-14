@@ -410,6 +410,75 @@ _dead_pid() { printf '2147483647'; }
   [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "padded: rc=$status $output"; false; }
 }
 
+# P2-2 (2026-09-14 round-3 review): round 2 implemented "unreadable => expired"
+# as "NON-NUMERIC => expired", and a truncated or doubled write is usually
+# still digits. An 11-digit stamp dates to the year 2537; `age` is hugely
+# negative; neither ageing arm fires; the marker is `fresh` FOREVER, on the row,
+# on the board, and in burn's real dry verdict. The rule is now a shape test and
+# a clock test (lib/core/dry_store.sh's _dry_stamp_okv), and this is its table.
+@test "alerts: a dry stamp that is digits but not a date is expired, not fresh forever" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  local now stamp
+  now="$(date +%s)"
+  # stamp | what it is
+  for stamp in \
+    "${now}7"           `# one extra digit — a doubled/truncated write, year 2537` \
+    "$(( now + 7200 ))" `# two hours in the future — a clock that stepped` \
+    "$(( now + 315360000 ))" `# ten years in the future` \
+    "${now}${now}"      `# the stamp written twice (20 digits)` \
+    "12345678"          `# eight digits — not a length date +%s ever produced` \
+    "0"                 `# what dry_store_mark writes when date itself failed` \
+    ; do
+    printf '%s\tresets 3pm\n' "$stamp" > "$CLIKAE_HOME/dry/codex/goby"
+    dry_store_peekv codex goby "$now" || { echo "[$stamp] peek rc!=0"; false; }
+    [ "$_DRY_PEEK" = expired ] || { echo "[$stamp] peek=$_DRY_PEEK"; false; }
+    run tmux_status_render claude wrasse '' '' 120
+    [[ "$output" != *"!"* ]] || { echo "[$stamp] counted red: $output"; false; }
+  done
+
+  # A NEGATIVE stamp is not a number this reader takes either (the `-` fails the
+  # digit test before the clock test ever runs).
+  printf -- '-100\tresets 3pm\n' > "$CLIKAE_HOME/dry/codex/goby"
+  dry_store_peekv codex goby "$now" || { echo "negative: peek rc!=0"; false; }
+  [ "$_DRY_PEEK" = expired ] || { echo "negative: peek=$_DRY_PEEK"; false; }
+
+  # …and the boundary in the other direction: 30 seconds ahead is skew on one
+  # host clock, which is READABLE and still fresh. The slack is 60s.
+  printf '%s\tresets 3pm\n' "$(( now + 30 ))" > "$CLIKAE_HOME/dry/codex/goby"
+  dry_store_peekv codex goby "$now" || { echo "+30s: peek rc!=0"; false; }
+  [ "$_DRY_PEEK" = fresh ] || { echo "+30s: peek=$_DRY_PEEK"; false; }
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "+30s: $output"; false; }
+}
+
+# The same rule, through the readers that are NOT decoration: dry_store_read is
+# what `clikae burn` asks before it decides a tank is dry, and dry_store_epoch
+# feeds the board's "seen HH:MM" annotation. An unreadable stamp must never
+# keep a tank marked dry — and only `expired` gets the file removed, so a
+# stamp that stayed `fresh` was one nothing would ever clean up.
+@test "dry: an unreadable stamp never keeps a tank dry, and the marker is removed" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  local marker now; marker="$CLIKAE_HOME/dry/codex/goby"; now="$(date +%s)"
+
+  printf '%s7\tresets 3pm\n' "$now" > "$marker"
+  run dry_store_read codex goby
+  [ "$status" -eq 1 ] || { echo "burn was told the tank is dry: rc=$status $output"; false; }
+  [ ! -f "$marker" ] || { echo "the unreadable marker survived the read"; false; }
+
+  printf '%s7\tresets 3pm\n' "$now" > "$marker"
+  run dry_store_epoch codex goby
+  [ "$status" -eq 1 ] || { echo "epoch accepted a year-2537 stamp: $output"; false; }
+
+  # The control, same two readers: a real stamp is still dry, with its phrase.
+  printf '%s\tresets 3pm\n' "$now" > "$marker"
+  run dry_store_read codex goby
+  [ "$status" -eq 0 ] && [ "$output" = "resets 3pm" ] || { echo "control: rc=$status [$output]"; false; }
+  run dry_store_epoch codex goby
+  [ "$status" -eq 0 ] && [ "$output" = "$now" ] || { echo "control epoch: rc=$status [$output]"; false; }
+}
+
 # P3-2 (2026-09-14 round-2 review): dry_store_peekv kept `read ... || return 1`
 # after round 1 fixed the same shape in tmux.sh — a marker with no trailing
 # newline returned 1 and was silently not counted (the under-report direction).
