@@ -443,6 +443,62 @@ EOF
   tmux -S "$sock" kill-server 2>/dev/null || true
 }
 
+# ── P2-B: a target is a VALUE, not a flag (review round 3) ─────────────────
+# `-t ''` used to count as "named" just because `-t` was there. Measured on a
+# real throwaway server: tmux, handed an empty target, picks a session itself
+# — it killed the OTHER of two sessions, and the whole server when only one
+# existed. `tmux kill-session -t "$SESS"` with `$SESS` unset is this argv.
+
+@test "shim: kill-session -t '' (empty target) is refused (rc 86) and BOTH sessions survive" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/empty-target.sock"
+  tmux -S "$sock" new-session -d -s cur 'sleep 60'
+  tmux -S "$sock" new-session -d -s other 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" kill-session -t ''
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  tmux -S "$sock" kill-server 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "server did not survive: $output"; false; }
+  [ "$output" = "$(printf 'cur\nother')" ] || { echo "surviving sessions: $output"; false; }
+}
+
+@test "shim: every 'no target' spelling of kill-session is refused, every named one passes (no real tmux needed)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  local bad=""
+  _tg_expect() { # _tg_expect <86|0> <label> args...
+    local want="$1" label="$2"; shift 2
+    rm -f "$TEST_HOME/recorder.log"
+    local rc=0
+    env TMUX="$TEST_HOME/fake,1,0" PATH="$p" "$bash_bin" "$(SHIM)" "$@" >/dev/null 2>&1 || rc=$?
+    local reached=no; [ -e "$TEST_HOME/recorder.log" ] && reached=yes
+    if [ "$want" -eq 86 ]; then
+      { [ "$rc" -eq 86 ] && [ "$reached" = no ]; } || bad="$bad
+  expected refusal:     $label (rc=$rc reached=$reached)"
+    else
+      { [ "$rc" -eq 0 ] && [ "$reached" = yes ]; } || bad="$bad
+  expected pass-through: $label (rc=$rc reached=$reached)"
+    fi
+  }
+  _tg_expect 86 "-t ''"                kill-session -t ''
+  _tg_expect 86 '-t ""'                kill-session -t ""
+  _tg_expect 86 "-t (last token)"      kill-session -t
+  _tg_expect 86 "-t="                  kill-session -t=
+  _tg_expect 86 "-t ="                 kill-session -t =
+  _tg_expect 86 "-t '' ; ls"           kill-session -t '' ';' ls
+  _tg_expect 86 "-t ; ls"              kill-session -t ';' ls
+  _tg_expect 86 "-t; ls (glued)"       kill-session '-t;' ls
+  _tg_expect 86 "ls ; kill-session -t" ls ';' kill-session -t
+  _tg_expect 86 "-a -t ''"             kill-session -a -t ''
+  _tg_expect 0  "-t cur"               kill-session -t cur
+  _tg_expect 0  "-tcur"                kill-session -tcur
+  _tg_expect 0  "-t=cur"               kill-session -t=cur
+  _tg_expect 0  "-t =cur"              kill-session -t =cur
+  _tg_expect 0  "-t 'cur;' ls"         kill-session -t 'cur;' ls
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
 # ── P2-2: the REFUSAL decision needs no real tmux at all (review round 1) ──
 # lib/shims/tmux checks argv + $TMUX and can exit 86 before ever resolving a
 # real tmux, so these run identically whether or not tmux is installed —

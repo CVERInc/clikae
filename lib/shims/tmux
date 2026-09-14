@@ -37,7 +37,8 @@
 # actually inherited:
 #
 #   kill-server   with no -S and no -L   — would kill the socket named in $TMUX
-#   kill-session  with no -t             — would kill the CURRENT session on it
+#   kill-session  with no named -t       — would kill the CURRENT session on it
+#                 (an empty -t names nothing: tmux then picks a session itself)
 #
 # A human at a plain shell has no $TMUX, so nothing here ever refuses them —
 # this only fires for a process that is already INSIDE a tmux session, which
@@ -99,12 +100,25 @@ if [ -n "${TMUX:-}" ]; then
   # a semicolon that was ITS OWN token. `"$@" ";"` below appends one final,
   # synthetic, always-standalone `;` so the LAST segment closes the same way
   # every earlier one does — no separate close-out pass needed after the loop.
+  #
+  # 🔴 A TARGET IS A VALUE, NOT A FLAG (P2-B, clikae#97 review round 3).
+  # `-t|-t*` used to mark the segment as targeted just for being there, so
+  # `kill-session -t ''` passed — and tmux, handed an empty target, picks a
+  # session itself: measured killing the OTHER session of two, and the whole
+  # server when only one existed. That is exactly the argv a script produces
+  # from `tmux kill-session -t "$SESS"` with `$SESS` unset. Only a non-empty
+  # value counts now: `-t ''`, `-t ""`, `-t` as the last token of its
+  # segment, `-t=` and a bare `=` (tmux's exact-match prefix with no name
+  # after it) all read as "no target". `_want_tval` makes the token AFTER a
+  # bare `-t` its value even when that token is empty — the empty-token skip
+  # below would otherwise never see it.
   _global_phase=1
   _skip_next=0
   _has_sock=0
   _seg_verb=""
   _seg_has_target=0
   _seg_has_a=0
+  _want_tval=0
   for _a in "$@" ";"; do
     if [ "$_skip_next" -eq 1 ]; then
       _skip_next=0
@@ -118,7 +132,15 @@ if [ -n "${TMUX:-}" ]; then
       *\;) _tok="${_tok%;}"; _seg_end=1 ;;
     esac
 
-    if [ -n "$_tok" ]; then
+    if [ "$_want_tval" -eq 1 ]; then
+      # This token is the value of the `-t` just before it, whatever it
+      # looks like (tmux's own getopt takes it the same way).
+      _want_tval=0
+      case "$_tok" in
+        ""|=) : ;;
+        *)    _seg_has_target=1 ;;
+      esac
+    elif [ -n "$_tok" ]; then
       if [ -n "$_seg_verb" ]; then
         # This segment's verb is already known — everything else here is
         # that command's own flags/args. Only -t/-a matter to the refusal.
@@ -127,7 +149,9 @@ if [ -n "${TMUX:-}" ]; then
         # getopts-style cluster — a bare `-a)` pattern only ever matched -a
         # on its own.
         case "$_tok" in
-          -t|-t*)        _seg_has_target=1 ;;
+          -t)            _want_tval=1 ;;
+          -t=)           : ;;
+          -t*)           _seg_has_target=1 ;;
           -a|-aC|-Ca)    _seg_has_a=1 ;;
         esac
       elif [ "$_global_phase" -eq 1 ]; then
@@ -176,9 +200,9 @@ if [ -n "${TMUX:-}" ]; then
           "$_seg_verb"*)
             if [ "$_seg_has_target" -eq 0 ]; then
               if [ "$_seg_has_a" -eq 1 ]; then
-                printf 'tmux-guard: refusing `tmux %s` — with no -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+                printf 'tmux-guard: refusing `tmux %s` — with no named -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
               else
-                printf 'tmux-guard: refusing `tmux %s` — with no -t this kills the CURRENT session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
+                printf 'tmux-guard: refusing `tmux %s` — with no named -t this kills a session tmux picks on %s (the CURRENT one; an empty -t names nothing). Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
               fi
               exit 86
             fi
@@ -191,6 +215,7 @@ if [ -n "${TMUX:-}" ]; then
       _seg_verb=""
       _seg_has_target=0
       _seg_has_a=0
+      _want_tval=0
     fi
   done
 fi

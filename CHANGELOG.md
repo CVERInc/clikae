@@ -107,6 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads the last `PATH=` token instead of the first and no longer aborts
   the whole report under `set -eo pipefail` on an ordinary race.
 
+  Review round 3: an empty `-t` no longer counts as naming a session —
+  `kill-session -t ''` (what `-t "$SESS"` becomes with `$SESS` unset) let
+  tmux pick a session itself and killed the other one, or the whole server
+  when only one existed; it is now refused like a bare `kill-session`.
+
 ## [0.29.0] — 2026-09-11
 
 ### Added
