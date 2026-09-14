@@ -411,6 +411,24 @@ _dead_pid() { printf '2147483647'; }
   [ "$status" -eq 1 ] || { echo "empty file: rc=$status"; false; }
 }
 
+# P3-3 (2026-09-14 round-2 review): the marker enumeration defaulted an unset
+# CLIKAE_HOME to $HOME/.clikae, dry_store_peekv used it bare — so every marker
+# the loop found, the peek could not open, and nothing was counted (unbound
+# under set -u).
+@test "alerts: with CLIKAE_HOME unset, the markers the row finds are the markers it reads" {
+  _src
+  mkdir -p "$HOME/.clikae/dry/codex"
+  printf '%s\tresets 3pm\n' "$(date +%s)" > "$HOME/.clikae/dry/codex/goby"
+  run env -u CLIKAE_HOME bash -uc '
+    . "$1/lib/core/dry_store.sh"; . "$1/lib/core/burn_status.sh"
+    . "$1/lib/core/duration.sh"; . "$1/lib/core/tmux.sh"
+    tmux_status_render codex goby "" "" 120' _ "$CLIKAE_TEST_ROOT"
+  [ "$status" -eq 0 ] || { echo "rc=$status: $output"; false; }
+  [[ "$output" == *"!1"* ]] || { echo "not counted: $output"; false; }
+  [[ "$output" == *"○"* ]] || { echo "fuel did not see it dry: $output"; false; }
+  [[ "$output" != *"unbound"* ]] || { echo "$output"; false; }
+}
+
 @test "alerts: they add up across both sources" {
   _src
   _dry_marker codex goby

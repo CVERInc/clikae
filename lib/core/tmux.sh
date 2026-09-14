@@ -849,6 +849,10 @@ tmux_status_alertsv() {
 # round-2 review — see the body).
 tmux_status_render() {
   local engine="$1" tank="$2" sid="$3" host="$4" width="$5"
+  # P3-3 (2026-09-14 round-2 review): ONE state directory for the whole row,
+  # resolved once, seen by every reader below through bash's dynamic scope —
+  # not a default spelled separately in each of them.
+  local CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}"
   case "$width" in ''|*[!0-9]*) width=80 ;; esac
   # A session id reaches here from a tmux user option, which a human can set by
   # hand. Anything that is not a plain id is not one.

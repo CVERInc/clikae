@@ -102,7 +102,11 @@ dry_store_mark() {
 dry_store_peekv() {
   local engine="$1" tank="$2" now="${3:-}" f line stamp age
   _DRY_PEEK=none; _DRY_PEEK_RESET=""
-  f="$CLIKAE_HOME/dry/$engine/$tank"   # dry_store_path's own body, inlined — see above
+  # dry_store_path's own body, inlined — see above. P3-3 (2026-09-14 round-2
+  # review): with the SAME default tmux_status_alertsv enumerates markers
+  # with; a bare `$CLIKAE_HOME` here meant an unset CLIKAE_HOME found every
+  # marker in the enumeration and opened none of them (unbound under set -u).
+  f="${CLIKAE_HOME:-$HOME/.clikae}/dry/$engine/$tank"
   [ -f "$f" ] || return 1
   # P3-2 (2026-09-14 round-2 review): `read` returns non-zero on a last line
   # with no trailing newline even though it filled `line`, and this used to
