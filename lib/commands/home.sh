@@ -191,8 +191,10 @@ EOF
         fi
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
-        # has no recap, so the expand is always visible.
-        age="$(_human_age "$mt")"
+        # has no recap, so the expand is always visible. Guarded like tmux.sh's
+        # call (P3-5, 2026-09-14 round-2 review): _human_age lives in
+        # lib/core/duration.sh, and 20+ test files source this file without it.
+        age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$mt")"
         # Is this session on the tank you're currently using? (● vs ○). Packed into
         # the active field as "<flag> <age>" so the draw has both.
         aflag="0"; _act="$(_home_active_for "$engine" 2>/dev/null || true)"
@@ -498,7 +500,8 @@ EOF
     fi
     [ "$mark" -eq 1 ] && title="${title}"$'\001'
 
-    age="$(_human_age "$created" 2>/dev/null || true)"
+    age=""   # P3-5: same declare -F guard as the Continue rows above
+    declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$created" 2>/dev/null || true)"
     # A waiter's countdown rides in its window name, so this costs one call and
     # keeps no state. Empty unless one is actually counting.
     wake_left="$(live_wake_note "$name" 2>/dev/null || true)"
