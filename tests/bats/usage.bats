@@ -765,6 +765,41 @@ STUB
   echo "$output" | jq -e '.source == "transcript" and .window_pct == 10'
 }
 
+@test "P2-2 (codex security review, round-5): rescanning a 3-day-old rollout must not renew its ranking eligibility" {
+  # _USAGE_CACHE_PEEK_MAX_AGE_SEC (900s) is meant to bound how OLD evidence
+  # can be and still rank a tank. Before this fix, usage_cache_peek measured
+  # that age off `scanned_at` — "when something last read this file" — which
+  # for a codex transcript reading is unrelated to how old the underlying
+  # quota EVENT actually is. A rollout can be rescanned (by `clikae usage`,
+  # by burn's own refreshes) indefinitely without any new evidence ever
+  # arriving from the vendor, and each rescan renewed the ceiling. Reproduces
+  # the review's exact shape: an event 3 days old, both percentages at 100,
+  # both resets already in the past.
+  clikae init codex old
+  mkdir -p "$CLIKAE_HOME/profiles/codex/old/sessions/2026/09/10"
+  local three_days_ago
+  three_days_ago="$(date -u -v-3d +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%S.000Z)"
+  local reset_past=$(( $(date +%s) - 3600 ))   # 1 hour ago, well in the past
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{"limit_id":"codex","primary":{"used_percent":100,"window_minutes":300,"resets_at":%s},"secondary":{"used_percent":100,"window_minutes":10080,"resets_at":%s}}}}\n' \
+    "$three_days_ago" "$reset_past" "$reset_past" \
+    > "$CLIKAE_HOME/profiles/codex/old/sessions/2026/09/10/rollout-usage.jsonl"
+  # A fresh scan honestly reports the old reading it found — this is `clikae
+  # usage`'s job, not usage_cache_peek's; it must keep telling the truth
+  # about what the transcript says, stale or not.
+  run clikae usage codex old --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "transcript" and .window_pct == 100 and .weekly_pct == 100'
+  # But burn's ranking must not trust it: cached_at (the EVENT's own 3-day-
+  # old timestamp) is what the age ceiling measures now, not scanned_at (the
+  # rescan that just happened). This candidate must read as unknown — never
+  # as 0% (the old reset-passed branch's answer) and never as 100%.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/usage.sh"
+  run usage_cache_peek codex old
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
 @test "P3-12: norm_stamp handles a +09:00 offset, not only +00:00" {
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/usage.sh"

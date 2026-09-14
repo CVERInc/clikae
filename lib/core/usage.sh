@@ -134,22 +134,35 @@ _USAGE_NORM_STAMP_JQ='
   def expired: if . == null then false else ((try norm_stamp catch ($now+1)) <= $now) end;
 '
 
-# P2 (round-4 review): how old a reading can be and still be trusted for
-# burn's ranking, named once and used at usage_cache_peek's one call site
-# below. Age is (a plain cache peek's only clock) `scanned_at` — "when
-# usage_read last actually looked" (see the (a)/(b)/`scanned_at` vs
-# `cached_at` note above), never `cached_at` alone: a codex transcript
-# reading's `cached_at` is deliberately the EVENT's own old timestamp
-# (P2-4, round-1 review) even when it was scanned moments ago, and ranking
-# by that would make almost every codex candidate "unknown". 15 minutes is
-# a small fraction of the 5-hour window burn ranks against (P2-3's "the
-# 5-hour clock a burn starting now actually runs against") — long enough
-# that a tank refreshed by a recent `clikae usage`, burn's own run-end
-# refresh (a), or a reroute's Pass 4 candidate refresh (b, lib/commands/
-# burn.sh's `_burn_next_same_engine`) still counts, short enough that the
-# reset-instant-passed branch below can't be
-# won by a reading old enough to predate the reset it's claiming to know
-# about.
+# P2 (round-4 review), corrected P2-2 (codex security review, round-5): how
+# old a reading can be and still be trusted for burn's ranking, named once
+# and used at usage_cache_peek's one call site below. Age is `cached_at` —
+# the EVIDENCE's own timestamp, never `scanned_at` (round-4's original
+# choice): `scanned_at` is "when usage_read last actually LOOKED", which for
+# a vendor reading coincides with `cached_at` but for a codex transcript
+# reading does not — a rollout's `cached_at` is deliberately the underlying
+# EVENT's own old timestamp (P2-4, round-1 review), while `scanned_at` is
+# whenever something last re-read that same unchanged rollout off disk.
+# Ranking by `scanned_at` let a THREE-DAY-OLD rollout stay ranking-eligible
+# forever, just by being rescanned — no new evidence from the vendor, only a
+# fresh look at old evidence, renewing a claim that should have expired. That
+# reproduced exactly: a synthetic 3-day-old rollout with both percentages at
+# 100 and both resets already past kept scoring an eligible reading (and,
+# combined with the reset-passed branch below, one that read as a
+# suspiciously perfect 0% used) after every rescan. Ranking by `cached_at`
+# instead means a codex candidate this stale correctly falls out of
+# eligibility (empty output, "unknown") regardless of how recently anything
+# rescanned it — the trade the round-4 comment warned about (codex
+# candidates going unknown more often) is the point, not a regression: an
+# unrefreshed reading's trustworthiness is about how old the FACT is, not how
+# recently something looked at the file that holds it. 15 minutes is a small
+# fraction of the 5-hour window burn ranks against (P2-3's "the 5-hour clock
+# a burn starting now actually runs against") — long enough that a tank
+# refreshed by a recent `clikae usage`, burn's own run-end refresh (a), or a
+# reroute's Pass 4 candidate refresh (b, lib/commands/burn.sh's
+# `_burn_next_same_engine`) still counts, short enough that the
+# reset-instant-passed branch below can't be won by a reading old enough to
+# predate the reset it's claiming to know about.
 _USAGE_CACHE_PEEK_MAX_AGE_SEC=${_USAGE_CACHE_PEEK_MAX_AGE_SEC:-900}
 
 # Cache-only peek: never calls the vendor, never forks the adapter, never
@@ -179,8 +192,8 @@ usage_cache_peek() {
   jq -er --argjson now "$now" --argjson max_age "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript") |
     select(.window_pct != null and .weekly_pct != null) |
-    ((.scanned_at // .cached_at)) as $scanned |
-    select($scanned != null and $scanned <= $now and ($now - $scanned) <= $max_age) |
+    (.cached_at) as $evidence |
+    select($evidence != null and $evidence <= $now and ($now - $evidence) <= $max_age) |
     (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
     (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
     [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
