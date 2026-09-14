@@ -615,6 +615,68 @@ STUB
   [ "$wall" -le 20 ]
 }
 
+@test "P3-4 (round-5 review): a stale-but-evidenced candidate is verified before confident fresh ones, and P3-3 stops early on a verified 0%" {
+  # Reproduces the review's exact board shape: alpha's on-disk 5% is 30
+  # minutes old (past the 15-minute ceiling — usage_cache_peek reads it as
+  # unknown), while bravo/charlie/delta all have confident FRESH readings
+  # (60s old). Before this fix, confident tier 0 always outranked ANY tier 1
+  # candidate for Pass 4's refresh budget, so alpha — despite the board
+  # itself still showing its stale percentage — never got a single vendor
+  # call, no matter how good its true headroom actually was (measured on
+  # 9da32cd-shaped code: alpha's real value, 1%, the emptiest of all four,
+  # went undiscovered). After the fix, alpha (stale-but-evidenced) is
+  # refreshed FIRST, revealing its true 1% — and P3-3's early-stop then fires
+  # the moment a later refresh confirms bravo can't beat it: the fixture
+  # gives bravo/charlie/delta unchanged real values, so calls stop at 3, the
+  # same total the review measured, but spent on the right three tanks.
+  clikae init claude alpha; clikae init claude bravo
+  clikae init claude charlie; clikae init claude delta
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage alpha 1; live_usage bravo 55; live_usage charlie 58; live_usage delta 59
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local now; now="$(date +%s)"
+  local alpha_at=$(( now - 1800 ))   # 30 minutes ago — past the ceiling
+  local fresh_at=$(( now - 60 ))     # 60 seconds ago — well inside it
+  jq -cn --argjson at "$alpha_at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/alpha.json"
+  jq -cn --argjson at "$fresh_at" \
+    '{window_pct:55,weekly_pct:55,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/bravo.json"
+  jq -cn --argjson at "$fresh_at" \
+    '{window_pct:58,weekly_pct:58,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/charlie.json"
+  jq -cn --argjson at "$fresh_at" \
+    '{window_pct:59,weekly_pct:59,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/delta.json"
+  # Sanity: alpha really does read as unknown pre-refresh (past the ceiling).
+  run usage_cache_peek claude alpha
+  [ "$status" -ne 0 ]
+  export USAGE_CALLS="$TEST_HOME/calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+tok="$(printf '%s' "$config" | sed -n 's/.*Bearer \([^"]*\)".*/\1/p')"
+line="$(awk -v t="$tok" '$1==t{print; exit}' "$CLIKAE_TEST_PCTMAP" 2>/dev/null)"
+if [ -z "$line" ]; then echo '{"error":"unauthorized"}'; exit 22; fi
+read -r _ window weekly <<< "$line"
+printf '{"five_hour":{"utilization":%s,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":%s,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}\n' "$window" "$weekly"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = alpha ]
+  [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" -eq 3 ]
+}
+
 @test "P2-3: real vendor reset-instant shape expires correctly (negative control proves the old guard failed open)" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

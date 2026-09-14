@@ -186,6 +186,26 @@ usage_cache_peek() {
     [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
 }
 
+# P3-4 (round-5 review): does a candidate have ANY on-disk numeric reading at
+# all, ignoring `_USAGE_CACHE_PEEK_MAX_AGE_SEC` entirely — used ONLY to decide
+# burn's Pass-4 refresh PRIORITY (lib/commands/burn.sh's `_burn_next_same_
+# engine`), never for ranking. Before this existed, a candidate whose only
+# on-disk reading was older than the ceiling was indistinguishable, at
+# refresh-priority time, from a candidate with NO reading at all — both
+# collapsed to the same "unknown" bucket and lost the budget race to any
+# candidate with a merely FRESH confident number, even when that stale
+# reading (a tank the board itself still shows a percentage for, aged) was
+# plausibly the actual best headroom in the fleet. This never returns a
+# NUMBER (see usage_cache_peek for that, ceiling-bounded and reset-aware) —
+# only whether refreshing this candidate is worth doing ahead of a blank one.
+usage_cache_has_reading() {
+  local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
+  [ -f "$cache" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -e '(.source == "vendor" or .source == "transcript") and .window_pct != null and .weekly_pct != null' \
+    "$cache" >/dev/null 2>&1
+}
+
 # Board reads, up to 24h old (P2-1(c) above): never does network I/O during a
 # redraw (cache-only, same file usage_cache_peek reads), but unlike
 # usage_cached_fields below does NOT stop returning a reading once it is

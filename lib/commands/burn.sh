@@ -455,7 +455,7 @@ _burn_next_same_engine() {
   # here"). Rank first (Pass 3, on-disk readings only); the live budget is
   # spent AFTER that ranking exists, only on candidates it says could win —
   # see Pass 4 below.
-  local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=()
+  local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=() c_stale=()
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -485,12 +485,16 @@ _burn_next_same_engine() {
       continue
     fi
     [ -n "$fallback" ] || fallback="$t"
-    local up="" uw="" peak="" fields
+    local up="" uw="" peak="" fields stale=0
     if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
       IFS=$'\t' read -r up uw peak <<< "$fields"
       up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
     fi
-    c_tank+=("$t"); c_acct+=("$tacct"); c_up+=("$up"); c_uw+=("$uw"); c_peak+=("$peak")
+    # P3-4 (round-5 review): a reading too old for usage_cache_peek's ceiling
+    # is still worth spending Pass 4's budget on SOONER than a candidate with
+    # no on-disk reading at all — see usage_cache_has_reading's own header.
+    declare -F usage_cache_has_reading >/dev/null && usage_cache_has_reading "$cli" "$t" && stale=1
+    c_tank+=("$t"); c_acct+=("$tacct"); c_up+=("$up"); c_uw+=("$uw"); c_peak+=("$peak"); c_stale+=("$stale")
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
@@ -511,16 +515,18 @@ EOF
     [ -n "${c_acct[i]}" ] || continue
     case "$seen" in *$'\n'"${c_acct[i]}"$'\n'*) continue ;; esac
     seen="$seen${c_acct[i]}"$'\n'
-    local first=-1 wu="" ww=""
+    local first=-1 wu="" ww="" hasstale=0
     for (( j = 0; j < n; j++ )); do
       [ "${c_acct[j]}" = "${c_acct[i]}" ] || continue
       [ "$first" -ge 0 ] || first=$j
       if [ "$j" != "$first" ]; then c_skip[j]=1; fi
+      [ "${c_stale[j]}" = 1 ] && hasstale=1
       [ -n "${c_up[j]}" ] || continue
       { [ -n "$wu" ] && [ "${c_up[j]}" -le "$wu" ]; } || wu="${c_up[j]}"
       { [ -n "$ww" ] && [ "${c_uw[j]}" -le "$ww" ]; } || ww="${c_uw[j]}"
     done
     c_up[first]="$wu"; c_uw[first]="$ww"
+    c_stale[first]="$hasstale"
     if [ -n "$wu" ]; then
       c_peak[first]="$wu"; [ "$ww" -le "$wu" ] || c_peak[first]="$ww"
     else
@@ -557,21 +563,41 @@ EOF
   # same-account sibling was already collapsed to one candidate in Pass 2
   # (c_skip), so this can never spend two calls on one account — one refresh
   # per account, reusing that one reading.
+  #
+  # P3-4 (round-5 review): tier 0 (confident, FRESH) always outranked tier 1
+  # (unknown) here, with no distinction WITHIN tier 1 between "never
+  # scanned" and "on-disk reading too old for usage_cache_peek's ceiling" —
+  # so a candidate the board itself still shows a percentage for (aged past
+  # 15 minutes) could sit behind cap-many confident tier-0 candidates
+  # forever, never verified and never selectable, no matter how good its
+  # true headroom actually was. Priority for THIS pass only (never Pass 5's
+  # final ranking) now has 4 levels instead of 3: a stale-but-evidenced tier
+  # 1 candidate (`c_stale`) goes FIRST — it is the one case where refreshing
+  # could reveal a genuinely better tank that confident tier 0 already
+  # accounts for — then confident tier 0, then a blank (never-scanned) tier
+  # 1, then tier 2 last (already known bad, least worth spending on).
   local -a c_picked=()
   for (( i = 0; i < n; i++ )); do c_picked[i]=0; done
-  local calls=0 pick pick_tier pick_up pick_uw
+  local calls=0 pick pick_prio pick_up pick_uw
   while [ "$calls" -lt "$_BURN_REROUTE_REFRESH_CAP" ]; do
-    pick=-1; pick_tier=9; pick_up=999999; pick_uw=999999
+    pick=-1; pick_prio=9; pick_up=999999; pick_uw=999999
     for (( i = 0; i < n; i++ )); do
       [ "${c_skip[i]}" = 0 ] || continue
       [ "${c_picked[i]}" = 0 ] || continue
-      local tier up uw
+      local tier up uw prio
       tier="${c_tier0[i]}"
-      if [ "$tier" = 1 ]; then up=0; uw=0; else up="${c_up[i]}"; uw="${c_uw[i]}"; fi
-      if [ "$tier" -lt "$pick_tier" ] ||
-         { [ "$tier" -eq "$pick_tier" ] && { [ "$up" -lt "$pick_up" ] ||
+      if [ "$tier" = 1 ]; then
+        up=0; uw=0
+        if [ "${c_stale[i]:-0}" = 1 ]; then prio=0; else prio=2; fi
+      elif [ "$tier" = 0 ]; then
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=1
+      else
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=3
+      fi
+      if [ "$prio" -lt "$pick_prio" ] ||
+         { [ "$prio" -eq "$pick_prio" ] && { [ "$up" -lt "$pick_up" ] ||
            { [ "$up" -eq "$pick_up" ] && [ "$uw" -lt "$pick_uw" ]; }; }; }; then
-        pick=$i; pick_tier=$tier; pick_up=$up; pick_uw=$uw
+        pick=$i; pick_prio=$prio; pick_up=$up; pick_uw=$uw
       fi
     done
     [ "$pick" -ge 0 ] || break
@@ -583,6 +609,11 @@ EOF
       IFS=$'\t' read -r up uw peak <<< "$fields"
       up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
       c_up[pick]="$up"; c_uw[pick]="$uw"; c_peak[pick]="$peak"
+      # P3-3 (round-5 review): a VERIFIED 0% window is the absolute floor —
+      # nothing left in this pool can beat it, so stop spending the refresh
+      # budget rather than always burning all _BURN_REROUTE_REFRESH_CAP
+      # calls even after the winner is already provably unbeatable.
+      [ "$peak" = 0 ] && break
     else
       # The refresh this call just spent was PROOF this candidate isn't
       # readable right now (usage_read already overwrote its cache with
