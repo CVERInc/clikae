@@ -366,11 +366,11 @@ EOF
   # measured, so the only counter the new pane can hold is the server's.
   local out="$TEST_HOME/newwin-pane.out"
   env -u _CLIKAE_TMUX_SHIM_HOPS "$real_tmux" new-window -d -t '=newwinprobe97:' \
-    "bash -c 'echo \"inherited=\${_CLIKAE_TMUX_SHIM_HOPS-<unset>}\" > $out; tmux -V >> $out 2>&1; echo done >> $out; sleep 30'"
+    "bash -c 'echo \"inherited=\${_CLIKAE_TMUX_SHIM_HOPS-<unset>}\" > $out; tmux -V >> $out 2>&1; echo PANE-FINISHED >> $out; sleep 30'"
   local i=0
-  while ! grep -qx done "$out" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  while ! grep -qx PANE-FINISHED "$out" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   tmux kill-session -t '=newwinprobe97' 2>/dev/null || true
-  grep -qx done "$out" || { echo "the new-window pane never finished: $(cat "$out" 2>/dev/null)"; false; }
+  grep -qx PANE-FINISHED "$out" || { echo "the new-window pane never finished: $(cat "$out" 2>/dev/null)"; false; }
   # Premise: that pane really did inherit a counter from the server, so the
   # assertion below is about ignoring it, not about it never being there.
   ! grep -qx 'inherited=<unset>' "$out" || { echo "premise broken: pane inherited no counter: $(cat "$out")"; false; }
