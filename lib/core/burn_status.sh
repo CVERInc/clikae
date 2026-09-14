@@ -10,9 +10,9 @@
 #
 # Purpose-built, not a general JSON parser: the only JSON these functions ever
 # read is the flat, single-line object _burn_status_write itself produces (no
-# nesting except the `rerouted_from` array, no field value ever contains a
-# literal `"`), so a small grep/sed extractor is honest here where it would be
-# a trap on arbitrary JSON.
+# nesting except the `rerouted_from` array; a `"` inside a value is always
+# json_str's escaped `\"` — see burn_status_fieldv), so a small extractor is
+# honest here where it would be a trap on arbitrary JSON.
 
 # burn_status_field <json> <field> -> the RAW JSON-encoded value for <field>
 # (a quoted string, `null`, `true`/`false`, a bare number, or a `[...]`
@@ -66,28 +66,39 @@ burn_status_field() {
 # case: 1,338 B → 1 ms, 8,338 B → 1 ms, 64,338 B → 2-3 ms, 1,000,338 B →
 # 32-34 ms — linear.
 #
-# Three alternatives, tried in the order that resolves ties the way the old
-# reader did (see below): a quoted string (re-quoted like the old reader),
-# the `rerouted_from` array (bracket-delimited, first `]` — same "no nesting"
-# assumption the header above already makes), or a bare token cut at the
-# next `,` or `}` (null/true/false/number). POSIX ERE alternation is
-# leftmost-LONGEST, not first-alternative-wins — but for every shape this
-# reader is ever asked to read, the bare alternative's `[^,}]*` matches
-# exactly the same span as the quoted alternative would (the value's own
-# closing quote is immediately followed by the field-terminating `,`/`}`, so
-# there is nothing after it for `[^,}]*` to keep consuming), so the two
-# alternatives tie and the earlier one in the pattern — quoted — wins,
-# matching the old reader's own re-quoting. Verified field-by-field against
-# every one of `_burn_status_write`'s 16 fields, real values: SAME.
+# Three alternatives: a JSON string (quotes kept), the `rerouted_from` array
+# (bracket-delimited, first `]` — the "no nesting" assumption the header
+# makes), or a bare token cut at the next `,` or `}` (null/true/false/number).
+#
+# 🔴 P3-1 (2026-09-14 round-2 review): this comment used to say the bare and
+# quoted alternatives always matched the same span, so the earlier one won.
+# Both halves were wrong. POSIX ERE alternation is leftmost-LONGEST: with a
+# `,` or `}` inside a string the quoted alternative is longer and wins on
+# length, not order; and the quoted alternative was `"[^"]*"`, which stops at
+# an ESCAPED quote, so with `\"` inside a string the BARE one was longer.
+# `{"reason":"say \"hi\", ok"}` read `"say \"hi\"` here and `"say \"` in the
+# pre-83946cb reader: two different truncations, neither the value. The header
+# note that no value contains a `"` was false too — json_str (lib/core/json.sh)
+# escapes one as `\"`, and `reason` is engine stderr. The string alternative is
+# now JSON's own: `"` then any run of non-quote-non-backslash bytes or a
+# backslash pair, then `"`. On writer output that string ends at its real
+# closing quote, which is immediately followed by `,`/`}`, so the bare
+# alternative can never be longer than it and the whole encoded value is
+# returned — exactly what json_str wrote (tests/bats/burn-status.bats compares
+# against json_str, not against another reader). A `"field":` inside a string
+# can never match either: every `"` json_str emits inside a value is preceded
+# by `\`. The pattern lives in a variable because a literal backslash inside
+# `[[ =~ ]]` is quoted differently across bash versions; a variable is not.
 #
 # The `"` and `:` around the name are load-bearing and are why a prefix cannot
 # be confused with a longer name: asking for `artifact` cannot match
 # `"artifact_bytes":`.
 # shellcheck disable=SC2034  # _BSF is an output slot, read by lib/core/tmux.sh.
 burn_status_fieldv() {
-  local json="$1" field="$2"
+  local json="$1" field="$2" re
   _BSF=""
-  [[ $json =~ \"$field\":(\"[^\"]*\"|\[[^]]*\]|[^,}]*) ]] && _BSF="${BASH_REMATCH[1]}"
+  re='"'"$field"'":("([^"\\]|\\.)*"|\[[^]]*\]|[^,}]*)'
+  [[ $json =~ $re ]] && _BSF="${BASH_REMATCH[1]}"
   return 0
 }
 

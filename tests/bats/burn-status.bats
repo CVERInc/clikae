@@ -167,6 +167,31 @@ STUB
   done
 }
 
+# P3-1 (2026-09-14 round-2 review): `reason` is engine stderr, json_str escapes
+# a `"` in it as `\"`, and the reader's string alternative stopped at that
+# escaped quote — `say "hi", ok` came back as `"say \"hi\"`. The expectation
+# here is the WRITER's own encoding, not a second reader.
+@test "burn-status: burn_status_fieldv returns a string field exactly as json_str wrote it" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local s enc json
+  for s in 'say "hi", ok' 'a}b' 'ends in \' 'x\"y' 'q"state":"LIE"' 'tab	and
+newline' 'plain'; do
+    enc="$(json_str "$s")"
+    json="{\"ok\":false,\"artifact\":\"/x\",\"artifact_bytes\":null,\"reason\":$enc,\"rerouted_from\":[\"codex/T1\"],\"state\":\"fail\",\"pid\":42}"
+    burn_status_fieldv "$json" reason
+    [ "$_BSF" = "$enc" ] || { echo "[$s]: got [$_BSF], writer wrote [$enc]"; false; }
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "[$s]: state [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = 42 ] || { echo "[$s]: pid [$_BSF]"; false; }
+    burn_status_fieldv "$json" rerouted_from
+    [ "$_BSF" = '["codex/T1"]' ] || { echo "[$s]: rerouted_from [$_BSF]"; false; }
+  done
+}
+
 @test "burn-status: every burn writes a status file even without --json" {
   # #41 is "every burn", not "every --json burn" — the whole point is that a
   # cockpit reading a DIFFERENT process never needs the burn to have opted in.
