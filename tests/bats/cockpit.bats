@@ -431,6 +431,57 @@ _wait_for_file() {
   [[ "$output" == *"stale settings lock"* ]] || false
 }
 
+# #63 round-6 P3-3: --off is defined (P1-3) as the operator's last-resort
+# escape hatch — it must never stay blocked. Before this fix it took the
+# exact same lock as a role move (test above) and refused identically to a
+# crashed transition's stale lock, exactly like a LIVE holder does — the
+# one command meant to recover from a crash did nothing when a crash was
+# the reason it was needed. A move onto a NAMED tank still refuses on a
+# stale lock unchanged (see the test above, which this must NOT break);
+# only --off auto-breaks a lock whose pid is confirmably dead.
+@test "--off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)" {
+  clikae init claude A
+  clikae cockpit claude A
+  local dead; dead="$(sh -c 'echo $$')"
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  printf '%s\n' "$dead" > "$CLIKAE_HOME/state/settings.lock/pid"
+  run clikae cockpit --off
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"breaking a stale settings lock"* ]] || false
+  [[ "$output" == *"cockpit: off"* ]] || false
+  [ ! -d "$CLIKAE_HOME/state/settings.lock" ]
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+}
+
+@test "--off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)" {
+  clikae init claude A
+  clikae cockpit claude A
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  printf '%s\n' "$$" > "$CLIKAE_HOME/state/settings.lock/pid"   # this live test process
+  CLIKAE_SETTINGS_LOCK_WAIT_S=1 run clikae cockpit --off
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"in progress"* ]] || false
+  [[ "$output" != *"breaking a stale settings lock"* ]] || false
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  rm -rf "$CLIKAE_HOME/state/settings.lock"
+}
+
+# #63 round-6 P3-3: a SIGKILL between _cockpit_state_write's mktemp and mv
+# leaves a `.cockpit.XXXXXX` scratch file in state/ forever — harmless, but
+# nothing ever swept it. The next successful state write now does.
+@test "a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)" {
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  : > "$CLIKAE_HOME/state/.cockpit.deadbeef"   # left behind by a hypothetical earlier crash
+  run clikae cockpit claude B
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/B" ]
+  local strays; strays="$(find "$CLIKAE_HOME/state" -maxdepth 1 -name '.cockpit.*' 2>/dev/null)"
+  [ -z "$strays" ]
+}
+
 @test "moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)" {
   # codex review repro: with A armed, replace B's directory with a symlink
   # to A. On f20a603 the move returned 0, state became claude/B, and the

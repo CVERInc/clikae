@@ -1,18 +1,31 @@
 # shellcheck shell=bash
 
-# _settings_lock_acquire -> take the ONE lock that serializes a cockpit role
-# transition (lib/commands/cockpit.sh: move, repair, --off) and a `settings
-# apply` write: a `mkdir` in $CLIKAE_HOME/state (atomic on every filesystem,
-# bash 3.2, no flock on macOS). Waits up to CLIKAE_SETTINGS_LOCK_WAIT_S
-# seconds (default 20), then refuses. Never breaks a lock on its own: a holder
-# whose pid is gone is named, with the exact removal command, because a
-# crashed transition is also the moment to look at `clikae doctor` first.
+# _settings_lock_acquire [break_stale] -> take the ONE lock that serializes a
+# cockpit role transition (lib/commands/cockpit.sh: move, repair, --off) and
+# a `settings apply` write: a `mkdir` in $CLIKAE_HOME/state (atomic on every
+# filesystem, bash 3.2, no flock on macOS). Waits up to
+# CLIKAE_SETTINGS_LOCK_WAIT_S seconds (default 20), then refuses. By default
+# never breaks a lock on its own: a holder whose pid is gone is named, with
+# the exact removal command, because a crashed transition is also the moment
+# to look at `clikae doctor` first.
 #
 # #63 round-5 P2-4: without it, two moves interleaved — A→B wrote state=B and
 # paused; B→A installed A, wrote state=A, removed B; A→B resumed and removed
 # A. Both returned 0 and neither tank was guarded. A `settings apply` holding
 # a snapshot taken before an install could likewise write the guard away.
+#
+# #63 round-6 P3-3: `break_stale=1` (used ONLY by `clikae cockpit --off`) is
+# the one exception to "never breaks a lock on its own" above. `--off` is
+# defined (P1-3) as the operator's last-resort escape hatch that must never
+# stay blocked — but a transition that crashed holding this lock did exactly
+# that: doctor named the stale lock, yet the one command meant to recover
+# from it refused with the same "in progress" message a LIVE holder gets.
+# With break_stale=1, a lock whose pid is confirmably dead is removed and
+# re-taken instead of refused; a lock still held by a LIVE pid still waits
+# and still refuses (round-5's mutual exclusion is unchanged) — only the
+# crash case, which is unambiguous (kill -0 says so), is auto-recovered.
 _settings_lock_acquire() {
+  local break_stale="${1:-0}"
   local d="$CLIKAE_HOME/state" lock pid tries=0 max="${CLIKAE_SETTINGS_LOCK_WAIT_S:-20}"
   case "$max" in ''|*[!0-9]*) max=20 ;; esac
   lock="$d/settings.lock"
@@ -21,6 +34,12 @@ _settings_lock_acquire() {
   while ! mkdir "$lock" 2>/dev/null; do
     pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      if [ "$break_stale" = 1 ]; then
+        log_warn "cockpit: breaking a stale settings lock $lock (pid $pid is not running) — --off is the last-resort escape hatch (#63 round-6 P3-3) and must not stay blocked by a transition that crashed holding it. Run \`clikae doctor\` afterward to see what it left guarded."
+        rm -rf "$lock" 2>/dev/null
+        pid=""
+        continue
+      fi
       log_err "A clikae cockpit/settings change died holding $lock (pid $pid is not running). Nothing was changed. Check clikae doctor, then remove the lock: rm -rf '$lock'"
       return 1
     fi
@@ -279,7 +298,15 @@ HELP
   # caller's (clikae init runs this too). Read-only modes take no lock.
   (
     if [ "$mode" = apply ]; then
-      _settings_lock_acquire || exit 1
+      # #63 round-6 P3-3: exit 4 (not 1) specifically when the LOCK itself
+      # is unavailable — distinct from every other failure below, which
+      # stays rc=1. `clikae init claude <tank>` (lib/commands/init.sh)
+      # already treats rc 2/3 (no template for this engine / jq missing) as
+      # a value-add it can live without; it now treats 4 the same way, with
+      # a WARN naming the lock, instead of returning 1 AFTER the tank it
+      # just created — one crashed transition's stale lock should not make
+      # a brand-new tank look like it failed to be created.
+      _settings_lock_acquire 0 || exit 4   # never break_stale here — see cockpit.sh's _cockpit_locked
       trap '_settings_lock_release' EXIT
       trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
     fi

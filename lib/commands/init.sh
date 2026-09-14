@@ -85,6 +85,13 @@ EOF
       cmd_settings apply claude "$profile" || _settings_rc=$?
       case "$_settings_rc" in
         0|2|3) ;;
+        # #63 round-6 P3-3: rc 4 means the settings lock itself was
+        # unavailable (held, or stale from a crashed cockpit/settings
+        # transition) — the tank above is already created either way, so
+        # this is the same "value-add, not a precondition" case as 2/3,
+        # just WARNed instead of silently swallowed, since the operator
+        # needs to know the template never got a chance to apply and why.
+        4) log_warn "Tank created, but the permissions template could not be applied: the settings lock ($CLIKAE_HOME/state/settings.lock) is held by another change or was left behind by one that crashed. Run \`clikae doctor\`, then \`clikae settings apply claude $profile\` once it clears." ;;
         *) return 1 ;;
       esac
       [ "$_settings_rc" -ne 0 ] || log_info "Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip."

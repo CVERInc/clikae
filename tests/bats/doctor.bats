@@ -334,6 +334,21 @@ EOF
   [[ "$output" == *"no cockpit is recorded: claude/aaa"* ]] || false
 }
 
+@test "doctor reports a settings lock dir with no pid file (#63 r6 P3-3)" {
+  # A crash between the lock's `mkdir` and its pid-file write (settings.sh's
+  # _settings_lock_acquire) leaves a lock dir with nothing inside it. The
+  # existing stale-lock check requires a NON-EMPTY dead pid to speak up —
+  # `[ -n "$lock_pid" ] && ! kill -0 …` — so this shape went unreported and
+  # every waiting command silently timed out with "pid unknown".
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"settings lock"* ]] || false
+  [[ "$output" == *"no pid file"* ]] || false
+  [[ "$output" == *"$CLIKAE_HOME/state/settings.lock"* ]] || false
+  rm -rf "$CLIKAE_HOME/state/settings.lock"
+}
+
 @test "doctor's cockpit check changes nothing on disk (read-only)" {
   clikae init claude aaa
   clikae cockpit claude aaa

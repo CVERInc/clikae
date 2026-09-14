@@ -256,6 +256,14 @@ _doctor_cockpit() {
     lock_pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
     if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
       printf '  %-16s %s\n' "cockpit" "stale settings lock $lock (pid $lock_pid is not running) — a cockpit/settings change died mid-way; check the lines below, then: rm -rf '$lock'"
+    elif [ -z "$lock_pid" ]; then
+      # #63 round-6 P3-3: a crash between the `mkdir` and the pid-file write
+      # leaves a lock dir with no pid file at all — the check above requires
+      # a NON-EMPTY dead pid to speak up, so this shape went unreported:
+      # every waiting command silently timed out (CLIKAE_SETTINGS_LOCK_WAIT_S,
+      # default 20s) and said "in progress (pid unknown)" with no hint doctor
+      # already knew something was wrong.
+      printf '  %-16s %s\n' "cockpit" "settings lock $lock has no pid file — a cockpit/settings change likely died between taking the lock and recording its pid; every waiting command times out until it clears. If nothing is actually mid-transition: rm -rf '$lock'"
     fi
   fi
   local cur; cur="$(_cockpit_state_read)"
