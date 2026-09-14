@@ -69,7 +69,7 @@
   ⚠️ **量的時候 server 必須還活著**：`exit-empty` 讓 server 隨最後一個 session 消失，而對死掉的 server 問選項會**默默起一顆新的**、回答 tmux 的預設值——長得跟 bug 一模一樣，不管 bug 在不在。
   互動模式時使用 `tmux attach -t "clikae-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
 
-- **每 session（非全域）的 clikae 選項清冊**：`status-left` / `status-left-length`（`tmux_label`，視窗徽章）之外，2026-09 起新增 `@clikae_session_id`（`tmux_set_session_id`，`lib/core/tmux.sh`）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，`live_session_id`（`lib/core/live.sh`）讀回。與上面的全域選項不同，它是單一 session 作用域、`set-option -t "=$session:"`，不會漏到同一 server 的其他 session；但同樣只在 `tmux_spawn_session` 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 `~/.clikae/state/<session>.session_id` 鏡像檔。
+- **每 session（非全域）的 clikae 選項清冊**：`status-left` / `status-left-length` / `status-right` / `status-right-length` / `status-interval` / `status-justify` / `status-format`（全部在 `tmux_status_line`，2026-09 #77 之前只有前兩個、且在 `tmux_label`；見 Rule 10）之外，2026-09 起新增 `@clikae_session_id`（`tmux_set_session_id`，`lib/core/tmux.sh`）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，`live_session_id`（`lib/core/live.sh`）讀回。與上面的全域選項不同，它是單一 session 作用域、`set-option -t "=$session:"`，不會漏到同一 server 的其他 session；但同樣只在 `tmux_spawn_session` 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 `~/.clikae/state/<session>.session_id` 鏡像檔。
 
 - **`base-index` 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0**：2026-09 起 `live_engine_alive`（`lib/core/live.sh`）需要問「這個 session 的引擎視窗還在不在」，一度用 `tmux list-windows -F '#{window_index}'` 比對字面 `0`——跟這條規則本身講的道理正是同一件事（`history-limit` 那個收據）：`tmux_spawn_session` 沒有設 `base-index` 不代表它是 0，代表它繼承使用者 `~/.tmux.conf` 裡設的任何值，而 `set -g base-index 1` 是很常見的一行。在 `base-index 1` 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗**名稱**：是否存在一個不是 `wake` 守望者（`^wake( |$)`，`wake_attach_watcher` 開的那個）的視窗——與 `tmux_sess_has_engine`（`lib/core/tmux.sh`）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。
 
@@ -416,3 +416,94 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   真正改不了的是**已經在跑的 session**：那個引擎的環境在它啟動時就固定了，attach 回去不會刷新——那正是 Rule 4（SSH socket 用穩定 symlink）存在的理由，也是 `roam.bats` 那句註解在講的情況。兩者不是同一件事，把它們混為一談就會像我一樣去修一個不存在的 bug。
 
   所以剩下的差異只是**「傳什麼」**：burn 傳整份（無人值守需要人類當時的 key／proxy），switch 傳 3 個（其餘由 client 環境自然帶過去）。這是刻意的，不是漂移。
+
+### Rule 10: 狀態列說的是「回來的指令」與「需要注意的事」(The Status Row, #77)
+
+- **症狀**：每個 session 最下面那一行，從 v0.21 到 2026-09 一直是
+  `[claude/hello] 0:claude* 1:wake … "✳ [ KITT ] tending th" 20:06 12-Sep-26`。
+  它是產品裡**最持久可見的一個字串**（整個 session 都在螢幕上），而操作者每三十秒
+  真正想知道的三件事——「怎麼回到這裡」「還剩多少油」「有沒有東西紅了」——一件都
+  沒回答。視窗清單把 clikae 自己開的 `wake` 守望者當成使用者開的視窗露出來；標題被
+  tmux 截到 20 欄；日期在你盯著它的時候不會變。
+- **收據**（2026-09-14，tmux 3.4，拋棄式 socket `-S "$(mktemp -d)/sock"`）：
+  ```
+  # 1. #{} 在 #() 裡會被展開（這是整個設計的前提，不是假設）
+  $ tmux set-option -t '=probe:' status-left \
+        "#(bash probe.sh W=#{client_width} SID=#{@clikae_session_id} N=#{session_name})"
+  $ # 117 欄的 client attach 之後，probe.sh 收到：
+  args=[W=117 SID=a52bdc12-dead-beef-0000-111122223333 N=probe]
+
+  # 2. 單引號包起來的空引數不會消失（引數數量才是對的）
+  status-left "#(bash probe.sh 'a b' '' 'c' '#{client_width}')"   -> count=4
+
+  # 3. 視窗清單要靠 status-format[0]，正反兩邊都量過
+  設了 status-format[0] 的那一列： LEFTSEG-…                （沒有視窗清單）
+  沒設的同一個 session：          LEFTSEG 0:sleep* 1:wake   （視窗清單在）
+
+  # 4. helper 的成本（20 次，開發機 reefbox）
+  real 0m0.284s  ->  14.2 ms / 次，預算是 30 ms
+  ```
+- **規範**：
+  1. **這一列只在一個地方組出來**：`lib/core/tmux.sh` 的 `tmux_status_render`
+     （內容）與 `tmux_status_line`（唯一寫 `status-left`／`status-right`／
+     `status-interval`／`status-justify`／`status-format` 的地方）。`tmux_label`
+     從此只負責視窗名稱，狀態列交給上面那個函式。
+  2. **`#()` 那一端不做任何判斷**：`lib/core/status_line.sh` 只負責把
+     `$HOME`／`$CLIKAE_HOME` 放到位、問 tmux 這個 session 在跑哪一份逐字稿
+     （`live_session_id`）、然後呼叫 `tmux_status_render`。tmux 沒辦法自己重算一個
+     shell 值，所以會變的東西（油量、警示、client 寬度）一定要走 `#()`；但**會變的
+     只有值，不是規則**。
+  3. **🔴 這條路上不准有 vendor、不准有網路、不准有 `jq`、不准有 `clikae` 自己。**
+     tmux 每 5 秒、每個 attach 的 client 各跑一次，而且是在 tmux server 裡跑——一個
+     會打網路的狀態列會永遠每五秒打一次，失敗了也沒有人看得到。油量只讀 #72 的快取
+     檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
+     `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
+     樁，並斷言它們的 tripwire 檔沒有出現。
+  4. **🔴 這條路上也不准「寫」。** `dry_store_read` 順手刪掉過期標記對「問一次」的
+     呼叫者是對的，對一個每五秒問一次的狀態列則會讓「這個標記什麼時候消失的」變成
+     「剛好有沒有人在看狀態列」的函數。所以狀態列走 `dry_store_peekv`（唯讀孿生，
+     同一條新鮮度規則），收垃圾留給真的在問的人。量過：把稽核範圍放大到整個
+     `$HOME` 會紅，紅在 tmux 自己會建立 socket 目錄——那是 tmux 的家務事，不是
+     clikae 的狀態。
+  5. **警示 `!N` 只數已經存在的狀態，而且 N=0 時整段不畫**：
+     `$CLIKAE_HOME/dry/<engine>/<tank>`（live catcher 寫的乾涸標記，
+     新鮮度由 dry_store 自己的 TTL 決定），加上
+     `$HOME/.clikae/logs/burn-*/status.json` 裡還寫著 `running`／`waiting-reset`
+     但 pid 已經不在的那些（#41 對「沒走到終局、也就是沒有產物的 lane」的定義）。
+     走到 `fail` 的**不算**：它當時已經對著跑它的人印過理由了，而這一列是為「還沒有
+     人被告知」的事存在的。
+     🔴 **CI 紅燈沒有被數進去，這是缺口不是決定**：issue #77 把它列為第三個來源，
+     而這個 repo 唯一的 Stop hook（`scripts/harness-stop-hook.sh`）只把報告閘門的
+     BLOCKED/ALLOWED 記進 `state/harness-hook.log`，從來沒有記過 CI 的判決。要數它
+     得先發明那個狀態，那是另一個改動。
+  6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
+     （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
+     `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是
+     board 的字彙（`docs/DESIGN-board-fuel-dots.md`）。
+  7. **寬度規則：會讓步的是 `ssh <host> -t ` 前綴，而且是整段拿掉不是截斷。**
+     提案指定會截斷的那一段（session 標題）在同一串討論裡被第三次修正拿掉了，剩下
+     唯一長度不固定的東西就是別人的主機名。半個主機名不是任何人跑得起來的指令，而
+     `clikae resume a52bdc12` 在「你正在讀這一列的那台機器」上本來就完全正確。100 欄
+     以下拿掉前綴，其餘約 50 欄，永遠不截斷。
+  8. **左邊那一段要真的是一道可以貼上去的指令**：有逐字稿 id 就是
+     `clikae resume <8 碼>`（所以 `clikae resume` 必須接受唯一前綴——
+     `_resume_prefix_candidates`，同一次改動的另一半，模稜兩可就列出候選並拒絕）；
+     沒有 id（codex／antigravity 的裸啟動，見 `tmux_set_session_id`）就是
+     `clikae <engine> <tank>`，絕對不是裸的 `clikae resume`——那會開選單，不是回到
+     這裡。
+  9. **主機名在 clikae 自己的行程裡解，不在 helper 裡解**：`#()` 是 tmux **server**
+     的子行程，繼承的是當初啟動 server 的那個環境（可能是好幾天前的另一個 shell）。
+     `tmux_status_line` 跑在人類真正坐著的那個 shell 裡，所以那裡的
+     `$SSH_CONNECTION` 才真的代表「這次啟動是從 ssh 進來的」。這是證據不是證明，而
+     它往安全的方向偏：不知道主機名就顯示不帶前綴的指令，那在讀這一列的地方永遠是
+     對的。`$CLIKAE_HOST` 一律優先——一台機器自己叫自己的名字，常常不是外面解得到的
+     那個名字。
+  10. **不要用 `window-status-format ''` 來藏視窗清單。** 它是**視窗**選項：用
+      `-t "=$session:"` 只會打到那個 session 的**當前**視窗，於是稍後才被
+      `wake_attach_watcher` 開出來的 `wake` 視窗又會帶著預設值回來；改用 `-g` 則會
+      把整台 server 上每一個 session（包含人類自己開的）的視窗清單清掉。
+      `status-format[0]` 是 **session** 選項，換掉的是整列，視窗清單包含在內。
+  11. **沒有 fleet 那一段**（提案裡的 `reefbox x● hi● l○`）。同一串討論第三次修正
+      把它撤掉了：整支艦隊的逐槽油量住在 board（`clikae home`，#72 之後是真數字），
+      狀態列講的是**這一槽、這一個 session**。`tests/bats/tmux-status.bats` 有一條
+      測試守著這個「沒有」，所以哪天要加回來會是有人刻意做的決定。

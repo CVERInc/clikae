@@ -540,8 +540,337 @@ tmux_spawn_session() {
   return 0
 }
 
-# tmux_label <session> <engine> <tank> — make the status bar say where you are, in
-# clikae's own words.
+# ─────────────────────────────────────────────────────────────────────────────
+# THE STATUS LINE (#77). Composed HERE, in one function, and nowhere else.
+#
+# WHAT IT REPLACED, and why none of it was load-bearing. Until this, the bottom
+# row of every session read:
+#
+#   [claude/hello] 0:claude* 1:wake …  "✳ [ KITT ] tending th"  20:06 12-Sep-26
+#
+# — a label clikae set (`tmux_label`), tmux's own window list, tmux's truncated
+# pane title, and a clock with a date. It is the single most persistently
+# visible string in the product, on screen for the whole session, and it
+# answered none of the three questions the operator actually has every thirty
+# seconds: how do I get back here, how much fuel is left, is anything red.
+#
+#   the window list   surfaced clikae's OWN `wake` watcher as a window the human
+#                     never opened. What the watcher has to say ("this tank went
+#                     dry") now arrives as the alert count instead.
+#   the pane title    was truncated to 20 columns by tmux, and Claude Code
+#                     already draws the session's name in its own top border.
+#   the date          does not change while you are looking at it.
+#
+# THE LINE, left → right (issue #77, as corrected three times in its own thread
+# by chodaict on 2026-09-12 — the corrections are the spec, not the opening
+# proposal):
+#
+#   clikae resume a52bdc12 │ 5h 42% · 7d 65% │                          20:19
+#   clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2 │                     20:19
+#
+# 🔴 NO EMOJI, AND THE ALERT SEGMENT IS ABSENT AT ZERO. The proposal's `🔴N`
+# cannot be built: `scripts/signet-lint.sh` fails any printed emoji outside the
+# ❯ cursor, and this string is printed. It is `!N`, coloured red by tmux, and
+# it is not drawn at all when N is 0 — "a human does not need to see silence
+# spelled out; the line is for what needs attention".
+#
+# 🔴 NO FLEET SEGMENT. The proposal's `reefbox x● hi● l○` was withdrawn in the
+# same thread: per-tank fuel for the whole fleet belongs on the board
+# (`clikae home`), which #72 turns into real numbers, and the status line is
+# about THIS tank and THIS session. Nothing here enumerates tanks — the alert
+# count is the one host-wide thing that survived, because "is anything red" is
+# the question the row exists to answer.
+#
+# WHAT IT COSTS. tmux re-runs the `#()` helper every `status-interval` (5s) per
+# attached client, inside tmux's own server process. So this whole path is
+# FORK-FREE except where a fork is unavoidable (`date`, and the one command
+# substitution that enumerates burn run directories): the JSON is read with
+# burn_status_fieldv, the dry markers with dry_store_peekv, and nothing here
+# calls a vendor, `curl`, `jq`, or `clikae` itself. Measured cost is in
+# docs/DESIGN-tmux.md Rule 10.
+#
+# 🔴 AND IT NEVER WRITES. A status line that collected stale state would make
+# "when did this marker disappear" depend on whether anyone was looking at a
+# status bar — see dry_store_peekv's header for the read-only twin this needs.
+
+# tmux_status_fuelv <engine> <tank> [now] -> $_TSTAT_FUEL, this tank's fuel.
+#
+#   "5h 42% · 7d 65%"   from #72's usage CACHE, when it holds a reading
+#   "○" / "·"           the board's own dry / no-reading glyphs, when it does not
+#
+# 🔴 THE CACHE FILE, NEVER THE VENDOR. `state/usage/<engine>/<tank>.json` (#72,
+# PR #89) is written by `clikae usage` and by `burn` at run end. This reads
+# whatever is on disk and is structurally incapable of fetching: a status line
+# that could make a network call would make one every five seconds, per client,
+# forever — and it runs in tmux's server, where nobody would ever see it fail.
+# tests/bats/tmux-status.bats puts a loudly-failing `curl` on PATH to keep that
+# true.
+#
+# A reading older than 24h is treated as unread rather than shown as current —
+# the same ceiling docs/DESIGN-board-fuel-dots.md gives the board, and for the
+# same reason: a week-old percentage presented as now is worse than no number.
+# `cached_at` absent (an older cache shape) is not aged out; we cannot judge
+# what we cannot read.
+#
+# The fallback is the DRY MARKER, not the board's full transcript scan. The
+# board's dot costs ~4 ms of forks per call and is re-derived per redraw; this
+# row redraws on a timer whether or not anyone is asking. The marker is what
+# the live catchers (burn's stdout classifier, `_switch_supervise`) already
+# wrote the moment they saw a limit, so it is the same fact, read the cheap way
+# — and `·` honestly says "no reading" rather than inventing a green dot.
+tmux_status_fuelv() {
+  local engine="$1" tank="$2" now="${3:-}" f json line w k ca age
+  _TSTAT_FUEL=""
+  case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
+
+  f="${CLIKAE_HOME:-$HOME/.clikae}/state/usage/$engine/$tank.json"
+  if [ -f "$f" ] && declare -F burn_status_fieldv >/dev/null 2>&1; then
+    json=""
+    # No `cat`: the cache is one small object and `read` costs no process.
+    while IFS= read -r line; do json="$json$line"; done < "$f"
+    burn_status_fieldv "$json" window_pct; w="$_BSF"
+    burn_status_fieldv "$json" weekly_pct; k="$_BSF"
+    burn_status_fieldv "$json" cached_at;  ca="$_BSF"
+    # A vendor percentage arrives as 42 or 42.0; the board owns precision, this
+    # row owns width. Anything that is not a number at all (null, absent) fails
+    # this and falls through to the glyph.
+    w="${w%%.*}"; k="${k%%.*}"
+    case "$w" in ''|*[!0-9]*) w="" ;; esac
+    case "$k" in ''|*[!0-9]*) k="" ;; esac
+    case "$ca" in ''|*[!0-9]*) ca="" ;; esac
+    age=86401
+    [ -n "$ca" ] && age=$(( now - ca ))
+    if [ -n "$w" ] && [ -n "$k" ] && { [ -z "$ca" ] || [ "$age" -lt 86400 ]; }; then
+      _TSTAT_FUEL="5h $w% · 7d $k%"
+      return 0
+    fi
+  fi
+
+  _TSTAT_FUEL="·"
+  declare -F dry_store_peekv >/dev/null 2>&1 || return 0
+  if dry_store_peekv "$engine" "$tank" "$now" && [ "$_DRY_PEEK" = fresh ]; then
+    _TSTAT_FUEL="○"
+  fi
+  return 0
+}
+
+# tmux_status_alertsv [now] -> $_TSTAT_ALERTS, how many things on this host are
+# red right now. Zero is normal and means the segment is not drawn at all.
+#
+# 🔴 COUNTED FROM STATE THAT ALREADY EXISTS. Nothing here writes a new kind of
+# record, and nothing here is a judgement call this function invented:
+#
+#   a tank the live catchers marked dry   $CLIKAE_HOME/dry/<engine>/<tank>,
+#                                         freshness by dry_store's own TTL. This
+#                                         is the wake watcher's trigger — the
+#                                         watcher fires BECAUSE this file
+#                                         appeared — so it is issue #77's "wake
+#                                         watchers that fired", read from the
+#                                         durable half of that event rather than
+#                                         from a window name that vanishes with
+#                                         the session.
+#   a burn lane whose writer is gone      $HOME/.clikae/logs/burn-*/status.json
+#                                         still saying `running`/`waiting-reset`
+#                                         with a pid that no longer exists —
+#                                         #41's own definition of a lane that
+#                                         died without reaching a terminal state,
+#                                         i.e. without an artifact. A lane that
+#                                         reached `fail` is NOT counted: it
+#                                         printed its reason to whoever ran it.
+#                                         That is the difference between "died"
+#                                         and "failed", and only the first is
+#                                         news nobody has been told.
+#
+# 🔴 CI RED IS NOT COUNTED, and that is a gap, not a decision to leave
+# undocumented. Issue #77 lists "CI red seen by the Stop hook" as a third
+# source; this repo's only Stop hook (`scripts/harness-stop-hook.sh`) records
+# BLOCKED/ALLOWED report-gate verdicts to `state/harness-hook.log` and has never
+# recorded a CI verdict. Counting it would mean inventing the state first, which
+# is a different change; see docs/DESIGN-tmux.md Rule 10.
+#
+# `kill -0` alone, deliberately NOT burn_status.sh's _burn_pid_matches_marker:
+# that guard costs a `ps` per candidate and exists to stop a RECYCLED pid from
+# refusing a real burn forever. Here the two errors are not symmetric — a
+# recycled pid makes this UNDERCOUNT (we believe the lane is alive and stay
+# quiet), which is the safe direction for a row that must never cry wolf.
+tmux_status_alertsv() {
+  local now="${1:-}" n=0 f e t d s json line st pid
+  _TSTAT_ALERTS=0
+  case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
+
+  if declare -F dry_store_peekv >/dev/null 2>&1; then
+    for f in "${CLIKAE_HOME:-$HOME/.clikae}"/dry/*/*; do
+      [ -f "$f" ] || continue
+      t="${f##*/}"
+      e="${f%/*}"; e="${e##*/}"
+      dry_store_peekv "$e" "$t" "$now" || continue
+      [ "$_DRY_PEEK" = fresh ] && n=$((n + 1))
+    done
+  fi
+
+  if declare -F burn_status_dirs >/dev/null 2>&1 \
+     && declare -F burn_status_fieldv >/dev/null 2>&1; then
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      s="$d/status.json"
+      [ -f "$s" ] || continue
+      json=""
+      while IFS= read -r line; do json="$json$line"; done < "$s"
+      burn_status_fieldv "$json" state; st="$_BSF"
+      st="${st#\"}"; st="${st%\"}"
+      case "$st" in running|waiting-reset) ;; *) continue ;; esac
+      burn_status_fieldv "$json" pid; pid="$_BSF"
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      kill -0 "$pid" 2>/dev/null && continue     # still alive — not news
+      n=$((n + 1))
+    done <<EOF
+$(burn_status_dirs)
+EOF
+  fi
+
+  _TSTAT_ALERTS="$n"
+  return 0
+}
+
+# tmux_status_render <engine> <tank> <sid> <host> <width> -> the whole left side
+# of the row on stdout. Pure: every input is an argument or $CLIKAE_HOME/$HOME,
+# so tests/bats/tmux-status.bats renders it without a tmux server anywhere.
+#
+# THE RECONNECT COMMAND is the left segment because it is literally the string
+# you would type to get back here, and it is copy-pasteable:
+#
+#   a session with a known transcript id   `clikae resume <8 chars>` — the
+#                                          prefix, not the UUID, because
+#                                          `clikae resume` resolves a unique
+#                                          prefix (lib/commands/resume.sh) and
+#                                          36 characters would own the row.
+#   a session without one                  `clikae <engine> <tank>` — codex and
+#                                          antigravity bare launches record no
+#                                          sid (see tmux_set_session_id), and
+#                                          this is the exact command that
+#                                          reattaches that tank. Never a bare
+#                                          `clikae resume`, which would open a
+#                                          picker rather than come back HERE.
+#
+# 🔴 THE WIDTH RULE, and why it is the ssh prefix that gives. Issue #77 asks
+# that the row fit 120 columns and that exactly one segment truncate, below 100.
+# The segment the proposal named for that job — the session title — was removed
+# by the same thread's third correction, and what is left is fixed-width except
+# for one thing: `ssh <host> -t `, whose length is somebody's hostname. So that
+# is the segment that gives, and it gives by being DROPPED rather than cut: half
+# a hostname is not a command anyone can run, whereas `clikae resume a52bdc12`
+# alone is still exactly right on the host where the row is being read. Below
+# 100 columns the rest of the row is ~50 characters and never truncates at all.
+tmux_status_render() {
+  local engine="$1" tank="$2" sid="$3" host="$4" width="$5"
+  case "$width" in ''|*[!0-9]*) width=80 ;; esac
+  # A session id reaches here from a tmux user option, which a human can set by
+  # hand. Anything that is not a plain id is not one.
+  case "$sid" in *[!a-zA-Z0-9-]*) sid="" ;; esac
+  case "$host" in *[!a-zA-Z0-9._-]*) host="" ;; esac
+
+  local cmd
+  if [ -n "$sid" ]; then
+    cmd="clikae resume ${sid:0:8}"
+  else
+    cmd="clikae $engine $tank"
+  fi
+  if [ -n "$host" ] && [ "$width" -ge 100 ]; then
+    cmd="ssh $host -t $cmd"
+  fi
+
+  # The separator is dim so the segments read as segments and not as one
+  # sentence; the alert count is the only thing that gets a colour, because it
+  # is the only thing that is ever news.
+  local sep=" #[fg=colour244]│#[default] "
+  local out="$cmd"
+
+  # ONE `date` for the whole row, handed to both readers. They each know how to
+  # ask for their own if nobody tells them (a test calling one directly), but
+  # the row asks once: two forks per redraw, per client, every five seconds, is
+  # exactly the kind of cost that is invisible until it is not — and a row
+  # whose two halves disagreed about what "now" is would age one marker out and
+  # not the other.
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+
+  tmux_status_fuelv "$engine" "$tank" "$now"
+  [ -n "$_TSTAT_FUEL" ] && out="$out$sep$_TSTAT_FUEL"
+
+  tmux_status_alertsv "$now"
+  [ "$_TSTAT_ALERTS" -gt 0 ] && out="$out$sep#[fg=red]!$_TSTAT_ALERTS#[default]"
+
+  printf '%s ' "$out"
+}
+
+# tmux_status_line <session> <engine> <tank> — the ONE place clikae writes a
+# `status-*` option. Best-effort like everything else in this file: a tmux too
+# old for one of these leaves that part of the default bar, and a launch never
+# fails over cosmetics.
+#
+# 🔴 `status-format[0]`, not `window-status-format ''`, is how the window list
+# goes away. `window-status-format` is a WINDOW option: setting it through
+# `-t "=$session:"` reaches that session's CURRENT window only, so the `wake`
+# watcher's window — opened later, by wake_attach_watcher — would come back
+# carrying the default, and setting it `-g` instead would blank the window list
+# in every session on the server, including ones the human opened themselves.
+# `status-format[0]` is a SESSION option that replaces the entire row, window
+# list included. Measured on tmux 3.4 in both directions: with it set the drawn
+# row is `<left> … <clock>`, and with it unset the same session draws
+# `<left> 0:sleep* 1:wake`.
+#
+# 🔴 `#{client_width}` IS EXPANDED INSIDE `#()`. tmux expands the command as a
+# format before running it, so the helper is told the real width of the client
+# that is about to draw the row — which is the only place that number exists
+# (two clients of different sizes each get their own render). Every argument is
+# single-quoted in the command string so an empty one (no known host) stays an
+# empty ARGUMENT rather than disappearing. Measured on tmux 3.4: a four-argument
+# invocation with an empty second argument arrives as `count=4`.
+#
+# HOST IS RESOLVED HERE, not in the helper. `#()` runs as a child of the tmux
+# SERVER and inherits the server's environment — whoever started it, possibly
+# days ago. This function runs in clikae's own process, i.e. in the shell the
+# human is actually sitting in, so `$SSH_CONNECTION` here means "this launch
+# arrived over ssh". It is evidence, not proof, and it is asymmetric in the safe
+# direction: not knowing the host shows the plain command, which is correct
+# where the row is being read. `$CLIKAE_HOST` wins outright, because the name a
+# machine calls itself is often not the name that resolves from outside it.
+tmux_status_line() {
+  local session="$1" engine="$2" tank="$3" lib host cmd
+  command -v tmux >/dev/null 2>&1 || return 0
+  lib="${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  host="${CLIKAE_HOST:-}"
+  if [ -z "$host" ] && [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ]; then
+    host="$(uname -n 2>/dev/null || true)"
+    host="${host%%.*}"
+  fi
+  case "$host" in *[!a-zA-Z0-9._-]*) host="" ;; esac
+
+  cmd="bash $(_switch_shquote "$lib/core/status_line.sh")"
+  cmd="$cmd $(_switch_shquote "$HOME")"
+  cmd="$cmd $(_switch_shquote "${CLIKAE_HOME:-$HOME/.clikae}")"
+  cmd="$cmd $(_switch_shquote "$engine") $(_switch_shquote "$tank")"
+  cmd="$cmd $(_switch_shquote "$session") $(_switch_shquote "$host")"
+  cmd="$cmd '#{client_width}'"
+
+  tmux set-option -t "=$session:" status-interval 5 2>/dev/null || true
+  tmux set-option -t "=$session:" status-left-length 200 2>/dev/null || true
+  tmux set-option -t "=$session:" status-right-length 12 2>/dev/null || true
+  tmux set-option -t "=$session:" status-justify left 2>/dev/null || true
+  tmux set-option -t "=$session:" status-left "#($cmd)" 2>/dev/null || true
+  # The clock, and no date: a date does not change while you are looking at it.
+  tmux set-option -t "=$session:" status-right '%H:%M ' 2>/dev/null || true
+  tmux set-option -t "=$session:" 'status-format[0]' \
+    '#[align=left]#{T;=/#{status-left-length}:status-left}#[align=right]#{T;=/#{status-right-length}:status-right}' \
+    2>/dev/null || true
+  return 0
+}
+
+# tmux_label <session> <engine> <tank> — hand the row above to
+# tmux_status_line, and name the WINDOW in clikae's own words.
+#
+# The history below is about the status bar, which this function owned until
+# #77 moved it one function up. It is kept here because the window name it
+# still sets was the other half of the same defect.
 #
 # That bar is the single most persistently visible string in the product: it sits
 # in the corner for the whole session. Until v0.21 clikae never set it, so tmux
@@ -563,8 +892,12 @@ tmux_spawn_session() {
 # default bar, which is what we had yesterday. Cosmetics never fail a launch.
 tmux_label() {
   local session="$1" engine="$2" tank="$3"
-  tmux set-option -t "=$session:" status-left-length 40 2>/dev/null || true
-  tmux set-option -t "=$session:" status-left "[$engine/$tank] " 2>/dev/null || true
+  # THE BAR ITSELF MOVED (#77). What `[engine/tank]` was telling you — which
+  # tank this window is — the reconnect command now says more precisely, and as
+  # something you can paste. This function keeps the other half of its job: the
+  # WINDOW name, which is a different tmux object and still says `claude`
+  # instead of `bash`. Both call sites want both, so the label stays the door.
+  tmux_status_line "$session" "$engine" "$tank"
   # Without this tmux renames the window after whatever is running in it, and
   # `-n` is undone the moment the engine spawns a child.
   tmux set-window-option -t "=$session:" automatic-rename off 2>/dev/null || true

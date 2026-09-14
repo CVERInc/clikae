@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The tmux status row now answers the three questions the old one did not: how
+  to get back here, how much fuel is left, whether anything is red. It reads
+  `clikae resume <8 chars> | 5h 42% . 7d 65% | !2` with the clock at the right
+  edge, and the window list, the truncated pane title and the date are gone
+  (#77). The reconnect command is a real command: `clikae resume` now resolves
+  a unique session-id prefix and refuses an ambiguous one with the candidates
+  listed. Fuel comes from #72's usage cache only -- the row never calls a
+  vendor, and falls back to the board's dry/no-reading glyph when there is no
+  cached reading. `!N` counts tanks the live catchers marked dry and burn lanes
+  whose writer died before reaching a terminal state; it is not drawn at all
+  when N is 0. Below 100 columns the `ssh <host> -t ` prefix is dropped -- the
+  only variable-width part of the row, and dropped rather than cut because half
+  a hostname is not a command. Measured at 14 ms per redraw.
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is

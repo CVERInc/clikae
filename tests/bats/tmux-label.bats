@@ -31,14 +31,24 @@ teardown() {
 }
 
 @test "label: the bar names the tank in clikae's words, not the session id" {
+  # 🔴 THE ASSERTION MOVED FROM THE OPTION TO THE ROW (#77). This used to read
+  # `status-left` and look for `claude/work`, because clikae's whole
+  # contribution to the bar WAS that literal. The bar is now a `#()` helper, so
+  # the option's value is a shell command — which mentions the session name,
+  # among other things, as an ARGUMENT that is never drawn. Asking the option
+  # what a person reads would now be asking the wrong object; ask the renderer.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_switch
   tmux new-session -d -s "$(_sess)" 'sleep 30'
   tmux_label "$(_sess)" claude work
   run tmux show-options -t "$(_sess)" status-left
-  [[ "$output" == *"claude/work"* ]] || false
-  # And the internal prefix is gone from what a person reads.
+  [[ "$output" == *"status_line.sh"* ]] || false
+
+  # What the person actually reads: the tank, as the command that returns to it.
+  run tmux_status_render claude work '' '' 120
+  [[ "$output" == *"clikae claude work"* ]] || false
   [[ "$output" != *"clikae-"* ]] || false     # the session id, whatever its prefix
+  [[ "$output" != *"$(_sess)"* ]] || false
 }
 
 @test "label: the window is named after the engine, not the shell that starts it" {
@@ -74,7 +84,12 @@ teardown() {
   tmux_label "$(_sess)" claude work
   tmux_label "$(_sess)" claude work
   run tmux show-options -t "$(_sess)" status-left
-  [[ "$output" == *"claude/work"* ]] || false
+  [[ "$output" == *"status_line.sh"* ]] || false
+  # Once, not twice: a second call must overwrite the option, not append to it.
+  # `grep -o | wc -l`, never `grep -c`: the option is ONE line, so a line count
+  # is 1 whether the helper appears once or five times.
+  [ "$(printf '%s' "$output" | grep -o 'status_line.sh' | wc -l | tr -d ' ')" -eq 1 ] || {
+    echo "$output"; false; }
 }
 
 @test "label: a session that is gone does not fail the caller" {

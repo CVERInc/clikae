@@ -163,6 +163,11 @@ done <<CALLERS
 $(grep -nE '^# .*[Cc]alled from .*\.sh' "${CORE[@]}" 2>/dev/null || true)
 CALLERS
 
+# 🔴 The `status-*` family joined the list with #77, when DESIGN-tmux started
+# making claims about seven of them. `window-status-format` is deliberately NOT
+# here: Rule 10 names it to say clikae does NOT set it (it is a window option
+# and would reach the wrong scope), and this check reads a named option as a
+# promise that the code sets it.
 # ── 3. Every tmux option a design rule names must actually be set ───────────
 # Rule 1 described `window-size latest` for a year and nothing set it, so the
 # behaviour held on one tmux and not another. A rule that states a setting is a
@@ -171,7 +176,7 @@ CALLERS
 # doc writes `window-size latest` — value inside the quotes — so a regex needing
 # a closing backtick right after the name skipped exactly the option that
 # motivated this check, while quietly matching four others and looking healthy.
-opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size)\b' \
+opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size|status-left|status-right|status-interval|status-justify|status-format)\b' \
   docs/DESIGN-tmux.md 2>/dev/null | tr -d '`' | sort -u || true)"
 while IFS= read -r opt; do
   [ -n "$opt" ] || continue
