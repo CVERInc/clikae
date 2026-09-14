@@ -405,23 +405,28 @@ some minutes) is NOT covered by lagging the cursor above — that was tried
 in earlier rounds of this feature and turned out to permanently stall a
 busy org (any 300-second window holding ≥500 rows pinned the cursor
 forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
-once every 5 polls, or right after a truncated one: ONE more request,
-newest-first, re-reading a window just below the cursor and delivering
-anything the main query may have missed while it was still indexing.
-That window is at least 300s, and wider the longer it's actually been
-since the last sweep COMPLETED — an epoch persisted next to the cursor
-and read back directly, not inferred from `--interval` or from how many
-polls elapsed times any single one of their gaps (an earlier version of
-this feature used a flat 300s window regardless of spacing, which only
-ever covered the gap between sweeps when `--interval <= 60s`; a later
-version multiplied one poll's own gap by how many polls had elapsed,
-which undercounted the moment polling wasn't evenly spaced — a live loop
-recovering from back-off is exactly that case; the default interval is
-10m, and a `--once` poll run from cron never knows `--interval` at all —
-see CHANGELOG). It never advances the cursor itself, so it cannot
-re-create that stall; a window holding 100+ updates is reported as "lag
-window truncated" and dropped rather than paginated, so it costs at most
-one extra request per poll.
+once every 5 polls, or right after a truncated one: one or more requests,
+oldest-first (same order as the main query), re-reading a window just
+below the cursor and delivering anything the main query may have missed
+while it was still indexing — oldest-first matters here because the
+late-indexed rows this sweep exists to catch sit at the OLD end of that
+window, and a busy org's own already-seen recent activity would otherwise
+fill a newest-first page before ever reaching them. That window is at
+least 300s, and wider the longer it's actually been since the last sweep
+COMPLETED — an epoch persisted next to the cursor and read back directly,
+not inferred from `--interval` or from how many polls elapsed times any
+single one of their gaps (an earlier version of this feature used a flat
+300s window regardless of spacing, which only ever covered the gap
+between sweeps when `--interval <= 60s`; a later version multiplied one
+poll's own gap by how many polls had elapsed, which undercounted the
+moment polling wasn't evenly spaced — a live loop recovering from
+back-off is exactly that case; the default interval is 10m, and a
+`--once` poll run from cron never knows `--interval` at all — see
+CHANGELOG). It never advances the cursor itself, so it cannot re-create
+that stall; reading paginates within the same 5-page/100-per-page budget
+the main query uses, and a window still not fully covered after that is
+reported as "lag window truncated" and dropped rather than read further,
+so it costs at most 5 extra requests per poll.
 
 Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
 `issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
@@ -468,10 +473,14 @@ tell "quiet today" from "I've been failing silently".
 read past all of them in one poll — extremely unlikely given GitHub's own
 secondary rate limits, but not impossible, so it's named here rather than
 covered by the "no backlog, however large" claim above. Within one poll,
-events the tail sweep finds are appended in `updated_at`-descending order
-(newest first), after the main query's ascending ones — so `events.jsonl`
-is no longer strictly non-decreasing the moment a sweep delivers anything;
-no consumer this feature ships relies on that ordering today.
+events the tail sweep finds are appended in `updated_at`-ascending order
+(oldest first, same direction as the main query — fixed 2026-09-14
+fix-round-6 review; an earlier version read the sweep's window
+newest-first), but AFTER the main query's own batch, and the sweep's
+window sits below the cursor the main query just advanced to — so
+`events.jsonl` is still no longer strictly non-decreasing the moment a
+sweep delivers anything; no consumer this feature ships relies on that
+ordering today.
 
 Requires `gh` already logged in — this feature never reads or writes a token
 itself, it uses whatever account `gh auth login` already set up, and refuses

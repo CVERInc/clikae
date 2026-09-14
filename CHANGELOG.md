@@ -95,11 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded polls and can never stall permanently ("truncated: continuing
   next poll" — and it does). The 300s indexing-lag margin is instead bought
   by a separate, bounded "tail sweep": once every 5 polls, or right after a
-  truncated one, ONE more request re-reads a window below the cursor
-  (newest first) and delivers anything the main query may have missed
-  while still indexing, without ever touching the cursor itself — a window
-  holding ≥100 updates is reported "lag window truncated" and dropped
-  rather than paginated, so this too can never stall. (An earlier version
+  truncated one, one or more requests, oldest-first, re-read a window below
+  the cursor and deliver anything the main query may have missed while
+  still indexing, without ever touching the cursor itself — a window still
+  not fully covered within the same 5-page/100-per-page budget the main
+  query uses is reported "lag window truncated" and dropped rather than
+  read further, so this too can never stall. (An earlier version
   of this entry had the sweep use a FIXED 300s window regardless of
   spacing — that only ever covered the gap between sweeps when
   `--interval <= 60s`; the 10m default never met it, so 45 of every 50
@@ -124,7 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back directly — measured, not inferred from any poll's own gap. A `0`
   (the sentinel a `date` failure's own fallback writes) or a future value
   in either that epoch or `.lastrun`'s own now reads as "missing", never
-  as a real span to subtract `now` from.)
+  as a real span to subtract `now` from. The same round also fixed the
+  sweep's own read direction — it re-read the window NEWEST-first, so a
+  busy org's own already-seen recent activity filled the one page before
+  ever reaching the OLDEST rows the sweep exists to catch (the
+  late-indexed ones); it now reads oldest-first, paginating within the
+  main query's own 5-page budget, and reports "lag window truncated" only
+  when that budget is actually exhausted.)
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is

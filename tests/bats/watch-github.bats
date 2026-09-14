@@ -1649,6 +1649,112 @@ STUB
   [ "$(grep -c '"number":9999' "$events" 2>/dev/null)" -eq 0 ]
 }
 
+# --- P2-2 (2026-09-14 fix-round-6 review): the sweep used to read
+# order=desc — the window's NEWEST end first — so on a busy org, activity
+# ALREADY in the seen-file (the main query's own recent polls) filled the
+# one page before the sweep ever reached the OLDEST end, where a
+# late-indexed row (by definition) sits. Fixed by reading order=asc, same
+# as the main query, paginated within the same 5-page/100 budget.
+
+@test "watch github --once: a busy org's own recent activity no longer crowds the late row out of the sweep (P2-2, fix-round-6)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local cursor0='2026-09-01T00:50:00Z'
+  printf '%s\n' "$cursor0" > "$state_dir/CVERInc.cursor"
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  _honest_corpus_add_row 3001 2026-09-01T01:00:00Z alice "issue one"
+
+  local anchor=1757289000
+  export FAKE_NOW="$anchor"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  local i
+  for i in 2 3 4; do
+    export FAKE_NOW=$((anchor + (i - 1) * 3600))
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+  done
+
+  # Poll 5: first-ever sweep, just establishes .sweepat.
+  export FAKE_NOW=$((anchor + 4 * 3600))
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  # The late row — 9000s below the cursor, at the OLD end of the window
+  # the second sweep will read.
+  _honest_corpus_add_row 9999 2026-08-31T22:30:00Z zed "late indexed issue"
+
+  # A busy org: 30 more issues opened by alice between EVERY poll from
+  # here on, all newer than the late row (and than each other) — 120 rows
+  # by poll 9, well past the single-page 100 an order=desc read would have
+  # been limited to; all of it deduped by the seen-file on re-reads.
+  local n num
+  n=3001
+  for i in 6 7 8 9; do
+    export FAKE_NOW=$((anchor + 4 * 3600 + (i - 5) * 3600))
+    for _ in $(seq 1 30); do
+      n=$((n + 1))
+      num="$n"
+      _row "$num" "2026-08-31T23:$(printf '%02d' $((i - 5))):00Z" alice reef "https://x/$num" 0 "busy issue $num" \
+        >> "$GH_STUB_DIR/honest_corpus.tsv"
+      printf '\n' >> "$GH_STUB_DIR/honest_corpus.tsv"
+    done
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+  done
+
+  # Poll 10: the schedule fires the second sweep — window 18000s reaches
+  # the 121-row-deep window (120 busy rows + the late one). The late row
+  # (oldest in the window) must still be delivered, and the sweep must NOT
+  # spuriously warn "lag window truncated" — 121 rows fits inside 2 pages
+  # of the 5-page budget, nowhere near the real 500-row cap.
+  export FAKE_NOW=$((anchor + 4 * 3600 + 5 * 3600))
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#9999 opened by zed: late indexed issue"* ]] || false
+  [[ "$output" != *"lag window truncated"* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(grep -c '"number":9999' "$events")" -eq 1 ]
+}
+
+# --- P3 (2026-09-14 fix-round-6 review): the "lag window truncated" branch
+# (:1216 as of this round) had 0 test coverage in every prior round — the
+# ONE line that lights up when P2-2 is broken. Forced directly: seed
+# .sweepn/.sweepat so the very NEXT poll's schedule fires a sweep with a
+# window truly holding >500 rows (past the 5-page/100 cap), rather than
+# driving 10 real polls just to get there.
+
+@test "watch github --once: a sweep window holding >500 updates reports 'lag window truncated' and does not stall (P3, fix-round-6)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local cursor0='2026-09-01T01:00:00Z'
+  printf '%s\n' "$cursor0" > "$state_dir/CVERInc.cursor"
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+  local anchor=1757289000
+  # .sweepat far enough in the past that now - sweepat comfortably exceeds
+  # the span 501 one-second-apart rows below the cursor will occupy.
+  printf '%s\n' "$((anchor - 900))" > "$state_dir/CVERInc.sweepat"
+
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  _honest_corpus_add_row 3001 2026-09-01T01:00:00Z alice "issue one"
+  # 501 rows, 1s apart, all inside the 900s window (00:45:00-01:00:00Z) —
+  # one past the 5-page/100 = 500-row cap.
+  _honest_corpus_append 9000 501 2026-09-01T00:50:00Z 1
+
+  export FAKE_NOW="$anchor"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"lag window truncated"* ]] || false
+  # Not stalled: the poll itself still reports success and a cursor.
+  [ -f "$state_dir/CVERInc.cursor" ]
+  [ "$(cat "$state_dir/CVERInc.sweepn")" = "0" ]
+}
+
 # --- P2-3 (2026-09-13 fix-round-2 review): end to end, `clikae wait --latest
 # watch-github-<org>` against the REAL writer, no epoch known in advance —
 # the whole point of the fix (a cockpit can only know the prefix).

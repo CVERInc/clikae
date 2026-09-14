@@ -1147,51 +1147,73 @@ _wg_tail_sweep_window() {
   printf '%s' "$window"
 }
 
-# _wg_tail_sweep <org> <cursor> <seen_file> <events_file> -> ONE bounded,
+# _wg_tail_sweep <org> <cursor> <seen_file> <events_file> -> a bounded,
 # separate re-read of the window BELOW <cursor> (P1-1, 2026-09-14
 # fix-round-4 review; window sizing revised P2-1, 2026-09-14 fix-round-5
-# and again fix-round-6 review — read the 🔴 notes in the file header
-# before touching this). order=desc, ONE page, per_page=100: catches a
-# row whose updated_at is old enough to sit behind the main cursor but
-# only just became visible in GitHub's search index (documented indexing
-# lag) — WITHOUT lagging the main cursor itself, which is what let a
-# >=500-row/300s window pin it forever (see CURSOR MONOTONICITY /
-# BACKLOG). Run by _wg_poll, once every N=5 polls or right after a
-# truncated one — schedule UNCHANGED by this round's fix, only the window
-# is; ALWAYS after the main cursor is already computed and persisted from
-# THIS poll's own $__WG_MAX_UPDATED alone — this function's own use of
-# $__WG_MAX_UPDATED (folded in by _wg_process, same as any other query)
-# is scratch, discarded by the caller, never fed back into the cursor
-# file. Found rows go through the same seen-file/_wg_process dedup as any
-# other row, so they are announced and logged exactly once, whichever
-# query finds them first. A full page (>=100 rows in the window) means
-# more rows exist than fit — reported as "lag window truncated" and
-# dropped, never paginated further, so this can cost at most ONE extra
-# request per poll and can never itself stall anything. A sweep failure
+# and again fix-round-6 review; read direction/pagination revised P2-2,
+# 2026-09-14 fix-round-6 review — read the 🔴 notes in the file header
+# before touching this). Catches a row whose updated_at is old enough to
+# sit behind the main cursor but only just became visible in GitHub's
+# search index (documented indexing lag) — WITHOUT lagging the main
+# cursor itself, which is what let a >=500-row/300s window pin it forever
+# (see CURSOR MONOTONICITY / BACKLOG). Run by _wg_poll, once every N=5
+# polls or right after a truncated one — schedule UNCHANGED by this
+# round's fix; ALWAYS after the main cursor is already computed and
+# persisted from THIS poll's own $__WG_MAX_UPDATED alone — this
+# function's own use of $__WG_MAX_UPDATED (folded in by _wg_process, same
+# as any other query) is scratch, discarded by the caller, never fed back
+# into the cursor file. Found rows go through the same
+# seen-file/_wg_process dedup as any other row, so they are announced and
+# logged exactly once, whichever query finds them first.
+#
+# 🔴 order=asc, PAGINATED (P2-2, 2026-09-14 fix-round-6 review — round 5's
+# own review named this fix and it was not taken: `order=desc` reads the
+# window's NEWEST end first, but the rows most likely to still be missing
+# sit at its OLDEST end (that is what "late-indexed" means) — and a busy
+# org's own recent activity, already in the seen-file from earlier polls,
+# fills a single desc page before the sweep ever reaches that old end. In
+# ASCENDING order the oldest (most overdue) rows sort first, exactly like
+# the main query already does, and reading them first is what makes a
+# single page usually enough — but is not guaranteed enough on its own on
+# a busy org, so this paginates within the SAME 5-page/100-per-page budget
+# _wg_poll_one_query already uses, stopping on a short page the same way.
+# "lag window truncated" is now reported ONLY when that 5-page cap is
+# actually hit (proven un-triggerable before this fix — see the P3 note in
+# the tests) — bounded to at most 5 extra requests per poll, the same cap
+# the main query already accepts, and it can never itself stall anything
+# (a truncated sweep still completes; see below). A sweep failure
 # classified as rate-limit counts toward back-off exactly like a
 # main-query failure would (P3-4, 2026-09-14 fix-round-5 review) — an org
 # already being rate-limited otherwise kept taking one more doomed request
 # every time the schedule fired, back-off or not.
 _wg_tail_sweep() {
   local org="$1" cursor="$2" seen_file="$3" events_file="$4"
-  local epoch since q tsv page_n window
+  local epoch since q tsv page_n window page=1 truncated=0
   epoch="$(_limit_iso_epoch "$cursor" "")"
   [ -n "$epoch" ] || return 0
   window="$(_wg_tail_sweep_window "$org")"
   since="$(_wg_iso_from_epoch "$((epoch - window))")"
   [ -n "$since" ] || return 0
   q="$(_wg_query_org "$org" "$since")"
-  if ! _wg_fetch_classified "$q" 1 desc; then
-    case "$__WG_LAST_KIND" in
-      rate-limit) __WG_BACKOFF=1 ;;
-    esac
-    log_warn "github:$org — lag sweep failed, skipping this poll's sweep: $__WG_LAST_REASON"
-    return 0
-  fi
-  tsv="$__WG_LAST_TSV"
-  _wg_process "$tsv" "$org" "$seen_file" "$events_file"
-  page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
-  [ "$page_n" -ge 100 ] && log_warn "github:$org — lag window truncated (>=100 updates in the last ${window}s); skipping the rest, not stalling."
+  while :; do
+    if ! _wg_fetch_classified "$q" "$page" asc; then
+      case "$__WG_LAST_KIND" in
+        rate-limit) __WG_BACKOFF=1 ;;
+      esac
+      log_warn "github:$org — lag sweep failed, skipping this poll's sweep: $__WG_LAST_REASON"
+      return 0
+    fi
+    tsv="$__WG_LAST_TSV"
+    _wg_process "$tsv" "$org" "$seen_file" "$events_file"
+    page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
+    [ "$page_n" -ge 100 ] || break
+    page=$((page + 1))
+    if [ "$page" -gt 5 ]; then
+      truncated=1
+      break
+    fi
+  done
+  [ "$truncated" -eq 1 ] && log_warn "github:$org — lag window truncated (>=500 updates in the last ${window}s); skipping the rest, not stalling."
   # Never written on a failed sweep (the early `return 0` above skips
   # this) — a sweep that never ran must not reset the clock on ground it
   # never covered; the NEXT sweep's window still needs to reach back to
@@ -1428,9 +1450,12 @@ has already re-read.
 GitHub's search index itself lags real writes by some minutes; rather than
 lagging the cursor above (which is what let a single dense poll pin it
 forever — see CHANGELOG), that margin is covered by a separate, bounded
-"tail sweep": once every 5 polls, or right after a truncated one, ONE
-more request re-reads the window below the cursor (newest first) and
-delivers anything a poll may have missed while it was still indexing — a
+"tail sweep": once every 5 polls, or right after a truncated one, one or
+more requests re-read the window below the cursor OLDEST FIRST — same
+order as the main query, so the rows most likely to still be missing (the
+late-indexed ones, which sit at the window's old end) are read before a
+busy org's own already-seen recent activity can fill the page — and
+deliver anything a poll may have missed while it was still indexing; a
 small seen-file de-dupes whichever query finds a row first. The window is
 at least 300s, wider the longer it's actually been since the last sweep
 COMPLETED — measured directly (an epoch persisted beside the cursor), not
@@ -1438,9 +1463,10 @@ inferred from --interval or from how many polls elapsed, so cron's
 `--once` is covered without needing to be told an interval, and a live
 loop's own back-off (or recovery from one) is covered exactly, not
 approximated from whichever single poll's gap happened to be shortest.
-If that window itself holds 100+ updates, the sweep reports "lag window
-truncated" and moves on rather than paginating — bounded to one extra
-request per poll, so it can never stall anything either.
+Reading paginates within the same 5-page/100-per-page budget the main
+query uses; a window still not fully covered after that reports "lag
+window truncated" and moves on rather than reading further — bounded to
+at most 5 extra requests per poll, so it can never stall anything either.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this
