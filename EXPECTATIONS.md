@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/7d61d90f321171d0ba0f6ff56de600c202e61600/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/b8764bbfe2540988933703d16a7e140d6a490a89/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -183,12 +183,13 @@ layout clikae knows how to stash to a throwaway; today that's claude. codex and 
 join the Soul through a *pointer* note instead of a real memory dir, so there is
 nothing to stash. Other engines report a clean "not supported" rather than pretend.
 
-**A handoff brief out of a codex or grok tank is thin.** `clikae handoff` cleans the
-transcript with a claude-shaped extractor before summarising; neither codex's rollout
-nor grok's `chat_history.jsonl` uses that shape, so the digest falls back to metadata
-plus whatever it can lift. The handoff still happens — it just carries less than the
-same command run on a claude tank. Open for a contributor, with the shapes and the
-constraints written out: [#33](https://github.com/CVERInc/clikae/issues/33).
+**A handoff brief never decodes a literal `\uXXXX` JSON escape.** `clikae handoff`
+unescapes `\n`, `\t`, `\"`, `\\` (grep/sed/awk only — no jq/python) on every engine,
+claude included; a `\uXXXX` sequence (rare — JSON only escapes to it for control
+characters, or when a writer forces plain-ASCII output) prints unchanged rather than
+decoded. Was true before #33 fixed the bigger gap (codex's and grok's own transcript
+shapes matching nothing at all — see the CHANGELOG); it's a documented follow-up on
+every engine now, not a regression.
 
 **An INTERACTIVE `--ephemeral` run still writes a transcript into the tank.** It
 drops your memory, your skills and the fleet's MCP servers — so the session does

@@ -119,6 +119,11 @@ implementation to read.</p>
 <td>claude, codex, grok</td>
 </tr>
 <tr>
+<td><code>adapter_handoff_extract &lt;transcript&gt; &lt;role&gt;</code></td>
+<td><code>clikae handoff</code>'s digest reads YOUR transcript's own shape (<code>role</code> is &quot;user&quot;/&quot;assistant&quot;) instead of assuming claude's <code>&quot;role&quot;:&quot;…&quot;,&quot;content&quot;:&quot;…&quot;</code> — text only, newest last. <strong>Lines-per-message is NOT uniform across engines, and that's fine:</strong> claude prints one line per text BLOCK (a message with two text parts becomes two lines — this is the pre-#33 shape, frozen for byte-identical parity, see <code>tests/fixtures/handoff-claude-golden.txt</code>); codex/grok print one line per MESSAGE (multiple text parts in one message are joined with a space first) — codex additionally collapses a printed line into its immediately preceding one when the two are byte-identical (round-3 #33 review P2-2; a duplicate is far more often the same turn recorded twice under codex's two overlapping transcript shapes than genuinely repeated input), so lines-per-message is not exactly 1:1 either. A caller doing <code>tail -n N</code> therefore gets &quot;last N blocks&quot; on claude vs &quot;last N messages&quot; elsewhere — pick either shape for a new adapter, just say which in your own hook's comment so the next reader isn't surprised. A hook that finds lines SHAPED like a role's turn but can't pull text out of any of them (a real shape mismatch) should say so on stderr (<code>handoff: &lt;engine&gt; extractor scanned N &lt;role&gt; lines, matched 0</code> — see codex.sh/grok.sh) rather than degrade silently — but a role with genuinely no turns yet (a brand-new tank the model hasn't replied to) is not a mismatch and should stay silent, or every reader learns to ignore the line (round-2 #33 review P3-2). <code>_handoff_extract</code> does NOT swallow hook stderr. Undefined → falls back to the claude-shaped grep (thinner, not broken).</td>
+<td>claude, codex, grok</td>
+</tr>
+<tr>
 <td><code>adapter_title_for_file &lt;file&gt;</code></td>
 <td>A session's title, derived from the transcript file alone. <strong>Prefer a user-set rename over a machine-generated title</strong>, and scan the tail — a rename lands wherever it was typed.</td>
 <td>claude, codex, grok, antigravity</td>
