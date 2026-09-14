@@ -336,7 +336,27 @@ EOF
         if [ "$_CLIKAE_ADOPT_LAST_COUNT" -gt 0 ]; then
           log_done "Tank adoption flag written: $_adopt_flag ($_CLIKAE_ADOPT_LAST_COUNT tank(s) newly adopted)."
         else
-          log_pass "Already adopted: $_adopt_flag — nothing to do."
+          # #61 round-4 P3-7: the flag being present only means the ONE-TIME
+          # sweep already ran (or, the very first time, had nothing to do) —
+          # it does NOT mean every directory that looks like real content
+          # still has its marker (one lost to a restored backup, say). Saying
+          # "Already adopted — nothing to do" while _doctor_stray_dirs below
+          # would name that very directory two lines later is the
+          # contradiction this closes: reuse the SAME enumerator (never a
+          # second copy of the stray-detection logic) and, if it found
+          # anything with recognisable content, point at the per-directory
+          # fix instead of claiming there's nothing to do.
+          local _strays
+          _strays="$(_doctor_stray_dirs 2>/dev/null | grep -F '(has ')" || true
+          if [ -n "$_strays" ]; then
+            log_warn "Adoption flag is set, but at least one directory looks like real content with no marker (a restored backup?) — the one-time sweep won't revisit it. Run \`init --adopt\` for each:"
+            printf '%s\n' "$_strays" | while IFS= read -r _line; do
+              local _pair; _pair="$(printf '%s\n' "$_line" | awk '{print $1}')"
+              [ -n "$_pair" ] && printf '    clikae init %s --adopt\n' "${_pair/\// }"
+            done
+          else
+            log_pass "Already adopted: $_adopt_flag — nothing to do."
+          fi
         fi
       else
         log_warn "Could not write the adoption flag: $_adopt_flag — store is read-only. Tanks are still recognised in memory each run (fix permissions to make it permanent)."

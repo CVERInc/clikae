@@ -166,6 +166,27 @@ _unadopt() {
   [[ "$output" != *"zzempty"* ]] || { echo "$output"; false; }
 }
 
+# --- #61 round-4 P3-7: a HALF-adopted store (flag present, but a directory
+# with real content lost its marker — e.g. a restored backup) must not say
+# "Already adopted — nothing to do" while doctor's own stray-directory check
+# names that very directory. ------------------------------------------------
+@test "doctor --adopt on a half-adopted store (flag present, a content-shaped stray missing its marker) names the fix instead of claiming nothing to do" {
+  clikae init claude real
+  mkdir -p "$CLIKAE_HOME/profiles/claude/two"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/two/.claude.json"
+  run clikae doctor --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"Already adopted"*"nothing to do"* ]] || \
+    { echo "still claims nothing to do while naming a stray: $output"; false; }
+  [[ "$output" == *"clikae init claude two --adopt"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/two/.clikae-tank" ]
+
+  # The named fix actually works.
+  run clikae init claude two --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/two/.clikae-tank" ]
+}
+
 # --- P2-2: doctor must not call a symlink alias a stray directory ----------
 @test "adoption: a symlink alias for a real, adopted tank is not reported as a stray directory" {
   clikae init codex zreal
