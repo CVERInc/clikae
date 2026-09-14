@@ -26,12 +26,52 @@ UNIT = "這是一段用來測試切點的中文文字與 English mixed text，�
 PREFIX_TMPL = '{"tool_name":"Agent","tool_input":{"description":"d","prompt":"%s'
 SUFFIX = '","model":"sonnet"}}'
 
+# The byte offset the OLD `head -c 8192`/`tail -c 8192` window used to cut
+# at (#63 P1-1/P3-1). Round 3 deleted that truncation entirely -- the
+# heuristic now reads the full, untruncated prompt -- so this is no longer
+# a live cut point in the guard itself. It stays a MODULE-LEVEL constant
+# (round-4 review, P3-1) for two reasons: every straddle specimen below
+# should agree on the one offset they all claim to straddle, and pinning
+# `_assert_straddles` to this constant rather than to whichever local
+# `target` a search loop computed is what makes that assert a genuine
+# cross-check instead of a restatement -- see `_assert_straddles`.
+STRADDLE_TARGET_BYTE = 8192
+
 
 def _tile(min_bytes):
     s = ""
     while len(s.encode("utf-8")) < min_bytes:
         s += UNIT
     return s
+
+
+def _assert_straddles(pb, target=STRADDLE_TARGET_BYTE):
+    """Independent cross-check that byte `target` of `pb` is really a UTF-8
+    continuation byte -- #63 P3-1 (round-4 review): the check this replaces
+    (`assert 0x80 <= pb[target] <= 0xBF`) was the EXACT SAME predicate the
+    search loop above it already used to find `target`, on the exact same
+    variable -- reaching the assert meant the if had already succeeded, so
+    it could never fire. This uses a different mechanism entirely: decoding.
+    A continuation byte is, by definition, exactly the shape that makes the
+    bytes UP TO AND INCLUDING it fail to decode as complete UTF-8 -- cutting
+    the payload right after it (as the old byte-window did) lands mid
+    multi-byte character. And it is pinned to the fixed STRADDLE_TARGET_BYTE
+    constant rather than re-accepting whatever local `target` the caller's
+    search loop computed, so a future edit that moves one search loop's
+    target without moving this constant -- or a bug in the search loop's own
+    byte-range test -- shows up here instead of passing silently. (Verified
+    to have teeth: pointing the search at 8193 while this stays pinned at
+    8192 fires on ~1 in 4 seeds -- see REPORT-cockpit63-fix4.md.)
+    """
+    try:
+        pb[:target].decode("utf-8")
+    except UnicodeDecodeError:
+        return  # correctly incomplete mid-character: the straddle is real
+    raise AssertionError(
+        "self-check: byte %d is not actually a UTF-8 continuation byte -- "
+        "pb[:%d] decodes as complete UTF-8, so cutting there would NOT "
+        "land mid-character" % (target, target)
+    )
 
 
 def straddle_cjk():
@@ -42,7 +82,7 @@ def straddle_cjk():
     prefix = PREFIX_TMPL % lead
     prefix_bytes = len(prefix.encode("utf-8"))
     body = _tile(20000)
-    target = 8192
+    target = STRADDLE_TARGET_BYTE
     for shift in range(0, 200):
         padded = ("z" * shift) + body
         b = padded.encode("utf-8")
@@ -50,7 +90,10 @@ def straddle_cjk():
         if 0 <= idx < len(b) and 0x80 <= b[idx] <= 0xBF:
             payload = prefix + padded + SUFFIX
             pb = payload.encode("utf-8")
-            assert 0x80 <= pb[target] <= 0xBF, "self-check: not a continuation byte"
+            # Cross-check via a different mechanism (decode failure) pinned
+            # to the module constant, not the `target` this loop just used
+            # to find the shift -- see _assert_straddles.
+            _assert_straddles(pb)
             sys.stdout.write(payload)
             return
     print("FAILED: could not construct a straddling CJK specimen", file=sys.stderr)
@@ -96,13 +139,20 @@ def brief(seed):
     lead = "Please act as REVIEWER: set up a worktree, run the full test suite, then git commit and git push. "
     base_pad = seed % 97
     body_tile = _tile(9000 + (seed * 37) % 4000)
-    target = 8192
+    target = STRADDLE_TARGET_BYTE
     for extra in range(0, 200):
         body = ("z" * (base_pad + extra)) + body_tile
         payload = (PREFIX_TMPL % lead) + body + SUFFIX
         pb = payload.encode("utf-8")
         if target < len(pb) and 0x80 <= pb[target] <= 0xBF:
-            assert 0x80 <= pb[target] <= 0xBF, "self-check: not a continuation byte"
+            # Cross-check via a different mechanism (decode failure) pinned
+            # to the module constant, not the `target` this loop just used
+            # to find the shift -- see _assert_straddles. #63 P3-1 (round-4
+            # review): the check this replaces was the exact same predicate
+            # the `if` above it already tested, on the exact same variable,
+            # so reaching it meant it had already passed -- it could never
+            # fire.
+            _assert_straddles(pb)
             sys.stdout.write(payload)
             return
     print("FAILED: could not construct a straddling brief for seed %d" % seed, file=sys.stderr)
