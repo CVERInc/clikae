@@ -106,7 +106,7 @@ if [ -n "${TMUX:-}" ]; then
   # `kill-session -t ''` passed — and tmux, handed an empty target, picks a
   # session itself: measured killing the OTHER session of two, and the whole
   # server when only one existed. That is exactly the argv a script produces
-  # from `tmux kill-session -t "$SESS"` with `$SESS` unset. Only a non-empty
+  # when it passes `-t "$SESS"` to kill-session with `$SESS` unset. Only a non-empty
   # value counts now: `-t ''`, `-t ""`, `-t` as the last token of its
   # segment, `-t=` and a bare `=` (tmux's exact-match prefix with no name
   # after it) all read as "no target". `_want_tval` makes the token AFTER a
