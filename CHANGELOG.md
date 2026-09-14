@@ -188,6 +188,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     call refuses (empty payload, no tool_name, no tool_input, malformed
     JSON, a missing library, an internal error). The escape hatches are
     read before the payload, so a refusal can always be lifted.
+  - The guard hook parses the call with jq instead of a regex scan that
+    decoded five escapes. Equivalent valid encodings of a refused call —
+    `"\u0073onnet"`, `"\u0041gent"`, `"\u0072eview"`, an escaped letter in
+    the `tool_input` key, trailing space/tab/CRLF — were allowed; each now
+    refuses with the plain form's exact message. Surrogate pairs count as
+    one character for the length tripwire, `tool_input.model` is read by
+    path (a `model` key elsewhere no longer stands in for it), and anything
+    that is not exactly one JSON object is refused. `json_field_str`, whose
+    only caller was the hook, is removed.
 
 ### Added
 

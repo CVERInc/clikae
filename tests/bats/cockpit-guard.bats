@@ -174,12 +174,69 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" == *"allowed until"* ]] || false
 }
 
-@test "an internal failure (json.sh missing next to the hook) refuses instead of allowing (#63 r5 P2-5)" {
-  local d="$BATS_TEST_TMPDIR/lonely/hooks"; mkdir -p "$d"
-  cp "$GUARD" "$d/cockpit-guard.sh"
-  run bash -c 'printf %s "$1" | bash "$2"' _ '{"tool_name":"Agent","tool_input":{"model":"haiku","prompt":"hi"}}' "$d/cockpit-guard.sh"
+@test "a missing dependency (no jq on PATH) refuses instead of allowing (#63 r5 P2-5/P2-6)" {
+  local nojq="$BATS_TEST_TMPDIR/nojq"
+  path_without_jq "$nojq"
+  PATH="$nojq" command -v jq >/dev/null 2>&1 && skip "jq is on PATH even without /usr/bin and /bin"
+  run env PATH="$nojq" bash "$GUARD" <<<'{"tool_name":"Agent","tool_input":{"model":"haiku","prompt":"hi"}}'
   [ "$status" -eq 2 ]
+  [[ "$output" == *"jq is not installed"* ]] || false
   [[ "$output" == *"fails closed"* ]] || false
+}
+
+# --- #63 round-5 P2-6: equivalent JSON serializations -----------------------
+# codex review: starting from a refused sonnet/review call, six changes to
+# the SERIALIZATION ONLY turned refuse into allow on f20a603. Each must now
+# refuse with byte-for-byte the same stderr as the plain form.
+_P26_PLAIN='{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"review"}}'
+
+@test "six serialization variants of a refused call all refuse with the plain form's exact stderr (#63 r5 P2-6)" {
+  run _guard "$_P26_PLAIN"
+  [ "$status" -eq 2 ]
+  local plain="$output"
+  [[ "$plain" == *"a sonnet-model Agent spawn whose prompt reads as a build/review lane"* ]] || false
+  local -a names=() variants=()
+  names+=("trailing space");     variants+=("$_P26_PLAIN ")
+  names+=("trailing tab");       variants+=("$_P26_PLAIN"$'\t')
+  names+=("trailing CRLF");      variants+=("$_P26_PLAIN"$'\r\n')
+  names+=("model \\u0073onnet"); variants+=('{"tool_name":"Agent","tool_input":{"model":"\u0073onnet","prompt":"review"}}')
+  names+=("tool \\u0041gent");   variants+=('{"tool_name":"\u0041gent","tool_input":{"model":"sonnet","prompt":"review"}}')
+  names+=("prompt \\u0072eview"); variants+=('{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"\u0072eview"}}')
+  names+=("key tool\\u005finput"); variants+=('{"tool_name":"Agent","tool\u005finput":{"model":"sonnet","prompt":"review"}}')
+  local i
+  for i in "${!variants[@]}"; do
+    run _guard "${variants[$i]}"
+    [ "$status" -eq 2 ] || { echo "${names[$i]}: status=$status output=$output" >&2; false; }
+    [ "$output" = "$plain" ] || { echo "${names[$i]}: stderr differs from the plain form:" >&2; echo "$output" >&2; false; }
+  done
+}
+
+@test "a surrogate pair decodes to ONE character: 1,000 emoji + an innocuous word stays under the length tripwire (#63 r5 P2-6)" {
+  # Counted as 2 UTF-16 units (or 12 raw escape characters) each, this
+  # prompt would be over 1,500 and refused on length; decoded correctly it
+  # is 1,010 characters with no keyword, and allowed.
+  local emoji="" i
+  for i in $(seq 1 1000); do emoji="$emoji"'\ud83d\ude00'; done
+  run _guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"sonnet\",\"prompt\":\"$emoji summarize\"}}"
+  [ "$status" -eq 0 ]
+  # ...and the same prompt with an escaped keyword after the emoji refuses.
+  run _guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"sonnet\",\"prompt\":\"$emoji \\u0072eview\"}}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"build/review lane"* ]] || false
+}
+
+@test "a model field elsewhere in the payload cannot stand in for tool_input.model (#63 r5 P2-6)" {
+  # codex review, structure note: an earlier metadata.model="haiku" was the
+  # first "model" the flat scan found, and the sonnet call was allowed.
+  run _guard '{"metadata":{"model":"haiku"},"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"review"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"a sonnet-model Agent spawn"* ]] || false
+}
+
+@test "two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)" {
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"haiku","prompt":"x"}}{"tool_name":"Agent"}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not one well-formed JSON object"* ]] || false
 }
 
 # --- #63 round-5 P2-5: SIGPIPE on large pretty-printed payloads --------------
@@ -452,11 +509,10 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
   echo "median: ${median}ms" >&2
   # #63 P1-1 fix2 stopped pre-slicing the payload before extraction -- see
   # this file's docstring for why that was a correctness bug, not just an
-  # optimization. The honest cost of that: `json_field_str` now decodes the
-  # WHOLE prompt (its escape-decode passes dominate), measured ~200-220ms
-  # median for 200kB on this host's GNU grep/bash 5.2 (was ~50ms capped, is
-  # NOT free anymore -- this bound reflects that, it is not the ~50ms round-1
-  # claim). This is deliberately loose (the sibling 1MB-adjacent commit
+  # optimization. The honest cost of that: the WHOLE payload is parsed (by
+  # jq since round 5, #63 P2-6; by a bash/grep scan measured ~200-220ms
+  # median for 200kB before that) -- this bound reflects that, it is not
+  # the ~50ms round-1 claim. This is deliberately loose (the sibling 1MB-adjacent commit
   # already established that a tight bound here is a flaky-CI-assertion
   # mistake, not a real regression signal, on a host that runs several other
   # lanes' full suites at once) -- it still catches the catastrophic case
