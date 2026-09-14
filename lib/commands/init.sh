@@ -89,6 +89,15 @@ EOF
     fi
     local d
     d="$(profile_dir "$cli" "$profile")"
+    # #61 round-4 P3-6: a FILE at $d is a different problem than nothing
+    # there at all, and the old single message called it "No such
+    # directory" (wrong — it exists) while suggesting `clikae init $cli
+    # $profile` (which would also fail: ensure_profile --create collides
+    # with the same file). Name what's actually there, suggest something
+    # that works.
+    if [ -e "$d" ] && [ ! -d "$d" ]; then
+      log_fail "$cli/$profile  ($d) is a file, not a directory — nothing to adopt. Move or remove it, then \`clikae init $cli $profile\` to create a tank there."
+    fi
     if [ ! -d "$d" ]; then
       log_fail "No such directory: $cli/$profile  ($d) — nothing to adopt. Use \`clikae init $cli $profile\` to create a new tank instead."
     fi

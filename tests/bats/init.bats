@@ -247,6 +247,19 @@ load '../helpers'
   [[ "$output" != *"hello.lock"* ]] || { echo "hello.lock listed as a tank: $output"; false; }
 }
 
+@test "#61 round-4 P3-6: init --adopt on a FILE says so and suggests something that works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  : > "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is a file, not a directory"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"No such directory"* ]] || { echo "still claims it doesn't exist: $output"; false; }
+  # The suggested follow-up (after removing the file) must actually work.
+  rm -f "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "doctor's Next: line for a stray directory names --adopt, and it actually works" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/restored2"
   printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored2/.claude.json"
