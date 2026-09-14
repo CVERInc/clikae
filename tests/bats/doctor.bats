@@ -311,3 +311,73 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   [ "$status" -eq 0 ]
   [ "$before" = "$after" ]
 }
+
+# --- macOS pane-path fallback + set -eo pipefail survival (P2-4, review round 2) --
+# `_doctor_pane_path`'s Darwin branch (`ps eww`) and its two callers were never
+# exercised anywhere: GitHub's macos bats runner has no tmux at all (the guard
+# probe's own `command -v tmux` short-circuits before either is ever reached),
+# and every Linux run takes the `/proc` branch instead. These probe the two
+# code paths directly rather than waiting for a platform this suite cannot run.
+
+@test "_doctor_pane_path (macOS ps eww fallback) reads the LAST PATH= token, not the command line's own" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  chmod +x "$TEST_HOME/.osbin/uname"
+  # Simulates BSD `ps eww -o command=`: the pane's own COMMAND legitimately
+  # contains "PATH=..." (Rule 10's `env PATH=... <cmd>`, lib/core/tmux.sh)
+  # BEFORE its real ENVIRONMENT's own PATH= is appended after it.
+  cat > "$TEST_HOME/.osbin/ps" <<'STUB'
+#!/bin/sh
+printf 'env PATH=/SHIM/intended:/usr/bin sleep 60 PATH=/REAL/env:/usr/bin OTHER=1\n'
+STUB
+  chmod +x "$TEST_HOME/.osbin/ps"
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [ "$output" = "/REAL/env:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+@test "doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # A session name live_session_names claims exists but tmux does not: the
+  # shape of the race between the listing and the -F probe two lines later.
+  cat > "$TEST_HOME/probe.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+live_session_names() { printf 'clikae-codex-ghost97\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/probe.sh"
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"AFTER-GUARD-CHECK"* ]] || { echo "aborted before completing: $output"; false; }
+}
+
+@test "doctor's tmux guard check survives an unreadable pane environment (set -eo pipefail)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  cat > "$TEST_HOME/probe2.sh" <<EOF
+set -eo pipefail
+CLIKAE_LIB="$CLIKAE_LIB"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+# shellcheck source=/dev/null
+. "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+# Simulates an unreadable /proc/<pid>/environ (or a failing macOS ps eww):
+# the real, per-pid probe returning nonzero, not just an empty string.
+_doctor_pane_path() { return 1; }
+live_session_names() { printf '$sess\tx\ty\n'; }
+_doctor_tmux_guard
+echo AFTER-GUARD-CHECK
+EOF
+  run bash "$TEST_HOME/probe2.sh"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"AFTER-GUARD-CHECK"* ]] || { echo "aborted before completing: $output"; false; }
+}

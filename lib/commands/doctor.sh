@@ -198,6 +198,16 @@ _doctor_legacy_prefix() {
 # "KEY=value" pairs after the command, space-separated, which is unambiguous
 # for PATH except in the (unsupported) case of a PATH entry that itself
 # contains a space.
+#
+# 🔴 THE LAST `PATH=` TOKEN, NOT THE FIRST (P2-4, clikae#97 review round 2).
+# `ps eww` prints the COMMAND first, the ENVIRONMENT after — and Rule 10's own
+# pane start command is `env PATH=<shim dir>:... <cmd>` (lib/core/tmux.sh),
+# so a pane's command line legitimately CONTAINS the literal text "PATH=…"
+# before its real environment's own "PATH=…" ever appears. `head -n1` took
+# the FIRST match — the command line's own text, not what the process
+# actually got — which is exactly the write-and-read-back-the-same-pipe bug
+# P1-2 fixed for `show-environment`, reopened here for a platform nothing
+# local can exercise (see below). `tail -n1` takes the real one.
 _doctor_pane_path() {
   local pid="$1"
   [ -n "$pid" ] || return 1
@@ -206,7 +216,11 @@ _doctor_pane_path() {
     return 0
   fi
   case "$(uname -s 2>/dev/null)" in
-    Darwin) ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | head -n1 ;;
+    # `|| true` is LOAD-BEARING, same reason as lib/core/proc.sh:35-40: on a
+    # locked-down host `ps eww` can exit non-zero, and under doctor's own
+    # `set -eo pipefail` (bin/clikae) a leaked failure here would abort the
+    # WHOLE health check, not just this one probe.
+    Darwin) ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | tail -n1 || true ;;
     *) return 1 ;;
   esac
 }
@@ -237,12 +251,18 @@ _doctor_tmux_guard() {
   while IFS=$'\t' read -r sess created attached; do
     [ -n "$sess" ] || continue
     : "$created" "$attached"
-    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)"
+    # `|| true` on both: doctor runs under `set -eo pipefail` (bin/clikae),
+    # and neither failure here is this whole command's business to abort on
+    # (P2-4, clikae#97 review round 2, mirroring lib/core/proc.sh:35-40) —
+    # `list-panes` on a session that ended between the listing above and
+    # here, or `_doctor_pane_path` unable to read that pid's environment,
+    # should read as "couldn't confirm the guard", not crash the report.
+    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)" || true
     if [ -z "$pid" ]; then
       missing="$missing $sess"
       continue
     fi
-    pane_path="$(_doctor_pane_path "$pid")"
+    pane_path="$(_doctor_pane_path "$pid")" || true
     case "$pane_path" in
       "$shim_dir:"*|"$shim_dir") continue ;;
       *) missing="$missing $sess" ;;
