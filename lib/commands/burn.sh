@@ -1343,12 +1343,14 @@ _burn_left_behind() {
     # single-level one, unlike discovery's nested pair — turned out to be
     # ANOTHER spot this round's added complexity (the ahead/dirty flag
     # computation below, absent from round-1's simpler single-key sort)
-    # tripped on real macOS CI's bash 3.2: traced all the way through
-    # discovery and every per-repo git/find call with rc=0, then nothing
-    # — not even the caller's very next statement — ever ran again. Same
-    # fix as discovery: a `mktemp` file instead of `< <(...)`, no
-    # process-substitution machinery left in this function's ranking path
-    # either.
+    # was observed to trip on real macOS CI's bash 3.2: traced all the way
+    # through discovery and every per-repo git/find call with rc=0, then
+    # nothing — not even the caller's very next statement — ever ran
+    # again. Same caveat as discovery's own comment on this (P3-4, round-3
+    # review): the CI-shaped failure is confirmed, the exact trigger within
+    # "a process substitution at this spot" is not. Same fix as discovery:
+    # a `mktemp` file instead of `< <(...)`, no process-substitution
+    # machinery left in this function's ranking path either.
     local i idx a_flag d_flag _lb_rank
     _lb_rank="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-rank.XXXXXX" 2>/dev/null)"
     if [ -n "$_lb_rank" ]; then
