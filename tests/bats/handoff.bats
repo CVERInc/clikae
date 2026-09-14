@@ -316,32 +316,51 @@ _seed_codex_whitespace_transcript() {
 }
 
 _seed_codex_injected_transcript() {
-  # Round-1 review P2-2: a response_item/role:user turn is NOT the same as
-  # something the human typed — codex also records machine-injected context
-  # that way. Two injected turns ahead of one real (event_msg/user_message)
-  # prompt: the digest must show ONLY the human line.
+  # Round-3 review P2-1: the REAL 0.154.0 codex_exec shape (see codex.sh's
+  # own comment above adapter_handoff_extract, and its round-3 review) is
+  # ONE message with THREE content parts, not one part per message — the
+  # round-1 fixture this replaces put the tag at the START of its own,
+  # single-part message, which happened to line up with the (buggy)
+  # line-anchored filter and stayed green while the real files still leaked.
+  # Part order matches the real files: plugin list, then the whole
+  # AGENTS.md dump, then environment_context, all inside ONE response_item
+  # — the shape that got joined into a single line BEFORE the old filter
+  # ever ran. content_item_kinds is the real files' own field naming what
+  # each part is; the human turn that follows is a SEPARATE message whose
+  # only kind is "user.text" (the shape the real files use for a typed
+  # prompt — event_msg/user_message does not appear in them at all).
   local profile="$1" dir="$2" sid="$3"
   local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/11"
   mkdir -p "$d"
   {
     echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
-    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd=/x shell=bash</environment_context>"}]}}'
-    echo '{"timestamp":"2026-09-11T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>AGENTS.md contents here</user_instructions>"}]}}'
-    echo '{"timestamp":"2026-09-11T00:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"the actual human prompt"}}'
+    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["plugins.recommendations","agents_md.instructions","environments.environment_context"],"content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of recommended plugins"},{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>secret house rules</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/x</cwd>\n</environment_context>"}]}}'
+    echo '{"timestamp":"2026-09-11T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"the actual human prompt"}]}}'
   } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
 }
 
-@test "#33 round-1 P2-2: codex handoff drops injected context turns, keeps only the human user_message" {
+@test "#33 round-3 review P2-1: codex user extract on the REAL 0.154.0 three-part injected shape keeps only the human prompt (first line is the human one, not a plugin/AGENTS.md/environment_context blob)" {
   clikae init codex work2
   local work="$TEST_HOME/work-codex-injected"; mkdir -p "$work"
   _seed_codex_injected_transcript work2 "$work" "44444444-4444-4444-4444-444444444444"
   cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work2/sessions/2026/09/11/rollout-2026-09-11T00-00-00-44444444-4444-4444-4444-444444444444.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  # Exactly ONE line, and it IS the human prompt verbatim — not the ~4.5 kB
+  # injected blob the pre-fix code emitted as "the first prompt" on a real
+  # rollout of this shape.
+  [ "$output" = "the actual human prompt" ]
+
   CODEX_HOME="$CLIKAE_HOME/profiles/codex/work2" run clikae handoff codex work2
   [ "$status" -eq 0 ]
   [[ "$output" == *"the actual human prompt"* ]] || false
-  [[ "$output" != *"environment_context"* ]] || false
-  [[ "$output" != *"user_instructions"* ]] || false
+  [[ "$output" != *"recommended_plugins"* ]] || false
   [[ "$output" != *"AGENTS.md"* ]] || false
+  [[ "$output" != *"secret house rules"* ]] || false
+  [[ "$output" != *"environment_context"* ]] || false
   [[ "$output" != *"cwd=/x"* ]] || false
 }
 

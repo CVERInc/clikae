@@ -349,6 +349,7 @@ adapter_handoff_extract() {
     BEGIN {
       role_re = "\"role\": *\"" role "\""
       part_keyre = "\"type\": *\"" part_type "\", *\"text\": *\""
+      kinds_re = "\"content_item_kinds\": *\\[[^]]*\\]"
       scanned = 0; matched = 0
     }
     $0 ~ event_re {
@@ -364,14 +365,38 @@ adapter_handoff_extract() {
       next
     }
     $0 ~ /"type": *"response_item"/ && $0 ~ role_re {
+      # round-3 review P2-1, metadata first: a real 0.154.0 rollout tags
+      # every response_item with content_item_kinds, and a human-typed turn
+      # is the ONLY one with a kind that starts with "user." (machine-
+      # injected context — AGENTS.md dumps, environment_context, plugin
+      # recommendations — never does). A line carrying this field and no
+      # "user."-prefixed kind is skipped WHOLE, before scanned/matched even
+      # see it — same "recognized and filtered, not a mismatch" spirit as
+      # round-2 P3-2 below, not "the anchors are looking at the wrong keys".
+      if (match($0, kinds_re)) {
+        kinds = substr($0, RSTART, RLENGTH)
+        if (kinds !~ /"user\./) next
+      }
       scanned++
       rest = $0; res = ""
       while (match(rest, part_keyre)) {
         rest = substr(rest, RSTART + RLENGTH)
         if (!match(rest, /^([^"\\]|\\.)*/)) break
         seg = substr(rest, 1, RLENGTH)
-        res = (res == "" ? seg : res " " seg)
         rest = substr(rest, RLENGTH + 2)
+        # round-3 review P2-1, per-part fallback: parts USED to be joined
+        # into one line BEFORE the line-anchored `<environment_context>`
+        # filter below ever saw them, so a real rollout whose first part is
+        # `<recommended_plugins>` and second is `# AGENTS.md instructions`
+        # produced a joined line starting with the FIRST tag only — the
+        # filter matched, but everything after the first part (the rest of
+        # the injected content, and any real text) rode along, unfiltered.
+        # Filtering PER PART before joining, here (not after), is the fix,
+        # and it also covers a shape with no content_item_kinds field at
+        # all (older/other rollouts) — the case the metadata check above
+        # has no way to decide.
+        if (seg ~ /^<[a-z_ ]+>/ || seg ~ /^# AGENTS\.md instructions/) continue
+        res = (res == "" ? seg : res " " seg)
       }
       if (res != "") { print res; matched++ }
     }
