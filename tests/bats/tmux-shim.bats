@@ -182,6 +182,34 @@ EOF
   [[ "$output" == *"gave up after"* ]] || { echo "expected the hop-ceiling message, got: $output"; false; }
 }
 
+# ── P3-5: a malformed counter means "no counter", never an abort (review round 3).
+# Measured before the pid-bound format: `garbage` -> `unbound variable`, rc 1;
+# `4` -> rc 127 (the ceiling, on the very first call). Neither let a kill
+# through, since the refusal runs first, but both broke an ordinary call.
+
+@test "shim: a garbage, stale or oversized hop counter reads as no counter (the call still goes through)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  local bad="" v rc
+  for v in garbage 4 99 1 '1:1' '1:4' ':' ':1' '-1' '1:' 'x[$(echo INJECTED >&2)]'; do
+    rm -f "$TEST_HOME/recorder.log"
+    run env -u TMUX _CLIKAE_TMUX_SHIM_HOPS="$v" PATH="$p" "$bash_bin" "$(SHIM)" -V
+    rc="$status"
+    { [ "$rc" -eq 0 ] && [ -e "$TEST_HOME/recorder.log" ] && [[ "$output" != *INJECTED* ]] && [[ "$output" != *"unbound"* ]]; } || bad="$bad
+  _CLIKAE_TMUX_SHIM_HOPS='$v': rc=$rc reached=$([ -e "$TEST_HOME/recorder.log" ] && echo yes || echo no) output=$output"
+  done
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "shim: a garbage hop counter never gets ahead of the refusal (kill-server still rc 86)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  run env TMUX="$TEST_HOME/fake,1,0" _CLIKAE_TMUX_SHIM_HOPS=garbage PATH="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" kill-server
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  [ ! -e "$TEST_HOME/recorder.log" ] || { echo "reached the recorder — should have refused first"; false; }
+}
+
 @test "shim: an unknown/no-op verb is never touched, \$TMUX set or not" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   run env TMUX="$TEST_HOME/whatever,1,0" bash "$(SHIM)" -V
