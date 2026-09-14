@@ -433,6 +433,24 @@ _seed_codex_injected_transcript() {
   [ -z "$output" ]
 }
 
+@test "#33 round-4 review P3-2: content_item_kinds naming no user.-prefixed kind on every candidate line still fires a loud diagnostic, not silence" {
+  # Before this fix, a response_item/role:user line whose content_item_kinds
+  # names no "user."-prefixed kind (an empty array, or a renamed kind on a
+  # future rollout) was skipped by `next` BEFORE scanned++ ran — so the
+  # bottom-of-script "scanned N, matched 0" diagnostic never had anything to
+  # count, and the whole prompt vanished with zero stderr output. This is the
+  # exact silent failure codex.sh's own comment above adapter_handoff_extract
+  # rules out.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/empty-kinds.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":[],"content":[{"type":"input_text","text":"a real human prompt"}]}}' > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"content_item_kinds named no"* ]] || false
+  [[ "$output" != *"a real human prompt"* ]] || false
+}
+
 _seed_codex_agent_message_transcript() {
   # Round-2 review P2-1: the repo-documented event_msg/agent_message shape
   # (the SAME shape lib/core/limit.sh's whole codex family reads,

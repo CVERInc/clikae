@@ -354,7 +354,7 @@ adapter_handoff_extract() {
       role_re = "\"role\": *\"" role "\""
       part_keyre = "\"type\": *\"" part_type "\", *\"text\": *\""
       kinds_re = "\"content_item_kinds\": *\\[[^]]*\\]"
-      scanned = 0; matched = 0; have_prev = 0; prev = ""
+      scanned = 0; matched = 0; have_prev = 0; prev = ""; kinds_skipped = 0
     }
     $0 ~ event_re {
       scanned++
@@ -398,7 +398,7 @@ adapter_handoff_extract() {
       has_kinds = 0
       if (match($0, kinds_re)) {
         kinds = substr($0, RSTART, RLENGTH)
-        if (kinds !~ /"user\./) next
+        if (kinds !~ /"user\./) { kinds_skipped++; next }
         has_kinds = 1
       }
       scanned++
@@ -462,6 +462,17 @@ adapter_handoff_extract() {
     END {
       if (scanned > 0 && matched == 0) {
         printf "handoff: codex extractor scanned %d %s lines, matched 0\n", scanned, role > "/dev/stderr"
+      } else if (scanned == 0 && matched == 0 && kinds_skipped > 0) {
+        # round-4 review P3-2: content_item_kinds present but naming no
+        # "user."-prefixed kind (an empty kinds array, or a future rollout
+        # that renames the kind) skips the WHOLE line before scanned++ ever
+        # runs, so the diagnostic above never fires — a real shape mismatch
+        # went completely silent — the exact thing the "Silent failure is
+        # not allowed" comment at :294 above rules out. This fires only when
+        # EVERY candidate line for this role was filtered by kinds and
+        # nothing was extracted by either shape (matched stays the true
+        # union total, including the event_msg branch own count).
+        printf "handoff: codex extractor found %d %s response_item line(s) but content_item_kinds named no \"user.\"-prefixed kind on any of them\n", kinds_skipped, role > "/dev/stderr"
       }
     }
   ' "$t" \
