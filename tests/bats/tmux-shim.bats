@@ -421,6 +421,18 @@ EOF
   [ "$status" -ne 0 ] || { echo "the target session should be dead: $output"; false; }
 }
 
+@test "shim: kill-session -aC (combined short options) is still recognised as -a (review round 2 P3)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sock="$TEST_HOME/bypass-ac.sock"
+  tmux -S "$sock" new-session -d -s bypassac 'sleep 60'
+  run env TMUX="$sock,1,0" bash "$(SHIM)" kill-session -aC
+  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
+  [[ "$output" == *"every OTHER session"* ]] || { echo "message doesn't credit -a: $output"; false; }
+  run tmux -S "$sock" list-sessions -F '#{session_name}'
+  [ "$status" -eq 0 ] && [ "$output" = "bypassac" ] || { echo "did not survive: $output"; false; }
+  tmux -S "$sock" kill-server 2>/dev/null || true
+}
+
 # ── P2-2: the REFUSAL decision needs no real tmux at all (review round 1) ──
 # lib/shims/tmux checks argv + $TMUX and can exit 86 before ever resolving a
 # real tmux, so these run identically whether or not tmux is installed —
@@ -440,6 +452,7 @@ _tg_recorder() {
   cat > "$TEST_HOME/.recorderbin/tmux" <<EOF
 #!$bash_bin
 printf 'ARGV:%s\n' "\$*" >> "$TEST_HOME/recorder.log"
+printf 'PATH:%s\n' "\$PATH" >> "$TEST_HOME/recorder.log"
 exit 0
 EOF
   chmod +x "$TEST_HOME/.recorderbin/tmux"
@@ -467,8 +480,15 @@ EOF
 @test "shim: an allowed call reaches whatever is on PATH with argv and PATH intact, real tmux or not" {
   _tg_recorder
   local bash_bin; bash_bin="$(command -v bash)"
-  run env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" -V
+  local test_path="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  run env -u TMUX PATH="$test_path" "$bash_bin" "$(SHIM)" -V
   [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   [ -f "$TEST_HOME/recorder.log" ] || { echo "the recorder was never reached"; false; }
   grep -qF -- '-V' "$TEST_HOME/recorder.log" || { echo "argv not forwarded: $(cat "$TEST_HOME/recorder.log")"; false; }
+  # "PATH intact" is the other half of this test's own name (P3, clikae#97
+  # review round 2) — the shim must leave $PATH exactly as received, not
+  # strip its own directory before handing off (see the file's own comment
+  # on why: stripping bought nothing against recursion and only cost every
+  # downstream process the guard).
+  grep -qF "PATH:$test_path" "$TEST_HOME/recorder.log" || { echo "PATH not intact: $(cat "$TEST_HOME/recorder.log")"; false; }
 }

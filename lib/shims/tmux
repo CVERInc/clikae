@@ -122,9 +122,13 @@ if [ -n "${TMUX:-}" ]; then
       if [ -n "$_seg_verb" ]; then
         # This segment's verb is already known — everything else here is
         # that command's own flags/args. Only -t/-a matter to the refusal.
+        # `-aC`/`-Ca` (P3, clikae#97 review round 2): tmux accepts kill-
+        # session's own short options combined in one token, same as any
+        # getopts-style cluster — a bare `-a)` pattern only ever matched -a
+        # on its own.
         case "$_tok" in
-          -t|-t*) _seg_has_target=1 ;;
-          -a)     _seg_has_a=1 ;;
+          -t|-t*)        _seg_has_target=1 ;;
+          -a|-aC|-Ca)    _seg_has_a=1 ;;
         esac
       elif [ "$_global_phase" -eq 1 ]; then
         case "$_tok" in
