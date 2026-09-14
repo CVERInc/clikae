@@ -772,11 +772,27 @@ tmux_status_fuelv() {
 # recorded a CI verdict. Counting it would mean inventing the state first, which
 # is a different change; see docs/DESIGN-tmux.md Rule 10.
 #
-# `kill -0` alone, deliberately NOT burn_status.sh's _burn_pid_matches_marker:
-# that guard costs a `ps` per candidate and exists to stop a RECYCLED pid from
-# refusing a real burn forever. Here the two errors are not symmetric — a
-# recycled pid makes this UNDERCOUNT (we believe the lane is alive and stay
-# quiet), which is the safe direction for a row that must never cry wolf.
+# 🔴 LIVENESS IS `kill -0` PLUS ONE `ps`, AND ONLY FOR A PID THAT ALREADY
+# FAILED (P3-1, 2026-09-14 round-3 review). This deliberately is NOT
+# burn_status.sh's _burn_pid_matches_marker: that guard costs a `ps` per
+# candidate and exists to stop a RECYCLED pid from refusing a real burn
+# forever. But `kill -0` alone cannot tell ESRCH from EPERM — measured on this
+# machine as an ordinary user, `kill -0 1` (init, root's) returns 1, exactly
+# like a pid that does not exist, so a `running` lane whose pid had been
+# recycled onto ANOTHER USER'S process counted as dead. The header used to say
+# the errors were asymmetric in the safe direction ("a recycled pid makes this
+# UNDERCOUNT"); that was true for a pid recycled onto one of OUR processes and
+# false for every other user's, and this row's whole claim is that it never
+# cries wolf. So a pid that fails `kill -0` is checked once with `ps -p`: still
+# on the process table means alive-and-foreign, which is never red. The cost is
+# paid only by a candidate that is already in a `running`/`waiting-reset` state
+# AND already failed `kill -0` — normally none per render, and never one per
+# marker.
+#
+# What is left, stated rather than hidden: a pid recycled onto ANY live process
+# (ours or a stranger's) still makes this UNDERCOUNT — we believe the lane is
+# alive and stay quiet. That is the direction a row that must never cry wolf
+# should miss in, and it is now the ONLY direction it misses in.
 tmux_status_alertsv() {
   local now="${1:-}" n=0 f e t d s json st pid upd dead_age keep_s
   _TSTAT_ALERTS=0
@@ -810,6 +826,9 @@ tmux_status_alertsv() {
       burn_status_fieldv "$json" pid; pid="$_BSF"
       case "$pid" in ''|*[!0-9]*) continue ;; esac
       kill -0 "$pid" 2>/dev/null && continue     # still alive — not news, however old
+      # P3-1 (round-3 review): `kill -0` says 1 for BOTH "no such process" and
+      # "not yours". Only the first is dead. See the header block above.
+      ps -p "$pid" >/dev/null 2>&1 && continue   # alive, just someone else's
       # P2-3 (round-2 review): pid liveness decides, not age. A dead writer is
       # red; `updated_at` only bounds how long, and the bound is the log
       # retention the file itself lives under — see the header block above

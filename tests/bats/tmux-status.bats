@@ -410,6 +410,27 @@ _dead_pid() { printf '2147483647'; }
   [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "padded: rc=$status $output"; false; }
 }
 
+# P3-1 (2026-09-14 round-3 review): `kill -0` returns 1 for BOTH "no such
+# process" and "that process is not yours", so a `running` lane whose pid had
+# been recycled onto another USER's process counted as dead — while the header
+# claimed the only error this function can make is to under-report. Measured as
+# an ordinary user: `kill -0 1` (init) rc=1, indistinguishable from a pid that
+# does not exist.
+@test "alerts: a pid that is alive but owned by someone else is never counted dead" {
+  _src
+  # pid 1 is init: it exists on every unix and belongs to root. As an ordinary
+  # user `kill -0 1` is EPERM; as root it succeeds. Either way it is ALIVE, so
+  # this assertion holds for whoever runs the suite.
+  _burn_status burn-1 running 1
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "a live foreign pid was called dead: $output"; false; }
+
+  # The control, same file, same state: a pid that really is gone is still red.
+  _burn_status burn-1 running "$(_dead_pid)"
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"!1"* ]] || { echo "control: $output"; false; }
+}
+
 # P2-2 (2026-09-14 round-3 review): round 2 implemented "unreadable => expired"
 # as "NON-NUMERIC => expired", and a truncated or doubled write is usually
 # still digits. An 11-digit stamp dates to the year 2537; `age` is hugely

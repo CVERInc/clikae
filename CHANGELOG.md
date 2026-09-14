@@ -247,7 +247,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blow the row's width. `!N` counts tanks the live catchers marked dry and
   burn lanes whose writer died before reaching a terminal state; it is not
   drawn at all when N is 0. A lane whose pid is dead is red however long it
-  ran (its `updated_at` is the attempt's start, not a heartbeat), and leaves
+  ran (its `updated_at` is the attempt's start, not a heartbeat) -- dead
+  meaning gone from the process table, not merely un-signalable, since
+  `kill -0` fails identically for a pid that belongs to another user -- and leaves
   the count once that stamp is older than the burn log retention (7 days, the
   same knob that removes the file), so it can neither hide nor pin red
   forever on a host that never runs `clikae burn` again. A dry marker whose
