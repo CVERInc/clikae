@@ -394,6 +394,63 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   [ "$out" = "c" ]
 }
 
+# --- launch gate (#63 round-5 P2-1) ---
+# The exclusion above only ever covered AUTOMATIC reroute. The codex review
+# reproduced `clikae burn claude <cockpit> --no-reroute …` entering the stub
+# engine, writing the artifact, rc=0. Every launch now asks one gate.
+
+@test "burn refuses an EXPLICIT target that is the recorded cockpit: rc≠0, engine never entered, no artifact (#63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --json --prompt 'review worktree' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused — claude/A is the recorded cockpit"* ]] || false
+  [[ "$output" == *"--force-cockpit"* ]] || false
+  [ ! -e "$L" ]      # the stub engine was never started
+  [ ! -e "$art" ]
+}
+
+@test "burn --force-cockpit runs on the cockpit and says so on stderr (#63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --force-cockpit --prompt 'review worktree' --artifact "$art"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--force-cockpit: burning claude/A even though it is the recorded cockpit"* ]] || false
+  [ -s "$L" ]
+  [ -e "$art" ]
+}
+
+@test "burn refuses a --to hop onto the cockpit after a dry tank, engine entered only for the first tank (#63 r5 P2-1)" {
+  _stub_codex
+  clikae init codex T1
+  clikae init codex H
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  mkdir -p "$CLIKAE_HOME/state"; printf 'codex/H\n' > "$CLIKAE_HOME/state/cockpit"
+  local A="$BATS_TEST_TMPDIR/out.md" L="$TEST_HOME/argv.log"
+  STUB_ARGV_LOG="$L" run clikae burn codex T1 --artifact "$A" --to codex/H -- run "$A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused — codex/H is the recorded cockpit"* ]] || false
+  [ "$(wc -l < "$L" | tr -d ' ')" = 1 ]   # T1 only
+  [ ! -e "$A" ]
+}
+
+@test "burn refuses a tank that is a symlink alias of the cockpit (physical identity, #63 r5 P2-1)" {
+  _stub_claude
+  clikae init claude A
+  ln -s "$CLIKAE_HOME/profiles/claude/A" "$CLIKAE_HOME/profiles/claude/alias"
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude alias --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
 @test "_burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)" {
   _src_burn
   clikae init claude a; clikae init claude b

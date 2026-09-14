@@ -39,6 +39,25 @@ _cockpit_state_write() {
 
 _cockpit_state_clear() { rm -f "$(_cockpit_state_file)" 2>/dev/null || true; }
 
+# _cockpit_is_recorded <engine> <tank> -> 0 when <engine>/<tank> IS the
+# recorded cockpit: by name (agy and antigravity are one engine), or by the
+# physical identity of the tank directory (`-ef`: a symlink alias of the
+# cockpit is still the cockpit). The one predicate every launch path asks —
+# `clikae burn`'s explicit target, its reroute hops, agy's walk (#63 round-5
+# P2-1) — so none of them can disagree about what "the cockpit" means.
+_cockpit_is_recorded() {
+  local e="$1" t="$2" cur ce ct
+  cur="$(_cockpit_state_read)"
+  [ -n "$cur" ] || return 1
+  ce="${cur%%/*}"; ct="${cur#*/}"
+  [ "$ce" = agy ] && ce=antigravity
+  [ "$e" = agy ] && e=antigravity
+  [ "$ce" = "$e" ] && [ "$ct" = "$t" ] && return 0
+  local a b
+  a="$(profile_dir "$e" "$t")"; b="$(profile_dir "$ce" "$ct")"
+  [ -d "$a" ] && [ -d "$b" ] && [ "$a" -ef "$b" ]
+}
+
 # _cockpit_hook_install <engine> <tank> -> install OUR PreToolUse block on
 # this tank's settings.json (union merge, backup, idempotent — see
 # lib/commands/settings.sh's _settings_write_file). Prints one status line.

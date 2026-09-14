@@ -149,6 +149,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attached; it now excludes the cockpit explicitly rather than relying on
   the live-session check to happen to cover it.
 
+- `clikae cockpit` round 5 (#63, codex security review):
+  - `clikae burn` refuses to launch on the recorded cockpit — the tank you
+    name, a `--to` hop, agy's walk, or a symlink alias of the cockpit's
+    directory — with the guard's own sentence, before any lock, `--fresh`
+    deletion or engine start. Round 4 only covered automatic reroute; an
+    explicit `clikae burn claude <cockpit>` ran to completion. This extends
+    #63's in-session tripwire to the launch path. `--force-cockpit` is the
+    operator override, and it says what it is doing on stderr.
+
 ### Added
 
 - `clikae cockpit <tank>` marks the tank that STEERS — the coordinating

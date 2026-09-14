@@ -198,6 +198,16 @@ through jq**: key order gets normalized and CRLF becomes LF. Content survives
 intact (a hand-written hooks block, extra keys, anything else in the file);
 byte-for-byte formatting does not.
 
+**The cockpit is never a burn target, either.** The hook only sees the
+cockpit's own in-session spawns; a headless `clikae burn` never passes
+through it. So `clikae burn` asks the same question before every engine
+launch — the tank you name, a `--to` hop, agy's own walk, a symlink alias of
+the cockpit's directory — and refuses with the guard's sentence
+(`cockpit-guard: refused — <engine>/<tank> is the recorded cockpit …`)
+before anything starts. Auto-reroute skips the cockpit. `--force-cockpit` is
+the operator override: the burn runs, and says on stderr that it is burning
+the cockpit.
+
 **The prompt heuristic is a tripwire, not a classifier — `--allow-agents` is
 the door.** It matches the issue's own phrases (`worktree`, a git commit/push,
 `REVIEWER`/an adversarial review, a test run) OR'd with a widened set of bare
