@@ -319,7 +319,23 @@ tmux_spawn_session() {
   # travels on to `new-session` as a single shell command STRING (tmux runs it
   # via the pane's default shell), and PATH is user- and machine-dependent
   # data, not something to splice in unquoted.
-  cmd="env PATH=$(printf '%q' "$PATH") $cmd"
+  #
+  # 🔴 `-u _CLIKAE_TMUX_SHIM_HOPS` (clikae#97 review round 2, P2-1). The shim's
+  # own cycle counter (lib/shims/tmux) has to survive an exec into a SCRIPT —
+  # another guard, a version-manager shim — because that script may leapfrog
+  # straight back into us (the whole reason the counter exists). But nothing
+  # requires that script to be as careful: if it just execs onward to a real
+  # binary without ever bouncing back (measured with `~/.local/bin/tmux`,
+  # clikae#97 round 2), the counter rides along into THAT client's environment
+  # — and if that client is the one that forks a new server (no socket existed
+  # yet), the counter is now in the server's GLOBAL table forever, so every
+  # future pane on it is born believing it is already mid-cycle. This is the
+  # one place clikae controls unconditionally for every session it creates
+  # (the same reasoning that put `PATH=` here for P1-1): strip the counter
+  # from the PANE's own process the same way PATH is forced onto it, so
+  # whatever leaked into the server's table never reaches anything clikae
+  # itself, or anything the pane goes on to fork, actually reads.
+  cmd="env -u _CLIKAE_TMUX_SHIM_HOPS PATH=$(printf '%q' "$PATH") $cmd"
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
   local _agent_sock=""

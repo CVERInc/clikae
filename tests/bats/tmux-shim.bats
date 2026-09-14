@@ -223,6 +223,42 @@ _src_tmux() {
   esac
 }
 
+# ── P2-1: the hop counter must not leak into the pane's own environment
+# (review round 2). A real `tmux_spawn_session` whose PATH is
+# shim -> a wrapper SCRIPT -> the real tmux binary: the shim's own cycle
+# counter has to survive its exec into that wrapper (it might leapfrog back
+# into the shim), but the wrapper has no obligation to scrub it before
+# reaching the real binary — measured with `~/.local/bin/tmux` reaching a
+# real server that way. If that unwitnessed client happens to be the one that
+# forks a fresh server, every future pane on it is born believing it is
+# already mid-cycle.
+
+@test "launch: the hop counter never reaches the pane process, even through an intermediate wrapper script" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -r /proc/self/environ ] || skip "no /proc on this platform"
+  _src_tmux
+  local real_tmux; real_tmux="$(command -v tmux)"
+  mkdir -p "$TEST_HOME/.wrapperbin"
+  local bash_bin; bash_bin="$(command -v bash)"
+  cat > "$TEST_HOME/.wrapperbin/tmux" <<EOF
+#!$bash_bin
+exec "$real_tmux" "\$@"
+EOF
+  chmod +x "$TEST_HOME/.wrapperbin/tmux"
+  # A wrapper script sits ahead of the real tmux; tmux_spawn_session then
+  # prepends the shim ahead of THAT, giving exactly shim -> wrapper -> real.
+  PATH="$TEST_HOME/.wrapperbin:$PATH"
+  tmux_spawn_session --session hopsleakprobe97 -- 'sleep 30'
+  local pid; pid="$(tmux list-panes -t '=hopsleakprobe97' -F '#{pane_pid}' | head -n1)"
+  run bash -c "tr '\\0' '\\n' < /proc/$pid/environ"
+  tmux kill-session -t '=hopsleakprobe97' 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "could not read /proc/$pid/environ: $output"; false; }
+  case "$output" in
+    *_CLIKAE_TMUX_SHIM_HOPS=*)
+      echo "pane process inherited the hop counter:"; printf '%s\n' "$output"; false ;;
+  esac
+}
+
 @test "launch: a bare kill-server run AS the pane's own process is refused (rc 86), the throwaway server survives" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   [ -r /proc/self/environ ] || skip "no /proc on this platform"
