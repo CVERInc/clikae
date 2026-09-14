@@ -3379,12 +3379,28 @@ assert rows[0]["ahead"] == 1, rows[0]
 # before any scan) 0s for the SAME run. A `find` shim that sleeps 1s makes
 # the scan slow enough here to be measurable at 1-second $SECONDS
 # granularity — a fast scan can't distinguish fixed from broken.
+# P2-2 (round-4 review): a blanket "every `find` call sleeps 1s" shim was
+# fine until #83 (`resume: hide sessions that burn started`, merged to main
+# after this test was written) gave `cmd_burn` its own pre/post
+# `adapter_all_transcripts` snapshot calls (codex.sh's own `find
+# "$1/sessions" …`) — TWO more `find` invocations that run *inside* the
+# timed window `elapsed_s` is pinned against (before `_burn_result`, same as
+# the engine attempt itself), not inside `_burn_left_behind`'s scan. Once
+# main is merged in, a shim that sleeps on every `find` legitimately makes
+# `elapsed_s` read 2-3s — that IS the correct value now, the assertion below
+# was just written against a world where those two calls didn't exist yet.
+# Narrowing the sleep to the scan's own `find` shapes (discovery's
+# `-print0`, the file-list find's `-newer` sentinel) keeps testing the same
+# invariant — scan time must not leak into `elapsed_s` — without the
+# session-attribution snapshot's unrelated `find` calls polluting it.
 @test "burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json" {
   _left84_setup
   _left84_repo
   cat > "$BATS_TEST_TMPDIR/bin/find" <<'STUB'
 #!/usr/bin/env bash
-sleep 1
+case " $* " in
+  *" -print0 "*|*" -newer "*) sleep 1 ;;
+esac
 exec /usr/bin/find "$@"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/find"
