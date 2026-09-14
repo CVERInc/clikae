@@ -179,7 +179,7 @@ _dead_pid() { printf '2147483647'; }
 @test "fuel: an aged reading costs the row no extra fork" {
   # The call site must be the variable-setting form: `$(_human_age …)` is a
   # subshell per render. Asserted on the source because a fork count needs
-  # strace, which CI does not have; the strace numbers are in Rule 10 §3.
+  # strace, which CI does not have; the strace numbers are in Rule 11 §3.
   # Code lines only: the comment explaining this fix quotes the forking form.
   run grep -nE '^[^#]*\$\(_human_age' "$CLIKAE_TEST_ROOT/lib/core/tmux.sh" "$CLIKAE_TEST_ROOT/lib/core/status_line.sh"
   [ "$status" -ne 0 ] || { echo "a forking call is back on the status path: $output"; false; }
@@ -913,7 +913,7 @@ INNER
 
 @test "helper: it costs far less than a redraw budget" {
   # Not a benchmark — a tripwire. The real measured cost is ~14 ms per call on
-  # the development host (docs/DESIGN-tmux.md Rule 10); the threshold here is
+  # the development host (docs/DESIGN-tmux.md Rule 11); the threshold here is
   # an order of magnitude above that, so it catches "somebody added a call that
   # blocks" and never catches "CI was busy".
   _usage_cache claude wrasse 42.0 65.0

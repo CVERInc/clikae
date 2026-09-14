@@ -85,7 +85,7 @@ dry_store_mark() {
 # cost this function's whole header promises is not there. Measured with
 # `strace -f -e trace=clone,execve` on the real helper (lib/core/status_line.sh):
 # 0 markers → 7 clones; 3 markers → 10; 33 markers → 40 — one clone per marker,
-# burn's half of the same render adds none. docs/DESIGN-tmux.md Rule 10 §3's
+# burn's half of the same render adds none. docs/DESIGN-tmux.md Rule 11 §3's
 # "two forks total" line was wrong the same way; fixed in the same commit.
 #
 # The fix inlines `dry_store_path`'s own one-line body instead of calling it

@@ -213,6 +213,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     A directory swapped in at the destination is refused instead of
     receiving the file. Read-only callers (doctor, `--check`, `--dry-run`)
     make no snapshot.
+- `clikae handoff` reads each engine's own transcript shape via a new optional
+  `adapter_handoff_extract` adapter hook (claude, codex, grok implement it;
+  an adapter without one falls back to the previous claude-shaped grep, so
+  third-party adapters keep working). codex's rollout records a turn as
+  either an `event_msg` (payload.type `user_message`/`agent_message`) or a
+  "response item" with an array `content`, and grok's `chat_history.jsonl`
+  has no `role` key at all — none of those matched under the old
+  claude-only extraction, so a dry codex/grok tank's brief carried metadata
+  only. Also fixes a `set -eo pipefail` bug where a raw brief's metadata line
+  (`sessionId`, `gitBranch`, …) silently killed the whole command on any
+  transcript missing a claude-only field — which was every codex/grok
+  transcript, so `clikae handoff codex`/`grok` produced no output at all
+  before this fix, not just a thin one (#33).
 
 ### Added
 
@@ -308,6 +321,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under grok's fixed mode — round-1 review caught `--permission acceptEdits`
   running silently on grok under a different mode (`bypassPermissions`); it
   now says so (#60).
+- tmux guard shim: `lib/shims/tmux` refuses a bare `kill-server` (no `-S`/`-L`)
+  or `kill-session` (no `-t`) while `$TMUX` is inherited — the shape that took
+  down a live server twice (2026-09-10, 2026-09-13) — rc 86, naming the socket
+  and the legal form; never refuses anything when `$TMUX` is unset. clikae
+  wraps the pane's own start command with `env PATH=<shim dir>:...` in the
+  one place a session is created (`tmux_spawn_session`, `lib/core/tmux.sh`) —
+  that reaches the pane's real process regardless of what tmux does with its
+  session environment tables, so every session clikae launches (and
+  everything that session forks) inherits it for free — no copy, no
+  settings.json. `clikae doctor` reads that pane process's own environment
+  and reports a live session whose `PATH` does not start with the shim
+  directory (#97).
+
+  Review round 2 hardened it further: the shim's own cycle counter no
+  longer leaks into a spawned pane's environment through an intermediate
+  wrapper script; the refusal scan now reads `-S`/`-L`/`-t`/`-a` per
+  `\;`-separated segment instead of once over the whole argv (closing three
+  more disposable-server-killing bypasses); the hop ceiling that stops two
+  guards leapfrogging forever no longer depends on `head` being resolvable
+  through the PATH it is validating; and `doctor`'s macOS pane-path probe
+  reads the last `PATH=` token instead of the first and no longer aborts
+  the whole report under `set -eo pipefail` on an ordinary race.
+
+  Review round 3: an empty `-t` no longer counts as naming a session —
+  `kill-session -t ''` (what `-t "$SESS"` becomes with `$SESS` unset) let
+  tmux pick a session itself and killed the other one, or the whole server
+  when only one existed; it is now refused like a bare `kill-session`. The
+  shim's hop counter is now bound to the process that set it (`<pid>:<n>`),
+  so a copy frozen into a tmux server no longer makes every `new-window`,
+  split or wake pane on it skip the next tmux wrapper — host guard
+  included — on its first call.
+  `clikae doctor` no longer reports a session it could not read (pane
+  already gone, `list-panes` failing, environment unreadable) as "not
+  first on PATH" with advice to restart the tank; it prints "unknown,
+  could not verify" for those instead.
 
 ## [0.29.0] — 2026-09-11
 

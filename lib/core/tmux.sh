@@ -251,6 +251,8 @@ _tmux_ssh_agent_link() {
 #           long-running session without git credentials.
 #   Rule 5  Session names are whitelisted rather than quoted around.
 #   Rule 7  What the server inherited at birth is written down (see above).
+#   Rule 10 The tmux guard shim goes first on PATH before the session is
+#           created, so the session — and everything it forks — inherits it.
 #
 # Returns 2 on a rejected name, 1 if tmux refused, 0 on success.
 tmux_spawn_session() {
@@ -275,6 +277,81 @@ tmux_spawn_session() {
   [ -n "$session" ] && [ -n "$cmd" ] || return 2
   # Rule 5 — do not rely on shell quoting to survive a hostile name.
   case "$session" in *[!a-zA-Z0-9_-]*) return 2 ;; esac
+
+  # Rule 10 — the tmux guard shim (CVERInc/clikae#97, lib/shims/tmux) goes
+  # first on PATH for the new session.
+  #
+  # 🔴 THE PANE'S OWN PROCESS, NOT `-e`, IS WHAT ACTUALLY CARRIES THIS (P1-1,
+  # clikae#97 review round 1). `tmux(1)`'s own "GLOBAL AND SESSION
+  # ENVIRONMENT" section says a new process's environment is the GLOBAL table
+  # (frozen at server birth) merged with the SESSION table (only touched by
+  # `-e`/`set-environment`) — PATH in neither by default — but measured
+  # directly (throwaway -S server, no clikae involved) that is not what a
+  # pane's REAL process gets: it inherits the SPAWNING CLIENT's live $PATH
+  # instead, which `-e PATH=…` never touches and `tmux show-environment -t`
+  # can never see either way (it only ever reports what `-e` wrote). An
+  # earlier version of this function relied on `-e` alone for the whole
+  # guarantee — every LAUNCH test read `show-environment` back and stayed
+  # green — while the pane process itself, and everything it forked,
+  # inherited whatever PATH the client happened to have. `doctor`'s
+  # `_doctor_tmux_guard` had the identical blind spot for the identical
+  # reason (P1-2, same review) and now reads the pane process directly.
+  #
+  # So: wrap the PANE'S OWN START COMMAND with `env PATH=…`, below, once
+  # `$cmd` is otherwise finalised. That is the pane's own first exec — the
+  # guard reaches it no matter what tmux does with its environment tables,
+  # any client-PATH quirk included. `-e "PATH=…"` is kept alongside (next
+  # line) as a harmless, documentary trace visible to `show-environment`;
+  # nothing in clikae relies on it for the guarantee any more.
+  #
+  # Also mutate THIS process's own $PATH, idempotently: harmless, and it
+  # means every tmux call this function goes on to make (including the
+  # chain below) already resolves `tmux` through the guard too.
+  local _shim_dir="$CLIKAE_LIB/shims"
+  case "$PATH" in
+    "$_shim_dir:"*) : ;;
+    *) PATH="$_shim_dir:$PATH" ;;
+  esac
+  export PATH
+  env_args+=("-e" "PATH=$PATH")
+  # The real guarantee (see above): the pane's own process is `env`'s child,
+  # so its PATH is exactly this, regardless of tmux. `printf %q` because $cmd
+  # travels on to `new-session` as a single shell command STRING (tmux runs it
+  # via the pane's default shell), and PATH is user- and machine-dependent
+  # data, not something to splice in unquoted.
+  #
+  # 🔴 `-u _CLIKAE_TMUX_SHIM_HOPS` (clikae#97 review round 2, P2-1). The shim's
+  # own cycle counter (lib/shims/tmux) has to survive an exec into a SCRIPT —
+  # another guard, a version-manager shim — because that script may leapfrog
+  # straight back into us (the whole reason the counter exists). But nothing
+  # requires that script to be as careful: if it just execs onward to a real
+  # binary without ever bouncing back (measured with `~/.local/bin/tmux`,
+  # clikae#97 round 2), the counter rides along into THAT client's environment
+  # — and if that client is the one that forks a new server (no socket existed
+  # yet), the counter is now in the server's GLOBAL table forever, so every
+  # future pane on it is born believing it is already mid-cycle. This is the
+  # one place clikae controls unconditionally for every session it creates
+  # (the same reasoning that put `PATH=` here for P1-1): strip the counter
+  # from the PANE's own process the same way PATH is forced onto it.
+  #
+  # 🔴 THIS ONLY COVERS THE PANE THIS FUNCTION SPAWNS (review round 3,
+  # P2-A). The earlier claim here, that a leaked counter "never reaches
+  # anything clikae itself reads", was measured false: `new-window`, a split,
+  # and clikae's own wake window (lib/core/wake.sh) inherit the server's
+  # table, not this command line. What actually closes the leak is in the
+  # shim: the counter is `<pid>:<n>` and only believed by that same pid or
+  # its direct child, so a copy frozen into a server is ignored by every
+  # pane. This `-u` stays because it costs nothing and keeps the pane's
+  # environment clean.
+  cmd="env -u _CLIKAE_TMUX_SHIM_HOPS PATH=$(printf '%q' "$PATH") $cmd"
+  # 🔴 CONSTRAINS EVERY FUTURE CALLER: `$cmd` MUST BE A SIMPLE COMMAND (P3,
+  # clikae#97 review round 2). `env … $cmd` only ever wraps the FIRST word —
+  # `cd x && …`, `exec foo`, `A=1 foo`, or anything with `;`/`&&` in it would
+  # change meaning (the guard would apply to `cd`, not to what runs after
+  # it, or `env` would try to exec a shell builtin and fail). The four
+  # current callers (switch.sh, burn.sh, antigravity.sh) all pass
+  # `bash -c …`/`bash "<file>"`, which is simple by construction — not an
+  # accident to rely on without saying so.
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
   local _agent_sock=""
@@ -587,7 +664,7 @@ tmux_spawn_session() {
 # substitution that enumerates burn run directories): the JSON is read with
 # burn_status_fieldv, the dry markers with dry_store_peekv, and nothing here
 # calls a vendor, `curl`, `jq`, or `clikae` itself. Measured cost is in
-# docs/DESIGN-tmux.md Rule 10.
+# docs/DESIGN-tmux.md Rule 11.
 #
 # 🔴 AND IT NEVER WRITES. A status line that collected stale state would make
 # "when did this marker disappear" depend on whether anyone was looking at a
@@ -636,7 +713,7 @@ tmux_spawn_session() {
 # already made for _burn_parse_duration) — "· 23h ago" — one shared
 # implementation of "how stale is old enough to say so" instead of a second
 # one invented here. Under 1h stays bare: that is recent enough that
-# annotating it would be noise on a row with no room to spare (Rule 10 §7).
+# annotating it would be noise on a row with no room to spare (Rule 11 §7).
 #
 # The fallback is the DRY MARKER, not the board's full transcript scan. The
 # board's dot costs ~4 ms of forks per call and is re-derived per redraw; this
@@ -770,7 +847,7 @@ tmux_status_fuelv() {
 # source; this repo's only Stop hook (`scripts/harness-stop-hook.sh`) records
 # BLOCKED/ALLOWED report-gate verdicts to `state/harness-hook.log` and has never
 # recorded a CI verdict. Counting it would mean inventing the state first, which
-# is a different change; see docs/DESIGN-tmux.md Rule 10.
+# is a different change; see docs/DESIGN-tmux.md Rule 11.
 #
 # 🔴 A `running` LANE WITH NO READABLE PID IS RED (P3-2, 2026-09-14 round-3
 # review). This used to `continue` on it — measured: `{"state":"running",

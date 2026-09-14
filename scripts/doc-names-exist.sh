@@ -169,7 +169,7 @@ CALLERS
 
 # 🔴 The `status-*` family joined the list with #77, when DESIGN-tmux started
 # making claims about seven of them. `window-status-format` is deliberately NOT
-# here: Rule 10 names it to say clikae does NOT set it (it is a window option
+# here: Rule 11 names it to say clikae does NOT set it (it is a window option
 # and would reach the wrong scope), and this check reads a named option as a
 # promise that the code sets it.
 # 🔴 P3-6 (2026-09-14 round-1 fix review): the alternation below named five of

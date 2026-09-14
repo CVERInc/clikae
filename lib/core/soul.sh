@@ -222,7 +222,11 @@ _memory_denied_hints() {
     printf '%safterwards.\n' "$c" >&2
     local born; born="$(tmux_server_born 2>/dev/null || true)"
     [ -n "$born" ] && printf '%sserver born: %s\n' "$c" "$born" >&2
-    printf '%sfix:    from a terminal that HAS the access: tmux kill-server,\n' "$g" >&2
+    # P2-4 (clikae#97 review round 1): a bare `tmux kill-server`, typed from
+    # INSIDE this same inherited session, is exactly the shape that took down
+    # a real server twice (#97) — clikae's own docs must not teach it. Name
+    # the socket this session is actually on, and the guarded form.
+    printf '%sfix:    from a terminal that HAS the access: tmux -S %s kill-server,\n' "$g" "${TMUX%%,*}" >&2
     printf '%sthen start clikae again. (Costs every session on it.)\n' "$c" >&2
     printf '\n' >&2
   fi

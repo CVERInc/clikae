@@ -182,6 +182,126 @@ _doctor_legacy_prefix() {
   return 0
 }
 
+# _doctor_pane_path <pid> -> the PATH value from that PROCESS's real
+# environment (P1-2, clikae#97 review round 1). NOT tmux's session table:
+# `tmux_spawn_session` (lib/core/tmux.sh, Rule 10) writes the shim dir into
+# the session table via `-e` AND wraps the pane's own start command with
+# `env PATH=…` — but a pane's real process gets the SPAWNING CLIENT's live
+# PATH, which `-e` never touches, so reading `show-environment -t` back only
+# ever proves what was ASKED for, never what the process actually got. The
+# original version of this probe did exactly that, and structurally could
+# not have gone red for a session spawned through `tmux_spawn_session`,
+# guard present or not: it always read back its own `-e` write.
+#
+# Linux reads /proc directly. macOS has no /proc; `ps eww` (BSD ps: e = show
+# environment, ww = don't truncate) is the documented fallback — it appends
+# "KEY=value" pairs after the command, space-separated, which is unambiguous
+# for PATH except in the (unsupported) case of a PATH entry that itself
+# contains a space.
+#
+# 🔴 THE LAST `PATH=` TOKEN, NOT THE FIRST (P2-4, clikae#97 review round 2).
+# `ps eww` prints the COMMAND first, the ENVIRONMENT after — and Rule 10's own
+# pane start command is `env PATH=<shim dir>:... <cmd>` (lib/core/tmux.sh),
+# so a pane's command line legitimately CONTAINS the literal text "PATH=…"
+# before its real environment's own "PATH=…" ever appears. `head -n1` took
+# the FIRST match — the command line's own text, not what the process
+# actually got — which is exactly the write-and-read-back-the-same-pipe bug
+# P1-2 fixed for `show-environment`, reopened here for a platform nothing
+# local can exercise (see below). `tail -n1` takes the real one.
+_doctor_pane_path() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  # 🔴 NONZERO MEANS "COULD NOT READ", NEVER "NO GUARD" (P3-4, clikae#97
+  # review round 3). The caller reports the two differently, so every way
+  # this can fail to see the process returns 1 instead of printing nothing:
+  # a pid that exited between `list-panes` and here, an environ that reads
+  # back empty (a zombie), `ps` failing or printing no PATH. Only a process
+  # whose environment WAS read gets rc 0, even if it has no PATH at all.
+  local env_dump=""
+  if [ -r "/proc/$pid/environ" ]; then
+    env_dump="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)" || return 1
+    [ -n "$env_dump" ] || return 1
+    printf '%s\n' "$env_dump" | sed -n 's/^PATH=//p' | head -n1
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    # `|| true` is LOAD-BEARING, same reason as lib/core/proc.sh:35-40: on a
+    # locked-down host `ps eww` can exit non-zero, and under doctor's own
+    # `set -eo pipefail` (bin/clikae) a leaked failure here would abort the
+    # WHOLE health check, not just this one probe.
+    Darwin)
+      env_dump="$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | tail -n1)" || true
+      [ -n "$env_dump" ] || return 1
+      printf '%s\n' "$env_dump"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# _doctor_tmux_guard -> say something ONLY when a live clikae session's PANE
+# PROCESS does not have the tmux guard shim first on its real PATH
+# (CVERInc/clikae#97, lib/shims/tmux — refuses a bare kill-server/kill-session
+# while $TMUX is inherited, rc 86).
+#
+# 🔴 FIRST, not just present. `tmux_spawn_session` is the only place that
+# arranges it, and a session captures its creating client's PATH once, at
+# birth (DESIGN-tmux Rule 8) — nothing repaints it later. So a session
+# started before the guard shipped, or one whose spawn path drifted around
+# Rule 10, is silently unprotected for its whole life; the only way to know
+# is to ask THAT session's own pane process what its PATH actually is
+# (`_doctor_pane_path`, above), not this process's, and not tmux's table.
+_doctor_tmux_guard() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  # P3 (clikae#97 review round 1): this is DOCTOR's own process's
+  # $CLIKAE_LIB, compared against sessions doctor did not necessarily spawn.
+  # Two copies of clikae on one machine (a release install plus a checkout
+  # like this review's own worktree) can each spawn sessions from a
+  # different $CLIKAE_LIB, and this only ever matches its OWN. A known,
+  # narrow blind spot — not fixed here — rather than a claim this covers
+  # every install on the machine.
+  local shim_dir="$CLIKAE_LIB/shims"
+  local sess created attached pid pane_path missing="" unknown=""
+  while IFS=$'\t' read -r sess created attached; do
+    [ -n "$sess" ] || continue
+    : "$created" "$attached"
+    # `|| true` / `if !`: doctor runs under `set -eo pipefail` (bin/clikae),
+    # and neither failure here is this whole command's business to abort on
+    # (P2-4, clikae#97 review round 2, mirroring lib/core/proc.sh:35-40).
+    #
+    # 🔴 "COULD NOT READ" IS ITS OWN ANSWER (P3-4, clikae#97 review round 3).
+    # `list-panes` on a session that ended between the listing above and
+    # here, a pane pid that is already gone, or an environment this user
+    # cannot read all used to land in `missing`, printing "not first on
+    # PATH" and "restart the tank" about a session nobody actually looked
+    # at. Measured for all three. They go to `unknown` now, which says only
+    # that the guard could not be verified.
+    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)" || true
+    if [ -z "$pid" ]; then
+      unknown="$unknown $sess"
+      continue
+    fi
+    if ! pane_path="$(_doctor_pane_path "$pid")"; then
+      unknown="$unknown $sess"
+      continue
+    fi
+    case "$pane_path" in
+      "$shim_dir:"*|"$shim_dir") continue ;;
+      *) missing="$missing $sess" ;;
+    esac
+  done <<EOF
+$(live_session_names 2>/dev/null || true)
+EOF
+  if [ -n "$missing" ]; then
+    printf '  %-16s %s\n' "tmux guard" "not first on PATH:$missing"
+    log_dim "                   (started before the guard, or outside tmux_spawn_session — reattach won't fix it, restart the tank to pick it up)"
+  fi
+  if [ -n "$unknown" ]; then
+    printf '  %-16s %s\n' "tmux guard" "unknown, could not verify:$unknown"
+    log_dim "                   (couldn't read that session's pane process — it may have just ended, or its environment isn't readable by this user)"
+  fi
+  return 0
+}
+
 # _doctor_memory -> say something ONLY when a Soul store cannot be read.
 #
 # 🔴 WHY DOCTOR AND NOT JUST THE LAUNCH WARNING. memory_access_warn fires when a
@@ -355,6 +475,7 @@ EOF
   printf '%s\n' "$rows" | _doctor_render_table
   echo ""
   _doctor_legacy_prefix
+  _doctor_tmux_guard
   _doctor_memory
   _doctor_cockpit
   # shellcheck source=./settings.sh
