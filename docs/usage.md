@@ -141,9 +141,10 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > **What makes a directory a tank.** Every tank carries a `.clikae-tank` marker
 > file (just the engine name, one line) inside it — that marker, not the
 > directory's name or content, is what `clikae tanks`, `burn`'s reroute, and
-> every other reader treat as "this is a real tank". `init` (and agy's own
-> tank creation) stamps it the moment a tank is made. **Upgrading from an
-> older clikae:** the first command you run against an existing store
+> every other reader treat as "this is a real tank". Only the marker's FIRST
+> LINE is ever read or compared; anything after the first newline is ignored.
+> `init` (and agy's own tank creation) stamps it the moment a tank is made.
+> **Upgrading from an older clikae:** the first command you run against an existing store
 > performs a one-time sweep that marks every existing tank directory (no
 > exceptions, no re-login required) and then writes a flag
 > (`$CLIKAE_HOME/state/tanks-adopted-v1`) so it never runs again — a

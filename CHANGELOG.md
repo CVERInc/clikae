@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error — and `clikae doctor --adopt` retries the write once the store is
   writable again. `clikae doctor` names any directory left without a marker
   and what to do about it.
+- `tank_dir_is_tank`'s marker check reads with the builtin `read`, not a
+  forked `cat` per tank (160ms → 123ms on `clikae tanks` with 30 tanks;
+  519ms → 483ms on `clikae doctor`). **This only compares the marker's FIRST
+  LINE**, a narrower check than the previous exact-whole-file compare — a
+  marker is always written as exactly one line (`tank_marker_write`), so this
+  is a no-op for any marker clikae itself wrote; it matters only for a marker
+  someone else hand-edited to add trailing garbage after the first newline,
+  which now still names a tank instead of being rejected.
 
 ### Fixed
 

@@ -326,3 +326,26 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" != *"wrongeng"* ]] || { echo "wrongly listed: $output"; false; }
 }
+
+# --- #61 round-4 P3-3: the round-3 cat->read builtin change narrowed the
+# marker comparison from the WHOLE FILE to just its FIRST LINE. Documented
+# (CHANGELOG.md, docs/usage.md) rather than restored, since every marker
+# clikae itself writes is exactly one line — this pins down the chosen
+# semantics against the two inputs the round-4 review used to demonstrate it.
+
+@test "#61 round-4 P3-3: a marker with garbage after the first line still names a tank (first-line semantics, documented)" {
+  clikae init claude multiline
+  printf 'claude\nJUNK\n' > "$CLIKAE_HOME/profiles/claude/multiline/.clikae-tank"
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"multiline"* ]] || { echo "$output"; false; }
+}
+
+@test "#61 round-4 P3-3: a 200 KB marker still names a tank, and reading it stays cheap (bounded to the first line, not the whole file)" {
+  clikae init claude bigmarker
+  { printf 'claude\n'; head -c 200000 /dev/zero | tr '\0' 'x'; echo; } \
+    > "$CLIKAE_HOME/profiles/claude/bigmarker/.clikae-tank"
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bigmarker"* ]] || { echo "$output"; false; }
+}
