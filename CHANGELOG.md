@@ -157,6 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     explicit `clikae burn claude <cockpit>` ran to completion. This extends
     #63's in-session tripwire to the launch path. `--force-cockpit` is the
     operator override, and it says what it is doing on stderr.
+  - Moving the role compares physical tank identity, not names: a
+    destination whose directory is a symlink alias of the current cockpit
+    (or whose settings.json is the same file) is refused as the same tank.
+    Before, the move returned 0, recorded the alias, and removed the only
+    guard from the shared settings.json.
 
 ### Added
 

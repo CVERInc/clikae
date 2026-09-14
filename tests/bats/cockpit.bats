@@ -235,6 +235,35 @@ _guard_installed() {
   ! _guard_installed "$CLIKAE_HOME/profiles/claude/bbb/settings.json"
 }
 
+@test "moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)" {
+  # codex review repro: with A armed, replace B's directory with a symlink
+  # to A. On f20a603 the move returned 0, state became claude/B, and the
+  # shared settings.json had no guard.
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  rm -rf "$CLIKAE_HOME/profiles/claude/B"
+  ln -s "$CLIKAE_HOME/profiles/claude/A" "$CLIKAE_HOME/profiles/claude/B"
+  run clikae cockpit claude B
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"same physical tank"* ]] || false
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+}
+
+@test "moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)" {
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  rm -f "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  ln "$CLIKAE_HOME/profiles/claude/A/settings.json" "$CLIKAE_HOME/profiles/claude/B/settings.json"
+  run clikae cockpit claude B
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"same physical tank"* ]] || false
+  _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "claude/A" ]
+}
+
 @test "--off with nothing set is an idempotent no-op" {
   run clikae cockpit --off
   [ "$status" -eq 0 ]

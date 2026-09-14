@@ -53,9 +53,23 @@ _cockpit_is_recorded() {
   [ "$ce" = agy ] && ce=antigravity
   [ "$e" = agy ] && e=antigravity
   [ "$ce" = "$e" ] && [ "$ct" = "$t" ] && return 0
+  _cockpit_same_physical_tank "$e" "$t" "$ce" "$ct"
+}
+
+# _cockpit_same_physical_tank <e1> <t1> <e2> <t2> -> 0 when two tank NAMES
+# reach the same bytes on disk: the tank directories are one directory
+# (`-ef` compares device+inode after following symlinks — a symlink alias, a
+# symlinked parent), or their settings.json are one file (a hard link, or a
+# symlink the install check would refuse anyway). #63 round-5 P2-2: the move
+# used to compare names only, while install and remove act on the physical
+# file — so moving A to a symlink alias of A "installed" idempotently and then
+# removed the only guard.
+_cockpit_same_physical_tank() {
   local a b
-  a="$(profile_dir "$e" "$t")"; b="$(profile_dir "$ce" "$ct")"
-  [ -d "$a" ] && [ -d "$b" ] && [ "$a" -ef "$b" ]
+  a="$(profile_dir "$1" "$2")"; b="$(profile_dir "$3" "$4")"
+  [ -d "$a" ] && [ -d "$b" ] || return 1
+  [ "$a" -ef "$b" ] && return 0
+  [ -e "$a/settings.json" ] && [ -e "$b/settings.json" ] && [ "$a/settings.json" -ef "$b/settings.json" ]
 }
 
 # _cockpit_hook_install <engine> <tank> -> install OUR PreToolUse block on
@@ -240,6 +254,14 @@ _cockpit_move() {
     # settings.json) but otherwise this is the idempotent no-op.
     _cockpit_hook_install "$engine" "$tank"
     return 0
+  fi
+
+  # #63 round-5 P2-2: different NAMES can still be one tank on disk. Install
+  # on the alias is an idempotent no-op on the shared settings.json, and the
+  # cleanup below would then remove the only guard while state names the
+  # alias. Refuse before anything is written.
+  if [ -n "$cur_engine" ] && _cockpit_same_physical_tank "$engine" "$tank" "$cur_engine" "$cur_tank"; then
+    log_fail "cockpit: $engine/$tank is the same physical tank as the current cockpit $cur_engine/$cur_tank (a symlink or hard-link alias) — refusing to move the role onto itself; $cur_engine/$cur_tank is still the cockpit, unchanged."
   fi
 
   # #63 P2-2 (round-2 review): this used to be a bare `_cockpit_hook_remove`
