@@ -1175,8 +1175,18 @@ _burn_left_behind() {
         -o -name dist -o -name build -o -name .cache \) -prune \
         -o \( -name .git -print0 -prune \) 2>/dev/null
     } > "$_lb_disc" 2>/dev/null || rc_disc=$?
+    # P2-1 (round-4 review): this used to set `lb_budget_hit=1` too, which
+    # forces every remaining root AND every marker already sitting in
+    # `$_lb_disc` (including `$root` itself, printed unconditionally above
+    # before `find` even runs) into `lb_budget_skipped` — a `find` that's
+    # merely slow-but-finite (a big cold tree, not a hang) made the payload
+    # repo itself vanish from the report while `lb_scan_budget` still had
+    # seconds left. A bounded `find` timing out only means "this root has
+    # an unknown number of repos we didn't finish listing" — one honest
+    # "more", not a declaration that the whole scan's budget is spent. The
+    # real budget is still enforced by the `$SECONDS` check both above and
+    # in the marker loop below.
     if [ "$rc_disc" -eq 124 ]; then
-      lb_budget_hit=1
       lb_budget_skipped=$((lb_budget_skipped + 1))
     fi
     while IFS= read -r -d '' marker; do
