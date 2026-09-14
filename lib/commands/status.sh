@@ -230,7 +230,14 @@ EOF
   if [ -n "$recent" ]; then
     printf '\n  %brecent carries%b\n' "$__C_BOLD" "$__C_RESET"
     printf '%s\n' "$recent" | while IFS= read -r _l; do
-      [ -n "$_l" ] && printf '    %b%s%b\n' "$__C_DIM" "$_l" "$__C_RESET"
+      # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — this loop is
+      # cmd_status' own LAST statement, called bare from dispatch under
+      # `set -e`; the same shape that made doctor/board/info die silently
+      # when their last-walked item happened to fail a test.
+      if [ -n "$_l" ]; then
+        printf '    %b%s%b\n' "$__C_DIM" "$_l" "$__C_RESET"
+      fi
     done
   fi
+  return 0
 }

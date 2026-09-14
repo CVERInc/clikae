@@ -180,6 +180,12 @@ _mcp_list() {
   fi
   log_info "Fleet-wide MCP servers for '$engine':"
   jq -r 'keys[]' "$store" | while IFS= read -r n; do
-    [ -n "$n" ] && printf '  %s\n' "$n"
+    # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — this loop is
+    # _mcp_list's own last statement, reached bare from `clikae mcp list`'s
+    # dispatch under `set -e`. Same shape as profile_store.sh's enumerator.
+    if [ -n "$n" ]; then
+      printf '  %s\n' "$n"
+    fi
   done
+  return 0
 }

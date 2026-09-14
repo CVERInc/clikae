@@ -655,9 +655,21 @@ _list_all_profiles_uncached() {
     tank_engine_known "$cli" || continue
     while IFS=$'\t' read -r name path; do
       [ -n "$name" ] || continue
-      tank_dir_is_tank "$cli" "$path" && printf '%s\t%s\t%s\n' "$cli" "$name" "$path"
+      # #61 round-3 P1-1: this must be an `if`, not `cmd && printf` — under
+      # `bin/clikae`'s `set -eo pipefail`, a `while` loop's exit status is
+      # its LAST command's, so with `&&` the whole loop (and the `for`
+      # around it, and this function's own `| sort` pipeline) returned 1
+      # whenever the LAST candidate walked happened not to be a tank —
+      # `doctor`/`status`/`info`/board all died silently (0 lines, rc 1)
+      # under `set -e`, with completely correct stdout. Whether this
+      # function succeeds must never be a function of which candidate
+      # happens to sort last.
+      if tank_dir_is_tank "$cli" "$path"; then
+        printf '%s\t%s\t%s\n' "$cli" "$name" "$path"
+      fi
     done < <(_tank_candidates "${cli_dir%/}")
   done | sort
+  return 0
 }
 
 # profiles_cache_warm -> populate the process-level cache of
@@ -681,6 +693,12 @@ profiles_cache_warm() {
   [ -n "$_CLIKAE_PROFILES_CACHE_SET" ] && return 0
   _CLIKAE_PROFILES_CACHE_SET=1
   _CLIKAE_PROFILES_CACHE="$(_list_all_profiles_uncached)"
+  # #61 round-3 P1-1: an explicit `return 0` at the end — callers (doctor,
+  # status, home's board) call this DIRECTLY under `set -e`, so this
+  # function's own rc must always be "cache populated", never whatever the
+  # walk's command substitution happened to return (that walk's rc is now
+  # fixed too, but this makes the guarantee explicit rather than incidental).
+  return 0
 }
 
 # profiles_cache_reset -> forget the warmed cache. The interactive board is a
