@@ -349,6 +349,7 @@ PLIST
   _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
   mkdir -p "$TEST_HOME/assets"
   printf 'fallback fixture' > "$TEST_HOME/assets/clikae.icns"
+  # shellcheck disable=SC2034  # cmd_app reads it for the asset fallback
   CLIKAE_ROOT="$TEST_HOME"
   run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]

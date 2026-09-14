@@ -18,6 +18,11 @@ jobs:
           severity: warning
           scandir: '.'
           additional_files: 'bin/clikae install.sh'
+      # The action above does not look at `.bats` (round-8 fix review P3-3),
+      # and neither did scripts/test.sh, so a finding in a test file was
+      # invisible on both sides. Same command the local gate runs.
+      - name: Run shellcheck on the bats suite
+        run: find tests -name '*.bats' -print0 | xargs -0 shellcheck -S warning
 
   signet:
     name: signet (CLI surface)

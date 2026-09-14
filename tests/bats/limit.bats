@@ -140,6 +140,7 @@ _src_limit() {
 
 @test "limit_output_dry: clean output stays NOT dry even with a pattern set" {
   _src_limit
+  # shellcheck disable=SC2034  # read by limit_output_dry itself
   CLIKAE_LIMIT_PATTERN='Quota exceeded'
   run limit_output_dry codex "wrote /tmp/out.md, all good."
   [ "$status" -ne 0 ]

@@ -14,6 +14,7 @@
 load '../helpers'
 
 _src_harness_lib() {
+  # shellcheck disable=SC2034  # agy_harness.sh reads it when sourced below
   CLIKAE_ROOT="$CLIKAE_TEST_ROOT"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/agy_harness.sh"
@@ -110,10 +111,11 @@ _run_stop() {  # stdin: payload
 }
 
 @test "harness: dispatched it holds on longer, but still stops" {
+  # shellcheck disable=SC2034  # declared with the names this test does use
   local t="$BATS_TEST_TMPDIR/t.jsonl" p i
   _transcript "$t" "I verified everything works." 0
   p="$(_payload "$t")"
-  for i in 1 2 3; do
+  for _ in 1 2 3; do
     run bash -c "printf %s '$p' | CLIKAE_DISPATCH=1 CK_HARNESS_STATE='$BATS_TEST_TMPDIR/state' bash '$(HARNESS)' Stop"
     [[ "$output" == *"continue"* ]] || false
   done

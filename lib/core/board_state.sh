@@ -1373,7 +1373,7 @@ board_state_refresh() (
       done < "$removed_f"
     fi
 
-    local -a manifest_lines=() reading_lines=()
+    local -a manifest_lines=() reading_lines=() reading_paths=()
     local mtv szv fpv age mtsec val sidscope
     if [ -f "$changed_f" ]; then
       while IFS=$'\037' read -r mtv szv fpv; do
@@ -1406,6 +1406,7 @@ board_state_refresh() (
               val="$("$parser" "$fpv")"
             fi
             reading_lines+=("$val")
+            reading_paths+=("$fpv")
           fi
         fi
         manifest_lines+=("$mtv"$'\036'"$szv"$'\036'"$sid"$'\036'"$scope"$'\036'"$val"$'\036'"$fpv")
@@ -1415,7 +1416,14 @@ board_state_refresh() (
       [ ! -f "$unchanged_f" ] || cat "$unchanged_f"
       [ "${#manifest_lines[@]}" -eq 0 ] || printf '%s\n' "${manifest_lines[@]}"
     } > "$gen/manifest"
+    # Round-8 fix review P3-2: the cold build published `readings-bounded` and
+    # the incremental path published nothing, so the presence of that file
+    # meant two different things ("this is what cold read" vs "this generation
+    # is incremental") and nobody auditing a frame could tell which. Both paths
+    # write it now, with the same meaning on both: the transcripts THIS refresh
+    # opened for a rate-limit reading.
     if [ -n "$window" ]; then
+      [ "${#reading_paths[@]}" -eq 0 ] || printf '%s\n' "${reading_paths[@]}" > "$gen/readings-bounded"
       {
         printf '%s\n' "${reading_lines[@]}"
         [ ! -f "$unchanged_f" ] || cut -d$'\036' -f5 "$unchanged_f" 2>/dev/null

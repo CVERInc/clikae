@@ -563,8 +563,9 @@ STUB
   declare -F adapter_burn_flags >/dev/null   # claude HAS it
   declare -F adapter_audit_flags >/dev/null
   load_adapter gh
-  ! declare -F adapter_burn_flags >/dev/null # gh must NOT have inherited it
-  ! declare -F adapter_audit_flags >/dev/null
+  # `! cmd` alone never fails a bats test (SC2314): `|| false` is what does.
+  ! declare -F adapter_burn_flags >/dev/null || false # gh must NOT have inherited it
+  ! declare -F adapter_audit_flags >/dev/null || false
 }
 
 # P1-1 (2026-09-12 round-2 review): adapter_meta_permission_modes (claude.sh,
@@ -2513,7 +2514,7 @@ STUB
   export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=1234
   run clikae burn claude t1 --artifact "$A" -- -p "raw prompt" --allowedTools "Bash,Agent"
   [ "$status" -eq 0 ]
-  ! grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log"
+  ! grep -q -- "--disallowedTools" "$BATS_TEST_TMPDIR/argv.log" || false
   grep -q -- "--allowedTools Bash,Agent" "$BATS_TEST_TMPDIR/argv.log"
   grep -q "^BG_WAIT=1234$" "$BATS_TEST_TMPDIR/env.log"
 }

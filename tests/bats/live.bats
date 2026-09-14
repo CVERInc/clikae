@@ -181,7 +181,9 @@ PATHDIRS
   # it was not, so a right answer arrived in the wrong variable.
   local row
   row="live"$'\037'"claude"$'\037'"t"$'\037'"title"$'\037'"recap"$'\037'"1"$'\036'"2m ago"$'\036'""$'\037'"clikae-claude-t"
+  # shellcheck disable=SC2034  # one destructuring read; only `active` is under test here
   local kind cli profile label alias active note
+  # shellcheck disable=SC2034  # one destructuring read; only `active` is under test here
   IFS=$'\037' read -r kind cli profile label alias active note <<<"$row"
   local at age wake
   IFS=$'\036' read -r at age wake <<<"$active"
@@ -236,7 +238,8 @@ PATHDIRS
   # work" never appears in the output.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "Alpha work" 202001010000   # older
   _claude_transcript "$dir" sidB "Beta work"  202601010000   # newer — the naive "guess"
 
@@ -263,7 +266,8 @@ PATHDIRS
   # guess as fact on both rows.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "Gamma work" 202001010000
   _claude_transcript "$dir" sidB "Delta work" 202601010000
 
@@ -283,7 +287,8 @@ PATHDIRS
   # render byte-identical to before the fix — no "?", same title.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" solo "Solo work" 202601010000
 
   tmux new-session -d -s "$(_csess)" 'sleep 30'
@@ -329,7 +334,8 @@ PATHDIRS
   # a trailing "?" — not by which conversation they actually named.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidB "Bare work"    202001010000   # older — the UNSTAMPED row's real transcript
   _claude_transcript "$dir" sidA "Resumed work" 202601010000   # newer — stamped, and what a naive mtime guess would pick for BOTH rows
 
@@ -371,7 +377,8 @@ PATHDIRS
   # move.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidOld "My own resumed work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux set-option -t "=$(_csess):" @clikae_session_id sidOld
@@ -398,7 +405,8 @@ PATHDIRS
   # transcript does not exist anywhere on disk.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   # The only real transcript on this tank belongs to nobody stamped —
   # available as an honest fallback guess once the stamp is known stale.
   _claude_transcript "$dir" sidReal "Something else" 202001010000
@@ -431,7 +439,8 @@ PATHDIRS
   # a second window by hand and killing the first one out from under it.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "My own work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'      # window 0 — stands in for the engine
   tmux new-window -t "$(_csess):" -n wake 'sleep 30'  # window 1 — stands in for the wake watcher
@@ -462,7 +471,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _tmux_conf_base_index 1
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "My own work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux set-option -t "=$(_csess):" @clikae_session_id sidA
@@ -483,7 +493,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _tmux_conf_base_index 1
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "My own work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'      # engine window, index 1
   tmux new-window -t "$(_csess):" -n wake 'sleep 30'  # wake watcher, index 2
@@ -504,7 +515,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _tmux_conf_base_index 0
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "My own work" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux set-option -t "=$(_csess):" @clikae_session_id sidA
@@ -527,7 +539,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # fallback text at all.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   local otherslug="-some-other-project-dir"
   mkdir -p "$dir/projects/$otherslug"
   printf '{"type":"custom-title","customTitle":"%s"}\n' "Work done elsewhere" \
@@ -559,7 +572,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # it — the exact shape issue #55 itself used as its example.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
 
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux new-session -d -s "$(_csess)-4242" 'sleep 30'
@@ -598,7 +612,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # proof that stamp had gone stale.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   local otherslug="-some-other-project-dir"
   mkdir -p "$dir/projects/$otherslug"
   printf '{"type":"custom-title","customTitle":"%s"}\n' "Work done elsewhere" \
@@ -628,7 +643,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # an ambiguous tank then looked exactly like an unambiguous one.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   local longtitle="auth redirect handling and the callback retry test we are still chasing down"
   _claude_transcript "$dir" sidA "$longtitle a" 202001010000
   _claude_transcript "$dir" sidB "$longtitle b" 202601010000
@@ -654,7 +670,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # question mark.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "Why is it slow?" 202001010000
   _claude_transcript "$dir" sidB "Fix the flake"    202601010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
@@ -684,7 +701,8 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   # single real transcript with no exclusion — never a blank cell.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   clikae init claude "$(_tank)"
-  local dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
   _claude_transcript "$dir" sidA "Work in progress" 202001010000
   tmux new-session -d -s "$(_csess)" 'sleep 30'
   tmux new-session -d -s "$(_csess)-4242" 'sleep 30'

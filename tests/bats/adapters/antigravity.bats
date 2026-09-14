@@ -273,7 +273,11 @@ assert_agy_title() {
 
   # and the name itself is namespaced, so the two tanks cannot share a slot
   local v1 v2
-  _AGY_WS_NS="${PROFILE//[^A-Za-z0-9_]/_}"; _agy_ws_varname ag-same; v1="$_agy_ws_var_out"
-  _AGY_WS_NS="${P2//[^A-Za-z0-9_]/_}";      _agy_ws_varname ag-same; v2="$_agy_ws_var_out"
+  _AGY_WS_NS="${PROFILE//[^A-Za-z0-9_]/_}"; _agy_ws_varname ag-same
+  # shellcheck disable=SC2154  # _agy_ws_var_out is _agy_ws_varname's out-variable
+  v1="$_agy_ws_var_out"
+  _AGY_WS_NS="${P2//[^A-Za-z0-9_]/_}"; _agy_ws_varname ag-same
+  # shellcheck disable=SC2154  # _agy_ws_var_out is _agy_ws_varname's out-variable
+  v2="$_agy_ws_var_out"
   [ "$v1" != "$v2" ]
 }

@@ -487,13 +487,12 @@ _codex_token_count_line() {
 
 @test "limit_codex_status_cached: an unchanged rollout's per-file cache entry is reused, not rewritten (P2-2)" {
   _src_limit
-  local d="$CLIKAE_HOME/profiles/codex/perfilecache" now cache fa fb
+  local d="$CLIKAE_HOME/profiles/codex/perfilecache" now cache fb
   now="$(TZ=UTC _at UTC '2026-09-10 10:00:00')"
   cache="$CLIKAE_HOME/cache/codex/perfilecache"
   _seed_codex_token_count "$d" a \
     "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
         '{"used_percent":10.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
-  fa="$d/sessions/2026/09/10/rollout-a.jsonl"
   TZ=UTC limit_codex_status_cached "$d" "$now" "$cache" >/dev/null
   local a_cache_before; a_cache_before="$(cat "$cache.d/rollout-a.jsonl")"
 

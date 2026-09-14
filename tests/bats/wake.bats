@@ -167,7 +167,8 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   wake_pref_set on
-  local s="clikae-claude-$(_sess)"
+  local s
+  s="clikae-claude-$(_sess)"
   tmux new-session -d -s "$s" 'sleep 20'
   CLIKAE_BIN="$CLIKAE_TEST_ROOT/bin/clikae" wake_offer claude "$(_sess)" "resets 3:50am (Asia/Tokyo)" >/dev/null
   run bash -c "tmux list-windows -t '$s' -F '#{window_name}' | grep -c '^wake'"

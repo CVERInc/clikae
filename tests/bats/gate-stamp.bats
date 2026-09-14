@@ -177,7 +177,7 @@ _stamp() {
   # reconstruct the decision from — and a silent decision is one nobody can
   # debug. Each path must name itself, and name itself DIFFERENTLY, or the line
   # is decoration rather than diagnosis.
-  local out reasons=""
+  local reasons=""
 
   run bash "$STAMPER"                                   # no stamp
   [ "$status" -ne 0 ]; [[ "$output" == *"gate:"* ]] || false

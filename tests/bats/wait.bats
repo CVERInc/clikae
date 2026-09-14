@@ -22,7 +22,7 @@ _mkstatus() {
 }
 
 @test "wait: a target already done exits 0 and prints its status object" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait burn-1
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
@@ -50,7 +50,7 @@ _mkstatus() {
 
 @test "wait: --any (the default) returns on the FIRST terminal target, not all of them" {
   _mkstatus burn-1 running null
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2
   [ "$status" -eq 0 ]
   [[ "$output" == *"burn-2"* ]] || false
@@ -58,8 +58,8 @@ _mkstatus() {
 }
 
 @test "wait: --all waits for every target and exits 0 only when EVERY one is done" {
-  _mkstatus burn-1 done true
-  _mkstatus burn-2 done true
+  _mkstatus burn-1 "done" true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 0 ]
   [[ "$output" == *"burn-1"* ]] || false
@@ -72,7 +72,7 @@ _mkstatus() {
 # the requested condition was NOT met.
 @test "wait: --all exits 1 (not 0) on a done+dry mix — one finishing clean does not save the others" {
   _mkstatus burn-1 dry false
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 1 ]
   [[ "$output" == *"burn-1"* ]] || false
@@ -81,7 +81,7 @@ _mkstatus() {
 
 @test "wait: --all exits 1 (not 0) on a done+fail mix" {
   _mkstatus burn-1 fail false
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 1 ]
 }
@@ -94,13 +94,13 @@ _mkstatus() {
 }
 
 @test "wait: accepts a bare pid as shorthand for burn-<pid>" {
-  _mkstatus burn-4242 done true
+  _mkstatus burn-4242 "done" true
   run clikae wait 4242
   [ "$status" -eq 0 ]
 }
 
 @test "wait: accepts a literal status-file path" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait "$CLIKAE_HOME/logs/burn-1/status.json"
   [ "$status" -eq 0 ]
 }
@@ -123,7 +123,7 @@ _mkstatus() {
 # target still running — `clikae wait A B --all --timeout 2 && ship` shipped
 # on a timeout. `--timeout` expiring is 1, full stop, in both modes.
 @test "wait: --all exits 1 (not 0) on a timeout even when one target is already done" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   _mkstatus burn-2 running null
   run clikae wait burn-1 burn-2 --all --timeout 1
   [ "$status" -eq 1 ]
@@ -138,7 +138,7 @@ _mkstatus() {
 
 @test "wait: actually BLOCKS — a target that flips to done mid-wait is caught, not missed" {
   _mkstatus burn-1 running null
-  ( sleep 2; _mkstatus burn-1 done true ) &
+  ( sleep 2; _mkstatus burn-1 "done" true ) &
   local bgpid=$!
   local t0=$SECONDS
   run clikae wait burn-1 --timeout 20
@@ -153,7 +153,7 @@ _mkstatus() {
 # both on first try. --------------------------------------------------------
 
 @test "wait: --timeout accepts a duration like 20m (both --help examples, as written)" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait burn-1 --timeout 20m
   [ "$status" -eq 0 ]
 }
@@ -197,14 +197,14 @@ _mkstatus() {
 # from, instead of being tried (and failing) as a literal directory name. --
 
 @test "wait: --json's own run_id (engine-tank-burn-pid) resolves to the top-level status file" {
-  _mkstatus burn-28186 done true codex T1
+  _mkstatus burn-28186 "done" true codex T1
   run clikae wait codex-T1-burn-28186
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
 }
 
 @test "wait: --json's per-attempt run_id with a -retryN suffix also resolves" {
-  _mkstatus burn-28186 done true codex T1
+  _mkstatus burn-28186 "done" true codex T1
   run clikae wait codex-T1-burn-28186-retry2
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false

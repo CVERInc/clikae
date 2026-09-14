@@ -541,6 +541,12 @@ _board_shims() {
   [ -f "$TEST_HOME/parsed.log" ]
   [ "$(wc -l < "$TEST_HOME/parsed.log" | tr -d ' ')" -eq 1 ]
   [[ "$(cat "$TEST_HOME/parsed.log")" == */session-0.jsonl ]] || false
+  # Round-8 P3-2: `readings-bounded` is published by BOTH paths, so its
+  # presence means one thing ("what this refresh opened"), not two.
+  local root gen
+  root="$(board_root "$CLIKAE_HOME/profiles/claude/work")"
+  gen="$root/$(cat "$root/current")"
+  [ "$(cat "$gen/readings-bounded")" = "$dir/session-0.jsonl" ]
 }
 
 @test "board: a removed transcript's resume row disappears after the next rebuild (round-6 incremental rebuild)" {
@@ -740,6 +746,7 @@ _b8_tank() {
   for ((i = 0; i < 50; i++)); do
     _board_entry_key "session-$i"; key="$_board_entry_key_out"
     _board_gen_entry "$held" "sids/$key" || { miss=$((miss + 1)); continue; }
+    # shellcheck disable=SC2154  # _board_gen_entry_out is its out-variable
     [ -s "$_board_gen_entry_out" ] || miss=$((miss + 1))
   done
   [ "$miss" -eq 0 ] || { echo "$miss of 50 entries unresolvable from the held generation"; false; }
@@ -874,7 +881,7 @@ _b8_tank() {
   cd "$TEST_HOME/work" || return 1
   _board_source
   load_adapter codex >/dev/null 2>&1 || true
-  local dir="$CLIKAE_HOME/profiles/codex/cjk" sd i j scope sid
+  local dir="$CLIKAE_HOME/profiles/codex/cjk" sd i j sid
   sd="$dir/sessions/2026/09/14"
   mkdir -p "$sd"
   local -a scopes=("$TEST_HOME/專案一" "$TEST_HOME/專案二" "$TEST_HOME/café" "$TEST_HOME/cafè")
@@ -1071,7 +1078,8 @@ _b8_tank() {
   # board_find could not resolve it.
   _b8_tank
   mkdir -p "$TEST_HOME/other"
-  local other="$B8_TANK/projects/$(_claude_project_slug "$TEST_HOME/other")"
+  local other
+  other="$B8_TANK/projects/$(_claude_project_slug "$TEST_HOME/other")"
   mkdir -p "$other"
   local i
   for i in 0 1 2; do

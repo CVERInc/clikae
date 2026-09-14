@@ -109,8 +109,8 @@ teardown() {
   PATH="$TEST_HOME/bin:$PATH" _pty_run "$CLIKAE_BIN" claude su >/dev/null 2>&1 &
   local runner=$!
 
-  local i engines=0
-  for i in $(seq 1 40); do
+  local engines=0
+  for _ in $(seq 1 40); do
     engines="$(_t list-windows -t '=clikae-claude-su:' -F '#{window_name}' 2>/dev/null \
       | grep -cvE '^wake( |$)' || true)"
     [ "${engines:-0}" -ge 1 ] && break

@@ -124,7 +124,7 @@ BASH4_FLAG_RE='declare -[gAn]|local -[An]|typeset -[An]'
     # The psm1 row keys by the engine name; assert that row carries the same binary,
     # env var (empty for flag-strategy engines), and strategy.
     local row
-    row="$(grep -E "^[[:space:]]*$n[[:space:]]*=" "$psm" || true)"
+    row="$(grep -E "^[[:space:]]*${n}[[:space:]]*=" "$psm" || true)"
     [ -n "$row" ] || { missing="$missing $n(no-row)"; continue; }
     printf '%s' "$row" | grep -q "Binary = '$bin'"     || missing="$missing $n(binary)"
     printf '%s' "$row" | grep -q "EnvVar = '$ev'"       || missing="$missing $n(envvar)"

@@ -132,8 +132,8 @@ load '../helpers'
   _pty_run "$CLIKAE_BIN" solo claude a --off > "$out" 2>&1 &
   local runner=$!
 
-  local i finished=0
-  for i in $(seq 1 40); do
+  local finished=0
+  for _ in $(seq 1 40); do
     kill -0 "$runner" 2>/dev/null || { finished=1; break; }
     sleep 0.5
   done

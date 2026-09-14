@@ -89,6 +89,7 @@ teardown() {
   # Otherwise "it will resume itself" is invisible from the window you are in.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_BUFFER_SECONDS=1
   tmux new-session -d -s "$(_sess)" 'sleep 30'
   tmux new-window -d -t "$(_sess)" -n wake 'sleep 30'

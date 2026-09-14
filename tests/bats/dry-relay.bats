@@ -192,6 +192,7 @@ _seed_email() { # <engine> <profile> <email>
 
 @test "dry_seen_suffix: builds a '· seen HH:MM' tag from an epoch" {
   _src
+  # shellcheck disable=SC2034  # the i18n string dry_seen_suffix formats
   T_DRY_SEEN="seen %s"
   run dry_seen_suffix 1780624464
   [ "$status" -eq 0 ]
@@ -201,6 +202,7 @@ _seed_email() { # <engine> <profile> <email>
 
 @test "dry_seen_suffix: empty/garbage epoch → no annotation (never invents a time)" {
   _src
+  # shellcheck disable=SC2034  # the i18n string dry_seen_suffix formats
   T_DRY_SEEN="seen %s"
   run dry_seen_suffix ""
   [ -z "$output" ]

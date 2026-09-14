@@ -183,7 +183,8 @@ STUB
 @test "_burn_wait_for_reset: gives up once a moved reset would exceed the ORIGINAL window" {
   _src_burn
   run_dir="$BATS_TEST_TMPDIR/run-b"; mkdir -p "$run_dir"
-  t0=$SECONDS; tried=""; burn_id="burn-b"; started_at=100
+  # shellcheck disable=SC2034  # the caller state _burn_wait_for_reset reads
+  t0=$SECONDS tried="" burn_id="burn-b" started_at=100
 
   date() { printf '1000\n'; }
   # A counter in a FILE, not a variable: `limit_reset_epoch` is always called
