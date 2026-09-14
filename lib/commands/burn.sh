@@ -406,16 +406,37 @@ _burn_output_tail() {
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
+#   · P0-cockpit (#63 P3-5, round-4 review) — SKIP the recorded cockpit tank,
+#     EXPLICITLY, unconditionally (not even --allow-active lifts this one).
+#     This used to be covered only BY ACCIDENT, through P0 above: a cockpit
+#     tank normally has an interactive session sitting on it, so the
+#     live-session check happened to catch it. But cockpit-guard.sh is a
+#     Claude Code PreToolUse hook — it only ever fires from inside a live
+#     Claude Code session — and a headless `clikae burn` run is exactly the
+#     kind of caller it can never see. The moment the cockpit's own session
+#     isn't there (the operator stepped away; the role outlives that one
+#     session), nothing else here would have stopped a dry-tank reroute from
+#     landing dispatched work directly on the tank that's supposed to be
+#     doing the dispatching — the guard that exists is architecturally
+#     unable to catch it from this caller. cockpit-guard.sh's OWN reserve
+#     listing (the one it prints in a refusal) already excludes the cockpit
+#     this same way; auto-reroute needed the identical rule, not a
+#     coincidence of P0.
 #   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
   local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
+  local __cockpit_cur; __cockpit_cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n')"
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
     tank_is_solo "$cli" "$t" && continue   # solo tanks are out of the fleet — never an auto-reroute target
+    if [ -n "$__cockpit_cur" ] && [ "$__cockpit_cur" = "$cli/$t" ]; then
+      log_warn "skipping $cli/$t — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+      continue
+    fi
     tdir="$(profile_dir "$cli" "$t")"
     if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
        && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then

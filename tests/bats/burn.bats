@@ -357,6 +357,51 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   [ "$output" = "b" ]
 }
 
+# --- cockpit exclusion (#63 P3-5, round-4 review) ---
+# The cockpit used to be protected only BY ACCIDENT, through P0: a cockpit
+# tank normally has an interactive session sitting on it, so the live-
+# session check happened to catch it. cockpit-guard.sh is a Claude Code
+# PreToolUse hook — it never fires for a headless `clikae burn` run at all
+# — so the moment that session isn't there, nothing stopped auto-reroute
+# from dispatching straight onto the tank that's supposed to be doing the
+# dispatching. These simulate NO live session anywhere (the accident-cover
+# gone) to isolate the new, explicit rule from the old, accidental one.
+
+@test "_burn_next_same_engine: refuses when the cockpit is the ONLY idle same-engine tank left (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"
+  live_dir_users() { :; }   # nobody interactive anywhere -- P0's accidental cover is gone
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0 2>/dev/null)"
+  [ -z "$out" ]             # only 'b' remains in the reserve and it's the cockpit
+}
+
+@test "_burn_next_same_engine: --allow-active does NOT rescue the cockpit tank (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"
+  live_dir_users() { :; }
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 1 2>/dev/null)"
+  [ -z "$out" ]             # unlike P0, this exclusion is unconditional
+}
+
+@test "_burn_next_same_engine: a tank that is NOT the cockpit is still picked normally (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b; clikae init claude c
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/b\n' > "$CLIKAE_HOME/state/cockpit"   # b is the cockpit; c is not
+  live_dir_users() { :; }
+  local out; out="$(_burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0 2>/dev/null)"
+  [ "$out" = "c" ]
+}
+
+@test "_burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)" {
+  _src_burn
+  clikae init claude a; clikae init claude b
+  live_dir_users() { :; }
+  run _burn_next_same_engine claude "claude/a" "" CLAUDE_CONFIG_DIR 0
+  [ "$output" = "b" ]
+}
+
 # --- #2 (tugtile dogfood): a STALE artifact must not be mistaken for success ---
 
 @test "burn does NOT count a STALE artifact as success (judges by mtime change)" {
