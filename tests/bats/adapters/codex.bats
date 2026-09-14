@@ -128,3 +128,79 @@ seed_rollout() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"000000000abc"* ]] || false
 }
+
+# --- #74 round-1 P1-1: burn's sidecar writer and resume's picker used to
+# derive a codex session's sid two different ways (payload.id from the file
+# body vs "everything after the last hyphen" in the filename) and could never
+# agree once the uuid itself has internal hyphens — the picker's derivation
+# then never matched what burn recorded, so codex burn sessions were NEVER
+# actually hidden despite the sidecar holding a line for every one of them. ---
+
+@test "codex adapter_sid_canonical recovers the FULL uuid from a rollout path, not just its last hyphen segment" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-00000000abcd"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$sid" ]
+  [ "$output" != "00000000abcd" ]   # the old (broken) last-hyphen-segment answer
+}
+
+@test "codex adapter_sid_canonical matches adapter_recent_sids's own sid, byte for byte" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-0000000beefd"
+  seed_rollout "$sid" "$WORK" "fix the build"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_recent_sids "$PROFILE"
+  [ "$status" -eq 0 ]
+  local from_recent="${output##*$'\037'}"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$from_recent" ]
+}
+
+# --- #74 round-4 P3-1: adapter_cwd_from_args argv shapes, measured against a
+# real codex 0.154.0 binary (clap accepts `=`-joined long AND short forms). --
+
+@test "codex adapter_cwd_from_args recognises -C <dir> (spaced)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C /tmp/one -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/one ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C<dir> (attached)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C/tmp/two -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/two ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd <dir> (spaced long alias)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd /tmp/three -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/three ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd=<dir> (clap long = form)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd=/tmp/four -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/four ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C=<dir> (clap short = form) without leaking the '='" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C=/tmp/five -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/five ]
+  [[ "$output" != =* ]] || false
+}
+
+@test "codex adapter_cwd_from_args returns empty (rc 1) with no -C/--cd at all" {
+  _setup_codex
+  run adapter_cwd_from_args exec -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

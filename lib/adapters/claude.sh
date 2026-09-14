@@ -237,6 +237,16 @@ adapter_sid_from_args() {
   return 0
 }
 
+# Optional hook: the cwd claude's OWN argv carries — see codex.sh's twin for
+# why `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1).
+# claude has no cwd-override flag at all (`claude --help`, 2.1.267): it always
+# runs in the process's actual OS cwd, which for a raw burn IS $PWD already —
+# defined (not left absent) so the "does this engine have such a flag" answer
+# is explicit rather than implied by a missing function.
+adapter_cwd_from_args() {
+  return 1
+}
+
 # Optional hook: the CLI flags to START A FRESH SESSION with a caller-chosen id,
 # one per line (same one-line-per-argv-item contract as adapter_resume_args).
 # Claude Code accepts a v4 UUID up front (`claude --help`: "--session-id <uuid>
@@ -252,6 +262,19 @@ adapter_new_session_args() {
   local uuid="$1"
   [ -n "$uuid" ] || return 1
   printf -- '--session-id\n%s\n' "$uuid"
+}
+
+# Optional hook: the canonical session id for a transcript PATH — the single
+# derivation BOTH `clikae burn`'s sidecar writer and `clikae resume`'s picker
+# must agree on, or a burn session can be written under one id and looked up
+# under another and never actually get hidden (#74 round-1 P1-1 — codex's two
+# derivations disagreed this way; claude's never has, since its transcript
+# filename already IS the sid, but the hook exists here too so a caller never
+# has to special-case which engine keeps that invariant for free).
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f##*/}"
+  printf '%s' "${sid%.jsonl}"
 }
 
 # Optional hook: a one-line RECAP of a session — "where you left off + next step".

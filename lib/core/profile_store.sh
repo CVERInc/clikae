@@ -434,9 +434,26 @@ EOF
 #     falls to the BOTTOM of the board order.
 #   · the dry marker ($CLIKAE_HOME/dry/<engine>/<old>) — a red-badge record left
 #     pointing at a name that no longer exists.
-# <engine> is the on-disk cli dir name (agy → antigravity). Best-effort throughout.
+#   · the burn sidecar (state/burn-sessions/<engine>/<old>, #74 round-1 P2-2)
+#     — left behind, its burn sessions would still hide correctly (the filter
+#     only ever reads a sid, never a path), but the file becomes an orphan
+#     nothing ever cleans, sitting under a tank name that no longer exists.
+# <engine> is the on-disk cli dir name (agy → antigravity) for the burn-order
+# file and the dry marker — but NOT for the sidecar: burn.sh has always
+# stored agy's sidecar under the literal directory name "agy" (its own
+# adapter file is antigravity.sh, but nothing under state/burn-sessions/ was
+# ever named to match), so translate here rather than push that alias
+# further up the call chain. Best-effort throughout.
 rename_tank_state() {
   local engine="$1" old="$2" new="$3"
+  local sc_engine="$engine"
+  [ "$sc_engine" = "antigravity" ] && sc_engine="agy"
+  local sc_old="$CLIKAE_HOME/state/burn-sessions/$sc_engine/$old"
+  local sc_new="$CLIKAE_HOME/state/burn-sessions/$sc_engine/$new"
+  if [ -f "$sc_old" ]; then
+    mkdir -p "$(dirname "$sc_new")" 2>/dev/null || true
+    mv "$sc_old" "$sc_new" 2>/dev/null || true
+  fi
   local of; of="$(order_file)"
   if [ -f "$of" ]; then
     local tmp; tmp="$(mktemp)"
@@ -457,6 +474,18 @@ rename_tank_state() {
       mv "$od" "$nd" 2>/dev/null || true
     fi
   fi
+  return 0
+}
+
+# remove_tank_burn_sidecar <engine> <tank> — rename_tank_state's twin for the
+# DELETION half of a tank's lifecycle (#74 round-1 P2-2): a removed tank's
+# burn sidecar used to stay on disk forever, an orphan under a tank name
+# nothing else references. Same "agy" alias as rename_tank_state above.
+# Best-effort: never blocks a tank removal.
+remove_tank_burn_sidecar() {
+  local engine="$1" tank="$2" sc_engine="$1"
+  [ "$sc_engine" = "antigravity" ] && sc_engine="agy"
+  rm -f "$CLIKAE_HOME/state/burn-sessions/$sc_engine/$tank" 2>/dev/null || true
   return 0
 }
 

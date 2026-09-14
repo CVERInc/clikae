@@ -178,6 +178,43 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd codex's OWN argv carries, read back out of "$@" for
+# `clikae burn`'s raw '-- <cmd...>' mode (#74 round-3 P1-1). Unlike
+# --prompt/--prompt-file mode, which composes -C itself from add_dirs[0]
+# (adapter_burn_flags above), a raw command's cwd is entirely the caller's:
+# `clikae burn codex T -- exec -C /tmp -s workspace-write '…'` — the --help
+# example at burn.sh:118 is exactly this shape. Recognises `-C <dir>`, the
+# attached `-C<dir>` (codex's own arg parser accepts both, same convention
+# git -C does), and the long alias `--cd <dir>`. Returns empty (rc 1) when
+# none appear — codex then runs in $PWD like every other engine, and the
+# caller (burn.sh) treats that as "no override" rather than guessing $PWD
+# itself (an unresolved raw launch must match nothing, not something).
+#
+# R4 review P3-1: real codex 0.154.0 (clap) also accepts the `=`-joined long
+# and short forms, `--cd=<dir>` and `-C=<dir>` — measured against the actual
+# binary, not inferred. Without these two cases, `--cd=<dir>` fell all the
+# way through to `return 1` (empty launch cwd, which the burn.sh P2-1 fix
+# now correctly treats as "unknown" rather than misattributing), and
+# `-C=<dir>` matched the looser `-C?*` case below and returned "=<dir>"
+# verbatim — a value that can never equal a real cwd, so it silently never
+# matched anything either. Both are handled explicitly now, ahead of the
+# looser glob.
+adapter_cwd_from_args() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "-C" ] || [ "$prev" = "--cd" ]; then
+      printf '%s' "$a"; return 0
+    fi
+    case "$a" in
+      --cd=*) printf '%s' "${a#--cd=}"; return 0 ;;
+      -C=*)   printf '%s' "${a#-C=}";   return 0 ;;
+      -C?*)   printf '%s' "${a#-C}";    return 0 ;;
+    esac
+    prev="$a"
+  done
+  return 1
+}
+
 # This dir's most recent rollout under <dir> (for relay / handoff).
 adapter_transcript_path() {
   local f; f="$(_codex_rollouts_for_cwd "$1" | head -n 1)"
@@ -257,5 +294,34 @@ adapter_find_session() {
 
 adapter_session_cwd() {
   _codex_meta_field "$1" cwd
+}
+
+# Optional hook: the canonical session id for a rollout PATH — see claude.sh's
+# twin for why this exists (#74 round-1 P1-1). codex's filename is
+# `rollout-<ISO-ts-with-dashes-for-colons>-<uuid>.jsonl`: a v4 uuid embeds
+# hyphens of its own (8-4-4-4-12), so a naive "everything after the last
+# hyphen" (the picker's old shape, resume.sh's `_resume_session_fields`) kept
+# only the UUID'S OWN LAST SEGMENT, not the whole id — it never matched what
+# burn actually recorded (which reads payload.id from the file body, the
+# correct value). A codex uuid is always exactly 36 characters;
+# `_clean_session_is_live` (clean.sh) already trusted exactly this fact for
+# its live-session guard ("ps only ever shows the bare uuid... keep only its
+# trailing 36") — same fact, now the one place every caller reads it from,
+# string-only (no file read) so this stays cheap in a per-session scan.
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f##*/}"; sid="${sid%.jsonl}"
+  if [ "${#sid}" -gt 36 ]; then sid="${sid:$(( ${#sid} - 36 ))}"; fi
+  printf '%s' "$sid"
+}
+
+# Optional hook: EVERY transcript path under this profile dir — no cwd
+# filter, no limit, no per-file reads. Used by `clikae burn`'s before/after
+# snapshot (#74 P1-2): the session THIS run produced is whichever rollout
+# exists after launch that did not exist before — a proven attribution, unlike
+# the old "newest transcript with mtime >= attempt start" heuristic, which
+# happily picked up a HUMAN's concurrent session in the same tank (R1-P1-2).
+adapter_all_transcripts() {
+  find "$1/sessions" -type f -name 'rollout-*.jsonl' 2>/dev/null
 }
 

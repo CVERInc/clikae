@@ -57,6 +57,8 @@ T_K_QUIT="beenden"
 T_K_FILTER="Filter"
 T_K_CLEANUP="aufräumen"
 T_K_CLEAN="Sitzungsdaten aufräumen — Speicherplatz freigeben"
+T_K_TOGGLE_ALL="--all umschalten"
+T_K_TOGGLE_BURN="Burn-Sitzungen ein-/ausblenden"
 # `clikae clean` section headings (T_CLEAN_SECT_OLD/_MIN are printf formats)
 T_CLEAN_SECT_REDUNDANT="Redundant (sicher)"
 T_CLEAN_SECT_OLD="Seit %s+ Tagen unberührt"

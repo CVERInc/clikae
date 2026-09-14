@@ -182,6 +182,7 @@ load_adapter() {
            adapter_resume_args adapter_session_meta adapter_list_sessions \
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \
            adapter_sid_from_args adapter_new_session_args \
+           adapter_sid_canonical adapter_all_transcripts \
            2>/dev/null || true
 
   # shellcheck source=/dev/null

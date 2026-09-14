@@ -188,6 +188,16 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd grok's OWN argv carries — see codex.sh's twin for why
+# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). Moot
+# in practice — grok defines no adapter_all_transcripts, so it never reaches
+# burn.sh's multi-candidate tie-break that reads this value (R3 review,
+# P3-6) — but defined for the same reason claude.sh's twin is: grok has no
+# cwd-override flag, so the honest answer is "no", not an absent function.
+adapter_cwd_from_args() {
+  return 1
+}
+
 # This dir's most recent conversation log under <dir> (for handoff / source
 # detection). chat_history.jsonl is the readable conversation; updates.jsonl is
 # the raw ACP event stream and runs an order of magnitude larger. Recency is
