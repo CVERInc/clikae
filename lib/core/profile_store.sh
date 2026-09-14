@@ -527,6 +527,34 @@ tanks_adopted_flag_write() {
   [ -f "$flag" ]
 }
 
+# _tank_adoption_warn_sentinel_path -> the sentinel _tank_adoption_warn_once
+# guards on, keyed by `$$` PLUS this process's own start time when it's
+# readable (same `ps -o lstart=` + dual BSD/GNU `date` parse
+# _burn_pid_matches_marker uses, folded into the sentinel's NAME instead of
+# a value read back later). #61 round-3 P3: a bare `$$` alone means a
+# RECYCLED pid (this process crashed/was killed before cleaning up its own
+# sentinel, and the OS later handed the same number to a new invocation)
+# silently inherits the old file and never warns at all — proven by hand
+# (round-3 review) with a synthetic leftover sentinel. Degrades to bare
+# `$$` when lstart isn't readable/parseable on this platform: a spurious
+# extra warning is cheap, a silently swallowed one is the actual risk this
+# guards against. bin/clikae's own EXIT trap removes this file at the end
+# of every invocation (see there) — this keyed name is defense in depth for
+# the invocations that never reach that trap (SIGKILL, a crash).
+_tank_adoption_warn_sentinel_path() {
+  local lstart epoch key="$$"
+  lstart="$(ps -o lstart= -p "$$" 2>/dev/null)"
+  if [ -n "$lstart" ]; then
+    epoch="$(date -j -f '%a %b %e %T %Y' "$lstart" +%s 2>/dev/null)"
+    [ -n "$epoch" ] || epoch="$(date -d "$lstart" +%s 2>/dev/null)"
+    case "$epoch" in
+      ''|*[!0-9]*) ;;
+      *) key="$$.$epoch" ;;
+    esac
+  fi
+  printf '%s/.clikae-adopt-warn.%s\n' "${TMPDIR:-/tmp}" "$key"
+}
+
 # _tank_adoption_warn_once -> exactly ONE line, ONCE per clikae invocation,
 # when the store's adoption flag cannot be persisted. Sentinel lives OUTSIDE
 # $CLIKAE_HOME (the whole point is that $CLIKAE_HOME can't be written to),
@@ -538,7 +566,7 @@ tanks_adopted_flag_write() {
 # single call, and scan_clis' 15-adapter fan-out turned ONE read-only tank
 # into 32 identical lines (two read-only tanks: 64).
 _tank_adoption_warn_once() {
-  local sentinel="${TMPDIR:-/tmp}/.clikae-adopt-warn.$$"
+  local sentinel; sentinel="$(_tank_adoption_warn_sentinel_path)"
   [ -e "$sentinel" ] && return 0
   : > "$sentinel" 2>/dev/null || true
   log_warn "This store's tanks aren't adopted yet and the flag can't be written (read-only store?) — recognising them in memory this run only. \`clikae doctor --adopt\` explains more; fix permissions on $(dirname "$(tanks_adopted_flag_path)") to persist it."

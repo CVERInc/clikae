@@ -213,3 +213,41 @@ _unadopt() {
   # nothing to adopt.
   [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
 }
+
+# --- #61 round-3 P3: the warn-once sentinel neither leaks nor can be
+# silently defeated by pid reuse -------------------------------------------
+@test "adoption warn sentinel: cleaned up after the process exits, not left in TMPDIR forever" {
+  _unadopt
+  mkdir -p "$CLIKAE_HOME/profiles/claude/ro1"
+  chmod a-w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
+
+  local fake_tmp="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$fake_tmp"
+  local out="$BATS_TEST_TMPDIR/out" err="$BATS_TEST_TMPDIR/err" rc=0
+  TMPDIR="$fake_tmp" "$CLIKAE_BIN" tanks >"$out" 2>"$err" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$err"; false; }
+  [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "stderr: $(cat "$err")"; false; }
+  # bin/clikae's own EXIT trap removes the sentinel — nothing should remain.
+  [ -z "$(find "$fake_tmp" -maxdepth 1 -name '.clikae-adopt-warn.*' 2>/dev/null)" ] || \
+    { echo "sentinel leaked: $(ls -la "$fake_tmp")"; false; }
+
+  chmod u+w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
+}
+
+@test "adoption warn sentinel path: keyed by more than bare pid when this platform can report a start time" {
+  # White-box: on any platform where `ps -o lstart=` + `date` parse (macOS
+  # and this suite's own Linux host both do — round-3 review measured a
+  # bare-\$\$ sentinel silently swallowing a warning after a simulated pid
+  # reuse), the path must differ from the bare-\$\$ sentinel name the
+  # pre-fix code always used, so a leftover file from a DIFFERENT process
+  # that reused this pid can never match.
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  local path; path="$(_tank_adoption_warn_sentinel_path)"
+  local bare="${TMPDIR:-/tmp}/.clikae-adopt-warn.$$"
+  if ps -o lstart= -p "$$" >/dev/null 2>&1; then
+    [ "$path" != "$bare" ] || { echo "sentinel is still bare-\$\$: $path"; false; }
+    [[ "$path" == "$bare".* ]] || { echo "sentinel doesn't extend the bare name: $path"; false; }
+  fi
+  # Calling it twice in the same process is stable (idempotent naming).
+  local path2; path2="$(_tank_adoption_warn_sentinel_path)"
+  [ "$path" = "$path2" ]
+}

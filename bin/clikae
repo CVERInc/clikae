@@ -38,6 +38,18 @@ source "$CLIKAE_LIB/core/i18n.sh"
 source "$CLIKAE_LIB/core/json.sh"
 # shellcheck source=../lib/core/profile_store.sh
 source "$CLIKAE_LIB/core/profile_store.sh"
+
+# #61 round-3 P3: best-effort cleanup of the read-only-store warn-once
+# sentinel (lib/core/profile_store.sh's _tank_adoption_warn_once) — it lives
+# outside $CLIKAE_HOME on purpose (that's the whole point when the store
+# itself can't be written to), so nothing else ever removes it. Without
+# this, every invocation against a read-only store leaves one 0-byte file
+# in $TMPDIR forever. Runs on every ordinary exit (including one that never
+# called the warn function — `rm -f` on a nonexistent path is silent);
+# doesn't fire on SIGKILL, which is exactly why the sentinel's own name is
+# ALSO keyed to this process's start time, not just its pid.
+trap 'rm -f "$(_tank_adoption_warn_sentinel_path 2>/dev/null)" 2>/dev/null || true' EXIT
+
 # shellcheck source=../lib/core/tmux.sh
 source "$CLIKAE_LIB/core/tmux.sh"
 # shellcheck source=../lib/core/soul.sh
