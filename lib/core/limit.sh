@@ -1514,30 +1514,78 @@ EOF
   _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
 }
 
+# ONE spelling of how a rate-limit reading is EXTRACTED from transcript lines,
+# shared by the per-file parsers below and by the batched scan the board's cold
+# build runs (_limit_batched_readings).
+#
+# 2026-09-14 round-8 fix review P1-1/P2-1 — why the batched form had to exist:
+# the board's cold build used to bound its rate-limit scan by a COUNT (the
+# newest CLIKAE_HOME_RECENT_MAX files per project directory) while the thing
+# that count approximates — the rolling window — is a TIME. Different
+# dimensions, so no count can ever be "provably >= the window": a limit sitting
+# in a session that went quiet behind eleven newer neighbours was invisible,
+# the fuel dot read FULL on a tank that was dry, and `_limit_tank_dry_raw`
+# (above) deliberately does not fall back to dry_store for claude — so `burn`
+# dispatched into it. The bound is the window now (every transcript whose mtime
+# is inside it, however many share a directory), which means the candidate set
+# can be large, which means the scan has to stop costing a `tail` + an `awk`
+# FORK PER FILE. Hence one batched read, and hence this shared source: two
+# spellings of one matching rule is exactly how this file's twin (board_state's
+# fingerprint) drifted, and a drift here is a fuel dot that lies.
+#
+#   scan(line)  folds one transcript line into maxL / maxS / rphrase
+#   lreset()    starts a fresh file's state
+#   reading()   renders them as the "<maxL>\037<maxS>\037<reset>" value every
+#               caller of this pair already stores, caches and compares
+#
+# `engine` selects the rules. They differ only in which STRUCTURAL markers name
+# a limit and a successful turn (codex's machine-readable `codex_error_info`,
+# claude's synthetic + isApiErrorMessage pair) — never the vendor's English
+# copy, which is theirs to change. See limit_profile_dry / _limit_codex_dry.
+_LIMIT_READING_AWK='
+function lreset() { maxL = ""; maxS = ""; rphrase = "" }
+function ts(s,   t) {
+  if (match(s, /"timestamp": *"[^"]*"/)) {
+    t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+    return t
+  }
+  return ""
+}
+function scan(s,   t) {
+  if (engine == "codex") {
+    if (s ~ /"codex_error_info": *"usage_limit_exceeded"/) {
+      t = ts(s)
+      if (t != "" && (maxL == "" || t > maxL)) {
+        maxL = t; rphrase = ""
+        if (match(s, /try again at [^".]*/)) rphrase = substr(s, RSTART, RLENGTH)
+      }
+      return
+    }
+    if (s ~ /"type": *"agent_message"/) {
+      t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+    }
+    return
+  }
+  if (s ~ /"model": *"<synthetic>"/ && s ~ /"isApiErrorMessage": *true/) {
+    t = ts(s)
+    if (t != "" && (maxL == "" || t > maxL)) {
+      maxL = t; rphrase = ""
+      if (match(s, /[Rr]esets [^"]*/)) rphrase = substr(s, RSTART, RLENGTH)
+    }
+    return
+  }
+  if (s ~ /"type": *"assistant"/ && s !~ /"model": *"<synthetic>"/) {
+    t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+  }
+}
+function reading(   U) { U = sprintf("%c", 31); return maxL U maxS U rphrase }
+'
+
 # Raw timestamp/reset readings preserve the original bounded-tail parser.
 _limit_claude_reading() {
-  transcript_tail "$1" | awk '
-
-      function ts(s,   t) {
-        if (match(s, /"timestamp": *"[^"]*"/)) {
-          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
-          return t
-        }
-        return ""
-      }
-      /"model": *"<synthetic>"/ && /"isApiErrorMessage": *true/ {
-        t = ts($0)
-        if (t != "" && (maxL == "" || t > maxL)) {
-          maxL = t; reset = ""
-          if (match($0, /[Rr]esets [^"]*/)) reset = substr($0, RSTART, RLENGTH)
-        }
-        next
-      }
-      /"type": *"assistant"/ && $0 !~ /"model": *"<synthetic>"/ {
-        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
-      }
-      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
-
+  transcript_tail "$1" | awk -v engine=claude "$_LIMIT_READING_AWK"'
+    { scan($0) }
+    END { print reading() }
   '
 }
 
@@ -1563,29 +1611,55 @@ _limit_readings() {
 }
 
 _limit_codex_reading() {
-  transcript_tail "$1" | awk '
-      function ts(s,   t) {
-        if (match(s, /"timestamp": *"[^"]*"/)) {
-          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
-          return t
-        }
-        return ""
-      }
-      /"codex_error_info": *"usage_limit_exceeded"/ {
-        t = ts($0)
-        if (t != "" && (maxL == "" || t > maxL)) {
-          maxL = t; reset = ""
-          if (match($0, /try again at [^".]*/)) reset = substr($0, RSTART, RLENGTH)
-        }
-        next
-      }
-      /"type": *"agent_message"/ {
-        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
-      }
-      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
-    '
+  transcript_tail "$1" | awk -v engine=codex "$_LIMIT_READING_AWK"'
+    { scan($0) }
+    END { print reading() }
+  '
 }
 
 _limit_codex_readings() {
   _limit_readings codex-dry _limit_codex_reading "$1"
+}
+
+# _limit_batched_readings <engine> <list-file> -> one
+# "<path>\037<maxL>\037<maxS>\037<reset>" line per path in <list-file> that
+# yielded anything, from ONE `tail` per `xargs` batch instead of one `tail`
+# plus one `awk` PER FILE. This is what makes a window-bounded scan affordable
+# (see _LIMIT_READING_AWK's header for why the bound had to become the window).
+#
+# It is a SPEED path, never a narrower answer: the per-file bound is
+# transcript_tail's own $CLIKAE_TX_TAIL_BYTES, so this reads exactly the bytes
+# the per-file parser would have read, and folds them with exactly the same
+# rules. tests/bats/home-bounded.bats compares the two over a fixture, the way
+# `_board_cold_sidscope`'s own receipt already compares its batched read
+# against `_board_engine_sidscope`.
+#
+# `/dev/null` FIRST, and `xargs` repeats the initial arguments in EVERY batch:
+# `tail` prints its `==> name <==` banners only when it has more than one file
+# and a batch can end up holding exactly one, so a fixed empty first file is
+# what makes the output shape unconditional (same device, same reason, as
+# _board_cold_sidscope_read's `head -c 512 /dev/null`). `tail` also writes a
+# newline before every banner but the first, so a transcript whose last byte is
+# not a newline cannot run into the next banner.
+_limit_batched_readings() {
+  local engine="$1" list="$2" bytes="${CLIKAE_TX_TAIL_BYTES:-524288}"
+  [ -s "$list" ] || return 0
+  tr '\n' '\0' < "$list" \
+    | xargs -0 tail -c "$bytes" /dev/null 2>/dev/null \
+    | awk -v engine="$engine" "$_LIMIT_READING_AWK"'
+      function emit() {
+        if (path == "" || path == "/dev/null") { path = ""; return }
+        print path U reading()
+        path = ""
+      }
+      BEGIN { U = sprintf("%c", 31); path = ""; lreset() }
+      /^==> .* <==$/ {
+        emit()
+        path = substr($0, 5, length($0) - 8)
+        lreset()
+        next
+      }
+      { scan($0) }
+      END { emit() }
+    '
 }

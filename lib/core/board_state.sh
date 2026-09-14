@@ -983,17 +983,13 @@ board_state_refresh() (
     #     `_agy_ws_load` index loaded above (round-3 P2-2), so it goes through
     #     `_board_engine_sidscope` with its stdout wired straight into the
     #     table — no `$( )` per file.
-    #   * Rate-limit readings are NOT computed here. That is the other half of
-    #     the 35 s on a tank whose files are all recent, and #62's own point:
-    #     a render must not PARSE the tree. Cold instead records the bounded
-    #     set a reading would be needed for — `readings-pending`, the newest
-    #     CLIKAE_HOME_RECENT_MAX files per project directory that fall inside
-    #     the engine's window — and `board_generation` treats a non-empty
-    #     pending list as a reason to refresh once more. The INCREMENTAL path
-    #     then pays for those few files and publishes a generation with no
-    #     pending list. Net effect: a cold build is a walk plus awk, and the
-    #     fuel dots land on the NEXT render (pinned by a bats receipt), not
-    #     35 s into this one. Everything else stays on demand.
+    #   * Rate-limit readings are scanned for EVERY transcript inside the
+    #     engine's window and for no others (`readings-bounded`, published so
+    #     that what was read is inspectable rather than inferred), in ONE
+    #     batched pass — see the reading block below and _LIMIT_READING_AWK
+    #     (lib/core/limit.sh). The old per-file `reading_cache_run` fork is the
+    #     other half of the 35 s; the fix was to stop forking per file, not to
+    #     look at fewer files.
     #
     # A cold build owns every entry it writes and has no ancestor to resolve
     # through: depth 0, no `parent`.
@@ -1007,10 +1003,11 @@ board_state_refresh() (
     _board_cold_sidscope "$engine" "$dir" "$rows_f" > "$ss_f"
 
     # ONE awk over (sid/scope table, stat rows): writes every `sids/` entry,
-    # the whole manifest, and the two candidate lists the two `sort`s below
-    # turn into `recent/` entries and `readings-pending`. `close()` after each
-    # entry keeps the open-file count at 1 — the one-true-awk on macOS has a
-    # hard FOPEN_MAX and would abort without it.
+    # the whole manifest, the `recent/` candidate list the `sort` below turns
+    # into per-scope entries, and `readings-bounded` (every path inside the
+    # window, no further filter). `close()` after each entry keeps the
+    # open-file count at 1 — the one-true-awk on macOS has a hard FOPEN_MAX
+    # and would abort without it.
     LC_ALL=C awk -v gen="$gen" -v now="${reading_now:-0}" -v window="${window:-0}" \
         -v man_out="$gen/manifest" -v rec_out="$rec_f" -v pend_out="$pend_f" \
         "$_BOARD_EKEY_AWK"'
@@ -1038,10 +1035,7 @@ board_state_refresh() (
           print ekey(scope) S scope S mts S sid > rec_out
         }
         print mt R sz R sid R scope R "" R path > man_out
-        if (window + 0 > 0 && (now - mts) < window) {
-          d = path; sub(/\/[^\/]*$/, "", d)
-          print d S mts S path > pend_out
-        }
+        if (window + 0 > 0 && (now - mts) < window) print path > pend_out
       }
       END { printf "" > man_out }
     ' "$ss_f" "$rows_f"
@@ -1067,60 +1061,52 @@ board_state_refresh() (
       '
     fi
 
-    # readings-pending: newest <n> per PROJECT DIRECTORY inside the window.
-    # Grouped by directory, not by scope, on purpose — claude's
-    # `agent-*.jsonl` subagent transcripts carry no sid (so they have no
-    # scope) and a rate limit lands in one of them with no matching write to
-    # its parent session (round-5 fix review P2-2). They live in the project
-    # directory, so grouping by directory keeps them in the bounded set.
-    if [ -s "$pend_f" ]; then
-      LC_ALL=C sort -t$'\037' -k1,1 -k2,2rn "$pend_f" | awk -v n="$n" '
-        BEGIN { S = sprintf("%c", 31) }
-        {
-          i = index($0, S); k = substr($0, 1, i - 1); rest = substr($0, i + 1)
-          j = index(rest, S); p = substr(rest, j + 1)
-          if (k != cur) { cur = k; c = 0 }
-          if (c < n) { print p; c++ }
-        }
-      ' > "$gen/readings-bounded"
-    fi
+    # readings-bounded: EVERY transcript whose mtime is inside this engine's
+    # window, in the order `_board_stat_rows` already sorted them — no count,
+    # no grouping, nothing dropped. See the reading block below, and
+    # _LIMIT_READING_AWK (lib/core/limit.sh) for why the bound is the window.
+    # Subagent transcripts (`agent-*.jsonl`) are in it like any other file: a
+    # limit lands in one of them with no matching write to its parent session
+    # (round-5 fix review P2-2), and they have no sid, so nothing else here
+    # would have kept them.
+    [ ! -s "$pend_f" ] || mv -f "$pend_f" "$gen/readings-bounded"
 
-    # ---- the bounded readings, folded in before this generation publishes ----
+    # ---- the window's readings, folded in before this generation publishes ----
     #
-    # DEVIATION FROM THE ROUND-8 BRIEF, and the measurement that forced it.
-    # The brief asked for these readings to be computed "lazily by the
-    # incremental path on the NEXT render". Built that way first, and it turns
-    # a receipt this branch has been carrying since round 5 RED: three tests
-    # in tests/bats/home-bounded.bats assert that a WARM render never opens a
-    # transcript ("warm reads zero transcript bytes", "self-heals inline once,
-    # then reads are bounded (list+stat, never content) again", "an
-    # incremental rebuild re-reads only the ONE file that changed"), and the
-    # render that consumes a pending list is, from outside, a warm render that
-    # runs `tail -c 524288` over ten transcripts. Measured, not argued: those
-    # three went red, plus "live rows … at most ONE candidate".
+    # 2026-09-14 round-8 fix review P1-1/P2-1 — THE BOUND IS THE WINDOW.
+    # Rounds 5-8 bounded this by a COUNT (the newest CLIKAE_HOME_RECENT_MAX
+    # files per project directory). A count and a window are different
+    # DIMENSIONS, so no count is ever "provably >= the window", and the
+    # reviewer measured the consequence on the real front door: a limit in a
+    # session that had gone quiet behind twelve newer neighbours in the same
+    # project directory was invisible, `clikae` drew a FULL fuel dot where main
+    # drew `○ … resets 11pm`, and claude's `_limit_tank_dry_raw` deliberately
+    # never falls back to dry_store — so `burn` dispatched into a dry tank. It
+    # did not self-heal either: only a further write to that same abandoned
+    # file would have fixed it. `CLIKAE_HOME_RECENT_MAX` bounds the Resume rows
+    # a scope SHOWS; it never had any business bounding what is SCANNED.
     #
-    # So the LIST is still the mechanism and the bound is still the brief's —
-    # the newest CLIKAE_HOME_RECENT_MAX per project directory, inside the
-    # engine's window, and nothing else — but it is consumed here, before the
-    # generation publishes, instead of one render later. What that keeps is
-    # the property #62 actually asks for: a render that changes nothing reads
-    # nothing. What it costs is that the discovery pass pays for the bounded
-    # set, which is ~1 reading on #62's own tank shape and 10 on the 5,000-file
-    # fixture — not the thousands the unbounded version paid.
+    # So every transcript inside the window is scanned, however many share a
+    # directory, and the cost that made the count tempting is paid off a
+    # different way: `_limit_batched_readings` (lib/core/limit.sh) reads all of
+    # them with one `tail` per `xargs` batch and folds them in one `awk`,
+    # instead of one `reading_cache_run` fork per file (~10-11 ms each — the
+    # entire slope the reviewer measured). Same bytes per file as the per-file
+    # parser, same rules, pinned by a bats receipt.
+    #
+    # Consumed HERE, before the generation publishes, rather than one render
+    # later: a "pending list the next render pays for" turns four receipts this
+    # branch has carried since round 5 red, because from outside that next
+    # render is a WARM render that opens transcripts ("warm reads zero
+    # transcript bytes", "self-heals inline once, then reads are bounded",
+    # "an incremental rebuild re-reads only the ONE file that changed", "live
+    # rows … at most ONE candidate"). What #62 asks for is that a render which
+    # changes nothing reads nothing; that is what this ordering keeps.
     #
     # The list is published as `readings-bounded` so what was read is
     # inspectable after the fact rather than inferred.
     if [ -n "$window" ] && [ -s "$gen/readings-bounded" ]; then
-      local pp pval
-      while IFS= read -r pp; do
-        [ -n "$pp" ] || continue
-        if declare -F reading_cache_run >/dev/null; then
-          pval="$(reading_cache_run "$kind" "$pp" "$parser" "$pp")"
-        else
-          pval="$("$parser" "$pp")"
-        fi
-        printf '%s\037%s\n' "$pp" "$pval"
-      done < "$gen/readings-bounded" > "$gen/.tmp/readings"
+      _limit_batched_readings "$engine" "$gen/readings-bounded" > "$gen/.tmp/readings"
       awk -v pf="$gen/.tmp/readings" '
         BEGIN { R = sprintf("%c", 30); S = sprintf("%c", 31) }
         FILENAME == pf {

@@ -342,33 +342,75 @@ _board_shims() {
   [ "$output" = 'try again at tomorrow' ]
 }
 
-@test "home: a claude limit appended to the 11th-newest session in its project is visible (round-5 P2-2)" {
+@test "home: a claude limit in a session that is NOT the newest in its project is visible (round-8 P1-1)" {
+  # Round-8 P3-4: this receipt used to APPEND the limit to the 11th-newest
+  # session — and an append makes that file the NEWEST, so it ranked 1st by
+  # the time anything read it and the test could not tell a count bound from a
+  # window bound at all. It was a ruler that could no longer reach its own
+  # specimen: green on a branch whose cold build dropped exactly this shape.
+  #
+  # Round-8 P1-1 is that shape: the limit is ALREADY in the file and the file
+  # is never written again, which is what a session that ran dry and was
+  # abandoned leaves on disk. It sits one hour back — well inside claude's
+  # 300-minute window — behind CLIKAE_HOME_RECENT_MAX + 2 newer neighbours in
+  # the same project directory. A per-directory count bound never scans it; the
+  # window does.
   [ -d "$CLIKAE_HOME/profiles/claude/work" ] || clikae init claude work >/dev/null
   mkdir -p "$TEST_HOME/work"
   cd "$TEST_HOME/work" || return 1
   _board_source
   load_adapter claude
-  local slug dir i stamp
+  local slug dir proj i stamp
   slug="$(_claude_project_slug "$PWD")"
   dir="$CLIKAE_HOME/profiles/claude/work"
-  mkdir -p "$dir/projects/$slug"
-  # 11 real sessions, session-0 newest down to session-10 oldest — round-4's
-  # per-project top-10 recorded set would have watched session-0..session-9
-  # only, dropping session-10 (the 11th) entirely.
-  for ((i = 0; i < 11; i++)); do
-    printf '{"type":"ai-title","aiTitle":"Fixture %s"}\n' "$i" > "$dir/projects/$slug/session-$i.jsonl"
-    stamp="$(date -v-${i}H '+%Y%m%d%H%M' 2>/dev/null || date -d "$i hours ago" '+%Y%m%d%H%M')"
-    touch -t "$stamp" "$dir/projects/$slug/session-$i.jsonl"
+  proj="$dir/projects/$slug"
+  mkdir -p "$proj"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 11pm"}]},"timestamp":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" > "$proj/session-quiet.jsonl"
+  stamp="$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '1 hour ago' '+%Y%m%d%H%M')"
+  touch -t "$stamp" "$proj/session-quiet.jsonl"
+  for ((i = 0; i < 12; i++)); do
+    printf '{"type":"ai-title","aiTitle":"Fixture %s"}\n' "$i" > "$proj/session-$i.jsonl"
   done
+  rm -rf "$CLIKAE_HOME/state/board" "$CLIKAE_HOME/state/readings"
+  _board_gen_cache_clear
   board_state_refresh claude "$dir"
   local _CLIKAE_BOARD=1
   run limit_profile_dry claude "$dir"
-  [ "$status" -ne 0 ]
-  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 11pm"}]},"timestamp":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$dir/projects/$slug/session-10.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 11pm"* ]] || false
+  # and the board agrees with the non-board scan it exists to approximate
+  _CLIKAE_BOARD=0
   run limit_profile_dry claude "$dir"
   [ "$status" -eq 0 ]
   [[ "$output" == *"resets 11pm"* ]] || false
+}
+
+@test "home: a codex limit in a rollout that is NOT the newest in its day dir is visible (round-8 P1-1)" {
+  # Same defect, codex's shape: the "project directory" is a DATE directory
+  # and a dozen rollouts in one day is ordinary. Codex's window is seven days,
+  # so a rollout touched an hour ago is deep inside it.
+  _board_source
+  load_adapter codex >/dev/null 2>&1 || true
+  local dir="$TEST_HOME/codex-window" sd i stamp
+  sd="$dir/sessions/2026/09/13"
+  mkdir -p "$sd" "$TEST_HOME/work"
+  cd "$TEST_HOME/work" || return 1
+  printf '{"type":"session_meta","payload":{"id":"quiet","cwd":"%s"}}\n{"timestamp":"2026-09-13T00:01:00Z","codex_error_info":"usage_limit_exceeded","message":"try again at tomorrow."}\n' \
+    "$TEST_HOME/work" > "$sd/rollout-quiet.jsonl"
+  stamp="$(date -v-1H '+%Y%m%d%H%M' 2>/dev/null || date -d '1 hour ago' '+%Y%m%d%H%M')"
+  touch -t "$stamp" "$sd/rollout-quiet.jsonl"
+  for ((i = 0; i < 12; i++)); do
+    printf '{"type":"session_meta","payload":{"id":"neighbour-%s","cwd":"%s"}}\n' \
+      "$i" "$TEST_HOME/work" > "$sd/rollout-neighbour-$i.jsonl"
+  done
+  rm -rf "$CLIKAE_HOME/state/board" "$CLIKAE_HOME/state/readings"
+  _board_gen_cache_clear
+  board_state_refresh codex "$dir"
+  local _CLIKAE_BOARD=1
+  run limit_profile_dry codex "$dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'try again at tomorrow' ]
 }
 
 @test "home: a claude limit landing only in an already-existing agent-*.jsonl is visible (round-5 P2-2)" {
@@ -747,35 +789,90 @@ _b8_tank() {
   [ "$a" != "$b" ]
 }
 
-@test "board (P2-2): a cold build parses only the BOUNDED reading set, never every file" {
-  # Round-7 P2-2: 35.6 s at 5,000 files on an idle host, against #62's own
-  # acceptance text ("under 1 s cold"). Two costs: ~2 `board_key` forks per
-  # file, and a rate-limit parse for every file inside the window. This pins
-  # the second one — the first is a timing property, measured in the round-8
-  # report, not assertable here.
+@test "board (round-8 P1-1): a cold build scans the whole WINDOW, nothing outside it, and does not fork per file" {
+  # Round-7 P2-2 measured 35.6 s at 5,000 files against #62's "under 1 s
+  # cold", and rounds 7-8 bought that back partly by scanning FEWER files
+  # (the newest CLIKAE_HOME_RECENT_MAX per project directory). That is the
+  # round-8 P1-1 defect: a count cannot bound a window. The cost is bought
+  # back by not FORKING per file instead — one `tail` per `xargs` batch, one
+  # `awk` — so this pins both halves at once: every in-window file is in the
+  # scanned set, no out-of-window file is, and the whole scan costs a handful
+  # of processes rather than one per file.
   _b8_tank
-  local i
+  local i stamp
   for ((i = 0; i < 40; i++)); do
     printf '{"type":"assistant","timestamp":"2026-09-13T00:00:00Z"}\n' > "$B8_PROJ/session-$i.jsonl"
   done
-  # log every transcript the rate-limit parser actually opens
-  cat > "$TEST_HOME/parsed2.log" </dev/null
-  _limit_claude_reading() { printf '%s\n' "$1" >> "$TEST_HOME/parsed2.log"; printf '\037\037\n'; }
+  # five transcripts OUTSIDE claude's 300-minute window
+  stamp="$(date -v-8H '+%Y%m%d%H%M' 2>/dev/null || date -d '8 hours ago' '+%Y%m%d%H%M')"
+  for ((i = 0; i < 5; i++)); do
+    printf '{"type":"assistant","timestamp":"2026-09-13T00:00:00Z"}\n' > "$B8_PROJ/stale-$i.jsonl"
+    touch -t "$stamp" "$B8_PROJ/stale-$i.jsonl"
+  done
+  # count every `tail` process the rebuild starts
+  export BOARD_IO_LOG="$TEST_HOME/tail.log"
+  mkdir -p "$TEST_HOME/tail-bin"
+  { printf '#!/bin/bash\nprintf "tail\\n" >> "$BOARD_IO_LOG"\n'
+    printf 'exec %q "$@"\n' "$(command -v tail)"; } > "$TEST_HOME/tail-bin/tail"
+  chmod +x "$TEST_HOME/tail-bin/tail"
   rm -rf "$CLIKAE_HOME/state/board" "$CLIKAE_HOME/state/readings"
   _board_gen_cache_clear
+  : > "$BOARD_IO_LOG"
+  local saved_path="$PATH"
+  PATH="$TEST_HOME/tail-bin:$PATH"
   board_state_refresh claude "$B8_TANK"
-  local n
-  n="$(wc -l < "$TEST_HOME/parsed2.log" | tr -d ' ')"
-  # CLIKAE_HOME_RECENT_MAX defaults to 10, one project directory here
-  [ "$n" -le 10 ] || { echo "cold parsed $n files"; false; }
-  [ "$n" -gt 0 ]
-  local root gen
+  PATH="$saved_path"
+
+  local root gen scanned tails
   root="$(board_root "$B8_TANK")"
   gen="$root/$(cat "$root/current")"
-  [ "$(wc -l < "$gen/readings-bounded" | tr -d ' ')" -eq "$n" ]
-  # every session still resolves, all 40 of them, with no per-file parse
-  [ "$(wc -l < "$gen/manifest" | tr -d ' ')" -eq 40 ]
+  scanned="$(wc -l < "$gen/readings-bounded" | tr -d ' ')"
+  # every one of the 40 in-window files, and none of the 5 outside it
+  [ "$scanned" -eq 40 ] || { echo "scanned $scanned of 40 in-window files"; false; }
+  ! grep -q '/stale-' "$gen/readings-bounded" || { echo "scanned an out-of-window file"; false; }
+  for ((i = 0; i < 40; i++)); do
+    grep -q "/session-$i.jsonl\$" "$gen/readings-bounded" \
+      || { echo "session-$i was inside the window and was not scanned"; false; }
+  done
+  # …and it cost a handful of processes, not one per file
+  tails="$(wc -l < "$BOARD_IO_LOG" | tr -d ' ')"
+  [ "$tails" -le 5 ] || { echo "the window scan started $tails tail processes"; false; }
+  # every session still resolves, all 45 of them
+  [ "$(wc -l < "$gen/manifest" | tr -d ' ')" -eq 45 ]
   [ -n "$(board_find claude "$B8_TANK" session-39)" ]
+}
+
+@test "board (round-8 P1-1): the batched window scan agrees with the per-file parser (claude, codex)" {
+  # `_limit_batched_readings` reads the tails of many transcripts in one
+  # `tail` and folds them in one `awk`; `_limit_claude_reading` /
+  # `_limit_codex_reading` read one file properly. The cold build trusts the
+  # first, so this asserts they answer the same thing — including a file whose
+  # last byte is not a newline, where the next `==> name <==` banner would run
+  # into the last record if `tail` did not separate them.
+  _board_source
+  local d="$TEST_HOME/readings" f eng parser
+  mkdir -p "$d/claude" "$d/codex"
+  printf '{"type":"ai-title","aiTitle":"nothing here"}\n' > "$d/claude/none.jsonl"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"limit · resets 11pm"}]},"timestamp":"2026-09-13T01:00:00.000Z"}\n' \
+    > "$d/claude/limit.jsonl"
+  printf '{"type":"assistant","timestamp":"2026-09-13T02:00:00.000Z"}\n' > "$d/claude/ok.jsonl"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"limit · resets 9am"}]},"timestamp":"2026-09-13T03:00:00.000Z"}' \
+    > "$d/claude/no-trailing-newline.jsonl"
+  printf '{"timestamp":"2026-09-10T00:00:00Z","codex_error_info":"usage_limit_exceeded","message":"try again at tomorrow."}\n' > "$d/codex/limit.jsonl"
+  printf '{"timestamp":"2026-09-11T00:00:00Z","type":"agent_message"}\n' > "$d/codex/ok.jsonl"
+  printf '{"timestamp":"2026-09-11T00:00:00Z","type":"agent_message"}' > "$d/codex/no-trailing-newline.jsonl"
+  for eng in claude codex; do
+    parser="_limit_${eng}_reading"
+    ls "$d/$eng"/*.jsonl > "$d/$eng.list"
+    _limit_batched_readings "$eng" "$d/$eng.list" | LC_ALL=C sort > "$d/$eng.batched"
+    : > "$d/$eng.perfile"
+    while IFS= read -r f; do
+      printf '%s\037%s\n' "$f" "$("$parser" "$f")" >> "$d/$eng.perfile"
+    done < "$d/$eng.list"
+    LC_ALL=C sort -o "$d/$eng.perfile" "$d/$eng.perfile"
+    diff "$d/$eng.batched" "$d/$eng.perfile" || { echo "$eng: batched != per-file"; false; }
+    [ -s "$d/$eng.batched" ]
+  done
 }
 
 @test "board (P2-2): the batched bounded read agrees with the per-file parser (codex, grok)" {
