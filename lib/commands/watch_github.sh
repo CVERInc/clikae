@@ -1273,13 +1273,16 @@ _wg_tail_sweep_window() {
 #
 # 🔴 order=asc, PAGINATED (P2-2, 2026-09-14 fix-round-6 review — round 5's
 # own review named this fix and it was not taken: `order=desc` reads the
-# window's NEWEST end first, but the rows most likely to still be missing
-# sit at its OLDEST end (that is what "late-indexed" means) — and a busy
-# org's own recent activity, already in the seen-file from earlier polls,
-# fills a single desc page before the sweep ever reaches that old end. In
-# ASCENDING order the oldest (most overdue) rows sort first, exactly like
-# the main query already does, and reading them first is what makes a
-# single page usually enough — but is not guaranteed enough on its own on
+# window's NEWEST end first, and a busy org's own recent activity, already
+# in the seen-file from earlier polls, fills a single desc page before the
+# sweep ever reaches the window's older rows. ⚠️ Corrected (P3-1,
+# fix-round-7 review): late-indexed rows do NOT sit at the old end — the
+# main cursor walks forward, so they are spread across the whole window;
+# only the MOST overdue ones are oldest. ASCENDING (same as the main
+# query) makes truncation less bad, not harmless: a truncated sweep still
+# drops whatever late rows sit in its unread newer part (see the warning
+# below). Reading oldest-first makes a single page usually enough — but not
+# guaranteed enough on its own on
 # a busy org, so this paginates within the SAME 5-page/100-per-page budget
 # _wg_poll_one_query already uses, stopping on a short page the same way.
 # "lag window truncated" is now reported ONLY when that 5-page cap is
@@ -1562,10 +1565,10 @@ lagging the cursor above (which is what let a single dense poll pin it
 forever — see CHANGELOG), that margin is covered by a separate, bounded
 "tail sweep": once every 5 polls, or right after a truncated one, one or
 more requests re-read the window below the cursor OLDEST FIRST — same
-order as the main query, so the rows most likely to still be missing (the
-late-indexed ones, which sit at the window's old end) are read before a
-busy org's own already-seen recent activity can fill the page — and
-deliver anything a poll may have missed while it was still indexing; a
+order as the main query — and deliver anything a poll may have missed
+while it was still indexing (late-indexed rows can sit anywhere in that
+window, not only at its old end, so a truncated sweep can still miss
+some in the part it didn't read); a
 small seen-file de-dupes whichever query finds a row first. The window is
 the time since the last sweep STARTED (at least 300s) plus a fixed 300s
 overlap with that sweep, so a row updated just before one sweep but

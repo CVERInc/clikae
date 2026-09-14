@@ -128,8 +128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a real span to subtract `now` from. The same round also fixed the
   sweep's own read direction — it re-read the window NEWEST-first, so a
   busy org's own already-seen recent activity filled the one page before
-  ever reaching the OLDEST rows the sweep exists to catch (the
-  late-indexed ones); it now reads oldest-first, paginating within the
+  ever reaching the window's older rows, where the most overdue
+  late-indexed ones sit (late rows are spread across the whole window, so
+  a truncated sweep can still miss newer ones); it now reads oldest-first, paginating within the
   main query's own 5-page budget, and reports "lag window truncated" only
   when that budget is actually exhausted. `review_requested` — added to the
   set of event types allowed to supply the `mention`-detecting body text in

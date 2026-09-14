@@ -408,10 +408,11 @@ forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
 once every 5 polls, or right after a truncated one: one or more requests,
 oldest-first (same order as the main query), re-reading a window just
 below the cursor and delivering anything the main query may have missed
-while it was still indexing — oldest-first matters here because the
-late-indexed rows this sweep exists to catch sit at the OLD end of that
-window, and a busy org's own already-seen recent activity would otherwise
-fill a newest-first page before ever reaching them. That window is the
+while it was still indexing — oldest-first so a busy org's own
+already-seen recent activity can't fill a newest-first page before the
+sweep reaches older rows. Late-indexed rows are spread across the whole
+window, though, not only at its old end, so a truncated sweep (below) can
+still miss some in the newer part it didn't read. That window is the
 time since the last sweep STARTED (at least 300s) plus a fixed 300s
 overlap with the previous sweep, so a row updated just before one sweep
 but indexed just after it is still re-read by the next — an epoch
