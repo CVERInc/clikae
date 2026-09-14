@@ -100,6 +100,14 @@ usage_read() (
 #     reads as 0% used, not as whatever stale percentage the last fetch
 #     happened to record — a tank that ran dry at 15:00Z must not still be
 #     ranked (or shown) at its old 100% two hours after its window reset.
+#     This "reset passed -> 0%" rule only applies to `usage_cache_peek`
+#     WITHIN its own `_USAGE_CACHE_PEEK_MAX_AGE_SEC` age ceiling (900s,
+#     below) — past that ceiling the reading is "unknown", never "0%",
+#     because a reading too old to trust is also too old to know it hasn't
+#     drifted past a LATER reset it never recorded. `usage_board_fields`
+#     carries no such ceiling: it honours the same reset-passed rule at any
+#     age, on its own 24h "unknown" cutoff (`home.sh`) instead — the two
+#     callers do not share one ruler (round-5 review P3-5).
 #
 # Nothing else writes or refreshes this cache. `usage_read` above is the
 # ONLY writer in the whole repo (`clikae usage`, plus (a)/(b) above calling
