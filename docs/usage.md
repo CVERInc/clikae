@@ -388,17 +388,30 @@ know the epoch yet) returns 0 and prints the events, the same reader a
 cockpit already blocks on for `clikae burn` — that's what a cron job or
 Stop hook calling `--once` actually has to consume, not the JSONL log.
 
-The cursor (the last update this poll actually processed, lagged 300s to
-absorb GitHub search's own indexing delay) persists at
-`$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small seen-file next to
-it de-dupes by (repo, issue number, updated timestamp), capped at the last
-5,000. Cold start (no cursor yet) bounds to the last 24 hours by default —
-`--since` overrides that bound — and each query paginates ascending
-(oldest-unseen-first) up to 500 rows (5 pages of 100) per poll. A busy org's
-backlog therefore can't outrun this permanently: a poll cut short by the cap
-still leaves the cursor at the end of what it read, so the next poll picks
-up exactly there — the trade-off is a backlogged cold start crawls forward
-from `--since`/24h-ago instead of surfacing today's newest activity first.
+The cursor (the EXACT max updated_at this poll actually processed — no lag)
+persists at `$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small
+seen-file next to it de-dupes by (repo, issue number, updated timestamp),
+capped at the last 5,000. Cold start (no cursor yet) bounds to the last 24
+hours by default — `--since` overrides that bound — and each query
+paginates ascending (oldest-unseen-first) up to 500 rows (5 pages of 100)
+per poll. A busy org's backlog therefore can't outrun this permanently: a
+poll cut short by the cap still leaves the cursor at the end of what it
+read, so the next poll picks up exactly there — the trade-off is a
+backlogged cold start crawls forward from `--since`/24h-ago instead of
+surfacing today's newest activity first.
+
+GitHub search's own indexing delay (real writes lag the search index by
+some minutes) is NOT covered by lagging the cursor above — that was tried
+in earlier rounds of this feature and turned out to permanently stall a
+busy org (any 300-second window holding ≥500 rows pinned the cursor
+forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
+once every 5 polls, or right after a truncated one: ONE more request,
+newest-first, re-reading the 300s just below the cursor, delivering
+anything the main query may have missed while it was still indexing. It
+never advances the cursor itself, so it cannot re-create that stall; a
+window holding 100+ updates is reported as "lag window truncated" and
+dropped rather than paginated, so it costs at most one extra request per
+poll.
 
 Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
 `issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
@@ -421,17 +434,18 @@ mostly buying nothing but extra requests. A brand-new issue/PR whose own
 OPENING text mentions you is not covered by this — no lookup happens for a
 fresh number, so there is no body text to check).
 
-Rate limits: normally 1 search request per poll (up to 5 when paginating),
-plus up to 50 activity lookups (each up to 2 requests) against the core
-API's much larger budget.
+Rate limits: normally 1 search request per poll (up to 5 when paginating,
+plus up to 1 more for the tail sweep above), plus up to 50 activity lookups
+(each up to 2 requests) against the core API's much larger budget.
 On a genuine rate limit (429, or a 403 the response attributes to it, or a
 5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
 never advanced past a page that failed to read, so nothing is silently
 skipped — a poll cut short by the 5-page cap prints "truncated: continuing
 next poll" and it does: pagination runs oldest-unseen-first, so the cursor
-lands at the end of what this poll actually read, and the next poll's query
-starts exactly there. No backlog, however large, can stall this
-permanently. A PERMANENT failure —
+lands EXACTLY at the last row this poll actually read, and the next poll's
+query starts exactly there. No backlog, however large, can stall this
+permanently — the cursor only ever advances, never regressing into a
+window it has already re-read. A PERMANENT failure —
 missing OAuth scope, SAML enforcement, a bad org name — is retried once,
 then reported and the command exits 1; it never enters back-off, since no
 amount of retrying fixes those. `--once` returns 0 only when a poll

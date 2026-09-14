@@ -85,9 +85,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on your own issue reaches you. Each query paginates ASCENDING (oldest
   unseen first) — a cursor + capped seen-file de-dupe by (repo, issue
   number, updated timestamp); a poll cut short by the 5-page/query cap pins
-  the cursor to the last row it actually read, and the NEXT poll continues
-  exactly there, so a backlog of any size drains in bounded polls and can
-  never stall permanently ("truncated: continuing next poll" — and it does).
+  the cursor to the EXACT last row it actually read (no lag — an earlier
+  version of this entry claimed the cursor lagged 300s behind the newest
+  row seen, to absorb GitHub search's own indexing delay; that lag was
+  itself a permanent-stall bug — any 300-second window holding ≥500 rows
+  pinned the cursor back inside the very page a poll had just re-read,
+  forever, on a busy-enough org, fixed 2026-09-14 fix-round-4 review), and
+  the NEXT poll continues exactly there, so a backlog of any size drains in
+  bounded polls and can never stall permanently ("truncated: continuing
+  next poll" — and it does). The 300s indexing-lag margin is instead bought
+  by a separate, bounded "tail sweep": once every 5 polls, or right after a
+  truncated one, ONE more request re-reads the 300s below the cursor
+  (newest first) and delivers anything the main query may have missed while
+  still indexing, without ever touching the cursor itself — a window
+  holding ≥100 updates is reported "lag window truncated" and dropped
+  rather than paginated, so this too can never stall.
   On a genuine rate limit (429, a 403
   the response attributes to it, or a 5xx) the interval backs off ×2 up to
   1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is

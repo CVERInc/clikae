@@ -178,6 +178,24 @@
 # size drains in bounded polls, never stalls, and needs no special-casing
 # for the truncated vs. non-truncated case.
 #
+# 🔴 PERMANENT STALL, FIXED AGAIN (P1-1, 2026-09-14 fix-round-4 review —
+# read before re-adding a lag subtraction to the cursor). Round 3's own fix
+# above is correct about `order=asc`, but round 3 (and rounds 1-2 before
+# it) ALSO subtracted a fixed 300s off the cursor for search-index lag
+# (see the CURSOR SEMANTICS note above _wg_query_org) — and that
+# subtraction alone recreated the identical permanent stall on a DENSER
+# backlog: any 300-second window holding >=500 rows (the page-5 cap) put
+# the lagged cursor back inside the very page this poll just read, so the
+# next poll re-read it, recomputed the identical lagged cursor, forever.
+# Proven with the same honest stub, denser corpora: 600 rows/0.6s apart
+# (a 300s window = exactly 500 rows) never moved the cursor past poll 1,
+# ever; worse, once stuck this way the feature stopped delivering ANY
+# activity for that org afterward, not just the tail — the exact failure
+# #46 exists to prevent. Fixed by dropping the lag from the cursor
+# entirely (see CURSOR SEMANTICS) and covering the same index-lag margin
+# with a separate, bounded `_wg_tail_sweep` that reads the last 300s on
+# its own schedule and never feeds back into this cursor.
+#
 # ⚠️ FORMERLY A KNOWN GAP, FIXED (P1-2, 2026-09-13 fix-round-2 review): round
 # 1 shipped `-author:<self>` in the org query as a "locked design decision",
 # with a caveat saying a plain reply on your own issue only reaches you via
@@ -278,15 +296,31 @@ _wg_iso_from_epoch() {
 
 # --- queries --------------------------------------------------------------
 
-# CURSOR SEMANTICS (P1-3, 2026-09-13 fix-round-1 review). The old query used
-# `updated:>cursor` (strict) with the cursor set to the exact max updated_at
-# seen — no margin. GitHub's search index lags real writes by some minutes
+# CURSOR SEMANTICS (P1-3, 2026-09-13 fix-round-1 review; revised P1-1,
+# 2026-09-14 fix-round-4 review). The original query used `updated:>cursor`
+# (strict) with the cursor set to the exact max updated_at seen — no
+# margin. GitHub's search index lags real writes by some minutes
 # (documented search-API behaviour); anything that lands in the index AFTER
 # the poll that set the cursor, but whose updated_at is <= that cursor,
 # would never appear in ANY future query — gone, silently, forever. Fixed by
-# using `>=` (inclusive) with the cursor itself already lagged 300s behind
-# the max seen (_wg_poll below) — the seen-file dedup (already needed for
-# other reasons) absorbs the resulting overlap between polls for free.
+# using `>=` (inclusive), with the cursor set to the EXACT max updated_at
+# actually processed each poll (_wg_poll below) — the seen-file dedup
+# (already needed for other reasons) absorbs the resulting one-row overlap
+# between polls for free.
+#
+# 🔴 Round 1 through 3 instead subtracted a fixed 300s straight off this
+# cursor to buy the same index-lag margin — round-4 review found that this
+# re-created the exact permanent-stall bug P1-2 (round 3) had just fixed:
+# any 300-second window holding >=500 rows (a busy org's own page-5 cap)
+# made the lagged cursor land BACK INSIDE the page this poll had just
+# re-read, so the next poll re-read the identical window, computed the
+# identical lagged cursor, forever — silently, with every poll still
+# reporting rc=0. Fixed by dropping the lag from this value entirely: the
+# cursor now only ever advances to what THIS poll actually saw, so it is
+# monotonic by construction and cannot regress into its own just-read
+# window. The 300s margin against index lag is instead bought by
+# _wg_tail_sweep, a SEPARATE bounded re-read of the last 300s that never
+# feeds back into this cursor — see that function's own comment.
 
 # _wg_query_org <org> <since> -> the search string for "issues/PRs updated
 # since <since>" in <org> — EVERY one, including issues you opened yourself
@@ -302,14 +336,15 @@ _wg_query_org() {
 
 # --- one query's worth of work ---------------------------------------------
 
-# _wg_fetch <query> <page> <errfile> -> TSV on stdout (number, updated_at,
-# login, repo, html_url, is_pr, title, comments — see the jq filter), gh's
-# own exit code. `comments` (P2-9, see _wg_latest_comment_author below) is
-# the issue's own comment COUNT as of this search hit — used to fetch the
-# single latest comment's author with one extra request, not to print
-# anything. gh's `--jq` is its own vendored implementation (gojq) — no
-# external `jq` binary required, unlike lib/core/fleet_mcp.sh's merge
-# (which genuinely needs the real jq for --slurpfile).
+# _wg_fetch <query> <page> <errfile> [order=asc] -> TSV on stdout (number,
+# updated_at, login, repo, html_url, is_pr, title, comments — see the jq
+# filter), gh's own exit code. `comments` (P2-9, see
+# _wg_latest_comment_author below) is the issue's own comment COUNT as of
+# this search hit — used to fetch the single latest comment's author with
+# one extra request, not to print anything. gh's `--jq` is its own vendored
+# implementation (gojq) — no external `jq` binary required, unlike
+# lib/core/fleet_mcp.sh's merge (which genuinely needs the real jq for
+# --slurpfile).
 #
 # `order=asc` + `per_page=100` (P2-7, 2026-09-13 fix-round-1 review; order
 # flipped desc->asc in P1-2, 2026-09-13 fix-round-3 review — see CURSOR
@@ -321,6 +356,9 @@ _wg_query_org() {
 # item, working forward — a poll that gets truncated still leaves the
 # cursor exactly at the end of what it read, so the NEXT poll continues
 # from there instead of re-reading the same top of the window forever.
+# `order` is overridable (4th arg, default `asc`) ONLY for _wg_tail_sweep
+# below, which deliberately wants `desc` — the newest rows in its 300s
+# window first — over the SAME plumbing rather than a second copy of it.
 #
 # 🔴 `--method GET` IS NOT OPTIONAL. `gh api`'s own default HTTP method
 # flips from GET to POST the moment ANY `-f`/`-F` is given (its docs say so
@@ -331,8 +369,8 @@ _wg_query_org() {
 # explicit GET, which is the whole point of using it instead of hand-quoting
 # a URL.
 _wg_fetch() {
-  local query="$1" page="$2" errfile="$3"
-  gh api search/issues --method GET -f q="$query" -f sort=updated -f order=asc \
+  local query="$1" page="$2" errfile="$3" order="${4:-asc}"
+  gh api search/issues --method GET -f q="$query" -f sort=updated -f order="$order" \
     -f per_page=100 -f page="$page" \
     --jq '.items[]? | [(.number|tostring), .updated_at, .user.login, (.repository_url|split("/")|.[-1]), .html_url, (if .pull_request then "1" else "0" end), .title, (.comments|tostring)] | @tsv' \
     2>"$errfile"
@@ -383,10 +421,10 @@ _wg_classify_error() {
   esac
 }
 
-# _wg_fetch_classified <query> <page> -> rc 0 on success, with the TSV in
-# global $__WG_LAST_TSV. On failure, retries the SAME call ONCE if (and
-# only if) the first failure classified as "permanent" (a transient blip
-# that merely wore a permission-denied costume is cheap to rule out; a
+# _wg_fetch_classified <query> <page> [order=asc] -> rc 0 on success, with
+# the TSV in global $__WG_LAST_TSV. On failure, retries the SAME call ONCE
+# if (and only if) the first failure classified as "permanent" (a transient
+# blip that merely wore a permission-denied costume is cheap to rule out; a
 # genuine permanent failure fails the same way twice) — then sets
 # $__WG_LAST_KIND / $__WG_LAST_REASON from whichever attempt is final and
 # returns 1.
@@ -398,10 +436,10 @@ _wg_classify_error() {
 # assertion failed because $__WG_LAST_REASON came back empty). The TSV
 # payload goes through $__WG_LAST_TSV for the same reason, not stdout.
 _wg_fetch_classified() {
-  local query="$1" page="$2" errfile rc kind
+  local query="$1" page="$2" order="${3:-asc}" errfile rc kind
   errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
   rc=0
-  __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile")" || rc=$?
+  __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile" "$order")" || rc=$?
   if [ "$rc" -eq 0 ]; then
     rm -f "$errfile"
     return 0
@@ -411,7 +449,7 @@ _wg_fetch_classified() {
     rm -f "$errfile"
     errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
     rc=0
-    __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile")" || rc=$?
+    __WG_LAST_TSV="$(_wg_fetch "$query" "$page" "$errfile" "$order")" || rc=$?
     if [ "$rc" -eq 0 ]; then
       rm -f "$errfile"
       return 0
@@ -906,16 +944,61 @@ _wg_poll_one_query() {
   done
 }
 
+# _wg_tail_sweep_counter_file <org> -> path tracking how many polls have run
+# since the last tail sweep (P1-1, 2026-09-14 fix-round-4 review).
+_wg_tail_sweep_counter_file() { printf '%s/%s.sweepn\n' "$(_wg_state_dir)" "$1"; }
+
+# _wg_tail_sweep <org> <cursor> <seen_file> <events_file> -> ONE bounded,
+# separate re-read of the 300s BELOW <cursor> (P1-1, 2026-09-14 fix-round-4
+# review — read the 🔴 note in the file header before touching this).
+# order=desc, ONE page, per_page=100: catches a row whose updated_at is
+# old enough to sit behind the main cursor but only just became visible in
+# GitHub's search index (documented indexing lag) — WITHOUT lagging the
+# main cursor itself, which is what let a >=500-row/300s window pin it
+# forever (see CURSOR MONOTONICITY / BACKLOG). Run by _wg_poll, ALWAYS
+# after the main cursor is already computed and persisted from THIS poll's
+# own $__WG_MAX_UPDATED alone — this function's own use of
+# $__WG_MAX_UPDATED (folded in by _wg_process, same as any other query) is
+# scratch, discarded by the caller, never fed back into the cursor file.
+# Found rows go through the same seen-file/_wg_process dedup as any other
+# row, so they are announced and logged exactly once, whichever query
+# finds them first. A full page (>=100 rows in the window) means more rows
+# exist than fit — reported as "lag window truncated" and dropped, never
+# paginated further, so this can cost at most ONE extra request per poll
+# and can never itself stall anything.
+_wg_tail_sweep() {
+  local org="$1" cursor="$2" seen_file="$3" events_file="$4"
+  local epoch since q tsv page_n
+  epoch="$(_limit_iso_epoch "$cursor" "")"
+  [ -n "$epoch" ] || return 0
+  since="$(_wg_iso_from_epoch "$((epoch - 300))")"
+  [ -n "$since" ] || return 0
+  q="$(_wg_query_org "$org" "$since")"
+  if ! _wg_fetch_classified "$q" 1 desc; then
+    log_warn "github:$org — lag sweep failed, skipping this poll's sweep: $__WG_LAST_REASON"
+    return 0
+  fi
+  tsv="$__WG_LAST_TSV"
+  _wg_process "$tsv" "$org" "$seen_file" "$events_file"
+  page_n="$(printf '%s\n' "$tsv" | grep -c . || true)"
+  [ "$page_n" -ge 100 ] && log_warn "github:$org — lag window truncated (>=100 updates in the last 300s); skipping the rest, not stalling."
+  return 0
+}
+
 # _wg_poll <org> [since_override] -> runs the org query (paginated; P2-2,
 # 2026-09-13 fix-round-3 review — the separate mentions query is gone, see
 # the file header), updates $__WG_EVENTS / $__WG_BACKOFF / $__WG_OK
 # (globals, set here — see
 # lib/core/wake.sh's _wake_targetsv for the same "sets globals instead of
 # forking a subshell" idiom this follows). Never advances the cursor past a
-# page that failed to read; the new cursor is lagged 300s behind the max
-# updated_at actually seen (P1-3 — see the CURSOR SEMANTICS note above
-# _wg_query_org). <since_override>, when non-empty, is used ONLY for a cold
-# start (no persisted cursor, or an empty cursor file) — see cmd_watch_github's
+# page that failed to read; the new cursor is EXACTLY the max updated_at
+# actually processed this poll — no lag (P1-1, 2026-09-14 fix-round-4
+# review; see the CURSOR SEMANTICS note above _wg_query_org and the 🔴 note
+# in the file header for why a lag subtracted straight off this value was
+# a permanent-stall bug, not a safety margin). Search-index lag is instead
+# covered by _wg_tail_sweep, run separately below, which never touches this
+# value. <since_override>, when non-empty, is used ONLY for a cold start
+# (no persisted cursor, or an empty cursor file) — see cmd_watch_github's
 # --since flag.
 _wg_poll() {
   local org="$1" since_override="${2:-}"
@@ -968,13 +1051,46 @@ _wg_poll() {
   # kept running alongside this one.
   _wg_poll_one_query "$org" "$since" "$seen_file" "$events_file"
 
+  # Never advance past an event a failed page might have contained. The new
+  # cursor is EXACTLY the max updated_at actually processed this poll — no
+  # lag; `>=` in the query plus the seen-file dedup absorb the one-row
+  # overlap between polls (P1-1, 2026-09-14 fix-round-4 review — see CURSOR
+  # SEMANTICS above _wg_query_org for why a lag subtracted straight off
+  # this value was the permanent-stall bug, not a safety margin).
+  local new_cursor=""
+  if [ "$__WG_OK" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
+    new_cursor="$__WG_MAX_UPDATED"
+    printf '%s\n' "$new_cursor" > "${cursor_file}.tmp" 2>/dev/null && mv -f "${cursor_file}.tmp" "$cursor_file" 2>/dev/null || true
+  fi
+
+  # TAIL SWEEP (P1-1, 2026-09-14 fix-round-4 review): once every N=5 polls,
+  # or right after a truncated one (more likely to have left recent rows
+  # behind an index-lag boundary) — see _wg_tail_sweep's own comment. Never
+  # touches $new_cursor above, so it can never re-create the stall it
+  # replaces. Skipped entirely on a failed poll: $new_cursor would be
+  # either empty or stale, neither a sound base for the sweep's own window.
+  if [ "$__WG_OK" -eq 1 ] && [ -n "$new_cursor" ]; then
+    local sweep_count_file sweep_n=0
+    sweep_count_file="$(_wg_tail_sweep_counter_file "$org")"
+    [ -f "$sweep_count_file" ] && sweep_n="$(cat "$sweep_count_file" 2>/dev/null || echo 0)"
+    case "$sweep_n" in ''|*[!0-9]*) sweep_n=0 ;; esac
+    sweep_n=$((sweep_n + 1))
+    if [ "$__WG_TRUNCATED" -eq 1 ] || [ "$sweep_n" -ge 5 ]; then
+      _wg_tail_sweep "$org" "$new_cursor" "$seen_file" "$events_file"
+      sweep_n=0
+    fi
+    printf '%s\n' "$sweep_n" > "$sweep_count_file" 2>/dev/null || true
+  fi
+
   # Cap the seen-file at the last 5,000 keys (brief's stated cap; P2-10 —
   # 500 was smaller than a single cold-start backlog could legitimately
   # be, so a busy first run would evict entries it had just written and
   # then re-announce them as "opened" a second time next poll). Atomic
   # `mktemp`+`mv` (P2-11): the old fixed `.tmp` name could collide with a
   # concurrent poll's own compaction even under the lock above if a
-  # previous crashed run left a stale `.tmp` sitting there.
+  # previous crashed run left a stale `.tmp` sitting there. Runs AFTER the
+  # tail sweep above so a sweep-found row's own seen-file entry is covered
+  # by the same compaction pass.
   if [ -f "$seen_file" ]; then
     local seen_tmp
     seen_tmp="$(mktemp "${seen_file}.XXXXXX" 2>/dev/null)" && \
@@ -988,29 +1104,6 @@ _wg_poll() {
   # `tail -n +2` drops whatever partial line a byte-boundary `tail -c` cut
   # into, so the file that survives is still one JSON object per line.
   _wg_events_rotate "$events_file"
-
-  # Never advance past an event a failed page might have contained. The new
-  # cursor lags 300s behind the max updated_at actually seen this poll —
-  # `>=` in the query plus the seen-file dedup absorb the resulting overlap.
-  #
-  # P1-2 (2026-09-13 fix-round-3 review): a SINGLE formula now, truncated or
-  # not — $__WG_MAX_UPDATED is the last row this poll actually processed
-  # EITHER WAY, because pagination runs ascending (see CURSOR MONOTONICITY /
-  # BACKLOG in the file header). Round 2 needed a separate
-  # $__WG_TRUNCATED_OLDEST override here specifically because desc order
-  # made $__WG_MAX_UPDATED equal to page 1's newest row on a truncated poll —
-  # wrong to resume from, and the actual cause of the permanent stall this
-  # round fixes. That override is gone, not renamed.
-  if [ "$__WG_OK" -eq 1 ] && [ -n "$__WG_MAX_UPDATED" ]; then
-    local max_epoch new_cursor
-    max_epoch="$(_limit_iso_epoch "$__WG_MAX_UPDATED" "")"
-    new_cursor=""
-    if [ -n "$max_epoch" ]; then
-      new_cursor="$(_wg_iso_from_epoch "$((max_epoch - 300))")"
-    fi
-    [ -n "$new_cursor" ] || new_cursor="$__WG_MAX_UPDATED"   # unparseable: no lag, still forward progress
-    printf '%s\n' "$new_cursor" > "${cursor_file}.tmp" 2>/dev/null && mv -f "${cursor_file}.tmp" "$cursor_file" 2>/dev/null || true
-  fi
 
   # P1-1 (2026-09-13 fix-round-1 review): the wake itself — one status file
   # per poll that found something, so `clikae wait` has a terminal state to
@@ -1050,9 +1143,9 @@ sandbox this one file — so `clikae wait watch-github-<org>-<epoch>` (the
 run_id this file itself
 prints) or `clikae wait --latest watch-github-<org>` (no epoch needed)
 returns 0 and prints the events, exactly like waiting on a burn. A cursor
-(the last update this poll actually processed) persists at
-$CLIKAE_HOME/state/watch-github/<org>.cursor; a small seen-file next to it
-de-dupes (repo, issue number, updated_at) triples.
+(the exact max updated_at this poll actually processed — no lag; see below)
+persists at $CLIKAE_HOME/state/watch-github/<org>.cursor; a small seen-file
+next to it de-dupes (repo, issue number, updated_at) triples.
 
   --org <org>       GitHub org to watch. Default: inferred from this
                      directory's GitHub remote (`gh repo view`).
@@ -1083,19 +1176,30 @@ you is not covered (no lookup happens for a fresh number; see docs/usage.md
 for the full story), only a reply on something already seen.
 
 Rate limits: normally 1 search request per poll (up to 5 when paginating to
-the cap; the search API allows 30/min authenticated), plus up to 50
-activity lookups (above, up to 2 requests each against the core API's much
-larger budget). On a genuine rate limit (429, or a 403 the response itself
-attributes to the rate limit, or a 5xx) the interval backs off ×2 up to 1h
-— from a floor of 60s, regardless of --interval — and one line is printed;
-the cursor is never advanced past a page that failed to read, and is kept
-300s behind the newest update actually seen (GitHub's search index itself
-lags real writes by some minutes) — a small seen-file de-dupes the
-resulting overlap between polls. A poll cut short by the 5-page cap prints
-"truncated: continuing next poll" — true now: pagination runs oldest-unseen
-first, so the cursor lands at the end of what this poll actually read, and
-the next poll's query starts exactly there. No backlog, however large, can
-stall this permanently — it drains in bounded, forward-only polls.
+the cap, plus up to 1 more for the tail sweep below; the search API allows
+30/min authenticated), plus up to 50 activity lookups (above, up to 2
+requests each against the core API's much larger budget). On a genuine
+rate limit (429, or a 403 the response itself attributes to the rate
+limit, or a 5xx) the interval backs off ×2 up to 1h — from a floor of 60s,
+regardless of --interval — and one line is printed; the cursor is never
+advanced past a page that failed to read. A poll cut short by the 5-page
+cap prints "truncated: continuing next poll" — true: pagination runs
+oldest-unseen first, so the cursor lands EXACTLY at the last row this poll
+actually read, and the next poll's query starts exactly there. No backlog,
+however large, can stall this permanently — it drains in bounded,
+forward-only polls, because the cursor never regresses into a window it
+has already re-read.
+
+GitHub's search index itself lags real writes by some minutes; rather than
+lagging the cursor above (which is what let a single dense poll pin it
+forever — see CHANGELOG), that margin is covered by a separate, bounded
+"tail sweep": once every 5 polls, or right after a truncated one, ONE more
+request re-reads the last 300s below the cursor (newest first) and
+delivers anything a poll may have missed while it was still indexing — a
+small seen-file de-dupes whichever query finds a row first. If that window
+itself holds 100+ updates, the sweep reports "lag window truncated" and
+moves on rather than paginating — bounded to one extra request per poll,
+so it can never stall anything either.
 
 A PERMANENT failure (missing OAuth scope, SAML enforcement, a bad org
 name — any other 403, or a 404) is retried once, then reported and this

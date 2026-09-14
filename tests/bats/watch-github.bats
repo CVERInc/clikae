@@ -318,6 +318,49 @@ _honest_corpus_write() {
   done
 }
 
+# _honest_corpus_write_dense <n> <start_iso> <rows_per_block> <secs_per_block>
+# -> like _honest_corpus_write, but <rows_per_block> rows share each
+# <secs_per_block>-second span (e.g. 5/3 = 0.6s/row, 5/1 = 0.2s/row) — bash
+# integer arithmetic can't take a fractional step directly, so several
+# consecutive rows land on the same whole second instead; what a real-time
+# window actually captures (the property P1-1 below depends on) is
+# identical either way. Overwrites honest_corpus.tsv, same shape/numbering
+# as _honest_corpus_write above.
+_honest_corpus_write_dense() {
+  local n="$1" start_iso="$2" rpb="$3" spb="$4" base
+  base="$(date -u -d "$start_iso" +%s 2>/dev/null \
+    || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$start_iso" +%s)"
+  local i sec ts
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  for i in $(seq 1 "$n"); do
+    sec=$(( (i - 1) * spb / rpb ))
+    ts="$(date -u -d "@$((base + sec))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -r "$((base + sec))" +%Y-%m-%dT%H:%M:%SZ)"
+    _row "$((2000 + i))" "$ts" alice reef "https://x/$((2000 + i))" 0 "issue $i" \
+      >> "$GH_STUB_DIR/honest_corpus.tsv"
+    printf '\n' >> "$GH_STUB_DIR/honest_corpus.tsv"
+  done
+}
+
+# _honest_corpus_append <start_num> <n> <start_iso> <step_s> -> APPEND $n
+# more rows (numbers <start_num>+1..<start_num>+n) to the EXISTING
+# honest_corpus.tsv, same shape as _honest_corpus_write — for simulating
+# activity that arrives well after an already-drained backlog (P1-1's
+# self-heal scenario).
+_honest_corpus_append() {
+  local start_num="$1" n="$2" start_iso="$3" step="$4" base
+  base="$(date -u -d "$start_iso" +%s 2>/dev/null \
+    || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$start_iso" +%s)"
+  local i ts
+  for i in $(seq 1 "$n"); do
+    ts="$(date -u -d "@$((base + i * step))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -r "$((base + i * step))" +%Y-%m-%dT%H:%M:%SZ)"
+    _row "$((start_num + i))" "$ts" alice reef "https://x/$((start_num + i))" 0 "late issue $i" \
+      >> "$GH_STUB_DIR/honest_corpus.tsv"
+    printf '\n' >> "$GH_STUB_DIR/honest_corpus.tsv"
+  done
+}
+
 @test "watch github: gh auth status failing exits 1 with a clear line" {
   _gh_stub_install
   printf '1\n' > "$GH_STUB_DIR/auth_rc"
@@ -338,10 +381,11 @@ _honest_corpus_write() {
   [[ "$output" == *"2 new event(s)"* ]] || false
   local cursor="$CLIKAE_HOME/state/watch-github/CVERInc.cursor"
   [ -f "$cursor" ]
-  # P1-3 (2026-09-13 fix-round-1 review): the cursor lags 300s behind the max
-  # updated_at actually seen (04:32:00 - 5m = 04:27:00), never the exact max
-  # — see the CURSOR SEMANTICS note in lib/commands/watch_github.sh.
-  [ "$(cat "$cursor")" = "2026-09-07T04:27:00Z" ]
+  # P1-1 (2026-09-14 fix-round-4 review): the cursor is EXACTLY the max
+  # updated_at actually processed this poll — no lag (an earlier round
+  # lagged this 300s, which turned out to be the permanent-stall bug the
+  # CURSOR SEMANTICS note in lib/commands/watch_github.sh now documents).
+  [ "$(cat "$cursor")" = "2026-09-07T04:32:00Z" ]
   # Durable JSONL record too — same $CLIKAE_HOME/logs directory burn's own
   # status.json lives under.
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
@@ -1023,7 +1067,12 @@ _honest_corpus_write() {
   [[ "$(cat "$GH_STUB_DIR/org.2.sent_query")" == *"updated:>="* ]] || false
 }
 
-@test "watch github --once: the cursor sent next poll is lagged 300s behind the max seen (P2-8)" {
+# P1-1 (2026-09-14 fix-round-4 review): earlier rounds lagged the cursor
+# 300s behind the max seen, and asserted that lag reached the SENT query
+# here. That lag was the permanent-stall bug (see CURSOR MONOTONICITY /
+# BACKLOG in lib/commands/watch_github.sh) — the cursor, and therefore the
+# next poll's query, now carries the EXACT max updated_at instead.
+@test "watch github --once: the cursor sent next poll is the EXACT max seen, no lag (P2-8/P1-1)" {
   _gh_stub_install
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:32:00Z alice reef https://x/100 0 "First issue")"
@@ -1034,9 +1083,7 @@ _honest_corpus_write() {
     "$(_row 101 2026-09-07T05:00:00Z bob reef https://x/101 0 "Second issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
-  # 04:32:00 - 300s = 04:27:00 — the SENT query, not just the persisted
-  # cursor file, must reflect the lag.
-  [[ "$(cat "$GH_STUB_DIR/org.2.sent_query")" == *"updated:>=2026-09-07T04:27:00Z"* ]] || false
+  [[ "$(cat "$GH_STUB_DIR/org.2.sent_query")" == *"updated:>=2026-09-07T04:32:00Z"* ]] || false
 }
 
 @test "watch github --once: cursor is not advanced when a later PAGE fails to read (P2-8)" {
@@ -1088,11 +1135,18 @@ _honest_corpus_write() {
 # >=500 rows in the window got truncated at page 5, computed the SAME
 # cursor, every single poll, forever. Proven here with an HONEST stub (see
 # _gh_stub_install_honest_corpus above) that actually filters/re-paginates,
-# not a canned per-call fixture — 501 rows, three consecutive `--once`
-# polls, every row delivered exactly once, and the cursor genuinely moves
-# forward each time (not stuck).
+# not a canned per-call fixture — 501 rows, every row delivered exactly
+# once, and the cursor genuinely moves forward each time (not stuck).
+#
+# Revised (P1-1, 2026-09-14 fix-round-4 review): row #2501 now arrives
+# DURING poll 1, not poll 2 — the tail sweep that fires right after a
+# truncated poll (_wg_tail_sweep) re-reads the 300s below the brand-new
+# cursor, desc order, and #2501 (only 10s past it) sits inside that
+# window. That's a correct, even earlier, delivery — not a regression —
+# see the P1-1 tests right below this one for the density this test's own
+# 10s-apart corpus is too sparse to exercise (the actual round-4 bug).
 
-@test "watch github --once: ascending pagination can never stall — 501 rows delivered exactly once over three honest polls (P1-2)" {
+@test "watch github --once: ascending pagination can never stall — 501 rows delivered exactly once, the tail caught by the same poll's sweep (P1-2/P1-1)" {
   _gh_stub_install_honest_corpus
   local state_dir="$CLIKAE_HOME/state/watch-github"
   mkdir -p "$state_dir"
@@ -1102,34 +1156,35 @@ _honest_corpus_write() {
   _honest_corpus_write 501 "$start_iso" 10
   printf '%s\n' "$start_iso" > "$state_dir/CVERInc.cursor"
 
-  # --- poll 1: 5 full pages (500 rows), truncated, cursor moves forward
-  # (NOT stuck at page 1's window — that's the whole bug this replaces).
+  # --- poll 1: 5 full pages (500 rows) truncate the MAIN query — cursor
+  # still moves forward to EXACTLY row #2500's own updated_at (no lag; NOT
+  # stuck re-reading page 1's window — that's the bug this replaces) — and
+  # the tail sweep that fires right after a truncated poll catches #2501
+  # in the very same poll.
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"+more, will catch up next poll"* ]] || false
-  [[ "$output" == *"500 new event(s) this poll. (truncated: continuing next poll)"* ]] || false
+  [[ "$output" == *"501 new event(s) this poll. (truncated: continuing next poll)"* ]] || false
   [[ "$output" == *"github CVERInc/reef#2001 opened by alice: issue 1"* ]] || false
   [[ "$output" == *"github CVERInc/reef#2500 opened by alice: issue 500"* ]] || false
-  [[ "$output" != *"#2501"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#2501 opened by alice: issue 501"* ]] || false
   local cursor1; cursor1="$(cat "$state_dir/CVERInc.cursor")"
   [ -n "$cursor1" ]
   [ "$cursor1" != "$start_iso" ]   # forward progress — round-2's bug left this stuck
+  local ts2500; ts2500="$(awk -F'\t' '$1==2500{print $2}' "$GH_STUB_DIR/honest_corpus.tsv")"
+  [ "$cursor1" = "$ts2500" ]       # EXACT, no lag (P1-1, fix-round-4)
 
-  # --- poll 2: cursor moved past row 501's window, so this poll actually
-  # delivers the one row that lived on the never-fetched page 6.
-  run clikae watch github --org CVERInc --once
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"github CVERInc/reef#2501 opened by alice: issue 501"* ]] || false
-  local cursor2; cursor2="$(cat "$state_dir/CVERInc.cursor")"
-  [ "$cursor2" != "$cursor1" ]     # still moving forward, not re-reading the same window
-  [[ "$output" != *"+more, will catch up next poll"* ]] || false   # caught up — no more truncation
-
-  # --- poll 3: fully caught up now — 0 new events, no truncation, cursor
-  # stable (the corpus has nothing newer to deliver).
+  # --- poll 2: fully caught up now — 0 new events, no truncation, cursor
+  # only ever advances (never regresses, even though this poll re-reads
+  # #2500/#2501 via `>=` and folds their updated_at into the running max).
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"0 new event(s) this poll."* ]] || false
   [[ "$output" != *"+more, will catch up next poll"* ]] || false
+  local cursor2; cursor2="$(cat "$state_dir/CVERInc.cursor")"
+  [[ "$cursor2" > "$cursor1" || "$cursor2" == "$cursor1" ]] || false
+  local ts2501; ts2501="$(awk -F'\t' '$1==2501{print $2}' "$GH_STUB_DIR/honest_corpus.tsv")"
+  [ "$cursor2" = "$ts2501" ]
 
   # The whole point: all 501 rows reached the durable log exactly once —
   # round 2's own bug delivered 500 and then NEVER the 501st, on any poll.
@@ -1138,6 +1193,117 @@ _honest_corpus_write() {
   [ "$(grep -c '"number":2001' "$events")" -eq 1 ]
   [ "$(grep -c '"number":2501' "$events")" -eq 1 ]
   [ "$(grep -oE '"number":[0-9]+' "$events" | sort -u | wc -l)" -eq 501 ]
+}
+
+# --- P1-1 (2026-09-14 fix-round-4 review): P1-2 above got `order=asc`
+# right, but this file ALSO lagged the cursor 300s behind the max seen (to
+# absorb GitHub search's own indexing delay) — and THAT alone recreated an
+# identical permanent stall on a denser backlog: any 300-second window
+# holding >=500 rows (the 5-page cap) put the lagged cursor back inside the
+# very page a poll had just re-read, forever, silently reporting rc=0.
+# Proven with the review's own densities (600 rows/0.6s-apart — a 300s
+# window holds ~500 rows, the exact critical ratio; 800 rows/0.2s-apart —
+# denser still) and a self-heal case (new activity an hour after a dense
+# backlog fully drains — the old bug's rounds 1-3 never delivered this
+# once stuck). Fixed by dropping the lag from the cursor entirely (see the
+# CURSOR SEMANTICS note above _wg_query_org) — the 300s margin is instead
+# bought by the separate, bounded _wg_tail_sweep exercised in the test
+# right above this block.
+
+@test "watch github --once: 600 rows 0.6s apart (a 300s window holds ~500 — the exact round-1..3 stall density) fully drain within 2 polls, cursor never regresses (P1-1)" {
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local start_iso='2026-09-01T00:00:00Z'
+  _honest_corpus_write_dense 600 "$start_iso" 5 3   # 5 rows / 3s = 0.6s/row
+  printf '%s\n' "$start_iso" > "$state_dir/CVERInc.cursor"
+
+  local -a cursors=()
+  local i cur
+  for i in 1 2; do
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+    cur="$(cat "$state_dir/CVERInc.cursor")"
+    if [ "$i" -gt 1 ]; then
+      [[ "$cur" > "${cursors[0]}" || "$cur" == "${cursors[0]}" ]] || { echo "cursor regressed: ${cursors[0]} -> $cur"; false; }
+    fi
+    cursors+=("$cur")
+  done
+  # A third poll must find nothing left — the whole backlog is drained,
+  # not stuck reporting "truncated" forever the way rounds 1-3 did on this
+  # exact density.
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  [[ "$output" != *"+more, will catch up next poll"* ]] || false
+
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 600 ]
+  [ "$(grep -oE '"number":[0-9]+' "$events" | sort -u | wc -l)" -eq 600 ]
+  [ "$(grep -c '"number":2600' "$events")" -eq 1 ]
+}
+
+@test "watch github --once: 800 rows 0.2s apart (denser still) fully drain within 2 polls, cursor never regresses (P1-1)" {
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local start_iso='2026-09-01T00:00:00Z'
+  _honest_corpus_write_dense 800 "$start_iso" 5 1   # 5 rows / 1s = 0.2s/row
+  printf '%s\n' "$start_iso" > "$state_dir/CVERInc.cursor"
+
+  local -a cursors=()
+  local i cur
+  for i in 1 2; do
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+    cur="$(cat "$state_dir/CVERInc.cursor")"
+    if [ "$i" -gt 1 ]; then
+      [[ "$cur" > "${cursors[0]}" || "$cur" == "${cursors[0]}" ]] || { echo "cursor regressed: ${cursors[0]} -> $cur"; false; }
+    fi
+    cursors+=("$cur")
+  done
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  [[ "$output" != *"+more, will catch up next poll"* ]] || false
+
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 800 ]
+  [ "$(grep -oE '"number":[0-9]+' "$events" | sort -u | wc -l)" -eq 800 ]
+  [ "$(grep -c '"number":2800' "$events")" -eq 1 ]
+}
+
+@test "watch github --once: after a dense backlog fully drains, activity an hour later still wakes — no permanent stall (P1-1 self-heal)" {
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local start_iso='2026-09-01T00:00:00Z'
+  _honest_corpus_write_dense 600 "$start_iso" 5 3   # same critical density
+  printf '%s\n' "$start_iso" > "$state_dir/CVERInc.cursor"
+
+  # Drain it (2 polls suffice per the test above; give it 3 for margin).
+  local i
+  for i in 1 2 3; do
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+  done
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+
+  # An hour later, 20 more rows land — the old bug's stuck cursor would
+  # have made these unreachable forever (0/20 delivered, per the round-4
+  # review's own self-heal measurement).
+  _honest_corpus_append 2600 20 "2026-09-01T01:00:00Z" 10
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"20 new event(s) this poll."* ]] || false
+  [[ "$output" == *"github CVERInc/reef#2601 opened by alice: late issue 1"* ]] || false
+  [[ "$output" == *"github CVERInc/reef#2620 opened by alice: late issue 20"* ]] || false
+
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(wc -l < "$events")" -eq 620 ]
+  [ "$(grep -c '"number":2620' "$events")" -eq 1 ]
 }
 
 # --- P2-3 (2026-09-13 fix-round-2 review): end to end, `clikae wait --latest
