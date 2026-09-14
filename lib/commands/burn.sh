@@ -1113,12 +1113,21 @@ _burn_left_behind() {
   # substitution (`while read … done < <(printf …; while read … done <
   # <(find …))`) — bash 3.2, which is what `/usr/bin/env bash` actually
   # resolves to on the macOS CI runner (confirmed: `$BASH_VERSION` traced
-  # as 3.2.57 there, not the bash 5 round-1's own review assumed), fails
-  # this construct SILENTLY: the outer process substitution's subshell
-  # never even started (traced: zero output, not even its own first
-  # statement, from inside), and the enclosing `$(_burn_left_behind …)`
-  # command substitution came back empty with rc=1 — every #84 test with
-  # any expected row read back `left_behind: []`. A plain temp file
+  # as 3.2.57 there, not the bash 5 round-1's own review assumed), was
+  # OBSERVED to fail this construct silently on that runner: the outer
+  # process substitution's subshell never even started (traced: zero
+  # output, not even its own first statement, from inside), and the
+  # enclosing `$(_burn_left_behind …)` command substitution came back empty
+  # with rc=1 — every #84 test with any expected row read back
+  # `left_behind: []`. P3-4 (round-3 review): the RESULT is confirmed
+  # (reverting this fix reproduces the CI-shaped failure in a bash:3.2
+  # container; reapplying it fixes the same container) but the MECHANISM
+  # is not — a minimal single- and double-nested `< <(...)` loop in the
+  # same container ran fine, and 17 other process substitutions elsewhere
+  # in `lib/` are unaffected, so "process substitution is unsafe on bash
+  # 3.2" is broader than what was actually shown; treat this specific
+  # nesting shape as the confirmed trigger, not the general mechanism.
+  # A plain temp file
   # (`mktemp`, POSIX, no bash-version-dependent process-substitution
   # machinery at all) replaces BOTH nested substitutions: one `find`,
   # written once, read once, with the SAME two-step logic (root itself
@@ -1126,9 +1135,26 @@ _burn_left_behind() {
   # doesn't come through `find` at all — then every discovered `.git`
   # stripped to its parent dir) — just via a `case` on the read-back value
   # instead of a second `printf`/`read` pipeline.
-  local _lb_disc
+  # P2-2 (round-3 review): the global scan budget below used to start its
+  # clock AFTER this whole discovery pass, and neither the `find` above nor
+  # the per-marker `rev-parse` it drives were bounded by it — only the
+  # per-call 5s bound applied. Measured: 200 repos with a slow `rev-parse`
+  # (1s each) took 221s wall to even START the budgeted per-repo loop; 8
+  # repos with a FIFO `.git/HEAD` (5s bound trips on every one) took 40s and
+  # produced ZERO rows, zero "and N more" — the whole scan silently ran to
+  # completion after a 4x-over-budget discovery, with nothing to show for
+  # it. `lb_scan_t0` now starts here, before the first `find`, so discovery
+  # spends the SAME clock the per-repo loop already respected.
+  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
+  local _lb_disc rc_disc
   for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
     _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
+    rc_disc=0
     {
       printf '%s\0' "$root"
       # `-maxdepth 3` (round-1) capped repo discovery 2 levels below
@@ -1141,14 +1167,40 @@ _burn_left_behind() {
       # sibling and subdirectory of the surrounding working tree open, so
       # a repo nested inside another repo's working tree is still found —
       # this is how nested repos get discovered at all, not a bug to fix.
-      find "$root" \( -name node_modules -o -name .venv -o -name target \
+      # P2-2 (round-3 review): bounded like every other git/find call in
+      # this file (bare `find`, not `command find` — see P2-1) — a cold
+      # network mount under $root used to be able to hang discovery itself
+      # with no bound at all.
+      _burn_lb_bounded 5 find "$root" \( -name node_modules -o -name .venv -o -name target \
         -o -name dist -o -name build -o -name .cache \) -prune \
         -o \( -name .git -print0 -prune \) 2>/dev/null
-    } > "$_lb_disc" 2>/dev/null
+    } > "$_lb_disc" 2>/dev/null || rc_disc=$?
+    if [ "$rc_disc" -eq 124 ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+    fi
     while IFS= read -r -d '' marker; do
+      if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+        lb_budget_hit=1
+        lb_budget_skipped=$((lb_budget_skipped + 1))
+        continue
+      fi
       [ "$marker" = "$root" ] || marker="${marker%/.git}"
       rp_rc=0
       repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+      if [ "$rp_rc" -eq 124 ]; then
+        # P2-2 (round-3 review): this is the FIFO-`.git/HEAD` shape itself —
+        # a repo whose discovery `rev-parse` hangs never becomes a `repos[]`
+        # entry, so it used to vanish with no trace anywhere in the output
+        # (not `left_behind[]`, not `left_behind_truncated`, not the human
+        # "and N more" line). Counting it into the same budget-skipped total
+        # the per-repo loop already reports is the "at least say a number"
+        # half of the round-2 fix's own promise ("a repo that trips it is
+        # force-included … worth a human's attention, not silence") —
+        # applied to discovery, not just the per-repo scan.
+        lb_budget_skipped=$((lb_budget_skipped + 1))
+        continue
+      fi
       [ "$rp_rc" -eq 0 ] || continue
       case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
       seen="${seen}"$'\n'"${repo}"$'\n'
@@ -1165,10 +1217,11 @@ _burn_left_behind() {
   # drops the STALEST candidates first, not an arbitrary find-order tail.
   # Same review, same finding: no wall-time budget either — a single repo
   # under a huge, cold tree could make the file-list `find` itself run
-  # arbitrarily long. `timeout 5` bounds that per repo; a repo that trips it
-  # is force-included (we genuinely don't know what's in it, which is worth
-  # a human's attention, not silence) with "(scan timed out)" in place of a
-  # files list.
+  # arbitrarily long. `_burn_lb_bounded 5 find …` (round-2: `timeout`/
+  # `gtimeout` don't ship on stock macOS — see the P2-1 comment above)
+  # bounds that per repo; a repo that trips it is force-included (we
+  # genuinely don't know what's in it, which is worth a human's attention,
+  # not silence) with "(scan timed out)" in place of a files list.
   local -a lb_repo=() lb_branch=() lb_ahead=() lb_dirty=() lb_files=() lb_ts=() lb_timeout=()
   _clikae_statv
   local stat_flag='-c'
@@ -1183,7 +1236,10 @@ _burn_left_behind() {
   # remaining candidate repo is skipped rather than attempted — reported
   # honestly as "scan budget exhausted" (lb_budget_skipped below), not
   # silently dropped the way the pre-fix cap dropped its tail.
-  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
+  # P2-2 (round-3 review): `lb_scan_budget`/`lb_scan_t0`/`lb_budget_hit`/
+  # `lb_budget_skipped` are declared once now, before discovery (above) —
+  # this loop shares that same clock and counter instead of starting a
+  # fresh 10s budget of its own on top of whatever discovery already spent.
   for repo in "${repos[@]}"; do
     if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
