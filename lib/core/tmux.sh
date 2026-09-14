@@ -336,6 +336,14 @@ tmux_spawn_session() {
   # whatever leaked into the server's table never reaches anything clikae
   # itself, or anything the pane goes on to fork, actually reads.
   cmd="env -u _CLIKAE_TMUX_SHIM_HOPS PATH=$(printf '%q' "$PATH") $cmd"
+  # 🔴 CONSTRAINS EVERY FUTURE CALLER: `$cmd` MUST BE A SIMPLE COMMAND (P3,
+  # clikae#97 review round 2). `env … $cmd` only ever wraps the FIRST word —
+  # `cd x && …`, `exec foo`, `A=1 foo`, or anything with `;`/`&&` in it would
+  # change meaning (the guard would apply to `cd`, not to what runs after
+  # it, or `env` would try to exec a shell builtin and fail). The four
+  # current callers (switch.sh, burn.sh, antigravity.sh) all pass
+  # `bash -c …`/`bash "<file>"`, which is simple by construction — not an
+  # accident to rely on without saying so.
 
   # Rule 4 — a single global symlink, refreshed on every spawn.
   local _agent_sock=""
