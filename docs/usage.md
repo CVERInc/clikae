@@ -188,8 +188,10 @@ whose model isn't opus/sonnet (haiku, for instance) is untouched regardless
 of `subagent_type` or prompt content; an opus/sonnet spawn — `Explore`
 included — is checked against the prompt heuristic below exactly like any
 other. This is not a general permission gate. The role, and the hook, live on
-exactly one tank at a time; moving it with `clikae cockpit` cleans up the old
-tank first. A human's own hooks on that tank are marked apart from the
+exactly one tank at a time; moving it with `clikae cockpit` arms the new
+tank first and only cleans up the old one once the new one is armed and
+recorded, so a failure partway through never leaves you with no cockpit
+guarded at all. A human's own hooks on that tank are marked apart from the
 guard's and are never touched — the settings.json write rides the same
 mechanism as `clikae settings apply` (below), so **the file round-trips
 through jq**: key order gets normalized and CRLF becomes LF. Content survives

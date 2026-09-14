@@ -10,8 +10,9 @@
 # lanes spawned in-session from the cockpit tank). This makes the rule the
 # machine's problem: `clikae cockpit <tank>` installs a PreToolUse hook
 # (lib/hooks/cockpit-guard.sh) on that ONE tank's settings.json, and moving
-# the role removes it from the old tank and installs it on the new one — the
-# guard lives with the ROLE, never hand-copied into a profile.
+# the role installs it on the new tank FIRST and only removes it from the
+# old tank once the new one is armed and recorded (#63 P2-1, round-4
+# review) — the guard lives with the ROLE, never hand-copied into a profile.
 #
 # State: $CLIKAE_HOME/state/cockpit — one line, "<engine>/<tank>" (absent =
 # no cockpit). The settings.json edit itself rides #76/#85's write mechanism
@@ -339,7 +340,9 @@ worker tanks with `clikae burn` instead of spawning them in its own session
 (which would spend the cockpit's own weekly budget on work meant for a
 worker). Marking a tank installs a PreToolUse hook there that refuses an
 in-session Agent spawn that reads as a build/review lane; moving the role
-removes the hook from the old tank and installs it on the new one.
+installs the hook on the new tank FIRST and only removes it from the old
+tank once the new one is armed and recorded — so a failure partway through
+never leaves you with no cockpit guarded at all.
 
 A bare tank name resolves the way `clikae <name>` does: unique across every
 engine wins, ambiguous asks you to qualify it (clikae cockpit <engine> <tank>).
