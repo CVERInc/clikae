@@ -75,13 +75,34 @@ dry_store_mark() {
 # The freshness RULE itself lives here only, and dry_store_read below is
 # written in terms of it — two copies of "how old is too old" is exactly the
 # drift this file's own TTL/MAX_RETAIN pair would suffer first.
+#
+# 🔴 "NEVER FORKS" WAS NOT TRUE (P2-3, 2026-09-14 round-1 fix review): every
+# call used to compute its path via `f="$(dry_store_path "$engine" "$tank")"`
+# — a command substitution, which is a subshell fork, once per marker. The
+# tmux status row's alert count (tmux_status_alertsv) calls this once per file
+# under `$CLIKAE_HOME/dry/*/*`, so a host with N dry markers forked N times a
+# render, on a 5-second timer, inside tmux's own server — exactly the class of
+# cost this function's whole header promises is not there. Measured with
+# `strace -f -e trace=clone,execve` on the real helper (lib/core/status_line.sh):
+# 0 markers → 7 clones; 3 markers → 10; 33 markers → 40 — one clone per marker,
+# burn's half of the same render adds none. docs/DESIGN-tmux.md Rule 10 §3's
+# "two forks total" line was wrong the same way; fixed in the same commit.
+#
+# The fix inlines `dry_store_path`'s own one-line body instead of calling it
+# through a forking `$( )` — the same "two literals in the same paragraph,
+# not one derived from the other" tradeoff burn_status.sh's burn_status_dirs
+# already makes for the identical reason (see that function's header): a
+# plain `$CLIKAE_HOME/dry/$engine/$tank` costs nothing to keep in sync with
+# dry_store_path's `printf` three lines up, and both are on the same screen.
+# dry_store_mark/_read/_clear/_epoch keep calling dry_store_path itself — none
+# of them are on a 5-second timer, so the fork there was never the problem.
 # shellcheck disable=SC2034  # _DRY_PEEK / _DRY_PEEK_RESET are output slots, read
 # by lib/core/tmux.sh's status-line composer, which shellcheck analyses as a
 # separate file. Same shape as tmux.sh's CLIKAE_TMUX_SESS_EXISTS.
 dry_store_peekv() {
   local engine="$1" tank="$2" now="${3:-}" f line stamp age
   _DRY_PEEK=none; _DRY_PEEK_RESET=""
-  f="$(dry_store_path "$engine" "$tank")"
+  f="$CLIKAE_HOME/dry/$engine/$tank"   # dry_store_path's own body, inlined — see above
   [ -f "$f" ] || return 1
   IFS= read -r line < "$f" 2>/dev/null || return 1
   stamp="${line%%$'\t'*}"
