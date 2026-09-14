@@ -55,6 +55,51 @@ dry_store_mark() {
   printf '%s\t%s\n' "$now" "$reset" > "$f" 2>/dev/null || true
 }
 
+# dry_store_peekv <engine> <tank> [now] -> the SAME freshness verdict as
+# dry_store_read, and NOTHING ELSE: it never removes a marker, never forks
+# (pass <now> to skip this function's only `date`), and sets
+#
+#   _DRY_PEEK      none | fresh | stale | expired
+#   _DRY_PEEK_RESET  the vendor's verbatim reset phrase (may be empty)
+#
+# 🔴 WHY A READ-ONLY TWIN EXISTS AT ALL. dry_store_read's lazy `rm -f` is
+# correct for a caller that is *asking a question once* — the board, burn, the
+# watcher — but the tmux status line (lib/core/tmux.sh's tmux_status_render)
+# asks it every 5 seconds, from tmux's own server process, for every session on
+# screen. A measurement that deletes state is not a measurement: it would make
+# "when did this marker disappear" a function of whether anyone happened to be
+# looking at a status bar, and it would do the deleting from a process that is
+# not the user's clikae. So the status line peeks and leaves the collecting to
+# whoever actually asked.
+#
+# The freshness RULE itself lives here only, and dry_store_read below is
+# written in terms of it — two copies of "how old is too old" is exactly the
+# drift this file's own TTL/MAX_RETAIN pair would suffer first.
+# shellcheck disable=SC2034  # _DRY_PEEK / _DRY_PEEK_RESET are output slots, read
+# by lib/core/tmux.sh's status-line composer, which shellcheck analyses as a
+# separate file. Same shape as tmux.sh's CLIKAE_TMUX_SESS_EXISTS.
+dry_store_peekv() {
+  local engine="$1" tank="$2" now="${3:-}" f line stamp age
+  _DRY_PEEK=none; _DRY_PEEK_RESET=""
+  f="$(dry_store_path "$engine" "$tank")"
+  [ -f "$f" ] || return 1
+  IFS= read -r line < "$f" 2>/dev/null || return 1
+  stamp="${line%%$'\t'*}"
+  _DRY_PEEK_RESET="${line#*$'\t'}"
+  [ "$_DRY_PEEK_RESET" = "$line" ] && _DRY_PEEK_RESET=""   # no TAB in the line → no phrase
+  case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
+  case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
+  age=$(( now - stamp ))
+  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
+    _DRY_PEEK=expired
+  elif [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
+    _DRY_PEEK=stale
+  else
+    _DRY_PEEK=fresh
+  fi
+  return 0
+}
+
 # dry_store_read <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase if a
 # FRESH marker exists; 1 otherwise. A marker older than CLIKAE_DRY_TTL is stale →
 # lazily removed and reported not-dry (turn green early rather than pin red).
@@ -63,25 +108,18 @@ dry_store_mark() {
 # retained, a marker older than CLIKAE_DRY_MAX_RETAIN is unconditionally gone
 # (R1-P1-2): --retain-stale is not a promise to keep evidence forever.
 dry_store_read() {
-  local engine="$1" tank="$2" f line stamp reset now age
-  f="$(dry_store_path "$engine" "$tank")"
-  [ -f "$f" ] || return 1
-  IFS= read -r line < "$f" 2>/dev/null || return 1
-  stamp="${line%%$'\t'*}"
-  reset="${line#*$'\t'}"
-  [ "$reset" = "$line" ] && reset=""        # no TAB in the line → no phrase
-  case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
-  now="$(date +%s 2>/dev/null || echo 0)"
-  age=$(( now - stamp ))
-  if [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
-    rm -f "$f" 2>/dev/null || true
-    return 1
-  fi
-  if [ "${3:-}" != --retain-stale ] && [ "$stamp" -gt 0 ] && [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
-    rm -f "$f" 2>/dev/null || true
-    return 1
-  fi
-  printf '%s' "$reset"
+  local engine="$1" tank="$2"
+  dry_store_peekv "$engine" "$tank" || return 1
+  case "$_DRY_PEEK" in
+    expired) rm -f "$(dry_store_path "$engine" "$tank")" 2>/dev/null || true; return 1 ;;
+    stale)
+      if [ "${3:-}" != --retain-stale ]; then
+        rm -f "$(dry_store_path "$engine" "$tank")" 2>/dev/null || true
+        return 1
+      fi
+      ;;
+  esac
+  printf '%s' "$_DRY_PEEK_RESET"
   return 0
 }
 

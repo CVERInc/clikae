@@ -19,10 +19,40 @@
 # array) — or nothing if the field is absent or the object doesn't match the
 # one shape this reads.
 burn_status_field() {
-  local json="$1" field="$2"
-  printf '%s' "$json" \
-    | grep -oE "\"$field\":(\"[^\"]*\"|null|true|false|-?[0-9]+|\[[^]]*\])" \
-    | head -n 1 | sed -E "s/^\"$field\"://"
+  burn_status_fieldv "$1" "$2"
+  printf '%s' "$_BSF"
+}
+
+# burn_status_fieldv <json> <field> -> the same RAW value, into $_BSF, WITHOUT
+# FORKING. Empty when the field is absent.
+#
+# 🔴 WHY THE FORK-FREE TWIN. The echoing form above costs a `grep`, a
+# `head`, a `sed` and a command substitution — four processes — for one field,
+# and both of its callers ask for several fields of several files in a loop:
+# burn_tank_busy walks every run directory on the machine before a burn may
+# start, and the tmux status line (lib/core/tmux.sh's tmux_status_render) does
+# the same walk every 5 seconds inside tmux's own server, under a 30 ms budget
+# that four processes per field cannot meet. The parse is pure bash 3.2
+# parameter expansion, which is exactly as honest as the grep was: this reads
+# the flat single-line object _burn_status_write itself produces and nothing
+# else (see this file's header), so "the first `"<field>":` in the string" is
+# the whole grammar either way.
+#
+# The `"` and `:` around the name are load-bearing and are why a prefix cannot
+# be confused with a longer name: asking for `artifact` cannot match
+# `"artifact_bytes":`.
+# shellcheck disable=SC2034  # _BSF is an output slot, read by lib/core/tmux.sh.
+burn_status_fieldv() {
+  local json="$1" field="$2" rest
+  _BSF=""
+  rest="${json#*\"$field\":}"
+  [ "$rest" = "$json" ] && return 0          # no such field
+  case "$rest" in
+    '"'*)  rest="${rest#\"}"; _BSF="\"${rest%%\"*}\"" ;;   # a quoted string, re-quoted
+    '['*)  _BSF="${rest%%]*}]" ;;                           # the rerouted_from array
+    *)     _BSF="${rest%%,*}"; _BSF="${_BSF%%\}*}" ;;       # null/true/false/number
+  esac
+  return 0
 }
 
 # burn_status_str <json> <field> -> <field>'s value with quotes stripped, or
@@ -44,6 +74,25 @@ burn_status_state() { burn_status_str "$1" state; }
 # $CLIKAE_HOME: the two agree by default but a caller overriding $CLIKAE_HOME
 # alone would otherwise read from a directory burn never wrote to).
 burn_status_dir() { printf '%s/.clikae/logs/%s\n' "$HOME" "$1"; }
+
+# burn_status_dirs -> every burn run directory that exists on this machine, one
+# per line, newest LAST (glob order). Fork-free: a plain glob, no `find`, no
+# command substitution — the tmux status line (lib/core/tmux.sh) walks this on
+# a 5-second timer inside tmux's own server process.
+#
+# The literal below is the same layout burn_status_dir six lines up prints, and
+# deliberately sits next to it rather than being derived from it: deriving it
+# would mean an unquoted command substitution, which word-splits a $HOME
+# containing a space. Two literals in the same paragraph drift far less easily
+# than two in different files — and if this layout ever moves, both lines are
+# on the same screen.
+burn_status_dirs() {
+  local d
+  for d in "$HOME"/.clikae/logs/burn-*; do
+    [ -d "$d" ] || continue
+    printf '%s\n' "$d"
+  done
+}
 
 # burn_status_resolve <run_id|status-file> -> echo the status.json PATH to
 # read, or return 1 if none can be found. Accepts, in order:
