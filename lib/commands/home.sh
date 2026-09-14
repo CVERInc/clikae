@@ -17,19 +17,10 @@
 # pure helpers that never read T_*.
 if declare -F i18n_load >/dev/null 2>&1; then i18n_load "$(clikae_lang)"; fi
 
-# _human_age <epoch-mtime> [now-epoch] — "just now" / "5m ago" / "3h ago" /
-# "2d ago". One formatter for the board's Continue list and the resume picker
-# (each used to carry its own copy).
-_human_age() {
-  local mt="$1" now="${2:-}" d
-  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo "$mt")"
-  d=$(( now - mt ))
-  if   [ "$d" -lt 60 ];    then printf 'just now'
-  elif [ "$d" -lt 3600 ];  then printf '%dm ago' "$(( d / 60 ))"
-  elif [ "$d" -lt 86400 ]; then printf '%dh ago' "$(( d / 3600 ))"
-  else                          printf '%dd ago' "$(( d / 86400 ))"
-  fi
-}
+# _human_age lives in lib/core/duration.sh now (P2-5, 2026-09-14 round-1 fix
+# review) — the tmux status row needed it too and couldn't justify sourcing
+# this whole file to get it. bin/clikae sources duration.sh globally, same as
+# every other core lib, so nothing here changes at the call sites.
 
 # _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.

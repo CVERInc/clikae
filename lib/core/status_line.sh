@@ -36,6 +36,14 @@ CK_CORE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$CK_CORE/dry_store.sh"    2>/dev/null || exit 0
 # shellcheck source=burn_status.sh
 . "$CK_CORE/burn_status.sh"  2>/dev/null || exit 0
+# shellcheck source=duration.sh
+# P2-5 (2026-09-14 round-1 fix review): _human_age, for the stale-fuel "· Nh
+# ago" suffix. A leaf lib like every other one sourced here — see its own
+# header — so this stays true to "everything it sources is a leaf library
+# with no top-level side effects". Guarded like the rest: tmux_status_fuelv
+# checks `declare -F _human_age` before calling it, so a source failure here
+# degrades to no suffix, not a broken row.
+. "$CK_CORE/duration.sh"     2>/dev/null || true
 # shellcheck source=live.sh
 . "$CK_CORE/live.sh"         2>/dev/null || exit 0
 # shellcheck source=tmux.sh
