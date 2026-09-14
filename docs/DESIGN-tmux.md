@@ -454,6 +454,34 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   發生過**，不是雜訊——它就是拿掉最後一個 fork 的理由。成本的組成也量過：
   裸 bash 5.2 ms、加上四個 source 7.1 ms，其餘全是 `date` 與 `tmux show-options`
   這兩個 fork。
+
+  🔴 **P3-3（2026-09-14 round-3 review）：上面那組數字是用 load 表達的，而真正的
+  自變數是 run dir 的「數量」。** load 是這台機器當下的雜訊，run dir 數是這一列
+  自己的輸入——`tmux_status_alertsv` 對 `$HOME/.clikae/logs/burn-*` 每一個目錄開一次
+  `status.json`，成本跟目錄數線性成長，而目錄只會單調累積：保存期 7 天，但
+  `_burn_sweep_old_logs` **只在有人跑 `clikae burn` 時才掃**，所以一台「開著 tmux
+  但這週沒 burn」的機器不會自己變便宜。`lib/core/burn_status.sh:46-48` 早就把這件事
+  寫對了，只有這一節停在舊的表達法。
+
+  量（本 commit 的碼，真 helper `lib/core/status_line.sh`、每點 20 連發 ×3 次取中位數、
+  沙箱 HOME／CLIKAE_HOME、reefbox、`uptime` load 5.1–7.9）：
+
+  ```
+  run dir 數   全 done（最便宜：state 讀完就 continue）   全 running（要驗 pid）
+       0                13.3 ms                                   —
+      50                21.8 ms                                   —
+     100                25.9 ms                              27.7 / 31.7 ms
+     200                34.5 ms                                   —
+     400                54.0 ms                              67.1 / 68.3 ms
+  ```
+
+  **每個 run dir 的邊際成本 ≈ 0.10 ms（全 done）／≈ 0.13 ms（全 running）**，
+  固定成本 ≈ 13 ms。所以 30 ms 的預算換算成 run dir 是：在這台機器、這個 load 下
+  **約 170 個**（review 在 load 2.9 量到的是 400 個；固定成本與邊際成本都跟 load 走，
+  「幾個 run dir 會破預算」不是一個常數，**「每個 run dir 要多少錢」才是**）。
+  這台機器現在有 108 個 run dir（`ls -1d ~/.clikae/logs/burn-*`，只數不開檔）。
+  ⚠️ 兩張表都是合成的 `status.json`；真實混合（有 `fail`／`waiting-reset`／
+  torn 的）沒量。
 - **規範**：
   1. **這一列只在一個地方組出來**：`lib/core/tmux.sh` 的 `tmux_status_render`
      （內容）與 `tmux_status_line`（唯一寫 `status-left`／`status-right`／
