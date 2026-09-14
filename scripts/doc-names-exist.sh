@@ -168,6 +168,18 @@ CALLERS
 # here: Rule 10 names it to say clikae does NOT set it (it is a window option
 # and would reach the wrong scope), and this check reads a named option as a
 # promise that the code sets it.
+# 🔴 P3-6 (2026-09-14 round-1 fix review): the alternation below named five of
+# those seven, not seven — `status-left-length`/`status-right-length` were
+# missing. `\b` doesn't require the alternation to consume the WHOLE name: it
+# only needs a word boundary right after wherever the match ends, and `-` is
+# already a non-word character, so `` `status-left-length` `` in the doc
+# matched the `status-left` alternative and stopped there — this check
+# reported success on a claim it never actually read. (`status-left` really is
+# set, so that report happened to be true; it would not have been for a name
+# whose SHORT form isn't set but whose `-length` form is.) POSIX leftmost-
+# longest alternation (grep -E's own matching rule, not first-alternative-
+# wins) picks the longer alternative once it exists as an option, regardless
+# of list order — adding the two `-length` names is the whole fix.
 # ── 3. Every tmux option a design rule names must actually be set ───────────
 # Rule 1 described `window-size latest` for a year and nothing set it, so the
 # behaviour held on one tmux and not another. A rule that states a setting is a
@@ -176,7 +188,7 @@ CALLERS
 # doc writes `window-size latest` — value inside the quotes — so a regex needing
 # a closing backtick right after the name skipped exactly the option that
 # motivated this check, while quietly matching four others and looking healthy.
-opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size|status-left|status-right|status-interval|status-justify|status-format)\b' \
+opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size|status-left-length|status-right-length|status-left|status-right|status-interval|status-justify|status-format)\b' \
   docs/DESIGN-tmux.md 2>/dev/null | tr -d '`' | sort -u || true)"
 while IFS= read -r opt; do
   [ -n "$opt" ] || continue
