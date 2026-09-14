@@ -723,13 +723,12 @@ tmux_status_fuelv() {
 #
 # 🔴 SKIPPED-BY-STATE LANES PAY NOTHING BEYOND READING THE FILE (P1-1,
 # 2026-09-14 round-1 fix review). `state` is parsed and switched on BEFORE
-# `pid` is ever touched — a `fail`/`dry`/`done`/`infra` lane's (often large,
-# see burn_status.sh's `reason` note) other fields are never read at all. This
-# was already true structurally; it only became CHEAP when burn_status_fieldv
-# stopped being O(n²), since `state` sits after `reason` in the object burn
-# writes (`_burn_status_write`) and a failed lane is exactly the one with the
-# largest `reason` — so the lane this loop means to skip cheaply used to be
-# the most expensive one to even ask.
+# `pid` is ever touched — a `fail`/`dry`/`done`/`infra` lane's other fields
+# are never read at all. (Round 1 also claimed a failed lane's `reason` made
+# this the expensive case; P2-6 of the round-2 review measured that false —
+# `reason` is capped at 200 bytes and a real status.json is ~366 bytes, see
+# burn_status.sh. What actually grows this loop's cost is the NUMBER of run
+# directories — 97 on the development host, 7-day retention — not their size.)
 #
 # 🔴 A DEAD PID IS RED, HOWEVER LONG THE LANE RAN (P2-3, 2026-09-14 round-2
 # review). Round 1 (P2-1) made a dead pid self-clear once `updated_at` was

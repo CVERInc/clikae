@@ -88,12 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
   (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion
-  prefix-strip that retries its glob at every byte offset, which turned a
-  FAILED lane's redacted stderr (`reason`, up to 64 KB by this repo's own
-  `_BURN_REDACT_TAIL_BYTES` default) into the everyday cost of finding
-  `state`/`pid` after it in the same object -- measured 1,910 ms at 64 KB,
-  didn't finish in 90s at 1 MB. A single `[[ =~ ]]` regex match replaces it,
-  still fork-free and linear: 2-3 ms at 64 KB, 32-34 ms at 1 MB. Also fixed
+  prefix-strip that retries its glob at every byte offset -- measured 1,910 ms
+  at 64 KB, didn't finish in 90s at 1 MB. A single `[[ =~ ]]` regex match
+  replaces it, still fork-free and linear: 2-3 ms at 64 KB, 32-34 ms at 1 MB.
+  (The round-2 review corrected why it mattered: burn never writes objects
+  that size. `reason` is capped at 200 bytes and real status files are ~366
+  bytes, so the change removes an unpredictable cost, not a live one.) Also fixed
   that round: `dry_store_peekv` forked once per dry marker (now flat
   regardless of marker count); the PR description's claim that `!N` counted
   "CI-red seen by the Stop hook" was false and has been corrected (that

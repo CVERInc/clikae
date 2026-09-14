@@ -115,51 +115,56 @@ _field() {
   [[ "$(_field "$f" rerouted_from)" == *"codex/T1"* ]] || false
 }
 
-# P1-1 (2026-09-14 round-1 fix review): `burn_status_fieldv`'s prefix-strip
-# parser was O(n²) — measured (this review) 64,338 bytes / last field: 1,910 ms
-# old, 2-3 ms new; 1,000,338 bytes: old never finished in 90s, new 32-34 ms.
-# `tests/bats/tmux-status.bats:370`'s existing cost test uses `_usage_cache`'s
-# ~150-byte object and cannot see this at all — this is the "sized" test the
-# round-1 review asked for, unit-testing the reader directly rather than
-# through the whole `clikae burn` pipeline. `reason` (the field that grows —
-# burn.sh redacts a failed run's stderr up to `_BURN_REDACT_TAIL_BYTES`,
-# default 65536) sits BEFORE `state`/`pid` in the real object
-# (`_burn_status_write`'s own field order), so asking for `state` here is
-# exactly the everyday FAILED-lane cost, not a synthetic worst case.
-#
-# The 1000 ms ceiling is not a stopwatch on a specific number (this machine is
-# not a neutral place to measure — see docs/DESIGN-tmux.md Rule 10's own
-# caveat) — new measures 2-3 ms here, old measures ~1,900 ms; 1000 ms sits
-# comfortably below the old number and >100x above the new one, so this is a
-# GUARD against the O(n²) curve coming back, not a precision claim.
-@test "burn-status: burn_status_fieldv stays fast on a 64KB reason field (P1-1 sized test)" {
+# P2-6 (2026-09-14 round-2 review): round 1 sized this at a 64 KB `reason`
+# on the premise that burn writes up to `_BURN_REDACT_TAIL_BYTES` of stderr
+# into it. It does not — that constant bounds how much stderr is READ; the
+# line written is cut by `_burn_truncate_utf8 … 200`, every other writer call
+# passes a short literal, and 97 real status.json files measured 349-414
+# bytes. So the true bound is pinned where it is decided — through the real
+# writer — and the reader is exercised at that bound and 10x it. No timing
+# claim: at these sizes the old quadratic reader was also sub-millisecond, and
+# a stopwatch that cannot tell the two apart is not a guard.
+@test "burn-status: a failed lane's reason is capped at 200 bytes in status.json, whatever stderr held" {
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 100000 /dev/zero | tr '\0' 'x' >&2   # one 100 KB stderr line, past the redaction read window too
+printf '\n' >&2
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- noop
+  [ "$status" -ne 0 ]
+  local f; f="$(_the_status_file)"
+  [ "$(_field "$f" state)" = '"fail"' ] || { cat "$f"; false; }
+  local reason; reason="$(_field "$f" reason)"
+  [ "${#reason}" -eq 202 ] || { echo "reason is ${#reason} bytes with quotes, want 202"; false; }
+  local size; size="$(wc -c < "$f" | tr -d ' ')"
+  [ "$size" -lt 1024 ] || { echo "status.json is $size bytes"; false; }
+}
+
+@test "burn-status: burn_status_fieldv reads every field at the real reason cap and at 10x it" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
-  local reason json t0 t1 elapsed_ms
-  reason="$(head -c 64000 /dev/zero | tr '\0' 'x')"
-  json="$(printf '{"ok":false,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":12,"run_id":"burn-1","state":"fail","started_at":1,"updated_at":2,"pid":123,"log":"/x","reset_at":null}' "$reason")"
-
-  t0="$(date +%s%N)"
-  burn_status_fieldv "$json" state
-  t1="$(date +%s%N)"
-  [ "$_BSF" = '"fail"' ] || { echo "state: got [$_BSF]"; false; }
-
-  burn_status_fieldv "$json" pid
-  [ "$_BSF" = "123" ] || { echo "pid: got [$_BSF]"; false; }
-
-  burn_status_fieldv "$json" reason
-  [ "${#_BSF}" -eq $((64000 + 2)) ] || { echo "reason length: got ${#_BSF}, want $((64000 + 2)) (quotes included)"; false; }
-
-  # prefix trap: artifact vs artifact_bytes, still correct at this size
-  burn_status_fieldv "$json" artifact
-  [ "$_BSF" = '"/x"' ] || { echo "artifact: got [$_BSF]"; false; }
-  burn_status_fieldv "$json" artifact_bytes
-  [ "$_BSF" = "null" ] || { echo "artifact_bytes: got [$_BSF]"; false; }
-
-  elapsed_ms=$(( (t1 - t0) / 1000000 ))
-  [ "$elapsed_ms" -le 1000 ] || {
-    echo "burn_status_fieldv on a 64KB reason (asking for a field AFTER it) took ${elapsed_ms}ms — the O(n^2) prefix-strip regression this guards against"
-    false; }
+  local n reason json
+  for n in 200 2000; do
+    reason="$(head -c "$n" /dev/zero | tr '\0' 'x')"
+    json="$(printf '{"ok":false,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":12,"run_id":"burn-1","state":"fail","started_at":1,"updated_at":2,"pid":123,"log":"/x","reset_at":null}' "$reason")"
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "$n: state got [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = "123" ] || { echo "$n: pid got [$_BSF]"; false; }
+    burn_status_fieldv "$json" reason
+    [ "${#_BSF}" -eq $((n + 2)) ] || { echo "$n: reason length ${#_BSF}"; false; }
+    # prefix trap: artifact vs artifact_bytes
+    burn_status_fieldv "$json" artifact
+    [ "$_BSF" = '"/x"' ] || { echo "$n: artifact got [$_BSF]"; false; }
+    burn_status_fieldv "$json" artifact_bytes
+    [ "$_BSF" = "null" ] || { echo "$n: artifact_bytes got [$_BSF]"; false; }
+  done
 }
 
 @test "burn-status: every burn writes a status file even without --json" {

@@ -43,18 +43,28 @@ burn_status_field() {
 # function) pays for scanning the large field's bytes at EVERY offset it
 # tries, not once. Measured on this box (bash 5.2, single field, last-field
 # worst case): 1,338 B → 2 ms, 8,338 B → 33 ms, 64,338 B → 1,910 ms, 1,000,338
-# B → didn't finish in 90 s. `reason` is exactly the field that grows: burn.sh
-# redacts a failed run's stderr to `_BURN_REDACT_TAIL_BYTES` (default 65536)
-# and writes it into `reason` — so an ordinary FAILED lane, the one case this
-# function is on the hot path for, was the worst case, and every lane skipped
-# by state in tmux_status_alertsv still paid to find out its state.
+# B → didn't finish in 90 s.
+#
+# 🔴 P2-6 (2026-09-14 round-2 review): what those sizes are NOT is sizes this
+# writer produces. Round 1 said `reason` could reach 64 KB because burn.sh
+# reads `_BURN_REDACT_TAIL_BYTES` (65536) of a failed run's stderr — but that
+# bounds how much stderr is read to FIND a reason, not how much is written:
+# lib/commands/burn.sh passes the chosen line through
+# `_burn_truncate_utf8 "$stderr_first" 200`, and every other
+# `_burn_status_write` call site passes a short literal. So `reason` is at
+# most 200 bytes before JSON escaping (400 if every byte were `"` or `\`),
+# and 97 real status.json files on the development host measured 349-414
+# bytes whole (median 366). At that size the old reader cost well under a
+# millisecond. The swap stays because the old shape was quadratic in the
+# object's size and its cost could not be read off the code, not because a
+# real object was ever large; tests/bats/burn-status.bats pins the real bound
+# through the writer itself, so a change that lifts it is a visible decision.
 #
 # The replacement is a single `[[ =~ ]]` regex match — still one process (no
 # fork, no subshell: `[[` and `BASH_REMATCH` are shell builtins), but glibc's
 # regex engine walks the string once. Re-measured, single field, same worst
 # case: 1,338 B → 1 ms, 8,338 B → 1 ms, 64,338 B → 2-3 ms, 1,000,338 B →
-# 32-34 ms — linear, and inside the 30 ms budget for every size this repo's
-# own `_BURN_REDACT_TAIL_BYTES` ceiling can actually produce.
+# 32-34 ms — linear.
 #
 # Three alternatives, tried in the order that resolves ties the way the old
 # reader did (see below): a quoted string (re-quoted like the old reader),

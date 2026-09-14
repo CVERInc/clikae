@@ -49,9 +49,9 @@ _dry_marker() {
 # hardcode `updated_at:2` — epoch second 2, i.e. 1970 — which every existing
 # caller here got away with only because nothing read `updated_at` before
 # that review; a self-clearing alert count needs a real one to age against).
-# `reason` (default "") lets P1-1's sized test put a realistic redacted-
-# stderr-sized string in the field that sits right before `state`/`pid` in
-# the real object (`_burn_status_write`'s own field order).
+# `reason` (default "") is the field that sits right before `state`/`pid` in
+# the real object (`_burn_status_write`'s own field order); the writer caps it
+# at 200 bytes (see burn-status.bats).
 _burn_status() {
   local run="$1" state="$2" pid="$3" age="${4:-0}" reason="${5:-}" upd
   upd=$(( $(date +%s) - age ))
