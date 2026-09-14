@@ -31,7 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory on every command, with exactly one warning line — never a raw shell
   error — and `clikae doctor --adopt` retries the write once the store is
   writable again. `clikae doctor` names any directory left without a marker
-  and what to do about it.
+  and what to do about it. **Upgrading**: that one warning line now prints on
+  EVERY command against a read-only store, including quiet ones like
+  `clikae --version`/`help`/`adapters` — those used to run before adoption was
+  checked at all; now the check is hoisted ahead of every command uniformly,
+  so they pick it up too.
 - `tank_dir_is_tank`'s marker check reads with the builtin `read`, not a
   forked `cat` per tank (160ms → 123ms on `clikae tanks` with 30 tanks;
   519ms → 483ms on `clikae doctor`). **This only compares the marker's FIRST

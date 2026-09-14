@@ -100,6 +100,21 @@ _unadopt() {
   chmod u+w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/profiles/claude/ro2" "$CLIKAE_HOME/state" 2>/dev/null || true
 }
 
+@test "#61 round-4 P3-4: a read-only store warns once even on --version/help/adapters, not just tank-reading commands" {
+  _unadopt
+  mkdir -p "$CLIKAE_HOME/profiles/claude/ro3"
+  chmod a-w "$CLIKAE_HOME/profiles/claude/ro3" "$CLIKAE_HOME/state" 2>/dev/null || true
+
+  for sub in --version help adapters; do
+    local out="$BATS_TEST_TMPDIR/out-$sub" err="$BATS_TEST_TMPDIR/err-$sub" rc=0
+    "$CLIKAE_BIN" "$sub" >"$out" 2>"$err" || rc=$?
+    [ "$rc" -eq 0 ] || { echo "clikae $sub: $(cat "$err")"; false; }
+    [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "clikae $sub stderr: $(cat "$err")"; false; }
+  done
+
+  chmod u+w "$CLIKAE_HOME/profiles/claude/ro3" "$CLIKAE_HOME/state" 2>/dev/null || true
+}
+
 # --- P2-1: doctor's own 15-adapter fan-out must not multiply the warning ----
 @test "adoption: doctor's per-adapter scan does not turn one read-only tank into many warning lines" {
   _unadopt
