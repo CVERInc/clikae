@@ -455,15 +455,25 @@ STUB
   [ "$_FNOTE" = 'window 65% · weekly 20% · 3h ago' ]
 
   # 25h old — past the 24h line: too stale to show as a number at all, falls
-  # through to whatever the rest of the chain says (here, the mocked
-  # unverified-reset fallback, same as a missing cache would hit).
-  _sim_unverified=1
+  # through to whatever the rest of the chain says below (weekly/codex/
+  # ready). P3-1 (round-4 review): the round-3 version of this case flipped
+  # _sim_unverified=1 here — but home.sh:1025 checks the SAME $_DRY_RESET
+  # _home_is_dryv sets and returns BEFORE the usage block at :1028 (where
+  # the 24h line at :1032 lives) is ever reached, so that assertion was
+  # satisfied by the stub, not by the 24h line: deleting :1032 left this
+  # test 82/82 green (see this test's own header — the receipt is now
+  # recorded there in the commit body, not re-derived here). Testing
+  # unverified PRIORITY is home.bats:646-701's job already; this scenario's
+  # only job is the 24h cutoff, so it must not simulate unverified — keep
+  # _DRY_RESET empty (never flip _sim_unverified) so control actually
+  # reaches :1028. Assert no percentage sign: the SIGN the stale reading
+  # was not used, without hard-coding which of weekly/codex/ready this bare
+  # fixture (none of those wired up) happens to fall into.
   jq -cn --argjson pct 44 --argjson now "$now" --argjson cached_at "$((now - 90000))" \
     '{window_pct:$pct,weekly_pct:20,source:"vendor",cached_at:$cached_at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [ "$_FNOTE" = 'reset passed · unverified' ]
-  [ "$_FDOT" = Y◐ ]
+  [[ "$_FNOTE" != *%* ]]
 }
 
 @test "Claude Keychain service uses the tank path; malformed credentials never invoke curl" {
