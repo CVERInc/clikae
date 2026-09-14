@@ -191,7 +191,13 @@ EOF
   # walks the store — this command's own `list_all_profiles` call below plus
   # one `resolve_active_profile`/`tanks_for_engine` walk per engine (via
   # _status_row_for) otherwise re-derive the same rows once each.
-  profiles_cache_warm
+  #
+  # #61 round-3 P3: guarded the same way home.sh's own call already is — a
+  # bare call is "command not found" under `set -eo pipefail` for any test
+  # that sources this file standalone (home.bats already does exactly that
+  # to unit-test home.sh without profile_store.sh in scope; nothing does it
+  # to status.sh today, but the two should not drift on this).
+  declare -F profiles_cache_warm >/dev/null 2>&1 && profiles_cache_warm
 
   # Which CLIs to report on. With an explicit <engine>, just that one. Otherwise
   # every CLI that has at least one profile.

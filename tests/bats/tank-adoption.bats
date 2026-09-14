@@ -251,3 +251,32 @@ _unadopt() {
   local path2; path2="$(_tank_adoption_warn_sentinel_path)"
   [ "$path" = "$path2" ]
 }
+
+# --- #61 round-3 P3: a marker with a trailing \r or trailing whitespace is
+# still recognised — a sync tool turning \n into \r\n used to make a real,
+# already-adopted tank vanish from `clikae tanks` entirely, with no CLI able
+# to bring it back (doctor can't even name it: it reads as "not a tank",
+# not "corrupted marker").
+@test "a marker with a trailing CRLF still names a real tank" {
+  clikae init claude crlf
+  printf 'claude\r\n' > "$CLIKAE_HOME/profiles/claude/crlf/.clikae-tank"
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"crlf"* ]] || { echo "$output"; false; }
+}
+
+@test "a marker with trailing whitespace still names a real tank" {
+  clikae init claude trailing
+  printf 'claude   \n' > "$CLIKAE_HOME/profiles/claude/trailing/.clikae-tank"
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"trailing"* ]] || { echo "$output"; false; }
+}
+
+@test "a marker naming a DIFFERENT engine is still correctly rejected (exact match not loosened)" {
+  clikae init claude wrongeng
+  printf 'codex\n' > "$CLIKAE_HOME/profiles/claude/wrongeng/.clikae-tank"
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"wrongeng"* ]] || { echo "wrongly listed: $output"; false; }
+}

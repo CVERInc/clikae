@@ -424,10 +424,25 @@ tank_marker_write() {
 # resume's next_tank all read it) — this is that filter, so nobody downstream
 # writes a second one next to it.
 tank_dir_is_tank() {
-  local cli="$1" dir="$2" marker
+  local cli="$1" dir="$2" marker _m
   marker="$(tank_marker_path "$dir")"
-  if [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$cli" ]; then
-    return 0
+  if [ -f "$marker" ]; then
+    # #61 round-3 P3: builtin `read`, not a forked `cat` per tank on every
+    # single read — measured 160ms -> 123ms on `clikae tanks` and
+    # 519ms -> 483ms on `clikae doctor` with 30 tanks, same tank count out.
+    IFS= read -r _m < "$marker" 2>/dev/null
+    if [ "$_m" = "$cli" ]; then
+      return 0
+    fi
+    # #61 round-3 P3: tolerate a trailing `\r` (a sync tool turning `\n`
+    # into `\r\n`) or trailing whitespace in the marker — round-3 review
+    # found this makes a real tank vanish from `clikae tanks` entirely,
+    # with no CLI able to bring it back. Exact match above is tried FIRST
+    # and kept as ITS OWN branch, so the ordinary clean-marker case never
+    # pays for the strip below.
+    _m="${_m%$'\r'}"
+    _m="${_m%"${_m##*[![:space:]]}"}"
+    [ "$_m" = "$cli" ] && return 0
   fi
   [ -n "$_CLIKAE_INMEM_ADOPTED_ACTIVE" ] || return 1
   local name="${dir%/}"; name="${name##*/}"
