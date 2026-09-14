@@ -45,6 +45,29 @@ _cockpit_state_read() {
   head -n 1 "$f" 2>/dev/null | tr -d '\n' || true
 }
 
+# _cockpit_state_unparseable -> 0 when the state PATH exists (regular file,
+# symlink, or unreadable) but does not read back as a clean "<engine>/<tank>"
+# record; 1 when it simply does not exist at all (ordinary "no cockpit" —
+# unchanged) or does parse cleanly.
+#
+# #63 round-6 P3-2: mode 000, a symlink, or content with a stray CR
+# (`codex/H\r\n`, e.g. hand-edited on Windows) all make _cockpit_state_read
+# return EMPTY — read failure and "no cockpit" produce the identical empty
+# string. _cockpit_is_recorded then can't tell a corrupt record from an
+# absent one, and every burn gate (_burn_cockpit_gate) waved launches
+# straight through onto the very tank the file was failing to protect. A
+# state file that exists but cannot be read is a reason to refuse every
+# burn, not a reason to open the gate — this predicate is that distinction.
+_cockpit_state_unparseable() {
+  local f raw
+  f="$(_cockpit_state_file)"
+  { [ -e "$f" ] || [ -L "$f" ]; } || return 1   # no path at all -> ordinary "no cockpit"
+  _cockpit_state_path_ok || return 0            # symlink (file or dir) -> unparseable
+  raw="$(cat "$f" 2>/dev/null)" || return 0     # unreadable (e.g. mode 000) -> unparseable
+  printf '%s' "$raw" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' && return 1
+  return 0                                      # extra bytes, CR, no '/', etc -> unparseable
+}
+
 # _cockpit_state_names <engine/tank or empty> -> 0 when the committed state,
 # re-read from disk, says exactly that ("" = no cockpit: absent or empty).
 _cockpit_state_names() {

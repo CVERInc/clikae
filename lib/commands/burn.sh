@@ -421,8 +421,22 @@ _burn_output_tail() {
 # predicate (_cockpit_is_recorded — by name or by physical tank identity),
 # asked before every engine launch, refusing with the guard's own sentence.
 # The override is explicit and loud, never silent.
+#
+# #63 round-6 P3-2: a state file that EXISTS but does not parse as a clean
+# "<engine>/<tank>" record (mode 000, a symlink, a stray CR) used to read
+# back as EMPTY — identical to no cockpit ever having been recorded — so
+# every launch sailed through onto whatever the corrupt file was failing to
+# protect. "Cannot read" is a reason to refuse EVERY burn (not just one
+# whose target happens to match), because clikae has no way to know which
+# tank the file meant; --force-cockpit does not override this, since there
+# is nothing named here to knowingly force. Absent state (never recorded)
+# is unaffected.
 _burn_cockpit_gate() {
   _BURN_COCKPIT_REFUSAL=""
+  if _cockpit_state_unparseable; then
+    _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $(_cockpit_state_file) exists but does not read back as a clean <engine>/<tank> cockpit record, so clikae cannot tell whether $1/$2 is the recorded cockpit. Run \`clikae doctor\` to see what's wrong, then \`clikae cockpit --off\` to clear it (or \`clikae cockpit <engine> <tank>\` to re-record it) before burning."
+    return 1
+  fi
   _cockpit_is_recorded "$1" "$2" || return 0
   if [ "$3" = 1 ]; then
     log_warn "--force-cockpit: burning $1/$2 even though it is the recorded cockpit (operator override — this spends the steering tank's own budget)."

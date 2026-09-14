@@ -475,6 +475,69 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
   [ ! -e "$art" ]
 }
 
+# #63 round-6 P3-2 (G6, r6 review): a state file that EXISTS but does not
+# read back cleanly used to make _cockpit_state_read return EMPTY —
+# byte-for-byte identical to "no cockpit was ever recorded" — so the gate
+# waved every burn through, including straight onto the tank the corrupt
+# file was failing to protect. Three ways a state file stops parsing
+# cleanly: unreadable (mode 000), an unsafe path (symlink), and malformed
+# content (a stray CR). All three must now refuse EVERY burn, not just one
+# naming the tank the file happened to (fail to) record.
+
+@test "burn refuses ALL burns when the state file exists but is unreadable (mode 000, #63 r6 P3-2)" {
+  _stub_claude
+  clikae init claude A
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/A\n' > "$CLIKAE_HOME/state/cockpit"
+  chmod 000 "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  chmod 600 "$CLIKAE_HOME/state/cockpit"   # so bats' own cleanup can remove it
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [[ "$output" == *"state/cockpit"* ]] || false
+  [[ "$output" == *"clikae doctor"* ]] || false
+  [[ "$output" == *"cockpit --off"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn refuses ALL burns when the state file is a symlink (#63 r6 P3-2)" {
+  _stub_claude
+  clikae init claude A
+  clikae init claude decoy
+  mkdir -p "$CLIKAE_HOME/state"
+  ln -s "$CLIKAE_HOME/profiles/claude/decoy/settings.json" "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn refuses ALL burns when the state file's content has a stray CR (#63 r6 P3-2)" {
+  _stub_codex
+  clikae init codex H
+  mkdir -p "$CLIKAE_HOME/state"; printf 'codex/H\r\n' > "$CLIKAE_HOME/state/cockpit"
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARGV_LOG="$L" run clikae burn codex H --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  [ ! -e "$L" ]
+  [ ! -e "$art" ]
+}
+
+@test "burn is unaffected when the state file simply does not exist (#63 r6 P3-2, no regression)" {
+  _stub_claude
+  clikae init claude A
+  # no $CLIKAE_HOME/state/cockpit at all
+  local art="$BATS_TEST_TMPDIR/artifact" L="$TEST_HOME/argv.log"
+  STUB_ARTIFACT="$art" STUB_ARGV_LOG="$L" run clikae burn claude A --no-reroute --prompt 'x' --artifact "$art"
+  [ "$status" -eq 0 ]
+  [ -e "$L" ]
+  [ -e "$art" ]
+}
+
 @test "_burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)" {
   _src_burn
   clikae init claude a; clikae init claude b
