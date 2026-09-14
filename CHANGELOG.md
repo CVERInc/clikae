@@ -254,7 +254,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   global scan budget now covers repo discovery too, not just the per-repo
   loop, and a repo whose discovery hangs is counted rather than dropped
   silently; a failed `--json` burn's stdout no longer waits an extra ~5s
-  for an orphaned watchdog to release its held-open fd.
+  for an orphaned watchdog to release its held-open fd. Round-4 review of
+  #87: round-3's own discovery-timeout fix had a regression — a bounded
+  discovery `find` that is merely slow-but-finite (not hung) forced the
+  whole scan budget to read as exhausted, making the burn's own cwd/`--add-dir`
+  repo (the one #84 exists to report on) vanish from the list; a timed-out
+  discovery `find` now counts as one honest "more" instead. `BURN_LB_GIT`
+  is resolved with `type -P`, not `command -v`, which returned a shadowing
+  shell function's bare name instead of a path when the caller had
+  `export -f`'d one named `git`.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
