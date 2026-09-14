@@ -1732,6 +1732,32 @@ _iso_from_epoch() {
   date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
 }
 
+# P3-3 (2026-09-14 fix-round-7 review): an org's FIRST sweep had no
+# .sweepat to measure from and fell back to the bare floor — narrower than
+# the ground the polls before it had covered. The first poll now records a
+# baseline, so the first sweep reaches back to it (plus the overlap).
+@test "watch github --once: the FIRST sweep reaches back to the first poll, not just the 300s floor (P3-3, fix-round-7)" {
+  _gh_stub_install_honest_corpus
+  _fake_wallclock_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  local anchor=1757289000 i now
+  printf '%s\n' "$(_iso_from_epoch $((anchor - 3600)))" > "$state_dir/CVERInc.cursor"
+  : > "$GH_STUB_DIR/honest_corpus.tsv"
+  for i in 1 2 3 4 5; do
+    now=$((anchor + (i - 1) * 600))
+    export FAKE_NOW="$now"
+    _honest_corpus_add_row $((3100 + i)) "$(_iso_from_epoch $((now - 5)))" alice "activity $i"
+    # Updated 50s before poll 1, visible only after poll 1 read the index.
+    [ "$i" -ne 2 ] || _honest_corpus_add_row 901 "$(_iso_from_epoch $((anchor - 50)))" zed "late before the first poll"
+    run clikae watch github --org CVERInc --once
+    [ "$status" -eq 0 ] || { echo "poll $i: $output"; false; }
+  done
+  [[ "$output" == *"github CVERInc/reef#901 opened by zed: late before the first poll"* ]] || { echo "poll 5: $output"; false; }
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [ "$(grep -c '"number":901' "$events")" -eq 1 ]
+}
+
 # P2-3 (2026-09-14 fix-round-7 review), end to end: a watcher started 8
 # days ago keeps appending to its durable events.jsonl; appends don't move
 # the directory's mtime, and the retention sweep used to delete it.

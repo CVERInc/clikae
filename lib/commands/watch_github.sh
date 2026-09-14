@@ -380,7 +380,8 @@ _wg_iso_from_epoch() {
 # per-poll gap is still useful on its own), but neither feeds the window
 # any more. The very first sweep an org ever has (or a `.sweepat` a
 # sanity check below treats as missing) has no prior sweep to measure
-# from — window stays at the 300s floor, same as before. (This note
+# from — window stays at the 300s floor, same as before (since
+# fix-round-7 P3-3, the first poll writes a baseline instead). (This note
 # originally said "at most ONE extra request per poll"; since fix-round-6
 # P2-2 paginates the sweep it is at most 5 — P3-2, fix-round-7.)
 #
@@ -1220,7 +1221,9 @@ _wg_poll_measure_gap() {
 # note above CURSOR SEMANTICS in the file header before touching this
 # again). No `.sweepat` yet (the very first sweep this org has ever had,
 # or one _wg_sane_epoch rejects) means no measurement exists — window
-# stays at the 300s floor, matching the original fixed margin.
+# stays at the 300s floor, matching the original fixed margin. Since
+# fix-round-7 P3-3 that only happens when _wg_poll could not write its
+# baseline: every poll records one when `.sweepat` is missing or insane.
 #
 # 🔴 PLUS A FIXED 300s OVERLAP (P2-1, 2026-09-14 fix-round-7 review — read
 # before trimming the `+ 300` below as "double counting the floor"). The
@@ -1392,6 +1395,24 @@ _wg_poll() {
   # for why the estimate it feeds needs the most recent single-poll gap,
   # not only a gap measured on sweep polls.
   _wg_poll_measure_gap "$org"
+
+  # P3-3 (2026-09-14 fix-round-7 review): no usable `.sweepat` (an org's
+  # first poll ever, state from before `.sweepat` existed, or a value
+  # _wg_sane_epoch rejects) used to leave the FIRST sweep at the bare 300s
+  # floor — narrower than the four polls before it had covered, so a row
+  # updated just before poll 1 and indexed after it was lost. Record THIS
+  # poll's start as the baseline instead: nothing before it was ever read
+  # by this watcher, so the first sweep measuring from here (plus its 300s
+  # overlap) covers exactly what the polls since then could have missed.
+  # Only ever written when missing — never moves an existing sweep's mark.
+  local sweepat_file sweepat_now sweepat_cur
+  sweepat_file="$(_wg_sweep_at_file "$org")"
+  sweepat_now="$(date +%s 2>/dev/null || echo 0)"
+  sweepat_cur="$(cat "$sweepat_file" 2>/dev/null || true)"
+  if ! _wg_sane_epoch "$sweepat_cur" "$sweepat_now" >/dev/null && [ "$sweepat_now" -gt 0 ]; then
+    printf '%s\n' "$sweepat_now" > "${sweepat_file}.tmp" 2>/dev/null \
+      && mv -f "${sweepat_file}.tmp" "$sweepat_file" 2>/dev/null || true
+  fi
 
   local seen_file events_file cursor_file since
   seen_file="$(_wg_seen_file "$org")"
