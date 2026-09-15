@@ -1633,7 +1633,11 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
   [ "$_FDOT" = 'D·' ] || { echo "dot: $_FDOT"; false; }
-  [ "$_FNOTE" = "⏳ token expired — run a session or 'clikae usage --wake work'" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "⏳ expired · usage --wake work" ] || { echo "note: $_FNOTE"; false; }
+  # It fits the tank row's gutter on an 80-column terminal: 47 columns of
+  # row before the note, the ⏳ counts two.
+  local n="${_FNOTE#⏳}"
+  [ $(( 47 + 2 + ${#n} )) -le 80 ] || { echo "note too wide: $_FNOTE"; false; }
 
   # Past 24h it is too old to say anything about: falls through, no hint.
   jq -cn --argjson at "$(( now - 90000 ))" \

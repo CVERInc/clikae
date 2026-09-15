@@ -732,8 +732,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unknown`/`no-credentials`. `reason` gains `unparseable` (a 200 that is not
   one usable reading); `network` now means only transport and server
   failures. An expired reading is cached for at most 60 seconds, not the
-  TTL. `clikae usage` text and the board say `⏳ token expired — run a
-  session or 'clikae usage --wake <tank>'`, and `clikae usage --wake <tank>`
+  TTL. `clikae usage` text says `⏳ token expired — run a session or
+  'clikae usage --wake <tank>'` (the board: `⏳ expired · usage --wake
+  <tank>`, sized to its gutter), and `clikae usage --wake <tank>`
   runs one trivial prompt through `clikae burn` (cockpit gate,
   running-burn lock and 60s bound unchanged; `--force-cockpit` for the
   cockpit) and re-reads with no cache (#107).

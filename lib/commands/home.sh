@@ -1354,7 +1354,8 @@ _home_fuel_dotv_compute() {
   # said out loud instead of falling through to a green "ready" — an idle tank
   # at 99% weekly used to look exactly like a fresh one. The dot is the
   # honest "no reading" `·` (there are no numbers), and the note carries the
-  # ⏳ and the remedy. Not ⏳ as the dot: every dot is one column wide and the
+  # ⏳ and the remedy, cut to fit the gutter (usage_expired_board_notev; the
+  # full sentence is `clikae usage`'s). Not ⏳ as the dot: every dot is one column wide and the
   # row grid is padded around that; an emoji is two. Fork-free: one `read` of
   # a one-line file, the same technique lib/core/tmux.sh's status row uses.
   local _ucache="$CLIKAE_HOME/state/usage/$cli/$profile.json" _uline="" _uca
@@ -1363,8 +1364,8 @@ _home_fuel_dotv_compute() {
     case "$_uline" in
       *'"source":"expired"'*)
         _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
-        if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ] && declare -F usage_expired_hintv >/dev/null 2>&1; then
-          usage_expired_hintv "$profile"
+        if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ] && declare -F usage_expired_board_notev >/dev/null 2>&1; then
+          usage_expired_board_notev "$profile"
           _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"; return 0
         fi ;;
     esac

@@ -254,9 +254,11 @@ expiry had passed — the login is fine, only a session refreshes it; always
 with `reason:"expired-token"` and no numbers), or `"unknown"` (no usable
 reading; `reason` is `no-credentials`, `network` or `unparseable` when known).
 On the board an expired reading under 24h old draws the no-reading `·` with
-the note `⏳ token expired — run a session or 'clikae usage --wake <tank>'`
-(the ⏳ lives in the note, not the dot: every dot is one column and the row
-grid is padded around that, an emoji is two). The optional
+the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not the
+dot: every dot is one column and the row grid is padded around that, an emoji
+is two; and the note is the short form because a tank row leaves 33 columns
+for it on an 80-column terminal — `clikae usage` prints the full sentence,
+`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
 same rollout transcript evidence `limit_codex_status` does, so its source is

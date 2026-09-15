@@ -32,6 +32,15 @@ _USAGE_AUTH_FAIL_TTL_SEC=60
 usage_expired_hintv() {
   _UEH="⏳ token expired — run a session or 'clikae usage --wake $1'"
 }
+# usage_expired_board_notev <tank> -> $_UEH, the same remedy cut to fit the
+# board's right gutter. A tank row spends 47 columns before its note (lead,
+# dot, name 7, engine 8, account 22, gap), which leaves 33 on an 80-column
+# terminal — the full sentence above is 63 and wrapped the row (measured on a
+# rendered board). Every existing note ("window 44% · weekly 20% · 3h ago")
+# fits that gutter; this one does for any tank name of up to 8 characters.
+usage_expired_board_notev() {
+  _UEH="⏳ expired · usage --wake $1"
+}
 usage_unknown() {
   case "${1:-}" in
     expired-token)
