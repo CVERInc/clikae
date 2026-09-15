@@ -13,9 +13,32 @@ source "$CLIKAE_LIB/core/burn_status.sh"
 # shellcheck source=../core/duration.sh
 source "$CLIKAE_LIB/core/duration.sh"
 
+# _wait_resolve_latest <prefix> -> the status.json path of the NEWEST
+# (by mtime, not by name — no assumption about epoch digit width) run
+# directory under $HOME/.clikae/logs matching <prefix>*, or 1 if none has a
+# status.json yet (P2-3, 2026-09-13 fix-round-2 review: a cockpit knows a
+# watch-github run's PREFIX — `watch-github-<org>` — but not the epoch
+# suffix a not-yet-run poll will pick; this is the "no epoch needed" entry
+# point burn_status_resolve's own literal/`burn-*`/pid forms don't cover).
+_wait_resolve_latest() {
+  local prefix="$1" base="$HOME/.clikae/logs" d f m best="" best_m=-1
+  [ -n "$prefix" ] && [ -d "$base" ] || return 1
+  for d in "$base/$prefix"*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    m="$(file_mtime "$f")"
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    if [ "$m" -gt "$best_m" ]; then best="$f"; best_m="$m"; fi
+  done
+  [ -n "$best" ] || return 1
+  printf '%s' "$best"
+}
+
 _wait_help() {
   cat <<'EOF'
 Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
+       clikae wait --latest <prefix> [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
 fail, infra, or stale (a `running`/`waiting-reset` row whose recorded pid is
@@ -35,6 +58,17 @@ refusing.
 
   --any        stop as soon as ONE target reaches a terminal state (default).
   --all        wait for EVERY named target to reach a terminal state.
+  --latest <prefix>  resolve to the NEWEST run directory under
+                    $HOME/.clikae/logs whose name starts with <prefix> that
+                    already has a status.json — for a caller who knows the
+                    prefix (e.g. `watch-github-CVERInc`) but not the epoch
+                    suffix a not-yet-finished poll will pick. May be given
+                    more than once, and mixed with plain targets. If nothing
+                    matches yet and --timeout was given, this WAITS for a
+                    match to appear (re-checked every poll, same as a plain
+                    target's own startup race) instead of refusing outright;
+                    with no --timeout, an unresolved prefix still refuses
+                    immediately, the same as before.
   --timeout <dur>   give up after this long — a bare integer of seconds, or
                     with a trailing s/m/h/d (e.g. 90, 90s, 20m, 2h); unbounded
                     if omitted.
@@ -54,20 +88,35 @@ Examples:
   clikae wait "burn-$!" --timeout 20m && echo "L finished"
 
   clikae wait burn-111 burn-222 burn-333 --all --timeout 30m
+
+  clikae wait --latest watch-github-CVERInc --timeout 20m
 EOF
 }
 
 cmd_wait() {
   local mode="any" timeout_s=""
-  local -a targets=()
+  local -a targets=()       # human-readable, for the timeout error message
+  local -a target_kind=()   # "target" | "latest", parallel to targets
+  # P2-1 (2026-09-13 fix-round-3 review — read before re-inlining this):
+  # `--latest <prefix>` used to resolve INLINE, the instant the flag was
+  # parsed — which meant it always failed for a run that hadn't started
+  # yet, REGARDLESS of a `--timeout` given later on the same command line
+  # (`_burn_parse_duration`'s own value wasn't even known yet at that
+  # point). `--latest` is precisely the case where the caller does NOT
+  # know the file exists yet (that's the whole reason it exists — no epoch
+  # to name a literal target with) — so parse ALL flags first, and defer
+  # `--latest` resolution to AFTER the polling loop below is built, where
+  # `$timeout_s` is fully known.
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help)  _wait_help; return 0 ;;
       --any)      mode="any"; shift ;;
       --all)      mode="all"; shift ;;
+      --latest)   shift; [ $# -gt 0 ] || log_fail "--latest needs a prefix"
+                  target_kind+=("latest"); targets+=("$1"); shift ;;
       --timeout)  shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
       -*)         log_fail "Unknown flag: $1  (try: clikae wait --help)" ;;
-      *)          targets+=("$1"); shift ;;
+      *)          target_kind+=("target"); targets+=("$1"); shift ;;
     esac
   done
   [ "${#targets[@]}" -ge 1 ] || log_fail "clikae wait needs at least one <run_id|status-file>  (try: clikae wait --help)"
@@ -82,23 +131,48 @@ cmd_wait() {
     timeout_s="$_parsed_timeout"
   fi
 
+  # P2-1: a "target" resolves now (as always — burn_status_resolve has its
+  # own short bounded wait, $CLIKAE_WAIT_RESOLVE_TIMEOUT_S, for the
+  # ordinary `burn … & wait "burn-$!"` startup race). A "latest" prefix
+  # ALSO tries now — the common case (the run already exists) still returns
+  # immediately, no behaviour change there. It resolves later than "now"
+  # ONLY when a `--timeout` was actually given: with no timeout, an
+  # unresolved `--latest` still refuses immediately (unbounded waiting on
+  # a target the caller gave no time budget for is not this feature's
+  # job) — unchanged from before for that case, so `clikae wait --latest
+  # nonexistent-prefix` (no --timeout) keeps refusing right away.
+  local n="${#targets[@]}"
   local -a paths=()
-  local t p
-  for t in "${targets[@]}"; do
-    p="$(burn_status_resolve "$t")" || log_fail "no status file for: $t  (has the burn started yet? see docs/orchestration.md)"
-    paths+=("$p")
+  local -a target_arg=("${targets[@]}")
+  local i
+  for ((i = 0; i < n; i++)); do
+    if [ "${target_kind[i]}" = "latest" ]; then
+      local _lp
+      if _lp="$(_wait_resolve_latest "${target_arg[i]}")"; then
+        paths[i]="$_lp"
+      elif [ -n "$timeout_s" ]; then
+        paths[i]=""   # not yet — retried each poll in the loop below
+      else
+        log_fail "no status file matches: ${target_arg[i]}*  (try: clikae wait --help)"
+      fi
+    else
+      paths[i]="$(burn_status_resolve "${target_arg[i]}")" \
+        || log_fail "no status file for: ${target_arg[i]}  (has the burn started yet? see docs/orchestration.md)"
+    fi
   done
 
-  local n="${#paths[@]}"
   local -a reported=()
-  local i
   for ((i = 0; i < n; i++)); do reported[i]=0; done
 
   local start=$SECONDS terminal_count=0 any_done=0 any_dry=0 any_other=0
   while :; do
     for ((i = 0; i < n; i++)); do
       [ "${reported[i]}" -eq 0 ] || continue
-      [ -f "${paths[i]}" ] || continue
+      if [ "${target_kind[i]}" = "latest" ] && [ -z "${paths[i]:-}" ]; then
+        local _lp2
+        _lp2="$(_wait_resolve_latest "${target_arg[i]}")" && paths[i]="$_lp2"
+      fi
+      [ -n "${paths[i]:-}" ] && [ -f "${paths[i]}" ] || continue
       local json st
       json="$(cat "${paths[i]}" 2>/dev/null)" || continue
       st="$(burn_status_state "$json")"

@@ -542,15 +542,40 @@ _burn_size() {
 # this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
 # overrides the default (7); 0 disables the sweep (kept forever, old
 # behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+# Also sweeps `watch-github-*` run dirs (P3-3, 2026-09-13 fix-round-3
+# review): those had ONLY _wg_runs_rotate's 200-directory count cap, no
+# day-based retention — same directory, same shape, same policy belongs.
+#
+# <dry_run> (P3-2, 2026-09-14 fix-round-4 review): `clikae clean --dry-run`
+# skips the actual `rm -rf` (unchanged) but now names what it WOULD have
+# swept — round 3 wired this sweep into `clean` and left its own preview
+# silently incomplete ("the sweep itself has none"), the one command whose
+# whole point is a caller checking before the real run.
+# shellcheck disable=SC2120  # called with an arg from clean.sh, a separate
+# sourced file shellcheck's per-invocation call-site scan doesn't see.
 _burn_sweep_old_logs() {
-  local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  local dry_run="${1:-0}" base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
   case "$days" in ''|*[!0-9]*) return 0 ;; esac
   [ "$days" -gt 0 ] || return 0
   [ -d "$base" ] || return 0
-  local d
+  local d n=0
   while IFS= read -r -d '' d; do
-    rm -rf "$d" 2>/dev/null || true
-  done < <(find "$base" -maxdepth 1 -type d -name 'burn-*' -mtime "+$days" -print0 2>/dev/null)
+    # 🔴 P2-3 (2026-09-14 watch-github fix-round-7 review): the
+    # `watch-github-*` glob also matched the org's DURABLE log
+    # `watch-github-<org>/events.jsonl`, whose directory mtime never moves
+    # on append — every burn/clean eight days after a watcher started
+    # deleted its whole history. A run directory always has status.json
+    # (_wg_status_write); the durable one never does. The name alone can't
+    # tell them apart: an org may itself be called `foo-2024`.
+    case "${d##*/}" in
+      watch-github-*) [ -f "$d/status.json" ] || continue ;;
+    esac
+    n=$((n + 1))
+    [ "$dry_run" -eq 1 ] || rm -rf "$d" 2>/dev/null || true
+  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*-[0-9]*' \) -mtime "+$days" -print0 2>/dev/null)
+  if [ "$dry_run" -eq 1 ] && [ "$n" -gt 0 ]; then
+    log_info "clean --dry-run: would also sweep $n old burn/watch-github log director$([ "$n" -eq 1 ] && printf y || printf ies) (older than ${days}d)."
+  fi
 }
 
 # Capture evidence beside the engine, before publishing completion. Consumers
