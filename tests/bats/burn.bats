@@ -4066,3 +4066,36 @@ STUB
   ! grep -qE '^clikae-lb-kill\.[0-9]+\.[0-9]+$' "$seen" || { echo "the mark still uses the guessable pid-pair name:"; cat "$seen"; false; }
   [ -z "$(ls -A "$tmp")" ] || { echo "the mark outlived the call:"; ls -A "$tmp"; false; }
 }
+
+# P3-3 (round-6 review): the watchdog's KILL is a GROUP kill and it was
+# unreachable — `wait "$pid"` returns the instant the DIRECT child dies of
+# TERM, and the parent then killed the watchdog mid-grace. Measured pre-fix: a
+# TERM-ignoring direct child => 0 survivors (the parent was still in `wait`),
+# but a child that dies of TERM with a TERM-ignoring child of its own => 1
+# survivor, still alive three seconds later.
+@test "burn #84 P3-3 (round-6 review): the group KILL still fires when the direct child dies of TERM first" {
+  _burn_lb_boot
+  local forker="$BATS_TEST_TMPDIR/forker-term" pidfile="$BATS_TEST_TMPDIR/term.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# This one dies on TERM. Its child does not — only the escalation reaches it.
+bash -c 'trap "" TERM; while :; do sleep 0.5; done' &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0
+  t0="$(date +%s)"
+  _burn_lb_bounded 2 "$forker" || rc=$?
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
+  local gpid; gpid="$(cat "$pidfile")"
+  sleep 1
+  local alive=0
+  [ "$gpid" -gt 1 ] 2>/dev/null || { echo "bad child pid '$gpid'"; false; }
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
+  [ "$alive" -eq 0 ] || { echo "the TERM-ignoring grandchild $gpid outlived the escalation"; false; }
+}

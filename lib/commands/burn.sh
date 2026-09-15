@@ -1079,6 +1079,7 @@ _burn_lb_kill() {
 _burn_lb_bounded() {
   local secs="$1"; shift
   local start=$SECONDS pid watcher rc mflag kill_mark
+  local timed_out=0
   # Lazily probed so a direct caller (the unit tests in burn.bats) gets the
   # same guarantee; `_burn_left_behind` probes ONCE up front so the four
   # per-repo `_burn_lb_git` calls — each inside its own `$(...)` subshell,
@@ -1178,6 +1179,16 @@ _burn_lb_bounded() {
       [ -z "$kill_mark" ] || printf '1\n' > "$kill_mark" 2>/dev/null || true
       _burn_lb_kill TERM "$pid" || true
       sleep 1
+      # P3-3 (round-6 review): this KILL is a GROUP kill (`kill -KILL -- -$pid`,
+      # since a bounded child's pgid is its own pid) and it is the only thing
+      # that reaches a grandchild which ignores TERM. It used to be unreachable:
+      # the parent's `wait "$pid"` returns the instant the DIRECT child dies of
+      # TERM, and the parent then killed this watchdog — mid-`sleep 1`, before
+      # the escalation. Measured: child `trap "" TERM` => 0 survivors (the
+      # parent was still blocked in `wait`), but a child that dies of TERM with
+      # a TERM-ignoring GRANDCHILD => 1 survivor, still alive 3s later. The
+      # parent now waits this subshell out instead whenever the mark says it
+      # fired.
       _burn_lb_kill KILL "$pid" || true
     fi
   ) >/dev/null 2>&1 3>&- 4>&- &
@@ -1199,8 +1210,16 @@ _burn_lb_bounded() {
   # target has already exited (the common, non-timeout case).
   rc=0
   wait "$pid" 2>/dev/null || rc=$?
-  _burn_lb_kill TERM "$watcher" || true
-  wait "$watcher" 2>/dev/null || true
+  if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
+    # The watchdog fired and is inside its own TERM→KILL grace (P3-3 above).
+    # Waiting it out costs one extra second on a path that has already spent
+    # `secs`, and it is what makes the group KILL exist at all.
+    timed_out=1
+    wait "$watcher" 2>/dev/null || true
+  else
+    _burn_lb_kill TERM "$watcher" || true
+    wait "$watcher" 2>/dev/null || true
+  fi
   # P3-3 (round-5 review): this used to be `[ $((SECONDS - start)) -lt
   # "$secs" ] && return "$rc"; return 124` — an integer comparison of
   # `$SECONDS`, which ticks on ABSOLUTE second boundaries (bash reads
@@ -1215,18 +1234,15 @@ _burn_lb_bounded() {
   # finishing): 4 of 8 identical runs reported a phantom.
   # The watchdog's own mark answers the question directly instead: it exists
   # only if the deadline passed with the child still alive.
-  if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
-    rm -f "$kill_mark" 2>/dev/null || true
-    return 124
-  fi
   [ -z "$kill_mark" ] || rm -f "$kill_mark" 2>/dev/null || true
   # Fallback for a $TMPDIR the watchdog could not write into: a child that
   # died FROM A SIGNAL at or past the deadline was almost certainly killed by
   # it. Both halves are needed — the signal alone would misread an
   # externally-killed command, the clock alone is the bug above.
   case "$rc" in
-    137|143) [ $((SECONDS - start)) -lt "$secs" ] || return 124 ;;
+    137|143) [ $((SECONDS - start)) -lt "$secs" ] || timed_out=1 ;;
   esac
+  [ "$timed_out" -eq 0 ] || return 124
   return "$rc"
 }
 
