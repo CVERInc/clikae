@@ -1708,6 +1708,44 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
 }
 
+# --- #113 item 3: a codex rollout whose name is not a uuid, on the BOARD ------
+# The adapter-level specimens live in tests/bats/adapters/{codex,grok}.bats; this
+# is the same file seen from the surface the fast path exists for. The resume
+# row's last field is the sid a keypress resumes, so that is what is asserted —
+# on the live adapter path AND on the board index path, which must agree.
+@test "board (#113): a codex rollout with a uuid-SHAPED, non-hex name shows the BODY id, on both the live and the index path" {
+  clikae init codex a >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  local body="019e0000-0000-7000-8000-0000000b0d13" bogus="notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$body" "$work"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-ODDNAME session"}}\n'
+  } > "$sdir/rollout-2026-06-03T09-00-00-$bogus.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-ODDNAME"* ]] || { echo "$output"; false; }
+
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/reading_cache.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/board_state.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items row mode
+  for mode in 0 1; do
+    _CLIKAE_BOARD="$mode" _home_items_load 2>/dev/null
+    row="$(printf '%s\n' "$items" | grep '^resume'$'\037''codex' || true)"
+    [ -n "$row" ] || { echo "mode=$mode: no codex resume row"; printf '%q\n' "$items"; false; }
+    [ "${row##*$'\037'}" = "$body" ] || { echo "mode=$mode: sid=${row##*$'\037'}"; false; }
+    [[ "$row" != *"$bogus"* ]] || { echo "mode=$mode: bogus id on the board"; false; }
+  done
+}
+
 # --- #113 item 1: the truncation signal is a ROW in the items stream, not a
 # `state/home-recent-truncated.$$` file ---------------------------------------
 # The file had no exit-time cleanup, so every truncating render — and every

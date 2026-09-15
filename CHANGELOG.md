@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps checking on every command (one directory test), so a burn that was
   already running under the old version when you upgraded is picked up too
   (#113).
+- The codex and grok Resume rows only take a session's id from its
+  rollout/session **name** when that name really ends in a uuid: eight, four,
+  four, four and twelve hex digits. Before, any 36-character name with dashes
+  in those positions counted (e.g. `…-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz`),
+  so the board could offer that string as a session id. Anything else now
+  falls back to the id recorded inside the file, the same id the board's index
+  already used (#113).
 - Four optional adapter hooks (`adapter_cwd_from_args`,
   `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
   `adapter_tank_fingerprint`) no longer leak from one adapter to the next

@@ -174,6 +174,12 @@ _grok_summaries_for_cwd() {
   return 0
 }
 
+# A uuid, as a `case` glob: 8-4-4-4-12 HEX digits (adapter_recent_sids' fast
+# path, #113). Explicit digit lists, not `[0-9a-f]` ranges, so no locale's
+# collation order can widen it.
+_GROK_HX='[0123456789abcdefABCDEF]'
+_GROK_UUID_GLOB="$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX-$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX-$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX-$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX-$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX$_GROK_HX"
+
 # _grok_find_summary <dir> <sid> — the summary.json for a session id (the uuid IS
 # the session directory's name), or empty. Not scoped to $PWD: `clikae resume
 # <id>` looks a session up across directories.
@@ -367,11 +373,17 @@ EOF
   # _grok_find_summary goes the other way (sid -> file). Anything not uuid-
   # shaped is not a layout grok writes, so it falls back to the file read
   # rather than guessing.
+  # 🔴 #113: "uuid-shaped" means HEX in the 8-4-4-4-12 shape ($_GROK_UUID_GLOB),
+  # not "dashes in the right columns" — the old `????????-????-…` accepted a
+  # directory named `notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz` and handed the board a
+  # sid no session has. Pinned by a counter-specimen in
+  # tests/bats/adapters/grok.bats.
   sessions_by_mtime "${sfiles[@]}" | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
     sid="${f%/summary.json}"; sid="${sid##*/}"
+    # shellcheck disable=SC2254  # the pattern IS the variable, unquoted on purpose
     case "$sid" in
-      ????????-????-????-????-????????????) : ;;
+      $_GROK_UUID_GLOB) : ;;
       *) sid="$(_grok_json_str "$f" id)" ;;
     esac
     [ -n "$sid" ] || continue
