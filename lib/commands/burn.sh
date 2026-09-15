@@ -705,8 +705,30 @@ EOF
       # source:"unknown" — see lib/core/usage.sh). Leaving Pass 1's stale
       # in-memory numbers in place would let this candidate win on a reading
       # it just failed to reproduce, ahead of a sibling that verified clean
-      # this same call (round-5 review P2-1). Demote to unknown in memory too.
-      c_up[pick]=""; c_uw[pick]=""; c_peak[pick]=""
+      # this same call (round-5 review P2-1).
+      #
+      # P3-1 (round-6 review): but blanket "demote to unknown" is only half a
+      # rule, and the other half ran backwards. Pass 5 ranks unknown (tier 1)
+      # AHEAD of known >=90% (tier 2) — deliberately, P2-9: no reading at all
+      # is a better bet than a reading that says "this tank is nearly out".
+      # So clearing a tier-2 candidate PROMOTED it: a tank last read at 99%
+      # sixty seconds ago, whose token happens to be dead this call, jumped
+      # from "known nearly-full" to "unknown" and beat a sibling that
+      # verified clean at 95% in this same call. Same shape as round-5 P2-1,
+      # mirrored onto the bad side.
+      #
+      # The rule that covers both: a FAILED refresh may only ever rank a
+      # candidate the SAME or WORSE than the evidence already on disk — never
+      # better. tier 0 (known <90%) -> 1, because "cannot read it now" is
+      # genuinely worse than a verified sibling; tier 1 stays 1; tier 2 KEEPS
+      # its last good reading and stays tier 2. That reading is already
+      # bounded by the ranking ceiling (usage_cache_peek applied it in Pass 1,
+      # so anything older than the ceiling was tier 1 here to begin with) —
+      # this branch never resurrects a number the ceiling had already thrown
+      # away, it only declines to launder a bad one into a blank.
+      if [ "${c_tier0[pick]}" != 2 ]; then
+        c_up[pick]=""; c_uw[pick]=""; c_peak[pick]=""
+      fi
     fi
   done
 

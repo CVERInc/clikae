@@ -302,12 +302,22 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   unbeatable floor — nothing left in the pool can score lower), the loop
   stops spending the remaining budget rather than always burning every call
   in the cap regardless (round-5 review, P3-3). A refresh call that FAILS
-  (401, network error, expired token) demotes that candidate to unknown in
-  memory for the final ranking too (round-5 review, P2-1) — it must never
-  win on the stale in-memory number Pass 1 read before the call proved
-  unreadable; `usage_read` overwrites that candidate's on-disk cache with
-  `source:"unknown"` on the same failure, so the in-memory and on-disk views
-  agree.
+  (401, network error, expired token) may only ever rank that candidate the
+  SAME or WORSE than the evidence already on disk, never better (round-5
+  review P2-1, round-6 review P3-1). Concretely: a snapshot tier-0 candidate
+  (known <90%) becomes unknown — it must never win on the flattering stale
+  number Pass 1 read before the call proved it unreadable — while a snapshot
+  tier-2 candidate (known >=90%) KEEPS its last good reading and stays
+  tier 2. Blanking tier 2 would have PROMOTED it, because unknown outranks
+  known->=90% by design (see the three tiers above): a tank last read at 99%
+  sixty seconds ago whose token is dead this call would have beaten a
+  sibling that verified clean at 95% in the same call. The kept reading is
+  already bounded by the age ceiling below (Pass 1 applied it, so anything
+  older was unknown here to begin with), so this never resurrects a number
+  the ceiling had discarded. `usage_read` overwrites that candidate's
+  on-disk cache with `source:"unknown"` on the same failure either way: the
+  disk records "cannot read it now", the ranking records "no better than
+  what we last saw".
   `usage_cache_peek`'s own age ceiling (`_USAGE_CACHE_PEEK_MAX_AGE_SEC`,
   `lib/core/usage.sh`, 15 minutes by default) is the second half of the
   round-4 fix: a reading older than that is "unknown" for ranking purposes,

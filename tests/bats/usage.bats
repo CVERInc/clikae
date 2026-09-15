@@ -440,6 +440,72 @@ STUB
   done
 }
 
+@test "P3-1 (round-6 review): a failed refresh may not PROMOTE a known-bad candidate above one that verified" {
+  # The mirror image of round-5 P2-1 above. exp holds a 99% vendor reading
+  # from 60 seconds ago (well inside the ranking ceiling, so Pass 3 freezes
+  # it as tier 2 — known >=90%, the worst tier) and its token is dead, so the
+  # stub 401s. hi has no cache at all (tier 1, unknown) and verifies clean at
+  # 95%.
+  #
+  # Pass 5 ranks unknown AHEAD of known >=90% (P2-9). So before this fix, the
+  # failed refresh BLANKED exp's numbers and it climbed tier 2 -> tier 1 and
+  # beat hi — a tank we last saw at 99% and cannot read now, chosen over one
+  # verified at 95% in this very call. After the fix a failed refresh can only
+  # rank a candidate the same or worse, so exp keeps its 99% and hi wins.
+  clikae init claude exp
+  printf '{"claudeAiOauth":{"accessToken":"tok-expired"}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/exp/.credentials.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage hi 95            # tok-hi registered -> verifies; tok-expired is not -> 401
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local at; at=$(( $(date +%s) - 60 ))
+  jq -cn --argjson at "$at" \
+    '{window_pct:99,weekly_pct:99,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/exp.json"
+  # Sanity: exp really is a CONFIDENT 99% pre-refresh (inside the ceiling).
+  run usage_cache_peek claude exp
+  [ "$status" -eq 0 ]
+  [[ "$output" == 99* ]] || { echo "pre-refresh peek: $output"; false; }
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = hi ] || { echo "picked: $output (expected hi)"; false; }
+}
+
+@test "P3-1 (round-6 review): a failed refresh still DEMOTES a flattering tier-0 reading (round-5 P2-1 must not regress)" {
+  # The other side of the same rule, asserted separately so a fix that simply
+  # stopped demoting on failure cannot pass: lo's on-disk 5% is 60 seconds old
+  # (tier 0, confident, the best tier) and its token is dead. Keeping that 5%
+  # would hand it the win over mid, which verified at 40% this same call.
+  # Same-or-worse means tier 0 -> unknown here, exactly as round-5 P2-1 fixed.
+  clikae init claude lo
+  printf '{"claudeAiOauth":{"accessToken":"tok-lo-invalid"}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/lo/.credentials.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage mid 40
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local at; at=$(( $(date +%s) - 60 ))
+  jq -cn --argjson at "$at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/lo.json"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = mid ] || { echo "picked: $output (expected mid)"; false; }
+}
+
 @test "cached vendor thresholds pick the right glyph" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

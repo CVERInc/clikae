@@ -86,10 +86,12 @@ usage_read() (
 #     default 3) refreshing only the top candidates off THAT snapshot —
 #     never all of them, and never before the snapshot ranking runs (bounded
 #     to candidates only, reusing the adapter's own existing --max-time — no
-#     new bound invented). A refresh that fails to read back demotes that
-#     candidate to unknown in memory for the FINAL ranking (round-5 review
-#     P2-1) — it can never win on the stale number it just failed to
-#     reproduce.
+#     new bound invented). A refresh that fails to read back may only rank
+#     that candidate the SAME or WORSE than the on-disk evidence, never
+#     better (round-5 review P2-1, round-6 review P3-1): a known-<90%
+#     candidate becomes unknown (it can never win on the stale number it
+#     just failed to reproduce), a known->=90% one KEEPS its reading rather
+#     than being laundered into an "unknown" that outranks it.
 # (c) the board NEVER fetches (usage_cache_peek/usage_board_fields below are
 #     cache-only, always) and shows the reading's age next to the dot once
 #     it is older than the TTL ("3h ago"), or "unknown" once it is older
