@@ -241,6 +241,11 @@ function ekey(s,   t, n, i, c, out) {
   if (n > 100) t = substr(t, 1, 60) "_" substr(t, n - 39) "_" n
   _EKMEMO[s] = t
   return t
+}
+function bsame(a, b) {
+  if (length(a) != length(b)) return 0
+  if (length(a) == 0) return 1
+  return index(a, b) == 1
 }'
 _board_entry_key_out=""
 _board_entry_key() {
@@ -256,6 +261,23 @@ _board_entry_key() {
   # record rather than as no input at all.
   _board_entry_key_out="$(LC_ALL=C awk "$_BOARD_EKEY_AWK"'{ print ekey($0) }' <<<"$s")"
 }
+# `bsame(a, b)` (in the same awk source) is BYTE equality, and every awk here
+# that asks "is this the same sid/scope?" uses it instead of `==`/`!=`.
+# Round-9 macOS CI (`bats (macos-latest)`, run 34804107952, test 720): POSIX
+# says awk compares strings in the COLLATION order of the caller's locale, and
+# macOS's awk does exactly that — apple-oss-distributions/awk `run.c` relop()
+# is `strcoll(getsval(x), getsval(y))`, for `!=` and `==` too. The runner's
+# UTF-8 collation has no weights for most CJK ideographs, so `專案一 != 專案二`
+# is FALSE there: the cold build's `recent/` grouping awk (which ran without
+# `LC_ALL=C`) never saw the scope change, and `專案一`'s entry got both
+# directories' sessions — four rows, its neighbour's two among them — while
+# `專案二` had no entry at all. glibc never collates two distinct strings equal,
+# so no Linux run of the same test could show it. Reproduced on Linux with
+# Apple's own awk built from source under a locale whose collation gives 二
+# 一's weight: the identical four rows; the same build under C.UTF-8 is green.
+# `LC_ALL=C` alone fixes it (C collation is byte order by POSIX), and those
+# awks run under it now; `bsame` is there so equality stops depending on ANY
+# locale at all — `length` + `index` never consult LC_COLLATE.
 
 # Generation layout version. A generation written by an older clikae has a
 # different on-disk shape and must never be read as if it were this one: an
@@ -798,7 +820,8 @@ _board_purge_recent_row() {
 $hdr
 EOF_HDR
   { [ "$hmark" = "#scope" ] && [ "$hscope" = "$scope" ]; } || return 0
-  { printf '%s\n' "$hdr"; tail -n +2 "$src" | awk -F$'\037' -v s="$sid" '$2 != s'; } \
+  # Byte equality, not `$2 != s` — see `bsame` under _board_entry_key.
+  { printf '%s\n' "$hdr"; tail -n +2 "$src" | LC_ALL=C awk -F$'\037' -v s="$sid" "$_BOARD_EKEY_AWK"'!bsame($2, s)'; } \
     | _board_gen_put "$gen" "recent/$key"
 }
 
@@ -1147,14 +1170,18 @@ board_state_refresh() (
     # Grouped by scope, the second group reopens the name with `>` and
     # truncates it, so the loser reads as a MISS, which is what that promise
     # actually says.
+    # "Is this still the same scope?" is `bsame`, under LC_ALL=C, never
+    # `sc != cur`: macOS's awk answers `!=` with strcoll(), and its UTF-8
+    # collation calls sibling CJK directories EQUAL, which merged 專案二's
+    # sessions into 專案一's entry (see `bsame`'s header).
     if [ -s "$rec_f" ]; then
-      LC_ALL=C sort -t$'\037' -k2,2 -k3,3rn "$rec_f" | awk -v gen="$gen" -v n="$n" '
+      LC_ALL=C sort -t$'\037' -k2,2 -k3,3rn "$rec_f" | LC_ALL=C awk -v gen="$gen" -v n="$n" "$_BOARD_EKEY_AWK"'
         BEGIN { S = sprintf("%c", 31) }
         {
           i = index($0, S); k = substr($0, 1, i - 1); rest = substr($0, i + 1)
           j = index(rest, S); sc = substr(rest, 1, j - 1); rest = substr(rest, j + 1)
           j = index(rest, S); mt = substr(rest, 1, j - 1); sid = substr(rest, j + 1)
-          if (sc != cur) {
+          if (NR == 1 || !bsame(sc, cur)) {
             if (curf != "") close(curf)
             cur = sc; c = 0
             curf = gen "/recent/" k

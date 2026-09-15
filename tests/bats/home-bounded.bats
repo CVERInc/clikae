@@ -876,6 +876,12 @@ _b8_tank() {
   # directory's Resume list answered with the other's sessions while the
   # other's went silently empty. Two CJK characters are six bytes; so are two
   # others. This is an ordinary project path, not an exotic one.
+  # Round-9b: the escape fixed the NAMES and macOS still went red here — with
+  # exactly the four rows above — because macOS's awk compares strings with
+  # strcoll() and its UTF-8 collation calls 專案一 and 專案二 equal (see `bsame`
+  # in lib/core/board_state.sh). glibc cannot produce that equality, so on
+  # Linux this test pins the byte-exact names and the NFC/NFD pair; the
+  # collation arm itself is macOS CI's to catch.
   clikae init codex cjk >/dev/null
   mkdir -p "$TEST_HOME/work"
   cd "$TEST_HOME/work" || return 1
@@ -884,7 +890,16 @@ _b8_tank() {
   local dir="$CLIKAE_HOME/profiles/codex/cjk" sd i j sid
   sd="$dir/sessions/2026/09/14"
   mkdir -p "$sd"
-  local -a scopes=("$TEST_HOME/專案一" "$TEST_HOME/專案二" "$TEST_HOME/café" "$TEST_HOME/cafè")
+  # Round-9b: the last scope is café in NFD (e + U+0301), byte-distinct from the
+  # NFC café beside it. On Linux they are two directories; on APFS the second
+  # `mkdir -p` lands in the first, but `$PWD` — what the scope is built from —
+  # is still the bytes that were typed, so the two remain two scopes and each
+  # must keep its own list. Nothing may normalize either side.
+  local nfc nfd
+  nfc="$TEST_HOME/$(printf 'caf\303\251')"
+  nfd="$TEST_HOME/$(printf 'cafe\314\201')"
+  [ "$nfc" != "$nfd" ]
+  local -a scopes=("$TEST_HOME/專案一" "$TEST_HOME/專案二" "$nfc" "$TEST_HOME/cafè" "$nfd")
   for ((i = 0; i < ${#scopes[@]}; i++)); do
     mkdir -p "${scopes[i]}"
     for j in 0 1; do
@@ -917,7 +932,19 @@ _b8_tank() {
   _board_entry_key "${scopes[0]}"; ka="$_board_entry_key_out"
   _board_entry_key "${scopes[1]}"; kb="$_board_entry_key_out"
   [ "$ka" != "$kb" ] || { echo "two scopes, one entry name: $ka"; false; }
-  [ -f "$gen/recent/$ka" ] && [ -f "$gen/recent/$kb" ]
+  for ((i = 0; i < ${#scopes[@]}; i++)); do
+    _board_entry_key "${scopes[i]}"
+    [ -f "$gen/recent/$_board_entry_key_out" ] \
+      || { echo "no recent/ entry [$_board_entry_key_out] for [${scopes[i]}]; have: $(ls "$gen/recent")"; false; }
+  done
+  # the name is derived from the BYTES, on this platform's awk, in this
+  # platform's locale: exact escapes, so NFC and NFD can never meet
+  _board_entry_key "$(printf '\345\260\210\346\241\210\344\270\200')"
+  [ "$_board_entry_key_out" = "%E5%B0%88%E6%A1%88%E4%B8%80" ] || { echo "專案一 -> $_board_entry_key_out"; false; }
+  _board_entry_key "$(printf 'caf\303\251')"
+  [ "$_board_entry_key_out" = "caf%C3%A9" ] || { echo "NFC café -> $_board_entry_key_out"; false; }
+  _board_entry_key "$(printf 'cafe\314\201')"
+  [ "$_board_entry_key_out" = "cafe%CC%81" ] || { echo "NFD café -> $_board_entry_key_out"; false; }
 
   # and the INCREMENTAL path does not merge one scope's row into another's
   # entry either: append to one rollout, rebuild, re-check every scope
@@ -934,6 +961,22 @@ _b8_tank() {
       || { echo "[${scopes[i]}] after rebuild got: $rows"; false; }
     [ "$(printf '%s\n' "$rows" | grep -c "s$i-")" -eq 2 ] \
       || { echo "[${scopes[i]}] after rebuild listed a sibling: $rows"; false; }
+  done
+
+  # and the PURGE path: remove one NFD session; only the NFD scope loses a row
+  rm -f "$sd/rollout-2026-09-14T04-01-s4-1.jsonl"
+  cd "$TEST_HOME/work" || return 1
+  _board_gen_cache_clear
+  board_state_refresh codex "$dir"
+  local want
+  for ((i = 0; i < ${#scopes[@]}; i++)); do
+    cd "${scopes[i]}" || return 1
+    _board_gen_cache_clear
+    rows="$(board_recent codex "$dir" 10)"
+    want=2; [ "$i" -ne 4 ] || want=1
+    [ "$(printf '%s\n' "$rows" | grep -c "s$i-")" -eq "$want" ] \
+      && [ "$(printf '%s\n' "$rows" | grep -c .)" -eq "$want" ] \
+      || { echo "[${scopes[i]}] after purge (want $want) got: $rows"; false; }
   done
 }
 
