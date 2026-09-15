@@ -154,7 +154,10 @@ _fake_bin() {
   [ -n "$calls" ] || { echo "no call sites found — this test proves nothing"; false; }
   unguarded="$(printf '%s\n' "$calls" | grep -v 'declare -F _human_age' || true)"
   [ -z "$unguarded" ] || { echo "unguarded: $unguarded"; false; }
-  [ "$(printf '%s\n' "$calls" | grep -c .)" -eq 2 ] || { echo "expected 2 call sites: $calls"; false; }
+  # THREE since #89 added the vendor-usage age annotation (`_home_fuel_*`).
+  # The count is here so a NEW call site cannot appear unnoticed and unguarded;
+  # the guard assertion above is the substance and is unchanged.
+  [ "$(printf '%s\n' "$calls" | grep -c .)" -eq 3 ] || { echo "expected 3 call sites: $calls"; false; }
   # The guarded shape really degrades to an empty age with the function absent.
   run bash -c 'unset -f _human_age; age=x; age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age 1)"; printf "[%s]" "$age"'
   [ "$status" -eq 0 ] && [ "$output" = "[]" ] || { echo "rc=$status $output"; false; }

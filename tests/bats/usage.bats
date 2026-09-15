@@ -511,6 +511,15 @@ STUB
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
+  # #102 moved `_human_age` out of home.sh into lib/core/duration.sh, which
+  # `bin/clikae` sources globally but a test that sources home.sh ALONE does
+  # not — and #89 added this very call site (the age alongside a stale vendor
+  # reading) in the same window, so on main the assertion below cannot pass at
+  # all: `_home_fuel_dotv_compute` dies with status 127 on the missing
+  # function. Sourcing the lib the front door already loads is what lets this
+  # test go on asserting the SAME string; the call site itself is now guarded
+  # by `declare -F` too (home.sh, and tests/bats/home.bats' own scan of it).
+  source "$CLIKAE_LIB/core/duration.sh"
   __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
   # round-3 review, P2-1: dry/expired-limit are now checked BEFORE the usage
   # cache (home.sh's _home_fuel_dotv_compute) and WIN outright, so a stub
@@ -541,6 +550,15 @@ STUB
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
+  # #102 moved `_human_age` out of home.sh into lib/core/duration.sh, which
+  # `bin/clikae` sources globally but a test that sources home.sh ALONE does
+  # not — and #89 added this very call site (the age alongside a stale vendor
+  # reading) in the same window, so on main the assertion below cannot pass at
+  # all: `_home_fuel_dotv_compute` dies with status 127 on the missing
+  # function. Sourcing the lib the front door already loads is what lets this
+  # test go on asserting the SAME string; the call site itself is now guarded
+  # by `declare -F` too (home.sh, and tests/bats/home.bats' own scan of it).
+  source "$CLIKAE_LIB/core/duration.sh"
   __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
   # round-3 review, P2-1: dry/expired-limit are now checked BEFORE the usage
   # cache and WIN outright — a stub that unconditionally reports the
@@ -693,6 +711,15 @@ STUB
   source "$CLIKAE_LIB/core/limit.sh"
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
+  # #102 moved `_human_age` out of home.sh into lib/core/duration.sh, which
+  # `bin/clikae` sources globally but a test that sources home.sh ALONE does
+  # not — and #89 added this very call site (the age alongside a stale vendor
+  # reading) in the same window, so on main the assertion below cannot pass at
+  # all: `_home_fuel_dotv_compute` dies with status 127 on the missing
+  # function. Sourcing the lib the front door already loads is what lets this
+  # test go on asserting the SAME string; the call site itself is now guarded
+  # by `declare -F` too (home.sh, and tests/bats/home.bats' own scan of it).
+  source "$CLIKAE_LIB/core/duration.sh"
   __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
   _home_is_dryv() { _DRY_RESET=''; return 1; }
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
