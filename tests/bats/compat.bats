@@ -227,6 +227,101 @@ $f:$ln:$rest"
   [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
 }
 
+# P3-6 (round-3 review): the guards above scan for known bash-4+ CONSTRUCTS
+# via grep — they can't see a bash 3.2 PARSE error, which is exactly what
+# broke CI on macOS (the interpreter itself, not a construct grep knows to
+# name). A real bash:3.2 running `bash -n` on every shipped file is the
+# direct gate; skip with a reason where docker isn't available rather than
+# silently passing.
+#
+# P3-2 (round-4 review): this gate had no sample-count assertion — point it
+# at an empty tree and it happily reports `checked=0`, rc=0: "passed" by
+# checking nothing. `checked=$n` is now printed unconditionally (pass or
+# fail) and asserted against a lower bound derived from the real tree
+# (`lib/**/*.sh` alone, ignoring bin/ and non-.sh — a true floor, never a
+# number that needs bumping by hand as files are added).
+#
+# P3-7 (round-5 review): this exact docker command used to be copy-pasted
+# THREE times (the real gate below, plus its own empty-tree and negative-
+# control test) — a change to the gate's `find` (say, its exclusion list)
+# only ever reached the copy the real test used; the two controls kept
+# testing whatever the LAST edited copy happened to say, silently, since
+# nothing forced all three to stay identical. One helper, called by name
+# three times, so the controls can only ever exercise the real gate.
+_bash32_parse_gate() {
+  local mount="$1"
+  docker run --rm -v "$mount:/src:ro" bash:3.2 bash -c \
+    'rc=0; n=0
+     while IFS= read -r -d "" f; do
+       n=$((n+1))
+       bash -n "$f" || rc=1
+     done < <(find /src/bin /src/lib -type f -not -path "/src/lib/templates/*" -print0)
+     echo "checked=$n"
+     exit $rc'
+}
+
+# P3-8 (round-5 review): the gate's OWN `find` excludes `lib/templates/`
+# (files meant to be parsed by a TARGET engine's runtime, not by clikae's own
+# bash 3.2), but the floor computed here used to count `lib/templates/*.sh`
+# toward the lower bound anyway — a margin of exactly 1 file in this repo
+# today (measured: `checked=93`, `floor=92`). Two `.sh` files landing in
+# `lib/templates/` would make this floor assertion fail for the WRONG
+# reason (a template the gate correctly never looked at, not a real parse
+# regression). The floor must exclude the same directory the gate does.
+_bash32_gate_floor() {
+  find "$CLIKAE_TEST_ROOT/lib" -name '*.sh' -type f -not -path '*/lib/templates/*' | wc -l | tr -d ' '
+}
+
+@test "bash 3.2 can parse every shipped lib/ + bin/ file (docker bash -n)" {
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  run _bash32_parse_gate "$CLIKAE_TEST_ROOT"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  local checked floor
+  checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
+  floor="$(_bash32_gate_floor)"
+  [ -n "$checked" ] || { echo "gate printed no checked= count: $output" >&2; false; }
+  [ "$checked" -ge "$floor" ] || { echo "checked=$checked < $floor lib/**/*.sh files — the gate scanned less than the real tree"; false; }
+}
+
+@test "P3-2 (round-4 review): the docker gate goes red on an empty tree's worth of nothing checked" {
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  # The ruler for the sample-count assertion above: point the SAME gate at a
+  # disposable tree with no shell files in bin/ or lib/ at all. Before the
+  # floor assertion, this "passed" (checked=0, rc=0) — reporting nothing
+  # checked as a clean bill of health, exactly the gap P3-2 found.
+  local probe="$TEST_HOME/emptytree"; mkdir -p "$probe/lib" "$probe/bin"
+  run _bash32_parse_gate "$probe"
+  [ "$status" -eq 0 ]
+  local checked; checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
+  [ "$checked" = 0 ]
+  # An empty tree must fail THIS repo's own floor (>=1 real lib/**/*.sh file).
+  local floor; floor="$(_bash32_gate_floor)"
+  [ "$floor" -gt 0 ]
+  [ "$checked" -lt "$floor" ]
+}
+
+@test "P3-2 (round-4 review): the docker gate's negative control — seed c673adb's claude.sh, it must go red" {
+  # This is the review's own negative control for THIS gate specifically
+  # (distinct from "the compat scans do not fire on their own documentation"
+  # above, which guards the grep-based scans): the historical claude.sh at
+  # c673adb is the file whose bash-4+ shape once broke CI's real macOS bash
+  # 3.2 with a genuine PARSE error (not a construct grep can name) — a
+  # disposable copy of it must make this gate fail, verbatim, with that
+  # error, or the gate is not actually exercising anything.
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  command -v git >/dev/null 2>&1 || skip "git not on PATH — cannot fetch c673adb's claude.sh"
+  local probe="$TEST_HOME/negcontrol"
+  mkdir -p "$probe/lib/adapters" "$probe/bin"
+  ( cd "$CLIKAE_TEST_ROOT" && git show c673adb:lib/adapters/claude.sh ) > "$probe/lib/adapters/claude.sh" \
+    || skip "c673adb:lib/adapters/claude.sh not reachable from this checkout"
+  run _bash32_parse_gate "$probe"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unexpected EOF while looking for matching"* ]] || { echo "expected the verbatim bash 3.2 parse error, got: $output" >&2; false; }
+}
+
 # --- PowerShell adapter table parity (informational; no Windows/pwsh needed) ----
 # powershell/Clikae.psm1 carries a hand-maintained $script:ClikaeAdapters table that
 # "mirrors lib/adapters/*.sh one-for-one" (its own comment). This is a SOURCE scan

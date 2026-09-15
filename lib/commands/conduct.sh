@@ -15,7 +15,10 @@
 # (audits, analyses, design proposals). Write/impl tournaments that need isolated
 # worktrees stay an orchestrator's job (see the conductor skill's Heavy mode).
 
-# Reuse burn's timeout-tool resolver (timeout/gtimeout/perl-or-warn).
+# Reuse burn's _burn_size (byte-count-or-"?" for the summary table). The
+# timeout-tool resolver this comment used to name (_burn_timeout_bin) moved
+# to lib/core/timeout_bin.sh (P2-2, round-2 review) and is sourced globally
+# now — this source is no longer why it's available here, only _burn_size is.
 # shellcheck source=./burn.sh
 source "$CLIKAE_LIB/commands/burn.sh"
 # agy is adapter-less (global single-account, no per-shell env to export), so it

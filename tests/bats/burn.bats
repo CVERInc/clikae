@@ -311,6 +311,9 @@ STUB
 @test "_burn_timeout_bin: picks \`timeout\` when it's on PATH" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): _burn_timeout_bin moved to lib/core/timeout_bin.sh —
+  # sourced globally by bin/clikae, but this test sources burn.sh directly.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
@@ -322,6 +325,8 @@ STUB
 @test "_burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): moved to lib/core/timeout_bin.sh — see above.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   local out
@@ -587,6 +592,8 @@ _seed_email() { printf '{"emailAddress": "%s"}\n' "$3" > "$CLIKAE_HOME/profiles/
 @test "_burn_timeout_bin: falls back to perl when no timeout/gtimeout" {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # P2-2 (round-2 review): moved to lib/core/timeout_bin.sh — see above.
+  . "$CLIKAE_TEST_ROOT/lib/core/timeout_bin.sh"
   CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"   # burn.sh sources antigravity.sh at load time
   . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
   mkdir -p "$BATS_TEST_TMPDIR/perlbin"
@@ -1029,6 +1036,66 @@ STUB
   run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], ','.join(d['rerouted_from']))" "$BATS_TEST_TMPDIR/j.txt"
   [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
   [ "$output" = "True T2 codex/T1" ] || { echo "got: $output"; false; }
+}
+
+# --- P1-2/P1-3/P1-4 (round-1 review, PR #89): burn used to swap the named
+# tank for a DIFFERENT one BEFORE the first attempt, whenever a sibling
+# looked like it had more headroom — even when the named tank was perfectly
+# healthy, even with --to naming an explicit next hop, and without ever
+# recording the swap in $tried / rerouted_from. That pre-launch swap is
+# deleted outright; these three tests reproduce the review's exact
+# scenarios against its absence.
+
+@test "burn claude a: worse headroom than b does not stop a from launching (no pre-launch substitution, P1-2)" {
+  _stub_claude
+  clikae init claude a
+  clikae init claude b
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:90,weekly_pct:90,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/a.json"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:10,weekly_pct:10,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/claude/b.json"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/out.md"
+  clikae burn claude a --artifact "$STUB_ARTIFACT" --json -- -p hi \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], d['rerouted_from'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True a []" ] || { echo "got: $output"; false; }
+  [ -f "$STUB_ARTIFACT" ]
+}
+
+@test "burn --to codex/c wins outright over headroom ordering on a dry tank (P1-3)" {
+  _stub_codex
+  clikae init codex a
+  clikae init codex b
+  clikae init codex c
+  : > "$CLIKAE_HOME/profiles/codex/a/.dry"
+  mkdir -p "$CLIKAE_HOME/state/usage/codex"
+  # b LOOKS like the obviously better reroute target (5% used); --to must
+  # still win over that ordering and land on c instead.
+  jq -cn --argjson now "$(date +%s)" '{window_pct:5,weekly_pct:5,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/codex/b.json"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex a --artifact "$A" --to codex/c -- run "$A"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  [[ "$output" == *"codex/c"* ]] || false
+  [[ "$output" != *"codex/b"* ]] || false
+}
+
+@test "burn --json: a reroute driven by headroom ordering is recorded in rerouted_from (P1-4)" {
+  _stub_codex
+  clikae init codex a
+  clikae init codex b
+  : > "$CLIKAE_HOME/profiles/codex/a/.dry"
+  mkdir -p "$CLIKAE_HOME/state/usage/codex"
+  jq -cn --argjson now "$(date +%s)" '{window_pct:5,weekly_pct:5,source:"vendor",cached_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/codex/b.json"
+  clikae burn codex a --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null
+  run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['tank'], d['rerouted_from'])" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "True b ['codex/a']" ] || { echo "got: $output"; false; }
 }
 
 @test "burn --json: every tank dry is a distinct, readable outcome" {
@@ -4306,4 +4373,73 @@ assert bravo, rows
 for f in bravo[0]["files"]:
     assert "REPO-A-LEAKED" not in f, bravo[0]
 '
+}
+
+# --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
+# --- cache at run end, off the launch path                                 ---
+
+@test "P2-1(a): burn refreshes the launched tank's usage cache at run end — one vendor call, off the launch path" {
+  _stub_claude
+  clikae init claude solo1
+  # Starting state P2-1's own receipt found on a real machine: no `clikae
+  # usage` has ever run for this tank, so there is no cache at all yet.
+  [ ! -f "$CLIKAE_HOME/state/usage/claude/solo1.json" ]
+  printf '{"claudeAiOauth":{"accessToken":"tok-solo1"}}\n' > "$CLIKAE_HOME/profiles/claude/solo1/.credentials.json"
+  export CURL_CALLS="$BATS_TEST_TMPDIR/curl_calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$CURL_CALLS"
+config="$(cat)"
+[[ "$config" == *'Bearer tok-solo1'* ]] || exit 2
+echo '{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":17,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  export STUB_ARTIFACT="$A"
+  run clikae burn claude solo1 --artifact "$A" --prompt "do it"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  # Exactly ONE vendor call, made after the run concluded — P1-2..P1-4
+  # (round-1 review) already proved the LAUNCH itself pays zero; this is
+  # the separate, deliberate call P2-1(a) adds at the other end.
+  [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]
+  [ -f "$CLIKAE_HOME/state/usage/claude/solo1.json" ]
+  jq -e '.window_pct == 42 and .weekly_pct == 17 and .source == "vendor"' \
+    "$CLIKAE_HOME/state/usage/claude/solo1.json"
+}
+
+@test "P2-1(a) control: a DRY run also refreshes the tank it just tried, not only a successful one" {
+  _stub_claude
+  clikae init claude dry1; clikae init claude dry2
+  printf '{"claudeAiOauth":{"accessToken":"tok-dry1"}}\n' > "$CLIKAE_HOME/profiles/claude/dry1/.credentials.json"
+  export CURL_CALLS="$BATS_TEST_TMPDIR/curl_calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$CURL_CALLS"
+config="$(cat)"
+[[ "$config" == *'Bearer tok-dry1'* ]] || exit 2
+echo '{"five_hour":{"utilization":95,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":80,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  # round-3 review, P3-2: the round-2 stub line ("5-hour limit reached ∙
+  # resets 2pm") is rc=1-BUT-NOT-dry under `limit_output_dry claude` ("no
+  # fresh artifact and no limit") — the run was classified as a plain
+  # failure, not dry, and the test's sole assertion (status -ne 0) held true
+  # either way, so it never actually proved this was a DRY run. Use the
+  # corpus phrase burn #45 (this file, above) already proved
+  # `limit_output_dry claude` recognizes as dry, and assert --json's own
+  # dry verdict, not just a nonzero exit.
+  run clikae burn claude dry1 --artifact "$A" --no-reroute --json --prompt "do it"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+  [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]
+  jq -e '.window_pct == 95 and .source == "vendor"' \
+    "$CLIKAE_HOME/state/usage/claude/dry1.json"
 }

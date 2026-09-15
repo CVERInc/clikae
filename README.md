@@ -172,6 +172,9 @@ with it that one account can't:
   hands you every answer to judge: a vote, not a coin flip.
 - **A long job that survives a dry tank** — burn re-fires it on your next reserve
   automatically, so unattended work finishes *somewhere*.
+- **See the runway before you hit it** — `clikae usage [engine] [tank]` reports
+  each tank's real vendor percentages (window/weekly used, and when they
+  reset), cached so the board never makes a network call to show them.
 
 Situation-by-situation recipes, with the exact calls, are in
 **[docs/playbooks.md](docs/playbooks.md)**. An account switcher gives you another login;

@@ -526,6 +526,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comes from `mktemp` rather than a predictable /tmp path. Everything those
   rounds deliberately left unfixed is now tracked in #112 rather than in
   review notes.
+- `clikae usage [engine] [tank] [--json] [--fresh]` reports Claude's OAuth
+  usage windows and Codex's own `rate_limits` evidence (read from its
+  rollout transcripts — no `codex` process runs for this), cached for 120
+  seconds (`CLIKAE_USAGE_TTL`); `source` is `"vendor"`, `"transcript"`, or
+  `"unknown"`. The board shows cached percentages; the tank a burn is told
+  to launch is always the one that runs, never silently substituted —
+  headroom preference only orders which tank a *dry* burn reroutes to next.
+  The board never calls the vendor itself; burn does, but only off its own
+  hot path — once for the tank it just ran, at run end, and, on a dry tank,
+  up to `_BURN_REROUTE_REFRESH_CAP` (3) calls spent on the reroute
+  candidates a first ranking off the on-disk cache says could actually win
+  (never once per candidate: a 20-tank fleet costs 3 calls, not 20, and
+  fewer if a refresh verifies a 0% window and stops the loop), never
+  before launching. Unavailable readings retain transcript fallbacks (#72;
+  round-1 review: named-tank launch, honest codex `source`, board redraw
+  fork removed; round-2 review: the two burn-time refreshes above (nothing
+  had ever refreshed the cache before), the board shows a stale-but-recent
+  reading with its age instead of hiding it, a reset instant already past
+  reads as 0% used rather than a stale percentage, and intra-tier ordering
+  is window_pct first, weekly_pct only the tie-break; round-3 review: the
+  Keychain read's own timeout warning is no longer swallowed, the reroute's
+  live vendor calls are capped so a growing fleet has a bounded wall-clock
+  cost, and a real bash 3.2 interpreter (not just a grep for known
+  constructs) gates every shipped file in CI; round-4 review: that round-3
+  cap spent its live-verify budget on candidates by listing order, before
+  ranking existed — so the calls could land on tanks that could never win
+  while the tank that DID win was the one candidate left unverified with a
+  stale, flattering on-disk reading. Candidates are now ranked FIRST on
+  whatever's already known, and the live budget is spent only on the
+  candidates that ranking says could win; a stale-but-recent on-disk
+  reading still counts (up to a new 15-minute age ceiling — past it it's
+  "unknown", never a flattering stale percentage), and a same-account
+  sibling can no longer burn a second refresh slot on the same real quota).
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

@@ -837,3 +837,151 @@ adapter_migrate_credentials() {
   secret=""
   return 0
 }
+
+# Optional usage hook. Secrets exist only in this subshell and curl's stdin.
+#
+# The darwin branch below mirrors adapter_migrate_credentials' own
+# `command -v security` guard, and bounds the call (round-1 review, P2-7):
+# burn's candidate loop no longer reaches this (P2-2), but `clikae usage`/
+# `--fresh` still can, and a locked keychain or an ACL prompt with no one
+# there to answer it must not hang a headless caller.
+#
+# P2-2 (round-2 review): this used to resolve its own two-arm bound
+# (timeout, gtimeout, nothing else) right here, on the one platform this
+# branch runs on (stock macOS), which ships NEITHER by default — so the 5s
+# bound was silently empty on every install that had not gone out of its
+# way to add one. lib/core/timeout_bin.sh's _burn_timeout_bin already has
+# the correct three-arm resolver (timeout, gtimeout, perl, plus an honest
+# warning when none exist); call that instead of re-rolling it narrower.
+# P3-5 (round-6 review, a first step toward #107): when this returns
+# non-zero it may print ONE line of JSON naming why, and nothing else —
+# never a vendor body, never anything derived from one. lib/core/usage.sh
+# reads at most `.reason`, through a three-value enum, and discards the
+# rest. See usage_unknown there for what the three words are allowed to
+# mean; the honest boundary is that `expired-token` is PROVEN from the
+# credentials file's own recorded expiry, `no-credentials` from the absence
+# of a usable token, and `network` is the catch-all for everything else
+# (which is exactly the lump #107 exists to take apart).
+_claude_usage_unreadable() {
+  printf '{"source":"unknown","reason":"%s"}\n' "$1"
+}
+
+# "the token had already expired" if the credentials file says so, else the
+# catch-all. Its own function so the two call sites below cannot drift, and
+# so neither has to spell out an `&&`/`||` chain (which would print BOTH
+# words, since the printer above deliberately returns 0).
+_claude_usage_call_failed() {
+  if [ "${_claude_token_expired:-0}" = 1 ]
+  then _claude_usage_unreadable expired-token
+  else _claude_usage_unreadable network
+  fi
+}
+
+adapter_usage() (
+  set +x
+  set +a
+  local dir="$1" service token response
+  export -n token response
+  token="$(
+    if [ -f "$dir/.credentials.json" ]; then
+      jq -er '.claudeAiOauth.accessToken // empty' "$dir/.credentials.json" 2>/dev/null
+    elif [[ "${OSTYPE:-}" == darwin* ]]; then
+      command -v security >/dev/null 2>&1 || exit 1
+      service="$(_claude_keychain_service "$dir")" || exit 1
+      local _tbin=""
+      # P3-3 (round-3 review): `2>/dev/null` here swallowed _burn_timeout_bin's
+      # own honest warning (lib/core/timeout_bin.sh:25) when all three arms
+      # are missing, so a stock-macOS box with none of timeout/gtimeout/perl
+      # ran the Keychain read UNBOUNDED, silently. burn.sh's own call sites
+      # (:741, :2476) already leave stderr unsuppressed for this reason.
+      declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
+      if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
+        "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      elif [ "$_tbin" = perl ]; then
+        perl -e 'alarm shift; exec @ARGV or exit 127' 5 security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      else
+        security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+      fi
+    fi
+  )" || { _claude_usage_unreadable no-credentials; return 1; }
+  # Restrict to bearer-token characters; reject curl-config injection.
+  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) _claude_usage_unreadable no-credentials; return 1 ;; esac
+  # P3-5 (round-6 review): ask the credentials file, BEFORE the call, whether
+  # the token it just handed over has already expired by its own record. This
+  # is the one failure cause that can be established without guessing at an
+  # HTTP status we never see (`--fail` collapses every 4xx/5xx into curl exit
+  # 22) — and it is exactly the case #107 opens with: an idle tank whose
+  # token lapsed, reported as a flat "unknown" indistinguishable from a tank
+  # with no credentials at all. Keychain-sourced tokens have no such record
+  # here, so they stay in the `network` lump.
+  local _claude_token_expired=0
+  if [ -f "$dir/.credentials.json" ] &&
+     jq -e --argjson now "$(date +%s)" \
+       '((.claudeAiOauth.expiresAt // empty) / 1000) < $now' \
+       "$dir/.credentials.json" >/dev/null 2>&1; then
+    _claude_token_expired=1
+  fi
+  # P3-2 (codex security review, round-5): the whole body used to land in
+  # this variable, and jq's own parsing/copying work, with no upper bound —
+  # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
+  # final cache shape protects against a faulty or hostile upstream sending
+  # a huge body (measured: a 16MiB synthetic body was fully accepted and
+  # normalized). `--max-filesize` is the line that actually does the work on
+  # a modern curl: since 8.4 it applies DURING the transfer, so it aborts a
+  # chunked/streamed body too, not only one whose Content-Length announces
+  # itself too large (measured on curl 8.5: 65536 accepted, 65537 refused
+  # with rc=63, identically across Content-Length / chunked / close-delimited
+  # — round-6 review). The `head -c` below is the fallback for a curl old
+  # enough to apply the flag only to an announced length.
+  #
+  # P3-3 (round-6 review): that fallback used to be nondeterministic. It read
+  # exactly the cap and TRUNCATED, so an over-long body whose overflow was
+  # trailing whitespace came back as a perfectly valid reading whenever curl
+  # happened to finish before `head` closed the pipe, and as a failure
+  # whenever head won the race (measured 6/20 accepted for one padding, 17/20
+  # for another) — the same response accepted or refused by pipe scheduling.
+  # Read exactly ONE byte more than the cap instead, and refuse outright if
+  # that byte arrives: over-long is over-long whoever wins the race. (If head
+  # closing the pipe kills curl first, PIPESTATUS[1] is non-zero and we
+  # refuse on that instead — both roads lead to the same verdict now.) The
+  # trailing `X` is a sentinel: `$( )` strips trailing newlines, and without
+  # it a body that overflows by exactly a newline would measure as fitting.
+  #
+  # PIPESTATUS[1] carries curl's OWN exit status, since `head` closing early
+  # would otherwise hide a real curl failure behind head's always-zero status.
+  local _claude_usage_max_bytes=65536
+  response="$(
+    printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
+      curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
+        --max-filesize "$_claude_usage_max_bytes" \
+        https://api.anthropic.com/api/oauth/usage 2>/dev/null |
+      head -c "$(( _claude_usage_max_bytes + 1 ))"
+    _claude_usage_curl_rc="${PIPESTATUS[1]}"
+    printf 'X'
+    exit "$_claude_usage_curl_rc"
+  )" || { token=""; _claude_usage_call_failed; return 1; }
+  response="${response%X}"
+  if [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -gt "$_claude_usage_max_bytes" ]; then
+    token=""; response=""; _claude_usage_unreadable network; return 1
+  fi
+  token=""
+  # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
+  # documents used to become multiple cached readings — burn's shell `read`
+  # only ever consumes the first TSV line, silently discarding whichever
+  # reading came later (measured: a two-document stub produced a second,
+  # tank-less 99%/99% reading that nothing downstream ever looked at, but
+  # that a different caller could). Slurp (`-s`) so exactly one JSON value —
+  # a single object — is ever accepted; anything else (0, 2+, or a
+  # non-object root) is `empty`, which `-e` turns into an honest failure
+  # rather than a partial or duplicated reading.
+  printf '%s' "$response" | jq -ce -s '
+    if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
+    select(.five_hour.utilization|type == "number") |
+    select(.seven_day.utilization|type == "number") |
+    {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
+     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}' ||
+    { _claude_usage_call_failed; return 1; }
+)
