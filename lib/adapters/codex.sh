@@ -489,8 +489,7 @@ adapter_recent_sids() {
   local dir="$1" limit="${2:-5}" f sid mt
   # codex's this-dir set is content-matched (a rollout records $PWD in its body,
   # not its path — see _codex_rollouts_for_cwd), so the FILE LIST comes from there;
-  # sessions_by_mtime (shared kernel) then stats+sorts it. sid is read from each
-  # rollout's session_meta (not derivable from the path). Read the list into an
+  # sessions_by_mtime (shared kernel) then stats+sorts it. Read the list into an
   # array line-by-line, never via unquoted word-splitting: tank names are
   # validated (no spaces) but $CLIKAE_HOME rides on $HOME, which ISN'T — a space
   # anywhere in the home path used to shred every path into fragments and
@@ -503,9 +502,22 @@ $(_codex_rollouts_for_cwd "$dir")
 EOF
   [ "${#rfiles[@]}" -gt 0 ] || return 0
   # plain `read -r mt f` (NOT `IFS= read`) so "<mtime> <path>" splits into two.
+  # 🔴 #34 round-2 P3-1: this tail used to be `sid="$( _codex_meta_field "$f" id )"`
+  # — a fork AND a file read PER ROW, after the cut. That made the board's ask
+  # width a real cost here (measured: 10 -> 200 rows ≈ +85 ms on a 1,000-rollout
+  # tank), while home.sh's comment claimed "the widened ask is free" on the
+  # strength of agy, the one engine with no such tail. The sid is in the NAME:
+  # `rollout-<ts>-<uuid>.jsonl`, the same fact _codex_find_rollout has always
+  # used to go the other way (sid -> file), read here through the one function
+  # that owns the rule. A name that does not end in a uuid is not a shape codex
+  # writes, so it falls back to the body read rather than guessing.
   sessions_by_mtime "${rfiles[@]}" | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
-    sid="$(_codex_meta_field "$f" id)"
+    _codex_sid_from_path "$f"; sid="$_CODEX_SID"
+    case "$sid" in
+      ????????-????-????-????-????????????) : ;;
+      *) sid="$(_codex_meta_field "$f" id)" ;;
+    esac
     [ -n "$sid" ] || continue
     printf '%s\037%s\n' "$mt" "$sid"
   done
@@ -577,10 +589,23 @@ adapter_session_cwd() {
 # trailing 36") — same fact, now the one place every caller reads it from,
 # string-only (no file read) so this stays cheap in a per-session scan.
 adapter_sid_canonical() {
-  local f="$1" sid
-  sid="${f##*/}"; sid="${sid%.jsonl}"
-  if [ "${#sid}" -gt 36 ]; then sid="${sid:$(( ${#sid} - 36 ))}"; fi
-  printf '%s' "$sid"
+  _codex_sid_from_path "$1"
+  printf '%s' "$_CODEX_SID"
+}
+
+# _codex_sid_from_path <rollout-path> -> sets $_CODEX_SID. The same rule as
+# adapter_sid_canonical above, in its no-subshell form: adapter_recent_sids runs
+# it once per row and a `$( … )` there is a fork per row. `return 0` is not
+# decoration — the last command is a test, so without it this function would
+# hand its caller rc=1 whenever the name is exactly 36 characters, and THAT is
+# the shape `set -e` actually kills (a failing test as a function's last
+# command), not the `[ … ] && cmd` an earlier comment blamed.
+_codex_sid_from_path() {
+  _CODEX_SID="${1##*/}"; _CODEX_SID="${_CODEX_SID%.jsonl}"
+  if [ "${#_CODEX_SID}" -gt 36 ]; then
+    _CODEX_SID="${_CODEX_SID:$(( ${#_CODEX_SID} - 36 ))}"
+  fi
+  return 0
 }
 
 # Optional hook: EVERY transcript path under this profile dir — no cwd

@@ -89,13 +89,47 @@ stay green while the code is wrong. We close that gap two ways:
    [[ "$output" == *"some text"* ]]                # ❌ silently ignored mid-body
    ```
 
-**When you add a `[[ … ]]` assertion, append `|| false`.** Plain `[ … ]` checks
-don't need it. If a command in a test body may legitimately return non-zero and
-is *not* an assertion, guard it with `|| true`. Sanity check (should print
-nothing):
+3. **The same exemption applies to a bare `! cmd`** — a command prefixed with
+   `!` never triggers `set -e` on its own (round-1 review of PR #87/#84,
+   P3-1: this convention only documented `[[ … ]]` until then, and a bare
+   `! cmd` assertion sitting mid-body was a silent no-op — found once already
+   fixed elsewhere in the same PR, then found AGAIN one test over, unfixed).
+   Unlike `[[ … ]]`, though, this only matters **mid-body**: bats itself
+   fails a test on its last command's exit status regardless of `set -e`
+   (round-4 review: `@test { ! true; }` alone *does* fail — verified against
+   bats 1.10.0), so a bare `! cmd` as the test's own last statement needs no
+   `|| false`. Mid-body it still does:
+
+   ```bash
+   ! grep -q "some text" <<<"$output" || false    # ✅ fails the test if found, mid-body
+   ! grep -q "some text" <<<"$output"               # ❌ silently ignored — but only
+                                                     #    when NOT the last statement
+   ```
+
+**When you add a `[[ … ]]` assertion, append `|| false`** — always. **A bare
+`! cmd` needs it everywhere except as the test's own last statement.** Plain
+`[ … ]` checks don't need it. If a command in a test body may legitimately
+return non-zero and is *not* an assertion, guard it with `|| true`. Sanity
+check (should print nothing):
+
+A grep alone cannot do this, and one that tries is worse than none: the
+`! cmd` version of this check shipped in round-4 of PR #87's review printed
+19 lines on this very tree, 14 of them perfectly correct last statements —
+a documented check that is red the day it lands and that nobody can make
+green. (Round-5 review, P3-5. The 5 lines it was right about, plus 4 bare
+`[[ … ]]` of the same shape — one of which the old `[[:space:]]*$` anchor
+could never have seen, because it carried a trailing comment — are fixed.) One `awk` pass, which can look at
+the next line, covers both shapes and really does print nothing:
 
 ```bash
-grep -rnE '^[[:space:]]*\[\[ .* \]\][[:space:]]*$' tests/bats
+# A bare `[[ … ]]` or `! cmd` assertion with no `||` and no line
+# continuation, EXCEPT as a test's own last statement (the line right
+# before the closing `}`) — bats fails a test on its last command's status
+# on its own, so there it is already load-bearing.
+find tests/bats -name '*.bats' -print0 | xargs -0 awk '
+  pend != "" { if ($0 !~ /^[[:space:]]*}/) print pf":"pl": "pend; pend="" }
+  /^[[:space:]]*(! |\[\[ )/ && !/\|/ && !/&&/ && !/\\$/ { pend=$0; pf=FILENAME; pl=FNR }
+  END { if (pend != "") print pf":"pl": "pend }'
 ```
 
 ## Proving a guard is load-bearing (`scripts/mutate.sh`)

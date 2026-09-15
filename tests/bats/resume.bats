@@ -102,7 +102,7 @@ _seed_transcript() {
   clikae init claude a
   run clikae resume "deadbeef-0000-0000-0000-000000000000"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No session"* ]]
+  [[ "$output" == *"No session"* ]] || false
   [ ! -f "$CLAUDE_STUB_LOG" ]
 }
 
@@ -158,14 +158,14 @@ _seed_transcript() {
 @test "resume ask-tank defaults to always, with no setting file" {
   run clikae resume ask-tank
   [ "$status" -eq 0 ]
-  [[ "$output" == *"always"* ]]
+  [[ "$output" == *"always"* ]] || false
   [ ! -f "$CLIKAE_HOME/resume-ask-tank" ]
 }
 
 @test "resume ask-tank <value> persists and reports back" {
   run clikae resume ask-tank dry-only
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dry-only"* ]]
+  [[ "$output" == *"dry-only"* ]] || false
   [ "$(cat "$CLIKAE_HOME/resume-ask-tank")" = "dry-only" ]
   run clikae resume ask-tank
   [[ "$output" == *"dry-only"* ]]
@@ -316,4 +316,45 @@ STUB
   [ "$status" -eq 0 ]
   [ -s "$CLAUDE_STUB_LOG" ]
   ! grep -q '^CLIKAE_RESUME_ALL=' "$CLAUDE_STUB_LOG"
+}
+
+# --- #34 GAP 2: `clikae resume <agy-sid>` must actually hand agy
+# `--conversation <sid>`, not silently launch a bare/new session. -------------
+# adapter_resume_args used `printf '--conversation\n%s\n' "$sid"` — bash's
+# printf builtin parses a leading `--conversation` as an unknown OPTION
+# (rc=2, no stdout), so rargs ended up EMPTY and resume exec'd agy with no
+# --conversation at all. No bats anywhere covered this path (only
+# grok.bats/codex.bats checked their own adapter_resume_args). A fake `agy` on
+# PATH records its real argv so this is a genuine end-to-end check, not just a
+# direct call to the adapter function.
+@test "resume hands agy '--conversation <sid>' end to end, not a bare relaunch (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+
+  local sid="aaaaaaaa-0000-4000-8000-000000000001"
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain/$sid/.system_generated/logs"
+  printf '{"content":"CWD-MATCH session content"}\n' \
+    > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$work" \
+    > "$base/brain/history.jsonl"
+  cd "$work" || return 1
+
+  # A fake `agy` that records its real argv — $TEST_HOME/.testbin is already
+  # first on PATH (helpers.bash), same place pgrep/security are stubbed.
+  local argv_log="$TEST_HOME/agy_argv.log"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf '"'"'%%s\\n'"'"' "$@" > %s\n' "$(printf '%q' "$argv_log")"
+    printf 'exit 0\n'
+  } > "$TEST_HOME/.testbin/agy"
+  chmod +x "$TEST_HOME/.testbin/agy"
+
+  run clikae resume "$sid"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$argv_log" ] || { echo "agy stub was never invoked — resume: $output"; false; }
+  grep -qF -- "--conversation" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+  grep -qF "$sid" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
 }
