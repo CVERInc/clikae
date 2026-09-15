@@ -192,6 +192,14 @@ project". Sessions a `clikae burn` lane started stay hidden (`clikae resume
 --all`, or `CLIKAE_RESUME_ALL=1`, shows them), and they are filtered out
 *before* the board cuts the list to `CLIKAE_HOME_RECENT_MAX`, so a tank full of
 fresh lane one-shots pushes real sessions down the list rather than off it.
+That promise has exactly one bound, and the board states it rather than hiding
+it: each tank is asked for `CLIKAE_HOME_RECENT_MAX` plus *its own* recorded
+burn sessions, capped at `CLIKAE_HOME_RECENT_SCAN_MAX` — which defaults to the
+burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), so only a sidecar
+larger than `clikae clean`'s GC allows can reach it. If it is ever reached and
+the list still comes up short, the Resume block says so ("N sessions hidden as
+burn runs · list truncated") and points you at `clikae resume --all`; it never
+draws a short list that reads as a complete one.
 
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. codex and grok

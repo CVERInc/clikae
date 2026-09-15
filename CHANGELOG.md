@@ -66,11 +66,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLIKAE_HOME_RECENT_MAX` rows and cut to that *before* the filter ran — so
   ten-or-more burn one-shots newer than your real sessions left the filter
   nothing to show and the whole block disappeared. Every engine is now asked
-  for enough rows to survive the filter (bounded by the new
-  `CLIKAE_HOME_RECENT_SCAN_MAX`, default 200), so hidden rows give up their
-  slots to real sessions instead of taking the list down with them. Affects
-  claude, codex and agy alike; most visible on agy, whose rows became
-  tank-scoped in the same release (#34).
+  for `CLIKAE_HOME_RECENT_MAX` + *that tank's own* recorded burn sessions, so
+  hidden rows give up their slots to real sessions instead of taking the list
+  down with them. The guarantee has one bound, and the board states it rather
+  than hiding it: the ask is capped at `CLIKAE_HOME_RECENT_SCAN_MAX`, which
+  defaults to the burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), and
+  if a tank cannot fill the list within that cap the Resume block says "N
+  sessions hidden as burn runs · list truncated" and points at `clikae resume
+  --all`. Affects claude, codex and agy alike; most visible on agy, whose rows
+  became tank-scoped in the same release (#34).
+- `clikae`'s codex and grok board rows read a session's id from the
+  rollout/session **filename** instead of re-opening the file once per row —
+  the same fact `clikae resume <id>` already used to go the other way. Only a
+  name that does not carry a uuid falls back to the old read. Nothing visible
+  changes; it is what makes the wider Resume ask above cost nothing (measured
+  on a 1,000-session tank, ask 10 → 200: codex was +225…+373 ms and grok
+  +917…+1056 ms before, both inside run-to-run noise after) (#34).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or
