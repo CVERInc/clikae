@@ -638,8 +638,11 @@ _tank_adoption_ensure() {
   # rely on `$HOME/.clikae` not existing afterward). A store with no
   # profiles/ dir yet has nothing to adopt; bail out before ANY write (not
   # just before the walk below) so a genuinely fresh or nonexistent store is
-  # left untouched. A later command that actually creates profiles/ (init,
-  # a real burn, …) runs the sweep then, same as always.
+  # left untouched. #61 round-5 P3-5: "a later command runs the sweep then"
+  # used to be all that closed the window, and it left one open across the
+  # whole of a brand-new store's FIRST command — ensure_profile calls this
+  # again the moment it creates a tank, so the store that just gained its
+  # first content is adopted and flagged inside that same command.
   [ -d "$root" ] || return 0
   _CLIKAE_INMEM_ADOPTED=$'\n'
   for cli_dir in "$root"/*/; do
@@ -1101,6 +1104,16 @@ ensure_profile() {
       # needed — the marker only names the ENGINE, which a rename never
       # changes); `remove` deletes the directory, marker included.
       tank_marker_write "$cli" "$d"
+      # #61 round-5 P3-5: and CLOSE the one-time adoption window, which the
+      # hoist in bin/clikae cannot close on a brand-new store — it runs
+      # before any command has created profiles/, and bails without writing
+      # the flag because there is nothing there to adopt. The tank we just
+      # made IS that first content, so the sweep belongs here, right after
+      # it: otherwise the window stayed open until the SECOND clikae command,
+      # and a directory that appeared in between (round-1 P1-3's `mkdir
+      # zzempty`) was swept up as a real tank. A no-op single `[ -f ]` once
+      # the flag exists, which is every case but the very first tank.
+      _tank_adoption_ensure
       ;;
     --require)
       [ -d "$d" ] || log_fail "Profile not found: $cli/$profile  (expected at $d)"

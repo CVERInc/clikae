@@ -258,10 +258,12 @@ EOF
     # not an env adapter), so it stamps its own marker at every point it
     # creates/adopts a tank dir. This one clikae itself just moved into place.
     tank_marker_write antigravity "$slots/$adopt"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/$adopt" "$link"
   else
     mkdir -p "$slots/default"
     tank_marker_write antigravity "$slots/default"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/default" "$link"
     log_done "Created an empty 'default' tank."
   fi
@@ -275,6 +277,7 @@ _agy_create_tank() {
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
   tank_marker_write antigravity "$slot"   # #61 round-1 P1-3 — see _agy_takeover's twin
+  _tank_adoption_ensure                    # #61 round-5 P3-5 — see ensure_profile's twin
   log_done "Created agy tank: $name"
   # The tank comes with the harness on. It does not change how agy talks — it
   # stops a reply from ending with "verified" in a session that ran nothing.

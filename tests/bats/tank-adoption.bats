@@ -291,6 +291,27 @@ _unadopt() {
   [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
 }
 
+# --- #61 round-5 P3-5: a brand-new store's FIRST command closes the adoption
+# window by itself. bin/clikae's hoist runs before profiles/ exists and bails
+# without writing the flag (correctly: three burn.bats tests require a refusal
+# to create no state at all), so `clikae init` used to leave the window open
+# until the SECOND clikae command — and anything that appeared in between was
+# swept up as a real tank, which is round-1 P1-3's `mkdir zzempty` verbatim.
+@test "#61 round-5 P3-5: the first init on a brand-new store writes the flag; a directory appearing after it is not a tank" {
+  rm -rf "$CLIKAE_HOME"          # no store at all, not even the helpers' stamps
+  run clikae init claude a --no-template
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/state/tanks-adopted-v1" ] || \
+    { echo "first init left the adoption window open"; ls -la "$CLIKAE_HOME/state" 2>&1; false; }
+
+  mkdir -p "$CLIKAE_HOME/profiles/claude/zz"     # an outside process, in the old window
+  run clikae tanks
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"a"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"zz"* ]] || { echo "post-init directory adopted: $output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/claude/zz/.clikae-tank" ]
+}
+
 # --- #61 round-5 P3-1: the read-only-store warning leaves NOTHING behind on
 # any path, and one user action prints exactly one line. Rounds 3-4 deduped
 # through a sentinel FILE in $TMPDIR removed by an EXIT trap; bash runs no
