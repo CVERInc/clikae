@@ -770,6 +770,118 @@ STUB
   echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
 }
 
+@test "P3-3 (round-6 review): --max-filesize is on the wire, with the cap's own value, and a curl that honours it yields unknown" {
+  # The round-6 review's mutation: DELETE the `--max-filesize` line and the
+  # round-5 P3-2 test stays green, because its stub curl never looks at argv
+  # — it only ever exercised `head -c`. On this host (curl 8.5) and on a
+  # modern macOS, --max-filesize is the line that actually does the blocking,
+  # including for chunked bodies. So assert it directly: it must reach curl's
+  # argv, carrying the same 65536 the fallback uses, and a curl that HONOURS
+  # it must turn the reading into unknown rather than a truncated "success".
+  usage_fixture
+  export USAGE_ARGS="$TEST_HOME/curl.args"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+printf '%s\n' "$@" > "$USAGE_ARGS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+# Honour --max-filesize the way curl >= 8.4 does: refuse the transfer (rc 63)
+# the moment the body is known to exceed it, writing nothing at all.
+max=""; prev=""
+for a in "$@"; do [ "$prev" = --max-filesize ] && max="$a"; prev="$a"; done
+body="$(printf '{"five_hour":{"utilization":7,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":8,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'; head -c 4096 /dev/zero | tr '\0' ' ')"
+if [ -n "$max" ] && [ "${#body}" -gt "$max" ]; then exit 63; fi
+printf '%s' "$body"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+
+  # 1. A body UNDER the cap is a normal reading — proves the stub and the cap
+  #    are not simply refusing everything.
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == 7'
+
+  # 2. The flag reached curl, with the cap's own value (65536) as its
+  #    argument — this is the assertion the deleted-line mutant fails.
+  grep -qx -- '--max-filesize' "$USAGE_ARGS" \
+    || { echo "curl argv had no --max-filesize:"; cat "$USAGE_ARGS"; false; }
+  grep -A1 -x -- '--max-filesize' "$USAGE_ARGS" | sed -n '2p' | grep -qx 65536 \
+    || { echo "--max-filesize did not carry 65536:"; cat "$USAGE_ARGS"; false; }
+
+  # 3. With the flag honoured and the body over the cap, the reading is
+  #    unknown — not a truncated body that happens to parse.
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+printf '%s\n' "$@" > "$USAGE_ARGS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+max=""; prev=""
+for a in "$@"; do [ "$prev" = --max-filesize ] && max="$a"; prev="$a"; done
+body="$(printf '{"five_hour":{"utilization":7,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":8,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'; head -c 70000 /dev/zero | tr '\0' ' ')"
+if [ -n "$max" ] && [ "${#body}" -gt "$max" ]; then exit 63; fi
+printf '%s' "$body"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
+}
+
+@test "P3-3 (round-6 review): a curl that does NOT honour --max-filesize is refused deterministically, not truncated" {
+  # The fallback's old shape read exactly the cap and truncated, so a body of
+  # "valid reading + trailing whitespace, total over the cap" came back as a
+  # perfectly good reading whenever curl finished before `head` closed the
+  # pipe, and as a failure whenever head won (the review measured 6/20 and
+  # 17/20 accepted for two paddings — the same response decided by pipe
+  # scheduling). This stub reproduces the losing side deterministically: it
+  # ignores --max-filesize (a curl older than 8.4 with no Content-Length) AND
+  # ignores SIGPIPE, so it always "succeeds" and always hands the whole body
+  # over. Pre-fix that is a silent truncation into a valid reading; the fix
+  # reads one byte past the cap and refuses when it arrives.
+  usage_fixture
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+trap '' PIPE
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+{ printf '{"five_hour":{"utilization":7,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":8,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+  head -c 70000 /dev/zero | tr '\0' ' '; } 2>/dev/null
+exit 0
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  # Five runs, all unknown: the point of the fix is that the verdict no
+  # longer depends on who wins the pipe race.
+  local i
+  for i in 1 2 3 4 5; do
+    run clikae usage claude work --fresh --json
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.source == "unknown" and .window_pct == null' \
+      || { echo "run $i accepted an over-long body: $output"; false; }
+  done
+
+  # And the boundary still holds the other way round: a body of EXACTLY the
+  # cap (65536 bytes) is a legal reading and must not be refused.
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+trap '' PIPE
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+[[ "$config" == *'Authorization: Bearer stub-secret-usage72'* ]] || exit 2
+head="{\"five_hour\":{\"utilization\":7,\"resets_at\":\"2099-01-01T00:00:00.000000+00:00\"},\"seven_day\":{\"utilization\":8,\"resets_at\":\"2099-01-07T00:00:00.000000+00:00\"}}"
+pad=$(( 65536 - ${#head} ))
+{ printf '%s' "$head"; head -c "$pad" /dev/zero | tr '\0' ' '; } 2>/dev/null
+exit 0
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == 7' \
+    || { echo "a body of exactly 65536 bytes was refused: $output"; false; }
+}
+
 @test "P3-4 (round-5 review): a stale-but-evidenced candidate is verified before confident fresh ones" {
   # Reproduces the review's exact board shape: alpha's on-disk 5% is 30
   # minutes old (past the 15-minute ceiling — usage_cache_peek reads it as

@@ -857,20 +857,42 @@ adapter_usage() (
   # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
   # final cache shape protects against a faulty or hostile upstream sending
   # a huge body (measured: a 16MiB synthetic body was fully accepted and
-  # normalized). `--max-filesize` aborts a response whose Content-Length
-  # announces itself too large; `head -c` bounds it too even when the length
-  # isn't announced up front (chunked/streamed) — capture curl's OWN exit
-  # status via PIPESTATUS since `head` closing early would otherwise hide a
-  # real curl failure behind head's always-zero status.
+  # normalized). `--max-filesize` is the line that actually does the work on
+  # a modern curl: since 8.4 it applies DURING the transfer, so it aborts a
+  # chunked/streamed body too, not only one whose Content-Length announces
+  # itself too large (measured on curl 8.5: 65536 accepted, 65537 refused
+  # with rc=63, identically across Content-Length / chunked / close-delimited
+  # — round-6 review). The `head -c` below is the fallback for a curl old
+  # enough to apply the flag only to an announced length.
+  #
+  # P3-3 (round-6 review): that fallback used to be nondeterministic. It read
+  # exactly the cap and TRUNCATED, so an over-long body whose overflow was
+  # trailing whitespace came back as a perfectly valid reading whenever curl
+  # happened to finish before `head` closed the pipe, and as a failure
+  # whenever head won the race (measured 6/20 accepted for one padding, 17/20
+  # for another) — the same response accepted or refused by pipe scheduling.
+  # Read exactly ONE byte more than the cap instead, and refuse outright if
+  # that byte arrives: over-long is over-long whoever wins the race. (If head
+  # closing the pipe kills curl first, PIPESTATUS[1] is non-zero and we
+  # refuse on that instead — both roads lead to the same verdict now.) The
+  # trailing `X` is a sentinel: `$( )` strips trailing newlines, and without
+  # it a body that overflows by exactly a newline would measure as fitting.
+  #
+  # PIPESTATUS[1] carries curl's OWN exit status, since `head` closing early
+  # would otherwise hide a real curl failure behind head's always-zero status.
   local _claude_usage_max_bytes=65536
   response="$(
     printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
       curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
         --max-filesize "$_claude_usage_max_bytes" \
         https://api.anthropic.com/api/oauth/usage 2>/dev/null |
-      head -c "$_claude_usage_max_bytes"
-    exit "${PIPESTATUS[1]}"
+      head -c "$(( _claude_usage_max_bytes + 1 ))"
+    _claude_usage_curl_rc="${PIPESTATUS[1]}"
+    printf 'X'
+    exit "$_claude_usage_curl_rc"
   )" || return 1
+  response="${response%X}"
+  [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -le "$_claude_usage_max_bytes" ] || return 1
   token=""
   # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
   # documents used to become multiple cached readings — burn's shell `read`
