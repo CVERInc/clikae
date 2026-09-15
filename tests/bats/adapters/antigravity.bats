@@ -414,3 +414,59 @@ assert_agy_title() {
   local n; n="$(printf '%s\n' "$output" | grep -c .)"
   [ "$n" -eq 2 ]
 }
+
+# --- #34 round-1 P2-2: the two P1-4 anchoring tests above were narrowed to
+# limit=1 (tank-scoping made their limit=5 exclusion assertion untrue), and
+# nothing replaced them at limit>1. Every other cache test at limit>1 checks
+# only PRESENCE or a line count — so "a stale cache pointer never beats disk
+# truth" had no test there at all, and the review's M2 mutant (make the cached
+# sid sort first and take a slot, whatever its mtime) survived the whole suite
+# green. At limit>1 a mis-anchored or stale cache read cannot change the
+# output SET any more (the disk scan sweeps the tank and dedups), so ORDER and
+# WHO GETS SQUEEZED OUT are the only faces left where it can go wrong — this
+# is the test for that face. ------------------------------------------------
+
+@test "antigravity recent_sids at limit=5: a stale cache pointer does not beat disk mtime order (#34 P2-2)" {
+  _setup_agy
+  local i sid
+  for i in 1 2 3 4 5; do
+    sid="ag-rank-0$i"
+    seed_agy_session "$sid" "$WORK" "rank $i"
+    touch -t "20200101000$i" "$BRAIN/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  # The normal stale case: the CLI wrote this pointer for $WORK, and four
+  # newer sessions have happened on the tank since.
+  printf '{"%s":"%s"}\n' "$WORK" "ag-rank-01" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  # Exact mtime order, newest first — and the cache's own sid in its TRUE
+  # position (last, because it is the oldest), not promoted to the front.
+  local got
+  got="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  [ "$got" = "ag-rank-05 ag-rank-04 ag-rank-03 ag-rank-02 ag-rank-01 " ] \
+    || { echo "order was: [$got]"; false; }
+}
+
+@test "antigravity recent_sids at limit=4: the stale cache pointer is the row that gets squeezed out (#34 P2-2)" {
+  _setup_agy
+  local i sid
+  for i in 1 2 3 4 5; do
+    sid="ag-cut-0$i"
+    seed_agy_session "$sid" "$WORK" "cut $i"
+    touch -t "20200101000$i" "$BRAIN/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-cut-01" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 4
+  [ "$status" -eq 0 ]
+  local got
+  got="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  # The oldest session loses its slot even though the cache points at it; the
+  # newest four are the answer. A cache pointer that took a slot by right
+  # would evict ag-cut-02 instead.
+  [ "$got" = "ag-cut-05 ag-cut-04 ag-cut-03 ag-cut-02 " ] \
+    || { echo "order was: [$got]"; false; }
+}
