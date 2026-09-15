@@ -318,6 +318,105 @@ _agy_log() { # <line>
   [[ "$output" != *"Continue"* ]] || false
 }
 
+# --- #34: agy's Resume rows are TANK-scoped, not directory-scoped ------------
+# On every real agy install, history.jsonl's "workspace" field is a constant
+# ($HOME), not the directory a session actually ran in — measured on #34/#83:
+# 607/607 indexed conversations, one distinct workspace value. Filtering these
+# rows by "$PWD == recorded workspace" could therefore never match outside
+# $HOME, and this list was permanently empty in any real project directory.
+# Fixture mirrors the verify report: one session recorded IN this dir, one
+# recorded at $HOME (the realistic case), one with no history.jsonl entry at
+# all (adapter_session_cwd's fallback, also $HOME) — from a non-$HOME cwd, all
+# three must show up, newest first.
+@test "agy board Resume rows show sessions regardless of recorded workspace, newest first (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+
+  local sid_match="aaaaaaaa-0000-4000-8000-000000000001"    # workspace == this dir
+  local sid_homews="bbbbbbbb-0000-4000-8000-000000000002"   # workspace == $HOME (realistic)
+  local sid_nohist="cccccccc-0000-4000-8000-000000000003"   # no history.jsonl entry at all
+
+  mkdir -p "$base/brain/$sid_match/.system_generated/logs"
+  printf '{"content":"CWD-MATCH session content"}\n' > "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_homews/.system_generated/logs"
+  printf '{"content":"HOME-WORKSPACE session content"}\n' > "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_nohist/.system_generated/logs"
+  printf '{"content":"NO-HISTORY session content"}\n' > "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+
+  {
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_match" "$work"
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_homews" "$HOME"
+  } > "$base/brain/history.jsonl"
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"CWD-MATCH session content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HOME-WORKSPACE session content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NO-HISTORY session content"* ]] || { echo "$output"; false; }
+  # newest mtime first: NO-HISTORY, then HOME-WORKSPACE, then CWD-MATCH.
+  [[ "$output" == *"NO-HISTORY session content"*"HOME-WORKSPACE session content"*"CWD-MATCH session content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "agy board Resume rows are capped at CLIKAE_HOME_RECENT_MAX, not flooded (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+
+  local sid1="dddddddd-0000-4000-8000-000000000001"
+  local sid2="dddddddd-0000-4000-8000-000000000002"
+  local sid3="dddddddd-0000-4000-8000-000000000003"
+  mkdir -p "$base/brain/$sid1/.system_generated/logs" "$base/brain/$sid2/.system_generated/logs" "$base/brain/$sid3/.system_generated/logs"
+  printf '{"content":"SESSION-ONE content"}\n' > "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-TWO content"}\n' > "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-THREE content"}\n' > "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=2 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-THREE content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-TWO content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SESSION-ONE content"* ]] || { echo "cap not applied: $output"; false; }
+}
+
+# --- #34 round-1 P3-2: docs said "the active tank", the board shows EVERY tank
+# Not a behaviour change — _home_recent_rows has always walked every tank of
+# every engine — but docs/EXPECTATIONS.md and the CHANGELOG both said "the
+# active tank", so this pins the sentence they now say instead.
+@test "agy Resume rows come from EVERY agy tank, not only the active one (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t1 >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t2 >/dev/null 2>&1
+  local t
+  for t in t1 t2; do
+    local base="$CLIKAE_HOME/profiles/antigravity/$t/antigravity-cli"
+    local sid="eeeeeeee-0000-4000-8000-00000000000$t"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"SESSION-OF-%s content"}\n' "$t" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  # active tank = whatever ~/.gemini points at (default, which has no session)
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t2 content"* ]] || { echo "$output"; false; }
+}
+
 @test "the continue list shows multiple recent sessions, newest first" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"
@@ -361,6 +460,128 @@ _agy_log() { # <line>
   CLIKAE_RESUME_ALL=1 run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Lane one-shot"* ]] || false
+}
+
+
+# --- #93 fix round 1, P2-1: the burn filter runs BEFORE the adapter's cut ------
+# home.sh's own comment promised "Filtered BEFORE the rank+cut below, or a
+# hidden row would just leave a gap instead of letting a real session take its
+# slot" — but each adapter was asked for exactly CLIKAE_HOME_RECENT_MAX rows and
+# cut to that BEFORE the filter ever saw them. So N burn sessions newer than the
+# human ones handed the filter N rows it had to drop, leaving zero: the Resume
+# block vanished entirely. #34's tank-scoping makes that reachable from any
+# directory on an agy tank (clikae's own doctrine burns agy hard), so the fix is
+# at the root — every engine, one place.
+_seed_burn_flood_agy() {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"HUMAN-%s content"}\n' "$i" > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"BURN-%s content"}\n' "$n" > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  done
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (agy tank, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  # newest human first
+  [[ "$output" == *"HUMAN-3 content"*"HUMAN-2 content"*"HUMAN-1 content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "CLIKAE_RESUME_ALL=1 still shows the burn sessions that flooded the tank (agy, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_RESUME_ALL=1 CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"BURN-12 content"* ]] || { echo "$output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (claude tank, #93 P2-1)" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i n sid
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t "20200101000$i" "$d/$sid.jsonl"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2021010100$n" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (codex tank, #93 P2-1)" {
+  clikae init codex a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="019e0000-0000-7000-8000-00000000000$i"
+    f="$sdir/rollout-2026-06-03T09-00-0$i-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%s session"}}\n' "$i"
+    } > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="019e0000-0000-7000-8000-0000000002$n"
+    f="$sdir/rollout-2026-06-03T10-00-$n-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"BURN-%s session"}}\n' "$n"
+    } > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
 }
 
 @test "a session's recap is shown under its continue row, hint stripped" {
@@ -1132,4 +1353,174 @@ EOF
   # Past the end is empty, not the last row — otherwise an out-of-range selection
   # would silently offer the previous row's keys.
   [ -z "$(_home_row_kind_at "$items" 99)" ] || false
+}
+
+# --- #93 fix round 2, P2-1: the ask is widened PER TANK, and the ceiling is the
+# burn sidecar's own cap ------------------------------------------------------
+# Round 1 widened the ask by the WHOLE store's burn count and then clamped it at
+# CLIKAE_HOME_RECENT_SCAN_MAX=200 — so ~190 burn sids ANYWHERE in the store put
+# the clamp back in charge and the bug came back: 195 burns + 50 humans gave 5
+# rows instead of 10, and 250 burns + 3 humans gave no Resume block at all, with
+# nothing on the board saying so. The sidecar's own cap is 2000, so 190 is a
+# routine number for burn-heavy agy use. These pin those exact numbers, on all
+# three board engines, plus the two things that make the bound honest: the ask
+# is per tank (another tank's burns are not this tank's problem) and the board
+# SAYS "truncated" when the ceiling really does bite.
+
+_recent_human_rows() {   # count HUMAN-#### rows in $output
+  printf '%s\n' "$output" | grep -c 'HUMAN-' || true
+}
+
+_seed_bulk_agy() {   # <tank> <humans> <burns>
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy "$1" >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/$1/antigravity-cli"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local i sid f
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '11111111-0000-4000-8000-%012d' "$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"HUMAN-%04d content"}\n' "$i" > "$f"
+    touch -t 202001010000 "$f"      # humans OLD; burns keep "now" => burns win
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '22222222-0000-4000-8000-%012d' "$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"BURN-%04d content"}\n' "$i" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "22222222-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+}
+
+_seed_bulk_claude() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
+  clikae init claude "$1" >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/$1/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i sid
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '33333333-0000-4000-8000-%012d' "$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%04d session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t 202001010000 "$d/$sid.jsonl"
+  done
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '44444444-0000-4000-8000-%012d' "$i"
+    printf '{"type":"ai-title","aiTitle":"BURN-%04d session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "44444444-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/$1"
+}
+
+_seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
+  clikae init codex "$1" >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/$1/sessions/2026/06/03"; mkdir -p "$sdir"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  local i sid f
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '019e0000-0000-7000-8000-%012d' "$i"
+    f="$sdir/rollout-2026-06-03T09-00-00-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%04d session"}}\n' "$i"
+    } > "$f"
+    touch -t 202001010000 "$f"
+  done
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '019e9999-0000-7000-8000-%012d' "$i"
+    f="$sdir/rollout-2026-06-03T10-00-00-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"BURN-%04d session"}}\n' "$i"
+    } > "$f"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "019e9999-0000-7000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/codex/$1"
+}
+
+@test "195 burns + 50 humans still fill the Continue list — agy (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 50 195
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Round 1 gave 5 here (clamped at 200 while asking 10+195=205).
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  # An agy tank's sidecar lives under the "agy" alias, not "antigravity" — if
+  # this lookup misses, the ask is never widened and this test reads 5.
+  [ -f "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+}
+
+@test "195 burns + 50 humans still fill the Continue list — claude (#93 round-2 P2-1)" {
+  _seed_bulk_claude a 50 195
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "195 burns + 50 humans still fill the Continue list — codex (#93 round-2 P2-1)" {
+  _seed_bulk_codex a 50 195
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "250 burns + 3 humans still show all 3 — the Resume block does not vanish (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 3 250
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Round 1 gave 0 rows AND no message at all.
+  [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "one tank's burns no longer clamp another tank's ask (#93 round-2 P2-1)" {
+  _seed_bulk_agy burny 0 195      # 195 burns, no humans
+  _seed_bulk_agy humany 50 0      # 50 humans, no burns
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+}
+
+@test "when the ceiling really does bite, the board SAYS the list is truncated (#93 round-2 P2-1)" {
+  # The ceiling is normally out of reach, so force it: ask 10, hide 50, ceiling
+  # 20 => the adapter is cut at 20, all 20 are burns, nothing survives. Round 1
+  # drew a silent empty board in exactly this shape.
+  _seed_bulk_agy default 50 50
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"list truncated"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae resume --all"* ]] || { echo "$output"; false; }
+}
+
+@test "a sidecar past CLIKAE_BURN_SIDECAR_CAP truncates, and says so, at the DEFAULT ceiling (#93 round-2 P2-1)" {
+  # 2,100 burns — more than the sidecar's own cap (2000), which is what the
+  # default ceiling is set to. This is the only shape left that can truncate
+  # without anyone overriding an env var.
+  _seed_bulk_claude a 3 2100
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"list truncated"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2100"* ]] || { echo "$output"; false; }
+}
+
+@test "no truncation note on an ordinary board (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 3 12
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"list truncated"* ]] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
 }

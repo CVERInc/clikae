@@ -146,6 +146,30 @@ _home_alias_for() {
 #   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
 # How many recent sessions the "continue" list surfaces.
 CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
+# Ceiling on what ONE adapter may be asked for when burn sessions still have to
+# be filtered out of its answer (#34 round-1 P2-1 — see _home_recent_rows).
+#
+# 🔴 #34 round-2 P2-1: this used to default to 200 while the ask was widened by
+# the WHOLE store's burn count, so 190 burn sids anywhere — any engine, any tank
+# — clamped every tank's ask and reinstated the very bug this fix exists for
+# (measured: 195 burns + 50 humans ⇒ 5 rows instead of 10; 250 burns + 3 humans
+# ⇒ no Resume block at all, silently). The sidecar's own cap is 2000, so 190 is
+# a routine number for burn-heavy agy use, not a corner. Two changes: the ask is
+# now widened per TANK (only that tank's sidecar file), and this ceiling is the
+# sidecar's own cap — so at the defaults it is unreachable by anything the GC
+# lets exist, and what is left of it is a guard against a corrupt/hand-written
+# sidecar rather than a routine clamp. When it DOES bite, the board says so
+# (T_RESUME_TRUNCATED) instead of silently showing a short list.
+#
+# What a wider ask costs, per engine (#34 round-2 P3-1 — the honest version):
+# every adapter scans+stats its whole tank BEFORE it `head -n <limit>`, so the
+# scan is limit-independent on all of them. The per-row tail AFTER the cut is
+# string-only too: agy/claude take the sid from the path, and codex/grok now
+# derive it from the rollout/session filename (fork-free, with a body read only
+# when the name does not carry a uuid — see their adapter_recent_sids). Before
+# that change codex/grok paid a fork + a file read per row and a 10→200 ask
+# cost ~+85 ms on a 1,000-rollout tank; measured again after it, see the PR.
+CLIKAE_HOME_RECENT_SCAN_MAX="${CLIKAE_HOME_RECENT_SCAN_MAX:-${CLIKAE_BURN_SIDECAR_CAP:-2000}}"
 
 # _burn_sids_file -> writes every currently-recorded burn sid (deduped, one
 # per line — the first tab field of each well-formed
@@ -186,8 +210,106 @@ _burn_sids_file() {
   return 1
 }
 
+# _burn_tank_hidden <engine> <tank> -> how many sessions the sidecar can hide on
+# THIS ONE TANK: the deduped, well-formed sid count of
+# state/burn-sessions/<engine>/<tank>. Always prints a number (0 when the tank
+# has no sidecar file at all).
+#
+# #34 round-2 P2-1: the ask used to be widened by the WHOLE store's burn count.
+# That never UNDER-asked (a tank's droppable rows are a subset of the store's),
+# but it pushed every tank's ask into CLIKAE_HOME_RECENT_SCAN_MAX's clamp as
+# soon as any other engine's tank had a few hundred burns — and the clamp is
+# what silently shortened the list. A row this tank's adapter returns can only
+# be dropped by a sid recorded for THIS tank, so this is the exact count, not a
+# smaller-but-still-safe one.
+_burn_tank_hidden() {
+  # 🔴 The sidecar's engine directory is NOT always the adapter/profile dir
+  # name: burn.sh has always written agy's under the literal "agy" while the
+  # adapter (and profiles_root) call it "antigravity" (burn.sh:731, and see
+  # rename_tank_state in lib/core/profile_store.sh, which carries the same
+  # translation and the same warning). Reading the wrong path here would count 0
+  # burns for every agy tank — which is exactly the pre-fix ask, i.e. the bug
+  # back again, silently. Tested: "an agy tank's ask is widened (its sidecar
+  # lives under the 'agy' alias)".
+  local eng="$1"
+  [ "$eng" = "antigravity" ] && eng="agy"
+  local f="$CLIKAE_HOME/state/burn-sessions/$eng/$2" n=0
+  if [ -f "$f" ]; then
+    n="$(LC_ALL=C awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{print $1}' "$f" 2>/dev/null \
+          | LC_ALL=C sort -u | LC_ALL=C awk 'END{print NR+0}' 2>/dev/null || printf '0')"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  fi
+  printf '%s' "$n"
+}
+
+# _home_trunc_flag -> path of the marker _home_recent_rows drops when a tank hit
+# CLIKAE_HOME_RECENT_SCAN_MAX and STILL could not hand back
+# CLIKAE_HOME_RECENT_MAX non-burn rows. It holds the hidden count to name in the
+# message; the renderers print T_RESUME_TRUNCATED under the Continue list when
+# it exists.
+#
+# A FILE, not a variable, on purpose: _home_recent_rows runs inside _home_items,
+# which the renderers consume through $( … ) (and which itself forks the recent
+# scan into the background), so nothing it assigns can reach the renderer. `$$`
+# is the MAIN shell's pid in bash even inside a subshell or a background job, so
+# both ends compute the same path without having to pass one. _home_recent_rows
+# clears it at the start of every scan, so a stale file from a recycled pid can
+# never speak for a render that did not truncate.
+_home_trunc_flag() {
+  printf '%s/state/home-recent-truncated.%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$$"
+}
+
+# _home_trunc_note <printed_resume> -> the one visible line the round-2 review
+# asked for: when the Continue list could not be filled within the ceiling, SAY
+# it. Prints the section header itself when no Resume row was drawn at all —
+# that (a tank whose burn sidecar outgrew the ceiling and buried every human
+# session) is precisely the case a silent board got wrong.
+_home_trunc_note() {
+  local _tf _th
+  _tf="$(_home_trunc_flag)"
+  [ -f "$_tf" ] || return 0
+  _th="$(cat "$_tf" 2>/dev/null || true)"
+  case "$_th" in ''|*[!0-9]*) _th=0 ;; esac
+  if [ "${1:-0}" -ne 1 ]; then
+    printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
+  fi
+  # shellcheck disable=SC2059  # the format IS the localized string
+  _home_wrap_prefixed "$(printf "$T_RESUME_TRUNCATED" "$_th")" \
+    "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  return 0
+}
+
 _home_recent_rows() {
   local name proot tdir tank rows sid mt acc="" _proots
+  local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
+  local _clamped=0 _got=0 _kept=0 _trunc=0
+  # Every scan starts by clearing last render's marker, so the note can never
+  # outlive the truncation that produced it.
+  rm -f "$(_home_trunc_flag)" 2>/dev/null || true
+  # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
+  # many rows each adapter has to be asked for depends on it. The filter below
+  # always ran before the rank+cut (as its comment promised), but every adapter
+  # had already been cut to CLIKAE_HOME_RECENT_MAX rows on its way here — so N
+  # burn sessions newer than the human ones handed the filter N rows it had to
+  # drop and left it nothing to promote: the Resume block disappeared, which is
+  # the exact symptom #34 set out to fix. Reachable on any agy tank from any
+  # directory since this PR's tank-scoping, and clikae's own dispatch doctrine
+  # burns agy tanks hard, so this is the shape that actually occurs.
+  # THE GUARANTEE, WITH ITS BOUND (#34 round-2 P2-1 — the round-1 version of
+  # this sentence had no bound and was therefore false): only a sid recorded in
+  # THIS TANK's sidecar can be dropped from this tank's answer, so asking that
+  # tank for N + <its own hidden count> yields N survivors whenever N exist —
+  # UNLESS that ask exceeds CLIKAE_HOME_RECENT_SCAN_MAX, which defaults to the
+  # sidecar's own cap and so only bites on a sidecar bigger than the GC allows.
+  # When it does bite, the board prints T_RESUME_TRUNCATED; the guarantee is
+  # never silently broken. Engine-agnostic on purpose: claude and codex tanks
+  # had the same hole (#74's filter, #83's sidecar) and get the same fix here,
+  # once, instead of three adapters each re-learning it.
+  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
+    _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
+  fi
+  # No sidecar (or CLIKAE_RESUME_ALL=1) => nothing to filter => the ask stays
+  # exactly CLIKAE_HOME_RECENT_MAX. The common path is byte-for-byte unchanged.
   _proots="$(profiles_root)"      # constant; asked once, not once per adapter
   while IFS= read -r name; do
     [ -n "$name" ] || continue
@@ -210,9 +332,39 @@ _home_recent_rows() {
     for tdir in "$proot"/*/; do
       [ -d "$tdir" ] || continue
       tank="${tdir%/}"; tank="${tank##*/}"
+      # How wide to ask THIS tank (#34 round-2 P2-1). Per tank, not per store:
+      # a row this tank returns can only be dropped by a sid recorded for this
+      # tank, so another engine's burn-heavy tank must not push this one's ask
+      # into the ceiling. A tank with no sidecar file asks for exactly N, so the
+      # common path is byte-for-byte the pre-#34 one.
+      _ask="$CLIKAE_HOME_RECENT_MAX"; _clamped=0; _hidden=0
+      if [ -n "$_burn_sids_f" ]; then
+        _hidden="$(_burn_tank_hidden "$name" "$tank")"
+        _ask=$((CLIKAE_HOME_RECENT_MAX + _hidden))
+        if [ "$_ask" -gt "$CLIKAE_HOME_RECENT_SCAN_MAX" ]; then
+          _ask="$CLIKAE_HOME_RECENT_SCAN_MAX"; _clamped=1
+        fi
+        if [ "$_ask" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _ask="$CLIKAE_HOME_RECENT_MAX"; fi
+      fi
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
-      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
+      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$_ask" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
+      # Clamped AND the adapter filled the ask to the brim => there may be rows
+      # it never got to mention. If what survives the filter is still short of
+      # N, the Continue list IS truncated: record it so the renderer can SAY so,
+      # instead of drawing a short list that reads as a complete one.
+      if [ "$_clamped" -eq 1 ]; then
+        _got="$(printf '%s\n' "$rows" | LC_ALL=C grep -c . 2>/dev/null || true)"
+        case "$_got" in ''|*[!0-9]*) _got=0 ;; esac
+        if [ "$_got" -ge "$_ask" ]; then
+          _kept="$(printf '%s\n' "$rows" | LC_ALL=C awk -F $'\037' -v f="$_burn_sids_f" '
+            BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+            NF >= 2 && $2 != "" && !($2 in skip) { k++ }
+            END { print k+0 }' 2>/dev/null || printf '0')"
+          case "$_kept" in ''|*[!0-9]*) _kept=0 ;; esac
+          if [ "$_kept" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _trunc=$((_trunc + _hidden)); fi
+        fi
+      fi
       while IFS=$'\037' read -r mt sid; do
         [ -n "$sid" ] || continue
         acc="$acc$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
@@ -223,7 +375,25 @@ INNER
   done <<EOF
 $(list_adapters)
 EOF
-  [ -n "$acc" ] || return 0
+  # Leave the marker BEFORE the early return below: the worst truncation is the
+  # one that empties the list completely, and that is the case the note exists
+  # to explain.
+  if [ "$_trunc" -gt 0 ]; then
+    mkdir -p "$CLIKAE_HOME/state" 2>/dev/null || true
+    printf '%s\n' "$_trunc" > "$(_home_trunc_flag)" 2>/dev/null || true
+  fi
+  if [ -z "$acc" ]; then
+    # What this actually relies on: BOTH ways out of this function remove the
+    # sidecar temp file — here, and after the filter below. The `if` is for
+    # reading, not for `set -e`: POSIX and bash exempt every command in an
+    # `&&` list except the one after the final `&&`, so `[ … ] && rm` is a
+    # no-op here too (verified: `set -eo pipefail; f=""; [ -n "$f" ] && rm -f
+    # "$f"; echo SURVIVED` prints SURVIVED, rc=0). The shape that DOES kill
+    # the shell is a failing test as the LAST command of a function — the
+    # function then returns 1 and its CALL is what errexit sees. The `return
+    # 0` two lines down is what rules that out here, not the `if`.
+    return 0
+  fi
   # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
   # `clikae resume`'s picker uses (_burn_sids_file, home.sh) — the board's own
   # "R" key already forwards to `clikae resume` (one filter, not two), but
@@ -234,17 +404,15 @@ EOF
   # "fixed" resume — the PR's own claim ("resume AND the home board hide
   # sidecar sessions by default") was true for one of the two surfaces.
   # Filtered BEFORE the rank+cut below, or a hidden row would just leave a
-  # gap instead of letting a real session take its slot.
-  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
-    local _burn_sids_f; _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
-    if [ -n "$_burn_sids_f" ]; then
-      acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
-        BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
-        !($4 in skip)
-      ')"
-      rm -f "$_burn_sids_f"
-      [ -n "$acc" ] || return 0
-    fi
+  # gap instead of letting a real session take its slot — which is only true
+  # because the ask above was widened by $_hidden first (P2-1).
+  if [ -n "$_burn_sids_f" ]; then
+    acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
+      BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+      !($4 in skip)
+    ')"
+    rm -f "$_burn_sids_f"
+    [ -n "$acc" ] || return 0
   fi
   # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
   # title + recap (the only content greps — bounded to the few rows actually shown).
@@ -1777,6 +1945,10 @@ EOF
 $items
 EOF
 
+  # "N sessions hidden as burn runs; list truncated" — printed here, directly
+  # under the Continue list (resume rows are the last thing _home_items emits).
+  _home_trunc_note "$printed_resume"
+
   if [ -n "$also" ]; then
     printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
     printf '%s' "$also"
@@ -2774,6 +2946,9 @@ EOF
   if [ "${_vphid:-0}" -gt 0 ]; then
     printf '    %b⋯ %d · ↑↓ %s%b\n' "$__C_DIM" "$_vphid" "$T_K_MOVE" "$__C_RESET"
   fi
+  # "N sessions hidden as burn runs; list truncated" (#34 round-2 P2-1), with
+  # extra=2 for the outer indenter this block is piped through.
+  _home_trunc_note "$printed_resume" 2
   if [ "$printed_resume" -eq 1 ]; then
     # The footer is a full localized sentence (54 columns in en-US, longer in
     # de/fr/pt) and was printed with no width budget at all — so on a narrow
