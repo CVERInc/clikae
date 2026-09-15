@@ -1007,13 +1007,72 @@ _burn_lb_pgroup_probe() {
   return 0
 }
 
+# Our own process group id, resolved at most once per shell and cached as the
+# empty string when the platform will not say (busybox `ps` has no `-o pgid` —
+# the same platform that made `_burn_lb_pgroup_probe` stop trusting `ps`).
+# `_burn_left_behind` resolves it up front so the per-repo `$(...)` subshells
+# inherit the answer instead of forking a `ps` each.
+_burn_lb_self_pgid() {
+  case "${_BURN_LB_PGID+set}" in set) return 0 ;; esac
+  _BURN_LB_PGID="$(ps -o pgid= -p $$ 2>/dev/null)" || _BURN_LB_PGID=''
+  _BURN_LB_PGID="${_BURN_LB_PGID// /}"
+  _BURN_LB_PGID="${_BURN_LB_PGID//$'\t'/}"
+  case "$_BURN_LB_PGID" in ''|*[!0-9]*) _BURN_LB_PGID='' ;; esac
+  return 0
+}
+
+# Says out loud what it refused and why. `log_warn` (stderr) when log.sh is
+# loaded — burn's `--json` payload goes to fd 4/stdout, never here — and a
+# bare printf when this file was sourced on its own.
+_burn_lb_kill_refused() {
+  if command -v log_warn >/dev/null 2>&1; then
+    log_warn "left-behind scan: refusing to signal \`-$2\` with $1 ($3) — see _burn_lb_kill."
+  else
+    printf 'left-behind scan: refusing to signal -%s with %s (%s)\n' "$2" "$1" "$3" >&2
+  fi
+  return 0
+}
+
 # _burn_lb_kill <signal> <pid> — the pid's whole process group when this
 # platform gave it one, the pid alone otherwise.
+# P3-1 (round-6 review): `_burn_lb_pgroup_probe` above proves the PLATFORM can
+# be aimed at a process group. It proves nothing about the VALUE this function
+# is handed, and `kill -- -$2` is exactly as catastrophic for a bad value as
+# the probe's own comment says: POSIX reads `-0` as "the CALLER's process
+# group", i.e. burn plus whatever shell launched it. Measured on this box (in
+# an isolated `setsid` session, so only that session died): `_burn_lb_kill TERM
+# 0` never returned, the caller exited with rc=15, and its own children went
+# with it. `-1` is the same shape aimed at every process the user may signal.
+# Today no call site can produce either — `$!` after `cmd &` is never 0, 1 or
+# empty — so this is a guard against the next caller, not a live bug; the blast
+# radius is the operator's terminal and the guard is a `case`.
+# Refusals are loud (`log_warn`) and return 1: a caller that gets here has a
+# bug, and silently doing nothing is how the wrong pid got this far.
 _burn_lb_kill() {
-  if [ "${_BURN_LB_PGROUP:-0}" = 1 ]; then
-    kill "-$1" -- "-$2" 2>/dev/null && return 0
+  local sig="$1" target="${2:-}"
+  case "$target" in
+    ''|*[!0-9]*)
+      _burn_lb_kill_refused "$sig" "$target" 'not a pid'
+      return 1 ;;
+  esac
+  if [ "$target" -lt 2 ] 2>/dev/null; then
+    _burn_lb_kill_refused "$sig" "$target" \
+      'reserved: 0 means the callers own process group, 1 means every process'
+    return 1
   fi
-  kill "-$1" "$2" 2>/dev/null || true
+  # The one value that looks like an ordinary pid and is still the disaster:
+  # our own process group's leader. A child's pgid is always its own fresh pid,
+  # so a legitimate target can never collide with it — but a stale/reused
+  # variable can.
+  _burn_lb_self_pgid
+  if [ -n "${_BURN_LB_PGID:-}" ] && [ "$target" = "$_BURN_LB_PGID" ]; then
+    _burn_lb_kill_refused "$sig" "$target" "that is burn's own process group"
+    return 1
+  fi
+  if [ "${_BURN_LB_PGROUP:-0}" = 1 ]; then
+    kill "-$sig" -- "-$target" 2>/dev/null && return 0
+  fi
+  kill "-$sig" "$target" 2>/dev/null || true
   return 0
 }
 
@@ -1105,9 +1164,9 @@ _burn_lb_bounded() {
     # finished on its own at the very same instant do not both claim it.
     if kill -0 "$pid" 2>/dev/null; then
       : > "$kill_mark" 2>/dev/null || true
-      _burn_lb_kill TERM "$pid"
+      _burn_lb_kill TERM "$pid" || true
       sleep 1
-      _burn_lb_kill KILL "$pid"
+      _burn_lb_kill KILL "$pid" || true
     fi
   ) >/dev/null 2>&1 3>&- 4>&- &
   watcher=$!
@@ -1128,7 +1187,7 @@ _burn_lb_bounded() {
   # target has already exited (the common, non-timeout case).
   rc=0
   wait "$pid" 2>/dev/null || rc=$?
-  _burn_lb_kill TERM "$watcher"
+  _burn_lb_kill TERM "$watcher" || true
   wait "$watcher" 2>/dev/null || true
   # P3-3 (round-5 review): this used to be `[ $((SECONDS - start)) -lt
   # "$secs" ] && return "$rc"; return 124` — an integer comparison of
@@ -1237,6 +1296,9 @@ _burn_left_behind() {
   # subshell, so a lazily-probed global would be recomputed (two `ps` forks
   # and a `sleep` each) four times per repo and thrown away every time.
   _burn_lb_pgroup_probe
+  # P3-1 (round-6 review): same reasoning for the `ps` that `_burn_lb_kill`'s
+  # value guard needs — resolved once here so the per-repo subshells inherit it.
+  _burn_lb_self_pgid
   # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
   # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
   # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)

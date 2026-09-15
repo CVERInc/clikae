@@ -3967,3 +3967,77 @@ assert rows[0]["ahead"] == 1, rows
 assert d["left_behind_truncated"] >= 1, d
 '
 }
+# --- round-6 review -----------------------------------------------------------
+
+# P3-1 (round-6 review): `_burn_lb_pgroup_probe` proves the platform can be
+# aimed at a process group; nothing proved the VALUE handed to `_burn_lb_kill`
+# was a pid at all. `kill -- -0` is POSIX for "the caller's own process group",
+# so one bad argument takes burn AND the operator's shell with it. Asserted
+# against a shell FUNCTION named `kill` (a function wins over the builtin) so
+# a regression cannot signal this test runner's own group: the assertion is
+# that the guard returns before `kill` is reached at all.
+@test "burn #84 P3-1 (round-6 review): _burn_lb_kill refuses every value that is not a signalable pid" {
+  _burn_lb_boot
+  local log="$BATS_TEST_TMPDIR/kill-args"
+  : > "$log"
+  kill() { printf '%s\n' "$*" >> "$log"; return 0; }
+  _BURN_LB_PGROUP=1
+  local bad rc
+  for bad in 0 -1 '' abc 1 '2x' '-' ; do
+    rc=0
+    _burn_lb_kill TERM "$bad" || rc=$?
+    [ "$rc" -eq 1 ] || { echo "_burn_lb_kill TERM '$bad' returned $rc, expected 1 (refused)"; false; }
+  done
+  [ ! -s "$log" ] || { echo "the guard let a refused value through to kill:"; cat "$log"; false; }
+  # The one refusal that looks like an ordinary pid: our own process group.
+  local mypgid
+  mypgid="$(ps -o pgid= -p $$ 2>/dev/null || true)"
+  mypgid="${mypgid// /}"
+  case "$mypgid" in ''|*[!0-9]*) mypgid='' ;; esac
+  if [ -n "$mypgid" ]; then
+    rc=0
+    _burn_lb_kill TERM "$mypgid" || rc=$?
+    [ "$rc" -eq 1 ] || { echo "_burn_lb_kill did NOT refuse our own pgid $mypgid (rc=$rc)"; false; }
+    [ ! -s "$log" ] || { echo "our own process group was signalled:"; cat "$log"; false; }
+  fi
+  # …and a real child pid still gets the group signal the fix exists to send.
+  sleep 30 &
+  local child=$!
+  [ "$child" -gt 1 ] || { echo "no child pid to test with"; false; }
+  rc=0
+  _burn_lb_kill TERM "$child" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "a legitimate pid was refused (rc=$rc)"; false; }
+  grep -q -- "-TERM -- -$child" "$log" || { echo "expected a group TERM for $child, got:"; cat "$log"; false; }
+  unset -f kill
+  builtin kill -KILL "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+}
+
+# The same finding with a REAL `kill`, contained: `setsid` gives the probe a
+# session of its own, so a regression kills only that session. Measured on the
+# pre-fix helper exactly this way — the probe never printed its next line, it
+# exited with rc=15, and its own sentinel child died with it.
+@test "burn #84 P3-1 (round-6 review): a real \`_burn_lb_kill TERM 0\` leaves its caller and its children alive" {
+  command -v setsid >/dev/null 2>&1 || skip "setsid needed to contain the group kill this asserts against"
+  local probe="$BATS_TEST_TMPDIR/probe-p31"
+  cat > "$probe" <<STUB
+#!/usr/bin/env bash
+export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+_BURN_LB_PGROUP=1
+sleep 30 &
+sentinel=\$!
+rc=0
+_burn_lb_kill TERM 0 || rc=\$?
+printf 'returned %s\n' "\$rc"
+if kill -0 "\$sentinel" 2>/dev/null; then printf 'sentinel alive\n'; else printf 'sentinel dead\n'; fi
+[ "\$sentinel" -gt 1 ] && kill -KILL "\$sentinel" 2>/dev/null
+printf 'caller survived\n'
+STUB
+  chmod +x "$probe"
+  run setsid -w bash "$probe"
+  [[ "$output" == *"returned 1"* ]] || { echo "no refusal; probe said: $output"; false; }
+  [[ "$output" == *"sentinel alive"* ]] || { echo "the caller's own child was killed: $output"; false; }
+  [[ "$output" == *"caller survived"* ]] || { echo "the caller never came back: $output"; false; }
+}
