@@ -138,7 +138,7 @@ one line per drifted tank. Requires <code>jq</code>; a missing template or missi
 reported and skipped, not a hard failure — a tank always finishes creating.
 Skip the template on a single tank with <code>clikae init claude &lt;tank&gt; --no-template</code>
 or machine-wide with <code>CLIKAE_NO_PERMISSIONS_TEMPLATE=1</code>. See
-<a href="https://github.com/CVERInc/clikae/blob/b030edf8d38ecd0f6db8eb6e8724e8725428479a/templates/permissions/README.md">the seed documentation</a>.</p>
+<a href="https://github.com/CVERInc/clikae/blob/eb58aab9bd40f1d48ea017e6e93a48116ddb7b74/templates/permissions/README.md">the seed documentation</a>.</p>
 <h3 id="31-switching--the-elided-verb">3.1 Switching — the elided verb</h3>
 <table>
 <thead>
@@ -265,6 +265,10 @@ fuel words forced on them.</p>
 <td>Which tank each CLI is on <strong>in this shell</strong>.</td>
 </tr>
 <tr>
+<td><code>clikae usage [engine] [tank] [--json] [--fresh]</code></td>
+<td>Each tank's vendor usage window(s): used% and reset time, cached 120s against the last SCAN (<code>CLIKAE_USAGE_TTL</code>; <code>--fresh</code> bypasses it; codex's cache hit still lags — its reading is stamped with the underlying event's own time). <code>source</code> is <code>vendor</code> (a live call answered), <code>transcript</code> (read from evidence the engine already wrote locally — no live process invoked; currently Codex, from the same rollout evidence <code>limit_codex_status</code> uses), or <code>unknown</code>. An <code>unknown</code> reading may also carry <code>reason</code> — <code>no-credentials</code> (no usable token at all), <code>expired-token</code> (a token was found and its own recorded expiry had passed), or <code>network</code> (the catch-all: the call was attempted and did not come back usable — an HTTP refusal, a timeout and an unparseable body all land here, and taking THAT apart is issue #107). The key is absent when the reason is not known, and never present on a <code>vendor</code>/<code>transcript</code> reading. The board never calls the vendor — it only shows what's on disk, aged if it must. <code>clikae burn</code> does: once for the tank it just ran, when the run ends (never before launching it), and — on a dry tank — up to <code>_BURN_REROUTE_REFRESH_CAP</code> (3) calls spent on the reroute candidates a first ranking off the on-disk cache says could actually win, stopping sooner if one of them verifies a 0% window. <strong>Not</strong> once per candidate: a 20-tank fleet costs 3 calls here, not 20 (this line said &quot;once per candidate&quot; until round 6 of #72's review; the cap arrived in round 3 and the ranking-first spend in round 4). See docs/DESIGN-board-fuel-dots.md's &quot;Vendor usage cache&quot; section.</td>
+</tr>
+<tr>
 <td><code>clikae to [target]</code></td>
 <td>Carry your session onward; bare = the next tank in your burn order (your tanks are the reserve).</td>
 </tr>
@@ -279,6 +283,10 @@ fuel words forced on them.</p>
 <tr>
 <td><code>clikae burn &lt;engine&gt; &lt;tank&gt; --artifact &lt;path&gt; (--prompt-file &lt;f&gt; | -- &lt;cmd…&gt;)</code></td>
 <td>Run a <strong>headless</strong> task on a tank, verify it by the artifact it must produce (never the exit code — <code>codex exec</code> exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the <strong>easy way</strong> (<code>--prompt-file</code>/<code>--prompt</code> + <code>--add-dir</code>: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the <strong>power-user way</strong> (raw <code>-- &lt;cmd…&gt;</code>). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; <code>burn</code> is the single-task unit it fans out and re-fires. <code>--to</code> forces an explicit next hop. <code>--infra-retries &lt;n&gt;</code> (0–10, default 2) retries tool-host infrastructure failures on the same tank; <code>--infra-delay &lt;s&gt;</code> (0–86400, default 5) sets the initial delay, doubled per retry. Exhaustion reports <code>reason: infra</code>.</td>
+</tr>
+<tr>
+<td><code>clikae wait &lt;run_id|status-file&gt;…</code></td>
+<td>Block until a burn (or several) reaches a terminal state — the composable half of <code>burn</code>'s <code>&amp;</code>/background pattern, never a hand-rolled poll loop.</td>
 </tr>
 <tr>
 <td><code>clikae conduct --leg &lt;e&gt;/&lt;t&gt;… (--prompt-file &lt;f&gt; | --prompt &lt;s&gt;)</code></td>
