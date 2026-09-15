@@ -2233,17 +2233,61 @@ STUB
 # shape, on three separate tanks (each run marks its tank dry): one slow sample
 # can no longer set the ceiling, and three runs cost about two seconds.
 #
-# The absolute 60 s ceiling below is a SECOND, coarser bound, not a replacement
-# for the ratio. The ratio is the sensitive instrument — it is what catches a
-# 26.5 s regression against a ~2 s baseline, and nothing absolute at 60 s would.
-# The absolute one catches only what the ratio structurally cannot: a baseline
-# so slow that 8x of it no longer excludes the regression. It sits ~100x above
-# every healthy measurement here (dense 466-486 ms, baseline 605-647 ms) and
-# above the two 45 s 8 MB guards in this file, so a slow-awk platform cannot
-# trip it on ordinary slowness. macOS's BWK awk remains UNMEASURED by anyone —
-# fix2 inferred it is slower, round 3 agreed it is an inference — which is
-# exactly why this guard now rests on two different kinds of bound instead of
-# one thin one.
+# 🔴 THE 60 s BOUND WAS AN EMPTY PROMISE AND IS GONE (P2-2, 2026-09-14 round-4
+# review). Round 3 added it as "a SECOND, coarser bound for what the ratio
+# structurally cannot see: a baseline so slow that 8x of it no longer excludes
+# the regression". Measured, with the regression actually injected (burn.sh's
+# `command -v perl` forced false, so redaction goes through the per-MATCH awk
+# loop): dense was 17.1 s at load 5 and 47.1 s at load 19 — it NEVER reaches
+# 60 s, so on the very case it was written for it stays silent. Both bounds
+# only fired when the regression was absolutely huge; they were the same
+# direction, not complementary, and between them sat a band nobody watched
+# (baseline in [dense/8, ~7.5 s]; the baselines measured in those same runs,
+# 1.5-1.8 s and 5.0-5.3 s, were 21% and 11% below its lower edge).
+#
+# What replaces it is an absolute ceiling LOW ENOUGH TO FIRE, chosen from both
+# ends of the measurement and stated so the next person can check the
+# arithmetic instead of the intent. Every number below was measured on this
+# guard, with the regression injected by forcing burn.sh's `command -v perl`
+# false:
+#
+#   healthy dense      469 ms (16 cores idle), 511 ms (pinned to 2 cores),
+#                      1387 ms (load ~5), 2428 ms (2 contended cores, 4x
+#                      oversubscribed) — the slowest healthy reading anyone has
+#                      taken is 2.4 s.
+#   regression dense   9.08 s (16 cores idle), 17.1 s (load 5), 47.1 s
+#                      (load 19), and 26.5 s in the original round-5 report on
+#                      a 4 MB/53774-hit capture — the fastest reading of the
+#                      regression anyone has taken is 9.1 s.
+#   ceiling            8 s: 3.3x above the slowest healthy measurement and
+#                      1.13x below the fastest regression measurement. It is
+#                      not generous, and it is not supposed to be — a ceiling
+#                      with 100x of headroom is a ceiling that never fires.
+#
+# The two halves are now genuinely complementary rather than both waiting for a
+# big absolute number: on a FAST box the ratio has 14.5x of margin (dense 9.08 s
+# against a 626 ms baseline) and the absolute is redundant; on a SLOW or loaded
+# box the ratio's margin collapses toward the multiplier (1.59x at load 3.9,
+# 1.34x at load 5, 1.16x at load 19 — measured, monotonic) and the absolute is
+# what still fires, because every measured regression there is 17-47 s.
+#
+# The ratio stays the sensitive half (it is what would catch a regression too
+# small for 15 s), and it is now written in the shape it always implied: pass
+# if dense is within 8x the median baseline OR if dense is under 2 s in
+# absolute terms. That second disjunct is the anti-flake floor — it replaces
+# `base_ms=500`, and it is TIGHTER (2 s, not 8 x 500 ms = 4 s) — and it is a
+# floor on FAILING, never a rescue for the regression: 17 s is not under 2 s.
+#
+# 🔴 AND THE RULER IS NOT THE SAME EVERYWHERE. The same 1.4 MB dense input
+# through the same `_burn_redact_one_awk` program (round-4 review's bench):
+# gawk 5.2.1 8.76 s, mawk 0.43 s (20x faster), busybox awk 16.67 s — a 40x
+# spread, and on mawk the injected regression comes in at 3336 ms and this
+# guard is GREEN. So what this file protects depends on which `awk` is first on
+# PATH, and until now nothing wrote down which one was measured. The test
+# prints its awk's identity with every failure, and the numbers above were
+# taken on GNU Awk 5.2.1 (/usr/bin/awk -> gawk) on Linux. macOS's BWK awk
+# remains UNMEASURED by anyone — fix2 inferred it is slower, round 3 agreed it
+# is an inference, and round 4 did not measure it either.
 _burn_now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000'; }
 
 _stub_dense_capture() {
@@ -2301,16 +2345,26 @@ STUB
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
   dense_ms=$((t1 - t0))
 
-  [ "$base_ms" -ge 500 ] || base_ms=500
+  # Which ruler measured this, printed on every failure — a 40x spread between
+  # awk implementations decides how much this guard can see (note above).
+  local awk_id; awk_id="$( { awk --version 2>/dev/null || awk -W version 2>&1; } | head -1)"
+  [ -n "$awk_id" ] || awk_id="unknown awk at $(command -v awk 2>/dev/null)"
+
+  # The sensitive half: within 8x the MEDIAN baseline, OR under 2 s in absolute
+  # terms. The second disjunct is the anti-flake floor (a sub-2 s measurement is
+  # runner noise, not a per-match regression) and never rescues the regression,
+  # which measures 17-47 s.
   ceiling_ms=$((base_ms * 8))
-  [ "$dense_ms" -le "$ceiling_ms" ] || {
-    echo "dense-needle classification took ${dense_ms}ms, over 8x the MEDIAN no-needle baseline (${ceiling_ms}ms, from [$samples]) — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline)"
+  [ "$dense_ms" -le "$ceiling_ms" ] || [ "$dense_ms" -le 2000 ] || {
+    echo "dense-needle classification took ${dense_ms}ms, over 8x the MEDIAN no-needle baseline (${ceiling_ms}ms, from [$samples]) and over the 2000ms noise floor — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline). Measured with: ${awk_id}"
     false; }
-  # The coarse second bound: only for the case the ratio cannot see, a baseline
-  # so slow that 8x of it stops excluding the regression. ~100x above every
-  # healthy measurement, so slowness alone never trips it.
-  [ "$dense_ms" -le 60000 ] || {
-    echo "dense-needle classification took ${dense_ms}ms — past the absolute sanity ceiling (60000ms). The ratio (baseline ${base_ms}ms) is the sensitive half of this guard; this half exists for a baseline too slow for the ratio to mean anything."
+
+  # The absolute half, and the reason it is 8 s and not 60 s: at 60 s it never
+  # fired on the regression it was written for (measured 9.1-47.1 s). This one
+  # fires however slow the baseline was — which is exactly the case the ratio
+  # goes blind on.
+  [ "$dense_ms" -le 8000 ] || {
+    echo "dense-needle classification took ${dense_ms}ms — past the absolute ceiling (8000ms: 3.3x the slowest healthy reading ever taken here, 2428ms on two contended cores, and below the fastest reading of the per-match regression, 9080ms). The ratio (baseline ${base_ms}ms, ceiling ${ceiling_ms}ms) is the half that goes blind when the baseline alone is slow; this half does not. Measured with: ${awk_id}"
     false; }
 }
 
