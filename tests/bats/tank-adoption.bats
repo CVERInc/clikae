@@ -430,6 +430,30 @@ STUB
   [ "$a2" -eq 0 ] || { echo "store A warned again despite its own key: $a2 WARN"; false; }
 }
 
+@test "#61 round-6 P3-3: the read-only adoption flag is INTERNAL and means exactly 1" {
+  # One setter (lib/hooks/cockpit-guard.sh) and one reader
+  # (_tank_adoption_ensure). Under its old public-looking name, tested with
+  # `[ -n … ]`, anything in the environment called CLIKAE_ADOPT_READONLY — `0`
+  # included — made every clikae command re-sweep, write no marker and no
+  # flag, and say nothing: the one-time adoption window never closed again.
+  local s
+  for s in old zero one; do
+    mkdir -p "$BATS_TEST_TMPDIR/$s/.clikae/profiles/claude/a1"
+  done
+  CLIKAE_ADOPT_READONLY=1 CLIKAE_HOME="$BATS_TEST_TMPDIR/old/.clikae" "$CLIKAE_BIN" tanks >/dev/null 2>&1
+  _CLIKAE_ADOPT_READONLY=0 CLIKAE_HOME="$BATS_TEST_TMPDIR/zero/.clikae" "$CLIKAE_BIN" tanks >/dev/null 2>&1
+  _CLIKAE_ADOPT_READONLY=1 CLIKAE_HOME="$BATS_TEST_TMPDIR/one/.clikae" "$CLIKAE_BIN" tanks >/dev/null 2>&1
+  # the old public name is inert now: the store lands as it always should
+  [ -f "$BATS_TEST_TMPDIR/old/.clikae/state/tanks-adopted-v1" ] || { echo "old name still suppresses the flag"; false; }
+  [ -f "$BATS_TEST_TMPDIR/old/.clikae/profiles/claude/a1/.clikae-tank" ] || { echo "old name still suppresses the marker"; false; }
+  # `0` means off
+  [ -f "$BATS_TEST_TMPDIR/zero/.clikae/state/tanks-adopted-v1" ] || { echo "=0 was read as ON"; false; }
+  [ -f "$BATS_TEST_TMPDIR/zero/.clikae/profiles/claude/a1/.clikae-tank" ] || { echo "=0 was read as ON"; false; }
+  # and the real internal name still works, for the hook
+  [ ! -e "$BATS_TEST_TMPDIR/one/.clikae/state/tanks-adopted-v1" ] || { echo "=1 no longer holds off"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/one/.clikae/profiles/claude/a1/.clikae-tank" ] || { echo "=1 no longer holds off"; false; }
+}
+
 @test "#61 round-6 P3-1: an unreadable marker is one WARN and a COMPLETE list, never a raw shell error" {
   if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
   local t

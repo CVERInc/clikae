@@ -124,6 +124,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole process tree, so a terminal warned about one read-only store then
   stayed silent about a second, unrelated one — a mounted or shared store
   whose answers were memory-only too, with nothing said about it (#61 round 6).
+- `CLIKAE_ADOPT_READONLY` in the environment no longer stops clikae adopting a
+  store. It was never a supported knob — it has one setter (the cockpit guard
+  hook) and one reader — but it read like one, and any value at all, `0`
+  included, made every command re-sweep the whole store while writing no
+  marker and no flag and saying nothing, leaving the one-time adoption window
+  open for good. It is now the internal `_CLIKAE_ADOPT_READONLY`, and only the
+  exact value `1` turns it on (#61 round 6).
 - `clikae cockpit --off` now removes the guard from a cockpit tank that is no
   longer enumerable — one whose `.clikae-tank` marker went missing or became
   unreadable (a restored backup, a sync tool). It used to sweep the same

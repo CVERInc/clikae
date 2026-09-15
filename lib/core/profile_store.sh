@@ -663,7 +663,7 @@ tanks_adopted_flag_write() {
 # is unbound in that process — either one would abort the very walk this
 # branch exists to keep intact. Silence is the correct behaviour there: the
 # hook's stderr is shown to the MODEL as the reason for a refusal it has
-# nothing to do with (the same reasoning as CLIKAE_ADOPT_READONLY below).
+# nothing to do with (the same reasoning as _CLIKAE_ADOPT_READONLY below).
 _tank_marker_unreadable_warn_once() {
   [ -z "${_CLIKAE_MARKER_WARNED:-}" ] || return 0
   _CLIKAE_MARKER_WARNED=1
@@ -705,7 +705,17 @@ _CLIKAE_ADOPT_LAST_FLAG_OK=0
 # _CLIKAE_ADOPT_LAST_FLAG_OK (1 once the flag is confirmed on disk) for
 # callers that report on it.
 #
-# CLIKAE_ADOPT_READONLY=1 (#61 round-5 merge, with #63's cockpit-guard hook):
+# _CLIKAE_ADOPT_READONLY=1 (#61 round-5 merge, with #63's cockpit-guard hook):
+# 🔴 #61 round-6 P3-3: leading underscore, and compared to EXACTLY `1`. It was
+# `CLIKAE_ADOPT_READONLY` tested with `[ -n … ]`, which reads from the outside
+# as a supported knob and is not one — it has exactly one setter (the hook,
+# below) and one reader (this function). Anyone who exported it into a shell,
+# or set it to `0` meaning "off", got a clikae that re-swept the whole store on
+# every single command, wrote no marker and no flag, and said nothing about
+# either: the one-time adoption window that #61 round-5 P3-5 spent a commit
+# CLOSING stayed open forever, and reopened a directory created long after it
+# should have. The internal name says who owns it, and `= 1` means `0` is off.
+#
 # sweep IN MEMORY ONLY — write no markers, no flag, and warn about neither.
 # For a process that is NOT `clikae` and has no business deciding this
 # store's permanent shape: lib/hooks/cockpit-guard.sh runs as a Claude Code
@@ -750,13 +760,13 @@ _tank_adoption_ensure() {
       _tank_shape_excluded "$name" && continue
       _CLIKAE_INMEM_ADOPTED="$_CLIKAE_INMEM_ADOPTED$cli"$'\t'"$name"$'\n'
       tank_dir_is_tank "$cli" "$path" && continue   # already marked
-      [ -n "${CLIKAE_ADOPT_READONLY:-}" ] && continue
+      [ "${_CLIKAE_ADOPT_READONLY:-}" = 1 ] && continue
       tank_marker_write "$cli" "$path"
       _CLIKAE_ADOPT_LAST_COUNT=$((_CLIKAE_ADOPT_LAST_COUNT + 1))
     done < <(_tank_candidates "${cli_dir%/}")
   done
   _CLIKAE_INMEM_ADOPTED_ACTIVE=1
-  if [ -n "${CLIKAE_ADOPT_READONLY:-}" ]; then
+  if [ "${_CLIKAE_ADOPT_READONLY:-}" = 1 ]; then
     # Nothing written, nothing to warn about: this run's answers live in
     # memory and die with the process.
     _CLIKAE_ADOPT_LAST_FLAG_OK=0

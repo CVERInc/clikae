@@ -227,7 +227,7 @@ _ckpt_refuse() {
     printf 'cockpit-guard: refused — %s.\n' "$why"
     printf 'Dispatch it instead:\n'
     printf '  clikae burn <engine> <tank> --prompt-file <f> --artifact <path>\n'
-    # shellcheck disable=SC2034  # CLIKAE_LIB/CLIKAE_ADOPT_READONLY are read by
+    # shellcheck disable=SC2034  # CLIKAE_LIB/_CLIKAE_ADOPT_READONLY are read by
     # the files sourced two lines down, not by this script.
     ( [ -n "$_dir" ] &&
       # #61 round-5 merge: the enumerator now (1) asks tank_engine_known,
@@ -235,11 +235,11 @@ _ckpt_refuse() {
       # hook is not `bin/clikae`, nothing sets those for it; without them
       # NO directory is a tank of any engine and the reserve reads empty),
       # and (2) runs the one-time adoption sweep, which this hook must
-      # never perform ON DISK: CLIKAE_ADOPT_READONLY keeps the answers in
+      # never perform ON DISK: _CLIKAE_ADOPT_READONLY keeps the answers in
       # memory, so the hook writes no marker, no flag and no WARN sentinel.
       CLIKAE_ROOT="$(cd "$_dir/../.." 2>/dev/null && pwd)" &&
       CLIKAE_LIB="$CLIKAE_ROOT/lib" &&
-      CLIKAE_ADOPT_READONLY=1 &&
+      _CLIKAE_ADOPT_READONLY=1 &&
       source "$_dir/../core/adapter_loader.sh" 2>/dev/null &&
       source "$_dir/../core/profile_store.sh" 2>/dev/null &&
       source "$_dir/../core/burn_status.sh" 2>/dev/null &&
