@@ -625,6 +625,19 @@ _CLIKAE_ADOPT_LAST_FLAG_OK=0
 # call. Sets _CLIKAE_ADOPT_LAST_COUNT (markers newly written this call) and
 # _CLIKAE_ADOPT_LAST_FLAG_OK (1 once the flag is confirmed on disk) for
 # callers that report on it.
+#
+# CLIKAE_ADOPT_READONLY=1 (#61 round-5 merge, with #63's cockpit-guard hook):
+# sweep IN MEMORY ONLY — write no markers, no flag, and warn about neither.
+# For a process that is NOT `clikae` and has no business deciding this
+# store's permanent shape: lib/hooks/cockpit-guard.sh runs as a Claude Code
+# PreToolUse hook, in its own process, possibly before any clikae command has
+# ever swept this store. Without this, sourcing profile_store.sh from there
+# would (a) write the one-time flag from a context where tank_engine_known
+# answers for no engine at all — permanently orphaning EVERY tank in the
+# store — and (b) on a read-only store call _tank_adoption_warn_once, whose
+# sentinel only bin/clikae's EXIT trap ever removes (r5 P3-1's leak, in a
+# process that has no such trap). In-memory adoption keeps the hook's own
+# listing honest without it ever deciding anything on disk.
 _tank_adoption_ensure() {
   local flag; flag="$(tanks_adopted_flag_path)"
   _CLIKAE_ADOPT_LAST_COUNT=0
@@ -654,11 +667,18 @@ _tank_adoption_ensure() {
       _tank_shape_excluded "$name" && continue
       _CLIKAE_INMEM_ADOPTED="$_CLIKAE_INMEM_ADOPTED$cli"$'\t'"$name"$'\n'
       tank_dir_is_tank "$cli" "$path" && continue   # already marked
+      [ -n "${CLIKAE_ADOPT_READONLY:-}" ] && continue
       tank_marker_write "$cli" "$path"
       _CLIKAE_ADOPT_LAST_COUNT=$((_CLIKAE_ADOPT_LAST_COUNT + 1))
     done < <(_tank_candidates "${cli_dir%/}")
   done
   _CLIKAE_INMEM_ADOPTED_ACTIVE=1
+  if [ -n "${CLIKAE_ADOPT_READONLY:-}" ]; then
+    # Nothing written, nothing to warn about: this run's answers live in
+    # memory and die with the process.
+    _CLIKAE_ADOPT_LAST_FLAG_OK=0
+    return 0
+  fi
   if tanks_adopted_flag_write "$flag"; then
     _CLIKAE_ADOPT_LAST_FLAG_OK=1
     _CLIKAE_INMEM_ADOPTED_ACTIVE=""   # on disk now — strict marker mode is correct
@@ -697,6 +717,15 @@ $fps
 EOF
   return 1
 }
+
+# The process-level cache profiles_cache_warm fills (see below). Declared
+# HERE, at file scope, not merely assigned inside that function: a caller
+# running under `set -u` that sources this file and calls list_all_profiles
+# without warming anything must not die on an unset variable —
+# lib/hooks/cockpit-guard.sh (a Claude Code PreToolUse hook, its own process,
+# `set -euo pipefail`) is exactly that caller.
+_CLIKAE_PROFILES_CACHE_SET=""
+_CLIKAE_PROFILES_CACHE=""
 
 # List every profile as "<cli> <profile> <path>" lines, sorted. THE one
 # enumerator (clikae tanks / burn's reroute / to's and resume's next_tank all

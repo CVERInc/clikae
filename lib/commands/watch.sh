@@ -1,10 +1,22 @@
 # shellcheck shell=bash
 # lib/commands/watch.sh — `clikae watch <engine> [<tank>] [--auto] [--to <t>]`
+#                          `clikae watch github [--org <o>] [--interval <d>] [--once]`
 #
 # Ambient relay: watch the current session's transcript and, when it looks like
 # the tank ran dry, hand off to the next tank — offering first (default), or
 # automatically once you've consented (--auto). Philosophy: quietly help, then
 # tell you what it did.
+#
+# `github` is a second SOURCE under the same verb, not a parallel command
+# (#46) — it watches GitHub's search API instead of a transcript, and turns a
+# reply/@mention into a wake line instead of an offer to switch tanks. Its
+# flag set (--org/--interval/--once) doesn't fit the engine-watching case
+# above, so it's dispatched before the shared flag parser and implemented in
+# lib/commands/watch_github.sh (read that file's header for the wake-event
+# design — there's no `clikae go` command and no generic wake bus, so it says
+# plainly what mechanism it actually uses instead of the issue's own guess).
+# shellcheck source=./watch_github.sh
+source "$CLIKAE_LIB/commands/watch_github.sh"
 #
 # ⚠️ WHAT THIS CAN AND CANNOT SEE. An interactive CLI hitting its usage limit does
 # not exit, returns no code, and fires no hook — so the only signal we can watch
@@ -75,6 +87,17 @@ _watch_grant_consent() {
 }
 
 cmd_watch() {
+  # `github` is a source, not an engine — its own flag set (--org/--interval/
+  # --once) doesn't fit the loop below, so hand off before any of it runs.
+  # Mirrors clikae_is_target's "target-ness wins" precedence check further
+  # down: a keyword this command itself defines is resolved before ever
+  # treating the first argument as an engine name.
+  if [ "${1:-}" = "github" ]; then
+    shift
+    cmd_watch_github "$@"
+    return $?
+  fi
+
   local cli="" profile="" got_profile=0 to="" auto=0 check=0 pattern="" pattern_explicit=0
   local -a positionals=()
   while [ $# -gt 0 ]; do
@@ -83,6 +106,11 @@ cmd_watch() {
         cat <<'EOF'
 Usage: clikae watch <engine> [<tank>] [--to <target>] [--auto] [--check]
                      [--pattern <regex>]
+       clikae watch github [--org <org>] [--interval <dur>] [--once]
+
+A different source: `clikae watch github` polls GitHub's search API for
+replies/@mentions instead of watching a tank's transcript. See:
+  clikae watch github --help
 
 Watch the current directory's session and, when it looks like the tank ran dry,
 hand off to the next tank. By default it OFFERS (asks first); with --auto it

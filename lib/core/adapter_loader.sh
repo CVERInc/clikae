@@ -180,7 +180,7 @@ load_adapter() {
            adapter_meta_strategy adapter_meta_description \
            adapter_meta_permission_modes \
            adapter_export_env adapter_run adapter_init \
-           adapter_relay adapter_transcript_path adapter_start_with_prompt \
+           adapter_relay adapter_transcript_path adapter_handoff_extract adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
            adapter_memory_dir adapter_memory_pointer_path adapter_install_hint adapter_burn_flags \
            adapter_audit_flags \

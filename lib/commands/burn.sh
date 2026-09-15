@@ -19,6 +19,8 @@
 source "$CLIKAE_LIB/commands/antigravity.sh"
 # shellcheck source=../core/duration.sh
 source "$CLIKAE_LIB/core/duration.sh"
+# shellcheck source=./cockpit.sh
+source "$CLIKAE_LIB/commands/cockpit.sh"
 
 # Exit-code contract (also documented in _burn_help's "Outcomes:" below — ONE
 # place, this constant is what both the code and the prose actually use).
@@ -38,7 +40,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
-                   [--permission <acceptEdits|auto>]
+                   [--permission <acceptEdits|auto>] [--force-cockpit]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -103,6 +105,13 @@ Give the task in one of two ways:
                       the tank you're mid-conversation on would silently burn
                       that quota, and two burns on one tank collide on the tmux
                       session name) and tanks sharing an already-dry account.
+  --force-cockpit     operator override: burn the tank recorded by `clikae
+                      cockpit` anyway. Without it, every launch onto the
+                      cockpit — the tank you name, a --to hop, an agy walk — is
+                      refused before the engine starts (#63): a burn there
+                      spends the steering tank's own budget. With it, burn says
+                      on stderr that it is doing exactly that. Auto-reroute
+                      never picks the cockpit, with or without this flag.
   --wait-for-reset <dur>   (#38) when a tank runs dry AND its vendor-reported
                       reset falls within <dur> (e.g. `30m`, `2h`, `90s`, or a
                       bare integer of seconds), sleep until the reset and re-fire
@@ -424,6 +433,44 @@ _burn_dry_epoch() {
   limit_reset_epoch "$1" "$(date +%s)"
 }
 
+# _burn_cockpit_gate <engine> <tank> <force_cockpit> -> 0 when a burn may launch
+# on <engine>/<tank>; 1 (sentence in $_BURN_COCKPIT_REFUSAL) when it is the
+# recorded cockpit and the operator did not pass --force-cockpit.
+#
+# #63 round-5 P2-1: cockpit-guard.sh is an in-session tripwire — a PreToolUse
+# hook on the cockpit's own Agent tool. It never sees a HEADLESS launch, and
+# before this gate the only launch-side protection was _burn_next_same_engine
+# skipping the cockpit during AUTOMATIC reroute: `clikae burn claude <cockpit>`
+# named explicitly (or reached with --to, or by agy's own walk) ran straight
+# through, rc=0. This extends the issue's tripwire to the launch path: ONE
+# predicate (_cockpit_is_recorded — by name or by physical tank identity),
+# asked before every engine launch, refusing with the guard's own sentence.
+# The override is explicit and loud, never silent.
+#
+# #63 round-6 P3-2: a state file that EXISTS but does not parse as a clean
+# "<engine>/<tank>" record (mode 000, a symlink, a stray CR) used to read
+# back as EMPTY — identical to no cockpit ever having been recorded — so
+# every launch sailed through onto whatever the corrupt file was failing to
+# protect. "Cannot read" is a reason to refuse EVERY burn (not just one
+# whose target happens to match), because clikae has no way to know which
+# tank the file meant; --force-cockpit does not override this, since there
+# is nothing named here to knowingly force. Absent state (never recorded)
+# is unaffected.
+_burn_cockpit_gate() {
+  _BURN_COCKPIT_REFUSAL=""
+  if _cockpit_state_unparseable; then
+    _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $(_cockpit_state_file) exists but does not read back as a clean <engine>/<tank> cockpit record, so clikae cannot tell whether $1/$2 is the recorded cockpit. Run \`clikae doctor\` to see what's wrong, then \`clikae cockpit --off\` to clear it (or \`clikae cockpit <engine> <tank>\` to re-record it) before burning."
+    return 1
+  fi
+  _cockpit_is_recorded "$1" "$2" || return 0
+  if [ "$3" = 1 ]; then
+    log_warn "--force-cockpit: burning $1/$2 even though it is the recorded cockpit (operator override — this spends the steering tank's own budget)."
+    return 0
+  fi
+  _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $1/$2 is the recorded cockpit (the tank that dispatches burns); burning it spends the steering tank's own budget. Dispatch to another tank, or pass --force-cockpit to override."
+  return 1
+}
+
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
 # The next same-engine tank to reroute a dry burn onto, in listing order — but the
 # reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
@@ -431,6 +478,22 @@ _burn_dry_epoch() {
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
+#   · P0-cockpit (#63 P3-5, round-4 review) — SKIP the recorded cockpit tank,
+#     EXPLICITLY, unconditionally (not even --allow-active lifts this one).
+#     This used to be covered only BY ACCIDENT, through P0 above: a cockpit
+#     tank normally has an interactive session sitting on it, so the
+#     live-session check happened to catch it. But cockpit-guard.sh is a
+#     Claude Code PreToolUse hook — it only ever fires from inside a live
+#     Claude Code session — and a headless `clikae burn` run is exactly the
+#     kind of caller it can never see. The moment the cockpit's own session
+#     isn't there (the operator stepped away; the role outlives that one
+#     session), nothing else here would have stopped a dry-tank reroute from
+#     landing dispatched work directly on the tank that's supposed to be
+#     doing the dispatching — the guard that exists is architecturally
+#     unable to catch it from this caller. cockpit-guard.sh's OWN reserve
+#     listing (the one it prints in a refusal) already excludes the cockpit
+#     this same way; auto-reroute needed the identical rule, not a
+#     coincidence of P0.
 #   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
@@ -441,6 +504,10 @@ _burn_next_same_engine() {
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
     tank_is_solo "$cli" "$t" && continue   # solo tanks are out of the fleet — never an auto-reroute target
+    if _cockpit_is_recorded "$cli" "$t"; then
+      log_warn "skipping $cli/$t — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+      continue
+    fi
     tdir="$(profile_dir "$cli" "$t")"
     if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
        && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then
@@ -500,15 +567,40 @@ _burn_size() {
 # this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
 # overrides the default (7); 0 disables the sweep (kept forever, old
 # behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+# Also sweeps `watch-github-*` run dirs (P3-3, 2026-09-13 fix-round-3
+# review): those had ONLY _wg_runs_rotate's 200-directory count cap, no
+# day-based retention — same directory, same shape, same policy belongs.
+#
+# <dry_run> (P3-2, 2026-09-14 fix-round-4 review): `clikae clean --dry-run`
+# skips the actual `rm -rf` (unchanged) but now names what it WOULD have
+# swept — round 3 wired this sweep into `clean` and left its own preview
+# silently incomplete ("the sweep itself has none"), the one command whose
+# whole point is a caller checking before the real run.
+# shellcheck disable=SC2120  # called with an arg from clean.sh, a separate
+# sourced file shellcheck's per-invocation call-site scan doesn't see.
 _burn_sweep_old_logs() {
-  local base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  local dry_run="${1:-0}" base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
   case "$days" in ''|*[!0-9]*) return 0 ;; esac
   [ "$days" -gt 0 ] || return 0
   [ -d "$base" ] || return 0
-  local d
+  local d n=0
   while IFS= read -r -d '' d; do
-    rm -rf "$d" 2>/dev/null || true
-  done < <(find "$base" -maxdepth 1 -type d -name 'burn-*' -mtime "+$days" -print0 2>/dev/null)
+    # 🔴 P2-3 (2026-09-14 watch-github fix-round-7 review): the
+    # `watch-github-*` glob also matched the org's DURABLE log
+    # `watch-github-<org>/events.jsonl`, whose directory mtime never moves
+    # on append — every burn/clean eight days after a watcher started
+    # deleted its whole history. A run directory always has status.json
+    # (_wg_status_write); the durable one never does. The name alone can't
+    # tell them apart: an org may itself be called `foo-2024`.
+    case "${d##*/}" in
+      watch-github-*) [ -f "$d/status.json" ] || continue ;;
+    esac
+    n=$((n + 1))
+    [ "$dry_run" -eq 1 ] || rm -rf "$d" 2>/dev/null || true
+  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*-[0-9]*' \) -mtime "+$days" -print0 2>/dev/null)
+  if [ "$dry_run" -eq 1 ] && [ "$n" -gt 0 ]; then
+    log_info "clean --dry-run: would also sweep $n old burn/watch-github log director$([ "$n" -eq 1 ] && printf y || printf ies) (older than ${days}d)."
+  fi
 }
 
 # Capture evidence beside the engine, before publishing completion. Consumers
@@ -873,6 +965,22 @@ _agy_burn() {
     while IFS= read -r _agy_cand; do
       [ -n "$_agy_cand" ] || continue
       case " ${agy_tried[*]} " in *" $_agy_cand "*) continue ;; esac
+      # #63 round-5 P2-1: the same launch gate cmd_burn asks, applied to agy's
+      # own walk — the cockpit is skipped, never launched.
+      # #63 round-6 P3-1: `_agy_burn`'s automatic walk (picking the NEXT
+      # tank after a dry one) always passed force_cockpit through, so
+      # `burn agy default --force-cockpit` — a flag the operator gave for
+      # the NAMED target — also let the WALK land on the cockpit, exactly
+      # what the help text (`--force-cockpit … Auto-reroute never picks the
+      # cockpit, with or without this flag`) and fix5's own report both
+      # promised would never happen. Pass 0 here, unconditionally: the walk
+      # is automatic, never named by the operator, so nothing it picks is
+      # ever "forced" onto the cockpit — same rule _burn_next_same_engine
+      # already follows for claude/codex's own auto-reroute.
+      if ! _burn_cockpit_gate agy "$_agy_cand" 0; then
+        log_warn "skipping agy/$_agy_cand — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+        continue
+      fi
       if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$_agy_cand" "$$"; then
         log_warn "skipping agy/$_agy_cand — another burn is already running on it (#40; --allow-active to override)."
         continue
@@ -2095,7 +2203,7 @@ cmd_burn() {
   local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
-  local wait_for_reset_raw="" wait_for_reset_s=""
+  local wait_for_reset_raw="" wait_for_reset_s="" force_cockpit=0
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
   # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
   # caller that ever reads this default value directly, before any reset
@@ -2135,6 +2243,7 @@ cmd_burn() {
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
@@ -2269,6 +2378,15 @@ cmd_burn() {
   # with an agy row that used a different spelling of the same engine.
   local status_engine="$cli"
   [ "$status_engine" = antigravity ] && status_engine=agy
+
+  # #63 round-5 P2-1: the named target, before any lock, --fresh deletion or
+  # engine launch. The status file is written first so `clikae wait burn-<pid>`
+  # reads a terminal refusal instead of stalling on a burn that never started.
+  if ! _burn_cockpit_gate "$status_engine" "$tank" "$force_cockpit"; then
+    _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+      "cockpit: $status_engine/$tank is the recorded cockpit (--force-cockpit to override)" ""
+    log_fail "$_BURN_COCKPIT_REFUSAL"
+  fi
 
   # #40: refuse to START a burn on a tank that already has one running —
   # detected from #41's own status files (a `state: running` row whose pid is
@@ -2651,6 +2769,22 @@ _NS_EOF
         # Readonly builtins in the child would fail loudly and dirty the pane;
         # restoring an environment is best-effort by nature.
         printf '} 2>/dev/null\n'
+      } >> "$wrapper_script"
+
+      # P2-3 (clikae#97 review round 1). The restore above puts the CALLER's
+      # PATH back verbatim — for an unattended `clikae burn` (cron, CI, a
+      # plain shell that never ran through tmux_spawn_session, which is
+      # burn's actual home turf) that PATH has no guard on it at all. Because
+      # this restore runs FIRST in the wrapper, it clobbers whatever
+      # tmux_spawn_session (below) put on the session's own PATH before the
+      # engine this wrapper goes on to exec ever sees it. Re-prepend AFTER
+      # the restore, idempotently, so the engine's PATH always has the guard
+      # first regardless of what the caller's own PATH looked like.
+      {
+        printf 'case "$PATH" in\n'
+        printf '  %q:*) : ;;\n' "$CLIKAE_LIB/shims"
+        printf '  *) PATH=%q":$PATH"; export PATH ;;\n' "$CLIKAE_LIB/shims"
+        printf 'esac\n'
       } >> "$wrapper_script"
 
       {
@@ -3198,6 +3332,15 @@ KV
         fi
         log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       fi
+    fi
+    # #63 round-5 P2-1: every hop — an explicit --to included — asks the same
+    # gate the named target did. An explicit hop onto the cockpit is refused,
+    # not skipped: the caller named it.
+    if ! _burn_cockpit_gate "$cli" "$nx_tank" "$force_cockpit"; then
+      _burn_status_write fail false "$cli" "$nx_tank" "$artifact" \
+        "cockpit: $cli/$nx_tank is the recorded cockpit (--force-cockpit to override)" ""
+      _burn_result false "$cli" "$nx_tank" "$artifact" "refused: $cli/$nx_tank is the recorded cockpit"
+      log_fail "$_BURN_COCKPIT_REFUSAL"
     fi
     cur="$nx_tank"
     infra_attempt=0; retry_delay="$infra_delay"

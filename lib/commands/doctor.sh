@@ -182,6 +182,126 @@ _doctor_legacy_prefix() {
   return 0
 }
 
+# _doctor_pane_path <pid> -> the PATH value from that PROCESS's real
+# environment (P1-2, clikae#97 review round 1). NOT tmux's session table:
+# `tmux_spawn_session` (lib/core/tmux.sh, Rule 10) writes the shim dir into
+# the session table via `-e` AND wraps the pane's own start command with
+# `env PATH=…` — but a pane's real process gets the SPAWNING CLIENT's live
+# PATH, which `-e` never touches, so reading `show-environment -t` back only
+# ever proves what was ASKED for, never what the process actually got. The
+# original version of this probe did exactly that, and structurally could
+# not have gone red for a session spawned through `tmux_spawn_session`,
+# guard present or not: it always read back its own `-e` write.
+#
+# Linux reads /proc directly. macOS has no /proc; `ps eww` (BSD ps: e = show
+# environment, ww = don't truncate) is the documented fallback — it appends
+# "KEY=value" pairs after the command, space-separated, which is unambiguous
+# for PATH except in the (unsupported) case of a PATH entry that itself
+# contains a space.
+#
+# 🔴 THE LAST `PATH=` TOKEN, NOT THE FIRST (P2-4, clikae#97 review round 2).
+# `ps eww` prints the COMMAND first, the ENVIRONMENT after — and Rule 10's own
+# pane start command is `env PATH=<shim dir>:... <cmd>` (lib/core/tmux.sh),
+# so a pane's command line legitimately CONTAINS the literal text "PATH=…"
+# before its real environment's own "PATH=…" ever appears. `head -n1` took
+# the FIRST match — the command line's own text, not what the process
+# actually got — which is exactly the write-and-read-back-the-same-pipe bug
+# P1-2 fixed for `show-environment`, reopened here for a platform nothing
+# local can exercise (see below). `tail -n1` takes the real one.
+_doctor_pane_path() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  # 🔴 NONZERO MEANS "COULD NOT READ", NEVER "NO GUARD" (P3-4, clikae#97
+  # review round 3). The caller reports the two differently, so every way
+  # this can fail to see the process returns 1 instead of printing nothing:
+  # a pid that exited between `list-panes` and here, an environ that reads
+  # back empty (a zombie), `ps` failing or printing no PATH. Only a process
+  # whose environment WAS read gets rc 0, even if it has no PATH at all.
+  local env_dump=""
+  if [ -r "/proc/$pid/environ" ]; then
+    env_dump="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)" || return 1
+    [ -n "$env_dump" ] || return 1
+    printf '%s\n' "$env_dump" | sed -n 's/^PATH=//p' | head -n1
+    return 0
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    # `|| true` is LOAD-BEARING, same reason as lib/core/proc.sh:35-40: on a
+    # locked-down host `ps eww` can exit non-zero, and under doctor's own
+    # `set -eo pipefail` (bin/clikae) a leaked failure here would abort the
+    # WHOLE health check, not just this one probe.
+    Darwin)
+      env_dump="$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | tail -n1)" || true
+      [ -n "$env_dump" ] || return 1
+      printf '%s\n' "$env_dump"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# _doctor_tmux_guard -> say something ONLY when a live clikae session's PANE
+# PROCESS does not have the tmux guard shim first on its real PATH
+# (CVERInc/clikae#97, lib/shims/tmux — refuses a bare kill-server/kill-session
+# while $TMUX is inherited, rc 86).
+#
+# 🔴 FIRST, not just present. `tmux_spawn_session` is the only place that
+# arranges it, and a session captures its creating client's PATH once, at
+# birth (DESIGN-tmux Rule 8) — nothing repaints it later. So a session
+# started before the guard shipped, or one whose spawn path drifted around
+# Rule 10, is silently unprotected for its whole life; the only way to know
+# is to ask THAT session's own pane process what its PATH actually is
+# (`_doctor_pane_path`, above), not this process's, and not tmux's table.
+_doctor_tmux_guard() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  # P3 (clikae#97 review round 1): this is DOCTOR's own process's
+  # $CLIKAE_LIB, compared against sessions doctor did not necessarily spawn.
+  # Two copies of clikae on one machine (a release install plus a checkout
+  # like this review's own worktree) can each spawn sessions from a
+  # different $CLIKAE_LIB, and this only ever matches its OWN. A known,
+  # narrow blind spot — not fixed here — rather than a claim this covers
+  # every install on the machine.
+  local shim_dir="$CLIKAE_LIB/shims"
+  local sess created attached pid pane_path missing="" unknown=""
+  while IFS=$'\t' read -r sess created attached; do
+    [ -n "$sess" ] || continue
+    : "$created" "$attached"
+    # `|| true` / `if !`: doctor runs under `set -eo pipefail` (bin/clikae),
+    # and neither failure here is this whole command's business to abort on
+    # (P2-4, clikae#97 review round 2, mirroring lib/core/proc.sh:35-40).
+    #
+    # 🔴 "COULD NOT READ" IS ITS OWN ANSWER (P3-4, clikae#97 review round 3).
+    # `list-panes` on a session that ended between the listing above and
+    # here, a pane pid that is already gone, or an environment this user
+    # cannot read all used to land in `missing`, printing "not first on
+    # PATH" and "restart the tank" about a session nobody actually looked
+    # at. Measured for all three. They go to `unknown` now, which says only
+    # that the guard could not be verified.
+    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)" || true
+    if [ -z "$pid" ]; then
+      unknown="$unknown $sess"
+      continue
+    fi
+    if ! pane_path="$(_doctor_pane_path "$pid")"; then
+      unknown="$unknown $sess"
+      continue
+    fi
+    case "$pane_path" in
+      "$shim_dir:"*|"$shim_dir") continue ;;
+      *) missing="$missing $sess" ;;
+    esac
+  done <<EOF
+$(live_session_names 2>/dev/null || true)
+EOF
+  if [ -n "$missing" ]; then
+    printf '  %-16s %s\n' "tmux guard" "not first on PATH:$missing"
+    log_dim "                   (started before the guard, or outside tmux_spawn_session — reattach won't fix it, restart the tank to pick it up)"
+  fi
+  if [ -n "$unknown" ]; then
+    printf '  %-16s %s\n' "tmux guard" "unknown, could not verify:$unknown"
+    log_dim "                   (couldn't read that session's pane process — it may have just ended, or its environment isn't readable by this user)"
+  fi
+  return 0
+}
+
 # _doctor_memory -> say something ONLY when a Soul store cannot be read.
 #
 # 🔴 WHY DOCTOR AND NOT JUST THE LAUNCH WARNING. memory_access_warn fires when a
@@ -306,6 +426,93 @@ EOF
   return 0
 }
 
+# _doctor_cockpit -> say something ONLY when the recorded cockpit and the
+# guard actually on disk disagree (#63 round-4 review, P3-7 + the other half
+# of P2-1). Nothing else checks this: `clikae cockpit` (_cockpit_show) only
+# asks whether the NAMED tank exists, never whether it's armed, so a state
+# write that races a guard write (P2-1) — or any other cause of drift, a
+# hand-edited settings.json, a `--off` that died partway through — left a
+# cockpit that reported healthy and stayed silent forever after. Read-only:
+# this names the mismatch, it does not repair it (`clikae cockpit --off`
+# sweeps every guard regardless of what state says).
+_doctor_cockpit() {
+  declare -F _cockpit_state_file >/dev/null 2>&1 || {
+    # shellcheck source=./cockpit.sh
+    source "$CLIKAE_LIB/commands/cockpit.sh"
+  }
+  local state_file; state_file="$(_cockpit_state_file)"
+  # #63 round-5 P2-3: this used to return right here when state was absent or
+  # empty — exactly the state a crash mid-write left behind (both tanks
+  # guarded, nothing recorded), so doctor said nothing. The guard scan below
+  # now always runs; only the "is the recorded tank armed" half needs a record.
+  if ! _cockpit_state_path_ok; then
+    printf '  %-16s %s\n' "cockpit" "state file $state_file (or its directory) is a symlink or not a regular file — it is ignored, and clikae cockpit refuses to change the role until it is removed"
+  fi
+  # #63 round-5 P2-4: a transition killed while holding the settings lock
+  # leaves it behind, and every later `clikae cockpit` refuses — name it here.
+  local lock="$CLIKAE_HOME/state/settings.lock" lock_pid
+  if [ -d "$lock" ]; then
+    lock_pid="$(head -n 1 "$lock/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      printf '  %-16s %s\n' "cockpit" "stale settings lock $lock (pid $lock_pid is not running) — a cockpit/settings change died mid-way; check the lines below, then: rm -rf '$lock'"
+    elif [ -z "$lock_pid" ]; then
+      # #63 round-6 P3-3: a crash between the `mkdir` and the pid-file write
+      # leaves a lock dir with no pid file at all — the check above requires
+      # a NON-EMPTY dead pid to speak up, so this shape went unreported:
+      # every waiting command silently timed out (CLIKAE_SETTINGS_LOCK_WAIT_S,
+      # default 20s) and said "in progress (pid unknown)" with no hint doctor
+      # already knew something was wrong.
+      printf '  %-16s %s\n' "cockpit" "settings lock $lock has no pid file — a cockpit/settings change likely died between taking the lock and recording its pid; every waiting command times out until it clears. If nothing is actually mid-transition: rm -rf '$lock'"
+    fi
+  fi
+  local cur; cur="$(_cockpit_state_read)"
+  local cur_engine="" cur_tank=""
+  case "$cur" in
+    '') ;;
+    */*) cur_engine="${cur%%/*}"; cur_tank="${cur#*/}" ;;
+    *) printf '  %-16s %s\n' "cockpit" "state file $state_file does not name an <engine>/<tank> (reads: $cur) — fix: clikae cockpit --off"
+       cur="" ;;
+  esac
+
+  local cli profile path
+  local named_exists=0 named_has_guard=0 strays=""
+  while IFS=$'\t' read -r cli profile path; do
+    [ -n "$cli" ] || continue
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_exists=1
+    fi
+    [ -f "$path/settings.json" ] || continue
+    grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    if [ -n "$cur" ] && [ "$cli" = "$cur_engine" ] && [ "$profile" = "$cur_tank" ]; then
+      named_has_guard=1
+    else
+      strays="$strays $cli/$profile"
+    fi
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+
+  if [ -z "$cur" ]; then
+    if [ -n "$strays" ]; then
+      printf '  %-16s %s\n' "cockpit" "guard found on tank(s) but no cockpit is recorded:$strays"
+      log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+    fi
+    return 0
+  fi
+
+  if [ "$named_exists" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur no longer exists — fix: clikae cockpit --off"
+  elif [ "$named_has_guard" -eq 0 ]; then
+    printf '  %-16s %s\n' "cockpit" "recorded cockpit $cur has NO guard installed — the in-session dispatch rule is NOT being enforced"
+    log_dim "                   fix: clikae cockpit $cur_engine $cur_tank"
+  fi
+  if [ -n "$strays" ]; then
+    printf '  %-16s %s\n' "cockpit" "guard also found on tank(s) that are not the recorded cockpit:$strays"
+    log_dim "                   fix: clikae cockpit --off, then clikae cockpit <the right tank>"
+  fi
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -409,7 +616,9 @@ EOF
   echo ""
   _doctor_stray_dirs
   _doctor_legacy_prefix
+  _doctor_tmux_guard
   _doctor_memory
+  _doctor_cockpit
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"

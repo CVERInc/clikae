@@ -67,3 +67,31 @@ _seed_trailing_non_tank_store() {
   [[ "$output" == *"ok"* ]] || false
   [[ "$output" != *"zzstray"* ]] || false
 }
+
+# #61 round-5 merge: lib/commands/cockpit.sh:428's comment ("the FIRST tank
+# `list_all_profiles`' `| sort` puts in front of a real cockpit tank") states
+# an ORDERING guarantee that nothing asserted — and the marker rewrite moved
+# the walk and added a process-level cache in front of it. Both paths (cold
+# walk and warmed cache) must still come out sorted.
+@test "enumerator order: list_all_profiles is sorted, cold and cache-warmed (cockpit.sh --off depends on it)" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/mid" "$CLIKAE_HOME/profiles/claude/aaa" \
+           "$CLIKAE_HOME/profiles/claude/zzz" "$CLIKAE_HOME/profiles/codex/bbb"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/mid/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/aaa/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/zzz/.clikae-tank"
+  printf 'codex\n'  > "$CLIKAE_HOME/profiles/codex/bbb/.clikae-tank"
+  run bash -c '
+    set -eo pipefail
+    CLIKAE_ROOT="'"$CLIKAE_TEST_ROOT"'"; CLIKAE_LIB="$CLIKAE_ROOT/lib"
+    source "$CLIKAE_LIB/core/adapter_loader.sh"
+    source "$CLIKAE_LIB/core/profile_store.sh"
+    cold="$(list_all_profiles)"
+    profiles_cache_warm
+    warm="$(list_all_profiles)"
+    [ "$cold" = "$(printf "%s\n" "$cold" | sort)" ] || { echo "COLD UNSORTED: $cold"; exit 1; }
+    [ "$warm" = "$cold" ] || { echo "WARM DIFFERS: $warm"; exit 1; }
+    printf "%s\n" "$cold" | cut -f1,2 | tr "\t" "/" | tr "\n" " "
+  '
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "claude/aaa claude/mid claude/zzz codex/bbb " ] || { echo "order=[$output]"; false; }
+}

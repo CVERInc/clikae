@@ -433,6 +433,54 @@ PSSTUB
   [ -f "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" ]
 }
 
+# P3-3 (2026-09-13 fix-round-3 review): `clikae clean` had NO notion of
+# ~/.clikae/logs at all — burn's own day-based retention sweep
+# (_burn_sweep_old_logs) only ever ran as a side effect of `clikae burn`
+# itself. clean.sh already sources burn.sh (for the tank-lock GC) — wired
+# in here too, real deletion only outside --dry-run.
+@test "clean (P3-3): a stale watch-github-* run directory is swept by a plain 'clikae clean', not just 'clikae burn'" {
+  mkdir -p "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  printf '{"ok":true}' > "$HOME/.clikae/logs/watch-github-CVERInc-99999/status.json"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]   # --dry-run: not yet
+  # P3-2 (2026-09-14 fix-round-4 review): the preview now NAMES this sweep
+  # instead of silently doing nothing about it.
+  [[ "$output" == *"would also sweep 1 old burn/watch-github log directory"* ]] || false
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]
+}
+
+# P2-3 (2026-09-14 fix-round-7 review): `watch-github-*` also matched the
+# org's DURABLE log directory, `watch-github-<org>/events.jsonl`, and an
+# append never moves a directory's mtime — so eight days after a watcher
+# started, any `clikae clean` or `clikae burn` deleted its whole event
+# history. Only run directories (a status.json inside) are swept now; an
+# org whose own name ends in digits must not look like a run either.
+@test "clean (P2-3): an old watch-github-<org> durable log directory is never swept; a stale run directory still is" {
+  local logs="$HOME/.clikae/logs" eight
+  eight="$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')"
+  mkdir -p "$logs/watch-github-CVERInc" "$logs/watch-github-CVERInc-2024" "$logs/watch-github-CVERInc-99999"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc/events.jsonl"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc-2024/events.jsonl"
+  printf '{"ok":true}' > "$logs/watch-github-CVERInc-99999/status.json"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc-99999/events.jsonl"
+  touch -t "$eight" "$logs/watch-github-CVERInc" "$logs/watch-github-CVERInc-2024" "$logs/watch-github-CVERInc-99999"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"would also sweep 1 old burn/watch-github log directory"* ]] || { echo "$output"; false; }
+
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$logs/watch-github-CVERInc/events.jsonl" ]
+  [ -f "$logs/watch-github-CVERInc-2024/events.jsonl" ]
+  [ ! -d "$logs/watch-github-CVERInc-99999" ]
+}
+
 @test "clean --help documents the sections and axes" {
   run clikae clean --help
   [ "$status" -eq 0 ]
