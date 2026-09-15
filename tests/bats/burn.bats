@@ -4129,3 +4129,58 @@ STUB
   [ "$rc" -ne 124 ] || { echo "an externally killed child was reported as a timeout it never hit"; false; }
   [ "$rc" -eq 143 ] || { echo "rc=$rc, expected 143 (killed by SIGTERM from outside)"; false; }
 }
+
+# P3-2 (round-6 review): `set -m` is what gives the bounded child its own
+# process group — and a terminal sends SIGINT only to its FOREGROUND group, so
+# from that fix onwards Ctrl-C stopped reaching the scan. Measured pre-fix:
+# burn died instantly and the child plus its own children kept running with
+# ppid=1 for the rest of the bound. The bound here (20s) is far longer than
+# this test's own patience on purpose: only the INT forward can end it in time.
+@test "burn #84 P3-2 (round-6 review): an interrupt during a bounded call stops the scan's own process group" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  local forker="$BATS_TEST_TMPDIR/forker-int" pidfile="$BATS_TEST_TMPDIR/int.pid" probe="$BATS_TEST_TMPDIR/probe-int"
+  local probe_out="$BATS_TEST_TMPDIR/probe-int.out"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# A background job of a shell WITHOUT job control inherits SIGINT=SIG_IGN
+# (POSIX), which \`find\`'s own \`-exec\` children never do — find is not a
+# shell. python3 puts the disposition back to default before exec so this
+# fixture has the shape the fix is actually about, not a shell artefact.
+python3 -c 'import os, signal; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp("sleep", ["sleep", "120"])' &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  cat > "$probe" <<STUB
+#!/usr/bin/env bash
+export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+self=\$\$
+( sleep 2; [ "\$self" -gt 1 ] && kill -INT "\$self" 2>/dev/null ) &
+rc=0
+_burn_lb_bounded 20 "$forker" || rc=\$?
+printf 'bounded returned %s\n' "\$rc"
+STUB
+  chmod +x "$probe"
+  local t0 t1
+  t0="$(date +%s)"
+  # The probe's own output goes to a FILE, never to `run`'s capture pipe: a
+  # child that outlives this call would hold that pipe open and wedge the whole
+  # suite (`run` waits for EOF, not for the process — the same fd-lifetime trap
+  # `_burn_lb_bounded`'s watchdog redirects itself away from).
+  run "$timeout_bin" -s KILL 15 bash -c '"$0" > "$1" 2>&1' "$probe" "$probe_out"
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
+  local gpid; gpid="$(cat "$pidfile")"
+  sleep 1
+  local alive=0
+  [ "$gpid" -gt 1 ] 2>/dev/null || { echo "bad child pid '$gpid'"; false; }
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 12 ] || { echo "the interrupt took $((t1 - t0))s to come back"; false; }
+  [ "$status" -eq 130 ] || { echo "probe exited $status, expected 130 (it re-raises the interrupt); it said: $(cat "$probe_out" 2>/dev/null)"; false; }
+  [ "$alive" -eq 0 ] || { echo "the scan's child $gpid outlived the interrupt"; false; }
+}

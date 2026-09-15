@@ -1107,6 +1107,16 @@ _burn_lb_now_ms() {
   return 0
 }
 
+# Remembers the caller's own INT disposition once per shell so the trap
+# `_burn_lb_bounded` installs can be taken back off exactly, not with a blanket
+# `trap - INT` — `cmd_burn` installs `_burn_exit_guard` on INT (see below), and
+# a helper that quietly deletes it would trade this round's fix for a worse bug.
+_burn_lb_int_save() {
+  case "${_BURN_LB_INT_PREV+set}" in set) return 0 ;; esac
+  _BURN_LB_INT_PREV="$(trap -p INT 2>/dev/null)" || _BURN_LB_INT_PREV=''
+  return 0
+}
+
 _burn_lb_bounded() {
   local secs="$1"; shift
   local start=$SECONDS pid watcher rc mflag kill_mark
@@ -1228,6 +1238,24 @@ _burn_lb_bounded() {
   ) >/dev/null 2>&1 3>&- 4>&- &
   watcher=$!
   [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
+  # P3-2 (round-6 review): `set -m` above is what puts the child in a process
+  # group of its own — and a terminal delivers SIGINT only to its FOREGROUND
+  # process group, so from the moment that fix landed, Ctrl-C during a scan
+  # stopped reaching the `find`/`git` the scan is waiting on. Measured: burn
+  # died instantly and its bounded child plus the watchdog's `sleep` kept
+  # running, orphaned (`ppid=1`), chewing the disk for the rest of the bound.
+  # Forwarding INT to the child's GROUP restores the pre-`set -m` behaviour:
+  # the scan stops now, the watchdog's TERM/KILL is still there as the backstop
+  # for a child that ignores INT, and the interrupt is re-raised below so burn
+  # exits the way an interrupted command is supposed to and the operator gets
+  # their shell back.
+  _burn_lb_int_save
+  _BURN_LB_INT=0
+  # `$pid` is baked in ON PURPOSE (SC2064): by the time this fires, `$pid` may
+  # already belong to the NEXT bounded call, and signalling that one's group
+  # would be the very footgun the guard above exists to stop.
+  # shellcheck disable=SC2064
+  trap "_BURN_LB_INT=1; _burn_lb_kill INT $pid || true" INT
   # This whole function runs under the caller's `set -eo pipefail`
   # (bin/clikae:6, same as every other git call in this file). `wait`'s
   # own exit status is the waited-on job's exit status — non-zero for
@@ -1244,6 +1272,7 @@ _burn_lb_bounded() {
   # target has already exited (the common, non-timeout case).
   rc=0
   wait "$pid" 2>/dev/null || rc=$?
+  if [ -n "${_BURN_LB_INT_PREV:-}" ]; then eval "$_BURN_LB_INT_PREV"; else trap - INT; fi
   if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
     # The watchdog fired and is inside its own TERM→KILL grace (P3-3 above).
     # Waiting it out costs one extra second on a path that has already spent
@@ -1298,6 +1327,19 @@ _burn_lb_bounded() {
           timed_out=1
         fi
         ;;
+    esac
+  fi
+  # Re-raise the interrupt we swallowed (P3-2) now that the child is reaped and
+  # the temp file is gone: the caller's own INT disposition is back in place,
+  # so this is `cmd_burn`'s `_burn_exit_guard 130` in a real burn and a plain
+  # 130 exit anywhere else. `$$` is bash's own pid — never 0, never empty —
+  # and is asserted anyway, because this file's one rule about `kill` is that
+  # the target is proven before it is used.
+  if [ "${_BURN_LB_INT:-0}" = 1 ]; then
+    _BURN_LB_INT=0
+    case "$$" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$$" -gt 1 ]; then kill -INT "$$" 2>/dev/null || true; fi ;;
     esac
   fi
   [ "$timed_out" -eq 0 ] || return 124
