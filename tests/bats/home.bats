@@ -529,7 +529,7 @@ _seed_burn_flood_agy() {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | clikae init agy default >/dev/null 2>&1
   local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
-  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
   local i n sid f
   for i in 1 2 3; do
     sid="11111111-0000-4000-8000-00000000000$i"
@@ -538,7 +538,7 @@ _seed_burn_flood_agy() {
     printf '{"content":"HUMAN-%s content"}\n' "$i" > "$f"
     touch -t "20200101000$i" "$f"
   done
-  : > "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     n="$(printf '%02d' "$i")"
     sid="22222222-0000-4000-8000-0000000000$n"
@@ -546,7 +546,7 @@ _seed_burn_flood_agy() {
     f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
     printf '{"content":"BURN-%s content"}\n' "$n" > "$f"
     touch -t "2021010100$n" "$f"
-    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/agy/default"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
   done
 }
 
@@ -1543,7 +1543,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | clikae init agy "$1" >/dev/null 2>&1
   local base="$CLIKAE_HOME/profiles/antigravity/$1/antigravity-cli"
-  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
   local i sid f
   for ((i=1; i<=$2; i++)); do
     printf -v sid '11111111-0000-4000-8000-%012d' "$i"
@@ -1552,7 +1552,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
     printf '{"content":"HUMAN-%04d content"}\n' "$i" > "$f"
     touch -t 202001010000 "$f"      # humans OLD; burns keep "now" => burns win
   done
-  : > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
   for ((i=1; i<=$3; i++)); do
     printf -v sid '22222222-0000-4000-8000-%012d' "$i"
     mkdir -p "$base/brain/$sid/.system_generated/logs"
@@ -1560,7 +1560,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
       > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
   done
   awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "22222222-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
-    > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+    > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
 }
 
 _seed_bulk_claude() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
@@ -1618,9 +1618,24 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   # Round 1 gave 5 here (clamped at 200 while asking 10+195=205).
   [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
   [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
-  # An agy tank's sidecar lives under the "agy" alias, not "antigravity" — if
+  # An agy tank's sidecar lives under its engine id, "antigravity" (#113) — if
   # this lookup misses, the ask is never widened and this test reads 5.
-  [ -f "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+}
+
+@test "a store written under the old 'agy' sidecar key is migrated before the board reads it — the ask is still widened (#113)" {
+  # The shape every existing install has: burn.sh wrote agy's sidecar under
+  # "agy". The board no longer translates, so without the startup migration
+  # this reads 5 rows (the #93 round-2 bug) instead of 10.
+  _seed_bulk_agy default 50 195
+  mv "$CLIKAE_HOME/state/burn-sessions/antigravity" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy" ]
 }
 
 @test "195 burns + 50 humans still fill the Continue list — claude (#93 round-2 P2-1)" {

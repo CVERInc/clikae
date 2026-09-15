@@ -1013,6 +1013,64 @@ EOF
   return 0
 }
 
+# burn_sidecar_migrate_legacy — one canonical engine key for the burn sidecar
+# (#113). state/burn-sessions/<engine>/<tank> is keyed by the ENGINE ID — the
+# adapter file's name, the profiles/<engine>/ directory, what list_adapters
+# prints — for every engine, antigravity included. It was not always: burn.sh
+# wrote agy's sidecar under the literal "agy" (its adapter_meta_cli_binary),
+# while every reader walks engine ids, so each reader had to carry its own
+# `antigravity -> agy` translation (home.sh's per-tank count, the board's
+# fingerprint, rename, remove, clean's GC) and the one that forgot counted 0
+# hidden sessions for every agy tank (#93 round 2). One key means no reader
+# translates anything.
+#
+# This moves a store written by an older clikae onto that key, and is called
+# once per command from bin/clikae. Not a CLIKAE_STATE_VERSION migration on
+# purpose: a `clikae burn agy` that was already running under the OLD binary
+# when you upgraded still appends to the old directory after any one-shot
+# migration has run, so the check has to stay — it is one `[ -d ]` when there
+# is nothing to do, which is every run after the first.
+#
+#   · canonical file absent  -> rename the legacy file onto it (rename(2), per
+#     file, so two commands migrating at once cannot nest one directory inside
+#     the other the way a whole-directory `mv` onto a just-created target does)
+#   · both exist             -> merge line by line: every canonical line in its
+#     order, then each legacy line not already present, then drop the legacy
+#     file. Written to a temp file beside it and renamed over, never truncated
+#     in place.
+#   · afterwards the legacy directory is removed if empty.
+# Idempotent: a second run finds no legacy directory and does nothing; a merge
+# re-run over the same bytes adds no line twice. Best-effort — never fails the
+# command it runs in front of.
+_BURN_SIDECAR_LEGACY_KEY="agy"
+_BURN_SIDECAR_CANONICAL_KEY="antigravity"
+burn_sidecar_migrate_legacy() {
+  local base="${CLIKAE_HOME:-$HOME/.clikae}/state/burn-sessions"
+  local old="$base/$_BURN_SIDECAR_LEGACY_KEY" new="$base/$_BURN_SIDECAR_CANONICAL_KEY"
+  [ -d "$old" ] || return 0
+  [ ! -L "$old" ] || return 0
+  mkdir -p "$new" 2>/dev/null || return 0
+  local f tank tmp
+  for f in "$old"/*; do
+    [ -f "$f" ] || continue
+    tank="${f##*/}"
+    if [ ! -e "$new/$tank" ]; then
+      mv "$f" "$new/$tank" 2>/dev/null || true
+      continue
+    fi
+    tmp="$(mktemp "$new/.$tank.merge.XXXXXX" 2>/dev/null)" || continue
+    if LC_ALL=C awk 'FNR == NR { seen[$0] = 1; print; next } !($0 in seen) { seen[$0] = 1; print }' \
+         "$new/$tank" "$f" > "$tmp" 2>/dev/null \
+       && mv -f "$tmp" "$new/$tank" 2>/dev/null; then
+      rm -f "$f" 2>/dev/null || true
+    else
+      rm -f "$tmp" 2>/dev/null || true
+    fi
+  done
+  rmdir "$old" 2>/dev/null || true
+  return 0
+}
+
 # rename_tank_state <engine> <old> <new> — carry a tank's OUT-OF-DIR state across a
 # rename. The tank directory itself moves (with its clikae-meta/{solo,git-identity}),
 # and Soul membership is handled by soul_rename_member — but two records key the tank
@@ -1026,18 +1084,13 @@ EOF
 #     — left behind, its burn sessions would still hide correctly (the filter
 #     only ever reads a sid, never a path), but the file becomes an orphan
 #     nothing ever cleans, sitting under a tank name that no longer exists.
-# <engine> is the on-disk cli dir name (agy → antigravity) for the burn-order
-# file and the dry marker — but NOT for the sidecar: burn.sh has always
-# stored agy's sidecar under the literal directory name "agy" (its own
-# adapter file is antigravity.sh, but nothing under state/burn-sessions/ was
-# ever named to match), so translate here rather than push that alias
-# further up the call chain. Best-effort throughout.
+# <engine> is the on-disk engine id (agy → antigravity) for all three — the
+# sidecar included, since #113 keyed it the same way (burn_sidecar_migrate_legacy
+# above). Best-effort throughout.
 rename_tank_state() {
   local engine="$1" old="$2" new="$3"
-  local sc_engine="$engine"
-  [ "$sc_engine" = "antigravity" ] && sc_engine="agy"
-  local sc_old="$CLIKAE_HOME/state/burn-sessions/$sc_engine/$old"
-  local sc_new="$CLIKAE_HOME/state/burn-sessions/$sc_engine/$new"
+  local sc_old="$CLIKAE_HOME/state/burn-sessions/$engine/$old"
+  local sc_new="$CLIKAE_HOME/state/burn-sessions/$engine/$new"
   if [ -f "$sc_old" ]; then
     mkdir -p "$(dirname "$sc_new")" 2>/dev/null || true
     mv "$sc_old" "$sc_new" 2>/dev/null || true
@@ -1068,12 +1121,11 @@ rename_tank_state() {
 # remove_tank_burn_sidecar <engine> <tank> — rename_tank_state's twin for the
 # DELETION half of a tank's lifecycle (#74 round-1 P2-2): a removed tank's
 # burn sidecar used to stay on disk forever, an orphan under a tank name
-# nothing else references. Same "agy" alias as rename_tank_state above.
+# nothing else references. Keyed by engine id, like rename_tank_state above.
 # Best-effort: never blocks a tank removal.
 remove_tank_burn_sidecar() {
-  local engine="$1" tank="$2" sc_engine="$1"
-  [ "$sc_engine" = "antigravity" ] && sc_engine="agy"
-  rm -f "$CLIKAE_HOME/state/burn-sessions/$sc_engine/$tank" 2>/dev/null || true
+  local engine="$1" tank="$2"
+  rm -f "$CLIKAE_HOME/state/burn-sessions/$engine/$tank" 2>/dev/null || true
   return 0
 }
 

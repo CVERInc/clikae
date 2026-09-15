@@ -214,17 +214,14 @@ _burn_sids_file() {
 # be dropped by a sid recorded for THIS tank, so this is the exact count, not a
 # smaller-but-still-safe one.
 _burn_tank_hidden() {
-  # 🔴 The sidecar's engine directory is NOT always the adapter/profile dir
-  # name: burn.sh has always written agy's under the literal "agy" while the
-  # adapter (and profiles_root) call it "antigravity" (burn.sh:731, and see
-  # rename_tank_state in lib/core/profile_store.sh, which carries the same
-  # translation and the same warning). Reading the wrong path here would count 0
-  # burns for every agy tank — which is exactly the pre-fix ask, i.e. the bug
-  # back again, silently. Tested: "an agy tank's ask is widened (its sidecar
-  # lives under the 'agy' alias)".
-  local eng="$1"
-  [ "$eng" = "antigravity" ] && eng="agy"
-  local f="$CLIKAE_HOME/state/burn-sessions/$eng/$2" n=0
+  # <engine> is the engine id, and so is the sidecar's directory — for agy too
+  # ("antigravity", #113). It used to be written under "agy" and read here
+  # through a translation; reading the wrong path counts 0 burns for every agy
+  # tank, which is the pre-#93 ask, i.e. the bug back again, silently. A store
+  # written by an older clikae is moved onto the one key by
+  # burn_sidecar_migrate_legacy (lib/core/profile_store.sh) before any command
+  # runs, so no reader translates anything.
+  local f="$CLIKAE_HOME/state/burn-sessions/$1/$2" n=0
   if [ -f "$f" ]; then
     n="$(LC_ALL=C awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{print $1}' "$f" 2>/dev/null \
           | LC_ALL=C sort -u | LC_ALL=C awk 'END{print NR+0}' 2>/dev/null || printf '0')"

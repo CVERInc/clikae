@@ -1413,21 +1413,21 @@ _b8_tank() {
   done
 }
 
-@test "board (round-10 P2-1): an agy tank's sidecar is fingerprinted under the 'agy' alias" {
-  # burn.sh writes antigravity's sidecar under the literal "agy" while this
-  # file's engine name is "antigravity" — the same trap `_burn_tank_hidden`
-  # documents. Reading only "$engine" here would leave every agy tank with
-  # exactly the bug this round fixes, and no claude/codex fixture can catch it.
+@test "board (round-10 P2-1): an agy tank's sidecar is fingerprinted under its engine id" {
+  # #113: burn.sh writes antigravity's sidecar under the engine id,
+  # "antigravity" — the same key `_burn_tank_hidden` reads — so the fingerprint
+  # reads that ONE path. (It used to be written under "agy" and hashed through
+  # a second, translated path; burn_sidecar_migrate_legacy moves an old store.)
   clikae init antigravity a >/dev/null
   _board_source
   local dir="$CLIKAE_HOME/profiles/antigravity/a"
   local before after
   before="$(_board_sidecar_rows antigravity "$dir" | wc -l)"
   [ "$before" -eq 0 ] || { echo "expected no sidecar rows, got $before"; false; }
-  mkdir -p "$CLIKAE_HOME/state/burn-sessions/agy"
-  printf 'ag-1\trun-1\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/agy/a"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/antigravity"
+  printf 'ag-1\trun-1\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/antigravity/a"
   after="$(_board_sidecar_rows antigravity "$dir" | wc -l)"
-  [ "$after" -eq 1 ] || { echo "the agy alias is not in the fingerprint: $after"; false; }
+  [ "$after" -eq 1 ] || { echo "the engine-id sidecar is not in the fingerprint: $after"; false; }
   # And a claude tank of the SAME name must not be dragged along by it.
   [ "$(_board_sidecar_rows claude "$CLIKAE_HOME/profiles/claude/a" | wc -l)" -eq 0 ] \
     || { echo "claude's fingerprint picked up agy's sidecar"; false; }

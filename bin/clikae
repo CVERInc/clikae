@@ -105,6 +105,12 @@ source "$CLIKAE_LIB/core/state_version.sh"
 # state is current or absent; read-only safe — see lib/core/state_version.sh).
 state_version_check
 
+# #113: the burn sidecar is keyed by engine id (state/burn-sessions/antigravity/,
+# never the old "agy"). One `[ -d ]` when there is nothing to move — see
+# burn_sidecar_migrate_legacy (lib/core/profile_store.sh) for why this runs every
+# command rather than once behind CLIKAE_STATE_VERSION.
+burn_sidecar_migrate_legacy
+
 # #61 round-2/3 P1-1/P1-2: the ONE-TIME inclusive tank-adoption sweep (see
 # lib/core/profile_store.sh) — "the first command run against a store with no
 # adoption flag" means literally the first, not just the first one that

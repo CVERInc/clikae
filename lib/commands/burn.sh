@@ -1103,7 +1103,10 @@ _agy_burn() {
       esac
     fi
     if [ -n "$sid_to_record" ]; then
-      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/agy/$cur"
+      # Keyed by engine id, "antigravity" — the directory every reader walks —
+      # not the "agy" binary name it used to be written under (#113; see
+      # burn_sidecar_migrate_legacy in lib/core/profile_store.sh).
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/antigravity/$cur"
       mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
       printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
     fi
