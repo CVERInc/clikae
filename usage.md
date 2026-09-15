@@ -123,6 +123,7 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 | Command | What it does |
 |---|---|
 | `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. |
+| `init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; `clikae doctor` names any candidate. |
 | `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
 | `migrate [<engine>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
@@ -136,6 +137,28 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > shell until you click Allow); a config file is trusted, so the window just opens.
 > The config lives inside the `.app` and is found via `path to me`, so the launcher
 > keeps working if you move it.
+
+> **What makes a directory a tank.** Every tank carries a `.clikae-tank` marker
+> file (just the engine name, one line) inside it — that marker, not the
+> directory's name or content, is what `clikae tanks`, `burn`'s reroute, and
+> every other reader treat as "this is a real tank". Only the marker's FIRST
+> LINE is ever read or compared, and only its first 64 characters; anything
+> after the first newline is ignored, as is anything past that 64th character
+> (trailing whitespace on the name is still tolerated).
+> `init` (and agy's own tank creation) stamps it the moment a tank is made.
+> **Upgrading from an older clikae:** the first command you run against an existing store
+> performs a one-time sweep that marks every existing tank directory (no
+> exceptions, no re-login required) and then writes a flag
+> (`$CLIKAE_HOME/state/tanks-adopted-v1`) so it never runs again — a
+> directory that shows up later with no marker is not a tank. If that flag
+> can't be written (a read-only or shared store), clikae keeps recognising
+> your tanks in memory on every run and says so once; `clikae doctor` names
+> the state and `clikae doctor --adopt` retries the write. **A directory that
+> shows up AFTER the sweep closes** — a restored backup, one you've since
+> confirmed is real — has no automatic way back through `init` (it refuses
+> any existing directory): use `clikae init <engine> <tank> --adopt` instead,
+> which marks it a tank without touching its content, and refuses unless it
+> already looks like that engine's own content.
 
 ### Keep burning when a tank runs dry
 
@@ -275,7 +298,7 @@ rest of the sweep from being cleaned up.
 | `lang [<locale>]` | Show or set the interface language (dashboard + prompts) — nine of them: `en-US`, `ja-JP`, `zh-TW`, `zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR`, `pt-BR`. Bare `clikae lang` lists them. Persists to `$CLIKAE_HOME/lang`; the board's `l` key opens a language picker. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LC_ALL` > `$LANG` > en-US. Adding a tenth is a self-contained PR — see [Adding a language](/adding-a-locale.md). |
 | `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output `{cli, profile, account, path}` for scripts and the GUI. 🔴 **Do not build a path out of `cli` + `profile`** — `cli` is the name you *invoke* (`agy`) while the store directory keeps the engine's own name (`antigravity`), so the two differ for Antigravity. `path` is authoritative for where the tank lives; use it. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
-| `doctor` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next. |
+| `doctor [--adopt]` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next — including whether this store's tanks are adopted (see the marker note above). `--adopt` retries writing the adoption flag for a store where it never persisted; harmless when the store is already adopted. |
 | `info [--json]` | Show install paths, platform, adapters, and tank count. |
 | `adapters` | List supported engines with descriptions. |
 | `demo` | A 30-second guided tour in a throwaway sandbox — shows isolated tanks, the tank board, and the `to` idea (your tanks are the reserve), then cleans up. Touches nothing real; the accounts are simulated, so it needs no installed engine. |
@@ -877,9 +900,11 @@ clikae burn codex M --artifact /tmp/out.md --to codex/H -- exec … "<task>"   #
 clikae burn codex M --artifact /tmp/out.md --timeout 300 -- exec … "<task>"  # bound a long run
 ```
 
-Outcomes: artifact present → done; dry on every reachable tank → fail; ran but
-produced no artifact and showed no limit → a real **task failure** (not rerouted —
-it would fail the same everywhere). `--no-reroute` runs once and stops on a dry tank.
+Outcomes: artifact present → done; every reachable tank dry or skipped → fail
+with `reason: no-tank-available` and a distinct exit code (2 — distinguishable
+from a task failure); ran but produced no artifact and showed no limit → a real
+**task failure** (not rerouted — it would fail the same everywhere). `--no-reroute`
+runs once and stops on a dry tank.
 
 `burn` is the single-task unit — **batch/parallelism stays your orchestrator's
 job** (fan several `burn`s out, review the artifacts). Make tasks idempotent and

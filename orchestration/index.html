@@ -218,7 +218,13 @@ object can't give it:</p>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "ok"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,              </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// null while running; true/false at a terminal state</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "engine"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"codex"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">"tank"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"T1"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "artifact"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"/path/to/out.md"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">"artifact_bytes"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,</span></span>
-<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "reason"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,           </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// e.g. "artifact produced", "tank ran dry", "infra"</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "reason"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,           </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// e.g. "artifact produced", "tank ran dry" (transient,</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // a reroute follows), "no-tank-available" (TERMINAL —</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // the whole reserve is dry), "tank ran dry and</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // --no-reroute is set" (TERMINAL — stopped after one),</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // "infra". The last two are both `state: dry` and both</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // rc 2 — `reason` is the ONLY thing that tells them</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // apart; see "clikae wait" below</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "reset"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">null</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,            </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// clikae-rendered reset text: the vendor's verbatim</span></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // phrase when a tank ran dry, OR — on a HEALTHY</span></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                            // codex run — clikae's own rendered text for its</span></span>
@@ -304,6 +310,13 @@ mix, a <code>fail</code>/<code>infra</code> among them, or <code>--timeout</code
 <li><code>--timeout</code> expiring is <code>1</code> unconditionally, in both modes — never <code>0</code>
 just because some other target happened to already be <code>done</code>.</li>
 </ul>
+<p><strong><code>dry</code> here is ONE state covering TWO shapes (#61 round-1 review, P2-5):</strong>
+a burn that exhausted its whole auto-reroute reserve (<code>reason: no-tank-available</code>) and a burn that stopped after ONE dry tank because
+<code>--no-reroute</code> said to (<code>reason: &quot;tank ran dry and --no-reroute is set&quot;</code>).
+Both write <code>state: dry</code> and both give burn's own process rc 2 — <code>wait</code>'s rc
+above answers &quot;is anything left to do&quot;, which is the same question either
+way. A caller that needs to tell the two apart reads <code>reason</code> off the
+printed status object, not <code>wait</code>'s own exit code.</p>
 <p><strong>A dead burn can never hang <code>wait</code> (2026-09-09 round-1 review, P1-1.)</strong> A
 <code>running</code> status whose recorded <code>pid</code> is no longer alive is read as a
 terminal, <code>fail</code>-equivalent outcome — printed with <code>&quot;state&quot;:&quot;stale&quot;</code> (a

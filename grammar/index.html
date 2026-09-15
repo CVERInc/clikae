@@ -138,7 +138,7 @@ one line per drifted tank. Requires <code>jq</code>; a missing template or missi
 reported and skipped, not a hard failure — a tank always finishes creating.
 Skip the template on a single tank with <code>clikae init claude &lt;tank&gt; --no-template</code>
 or machine-wide with <code>CLIKAE_NO_PERMISSIONS_TEMPLATE=1</code>. See
-<a href="https://github.com/CVERInc/clikae/blob/459c98119da332db560a353841c0b07a645f7e7e/templates/permissions/README.md">the seed documentation</a>.</p>
+<a href="https://github.com/CVERInc/clikae/blob/b6e8dc1a7470666419983e7be6aacc890fda33dd/templates/permissions/README.md">the seed documentation</a>.</p>
 <h3 id="31-switching--the-elided-verb">3.1 Switching — the elided verb</h3>
 <table>
 <thead>
@@ -230,7 +230,11 @@ fuel words forced on them.</p>
 <tbody>
 <tr>
 <td><code>clikae init &lt;engine&gt; &lt;tank&gt;</code></td>
-<td>Create a tank. (<code>--alias</code> also writes a shell alias.)</td>
+<td>Create a tank. (<code>--alias</code> also writes a shell alias; <code>--no-template</code> skips the claude permissions template.)</td>
+</tr>
+<tr>
+<td><code>clikae init &lt;engine&gt; &lt;tank&gt; --adopt</code></td>
+<td>Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. Doesn't touch the directory's content; incompatible with <code>--alias</code>/<code>--no-template</code>.</td>
 </tr>
 <tr>
 <td><code>clikae remove &lt;engine&gt; &lt;tank&gt;</code></td>
@@ -282,7 +286,7 @@ fuel words forced on them.</p>
 </tr>
 <tr>
 <td><code>clikae burn &lt;engine&gt; &lt;tank&gt; --artifact &lt;path&gt; (--prompt-file &lt;f&gt; | -- &lt;cmd…&gt;)</code></td>
-<td>Run a <strong>headless</strong> task on a tank, verify it by the artifact it must produce (never the exit code — <code>codex exec</code> exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the <strong>easy way</strong> (<code>--prompt-file</code>/<code>--prompt</code> + <code>--add-dir</code>: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the <strong>power-user way</strong> (raw <code>-- &lt;cmd…&gt;</code>). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; <code>burn</code> is the single-task unit it fans out and re-fires. <code>--to</code> forces an explicit next hop. <code>--infra-retries &lt;n&gt;</code> (0–10, default 2) retries tool-host infrastructure failures on the same tank; <code>--infra-delay &lt;s&gt;</code> (0–86400, default 5) sets the initial delay, doubled per retry. Exhaustion reports <code>reason: infra</code>.</td>
+<td>Run a <strong>headless</strong> task on a tank, verify it by the artifact it must produce (never the exit code — <code>codex exec</code> exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the <strong>easy way</strong> (<code>--prompt-file</code>/<code>--prompt</code> + <code>--add-dir</code>: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the <strong>power-user way</strong> (raw <code>-- &lt;cmd…&gt;</code>). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; <code>burn</code> is the single-task unit it fans out and re-fires. <code>--to</code> forces an explicit next hop. <code>--infra-retries &lt;n&gt;</code> (0–10, default 2) retries tool-host infrastructure failures on the same tank; <code>--infra-delay &lt;s&gt;</code> (0–86400, default 5) sets the initial delay, doubled per retry — retries exhausted reports <code>reason: infra</code> (rc 1). A dry tank auto-reroutes to the next reserve tank; the WHOLE reserve going dry reports <code>reason: no-tank-available</code> (rc 2, #61) — distinct from a real task failure (rc 1) and from <code>--no-reroute</code> stopping after one dry tank (<code>reason: &quot;tank ran dry and --no-reroute is set&quot;</code>, also rc 2).</td>
 </tr>
 <tr>
 <td><code>clikae wait &lt;run_id|status-file&gt;…</code></td>

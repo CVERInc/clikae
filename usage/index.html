@@ -142,6 +142,10 @@ fall back to 2); the <code>off</code> value is matched case-insensitively (<code
 <td>Create the tank directory; with <code>--alias</code>, also write a shell alias.</td>
 </tr>
 <tr>
+<td><code>init &lt;engine&gt; &lt;tank&gt; --adopt</code></td>
+<td>Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; <code>clikae doctor</code> names any candidate.</td>
+</tr>
+<tr>
 <td><code>remove &lt;engine&gt; &lt;tank&gt; [--force] [--keep-data]</code></td>
 <td>Remove dir + alias + <code>.app</code>. <code>--keep-data</code> keeps the directory.</td>
 </tr>
@@ -174,6 +178,29 @@ for an externally-injected <code>-e</code> command (so a <code>-e</code> launche
 shell until you click Allow); a config file is trusted, so the window just opens.
 The config lives inside the <code>.app</code> and is found via <code>path to me</code>, so the launcher
 keeps working if you move it.</p>
+</blockquote>
+<blockquote>
+<p><strong>What makes a directory a tank.</strong> Every tank carries a <code>.clikae-tank</code> marker
+file (just the engine name, one line) inside it — that marker, not the
+directory's name or content, is what <code>clikae tanks</code>, <code>burn</code>'s reroute, and
+every other reader treat as &quot;this is a real tank&quot;. Only the marker's FIRST
+LINE is ever read or compared, and only its first 64 characters; anything
+after the first newline is ignored, as is anything past that 64th character
+(trailing whitespace on the name is still tolerated).
+<code>init</code> (and agy's own tank creation) stamps it the moment a tank is made.
+<strong>Upgrading from an older clikae:</strong> the first command you run against an existing store
+performs a one-time sweep that marks every existing tank directory (no
+exceptions, no re-login required) and then writes a flag
+(<code>$CLIKAE_HOME/state/tanks-adopted-v1</code>) so it never runs again — a
+directory that shows up later with no marker is not a tank. If that flag
+can't be written (a read-only or shared store), clikae keeps recognising
+your tanks in memory on every run and says so once; <code>clikae doctor</code> names
+the state and <code>clikae doctor --adopt</code> retries the write. <strong>A directory that
+shows up AFTER the sweep closes</strong> — a restored backup, one you've since
+confirmed is real — has no automatic way back through <code>init</code> (it refuses
+any existing directory): use <code>clikae init &lt;engine&gt; &lt;tank&gt; --adopt</code> instead,
+which marks it a tank without touching its content, and refuses unless it
+already looks like that engine's own content.</p>
 </blockquote>
 <h3 id="keep-burning-when-a-tank-runs-dry">Keep burning when a tank runs dry</h3>
 <table>
@@ -399,8 +426,8 @@ rest of the sweep from being cleaned up.</p>
 <td>Show which tank each engine is on <strong>in this shell</strong>. <code>--json</code> emits one object per engine with a <code>state</code> enum.</td>
 </tr>
 <tr>
-<td><code>doctor</code></td>
-<td>Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next.</td>
+<td><code>doctor [--adopt]</code></td>
+<td>Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next — including whether this store's tanks are adopted (see the marker note above). <code>--adopt</code> retries writing the adoption flag for a store where it never persisted; harmless when the store is already adopted.</td>
 </tr>
 <tr>
 <td><code>info [--json]</code></td>
@@ -938,9 +965,11 @@ re-fires the <em>same</em> task on the next tank in your reserve.</p>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> burn</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> M</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --artifact</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --to</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex/H</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> exec</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> …</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "&#x3C;task>"</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # explicit next hop</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> burn</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> codex</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> M</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --artifact</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> /tmp/out.md</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --timeout</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> 300</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> exec</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> …</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> "&#x3C;task>"</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">  # bound a long run</span></span></code></pre>
-<p>Outcomes: artifact present → done; dry on every reachable tank → fail; ran but
-produced no artifact and showed no limit → a real <strong>task failure</strong> (not rerouted —
-it would fail the same everywhere). <code>--no-reroute</code> runs once and stops on a dry tank.</p>
+<p>Outcomes: artifact present → done; every reachable tank dry or skipped → fail
+with <code>reason: no-tank-available</code> and a distinct exit code (2 — distinguishable
+from a task failure); ran but produced no artifact and showed no limit → a real
+<strong>task failure</strong> (not rerouted — it would fail the same everywhere). <code>--no-reroute</code>
+runs once and stops on a dry tank.</p>
 <p><code>burn</code> is the single-task unit — <strong>batch/parallelism stays your orchestrator's
 job</strong> (fan several <code>burn</code>s out, review the artifacts). Make tasks idempotent and
 artifact-checked (fixed input/output paths), and pre-stage inputs to <code>/tmp</code> rather
