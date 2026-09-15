@@ -437,6 +437,128 @@ _agy_log() { # <line>
   [[ "$output" == *"Lane one-shot"* ]] || false
 }
 
+
+# --- #93 fix round 1, P2-1: the burn filter runs BEFORE the adapter's cut ------
+# home.sh's own comment promised "Filtered BEFORE the rank+cut below, or a
+# hidden row would just leave a gap instead of letting a real session take its
+# slot" — but each adapter was asked for exactly CLIKAE_HOME_RECENT_MAX rows and
+# cut to that BEFORE the filter ever saw them. So N burn sessions newer than the
+# human ones handed the filter N rows it had to drop, leaving zero: the Resume
+# block vanished entirely. #34's tank-scoping makes that reachable from any
+# directory on an agy tank (clikae's own doctrine burns agy hard), so the fix is
+# at the root — every engine, one place.
+_seed_burn_flood_agy() {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"HUMAN-%s content"}\n' "$i" > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"BURN-%s content"}\n' "$n" > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  done
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (agy tank, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  # newest human first
+  [[ "$output" == *"HUMAN-3 content"*"HUMAN-2 content"*"HUMAN-1 content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "CLIKAE_RESUME_ALL=1 still shows the burn sessions that flooded the tank (agy, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_RESUME_ALL=1 CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"BURN-12 content"* ]] || { echo "$output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (claude tank, #93 P2-1)" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i n sid
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t "20200101000$i" "$d/$sid.jsonl"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2021010100$n" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (codex tank, #93 P2-1)" {
+  clikae init codex a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="019e0000-0000-7000-8000-00000000000$i"
+    f="$sdir/rollout-2026-06-03T09-00-0$i-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%s session"}}\n' "$i"
+    } > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="019e0000-0000-7000-8000-0000000002$n"
+    f="$sdir/rollout-2026-06-03T10-00-$n-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"BURN-%s session"}}\n' "$n"
+    } > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
 @test "a session's recap is shown under its continue row, hint stripped" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"

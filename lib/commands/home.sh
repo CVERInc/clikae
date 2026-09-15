@@ -146,6 +146,13 @@ _home_alias_for() {
 #   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
 # How many recent sessions the "continue" list surfaces.
 CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
+# Ceiling on what ONE adapter may be asked for when burn sessions still have to
+# be filtered out of its answer (#34 round-1 P2-1 — see _home_recent_rows). The
+# adapters all scan+stat their whole tank before they `head -n <limit>`, so a
+# bigger ask costs a longer sort tail, not a bigger scan; this exists to bound
+# the rows that then flow through the filter and the shell accumulator, not to
+# bound the adapter.
+CLIKAE_HOME_RECENT_SCAN_MAX="${CLIKAE_HOME_RECENT_SCAN_MAX:-200}"
 
 # _burn_sids_file -> writes every currently-recorded burn sid (deduped, one
 # per line — the first tab field of each well-formed
@@ -188,6 +195,34 @@ _burn_sids_file() {
 
 _home_recent_rows() {
   local name proot tdir tank rows sid mt acc="" _proots
+  local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
+  # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
+  # many rows each adapter has to be asked for depends on it. The filter below
+  # always ran before the rank+cut (as its comment promised), but every adapter
+  # had already been cut to CLIKAE_HOME_RECENT_MAX rows on its way here — so N
+  # burn sessions newer than the human ones handed the filter N rows it had to
+  # drop and left it nothing to promote: the Resume block disappeared, which is
+  # the exact symptom #34 set out to fix. Reachable on any agy tank from any
+  # directory since this PR's tank-scoping, and clikae's own dispatch doctrine
+  # burns agy tanks hard, so this is the shape that actually occurs.
+  # At most $_hidden rows can be dropped, so asking for N + $_hidden guarantees
+  # N survivors when N exist. Engine-agnostic on purpose: claude and codex tanks
+  # had the same hole (#74's filter, #83's sidecar) and get the same fix here,
+  # once, instead of three adapters each re-learning it.
+  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
+    _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
+    if [ -n "$_burn_sids_f" ]; then
+      _hidden="$(LC_ALL=C awk 'END{print NR+0}' "$_burn_sids_f" 2>/dev/null || printf '0')"
+      case "$_hidden" in ''|*[!0-9]*) _hidden=0 ;; esac
+      _ask=$((CLIKAE_HOME_RECENT_MAX + _hidden))
+      # Bound it: the sidecar is capped at CLIKAE_BURN_SIDECAR_CAP (2000), and
+      # no board wants 2010 rows per tank flowing through a shell accumulator.
+      [ "$_ask" -le "$CLIKAE_HOME_RECENT_SCAN_MAX" ] || _ask="$CLIKAE_HOME_RECENT_SCAN_MAX"
+      [ "$_ask" -ge "$CLIKAE_HOME_RECENT_MAX" ] || _ask="$CLIKAE_HOME_RECENT_MAX"
+    fi
+  fi
+  # No sidecar (or CLIKAE_RESUME_ALL=1) => nothing to filter => the ask stays
+  # exactly CLIKAE_HOME_RECENT_MAX. The common path is byte-for-byte unchanged.
   _proots="$(profiles_root)"      # constant; asked once, not once per adapter
   while IFS= read -r name; do
     [ -n "$name" ] || continue
@@ -211,7 +246,7 @@ _home_recent_rows() {
       [ -d "$tdir" ] || continue
       tank="${tdir%/}"; tank="${tank##*/}"
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
-      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
+      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$_ask" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
       while IFS=$'\037' read -r mt sid; do
         [ -n "$sid" ] || continue
@@ -223,7 +258,12 @@ INNER
   done <<EOF
 $(list_adapters)
 EOF
-  [ -n "$acc" ] || return 0
+  if [ -z "$acc" ]; then
+    # `[ … ] && rm` would be an AND-list whose false branch returns 1 — under
+    # the CLI's `set -e` that is an exit, not a no-op. Spell it as an `if`.
+    if [ -n "$_burn_sids_f" ]; then rm -f "$_burn_sids_f"; fi
+    return 0
+  fi
   # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
   # `clikae resume`'s picker uses (_burn_sids_file, home.sh) — the board's own
   # "R" key already forwards to `clikae resume` (one filter, not two), but
@@ -234,17 +274,15 @@ EOF
   # "fixed" resume — the PR's own claim ("resume AND the home board hide
   # sidecar sessions by default") was true for one of the two surfaces.
   # Filtered BEFORE the rank+cut below, or a hidden row would just leave a
-  # gap instead of letting a real session take its slot.
-  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
-    local _burn_sids_f; _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
-    if [ -n "$_burn_sids_f" ]; then
-      acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
-        BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
-        !($4 in skip)
-      ')"
-      rm -f "$_burn_sids_f"
-      [ -n "$acc" ] || return 0
-    fi
+  # gap instead of letting a real session take its slot — which is only true
+  # because the ask above was widened by $_hidden first (P2-1).
+  if [ -n "$_burn_sids_f" ]; then
+    acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
+      BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+      !($4 in skip)
+    ')"
+    rm -f "$_burn_sids_f"
+    [ -n "$acc" ] || return 0
   fi
   # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
   # title + recap (the only content greps — bounded to the few rows actually shown).
