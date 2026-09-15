@@ -1290,7 +1290,17 @@ _home_fuel_dotv_compute() {
     if [ "$age" -lt 86400 ]; then
       ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
       _FNOTE="window ${up}% · weekly ${uw}%"
-      [ "$age" -lt "$ttl" ] || _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
+      # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
+      # lib/core/duration.sh and 20+ test files source home.sh on its own, so
+      # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
+      # declare -F") asserts the guard per CODE LINE — reaching this one needs
+      # a real usage cache, so nothing else would catch it. #89 added this
+      # third call site after #102's test was written against two, and main
+      # (459c981) carries it unguarded: that test is red on main itself, not
+      # only here. Guarded rather than carried forward. Same `&&`-list shape
+      # as the other two call sites; errexit exempts every command in an
+      # `&&` list but the last, so a missing function is a no-op, not a death.
+      declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
       peak="${peak%%.*}"
       if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
       elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
