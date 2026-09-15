@@ -406,6 +406,60 @@ STUB
   [ "$(printf '%s\n' "$output" | grep -c 'WARN')" -eq 1 ] || { echo "$output"; false; }
 }
 
+@test "#61 round-6 P3-1: an unreadable marker is one WARN and a COMPLETE list, never a raw shell error" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  local t
+  for t in a1 b2 c3; do
+    mkdir -p "$CLIKAE_HOME/profiles/claude/$t"
+    printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/$t/.clikae-tank"
+  done
+  chmod 000 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank"
+  local out err rc=0
+  out="$BATS_TEST_TMPDIR/o"; err="$BATS_TEST_TMPDIR/e"
+  "$CLIKAE_BIN" tanks > "$out" 2> "$err" || rc=$?
+  chmod 644 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || { cat "$err"; false; }
+  # the walk is NOT truncated at b2 — c3 sorts after it
+  grep -q ' a1 ' "$out" || grep -qw a1 "$out" || { cat "$out"; false; }
+  grep -qw c3 "$out" || { echo "list truncated at the unreadable marker:"; cat "$out"; false; }
+  grep -qw b2 "$out" && { echo "an unreadable marker must not name a tank:"; cat "$out"; false; }
+  # exactly one warning line, and never a raw shell error (CHANGELOG's promise)
+  [ "$(grep -c 'WARN' "$err")" -eq 1 ] || { cat "$err"; false; }
+  ! grep -q 'profile_store.sh: line' "$err" || { cat "$err"; false; }
+  ! grep -q 'unbound variable' "$err" || { cat "$err"; false; }
+}
+
+@test "#61 round-6 P3-1: list_all_profiles under \`set -u\` returns a COMPLETE list whatever position is unreadable" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  # White-box, the hook's own shape: `set -u`, this file sourced without
+  # log.sh. The enumerator used to abort at the unreadable tank and return
+  # everything BEFORE it with rc 0 — a silently truncated answer.
+  local t
+  for t in a1 b2 c3 d4; do
+    mkdir -p "$CLIKAE_HOME/profiles/claude/$t"
+    printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/$t/.clikae-tank"
+  done
+  local which got
+  for which in a1 b2 d4; do
+    chmod 644 "$CLIKAE_HOME"/profiles/claude/*/.clikae-tank
+    chmod 000 "$CLIKAE_HOME/profiles/claude/$which/.clikae-tank"
+    got="$(bash -c '
+      set -uo pipefail
+      CLIKAE_ROOT="'"$CLIKAE_TEST_ROOT"'"; CLIKAE_LIB="$CLIKAE_ROOT/lib"
+      source "$CLIKAE_LIB/core/adapter_loader.sh"
+      source "$CLIKAE_LIB/core/profile_store.sh"
+      list_all_profiles | cut -f2 | tr "\n" " "' 2>&1)"
+    chmod 644 "$CLIKAE_HOME"/profiles/claude/*/.clikae-tank
+    case "$got" in
+      *"unbound variable"*|*"Permission denied"*) echo "$which: $got"; false ;;
+    esac
+    # every tank except the unreadable one, in sorted order, nothing dropped
+    local want=""
+    for t in a1 b2 c3 d4; do [ "$t" = "$which" ] || want="$want$t "; done
+    [ "$got" = "$want" ] || { echo "$which unreadable -> got [$got] want [$want]"; false; }
+  done
+}
+
 @test "adoption warn: launching a tank on a read-only store warns ONCE and leaves TMPDIR empty (#61 round-5 P3-1)" {
   # The launch family the round-5 review measured: `clikae <engine> <tank>`
   # ends in an `exec` into the engine. stdin/stdout are not TTYs under bats,

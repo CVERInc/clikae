@@ -111,6 +111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not yet a tank now refuses (`Not a tank: …`) instead of writing
   `settings.json` into it — naming a bare directory used to be enough to seed
   it into existence as a permanent tank on the next walk (#61 round 2).
+- A `.clikae-tank` marker that exists but cannot be READ (permissions, a
+  changed owner, an ACL) no longer truncates the tank list. It used to print a
+  raw `profile_store.sh: line …: Permission denied` and, in a caller running
+  under `set -u` — which is what `clikae cockpit`'s PreToolUse hook is — abort
+  the walk at that directory and return everything BEFORE it with exit code 0:
+  a silently short list, and a refusal message claiming there was no idle tank
+  while idle tanks sat in the store. Such a directory is now simply not a tank,
+  said once in one warning line and never as a raw shell error (#61 round 6).
 - `clikae cockpit --off` now removes the guard from a cockpit tank that is no
   longer enumerable — one whose `.clikae-tank` marker went missing or became
   unreadable (a restored backup, a sync tool). It used to sweep the same

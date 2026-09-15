@@ -159,6 +159,34 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" != *"claude/cockpit-tank"* ]] || false
 }
 
+@test "#61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  # The hook runs under `set -u`. `_m` was left unassigned when the marker
+  # could not be opened, so the enumerator died mid-walk and returned a list
+  # truncated AT that tank with rc 0 — the refusal then claimed there was no
+  # idle tank while idle tanks sat in the store. `b2` sorts between the two.
+  mkdir -p "$CLIKAE_HOME/state" \
+    "$CLIKAE_HOME/profiles/claude/a1" \
+    "$CLIKAE_HOME/profiles/claude/b2" \
+    "$CLIKAE_HOME/profiles/claude/c3"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/a1/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/c3/.clikae-tank"
+  printf 'claude/nowhere\n' > "$CLIKAE_HOME/state/cockpit"
+  chmod 000 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  chmod 644 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"claude/a1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/c3"* ]] || { echo "truncated at b2: $output"; false; }
+  # The unreadable one is simply not a tank — and the hook's stderr is read by
+  # the MODEL, so neither a WARN nor a raw shell error may appear in it.
+  [[ "$output" != *"claude/b2"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"WARN"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"Permission denied"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"unbound variable"* ]] || { echo "$output"; false; }
+}
+
 @test "fails CLOSED on an empty payload (#63 r5 P2-5)" {
   run _guard ''
   [ "$status" -eq 2 ]

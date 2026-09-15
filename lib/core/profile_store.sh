@@ -424,7 +424,7 @@ tank_marker_write() {
 # resume's next_tank all read it) — this is that filter, so nobody downstream
 # writes a second one next to it.
 tank_dir_is_tank() {
-  local cli="$1" dir="$2" marker _m
+  local cli="$1" dir="$2" marker _m=""
   marker="$(tank_marker_path "$dir")"
   if [ -f "$marker" ]; then
     # #61 round-3 P3: builtin `read`, not a forked `cat` per tank on every
@@ -442,7 +442,38 @@ tank_dir_is_tank() {
     # case where the OVERFLOW is meaningful — a real name followed by a
     # pile of whitespace — still matches, because the strip runs on the
     # first 64 characters and the name is at the front of them.
-    IFS= read -r -n 64 _m < "$marker" 2>/dev/null
+    #
+    # 🔴 #61 round-6 P3-1: `_m` is initialised at the top of this function and
+    # the read runs inside a REDIRECTED GROUP. Both halves are load-bearing,
+    # and the bare `IFS= read … < "$marker" 2>/dev/null` this replaces had
+    # neither:
+    #
+    #   * redirections are processed left to right, so `< "$marker"` failed
+    #     (mode 000, a changed owner, an ACL) BEFORE `2>/dev/null` was in
+    #     effect — the raw `profile_store.sh: line NNN: …: Permission denied`
+    #     went to the operator's screen, which CHANGELOG's "exactly one
+    #     warning line — never a raw shell error" promise forbids. `{ … }
+    #     2>/dev/null` establishes the suppression around the whole group, so
+    #     the failing open inside it has nowhere to print;
+    #   * when the open fails, `read` never runs and `_m` is never assigned —
+    #     so the `[ "$_m" = … ]` below died with `_m: unbound variable` under
+    #     `set -u`. That is lib/hooks/cockpit-guard.sh, which the block at the
+    #     bottom of this file promises will not die here. It did not die
+    #     loudly: the enumerator aborted mid-walk and returned a list
+    #     TRUNCATED AT THE UNREADABLE TANK, with rc 0 — the hook's refusal
+    #     message then told the operator "No idle tank in the reserve right
+    #     now" with idle tanks sitting in the store. rc kept its shape and the
+    #     CONTENT ran off, which is the same failure b70967b (#61 P1-1) wrote
+    #     its long note about.
+    #
+    # An unreadable marker is "not a tank" (nothing else is knowable about
+    # it), said ONCE per process rather than swallowed — the probe below is
+    # only paid when nothing was read, which is the empty-marker case too.
+    { IFS= read -r -n 64 _m < "$marker"; } 2>/dev/null || true
+    if [ -z "$_m" ] && ! { : < "$marker"; } 2>/dev/null; then
+      _tank_marker_unreadable_warn_once "$dir"
+      return 1
+    fi
     if [ "$_m" = "$cli" ]; then
       return 0
     fi
@@ -585,6 +616,30 @@ tanks_adopted_flag_write() {
 # clikae exec'd stays quiet about the same store. That operator has already
 # read the line in this terminal; a warning repeated per keypress is how this
 # started (round-2 P2-1), and an unremovable file is what it became.
+# _tank_marker_unreadable_warn_once <dir> -> exactly ONE line per process
+# when a `.clikae-tank` marker exists but cannot be opened (#61 round-6 P3-1).
+# Deduped through the same exported-variable mechanism as the adoption warning
+# below, for the same reasons; not keyed by store, because "one line" is the
+# whole point and a second unreadable marker is the same news.
+#
+# `declare -F log_warn` is NOT defensiveness for its own sake: the one caller
+# that must survive this path, lib/hooks/cockpit-guard.sh, sources THIS file
+# without lib/core/log.sh, under `set -uo pipefail`. A bare `log_warn` there
+# is a command-not-found, and `log_warn`'s own body reads `$__C_YELLOW`, which
+# is unbound in that process — either one would abort the very walk this
+# branch exists to keep intact. Silence is the correct behaviour there: the
+# hook's stderr is shown to the MODEL as the reason for a refusal it has
+# nothing to do with (the same reasoning as CLIKAE_ADOPT_READONLY below).
+_tank_marker_unreadable_warn_once() {
+  [ -z "${_CLIKAE_MARKER_WARNED:-}" ] || return 0
+  _CLIKAE_MARKER_WARNED=1
+  export _CLIKAE_MARKER_WARNED
+  if declare -F log_warn >/dev/null 2>&1 && [ -n "${__C_YELLOW+x}" ]; then
+    log_warn "A tank marker exists but cannot be read: $1/.clikae-tank — treating that directory as NOT a tank this run. Fix its permissions (or remove and re-adopt it with \`clikae init <engine> <name> --adopt\`); \`clikae doctor\` lists it."
+  fi
+  return 0
+}
+
 _tank_adoption_warn_once() {
   [ -z "${_CLIKAE_ADOPT_WARNED:-}" ] || return 0
   _CLIKAE_ADOPT_WARNED=1
