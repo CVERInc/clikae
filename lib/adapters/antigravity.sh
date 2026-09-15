@@ -239,7 +239,16 @@ adapter_recent_sids() {
   local -a afiles=()
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.
-  if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
+  # #34 round-2 P3-3: this used to be `[ "${3:-}" != disk ] && [ -f "$cache" ]`
+  # — a third argument meant to let `clikae burn` bypass the cache and read
+  # disk. Nothing has ever passed it: repo-wide, the only non-adapter callers
+  # are home.sh (n=10, n=10, n=1) and the bats suites, all two-argument, and
+  # burn.sh does not call this function at all. Deleted rather than kept
+  # "for later": a dead branch with a docstring describing a caller that does
+  # not exist is worse than no branch. Anything that needs the disk answer can
+  # ask for n>1, which already folds the cache hit into the ranking instead of
+  # letting it win.
+  if [ -f "$cache" ]; then
     local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
     # #74 round-1 P1-4: json_value_for_key (lib/core/json.sh) ANCHORS the
     # extraction to the matched "<cwd>": "<sid>" pair itself — the previous
@@ -256,7 +265,7 @@ adapter_recent_sids() {
       if [ -f "$f" ]; then
         # #74 round-1 P2-1: the cache is a per-directory POINTER — at most one
         # candidate for $want, ever — so it can only fully answer an n=1
-        # ask (burn's own use, via the "disk"-bypassing 3rd arg aside). A
+        # ask. A
         # caller wanting more than one (the board's Continue list, home.sh's
         # exclusion-pass retries) used to get back exactly this one anyway: a
         # cache hit returned immediately and the scan below — the only thing
