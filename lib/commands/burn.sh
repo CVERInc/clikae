@@ -427,6 +427,42 @@ _burn_output_tail() {
   printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
+# P2 (round-4 review): the reroute refresh budget — see _burn_next_same_engine
+# below. Named once, used at every site that used to hardcode "3" (the cap
+# check itself, its own comment, and docs/DESIGN-board-fuel-dots.md's prose)
+# so the three copies can't drift from each other again.
+_BURN_REROUTE_REFRESH_CAP=${_BURN_REROUTE_REFRESH_CAP:-3}
+# P3-6 (round-5 review): an EXPLICITLY-set non-numeric override used to fail
+# SILENTLY at the `while` check inside _burn_next_same_engine (`[: abc:
+# integer expression expected` on stderr, but the loop condition simply
+# never fires) — the whole live-verification mechanism went dark, zero
+# calls spent on every reroute from then on, with only that one
+# bash-internal stderr line as any trace. A loud, named warning plus a safe
+# default beats either that bash-internal message or a QUIET fallback
+# (`CLIKAE_USAGE_TTL`'s own pattern elsewhere in this codebase) — this knob
+# controls whether burn ever verifies a reroute target at all, worth
+# calling out by name. The unset/empty case above already resolved to the
+# default and is never "invalid" — only a value that's actually SET to
+# something non-numeric reaches this check.
+#
+# P3-4 (round-6 review): "all digits" was not enough. `99999999999999999999`
+# passed the check and then walked straight back into the failure P3-6 above
+# was written to kill: `[ "$calls" -lt 99999999999999999999 ]` is an
+# arithmetic OVERFLOW, not a comparison, so the loop condition errors out
+# (`[: …: integer expression expected`) and never fires — zero live
+# verification calls on every reroute, no warning, one bash-internal stderr
+# line as the only trace. Measured identically on bash 5.2 and bash 3.2.57.
+# So bound the DIGIT COUNT too: `??????????*` is ten characters or more, i.e.
+# anything that cannot fit in a signed 32-bit integer's ten digits with room
+# to spare. Nine digits (999,999,999) is already absurd for either knob — a
+# billion reroute verification calls, or an age ceiling of 31 years — so
+# nothing legitimate is refused here.
+case "$_BURN_REROUTE_REFRESH_CAP" in
+  *[!0-9]*|??????????*)
+    log_warn "_BURN_REROUTE_REFRESH_CAP=\"$_BURN_REROUTE_REFRESH_CAP\" is not a non-negative integer of at most 9 digits — using the default (3). A reroute's live verification budget silently drops to zero calls otherwise."
+    _BURN_REROUTE_REFRESH_CAP=3
+    ;;
+esac
 # _burn_dry_epoch <reset-phrase> -> the phrase's reset instant as an epoch on
 # stdout, or nothing (rc 1) when it does not parse — limit_reset_epoch's own
 # contract, just anchored to "now" for the caller. A tiny wrapper so both
@@ -476,8 +512,8 @@ _burn_cockpit_gate() {
 }
 
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
-# The next same-engine tank to reroute a dry burn onto, in listing order — but the
-# reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
+# The next same-engine tank to reroute a dry burn onto — the reserve is not
+# naive (the 2026-06-04 "burn-out" dogfood):
 #   · P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
@@ -500,10 +536,48 @@ _burn_cockpit_gate() {
 #     coincidence of P0.
 #   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
+#   · P2-6 (round-1 review) — SKIP a tank whose account is the SAME as the hop
+#     we just left ($tried's last entry): same login, same real quota, so it
+#     is a wasted hop even before dried_accts knows it. And among the
+#     candidates that remain, tanks sharing an account are ranked as ONE —
+#     see the "collapse" pass below — never offered as two independent
+#     options in the same ranking.
+#   · P2-9 (round-1 review) — a tank we KNOW is nearly exhausted (peak >=90%)
+#     must not outrank a tank we simply have no reading for. Ranking is three
+#     tiers, best first: known headroom <90% -> unknown -> known >=90%
+#     (tiering itself uses peak = max(window_pct, weekly_pct): a tank with
+#     PLENTY of weekly room left but its 5h window nearly gone still lands in
+#     the worst tier, because a burn starting NOW hits that wall in minutes).
+#   · P2-3 (round-2 review) — WITHIN a tier, ordered by lowest window_pct
+#     first, weekly_pct only as the tie-break. A burn is about to run NOW: a
+#     tank with a great weekly number but its 5-hour window nearly spent
+#     would be picked over one with hours of window left just because its
+#     weekly digit looks nicer — a real reroute to the WORSE choice for the
+#     run about to happen. Tiering above already weighs window heavily (via
+#     peak); ordering used to weigh it only as a tie-break, the two
+#     disagreeing about which window matters — this makes them agree.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
   local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
+  local fallback=""
+  local last_hop="" last_acct=""
+  last_hop="${tried##* }"
+  case "$last_hop" in "$cli/"*) last_acct="$(_limit_tank_account "$cli" "${last_hop#*/}" 2>/dev/null || true)" ;; esac
+
+  # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays,
+  # read CACHE-ONLY (usage_cache_peek never forks the adapter or calls the
+  # vendor — see lib/core/usage.sh's header). peak/up/uw empty = no usable
+  # reading (unknown). P2 (round-4 review): this pass used to spend the live
+  # vendor budget HERE, on listing-order candidates, before ranking existed —
+  # so the calls landed on whoever sorted first alphabetically, not on
+  # whoever could actually win, and the tank that DID win was routinely the
+  # one unverified candidate left holding a stale, flattering number
+  # (usage_cache_peek's own contract: "A STALE reading is still returned
+  # here"). Rank first (Pass 3, on-disk readings only); the live budget is
+  # spent AFTER that ranking exists, only on candidates it says could win —
+  # see Pass 4 below.
+  local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=() c_stale=()
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
@@ -518,12 +592,14 @@ _burn_next_same_engine() {
       log_warn "skipping $cli/$t — an interactive session is using it (burn would spend that quota; --allow-active to override)."
       continue
     fi
-    if [ -n "$dried_accts" ]; then
-      tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
-      if [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
-        log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
-        continue
-      fi
+    tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
+    if [ -n "$dried_accts" ] && [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
+      log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
+      continue
+    fi
+    if [ -n "$last_acct" ] && [ -n "$tacct" ] && [ "$tacct" = "$last_acct" ]; then
+      log_warn "skipping $cli/$t — same account as the tank just tried (shared quota; not a real second option)."
+      continue
     fi
     # P2 (#40) — SKIP a tank that already has a RUNNING burn on it, per #41's
     # status files (never tmux session names: two burns on one tank collide
@@ -534,22 +610,199 @@ _burn_next_same_engine() {
       log_warn "skipping $cli/$t — another burn is already running on it (#40; --allow-active to override)."
       continue
     fi
-    printf '%s\n' "$t"; return 0
+    [ -n "$fallback" ] || fallback="$t"
+    local up="" uw="" peak="" fields stale=0
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
+    fi
+    # P3-4 (round-5 review): a reading too old for usage_cache_peek's ceiling
+    # is still worth spending Pass 4's budget on SOONER than a candidate with
+    # no on-disk reading at all — see usage_cache_has_reading's own header.
+    declare -F usage_cache_has_reading >/dev/null && usage_cache_has_reading "$cli" "$t" && stale=1
+    c_tank+=("$t"); c_acct+=("$tacct"); c_up+=("$up"); c_uw+=("$uw"); c_peak+=("$peak"); c_stale+=("$stale")
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
+
+  # Pass 2 (P2-6) — collapse same-account candidates to ONE. The account's
+  # reading is the WORST (highest) window/weekly seen across its candidate
+  # tanks this call — never overstate a shared quota just because one
+  # sibling's cache snapshot happens to look better. Only the FIRST such
+  # tank (listing order) stays a candidate; every other sibling is dropped
+  # from ranking outright (a `c_skip` flag, not a fake "unknown" — an
+  # unknown reading must never let a dropped, actually-known-bad sibling
+  # sneak ahead of a genuine unknown, see P2-9 above).
+  local n="${#c_tank[@]}" i j
+  local -a c_skip=()
+  for (( i = 0; i < n; i++ )); do c_skip[i]=0; done
+  local seen=$'\n'
+  for (( i = 0; i < n; i++ )); do
+    [ -n "${c_acct[i]}" ] || continue
+    case "$seen" in *$'\n'"${c_acct[i]}"$'\n'*) continue ;; esac
+    seen="$seen${c_acct[i]}"$'\n'
+    local first=-1 wu="" ww="" hasstale=0
+    for (( j = 0; j < n; j++ )); do
+      [ "${c_acct[j]}" = "${c_acct[i]}" ] || continue
+      [ "$first" -ge 0 ] || first=$j
+      if [ "$j" != "$first" ]; then c_skip[j]=1; fi
+      [ "${c_stale[j]}" = 1 ] && hasstale=1
+      [ -n "${c_up[j]}" ] || continue
+      { [ -n "$wu" ] && [ "${c_up[j]}" -le "$wu" ]; } || wu="${c_up[j]}"
+      { [ -n "$ww" ] && [ "${c_uw[j]}" -le "$ww" ]; } || ww="${c_uw[j]}"
+    done
+    c_up[first]="$wu"; c_uw[first]="$ww"
+    c_stale[first]="$hasstale"
+    if [ -n "$wu" ]; then
+      c_peak[first]="$wu"; [ "$ww" -le "$wu" ] || c_peak[first]="$ww"
+    else
+      c_peak[first]=""
+    fi
+  done
+
+  # Pass 3 — freeze a tier for every surviving (non-skipped) candidate on
+  # WHATEVER is already known (cache, age-penalised by usage_cache_peek's own
+  # ceiling — see lib/core/usage.sh) — a snapshot taken once, before any live
+  # call this invocation makes, so Pass 4 can decide who is worth a vendor
+  # call without one candidate's fresh reading shadowing another's untested
+  # one. tier 0 = known <90% (best), 1 = unknown, 2 = known >=90% (worst) —
+  # same three tiers Pass 5's final ranking below uses.
+  local -a c_tier0=()
+  for (( i = 0; i < n; i++ )); do
+    if [ -z "${c_peak[i]}" ]; then c_tier0[i]=1
+    elif [ "${c_peak[i]}" -ge 90 ]; then c_tier0[i]=2
+    else c_tier0[i]=0
+    fi
+  done
+
+  # Pass 4 — P2 (round-4 review): spend the live budget on the candidates
+  # that Pass 3's on-disk snapshot says could actually win — not on whoever
+  # sorted first alphabetically. That was the bug: 3 vendor calls landed on
+  # the first 3 candidates BY LISTING ORDER, so a 4th candidate holding a
+  # stale but flattering on-disk number could win the whole ranking without
+  # ever being verified this call (usage_cache_peek's own contract: "A STALE
+  # reading is still returned here"). Selection-sort the top
+  # _BURN_REROUTE_REFRESH_CAP candidates OFF THE FROZEN SNAPSHOT (never off
+  # each other's just-refreshed numbers, so a same-tier sibling that hasn't
+  # been checked yet is never skipped just because the one picked first
+  # happened to verify well), refresh each with one real vendor call. A
+  # same-account sibling was already collapsed to one candidate in Pass 2
+  # (c_skip), so this can never spend two calls on one account — one refresh
+  # per account, reusing that one reading.
+  #
+  # P3-4 (round-5 review): tier 0 (confident, FRESH) always outranked tier 1
+  # (unknown) here, with no distinction WITHIN tier 1 between "never
+  # scanned" and "on-disk reading too old for usage_cache_peek's ceiling" —
+  # so a candidate the board itself still shows a percentage for (aged past
+  # 15 minutes) could sit behind cap-many confident tier-0 candidates
+  # forever, never verified and never selectable, no matter how good its
+  # true headroom actually was. Priority for THIS pass only (never Pass 5's
+  # final ranking) now has 4 levels instead of 3: a stale-but-evidenced tier
+  # 1 candidate (`c_stale`) goes FIRST — it is the one case where refreshing
+  # could reveal a genuinely better tank that confident tier 0 already
+  # accounts for — then confident tier 0, then a blank (never-scanned) tier
+  # 1, then tier 2 last (already known bad, least worth spending on).
+  local -a c_picked=()
+  for (( i = 0; i < n; i++ )); do c_picked[i]=0; done
+  local calls=0 pick pick_prio pick_up pick_uw
+  while [ "$calls" -lt "$_BURN_REROUTE_REFRESH_CAP" ]; do
+    pick=-1; pick_prio=9; pick_up=999999; pick_uw=999999
+    for (( i = 0; i < n; i++ )); do
+      [ "${c_skip[i]}" = 0 ] || continue
+      [ "${c_picked[i]}" = 0 ] || continue
+      local tier up uw prio
+      tier="${c_tier0[i]}"
+      if [ "$tier" = 1 ]; then
+        up=0; uw=0
+        if [ "${c_stale[i]:-0}" = 1 ]; then prio=0; else prio=2; fi
+      elif [ "$tier" = 0 ]; then
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=1
+      else
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=3
+      fi
+      if [ "$prio" -lt "$pick_prio" ] ||
+         { [ "$prio" -eq "$pick_prio" ] && { [ "$up" -lt "$pick_up" ] ||
+           { [ "$up" -eq "$pick_up" ] && [ "$uw" -lt "$pick_uw" ]; }; }; }; then
+        pick=$i; pick_prio=$prio; pick_up=$up; pick_uw=$uw
+      fi
+    done
+    [ "$pick" -ge 0 ] || break
+    c_picked[pick]=1
+    declare -F usage_read >/dev/null && usage_read "$cli" "${c_tank[pick]}" 1 >/dev/null 2>&1 || true
+    calls=$((calls + 1))
+    local up="" uw="" peak="" fields
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "${c_tank[pick]}")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
+      c_up[pick]="$up"; c_uw[pick]="$uw"; c_peak[pick]="$peak"
+      # P3-3 (round-5 review): a VERIFIED 0% window is the absolute floor —
+      # nothing left in this pool can beat it, so stop spending the refresh
+      # budget rather than always burning all _BURN_REROUTE_REFRESH_CAP
+      # calls even after the winner is already provably unbeatable.
+      [ "$peak" = 0 ] && break
+    else
+      # The refresh this call just spent was PROOF this candidate isn't
+      # readable right now (usage_read already overwrote its cache with
+      # source:"unknown" — see lib/core/usage.sh). Leaving Pass 1's stale
+      # in-memory numbers in place would let this candidate win on a reading
+      # it just failed to reproduce, ahead of a sibling that verified clean
+      # this same call (round-5 review P2-1).
+      #
+      # P3-1 (round-6 review): but blanket "demote to unknown" is only half a
+      # rule, and the other half ran backwards. Pass 5 ranks unknown (tier 1)
+      # AHEAD of known >=90% (tier 2) — deliberately, P2-9: no reading at all
+      # is a better bet than a reading that says "this tank is nearly out".
+      # So clearing a tier-2 candidate PROMOTED it: a tank last read at 99%
+      # sixty seconds ago, whose token happens to be dead this call, jumped
+      # from "known nearly-full" to "unknown" and beat a sibling that
+      # verified clean at 95% in this same call. Same shape as round-5 P2-1,
+      # mirrored onto the bad side.
+      #
+      # The rule that covers both: a FAILED refresh may only ever rank a
+      # candidate the SAME or WORSE than the evidence already on disk — never
+      # better. tier 0 (known <90%) -> 1, because "cannot read it now" is
+      # genuinely worse than a verified sibling; tier 1 stays 1; tier 2 KEEPS
+      # its last good reading and stays tier 2. That reading is already
+      # bounded by the ranking ceiling (usage_cache_peek applied it in Pass 1,
+      # so anything older than the ceiling was tier 1 here to begin with) —
+      # this branch never resurrects a number the ceiling had already thrown
+      # away, it only declines to launder a bad one into a blank.
+      if [ "${c_tier0[pick]}" != 2 ]; then
+        c_up[pick]=""; c_uw[pick]=""; c_peak[pick]=""
+      fi
+    fi
+  done
+
+  # Pass 5 — pick the best surviving candidate, three tiers, using whatever
+  # is now known: freshly-verified where Pass 4 spent the budget, the Pass 3
+  # snapshot everywhere else. P2-3 (round-2 review): WITHIN a tier, ordered
+  # by window_pct (the 5-hour clock a burn starting now actually runs
+  # against) first, weekly_pct only breaking a tie — swapped from the
+  # round-1 shape, which ordered by weekly_pct first. See this function's
+  # own header for why.
+  local best="" best_tier=9 best_uw=999999 best_up=999999
+  for (( i = 0; i < n; i++ )); do
+    [ "${c_skip[i]}" = 0 ] || continue
+    local tier up uw
+    if [ -z "${c_peak[i]}" ]; then tier=1; up=0; uw=0
+    elif [ "${c_peak[i]}" -ge 90 ]; then tier=2; up="${c_up[i]}"; uw="${c_uw[i]}"
+    else tier=0; up="${c_up[i]}"; uw="${c_uw[i]}"
+    fi
+    if [ "$tier" -lt "$best_tier" ] ||
+       { [ "$tier" -eq "$best_tier" ] && { [ "$up" -lt "$best_up" ] ||
+         { [ "$up" -eq "$best_up" ] && [ "$uw" -lt "$best_uw" ]; }; }; }; then
+      best="${c_tank[i]}"; best_tier=$tier; best_uw=$uw; best_up=$up
+    fi
+  done
+  printf '%s\n' "${best:-$fallback}"
 }
 
-# _burn_timeout_bin -> echo `timeout` or `gtimeout` if one is on PATH; otherwise echo
-# NOTHING and warn that the run will be UNBOUNDED. Factored out so the "no tool →
-# honest warning, still runs" contract is unit-testable (stock macOS ships neither).
-_burn_timeout_bin() {
-  if command -v timeout  >/dev/null 2>&1; then printf 'timeout';  return 0; fi
-  if command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout'; return 0; fi
-  if command -v perl     >/dev/null 2>&1; then printf 'perl';     return 0; fi
-  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) or \`perl\` on PATH — running WITHOUT a time bound."
-  return 0
-}
+# _burn_timeout_bin moved to lib/core/timeout_bin.sh (P2-2, round-2 review):
+# lib/adapters/claude.sh's Keychain read needs the same three-arm resolver
+# (timeout -> gtimeout -> perl -> honest warning) and an adapter has no
+# business sourcing a command file for it — see that file's header for why.
+# Sourced globally in bin/clikae like every other lib/core/*.sh, so it's
+# still just `_burn_timeout_bin` here, unchanged call sites below.
 
 # Artifact freshness uses _clikae_mtime (lib/core/adapter_loader.sh) — epoch mtime,
 # 0 if absent, GNU-stat-first for Linux portability — so a STALE file from a prior
@@ -3593,6 +3846,13 @@ cmd_burn() {
   local t0=$SECONDS
 
   local cur="$tank" tried="" dried_accts="" reset out rc
+  # The named tank is the launch target, always (P1-2/P1-3/P1-4, round-1 review).
+  # There used to be a headroom swap here that picked a DIFFERENT tank than the
+  # one the caller named — before the first attempt, outside `$tried`, and
+  # blind to `--to`. Headroom preference now lives in exactly one place:
+  # _burn_next_same_engine's candidate ordering below, which only runs once
+  # `$cur` itself has gone dry (or --to names an explicit next hop, which
+  # always wins outright over any ordering).
   local earliest_reset="" earliest_epoch=""   # #61: earliest parseable reset across every dry hop
   while :; do
     validate_name profile "$cur"
@@ -4046,6 +4306,22 @@ KV
       artifact_fresh=1
       artifact_bytes_snapshot="$(_burn_size "$artifact")"
     fi
+
+    # P2-1(a) (round-2 review): this tank just finished a run — the board's
+    # cache for it is either absent or as stale as its last `clikae usage`
+    # (nothing else ever wrote it; see lib/core/usage.sh's header). One vendor
+    # call, here, off the launch path (the launch itself still pays zero — see
+    # P1-2..P1-4 above) and AFTER the artifact check so it can never delay
+    # judging this run's own outcome. Best-effort: a failed refresh overwrites
+    # this tank's cache with source:"unknown" (usage_read's actual contract —
+    # see lib/core/usage.sh; a stale-but-readable board dot for it disappears
+    # rather than surviving untouched) but never affects $rc/$out. (r3 P3-5,
+    # confirmed still live in round-4: this is a bare
+    # AND-list under bin/clikae's `set -e` — usage_read's own exit status
+    # would end the whole burn if it were ever non-zero here; `|| true`
+    # makes "best-effort" structural instead of relying on usage_read
+    # happening to always end in a printf today.)
+    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1 || true
 
     # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
     # BEFORE classifying — not just at display time. _burn_output_tail already

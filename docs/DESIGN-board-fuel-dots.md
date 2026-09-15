@@ -237,3 +237,245 @@ Parseable expired store evidence survives the marker TTL as unverified until
 cleared, but never longer than `CLIKAE_DRY_MAX_RETAIN` (7 days) — retained
 evidence is a caution, not a promise to remember forever. Unparseable store
 evidence retains the existing TTL behavior.
+
+
+## Vendor usage cache (#72)
+
+Run `clikae usage [engine] [tank] [--json]` to read usage. JSON output is one
+object per tank: `engine`, `tank`, `window_pct`, `weekly_pct`,
+`window_resets_at`, `weekly_resets_at`, and `source`. Percentages are used
+quota (0–100); unavailable fields are null. `source` is `"vendor"` (a live
+call actually answered), `"transcript"` (derived from local evidence the
+engine already wrote — currently Codex's `rate_limits`, scanned from
+rollouts modified in the last 7 days, the same `-mmin -10080` window
+`limit_codex_status` uses), or `"unknown"` (no usable reading). The optional
+adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
+usage endpoint; Codex never runs a `codex` process for this — it reads the
+same rollout transcript evidence `limit_codex_status` does, so its source is
+`"transcript"` and its `cached_at` is that reading's own newest event
+timestamp, not the time it was read (round-1 review, P2-4: a week-old
+rollout must not be stamped "just now"); Antigravity currently returns
+unknown. Parsing requires jq; without it readings are unknown.
+
+Readings live at `$CLIKAE_HOME/state/usage/<engine>/<tank>.json`, including
+`cached_at` (the reading's own evidentiary timestamp — see `usage_read`'s
+header) and `scanned_at` (when it was actually fetched/scanned; round-2
+review, P3 — the two coincide for a vendor reading but not for codex's
+transcript evidence, whose `cached_at` is the underlying event's own time).
+TTL defaults to 120 seconds against `scanned_at`; `CLIKAE_USAGE_TTL`
+overrides it and `--fresh` bypasses it. Errors are cached too. Writes are
+atomic, and `usage_read` is the ONLY writer in the repo.
+
+**Who writes this cache, and who reads what (round-2 review, P2-1):**
+
+- **(a)** `burn` refreshes the LAUNCHED tank's reading once, at run END —
+  after the run's own artifact check (so it can never delay judging that
+  run's outcome), never before launching (the launch itself still pays
+  zero vendor round-trips — round-1 review, P1-2/P1-3/P1-4, unchanged).
+- **(b)** when the named tank is dry and burn must reroute, this is the one
+  moment a stale number would cost burn a wrong hop — so surviving
+  CANDIDATES are ranked FIRST, on whatever is already known (their cache,
+  through `usage_cache_peek`'s own age ceiling — see below), and ONLY THEN
+  does burn spend live vendor calls verifying the candidates ranking says
+  are worth a call, bounded by `_BURN_REROUTE_REFRESH_CAP` (3 by default;
+  named once in `lib/commands/burn.sh`, never re-typed; an override that is
+  not a non-negative integer of at most 9 digits warns loudly and falls back
+  to the default rather than silently spending zero calls — round-5 review
+  P3-6 for the non-numeric case, round-6 review P3-4 for the all-digit
+  OVERFLOWING one, which passed the first check and then produced the same
+  silent zero budget because `[ "$calls" -lt 99999999999999999999 ]` is an
+  arithmetic overflow, not a comparison. `_USAGE_CACHE_PEEK_MAX_AGE_SEC`
+  below carries the same bound, where an overflow was the quieter failure
+  still: it became a 1e20-second ceiling, i.e. every reading trusted
+  forever, with no warning at all). Round-3 review, P3-4, found
+  `candidates * --max-time 8` has no total bound as a fleet grows — the cap
+  answers that — but round-4 review, P2, found the round-3 shape spent that
+  cap on the first 3 candidates by LISTING (alphabetical) order, refreshed
+  BEFORE ranking existed: the calls landed on tanks that could never win
+  while the tank that DID win was routinely the one candidate left
+  unverified with a stale, flattering on-disk reading. Ranking first and
+  spending the budget on the winning candidate(s) closes that: a same-account
+  sibling was already collapsed to one candidate before any live call (Pass
+  2, below), so this can never spend two calls on one account either — one
+  refresh per account, reusing that one reading. A candidate the cap never
+  reaches keeps whatever `usage_cache_peek` already returned for it (fresh,
+  aged, or unknown past the ceiling) — never a live call, same as today.
+  Refresh priority (round-5 review, P3-4) has FOUR levels, not three: a
+  tier-1 candidate WITH an on-disk reading too old for the ceiling below
+  goes first (the one case a confident-but-fresh candidate could be hiding
+  an even better tank the board itself still shows a stale percentage for),
+  then confident tier-0, then a blank tier-1 with no reading at all, then
+  tier-2 last. And the moment a refresh confirms a verified 0% window (an
+  unbeatable floor — nothing left in the pool can score lower), the loop
+  stops spending the remaining budget rather than always burning every call
+  in the cap regardless (round-5 review, P3-3). A refresh call that FAILS
+  (401, network error, expired token) may only ever rank that candidate the
+  SAME or WORSE than the evidence already on disk, never better (round-5
+  review P2-1, round-6 review P3-1). Concretely: a snapshot tier-0 candidate
+  (known <90%) becomes unknown — it must never win on the flattering stale
+  number Pass 1 read before the call proved it unreadable — while a snapshot
+  tier-2 candidate (known >=90%) KEEPS its last good reading and stays
+  tier 2. Blanking tier 2 would have PROMOTED it, because unknown outranks
+  known->=90% by design (see the three tiers above): a tank last read at 99%
+  sixty seconds ago whose token is dead this call would have beaten a
+  sibling that verified clean at 95% in the same call. The kept reading is
+  already bounded by the age ceiling below (Pass 1 applied it, so anything
+  older was unknown here to begin with), so this never resurrects a number
+  the ceiling had discarded. `usage_read` overwrites that candidate's
+  on-disk cache with `source:"unknown"` on the same failure either way: the
+  disk records "cannot read it now", the ranking records "no better than
+  what we last saw".
+  `usage_cache_peek`'s own age ceiling (`_USAGE_CACHE_PEEK_MAX_AGE_SEC`,
+  `lib/core/usage.sh`, 15 minutes by default) is the second half of the
+  round-4 fix: a reading older than that is "unknown" for ranking purposes,
+  never a flattering-but-stale percentage — belt-and-suspenders with the
+  reorder above, since a reading young enough to survive the ceiling can
+  still legitimately outrank an unverified tier and get prioritised for a
+  live call, the same as any other tier-0 candidate would. This ceiling
+  measures the evidence's own `cached_at`, not `scanned_at` — see the
+  age-clock paragraph below for why that distinction matters for codex's
+  transcript-derived readings specifically. A non-numeric override here
+  warns loudly and falls back to the default rather than silently reading
+  every candidate as unknown (round-5 review, P3-6).
+- **(c)** the board NEVER fetches. It reads whatever is already on disk,
+  however old, via `usage_board_fields` — silently within the TTL, WITH its
+  age alongside it ("window 44% · weekly 20% · 3h ago") once past the TTL,
+  and treated as if there were no cached reading at all once it is 24h or
+  older. `clikae usage [engine] [tank] [--fresh]` (a bare `clikae usage
+  --fresh` covers every tank) is the only thing a HUMAN runs to fill this
+  cache; (a)/(b) are `burn` calling the same writer (`usage_read`) the same
+  way, on its own schedule.
+- **(d)** `usage_cache_peek` (burn's ranking) and `usage_board_fields` (the
+  board's display) both honour the reading's OWN `window_resets_at` /
+  `weekly_resets_at`: a window whose reset instant has already passed reads
+  as 0% used, never as whatever stale percentage the last fetch happened to
+  record — a tank that ran dry at 15:00Z must not still be ranked (or
+  shown) at its old 100% two hours after its window reset. This "reset
+  passed -> 0%" rule only fires for `usage_cache_peek` WITHIN its own age
+  ceiling (below) — past that ceiling the reading is "unknown", never "0%":
+  a reading too old to trust for ranking is also too old to know it hasn't
+  drifted past a LATER reset it never recorded (round-5 review, P2-2, found
+  the ceiling itself measuring the wrong clock let this combination produce
+  a false "0%" for a 3-day-old codex transcript — see the age-clock
+  paragraph below). `usage_board_fields` carries no such ceiling: it honours
+  the reset-passed rule at any age, gated only by its own 24h cutoff in (c).
+  Round-5 review, P3-4/P3-3, also changed WHICH candidates Pass 4 spends its
+  live-call budget on and WHEN it stops: a tier-1 (unknown) candidate that
+  DOES have an on-disk reading — just one too old for the ceiling below — is
+  now refreshed BEFORE a confident, fresh tier-0 candidate (a candidate with
+  no on-disk reading at all still ranks behind confident tier-0, only ahead
+  of tier-2), so a tank the board still shows a stale percentage for can't
+  sit unverified forever behind cap-many fresher-but-not-necessarily-better
+  candidates; and the loop stops the moment a refresh confirms a verified 0%
+  (an unbeatable floor) rather than always spending every call in the cap.
+
+**Three different clocks answer three different questions here — reconciled,
+not unified, because unifying them would make one of the three lie (round-5
+review, P3-5):**
+
+One thing they are NOT allowed to disagree about is what a NEGATIVE age
+means. A `cached_at` in the FUTURE — a cache written while the host clock was
+ahead, or copied from a machine that was — **counts as age 0**, in both
+rulers (round-6 review, P3-7). Until then `usage_cache_peek` REJECTED such a
+reading (`select($evidence <= $now)`) while `_home_fuel_dotv_compute` clamped
+it (`[ "$age" -ge 0 ] || age=0`), so a cache stamped thirty seconds ahead was
+"unknown" for burn ranking and "freshly read" on the board at the same
+instant — a fourth kind of inconsistency this section did not cover. Age 0
+rather than rejection, because the reading is real evidence carrying a skewed
+stamp and rejecting it punishes the tank for its host clock; and because a
+skewed stamp can only make a reading look YOUNGER than it is, never older, so
+the rule can never resurrect a reading the ceiling would otherwise discard.
+On the board, age 0 also means no age annotation is printed, which is the
+honest rendering: the stamp says "now" and we have no better number.
+
+- `_USAGE_CACHE_PEEK_MAX_AGE_SEC` (`lib/core/usage.sh`, 900s / 15 minutes)
+  answers "is this reading recent enough to RANK burn's reroute on". It
+  measures the evidence's own `cached_at` (round-5 review, P2-2 — NOT
+  `scanned_at`: a codex transcript reading's `cached_at` is the underlying
+  quota EVENT's timestamp, while `scanned_at` is merely when something last
+  re-read that same unchanged rollout off disk; measuring `scanned_at`
+  let an indefinitely-old rollout stay ranking-eligible forever just by
+  being rescanned, no new evidence from the vendor ever required). Short on
+  purpose: burn's ranking is a live decision made once, right now, so a
+  number a burn might act on immediately should be barely older than "now".
+- `_home_fuel_dotv_compute`'s 24h cutoff (`lib/commands/home.sh`, 86400s;
+  `_home_fuel_dotv` is the memoizing wrapper around it) answers
+  "is this reading still worth SHOWING a percentage for on the board at
+  all". Long on purpose: the board is a passive glance, not a live
+  decision — a number from this morning is still useful context next to a
+  dot, where a number from 15 minutes ago being ranking-stale would be
+  useless noise if the board refused to show numbers past the same short
+  ceiling burn uses.
+- `next_tank` (`lib/core/profile_store.sh:508`) answers neither question —
+  it carries no percentage and no age at all. It walks the burn-order RING
+  by `limit_tank_dry`'s boolean dry/not-dry state (a completely different
+  subsystem, `lib/core/limit.sh`, unrelated to the usage cache these two
+  clocks measure) and stops at the first same-engine tank that isn't dry.
+  Giving it either of the above ages would require it to start reading the
+  usage cache it was never built to read — a materially different, larger
+  change, not a two-line reconciliation.
+
+`usage_cached_fields` (fresh-only, no age shown) still exists with its
+original contract for any caller that genuinely wants "fresh or nothing",
+but is no longer the board's primary read — see (c) above for why a
+120s-TTL-only gate left the vendor cache invisible almost all the time on
+a real machine (round-2 review's own receipt: 3 of 4 real tanks, hours
+stale, showed nothing).
+
+`_home_fuel_dotv`'s header used to promise the redraw path is "fork-free";
+that was never fully true (see the codex paragraph above) and is even less
+so now that (c) means every tank not yet memoized this redraw pays one
+`jq` fork to parse its cache file (plus one shared `date` fork for the
+whole redraw) — see that function's own header (round-2 review, P3-1) for
+the measured cost and why a hand-rolled bash-only JSON reader was judged
+not worth it for a sub-millisecond-per-tank, redraw-only cost.
+
+Dry and the expired-limit caution are decided FIRST, from `_home_is_dryv` —
+a persisted dry marker, an account-contagion sibling, or a parseable reset
+that has already passed (`reset passed · unverified`) all win outright,
+verbatim reset string included, before the vendor cache is even consulted
+(round-3 review, P2-1: the reverse ordering let any <24h cached reading
+paper over a dry tank). The vendor reading only colours a tank that has
+already cleared both checks: for a current (<24h) reading on such a tank,
+the higher used percentage determines the dot — 90% or more red, 60% or
+more yellow, otherwise green — and the note shows both window and weekly
+percentages. Missing readings, and readings 24h or older, are treated as
+unknown and fall through to the existing weekly-caution / codex-status /
+ready chain below.
+
+The tank a caller names is always the one burn launches — there is no
+pre-launch substitution (round-1 review, P1-2/P1-3/P1-4). Headroom
+preference only governs which tank a *dry* burn reroutes to *next*, in
+three tiers, best first: a known reading under 90% used beats an unknown
+reading, which beats a known reading of 90% or more (P2-9 — a tank we know
+nothing about should not lose to one the vendor just called nearly
+exhausted; tiering itself uses `peak = max(window_pct, weekly_pct)`).
+WITHIN a tier, ordered by lowest **window_pct** first, `weekly_pct` only as
+the tie-break (round-2 review, P2-3 — swapped from round-1's weekly-first
+shape: a burn is about to run NOW, against the 5-hour window, so a tank
+with a great weekly number but its window nearly spent is the wrong pick).
+Tanks sharing a vendor account rank as ONE, using the worst (highest)
+reading any of them reported this call — never overstating a shared quota
+because one sibling's cache snapshot happens to look better — and a tank
+is never offered as the very next hop after a sibling on the same account,
+even before that account is confirmed dry (P2-6). The existing
+live-session, busy-burn, solo, and dried-account exclusions are retained.
+`--to` always wins outright over this ordering, and every hop it produces
+— including the very first, off a tank that just went dry — is recorded
+in `rerouted_from`. Unknown usage keeps the existing transcript-based
+launch and reroute behavior otherwise.
+
+Claude reads the tank credential file or tank-specific macOS Keychain
+service, guarded by `command -v security` and a bounded wait via
+`lib/core/timeout_bin.sh`'s `_burn_timeout_bin` — `timeout` → `gtimeout` →
+`perl -e 'alarm …; exec …'` → an honest warning and an unbounded call as a
+last resort (mirroring the credential-migration hook's own guard; round-1
+review, P2-7; round-2 review, P2-2: this used to be its own two-arm copy,
+`timeout`/`gtimeout` only, right here — the ONE platform this branch runs
+on, stock macOS, ships NEITHER by default, so the bound was silently empty
+on an unmodified install; now it calls the repo's one shared resolver,
+which already had the third arm). The bearer token is passed solely
+through curl configuration on stdin, with shell tracing disabled, never
+through argv or an exported variable. Curl defaults are disabled and
+timeouts bound failures; HTTP errors and network failures become unknown
+without printing response bodies.

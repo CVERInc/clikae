@@ -1171,7 +1171,7 @@ _home_codex_status_readv() {
   return 0
 }
 
-# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, fork-free, into $_FDOT.
+# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, into $_FDOT.
 #
 # The redraw path wants just the mark, and every row was paying a `$( )` to get
 # it — and this one is the priciest on the board, because _home_is_dry forks awk
@@ -1179,20 +1179,131 @@ _home_codex_status_readv() {
 # 248 ms frame, for a value that cannot change between two keypresses.
 # The echoing form above stays for the non-hot callers that want the phrase too.
 #
-# "Fork-free" is aspirational for the codex branch specifically, not literal:
-# a cache hit (_home_codex_status_readv -> limit_codex_status_cached) still
-# costs a handful of forks (`find`/`stat`/`head`/`awk` to check the cache key)
-# — see P2-1 in limit_codex_status_cached's header — just no longer one
-# proportional to the rollout store's CONTENT size, which is what actually
-# broke this contract before the fix.
+# P3-1 (round-2 review): this header used to promise "fork-free" outright.
+# That was never true even at its narrowest (see the codex paragraph below,
+# unchanged), and P2-1(c)'s fix to actually SHOW the vendor cache (not just
+# the fresh-within-120s slice of it) made it less true, not more: every tank
+# not yet memoized this redraw still pays one `jq` fork (usage_board_fields)
+# to parse its cache file, plus one `date` fork for the whole redraw (below,
+# shared via $_FUEL_MEMO_NOW — not one per tank). The real, current contract
+# is "at most one `date` fork per redraw, and at most one `jq` fork per
+# (dry,cli,tank) key per redraw" — memoization removes the multiplier a tank
+# repeated across several rows used to pay (see the P2-1 round-1 comment
+# just below), it does not remove the base cost of reading the cache at all.
+# Measured on this host, µs/call, `origin/main` (no usage cache in play) vs
+# this branch: 43–49 (main) vs ~960–1000 with a warm vendor cache and one
+# call per tank per redraw (was ~4700 before the P2-1 round-1 memoization —
+# see docs/DESIGN-board-fuel-dots.md's own numbers). A hand-rolled bash-only
+# JSON reader could close that last gap, but the cache format already goes
+# through `jq -ce` on write specifically so nothing downstream has to
+# re-implement JSON parsing by hand (see lib/core/usage.sh's usage_read) —
+# rewriting that decision here, for one caller, in exchange for shaving a
+# sub-millisecond-per-tank cost that is not on any hot per-keypress path
+# (only a redraw, and only the tanks whose memo missed) was judged not worth
+# the fragility. Rewritten to say what ships, not what this used to promise.
+#
+# "Fork-free" was, and remains, more aspirational for the codex branch
+# specifically: a cache hit (_home_codex_status_readv ->
+# limit_codex_status_cached) still costs a handful of forks (`find`/`stat`/
+# `head`/`awk` to check the cache key) — see P2-1 in
+# limit_codex_status_cached's header — just no longer one proportional to
+# the rollout store's CONTENT size, which is what actually broke this
+# contract before that fix.
 _home_fuel_dotv() {
   local dry="$1" cli="$2" profile="$3"
+  # P2-1 (round-1 review): a tank can appear in more than one row of the SAME
+  # redraw (a Live row and its Tank row are the same tank) — 1634/1657/1686/
+  # 2574/2632 are five call sites, not five DIFFERENT tanks. usage_cached_fields
+  # forks `date`+`jq`; paying that per ROW instead of per TANK-per-REDRAW was
+  # the 719µs -> 4605µs regression. _home_fuel_memo_reset (called once per
+  # render, same "once per render" shape as _home_cols_prime) clears this
+  # between redraws; within one redraw a repeat (dry,cli,profile) key is
+  # served from memory with zero forks.
+  local _key="$dry"$'\037'"$cli/$profile" _n="${#_FUEL_MEMO_KEYS[@]}" _i
+  if [ "$_n" -gt 0 ]; then
+    for (( _i = 0; _i < _n; _i++ )); do
+      if [ "${_FUEL_MEMO_KEYS[_i]}" = "$_key" ]; then
+        _FDOT="${_FUEL_MEMO_DOT[_i]}"; _FNOTE="${_FUEL_MEMO_NOTE[_i]}"
+        return 0
+      fi
+    done
+  fi
+  [ -n "$_FUEL_MEMO_NOW" ] || _FUEL_MEMO_NOW="$(date +%s 2>/dev/null || echo 0)"
+  _home_fuel_dotv_compute "$dry" "$cli" "$profile" "$_FUEL_MEMO_NOW"
+  _FUEL_MEMO_KEYS[_n]="$_key"; _FUEL_MEMO_DOT[_n]="$_FDOT"; _FUEL_MEMO_NOTE[_n]="$_FNOTE"
+}
+
+# _home_fuel_memo_reset — clear the per-redraw fuel-dot memo. Called once at
+# the top of each redraw entry point (_home_render_static, _home_pick_draw_body),
+# right beside _home_cols_prime — the same "one per render, not one per row"
+# shape that function already established.
+_FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+_home_fuel_memo_reset() {
+  _FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+}
+
+# The actual computation _home_fuel_dotv used to do inline — unchanged logic,
+# just given a $4 `now` (epoch seconds, shared for the whole redraw) so it
+# never forks `date` itself; usage_board_fields accepts the same param.
+#
+# P2-1(c) (round-2 review): this used to call usage_cached_fields, which
+# stops returning ANYTHING once the reading is older than the 120s TTL —
+# and nothing but a manual `clikae usage` ever refreshes it (see
+# lib/core/usage.sh's "who writes this cache" header), so on a real machine
+# the vendor number was invisible almost all the time (round-2 review's own
+# receipt: 3 of 4 real tanks, hours stale, showed nothing). usage_board_fields
+# has no TTL of its own — it returns whatever is on disk, however old, same
+# cache-only/no-fetch/reset-instant-aware contract as burn's
+# usage_cache_peek — so THIS function is the one that draws the line: still
+# shown, silently, inside the TTL; shown WITH its age once past the TTL
+# ("window 44% · weekly 20% · 3h ago" — _human_age already has this exact
+# phrasing, built for the Continue list); and treated as if there were no
+# cached reading at all once the reading is 24h or older (falls through to
+# the same dry/weekly/codex/ready chain below this block, unchanged) — a
+# number that old is closer to noise than to a fact worth a coloured dot.
+#
+# P2-1, round 3: dry and "reset passed · unverified" are checked FIRST, below,
+# and WIN outright — a fresh vendor percentage never overrides them. Per
+# docs/DESIGN-board-fuel-dots.md:41 (red = dry, including account contagion
+# and the verbatim reset string) and :223-224 (#75: an expired limit takes
+# precedence over proactive percentage snapshots), the vendor reading only
+# gets to colour a tank that has already cleared BOTH checks. Landing the
+# usage_board_fields block ahead of _home_is_dryv (as this function did before
+# round 3) let any <24h cached reading paper over a dry tank, silently eating
+# its reset string — round-2's own receipt found four real tanks all carrying
+# a vendor reading, so that ordering was the common case, not an edge one.
+_home_fuel_dotv_compute() {
+  local dry="$1" cli="$2" profile="$3" now="${4:-}"
   _FNOTE=""
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
   fi
   if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
+  fi
+  local usage_fields up uw peak cached_at age ttl
+  if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
+    IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
+    # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
+    # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
+    # (lib/core/usage.sh) now shares — it used to REJECT that same reading
+    # instead, so a cache stamped 30 seconds ahead was unknown for burn
+    # ranking and freshly-read on the board at the same instant. Age 0 also
+    # means no age annotation below, which is the honest rendering: we have
+    # no idea how old it really is, and the stamp says "now".
+    age=$(( now - cached_at )); [ "$age" -ge 0 ] || age=0
+    if [ "$age" -lt 86400 ]; then
+      ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
+      _FNOTE="window ${up}% · weekly ${uw}%"
+      [ "$age" -lt "$ttl" ] || _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
+      peak="${peak%%.*}"
+      if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
+      elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
+      else _FDOT="${__C_GREEN}●$__C_RESET"; fi
+      return 0
+    fi
+    # 24h or older: too stale to trust — fall through as if unread, below.
   fi
   if _home_weekly_readv "$cli" "$profile"; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
@@ -1827,6 +1938,7 @@ _home_trunc_mid() {
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
   _home_cols_prime          # one width question per render, not one per row
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   local items="$1" dry="$2" any_dry=""
   # Two numbers for one headline used to cost nine processes — two awks, a sort, a
   # uniq-by-grep and the pipes to feed them — over a string the loop below is
@@ -2741,6 +2853,7 @@ _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
   local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
   _home_cols_prime
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with
@@ -2928,8 +3041,19 @@ LIVEACT
           printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
         local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
-        local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
-        dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
+        # P3-2 (round-2 review): this used to call the ECHOING _home_fuel_dot
+        # via `$( )` — a command substitution IS a subshell, so any memo
+        # write _home_fuel_dotv makes inside it (the per-redraw fuel-dot
+        # cache, `_FUEL_MEMO_*`) never reaches the parent shell: readable
+        # (a repeat lookup here would still see nothing to reuse) but not
+        # writable back out. Every OTHER call site already calls
+        # _home_fuel_dotv directly and reads $_FDOT/$_FNOTE in this same
+        # shell (1634/1657/1686/2612 above) — this was the one holdout, and
+        # it silently broke :940's "repeat … with zero forks" promise at
+        # exactly this call point (a tank whose Live row already computed
+        # its dot paid the fork again here instead of hitting the memo).
+        _home_fuel_dotv "$dry" "$cli" "$profile"
+        dot="$_FDOT"; _reset="$_FNOTE"
         # Aligned columns (display-width padded): name · engine · account, then a
         # right gutter holding the reset time when the tank is dry. (No "this shell"
         # marker — see _home_render_static: with many tanks open at once it's noise.)

@@ -70,10 +70,14 @@ source "$CLIKAE_LIB/core/dry_store.sh"
 source "$CLIKAE_LIB/core/burn_status.sh"
 # shellcheck source=../lib/core/duration.sh
 source "$CLIKAE_LIB/core/duration.sh"
+# shellcheck source=../lib/core/timeout_bin.sh
+source "$CLIKAE_LIB/core/timeout_bin.sh"
 # shellcheck source=../lib/core/update_check.sh
 source "$CLIKAE_LIB/core/update_check.sh"
 # shellcheck source=../lib/core/limit.sh
 source "$CLIKAE_LIB/core/limit.sh"
+# shellcheck source=../lib/core/usage.sh
+source "$CLIKAE_LIB/core/usage.sh"
 # shellcheck source=../lib/core/history.sh
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh
@@ -125,7 +129,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|settings|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|wait|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|cockpit|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|settings|doctor|demo|init|app|tanks|list|ls|usage|status|remove|rm|run|burn|wait|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|cockpit|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }
