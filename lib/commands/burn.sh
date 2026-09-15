@@ -1115,8 +1115,20 @@ _burn_lb_bounded() {
   # path is unique among LIVE processes, but a previous call killed between
   # its own `kill` and its own `rm` could have left one behind under the same
   # `$$`/pid pair.
-  kill_mark="${TMPDIR:-/tmp}/clikae-lb-kill.$$.$pid"
-  [ -e "$kill_mark" ] && rm -f "$kill_mark" 2>/dev/null
+  # P3-6 (round-6 review): this used to be `"${TMPDIR:-/tmp}/clikae-lb-kill.$$.$pid"`
+  # — the only path in this function assembled by hand while `disc`, `scan` and
+  # `rank` all use `mktemp`. Both of its ingredients are readable by every other
+  # user of a shared `/tmp`, which buys them two things: create the file first
+  # and this call reports a timeout that never happened, or point it at a
+  # symlink and the watchdog's write truncates whatever it names (the `rm -f`
+  # that followed removed the link, not the damage). `mktemp` is O_EXCL, 0600
+  # and unguessable, so neither move exists any more.
+  # The file is created EMPTY and now carries the answer in its SIZE, not in
+  # its existence: `mktemp` made it, so "it exists" no longer means "the
+  # watchdog fired" — `[ -s ]` does. An empty `kill_mark` (mktemp failed, e.g.
+  # a full or read-only $TMPDIR) is the one case that has no evidence to read,
+  # and only that case falls back to the clock at the end of this function.
+  kill_mark="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-kill.XXXXXX" 2>/dev/null)" || kill_mark=''
   # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
   # wrong in a way that only showed up under real load: every bounded call
   # — even one that finishes instantly — pays up to ~1s of pure polling
@@ -1163,7 +1175,7 @@ _burn_lb_bounded() {
     # Gate on the child still existing so the deadline and a command that
     # finished on its own at the very same instant do not both claim it.
     if kill -0 "$pid" 2>/dev/null; then
-      : > "$kill_mark" 2>/dev/null || true
+      [ -z "$kill_mark" ] || printf '1\n' > "$kill_mark" 2>/dev/null || true
       _burn_lb_kill TERM "$pid" || true
       sleep 1
       _burn_lb_kill KILL "$pid" || true
@@ -1203,10 +1215,11 @@ _burn_lb_bounded() {
   # finishing): 4 of 8 identical runs reported a phantom.
   # The watchdog's own mark answers the question directly instead: it exists
   # only if the deadline passed with the child still alive.
-  if [ -e "$kill_mark" ]; then
+  if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
     rm -f "$kill_mark" 2>/dev/null || true
     return 124
   fi
+  [ -z "$kill_mark" ] || rm -f "$kill_mark" 2>/dev/null || true
   # Fallback for a $TMPDIR the watchdog could not write into: a child that
   # died FROM A SIGNAL at or past the deadline was almost certainly killed by
   # it. Both halves are needed — the signal alone would misread an

@@ -4041,3 +4041,28 @@ STUB
   [[ "$output" == *"sentinel alive"* ]] || { echo "the caller's own child was killed: $output"; false; }
   [[ "$output" == *"caller survived"* ]] || { echo "the caller never came back: $output"; false; }
 }
+
+# P3-6 (round-6 review): the watchdog's mark was the one path in this file
+# assembled by hand (`$TMPDIR/clikae-lb-kill.$$.$pid`) while disc/scan/rank all
+# used `mktemp`. Both ingredients are readable by any other user of a shared
+# /tmp: pre-create that name and the call reports a timeout that never
+# happened; make it a symlink and the watchdog's write truncates whatever it
+# points at. The poller below watches $TMPDIR for the whole bounded call and
+# the assertion is on the NAME, not just on the cleanup.
+@test "burn #84 P3-6 (round-6 review): the watchdog's mark is an unguessable mktemp path, and nothing is left behind" {
+  _burn_lb_boot
+  local tmp="$BATS_TEST_TMPDIR/marktmp"; mkdir -p "$tmp"
+  export TMPDIR="$tmp"
+  local seen="$BATS_TEST_TMPDIR/seen-names"; : > "$seen"
+  ( for _i in $(seq 1 160); do ls -A "$tmp" >> "$seen" 2>/dev/null; sleep 0.05; done ) &
+  local poller=$!
+  local rc=0
+  _burn_lb_bounded 2 sleep 30 || rc=$?
+  [ "$poller" -gt 1 ] 2>/dev/null || { echo "bad poller pid"; false; }
+  kill -TERM "$poller" 2>/dev/null || true
+  wait "$poller" 2>/dev/null || true
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  grep -q '^clikae-lb-kill\.' "$seen" || { echo "never saw a kill mark at all — this test proved nothing:"; cat "$seen"; false; }
+  ! grep -qE '^clikae-lb-kill\.[0-9]+\.[0-9]+$' "$seen" || { echo "the mark still uses the guessable pid-pair name:"; cat "$seen"; false; }
+  [ -z "$(ls -A "$tmp")" ] || { echo "the mark outlived the call:"; ls -A "$tmp"; false; }
+}
