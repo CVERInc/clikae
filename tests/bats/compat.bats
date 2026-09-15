@@ -42,6 +42,77 @@ BASH4_FLAG_RE='declare -[gAn]|local -[An]|typeset -[An]'
   [ -z "$output" ]
 }
 
+@test "board GC still RUNS under a real bash 3.2, not just parses" {
+  # 🔴 THE CLASS bash -n CANNOT SEE. Every other guard in this file scans source
+  # TEXT, and `shellcheck -S warning`, `bash -n` and the CI's own syntax gate are
+  # all parsers — but bash 3.2 re-parses the BODY of a `$( … )` only when it
+  # expands it, and its scanner stops at the first unbalanced `)`. So a `case`
+  # pattern inside a command substitution parses clean everywhere and then, on
+  # 3.2 only, fails AT RUNTIME with `command substitution: syntax error near
+  # unexpected token` on stderr — while the substitution yields the empty string
+  # and the caller returns 0. `_board_gc_candidates` shipped exactly that shape
+  # on 6a4aa49: an EMPTY candidate list, no error code, so the board GC swept
+  # nothing on macOS and said nothing. `2f51d15` hoisted the `case` into
+  # `_board_gc_rows`; this asserts the fix by EXECUTING it, because nothing that
+  # reads the file can.
+  command -v docker >/dev/null 2>&1 || skip "docker is unavailable; cannot run a real bash 3.2"
+  docker image inspect bash:3.2 >/dev/null 2>&1 \
+    || skip "the bash:3.2 image is not present locally (docker pull bash:3.2 to enable this guard)"
+
+  local probe="$TEST_HOME/bash32.sh"
+  cat > "$probe" <<'PROBE'
+cd /w || exit 1
+. lib/core/profile_store.sh || exit 1
+. lib/core/board_state.sh   || exit 1
+# The bash:3.2 image is Alpine, so its userland is busybox: `_clikae_statv`
+# sees a `stat` that does not say GNU, takes the BSD branch, and busybox's
+# `stat -f` answers with FILESYSTEM info. That is the container's userland,
+# not this code (macOS' BSD `stat -f %m` is right) — stub it out so the probe
+# measures the thing it is about.
+file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+
+# CONTROL FOR THE RULER: prove this bash really is one that cannot see the
+# class, so a green result below means "fixed", not "ran on bash 5". The bad
+# shape lives in its own FILE, run by its own bash — written inline it would
+# break this probe the same way it breaks the subject.
+case "$BASH_VERSION" in
+  3.2*) ;;
+  *) echo "CONTROL: not bash 3.2 but $BASH_VERSION"; exit 9 ;;
+esac
+printf '%s\n' 'v="$(case x in x) echo alive ;; esac)"' 'printf "CTL=[%s]\n" "$v"' > /tmp/ctl.sh
+bash /tmp/ctl.sh > /tmp/ctl.out 2>/tmp/ctl.err
+if [ ! -s /tmp/ctl.err ] || grep -q 'CTL=\[alive\]' /tmp/ctl.out; then
+  echo "CONTROL-DID-NOT-FIRE: a case inside \$( ) ran clean here"; exit 9
+fi
+
+root="$(mktemp -d)/board"; mkdir -p "$root"
+i=1
+while [ "$i" -le 4 ]; do
+  mkdir -p "$root/generation.g$i"; echo "$i" > "$root/generation.g$i/seq"
+  [ "$i" -eq 1 ] || echo "generation.g$((i-1))" > "$root/generation.g$i/parent"
+  i=$((i + 1))
+done
+mkdir -p "$root/generation.orphan"; echo 0 > "$root/generation.orphan/seq"
+echo "generation.g4" > "$root/current"
+_board_gc_rows "$root" > /tmp/rows 2>/tmp/rows.err || true
+_board_gc_candidates "$root" 2 > /tmp/cand 2>/tmp/cand.err || true
+echo "ROWS=$(grep -c . /tmp/rows)"
+echo "CAND=$(grep -c . /tmp/cand)"
+echo "ERR=$(cat /tmp/rows.err /tmp/cand.err | tr '\n' ' ')"
+PROBE
+
+  run docker run --rm -v "$CLIKAE_TEST_ROOT":/w:ro -v "$TEST_HOME":/p:ro \
+    bash:3.2 bash /p/bash32.sh
+  [ "$status" -eq 0 ] || { echo "probe exited $status: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ROWS=5$' \
+    || { echo "_board_gc_rows saw the wrong number of generations under 3.2: $output"; false; }
+  # keep=2 roots g4 and g3; g2/g1 survive as their chain, orphan does not
+  printf '%s\n' "$output" | grep -q '^CAND=1$' \
+    || { echo "_board_gc_candidates under bash 3.2: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ERR=$' \
+    || { echo "bash 3.2 wrote to stderr: $output"; false; }
+}
+
 @test "the compat scans do not fire on their own documentation" {
   # 🔴 A CONTROL FOR THE RULER, not for the code. `scan` was a plain grep over
   # source text until a comment saying "not readlink -f" turned it red. Both
