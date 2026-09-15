@@ -168,7 +168,11 @@ _dead_pid() { printf '2147483647'; }
   done
   # The ordinary names a caller reaches for (the old unprefixed locals among
   # them) land in the caller's variable, not in a function local.
-  local v mt age suffix
+  # `d`/`mt`/`now` are declared by the `local "$v"=""` inside the loop, which
+  # is the declaration this test is about; naming `mt` again out here left it
+  # assigned-but-never-read (SC2034 under the CI bats shellcheck gate), and
+  # `d`/`now` were never named here in the first place.
+  local v age suffix
   for v in d mt now age suffix; do
     local "$v"=""
     _human_agev "$v" 1699992800 1700000000
@@ -297,7 +301,8 @@ _dead_pid() { printf '2147483647'; }
   # been told — a lane that died mid-flight, not one that reported.
   _src
   _burn_status burn-1 fail "$(_dead_pid)"
-  _burn_status burn-2 done "$(_dead_pid)"
+  # `done` quoted: bare, shellcheck reads it as the loop keyword (SC1010).
+  _burn_status burn-2 "done" "$(_dead_pid)"
   _burn_status burn-3 dry  "$(_dead_pid)"
   run tmux_status_render claude wrasse '' '' 120
   [[ "$output" != *"!"* ]] || { echo "$output"; false; }
@@ -363,7 +368,10 @@ _dead_pid() { printf '2147483647'; }
   run tmux_status_render claude wrasse '' '' 120
   [[ "$output" != *"!"* ]] || { echo "just over 7d: $output"; false; }
   # The bound IS the sweep's own knob, not a second copy of the number.
-  CLIKAE_BURN_LOG_RETENTION_DAYS=30
+  # Exported, not a bare assignment: `tmux_status_render` runs in this shell so
+  # either reaches it, but only the export tells shellcheck the value is read
+  # somewhere (SC2034 under the CI bats shellcheck gate).
+  export CLIKAE_BURN_LOG_RETENTION_DAYS=30
   run tmux_status_render claude wrasse '' '' 120
   [[ "$output" == *"!1"* ]] || { echo "retention 30d: $output"; false; }
 }
@@ -835,8 +843,10 @@ _SEP=' #[fg=colour244]│#[default] '
 
 @test "width ladder: rung by rung, at a width that forces exactly that rung" {
   _src
-  local t24 t27 t42 row
-  t24="$(_tank 24)"; t27="$(_tank 27)"; t42="$(_tank 42)"
+  # 24 and 42 are the two widths the rungs below exercise; a 27-char tank was
+  # built and never used (SC2034 under the CI bats shellcheck gate).
+  local t24 t42 row
+  t24="$(_tank 24)"; t42="$(_tank 42)"
 
   # rung 0 — nothing gives: 120 columns, prefix included.
   tmux_status_rowv 120 reefbox claude "$t24" '' '5h 100% · 7d 100%' '23h ago' 10
