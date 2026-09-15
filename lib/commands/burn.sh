@@ -981,25 +981,29 @@ _agy_burn() {
 # wrong thing — a `-$pid` that is NOT a process group of its own is the
 # SCAN's process group, i.e. burn itself and whatever shell launched it. So
 # the capability is verified once per scan against a throwaway child rather
-# than assumed: background one under job control, ask `ps` for its pgid, and
-# only group-kill if that pgid is both the child's own pid and different from
-# this shell's. Anything else (no job control, a `ps` that cannot answer)
-# leaves `_BURN_LB_PGROUP=0` and every kill below falls back to the exact
-# single-pid behaviour this function had before — never worse, just not
-# better. Two `ps` forks and one `sleep`, once per `_burn_left_behind` call.
+# than assumed, and anything short of proof leaves `_BURN_LB_PGROUP=0`, where
+# every kill below falls back to the exact single-pid behaviour this function
+# had before — never worse, just not better.
+# The test is `kill -0 -- -$p`, and it is EXACT rather than approximate: a
+# process group's id is always some process's pid, and that pid here is our
+# own child, so a group with id `$p` can exist only if `$p` itself leads it.
+# It is also the bash builtin, which matters more than it looks — the first
+# cut asked `ps -o pgid= -p "$p"`, and on a real `bash:3.2.57` container
+# (busybox `ps`, no such option) it answered nothing, silently disabling the
+# whole fix on the one bash version this round exists to protect. Measured
+# there: `PGROUP=0`, the grandchild survived, `survivors=1`. With this
+# version, on the same container: `PGROUP=1`, zero survivors.
 _burn_lb_pgroup_probe() {
   _BURN_LB_PGROUP=0
-  local mflag p childpg mypg
+  local mflag p
   case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
   { set -m; } 2>/dev/null
   sleep 30 &
   p=$!
   [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
-  childpg="$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')" || childpg=""
-  mypg="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')" || mypg=""
+  kill -0 -- "-$p" 2>/dev/null && _BURN_LB_PGROUP=1
   kill "$p" 2>/dev/null || true
   wait "$p" 2>/dev/null || true
-  [ -n "$childpg" ] && [ "$childpg" = "$p" ] && [ "$childpg" != "$mypg" ] && _BURN_LB_PGROUP=1
   return 0
 }
 
