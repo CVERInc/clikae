@@ -249,12 +249,12 @@ STUB
 # epoch suffix a not-yet-finished poll will pick.
 
 @test "wait --latest: resolves to the NEWEST matching run directory by mtime" {
-  _mkstatus watch-github-T-100 done true github T
+  _mkstatus watch-github-T-100 "done" true github T
   local past
   past="$(date -u -d '-10 minutes' +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-10M +%Y%m%d%H%M.%S)"
   touch -t "$past" "$CLIKAE_HOME/logs/watch-github-T-100/status.json"
 
-  _mkstatus watch-github-T-200 done true github T
+  _mkstatus watch-github-T-200 "done" true github T
   run clikae wait --latest watch-github-T
   [ "$status" -eq 0 ]
   [[ "$output" == *'"run_id":"watch-github-T-200"'* ]] || false
@@ -267,8 +267,8 @@ STUB
 }
 
 @test "wait --latest: mixes with a plain target under --all" {
-  _mkstatus burn-1 done true
-  _mkstatus watch-github-T-300 done true github T
+  _mkstatus burn-1 "done" true
+  _mkstatus watch-github-T-300 "done" true github T
   run clikae wait burn-1 --latest watch-github-T --all
   [ "$status" -eq 0 ]
 }
@@ -284,7 +284,7 @@ STUB
 
 @test "wait --latest: waits for a matching file to APPEAR within --timeout (P2-1)" {
   # No watch-github-X-* run directory exists yet when this starts.
-  ( sleep 2; _mkstatus watch-github-X-100 done true github T ) &
+  ( sleep 2; _mkstatus watch-github-X-100 "done" true github T ) &
   local bgpid=$!
   local t0=$SECONDS
   run clikae wait --latest watch-github-X --timeout 5
@@ -295,7 +295,7 @@ STUB
 }
 
 @test "wait --latest: --timeout given AFTER --latest on the command line still applies (parse-all-flags-first, P2-1)" {
-  ( sleep 2; _mkstatus watch-github-Y-100 done true github T ) &
+  ( sleep 2; _mkstatus watch-github-Y-100 "done" true github T ) &
   local bgpid=$!
   run clikae wait --latest watch-github-Y --timeout 5
   wait "$bgpid" 2>/dev/null || true

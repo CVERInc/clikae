@@ -10,6 +10,7 @@
 # print the same sectioned list — or calls the safety-check helpers directly.
 
 load '../helpers'
+bats_require_minimum_version 1.5.0   # for `run !`
 
 # Bring _clean_stale_copy_check + friends into THIS bats process, in the same
 # order bin/clikae sources them (clean.sh itself sources resume.sh → home.sh) —
@@ -1671,7 +1672,7 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
   [ -f "$f" ]
   grep -qF "$live_sid" "$f"
-  ! grep -qF "$dead_sid" "$f"
+  run ! grep -qF "$dead_sid" "$f"
   [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
 }
 
@@ -1693,9 +1694,9 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
   [ "$(wc -l < "$f" | tr -d ' ')" = 5 ]
   # newest 5 (run-4..run-8) kept, oldest 3 dropped
-  ! grep -qF "run-1" "$f"
-  ! grep -qF "run-2" "$f"
-  ! grep -qF "run-3" "$f"
+  run ! grep -qF "run-1" "$f"
+  run ! grep -qF "run-2" "$f"
+  run ! grep -qF "run-3" "$f"
   grep -qF "run-8" "$f"
 }
 
@@ -1749,7 +1750,7 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/codex/T1"
   [ -f "$f" ]
   grep -qF "$live_sid" "$f"
-  ! grep -qF "$dead_sid" "$f"
+  run ! grep -qF "$dead_sid" "$f"
   [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
 }
 
