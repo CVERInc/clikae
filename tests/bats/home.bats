@@ -892,6 +892,63 @@ _seed_burn_flood_agy() {
   [[ "$output" == *"85% of your weekly limit"* ]] || false
 }
 
+# P2-1, round-3 review: home.sh:1012-1026 (the usage_board_fields block) used
+# to run BEFORE :1027 (the dry check) — any <24h vendor reading, however
+# fresh, silently painted a percentage dot over a tank that was ACTUALLY
+# dry, eating its verbatim reset string. Per
+# docs/DESIGN-board-fuel-dots.md:41 (red = dry, including a sibling on the
+# same account) and :223-224 (#75: an expired limit precedes proactive
+# percentage snapshots), dry and the expired-limit caution must win FIRST —
+# the vendor reading only gets to colour a tank that clears both.
+@test "_home_fuel_dot: dry and the expired-limit caution win over ANY fresh vendor reading; a healthy tank still gets its percentage (P2-1, round-3 review)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local now t
+  now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  # Every tank below carries the SAME 30-second-fresh 40% reading — well
+  # under both the 120s TTL and the 24h "too stale to trust" line — so a
+  # percentage dot is available to every one of them; only dry-set
+  # membership decides whether it's allowed to show.
+  for t in owndry siblingdry expiredunverified healthy; do
+    printf '{"window_pct":40,"weekly_pct":40,"window_resets_at":"2099-01-01T00:00:00.000000+00:00","weekly_resets_at":"2099-01-07T00:00:00.000000+00:00","source":"vendor","cached_at":%d,"scanned_at":%d}' \
+      "$((now - 30))" "$((now - 30))" > "$CLIKAE_HOME/state/usage/claude/$t.json"
+  done
+  local unverified="${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}"
+  # owndry/siblingdry: a real, parseable reset phrase in the dry set — home.sh
+  # cannot tell "this tank's own transcript limit" from "a sibling on the
+  # same dry account" apart (both are just an entry keyed by engine/tank; the
+  # dry-set builder is what tells them apart), so both exercise the exact
+  # same code path here. expiredunverified: the phrase IS the unverified
+  # marker itself, the caution path (_home_is_dryv returns false but leaves
+  # $_DRY_RESET set to it).
+  local dry_set
+  dry_set="$(printf 'claude\037owndry\037Resets in 2h\nclaude\037siblingdry\037Resets in 3h\nclaude\037expiredunverified\037%s' "$unverified")"
+
+  run _home_fuel_dot "$dry_set" claude owndry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 2h"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  run _home_fuel_dot "$dry_set" claude siblingdry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 3h"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  run _home_fuel_dot "$dry_set" claude expiredunverified
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" == *"$unverified"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  # Not in the dry set at all: the fix narrows precedence, it does not blind
+  # the board to a genuinely healthy tank's real reading.
+  run _home_fuel_dot "$dry_set" claude healthy
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"window 40%"* ]] || false
+}
+
 @test "limit_weekly_marker (BETA): captures the vendor weekly phrase, ignores noise" {
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   run limit_weekly_marker "You've used 85% of your weekly limit, resets Monday"

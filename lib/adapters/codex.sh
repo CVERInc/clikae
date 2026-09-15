@@ -618,3 +618,27 @@ adapter_all_transcripts() {
   find "$1/sessions" -type f -name 'rollout-*.jsonl' 2>/dev/null
 }
 
+# Same raw two-window status evidence used by limit_codex_status — scanning
+# rollouts modified in the last 7 days (`_limit_codex_rate_limits`'s
+# `-mmin -10080`; see docs/DESIGN-board-fuel-dots.md's Vendor usage cache
+# section). P2-4 (round-1 review): this is NOT a live vendor call — no
+# `codex` process runs here, ever — so it is honestly `source:"transcript"`,
+# never `"vendor"` (the old code claimed vendor regardless, and #72's own
+# acceptance criteria named "transcript" as a real, reachable value that
+# nothing in the repo ever produced). `cached_at` is set from the winning
+# event's OWN timestamp (the 7th field _limit_codex_rate_limits now
+# returns), not "now" — usage_read only falls back to "now" when a reading
+# carries no usable event time of its own, so a week-old rollout is never
+# stamped as freshly read.
+adapter_usage() {
+  local fields pu _pw pr su _sw sr ts
+  fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r pu _pw pr su _sw sr ts <<< "$fields"
+  jq -cn --arg pu "$pu" --arg su "$su" --arg pr "$pr" --arg sr "$sr" --arg ts "$ts" '
+    def pct: try tonumber catch null;
+    def stamp: try (tonumber | todateiso8601) catch null;
+    def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
+    {window_pct:($pu|pct),weekly_pct:($su|pct),
+     window_resets_at:($pr|stamp),weekly_resets_at:($sr|stamp),source:"transcript",
+     event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
+}

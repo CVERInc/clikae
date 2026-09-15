@@ -240,8 +240,12 @@ _codex_token_count_line() {
         '{"used_percent":5.0,"window_minutes":10080,"resets_at":1791999999}')"
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr
-  IFS=$'\037' read -r pu pw pr su sw sr <<< "$output"
+  local pu pw pr su sw sr ts
+  # P2-4 (round-1 review, PR #89): _limit_codex_rate_limits now returns a 7th
+  # field (the winning event's own timestamp, for clikae usage's cached_at) —
+  # name it here too (unused) so plain `read`'s "extra fields glom onto the
+  # last variable" rule doesn't silently append it onto $sr.
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
   [ "$pu" = "0.0" ]; [ "$pw" = "300" ]; [ "$pr" = "1791471936" ]
   [ "$su" = "5.0" ]; [ "$sw" = "10080" ]; [ "$sr" = "1791999999" ]
 }
@@ -256,8 +260,8 @@ _codex_token_count_line() {
         '{"used_percent":40.0,"window_minutes":300,"resets_at":1791475000}' 'null')"
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr
-  IFS=$'\037' read -r pu pw pr su sw sr <<< "$output"
+  local pu pw pr su sw sr ts
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
   [ "$pu" = "40.0" ]
   [ "$pr" = "1791475000" ]
 }
@@ -336,8 +340,8 @@ _codex_token_count_line() {
 
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr
-  IFS=$'\037' read -r pu pw pr su sw sr <<< "$output"
+  local pu pw pr su sw sr ts
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
   [ "$pu" = "5.0" ]        # the FRESH reading, not the stale 100.0
   [ "$pr" = "1900000000" ]
 }
