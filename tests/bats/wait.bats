@@ -243,3 +243,78 @@ STUB
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *'"state":"done"'* ]] || false
 }
+
+# --- P2-3 (2026-09-13 fix-round-2 review): `clikae wait --latest <prefix>` —
+# a caller who knows a run's PREFIX (e.g. `watch-github-CVERInc`) but not the
+# epoch suffix a not-yet-finished poll will pick.
+
+@test "wait --latest: resolves to the NEWEST matching run directory by mtime" {
+  _mkstatus watch-github-T-100 done true github T
+  local past
+  past="$(date -u -d '-10 minutes' +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-10M +%Y%m%d%H%M.%S)"
+  touch -t "$past" "$CLIKAE_HOME/logs/watch-github-T-100/status.json"
+
+  _mkstatus watch-github-T-200 done true github T
+  run clikae wait --latest watch-github-T
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-T-200"'* ]] || false
+}
+
+@test "wait --latest: no match refuses with a clear message" {
+  run clikae wait --latest watch-github-nonexistent
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no status file matches"* ]] || false
+}
+
+@test "wait --latest: mixes with a plain target under --all" {
+  _mkstatus burn-1 done true
+  _mkstatus watch-github-T-300 done true github T
+  run clikae wait burn-1 --latest watch-github-T --all
+  [ "$status" -eq 0 ]
+}
+
+# --- P2-1 (2026-09-13 fix-round-3 review): `--latest` used to resolve at
+# PARSE TIME — a run that had not started yet always refused immediately,
+# `--timeout` or not (it wasn't even parsed yet: `--latest` was handled
+# inline, before the flag loop reached a later `--timeout`). That is exactly
+# backwards for a caller who used `--latest` precisely BECAUSE they do not
+# know the run exists yet — the cockpit-hand-rolled `until [ -e … ]` this
+# whole command exists to replace (see the file header) could always at
+# least wait for a file to appear; this could not.
+
+@test "wait --latest: waits for a matching file to APPEAR within --timeout (P2-1)" {
+  # No watch-github-X-* run directory exists yet when this starts.
+  ( sleep 2; _mkstatus watch-github-X-100 done true github T ) &
+  local bgpid=$!
+  local t0=$SECONDS
+  run clikae wait --latest watch-github-X --timeout 5
+  wait "$bgpid" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-X-100"'* ]] || false
+  [ "$((SECONDS - t0))" -ge 1 ] || false   # it did not return before the file could appear
+}
+
+@test "wait --latest: --timeout given AFTER --latest on the command line still applies (parse-all-flags-first, P2-1)" {
+  ( sleep 2; _mkstatus watch-github-Y-100 done true github T ) &
+  local bgpid=$!
+  run clikae wait --latest watch-github-Y --timeout 5
+  wait "$bgpid" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-Y-100"'* ]] || false
+}
+
+@test "wait --latest: with --timeout, a match that never appears still times out with rc=1 (P2-1)" {
+  local t0=$SECONDS
+  run clikae wait --latest watch-github-never --timeout 2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"timed out"* ]] || false
+  [ "$((SECONDS - t0))" -ge 2 ] || false
+}
+
+@test "wait --latest: with NO --timeout, an unresolved prefix still refuses immediately, unchanged (P2-1)" {
+  local t0=$SECONDS
+  run clikae wait --latest watch-github-still-nonexistent
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no status file matches"* ]] || false
+  [ "$((SECONDS - t0))" -le 2 ] || false   # did not sit and poll — refused right away
+}

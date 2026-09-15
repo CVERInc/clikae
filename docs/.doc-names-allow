@@ -22,9 +22,11 @@ elapsed_s          ditto
 run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
 started_at         a field in #41's status.json, not a function
+updated_at         a field GitHub's search API returns per issue/PR (the tail-sweep/cursor field name), not a function
 token_count        codex's own rollout event type name, quoted in docs/DESIGN-board-fuel-dots.md
 used_percent       a field in codex's own rate_limits JSON, not a function
 window_minutes     ditto
 resets_at          ditto
 codex_exec         the value of codex's own session_meta.originator field, quoted verbatim
 clikae_session_id  the per-session tmux user option `@clikae_session_id` (lib/core/tmux.sh's tmux_set_session_id, lib/core/live.sh's live_session_id), not a function
+subagent_type      a JSON field name in Claude Code's PreToolUse hook payload (tool_input.subagent_type); docs/usage.md's cockpit section names it to say the guard deliberately never reads it (#63 P3-2)

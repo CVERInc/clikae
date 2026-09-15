@@ -88,6 +88,9 @@ EOF
     local cli_dir
     cli_dir="$(dirname "$d")"
     rmdir "$cli_dir" 2>/dev/null && log_dim "  (also cleaned empty $cli_dir)"
+    # #74 round-1 P2-2: the burn sidecar is out-of-dir state, keyed by tank
+    # NAME — rm -rf on the dir never touches it.
+    remove_tank_burn_sidecar "$cli" "$profile"
   fi
 
   if rc_has_block "$rc_file" "$rc_id"; then

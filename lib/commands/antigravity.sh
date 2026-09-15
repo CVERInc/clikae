@@ -384,6 +384,7 @@ _agy_remove() {
         rm -f "$link"; mv "${slots:?}/$name" "$link"; rm -f "$(_agy_consent)"
         rmdir "$slots" 2>/dev/null || true
         _agy_kc_forget "$name"   # login stays in the canonical Keychain item; drop the stash
+        remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
         log_done "Restored ~/.gemini from '$name' and turned agy multi-account off."
         return 0
       fi
@@ -393,6 +394,7 @@ _agy_remove() {
     rm -f "$link"; rm -rf "${slots:?}/$name"; rm -f "$(_agy_consent)"
     rmdir "$slots" 2>/dev/null || true
     _agy_kc_forget "$name"; _agy_kc_logout   # login lost, as warned
+    remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
     log_done "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
     return 0
   fi
@@ -404,6 +406,7 @@ _agy_remove() {
   fi
   rm -rf "${slots:?}/$name"
   _agy_kc_forget "$name"
+  remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
   log_done "Removed agy tank: $name"
 }
 

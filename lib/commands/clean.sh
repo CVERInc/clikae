@@ -917,6 +917,111 @@ _clean_scrollback_gc() {
   return 0
 }
 
+# _clean_burn_sidecar_gc <dry_run> -> prune state/burn-sessions/<engine>/<tank>
+# (#74 round-1 P2-2): burn appends one line per attempt and NOTHING ever
+# collected it — every infra retry mints its own line forever, and the
+# resume picker pays for every line on every render (8170ms measured at
+# 20,000 lines vs 1287ms at 0). Two independent prunes, per file:
+#   1. drop lines whose sid no longer has a transcript (the session they
+#      recorded is gone — nothing left for them to hide)
+#   2. cap what's left at $CLIKAE_BURN_SIDECAR_CAP (default 2000), newest
+#      kept — an append-only file, so newest = the TAIL
+# A file needing neither prune is left BYTE-IDENTICAL: untouched, no rewrite,
+# same mtime — a store with nothing to prune stays provably unchanged
+# (tests/bats/resume-hide-burn.bats already asserts this for the common case).
+CLIKAE_BURN_SIDECAR_CAP="${CLIKAE_BURN_SIDECAR_CAP:-2000}"
+
+_clean_burn_sidecar_gc() {
+  local dry_run="$1" base="$CLIKAE_HOME/state/burn-sessions" eng_dir f
+  [ -d "$base" ] || return 0
+  local total_dropped=0 total_capped=0 total_files=0
+  for eng_dir in "$base"/*/; do
+    [ -d "$eng_dir" ] || continue
+    local engine; engine="${eng_dir%/}"; engine="${engine##*/}"
+    for f in "$eng_dir"*; do
+      [ -f "$f" ] || continue
+      local tank="${f##*/}"
+      # burn.sh has always stored agy's sidecar under the literal dir name
+      # "agy" (see rename_tank_state's comment) — everything else in clikae
+      # (adapters, profile dirs) calls it "antigravity".
+      local adapter_name="$engine"
+      [ "$adapter_name" = "agy" ] && adapter_name="antigravity"
+      local pdir; pdir="$(profile_dir "$adapter_name" "$tank" 2>/dev/null || true)"
+      # #74 round-2 P2-1: load_adapter exit()s the WHOLE PROCESS on a broken
+      # adapter (lib/core/adapter_loader.sh) — `|| true` only catches a
+      # nonzero return, never an exit. home.sh:193-201 already has the fix
+      # for this exact hazard: probe in a subshell first (safe to let exit
+      # there — only the subshell dies), and only load for real in THIS
+      # shell once the probe has proven it won't. A stray/unrecognized
+      # engine dir under state/burn-sessions/ (removed adapter, hand-placed
+      # directory) used to take the entire `clikae clean` down with it —
+      # rc=1, zero output, no GC, no Trash scan, no report.
+      if ! ( load_adapter "$adapter_name" >/dev/null 2>&1 ); then
+        log_warn "clean: no adapter for '$adapter_name' — skipping its burn sidecar ($f)"
+        continue
+      fi
+      load_adapter "$adapter_name" >/dev/null 2>&1 || true
+      local -a lines=()
+      while IFS= read -r _bl || [ -n "$_bl" ]; do
+        [ -n "$_bl" ] && lines+=("$_bl")
+      done < "$f"
+      local n_total="${#lines[@]}"
+      [ "$n_total" -gt 0 ] || continue
+      local -a live=()
+      local _ln _sid dropped_stale=0
+      for _ln in "${lines[@]}"; do
+        # #74 round-2 P3-4: a line failing home.sh's OWN "valid sidecar line"
+        # definition (_burn_sidecar_line_valid, shared — not a second copy of
+        # the rule) is already dead to the reader; it must be just as dead
+        # here, or a hand-corrupted line sits forever, counted "live" and
+        # occupying one of CLIKAE_BURN_SIDECAR_CAP's slots.
+        if ! _burn_sidecar_line_valid "$_ln"; then
+          dropped_stale=$((dropped_stale + 1))
+          continue
+        fi
+        _sid="${_ln%%$'\t'*}"
+        # #74 round-2 P2-2: read adapter_find_session's OUTPUT, not its exit
+        # code — codex/grok both return 0 on a miss (empty stdout), so the
+        # exit-code form never pruned a stale codex/grok line.
+        local _found_transcript=""
+        if [ -n "$_sid" ] && [ -n "$pdir" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+          _found_transcript="$(adapter_find_session "$pdir" "$_sid" 2>/dev/null || true)"
+        fi
+        if [ -n "$_found_transcript" ]; then
+          live+=("$_ln")
+        else
+          dropped_stale=$((dropped_stale + 1))
+        fi
+      done
+      local n_live="${#live[@]}" dropped_cap=0
+      if [ "$n_live" -gt "$CLIKAE_BURN_SIDECAR_CAP" ]; then
+        dropped_cap=$((n_live - CLIKAE_BURN_SIDECAR_CAP))
+        live=("${live[@]:$dropped_cap}")
+      fi
+      total_files=$((total_files + 1))
+      if [ "$dropped_stale" -eq 0 ] && [ "$dropped_cap" -eq 0 ]; then
+        continue   # nothing to prune — leave byte-identical
+      fi
+      total_dropped=$((total_dropped + dropped_stale))
+      total_capped=$((total_capped + dropped_cap))
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] Would prune burn sidecar $engine/$tank: $dropped_stale stale, $dropped_cap over cap (kept ${#live[@]} of $n_total)"
+        continue
+      fi
+      if [ "${#live[@]}" -eq 0 ]; then
+        rm -f "$f"
+      else
+        local tmp; tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null || printf '%s.tmp.%s' "$f" "$$")"
+        printf '%s\n' "${live[@]}" > "$tmp" && mv "$tmp" "$f"
+      fi
+    done
+  done
+  if [ "$dry_run" != "1" ] && { [ "$total_dropped" -gt 0 ] || [ "$total_capped" -gt 0 ]; }; then
+    log_info "GC: pruned $total_dropped stale + $total_capped over-cap burn sidecar line(s)."
+  fi
+  return 0
+}
+
 # _clean_session_id_gc <dry_run> -> delete `.session_id` state files whose
 # tmux session is gone.
 #
@@ -1425,6 +1530,14 @@ cmd_clean() {
   _clean_tank_lock_gc "$dry_run"
   _clean_board_gc "$dry_run"
   _clean_readings_gc "$dry_run"
+  _clean_burn_sidecar_gc "$dry_run"
+  # P3-3 (2026-09-13 fix-round-3 review): burn.sh is already sourced above —
+  # its own day-based log retention (burn-*, and watch-github-* as of this
+  # round) used to run ONLY as a side effect of `clikae burn` itself;
+  # `clikae clean` had no notion of ~/.clikae/logs at all. Runs under
+  # --dry-run too now (P3-2, 2026-09-14 fix-round-4 review) — it just
+  # previews instead of deleting, same as every other GC above.
+  _burn_sweep_old_logs "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

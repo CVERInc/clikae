@@ -433,6 +433,54 @@ PSSTUB
   [ -f "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" ]
 }
 
+# P3-3 (2026-09-13 fix-round-3 review): `clikae clean` had NO notion of
+# ~/.clikae/logs at all — burn's own day-based retention sweep
+# (_burn_sweep_old_logs) only ever ran as a side effect of `clikae burn`
+# itself. clean.sh already sources burn.sh (for the tank-lock GC) — wired
+# in here too, real deletion only outside --dry-run.
+@test "clean (P3-3): a stale watch-github-* run directory is swept by a plain 'clikae clean', not just 'clikae burn'" {
+  mkdir -p "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  printf '{"ok":true}' > "$HOME/.clikae/logs/watch-github-CVERInc-99999/status.json"
+  touch -t "$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')" \
+    "$HOME/.clikae/logs/watch-github-CVERInc-99999"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]   # --dry-run: not yet
+  # P3-2 (2026-09-14 fix-round-4 review): the preview now NAMES this sweep
+  # instead of silently doing nothing about it.
+  [[ "$output" == *"would also sweep 1 old burn/watch-github log directory"* ]] || false
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -d "$HOME/.clikae/logs/watch-github-CVERInc-99999" ]
+}
+
+# P2-3 (2026-09-14 fix-round-7 review): `watch-github-*` also matched the
+# org's DURABLE log directory, `watch-github-<org>/events.jsonl`, and an
+# append never moves a directory's mtime — so eight days after a watcher
+# started, any `clikae clean` or `clikae burn` deleted its whole event
+# history. Only run directories (a status.json inside) are swept now; an
+# org whose own name ends in digits must not look like a run either.
+@test "clean (P2-3): an old watch-github-<org> durable log directory is never swept; a stale run directory still is" {
+  local logs="$HOME/.clikae/logs" eight
+  eight="$(date -v-8d '+%Y%m%d%H%M' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M')"
+  mkdir -p "$logs/watch-github-CVERInc" "$logs/watch-github-CVERInc-2024" "$logs/watch-github-CVERInc-99999"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc/events.jsonl"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc-2024/events.jsonl"
+  printf '{"ok":true}' > "$logs/watch-github-CVERInc-99999/status.json"
+  printf '{"n":1}\n' > "$logs/watch-github-CVERInc-99999/events.jsonl"
+  touch -t "$eight" "$logs/watch-github-CVERInc" "$logs/watch-github-CVERInc-2024" "$logs/watch-github-CVERInc-99999"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"would also sweep 1 old burn/watch-github log directory"* ]] || { echo "$output"; false; }
+
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$logs/watch-github-CVERInc/events.jsonl" ]
+  [ -f "$logs/watch-github-CVERInc-2024/events.jsonl" ]
+  [ ! -d "$logs/watch-github-CVERInc-99999" ]
+}
+
 @test "clean --help documents the sections and axes" {
   run clikae clean --help
   [ "$status" -eq 0 ]
@@ -1599,4 +1647,165 @@ _pin_clean_tank_lock_gc_removals() {
     echo "baseline: [$baseline]  after comment: [$commented_pin]"
     false
   }
+}
+
+# --- #74 round-1 P2-2: the burn sidecar (state/burn-sessions/<engine>/<tank>)
+# had no GC at all — every attempt appended a line forever. `clikae clean`
+# now drops lines whose transcript is gone and caps what's left, newest kept;
+# a file needing neither prune stays byte-identical. ------------------------
+
+@test "_clean_burn_sidecar_gc drops a sidecar line whose transcript no longer exists" {
+  _source_clean
+  clikae init claude T1
+  local live_sid dead_sid slug
+  live_sid="11111111-1111-4111-8111-111111111111"
+  dead_sid="22222222-2222-4222-8222-222222222222"
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '%s\trun-1\t1700000000\n%s\trun-2\t1700000001\n' "$live_sid" "$dead_sid" \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ -f "$f" ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$dead_sid" "$f"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+}
+
+@test "_clean_burn_sidecar_gc caps the sidecar at the configured limit, newest kept" {
+  _source_clean
+  clikae init claude T1
+  export CLIKAE_BURN_SIDECAR_CAP=5
+  local i slug sid
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  for i in $(seq 1 8); do
+    sid="$(printf '33333333-3333-4333-8333-33333333%04d' "$i")"
+    printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+      > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$sid.jsonl"
+    printf '%s\trun-%d\t%d\n' "$sid" "$i" "$((1700000000 + i))" >> "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  done
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 5 ]
+  # newest 5 (run-4..run-8) kept, oldest 3 dropped
+  ! grep -qF "run-1" "$f"
+  ! grep -qF "run-2" "$f"
+  ! grep -qF "run-3" "$f"
+  grep -qF "run-8" "$f"
+}
+
+@test "_clean_burn_sidecar_gc leaves a sidecar with nothing to prune byte-identical" {
+  _source_clean
+  clikae init claude T1
+  local live_sid="44444444-4444-4444-8444-444444444444" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  printf '%s\trun-1\t1700000000\n' "$live_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  local before; before="$(sha256sum "$CLIKAE_HOME/state/burn-sessions/claude/T1" | cut -d' ' -f1)"
+  local mtime_before; mtime_before="$(stat -c '%Y' "$CLIKAE_HOME/state/burn-sessions/claude/T1" 2>/dev/null || stat -f '%m' "$CLIKAE_HOME/state/burn-sessions/claude/T1")"
+  sleep 1
+  _clean_burn_sidecar_gc 0
+  local after; after="$(sha256sum "$CLIKAE_HOME/state/burn-sessions/claude/T1" | cut -d' ' -f1)"
+  local mtime_after; mtime_after="$(stat -c '%Y' "$CLIKAE_HOME/state/burn-sessions/claude/T1" 2>/dev/null || stat -f '%m' "$CLIKAE_HOME/state/burn-sessions/claude/T1")"
+  [ "$before" = "$after" ]
+  [ "$mtime_before" = "$mtime_after" ]
+}
+
+@test "_clean_burn_sidecar_gc dry-run changes nothing on disk" {
+  _source_clean
+  clikae init claude T1
+  local dead_sid="55555555-5555-4555-8555-555555555555"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '%s\trun-1\t1700000000\n' "$dead_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 1
+  grep -qF "$dead_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+}
+
+# #74 round-2 P2-2: codex/grok's adapter_find_session returns 0 (success) on a
+# miss — empty stdout, no matching rollout on disk. Reading the exit code (the
+# round-1 shape) meant this GC's stale-prune never fired for those two
+# engines; a codex line with no transcript is exactly as "live" to it as one
+# that does.
+@test "_clean_burn_sidecar_gc drops a stale codex sidecar line (adapter_find_session returns 0 on a miss)" {
+  _source_clean
+  clikae init codex T1
+  local live_sid dead_sid
+  live_sid="66666666-6666-4666-8666-666666666666"
+  dead_sid="77777777-7777-4777-8777-777777777777"
+  mkdir -p "$CLIKAE_HOME/profiles/codex/T1/sessions/2026/09/13"
+  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$live_sid" "$PWD" \
+    > "$CLIKAE_HOME/profiles/codex/T1/sessions/2026/09/13/rollout-2026-09-13T00-00-00-$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  printf '%s\trun-1\t1700000000\n%s\trun-2\t1700000001\n' "$live_sid" "$dead_sid" \
+    > "$CLIKAE_HOME/state/burn-sessions/codex/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/codex/T1"
+  [ -f "$f" ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$dead_sid" "$f"
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+}
+
+# #74 round-2 P2-1: `load_adapter` EXIT()S THE WHOLE PROCESS on an adapter it
+# can't find (lib/core/adapter_loader.sh) — `|| true` catches a nonzero
+# return, never an exit. An unrecognized engine directory under
+# state/burn-sessions/ (a removed custom adapter, docs/adding-an-adapter.md;
+# a downgrade; anything hand-placed) used to take the ENTIRE `clikae clean`
+# down with it: rc=1, zero output, no GC, no Trash scan, no report — for a
+# command that has nothing to do with the broken adapter at all.
+@test "#74 round-2 P2-1: an unrecognized engine dir under state/burn-sessions/ does not kill clikae clean" {
+  clikae init claude T1
+  local live_sid="88888888-8888-4888-8888-888888888888" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude" "$CLIKAE_HOME/state/burn-sessions/unknown-engine"
+  printf '%s\trun-1\t1700000000\n' "$live_sid" > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  printf 'ffffffff-ffff-4fff-8fff-ffffffffffff\trun-1\t1700000000\n' \
+    > "$CLIKAE_HOME/state/burn-sessions/unknown-engine/some-tank"
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"no adapter for 'unknown-engine'"* ]] || false
+  # The known engine's sidecar still got its normal GC pass, unaffected.
+  grep -qF "$live_sid" "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+}
+
+# #74 round-2 P3-4: home.sh's _burn_sids_file (the picker's READ side) and
+# clean.sh's GC used two DIFFERENT definitions of "valid sidecar line" — a
+# hand-corrupted line (trailing tab, non-numeric epoch, two fields) was dead
+# to the reader (never hid a session) but ALIVE to the GC (kept forever,
+# occupying one of CLIKAE_BURN_SIDECAR_CAP's slots). Now both read
+# _burn_sidecar_line_valid, home.sh's own definition.
+@test "#74 round-2 P3-4: _clean_burn_sidecar_gc drops a malformed line even when its first field names a real, live transcript" {
+  _source_clean
+  clikae init claude T1
+  local live_sid="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" other_sid="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" slug
+  slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug" "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$live_sid.jsonl"
+  # $other_sid ALSO has a real, live transcript — so the naive "everything
+  # before the first tab" extraction (the old GC's only check) finds it and
+  # calls the line "live". The line itself is malformed (missing 3rd field),
+  # so home.sh's own reader already treats it as garbage; the GC must too.
+  printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"hi"}}\n' "$PWD" \
+    > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$other_sid.jsonl"
+  {
+    printf '%s\trun-1\t1700000000\n' "$live_sid"
+    printf '%s\trun-2\n' "$other_sid"
+  } > "$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  _clean_burn_sidecar_gc 0
+  local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
+  [ -f "$f" ]
+  [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
+  grep -qF "$live_sid" "$f"
+  ! grep -qF "$other_sid" "$f"
 }

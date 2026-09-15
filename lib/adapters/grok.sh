@@ -199,6 +199,16 @@ adapter_sid_from_args() {
   return 1
 }
 
+# Optional hook: the cwd grok's OWN argv carries — see codex.sh's twin for why
+# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). Moot
+# in practice — grok defines no adapter_all_transcripts, so it never reaches
+# burn.sh's multi-candidate tie-break that reads this value (R3 review,
+# P3-6) — but defined for the same reason claude.sh's twin is: grok has no
+# cwd-override flag, so the honest answer is "no", not an absent function.
+adapter_cwd_from_args() {
+  return 1
+}
+
 # This dir's most recent conversation log under <dir> (for handoff / source
 # detection). chat_history.jsonl is the readable conversation; updates.jsonl is
 # the raw ACP event stream and runs an order of magnitude larger. Recency is
@@ -218,6 +228,101 @@ EOF
   t="${f%/summary.json}/chat_history.jsonl"
   [ -f "$t" ] || return 1
   printf '%s\n' "$t"
+}
+
+# Optional hook (#33, round-1 P1-1 fix; round-2 P2-2/P3-3 review fixes
+# folded in): the transcript SHAPE belongs to the adapter. Prints one line
+# per MESSAGE of <role> ("user"/"assistant") — several text parts in one
+# message join with a space onto one line, unlike claude.sh's twin, which
+# prints one line per text BLOCK instead (round-1 review P3-1;
+# docs/adding-an-adapter.md spells out the difference) — text only, newest
+# last — used by `clikae handoff`'s digest (lib/core/handoff.sh,
+# _handoff_extract).
+#
+# grok's chat_history.jsonl has NO `role` key at all — the message kind IS
+# the top-level `type`:
+#   {"type":"user","content":[{"type":"text","text":"…"}]}
+#   {"type":"assistant","content":[{"type":"text","text":"…"}]}
+# so the claude-shaped `"role":"user","content":"` anchor can't even start
+# matching (there is no `"role"` key to anchor on), and `content` is an ARRAY
+# of typed parts on top of that — the same two-part gap codex has, different
+# keys. Round-2 review P2-1's own note on this: no real grok
+# `chat_history.jsonl` has been seen for EITHER the outer `{"type":"user"/
+# "assistant",…}` envelope above or the whitespace convention below — unlike
+# codex's event_msg shape, which `lib/core/limit.sh` independently confirms
+# against a real rollout, grok's shape here rests only on issue #33's own
+# excerpt and tests/bats/adapters/grok.bats:44. Treat it as documented, not
+# verified, until a real transcript turns up.
+#
+# Round-2 review P3-3: the value scan below only pulls a content part's
+# "text" when it is immediately preceded by that SAME part's own
+# `"type":"text"` field — the only field order grok's documented shape
+# above shows. A bare `"text": *"` key scan also lights up on a DIFFERENT
+# part in the same array that merely happens to carry its own "text" key
+# (e.g. an image part's alt text), which would leak non-reply content into a
+# brief meant for another vendor.
+#
+# Round-2 review P2-2: the previous version built each matched value with a
+# character-by-character `seg = seg c` loop — O(1) per character on gawk,
+# but O(line length) PER CHARACTER on mawk (Debian/Ubuntu's DEFAULT `awk` on
+# a base image) and busybox awk, i.e. O(n²) overall (see codex.sh's twin of
+# this function for the measured numbers — same loop, same fix).
+# `match(rest, /^([^"\\]|\\.)*/)` finds the WHOLE value (escapes included)
+# in ONE call — RLENGTH is the value's length, so `substr()` lifts it in one
+# shot, leaving nothing for mawk's string-concat cost to multiply.
+#
+# Escape parity note: only \n \t \" \\ are unescaped, matching the claude
+# path; \uXXXX is left as a documented follow-up, not decoded here either.
+#
+# Whitespace (round-1 review P1-1): the anchor/key patterns below tolerate a
+# space after the colon (` *`, the SAME idiom `lib/core/limit.sh`'s whole
+# codex family and codex.sh's twin of this function use — see codex.sh's
+# comment for the real-rollout evidence, which does NOT extend to grok — see
+# the provenance note above).
+#
+# Silent failure is not allowed (round-1 review P1-1) — but round-2 review
+# P3-2: a role with genuinely no turns yet (a brand-new tank the model
+# hasn't replied to) is NOT a shape mismatch, and firing the same stderr
+# line for both trained a reader to ignore it. So the diagnostic now fires
+# only when SCANNED (a line whose top-level `type` matches this role) is > 0
+# while MATCHED (a value actually pulled out of one) stays 0 — and it says
+# how many lines it saw. Zero scanned lines stays silent.
+# handoff.sh's _handoff_extract no longer swallows a hook's stderr (see its
+# own comment), so a real diagnostic still reaches the user.
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  [ -n "$t" ] && [ -f "$t" ] || return 0
+  case "$role" in user|assistant) ;; *) return 0 ;; esac
+  local out
+  out="$(awk -v role="$role" '
+    BEGIN {
+      type_re = "\"type\": *\"" role "\""
+      part_keyre = "\"type\": *\"text\", *\"text\": *\""
+      scanned = 0; matched = 0
+    }
+    $0 !~ type_re { next }
+    {
+      scanned++
+      rest = $0; res = ""
+      while (match(rest, part_keyre)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (!match(rest, /^([^"\\]|\\.)*/)) break
+        seg = substr(rest, 1, RLENGTH)
+        res = (res == "" ? seg : res " " seg)
+        rest = substr(rest, RLENGTH + 2)
+      }
+      if (res != "") { print res; matched++ }
+    }
+    END {
+      if (scanned > 0 && matched == 0) {
+        printf "handoff: grok extractor scanned %d %s lines, matched 0\n", scanned, role > "/dev/stderr"
+      }
+    }
+  ' "$t" \
+    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+    | grep -av '^[[:space:]]*$' || true)"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
 }
 
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest

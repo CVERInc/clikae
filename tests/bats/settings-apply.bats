@@ -186,3 +186,36 @@ load '../helpers'
   cmp "$d/settings.json" "$TEST_HOME/before"
   [ "$(find "$d" -name '*.tmp.*' | wc -l | tr -d ' ')" -eq 0 ]
 }
+
+@test "_settings_write_file refuses empty content and leaves the live file byte-identical (#63 P2-4)" {
+  # The exact repro from the round-1 review: a jq that dies mid-pipeline (OOM,
+  # disk full, killed mid-upgrade) makes command substitution swallow the
+  # failure and hand `_settings_write_file` an empty string — which the old
+  # code wrote as a single bare newline, rc=0, no error, over a live file.
+  local d="$CLIKAE_HOME/profiles/claude/work"
+  mkdir -p "$d"
+  printf '%s\n' '{"model":"opus"}' > "$d/settings.json"
+  cp "$d/settings.json" "$TEST_HOME/before"
+  source "$CLIKAE_LIB/commands/settings.sh"
+  run _settings_write_file "$d/settings.json" "" probe
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refusing to write empty content"* ]] || false
+  cmp "$TEST_HOME/before" "$d/settings.json"
+  # No backup should have been made either -- the write was refused before
+  # touching anything, not rolled back after.
+  [ "$(find "$d" -name '*.clikae.bak.*' | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "settings.json.clikae.bak.* is capped at the newest 5 per tank (#63 P3-11)" {
+  clikae init claude work
+  local d="$CLIKAE_HOME/profiles/claude/work" i
+  source "$CLIKAE_LIB/commands/settings.sh"
+  for i in 1 2 3 4 5 6 7; do
+    printf '%s\n' "{\"model\":\"m$i\"}" > "$d/settings.json"
+    # through _settings_snapshot, the only way a writer gets a file and its
+    # snapshot (#63 r5 P3-3)
+    run eval '( _settings_snapshot "$d" claude/work && _settings_write_file "$_SETTINGS_FILE" "{\"model\":\"m$((i + 1))\"}" claude/work "$_SETTINGS_SNAP" )'
+    [ "$status" -eq 0 ] || { echo "iter $i failed: $output" >&2; false; }
+  done
+  [ "$(find "$d" -name '*.clikae.bak.*' | wc -l | tr -d ' ')" -eq 5 ]
+}

@@ -10,6 +10,8 @@ _setup_agy() {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # sessions_by_mtime (shared kernel)
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/json.sh"            # json_value_for_key (cache lookup)
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/adapters/antigravity.sh"
   WORK="$TEST_HOME/work"; mkdir -p "$WORK"; cd "$WORK" || return 1
   PROFILE="$TEST_HOME/aprofile"
@@ -280,4 +282,126 @@ assert_agy_title() {
   # shellcheck disable=SC2154  # _agy_ws_var_out is _agy_ws_varname's out-variable
   v2="$_agy_ws_var_out"
   [ "$v1" != "$v2" ]
+}
+
+# --- #74 round-1 P1-1: one canonical sid derivation, shared by burn's sidecar
+# writer and resume's picker. ---
+
+@test "antigravity adapter_sid_canonical is the brain/<sid>/ directory name" {
+  _setup_agy
+  seed_agy_session ag-canon "$WORK" "hi"
+  run adapter_sid_canonical "$BRAIN/ag-canon/.system_generated/logs/transcript.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ag-canon" ]
+}
+
+@test "antigravity adapter_all_transcripts lists every session's transcript under a profile dir" {
+  _setup_agy
+  seed_agy_session ag-one "$WORK" "one"
+  seed_agy_session ag-two "/elsewhere" "two"
+  run adapter_all_transcripts "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-one"* ]] || false
+  [[ "$output" == *"ag-two"* ]] || false
+}
+
+# --- #74 round-1 P1-4: the cache extraction used to be a greedy `.*:` sed
+# walk over the whole MATCHED LINE — on a real (compact, single-line) cache
+# with more than one project's pointer, it silently returned whichever `: "`
+# came LAST in the file, not the one for the matched key. -------------------
+
+@test "antigravity cache lookup returns THIS cwd's sid, not a later key's, from a compact multi-entry cache" {
+  _setup_agy
+  local sid_here="ag-here-0001" sid_other="ag-other-0002"
+  local other_dir="$TEST_HOME/other-project"
+  mkdir -p "$BRAIN/$sid_here/.system_generated/logs" "$BRAIN/$sid_other/.system_generated/logs"
+  printf '{"content":"here"}\n'  > "$BRAIN/$sid_here/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"other"}\n' > "$BRAIN/$sid_other/.system_generated/logs/transcript.jsonl"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  # ONE line, WORK's entry first, the other project's entry (and thus the
+  # LAST "\"…\":\"…\"" in the file) second — exactly the shape a naive
+  # greedy `.*:` walk gets wrong regardless of which key actually matched.
+  printf '{"%s":"%s","%s":"%s"}\n' "$WORK" "$sid_here" "$other_dir" "$sid_other" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$sid_here"* ]] || false
+  [[ "$output" != *"$sid_other"* ]] || false
+}
+
+@test "antigravity cache lookup: order reversed still returns THIS cwd's sid" {
+  _setup_agy
+  local sid_here="ag-here-0003" sid_other="ag-other-0004"
+  local other_dir="$TEST_HOME/other-project-2"
+  mkdir -p "$BRAIN/$sid_here/.system_generated/logs" "$BRAIN/$sid_other/.system_generated/logs"
+  printf '{"content":"here"}\n'  > "$BRAIN/$sid_here/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"other"}\n' > "$BRAIN/$sid_other/.system_generated/logs/transcript.jsonl"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  # This cwd's entry LAST this time — the old bug's "return whatever's last"
+  # shape would have passed this ordering by accident; both orderings must work.
+  printf '{"%s":"%s","%s":"%s"}\n' "$other_dir" "$sid_other" "$WORK" "$sid_here" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$sid_here"* ]] || false
+  [[ "$output" != *"$sid_other"* ]] || false
+}
+
+# --- #74 round-1 P2-1: a cache hit used to `return 0` immediately, so any
+# limit greater than 1 still got back exactly one row — the board's Continue
+# list (limit 10) and its exclusion-pass retries (home.sh:330/437, also
+# limit 10) silently collapsed to at most one agy candidate no matter how
+# many real sessions this directory actually had. -----------------------------
+
+@test "antigravity recent_sids with limit>1 returns the cached hit PLUS the rest from disk, not just the cached one" {
+  _setup_agy
+  local sid_cached="ag-cached-01"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  # Three MORE real sessions in this same directory that the cache never
+  # learned about (a stale/not-yet-refreshed pointer is the normal case).
+  seed_agy_session ag-disk-01 "$WORK" "disk only 1"
+  seed_agy_session ag-disk-02 "$WORK" "disk only 2"
+  seed_agy_session ag-disk-03 "$WORK" "disk only 3"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 4 ]
+  [[ "$output" == *"$sid_cached"* ]] || false
+  [[ "$output" == *"ag-disk-01"* ]] || false
+  [[ "$output" == *"ag-disk-02"* ]] || false
+  [[ "$output" == *"ag-disk-03"* ]] || false
+  # The cached one is not ALSO re-discovered by the disk scan (no duplicate line).
+  local hits; hits="$(printf '%s\n' "$output" | grep -c "$sid_cached")"
+  [ "$hits" -eq 1 ]
+}
+
+@test "antigravity recent_sids with limit=1 keeps the original single-stat cache fast path" {
+  _setup_agy
+  local sid_cached="ag-cached-02"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  seed_agy_session ag-disk-04 "$WORK" "disk only"
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 1 ]
+  [[ "$output" == *"$sid_cached"* ]] || false
+}
+
+@test "antigravity recent_sids with limit>1 still caps at limit across cache+disk" {
+  _setup_agy
+  local sid_cached="ag-cached-03"
+  seed_agy_session "$sid_cached" "$WORK" "cached pointer"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "$sid_cached" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  seed_agy_session ag-disk-05 "$WORK" "d1"
+  seed_agy_session ag-disk-06 "$WORK" "d2"
+  seed_agy_session ag-disk-07 "$WORK" "d3"
+  run adapter_recent_sids "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  local n; n="$(printf '%s\n' "$output" | grep -c .)"
+  [ "$n" -eq 2 ]
 }

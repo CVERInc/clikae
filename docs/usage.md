@@ -55,7 +55,7 @@ plain, conventional verbs.
 | `<engine> <tank> --ephemeral` | Switch and run with **ephemeral memory** — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below. |
 | `<engine>` | One tank → use it; several → list them; none → offer to create. |
 | `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Source is auto-detected (env var, else this directory's most recent session). Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
-| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
+| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. Headless `burn` sessions are hidden by default (they're one-shot lane tasks, not conversations you'd want to reopen); `--all`, or `a` inside the picker, shows them too, labeled `[burn]`. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
 | `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
 **Your session outlives the terminal.** A bare switch runs the engine inside a
@@ -158,6 +158,114 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > supervised — agy has one global login and no per-tank signal. Nothing runs in the
 > background unless you launched it through clikae (no daemon) — deliberate.
 > `clikae status` shows what it carried (recent carries). **Tell us how it feels.**
+
+### The cockpit role — dispatch, don't spawn
+
+A coordinating session ("the cockpit") should hand build/review work to worker
+tanks with `clikae burn` rather than spawning it through its own in-session
+Agent/Task tool — a spawn like that spends the cockpit's OWN weekly budget on
+work a worker tank was going to pay for anyway. That rule is easy to forget
+exactly when a session is busiest, so `clikae cockpit` makes it the machine's
+problem instead of memory's:
+
+| Command | What it does |
+|---|---|
+| `cockpit` | Show the current cockpit tank (or that none is set). |
+| `cockpit [<engine>] <tank>` | Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like `clikae <name>`. |
+| `cockpit --off` | Remove the guard everywhere and forget the role. |
+| `cockpit --allow-agents <dur>` | Temporarily lift the guard (e.g. `4h`) without removing it. |
+
+The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
+a spawn whose model is missing, or whose model is opus/sonnet (any family-
+prefixed form too — `claude-opus-*`, `claude-sonnet-*`, `opusplan`, or the
+bare alias) **and** whose prompt reads as a build/review lane — naming the
+current idle reserve and the exact `clikae burn <engine> <tank>
+--prompt-file <f> --artifact <path>` shape to use instead. It also refuses an
+opus/sonnet spawn outright when the prompt is over 1,500 characters,
+regardless of content. **The guard never reads `subagent_type`** — `model` is
+the only thing that decides whether a spawn gets examined at all. A haiku or
+fable spawn is untouched regardless of `subagent_type` or prompt content; an
+opus/sonnet spawn — `Explore` included — is checked against the prompt
+heuristic below exactly like any other. Provider spellings are placed in
+their family (`us.anthropic.claude-sonnet-4-5-v1:0`, `claude-sonnet-4-5@…`,
+`sonnet[1m]`). A model id the guard does not recognise is **checked like
+opus/sonnet**, not waved through: a refusal names it as unrecognised, and a
+spawn that passes prints one line saying the id was unrecognised. The hook **fails closed**: a call it cannot read (an empty or
+malformed payload, no tool input object) is refused with the reason, and the
+escape hatches below are checked before the payload, so that refusal can
+always be lifted. This is not a general permission gate. The role, and the hook, live on
+exactly one tank at a time; moving it with `clikae cockpit` arms the new
+tank first and only cleans up the old one once the new one is armed and
+recorded, so a failure partway through never leaves you with no cockpit
+guarded at all. A human's own hooks on that tank are marked apart from the
+guard's and are never touched — the settings.json write rides the same
+mechanism as `clikae settings apply` (below), so **the file round-trips
+through jq**: key order gets normalized and CRLF becomes LF. Content survives
+intact (a hand-written hooks block, extra keys, anything else in the file);
+byte-for-byte formatting does not.
+
+**The cockpit is never a burn target, either.** The hook only sees the
+cockpit's own in-session spawns; a headless `clikae burn` never passes
+through it. So `clikae burn` asks the same question before every engine
+launch — the tank you name, a `--to` hop, agy's own walk, a symlink alias of
+the cockpit's directory — and refuses with the guard's sentence
+(`cockpit-guard: refused — <engine>/<tank> is the recorded cockpit …`)
+before anything starts. Auto-reroute skips the cockpit. `--force-cockpit` is
+the operator override: the burn runs, and says on stderr that it is burning
+the cockpit.
+
+**The prompt heuristic is a tripwire, not a classifier — `--allow-agents` is
+the door.** It matches the issue's own phrases (`worktree`, a git commit/push,
+`REVIEWER`/an adversarial review, a test run) OR'd with a widened set of bare
+imperative verbs (`commit`, `push`, "open a PR", `review`, `grade`, "run
+tests", "make CI") because missing a real build/review lane is the expensive
+direction (that's the incident this guard exists for) and a false refusal is
+cheap (the escape hatches below exist precisely for this). Measured against a
+14-item corpus (`tests/bats/cockpit-guard.bats`) — 8 prompts that read as
+dispatchable work, 6 that don't — the heuristic gets 11/14 right. On THIS
+corpus, all 3 misses are false refusals, not false allows, and all 3 are
+structural: an innocuous prompt that merely **mentions** one of these words
+in passing (a question about `git push --force-with-lease`, about a
+`worktree` section in the docs, about what `npm test` does) gets refused
+exactly like a prompt that asks for the real thing, because a plain keyword
+match can't tell "explains X" from "do X" apart, and every attempt to narrow
+the pattern enough to allow the innocuous case would also let its
+should-refuse sibling in this same corpus through. If a refusal looks wrong,
+that's expected, not a bug — `--allow-agents` (below) is how you get past it.
+
+**"3 misses" is a property of this corpus, not a bound on the false-refusal
+rate.** A second, adversarially-innocuous 10-prompt corpus (round-2 review,
+`REVIEW-cockpit63-r2.md`, plus 4 more in the same spirit) scores 8/10
+refused — worse, not better, because these were chosen specifically to
+brush against a trigger word without asking for build/review work:
+
+| Prompt | Outcome |
+|---|---|
+| Find every file that mentions push notifications and list them | refused |
+| Review the attached spec and tell me if the wording is clear | refused |
+| What does the word "commit" mean in the context of database transactions? | refused |
+| Explain how git worktrees differ from clones, conceptually | refused |
+| Search the codebase for where we grade student submissions | refused |
+| Summarize the customer reviews in reviews.csv | **allowed** (`\breview\b` doesn't match "reviews") |
+| What does npm test actually run under the hood? | refused |
+| Can you explain what 'open a PR' means for someone new to GitHub? | refused |
+| List the files that were pushed in the last release | **allowed** |
+| Grade how readable this poem is, out of 10 | refused |
+
+Expect a false-refusal rate closer to this table's than the 14-item corpus's
+on real, adversarially-chosen prompts — that's still the cheap direction
+(`--allow-agents` exists precisely because false refusals are meant to be
+routine, not rare).
+
+Sometimes the right call is to spend the cockpit tank's own budget on purpose
+("burn the cockpit tank tonight") — a guard that cannot be lifted gets
+deleted instead of obeyed, so there's an escape hatch: set
+`CLIKAE_COCKPIT_ALLOW_AGENTS=1` in the environment, or run `clikae cockpit
+--allow-agents <dur>` for a timed allowance. `clikae cockpit --off` removes
+the guard everywhere and clears any live allowance; it sweeps every tank
+(not just the recorded one) and never aborts partway through — a tank with a
+broken settings.json is reported at the end, by name, but does not stop the
+rest of the sweep from being cleaned up.
 
 ### Inspect
 
@@ -342,6 +450,173 @@ you what it did.
 > clikae watch claude --check          # would the pattern fire on this session?
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
+
+## Ambient: turn GitHub replies into wake events (`watch github`)
+
+A different source under the same verb: instead of watching a tank's own
+transcript for a dry limit, `clikae watch github` polls GitHub's search API
+for every issue/PR update in an org — including replies on issues YOU
+opened — plus @mentions of you, so a collaborator's reply doesn't sit
+unseen until someone happens to run `gh` by hand.
+
+```bash
+clikae watch github --org CVERInc              # foreground, polls every 10m, Ctrl-C to stop
+clikae watch github --org CVERInc --interval 5m # a tighter poll interval
+clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
+clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bound, default 24h ago
+```
+
+`--org` defaults to the login `gh repo view` reports for this directory's
+GitHub remote when omitted. Every new event prints live as one line — this
+is the actual output line for a collaborator's reply that @-mentions you on
+an issue YOU opened (P2-2, 2026-09-13 fix-round-3 review: regenerated from
+what this implementation really prints — the reply's own text decides
+`kind`, but only the issue's TITLE is ever shown, never the reply text
+itself):
+
+```
+[ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect
+```
+
+— a collaborator's reply reaching you even on an issue YOU opened (the org
+query has no `-author:<self>` filter; see the caveat below for exactly what
+self-exclusion means instead). It's also appended,
+as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
+durable trail, and — the actual wake — every poll that finds at least one
+new event writes a burn-status-shaped file to
+`$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json` — burn's own
+directory layout, not a lookalike location `clikae wait` can't resolve.
+🔴 Deliberately `$HOME`, not `$CLIKAE_HOME` (P3-2, 2026-09-13 fix-round-3
+review) — the one path in this feature that ignores a `$CLIKAE_HOME`
+override, the same as burn's own status files always have; a sandboxed
+`$CLIKAE_HOME` does not sandbox this one file. So
+`clikae wait watch-github-<org>-<epoch>` (the run_id printed inside the
+file) or `clikae wait --latest watch-github-<org>` (a cockpit that doesn't
+know the epoch yet) returns 0 and prints the events, the same reader a
+cockpit already blocks on for `clikae burn` — that's what a cron job or
+Stop hook calling `--once` actually has to consume, not the JSONL log.
+
+The cursor (the EXACT max updated_at this poll actually processed — no lag)
+persists at `$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small
+seen-file next to it de-dupes by (repo, issue number, updated timestamp),
+capped at the last 5,000. Cold start (no cursor yet) bounds to the last 24
+hours by default — `--since` overrides that bound — and each query
+paginates ascending (oldest-unseen-first) up to 500 rows (5 pages of 100)
+per poll. A busy org's backlog therefore can't outrun this permanently: a
+poll cut short by the cap still leaves the cursor at the end of what it
+read, so the next poll picks up exactly there — the trade-off is a
+backlogged cold start crawls forward from `--since`/24h-ago instead of
+surfacing today's newest activity first.
+
+GitHub search's own indexing delay (real writes lag the search index by
+some minutes) is NOT covered by lagging the cursor above — that was tried
+in earlier rounds of this feature and turned out to permanently stall a
+busy org (any 300-second window holding ≥500 rows pinned the cursor
+forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
+once every 5 polls, or right after a truncated one: one or more requests,
+oldest-first (same order as the main query), re-reading a window just
+below the cursor and delivering anything the main query may have missed
+while it was still indexing — oldest-first so a busy org's own
+already-seen recent activity can't fill a newest-first page before the
+sweep reaches older rows. Late-indexed rows are spread across the whole
+window, though, not only at its old end, so a truncated sweep (below) can
+still miss some in the newer part it didn't read. That window is the
+time since the last sweep STARTED (at least 300s) plus a fixed 300s
+overlap with the previous sweep, so a row updated just before one sweep
+but indexed just after it is still re-read by the next — an epoch
+persisted next to the cursor and read back directly,
+not inferred from `--interval` or from how many polls elapsed times any
+single one of their gaps (an earlier version of this feature used a flat
+300s window regardless of spacing, which only ever covered the gap
+between sweeps when `--interval <= 60s`; a later version multiplied one
+poll's own gap by how many polls had elapsed, which undercounted the
+moment polling wasn't evenly spaced — a live loop recovering from
+back-off is exactly that case; the default interval is 10m, and a
+`--once` poll run from cron never knows `--interval` at all — see
+CHANGELOG). It never advances the cursor itself, so it cannot re-create
+that stall; reading paginates within the same 5-page/100-per-page budget
+the main query uses, and a window still not fully covered after that is
+reported as "lag window truncated" and dropped rather than read further,
+so it costs at most 5 extra requests per poll.
+
+Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
+`issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
+label, an assignee change) and whether that was you. That endpoint has no
+`direction` parameter, so learning the LATEST event means reading its own
+`Link: rel="last"` page number and fetching that page (up to 2 requests,
+still counted as 1 lookup against the budget below) — the one endpoint
+whose events carry an actor for review/label/assignee shapes too, not just
+a comment. Bounded to 50 such lookups per poll, spent oldest-unseen-first
+(the order the asc-paginated search results stream in), and stopped early
+once GitHub's own
+`X-RateLimit-Remaining` drops under 100. A candidate beyond that bound is
+still reported — never silently dropped — just as `by unknown` instead of a
+real login. If that fetched event's own text @-mentions you, `kind` is
+`mention` instead of `comment`/`review` (P2-2, 2026-09-13 fix-round-3
+review — this REPLACES a separate `mentions:<self>` search query that used
+to run every poll: once the org query above lost its `-author:<self>`
+filter, that second query became a strict subset of the first, so it was
+mostly buying nothing but extra requests. A brand-new issue/PR whose own
+OPENING text mentions you is not covered by this — no lookup happens for a
+fresh number, so there is no body text to check).
+
+Rate limits: normally 1 search request per poll (up to 5 when paginating,
+plus up to 5 more for the tail sweep above), plus up to 50 activity lookups
+(each up to 2 requests) against the core API's much larger budget.
+On a genuine rate limit (429, or a 403 the response attributes to it, or a
+5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
+never advanced past a page that failed to read, so nothing is silently
+skipped — a poll cut short by the 5-page cap prints "truncated: continuing
+next poll" and it does: pagination runs oldest-unseen-first, so the cursor
+lands EXACTLY at the last row this poll actually read, and the next poll's
+query starts exactly there. No backlog, however large (short of the one
+case under Known limits below), can stall this
+permanently — the cursor only ever advances, never regressing into a
+window it has already re-read. A PERMANENT failure —
+missing OAuth scope, SAML enforcement, a bad org name — is retried once,
+then reported and the command exits 1; it never enters back-off, since no
+amount of retrying fixes those. `--once` returns 0 only when a poll
+actually succeeded (events or none); 1 on any failure, so a cron job can
+tell "quiet today" from "I've been failing silently".
+
+**Known limits.** The one case the cursor above can still get stuck on:
+≥500 issue/PR updates sharing the exact same `updated_at` second (the
+5-page cap) pins the cursor at that second forever, since it can never
+read past all of them in one poll — extremely unlikely given GitHub's own
+secondary rate limits, but not impossible, so it's named here rather than
+covered by the "no backlog, however large" claim above. Within one poll,
+events the tail sweep finds are appended in `updated_at`-ascending order
+(oldest first, same direction as the main query — fixed 2026-09-14
+fix-round-6 review; an earlier version read the sweep's window
+newest-first), but AFTER the main query's own batch, and the sweep's
+window sits below the cursor the main query just advanced to — so
+`events.jsonl` is still no longer strictly non-decreasing the moment a
+sweep delivers anything; no consumer this feature ships relies on that
+ordering today.
+
+Requires `gh` already logged in — this feature never reads or writes a token
+itself, it uses whatever account `gh auth login` already set up, and refuses
+immediately (exit 1) if `gh auth status` fails.
+
+> **Honest caveat.** GitHub's search API returns issue/PR-level rows, not a
+> per-comment feed, so its own `user.login` is always the ISSUE's author,
+> never whoever's activity just touched it. Self-exclusion and the `kind`
+> shown for an update therefore never trust that field: for a number seen
+> before, both come from the timeline lookup above (round 1 of this feature
+> compared the issue's own author against self instead — which meant a
+> collaborator's reply on an issue YOU opened was invisible no matter what,
+> the exact headline case above, not a documented exception to it). A number
+> never seen before needs no lookup — opening IS the event, and the row's
+> own login is unambiguously who did it; a self-authored new issue is
+> recorded as seen but is not itself an event. `kind` is `opened`,
+> `comment`, `review`, `activity` (any other timeline event — a label, an
+> assignee change, …), or `mention` (an ALREADY-SEEN number whose latest
+> fetched activity's own body text @-mentions you — see the P2-2 paragraph
+> above; a fresh number's own OPENING text is not covered, so a brand-new
+> issue/PR that @-mentions you still reads `opened`, never `mention`).
+> Past the 50-lookup budget or the API's own rate limit, an update's actor
+> cannot be verified and is reported as `unknown` rather than guessed — see
+> the rate-limits paragraph above.
 
 ## What is running right now — the board's Live section
 

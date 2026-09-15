@@ -103,6 +103,27 @@ load '../helpers'
   [[ "$output" == *"No permissions template for engine: claude; skipping"* ]] || false
 }
 
+@test "init still creates a claude tank when the settings lock is stale, and WARNs naming it (#63 r6 P3-3)" {
+  # A crashed cockpit/settings transition leaves lib/commands/settings.sh's
+  # mkdir lock behind. Before this fix, `cmd_settings apply` returned rc=1
+  # for ANY lock failure, and init's `case … 0|2|3) ;; *) return 1 ;;`
+  # treated that identically to a real bug — so `clikae init claude C`
+  # returned 1 AFTER "Created tank: claude/C" had already printed. rc=4 now
+  # distinguishes "lock unavailable" from a real template-apply failure, and
+  # init WARNs instead of failing.
+  local dead; dead="$(sh -c 'echo $$')"
+  mkdir -p "$CLIKAE_HOME/state/settings.lock"
+  printf '%s\n' "$dead" > "$CLIKAE_HOME/state/settings.lock/pid"
+  run clikae init claude C
+  [ "$status" -eq 0 ]
+  [ -d "$CLIKAE_HOME/profiles/claude/C" ]
+  [[ "$output" == *"Created tank: claude/C"* ]] || false
+  [[ "$output" == *"permissions template could not be applied"* ]] || false
+  [[ "$output" == *"$CLIKAE_HOME/state/settings.lock"* ]] || false
+  [ -d "$CLIKAE_HOME/state/settings.lock" ]   # init never breaks the lock itself — only --off does
+  rm -rf "$CLIKAE_HOME/state/settings.lock"
+}
+
 @test "init seeds an env-file adapter's config file (kubectl)" {
   run clikae init kubectl dev
   [ "$status" -eq 0 ]
