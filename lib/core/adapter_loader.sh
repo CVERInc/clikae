@@ -176,6 +176,18 @@ load_adapter() {
   # OPTIONAL ones (adapter_relay, adapter_start_with_prompt, …) would otherwise
   # leak across adapters — e.g. `clikae handoff <a> --to <b>` loads two adapters
   # in one process, and a hook b doesn't define must NOT be inherited from a.
+  #
+  # 🔴 THE LIST IS THE GATE, AND IT DRIFTS SILENTLY. Adding a hook to one
+  # adapter and forgetting this list has already shipped twice (#81's
+  # adapter_burn_flags/adapter_audit_flags, #60's
+  # adapter_meta_permission_modes), and a leaked hook does not look like a bug:
+  # `declare -F` says the hook is there, so the caller believes the NEW engine
+  # supports whatever it gates. Four more were missing when round 12 checked
+  # mechanically — adapter_cwd_from_args, adapter_ephemeral_flags,
+  # adapter_mcp_config_file, adapter_tank_fingerprint — so the check is a test
+  # now, not a habit: "every adapter hook is in adapter_loader's unset list"
+  # (tests/bats/adapters/extra.bats) compares this list against every
+  # `adapter_*` definition under lib/adapters/ and names what is missing.
   unset -f adapter_meta_name adapter_meta_cli_binary adapter_meta_env_var \
            adapter_meta_strategy adapter_meta_description \
            adapter_meta_permission_modes \
@@ -189,6 +201,8 @@ load_adapter() {
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \
            adapter_sid_from_args adapter_new_session_args \
            adapter_sid_canonical adapter_all_transcripts \
+           adapter_cwd_from_args adapter_ephemeral_flags \
+           adapter_mcp_config_file adapter_tank_fingerprint \
            2>/dev/null || true
 
   # shellcheck source=/dev/null

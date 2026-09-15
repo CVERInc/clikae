@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Four optional adapter hooks (`adapter_cwd_from_args`,
+  `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
+  `adapter_tank_fingerprint`) no longer leak from one adapter to the next
+  loaded in the same process — `clikae handoff <a> --to <b>` used to leave
+  `a`'s definitions answering for `b`, so a capability gate that asks
+  `declare -F` believed `b` supported what only `a` does. A test now compares
+  every `adapter_*` definition under `lib/adapters/` against the loader's
+  unset list, so the next hook added cannot go missing quietly (#62).
 - Deleted antigravity's bulk `sid -> workspace` index and the plain-global
   cache built on it. Its only reader was a cwd filter the board no longer has
   (agy's index scope is a per-tank constant), so it had been a documented
