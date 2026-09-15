@@ -538,14 +538,22 @@ _tank_candidates() {
     d="${d%/}"
     if [ -L "$d" ]; then links+=("$d"); else reals+=("$d"); fi
   done
-  for d in "${reals[@]}"; do
+  # 🔴 `${a[@]+"${a[@]}"}`, not `"${a[@]}"` — bash 3.2 (every stock macOS) treats
+  # an EMPTY array as UNSET, so `"${reals[@]}"` under `set -u` is
+  # `links[@]: unbound variable` and the walk dies. Caught by round-6 P3-1's own
+  # `set -u` test on the macOS CI runner and nowhere else: bash 4+ expands an
+  # empty array to nothing, so this is invisible on Linux. Reachable for real —
+  # any engine dir whose entries are all real (or all symlinks) leaves the other
+  # array empty, and lib/hooks/cockpit-guard.sh is a `set -u` caller of this
+  # walk. The `+` form expands to nothing when the array is unset OR empty.
+  for d in ${reals[@]+"${reals[@]}"}; do
     name="${d##*/}"
     real="$(cd "$d" 2>/dev/null && pwd -P)" || continue
     case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
     seen="$seen$real"$'\n'
     printf '%s\t%s\n' "$name" "$d"
   done
-  for d in "${links[@]}"; do
+  for d in ${links[@]+"${links[@]}"}; do
     [ -d "$d" ] || continue   # broken symlink, or one pointing at a non-dir
     name="${d##*/}"
     real="$(cd "$d" 2>/dev/null && pwd -P)" || continue
@@ -1097,7 +1105,7 @@ EOF
     for ((i = cur_idx + 1; i < ${#all[@]}; i++)); do ring+=("${all[i]}"); done
     for ((i = 0; i < cur_idx; i++));               do ring+=("${all[i]}"); done
   else
-    ring=("${all[@]}")
+    ring=(${all[@]+"${all[@]}"})   # same bash 3.2 empty-array trap as _tank_candidates
   fi
   [ "${#ring[@]}" -gt 0 ] || return 0
 
@@ -1121,7 +1129,7 @@ EOF
   # Pass 1: nearest fuelled SAME-engine tank (real resume). Pass 2: any engine.
   local pass e t
   for pass in same any; do
-    for entry in "${ring[@]}"; do
+    for entry in ${ring[@]+"${ring[@]}"}; do
       e="${entry%%/*}"; t="${entry#*/}"
       # agy/antigravity is global single-account — it can't be an auto carry-onward
       # target (handoff treats it as a no-/tank single-account target, so a ring

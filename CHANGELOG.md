@@ -111,6 +111,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not yet a tank now refuses (`Not a tank: …`) instead of writing
   `settings.json` into it — naming a bare directory used to be enough to seed
   it into existence as a permanent tank on the next walk (#61 round 2).
+- The profile-store walk no longer dies with `links[@]: unbound variable` on
+  bash 3.2 (every stock macOS) when a caller runs under `set -u` — which is
+  what the `clikae cockpit` guard hook does — and an engine's directory holds
+  only real tanks or only symlinked ones. bash 3.2 treats an empty array as
+  unset, so one of the two lists the walk builds was always "unset" on a
+  typical store (#61 round 6).
 - A `.clikae-tank` marker that exists but cannot be READ (permissions, a
   changed owner, an ACL) no longer truncates the tank list. It used to print a
   raw `profile_store.sh: line …: Permission denied` and, in a caller running
