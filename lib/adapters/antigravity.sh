@@ -192,12 +192,24 @@ adapter_title_for_file() {
 # caller is a board hot path (home.sh's Live-row fallback title, once per live
 # tank per frame). Measured on a 1,000-session tank: the tank walk this
 # function does for n>1 is 4.7-5.0 s (it stats every session before it cuts —
-# the cut's size makes no difference), against one stat for the pointer. So
+# the cut's size makes no difference HERE), against one stat for the pointer. So
 # making n=1 return "the first row of the tank ranking" would put five seconds
 # on a frame render to change one fallback title, on the exact engine whose
 # tanks get the most sessions. The user-visible consequence of keeping it is
 # small and now documented: that one fallback title can differ depending on
 # which directory you opened the board from.
+#
+# 🔴 #34 round-2 P3-1: "the cut's size makes no difference" is a property of
+# THIS adapter (and claude's), not of adapters in general, and the round-1 fix
+# generalised it to all of them after measuring only this one — the single
+# engine with no per-row work after `head -n`. codex and grok did have such a
+# tail (a fork + a file read per row, to get a sid the path did not carry) and
+# paid ~+225…+373 ms / ~+917…+1056 ms going from a 10-row ask to a 200-row one
+# on a 1,000-session tank. That tail is gone as of this PR (they read the sid
+# from the filename now, see their adapter_recent_sids), so the claim is true
+# across the board again — but it was an extrapolation when it was written, and
+# the honest per-engine version now lives beside CLIKAE_HOME_RECENT_SCAN_MAX in
+# lib/commands/home.sh rather than being re-asserted from one sample.
 #
 # (Aside, for whoever reads the mtime field: the n=1 path's mtime comes from
 # _clikae_mtime, which lives in lib/core/adapter_loader.sh. The CLI always has
