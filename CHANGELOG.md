@@ -272,8 +272,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hits its own ceiling now says "discovery timed out", not "scan budget
   exhausted"; and `$PWD`/`--add-dir` are resolved before any `find` runs,
   so a repo already discovered at the budget boundary is reported instead
-  of dropped. Everything those rounds deliberately left unfixed is now
-  tracked in #112 rather than in review notes.
+  of dropped. Round-6 review of #87: the kill that aims at a process group
+  now verifies the VALUE it is handed, not just the platform's capability
+  (`kill -- -0` is the caller's own group — burn plus the shell that
+  launched it); Ctrl-C reaches the scan again (`set -m` had put the child
+  in a group the terminal's SIGINT never visits, so a cancelled scan kept
+  reading the disk for the rest of its bound); the TERM->KILL escalation
+  reaches the whole group instead of dying with the direct child, so a
+  grandchild that ignores TERM is no longer left running; each repo's
+  file-list scan gets its own temp file, so a writer that outlived one
+  repo's bound can no longer land its rows — and its mtime, and with it
+  the ranking — in the NEXT repo's report; the 137/143 fallback is narrowed
+  to the case its own comment described (no mark could be written) and uses
+  a millisecond clock where one exists, instead of reporting an
+  externally-killed command as a timeout; and the watchdog's kill mark
+  comes from `mktemp` rather than a predictable /tmp path. Everything those
+  rounds deliberately left unfixed is now tracked in #112 rather than in
+  review notes.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
