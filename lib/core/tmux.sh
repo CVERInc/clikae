@@ -1055,15 +1055,41 @@ tmux_status_alertsv() {
 # which is the two-digit case mistaken for all of them. The spec still promises
 # only 80.)
 #
-# Columns, not bytes: the row can carry `·`, `○`, `│` and `…`, and tmux runs
-# this helper under whatever locale its server has, so every one of them becomes
-# a single ASCII byte before anything is counted. No fork.
+# Cells, not bytes: the row can carry `·`, `○`, `│` and `…`, each multi-byte in
+# UTF-8, and each is replaced by one ASCII byte before anything is counted — so
+# `${#s}` is a count of CELLS AS TMUX COUNTS THEM, under a UTF-8 locale and
+# under C alike, with no fork. What that is NOT is a promise about the screen;
+# see the function below.
 
-# _tmux_status_colsv <string> -> $_TSTAT_COLS, its width in terminal columns.
-# The four glyphs this row can emit are one column each and multi-byte in UTF-8;
-# substituting them for one ASCII byte makes ${#s} right under a UTF-8 locale
-# AND under C. Styles (`#[...]`) are never passed here — the composer counts the
-# parts before it adds them.
+# _tmux_status_colsv <string> -> $_TSTAT_COLS, its width in the cells tmux lays
+# the row out in. Styles (`#[...]`) are never passed here — the composer counts
+# the parts before it adds them.
+#
+# 🔴 THE UNIT IS TMUX'S `wcwidth`, WHICH IS NOT ALWAYS THE TERMINAL'S (P3-4,
+# 2026-09-14 round-4 review). This function substitutes one ASCII byte for each
+# of the four glyphs, so its answer equals the column count only while each of
+# them is one column wide. Measured, and the news is good at this layer: on
+# glibc, `wcwidth` returns 1 for `…` U+2026, `·` U+00B7, `│` U+2502 and `○`
+# U+25CB in C.UTF-8, zh_TW.UTF-8 and ja_JP.UTF-8 alike (glibc keeps one width
+# table for every locale), and a real tmux 3.4 laid out the same 90-cell ladder
+# matrix identically in all three — not one cell off by one.
+#
+# What is outside this function's reach is the EMULATOR. All four glyphs are
+# East Asian AMBIGUOUS width, and iTerm2, Terminal.app and Windows Terminal all
+# offer "treat ambiguous-width as two columns". With that on, tmux still lays
+# the row out at 1 and the screen draws 2 — up to 4-5 cells of drift on a full
+# row, which misaligns the whole status bar rather than just this segment. That
+# is not new here (`·` and `│` are the board's existing vocabulary, and the
+# emulator setting breaks tmux's own layout the same way), but `…` gives it one
+# more place to appear, and this comment used to read as though the substitution
+# had settled the question. It has not: an ambiguous=2 terminal can overflow the
+# row by one cell per `…` drawn, and nothing this helper can measure would see
+# it. The ASCII alternative (`...`) would cost two more columns on the rung that
+# is already the tightest, so the glyph stays and the limit is written down.
+#
+# (Names cannot reach into this: `validate_name` — lib/core/profile_store.sh —
+# caps a tank name to `^[A-Za-z0-9._-]+$`, and tmux_status_render filters the
+# host to `[a-zA-Z0-9._-]`, so `${#s}` is exactly their column count.)
 _tmux_status_colsv() {
   local s="$1"
   # 🔴 never `~` as a replacement: bash 5.2 TILDE-EXPANDS the replacement
