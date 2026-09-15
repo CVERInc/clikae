@@ -22,6 +22,7 @@ elapsed_s          ditto
 run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
 started_at         a field in #41's status.json, not a function
+updated_at         a field GitHub's search API returns per issue/PR (the tail-sweep/cursor field name), not a function
 token_count        codex's own rollout event type name, quoted in docs/DESIGN-board-fuel-dots.md
 used_percent       a field in codex's own rate_limits JSON, not a function
 window_minutes     ditto
@@ -34,3 +35,4 @@ window_resets_at   ditto
 weekly_resets_at   ditto
 cached_at          a field in `clikae usage --json`'s result object and in the on-disk usage cache (#72), not a function
 scanned_at         a field in the on-disk usage cache only (#72 round-2 review, P3) — when it was last SCANNED, separate from cached_at's "how old is the reading itself"; not a function, never in `clikae usage --json`'s output (usage_read strips both before printing)
+subagent_type      a JSON field name in Claude Code's PreToolUse hook payload (tool_input.subagent_type); docs/usage.md's cockpit section names it to say the guard deliberately never reads it (#63 P3-2)

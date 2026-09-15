@@ -30,6 +30,19 @@ load '../helpers'
   [ "$status" -eq 0 ]
 }
 
+@test "install.sh leaves the tmux guard shim executable (install.sh:59, CVERInc/clikae#97 review round 1 P3)" {
+  # `cp -R`'s handling of the executable bit is not guaranteed across
+  # platforms — install.sh has its own explicit `chmod +x` for exactly this
+  # file, and until now nothing pinned it: an unreadable-as-executable shim
+  # fails OPEN (tmux_usable's `command -v tmux` would skip straight past it)
+  # rather than failing loud.
+  local prefix="$BATS_TEST_TMPDIR/shim-exec-install"
+  PREFIX="$prefix" "$CLIKAE_TEST_ROOT/install.sh" >/dev/null 2>&1
+  local shim="$prefix/share/clikae/lib/shims/tmux"
+  [ -f "$shim" ] || { echo "shim not installed at $shim"; false; }
+  [ -x "$shim" ] || { echo "shim installed but not executable: $shim"; false; }
+}
+
 @test "the in-repo Homebrew formula copy still installs templates/ next to bin and lib" {
   run grep -E '^\s*libexec\.install "bin", "lib", "templates"' "$CLIKAE_TEST_ROOT/homebrew/clikae.rb"
   [ "$status" -eq 0 ]

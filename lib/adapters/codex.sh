@@ -222,6 +222,267 @@ adapter_transcript_path() {
   printf '%s\n' "$f"
 }
 
+# _CODEX_USER_MESSAGE_TYPE_RE / _CODEX_AGENT_MESSAGE_TYPE_RE — the anchors
+# for "this line records something the human/the model actually typed",
+# shared by adapter_title_for_file (below) and adapter_handoff_extract's
+# event_msg scan, so nothing in this file disagrees with itself about what a
+# codex event looks like (round-1 review P2-2). Codex writes a human-typed
+# turn as an event_msg whose payload.type is "user_message" and a model
+# reply as an event_msg whose payload.type is "agent_message" — both carry
+# the text in "message". _CODEX_AGENT_MESSAGE_TYPE_RE is the SAME anchor
+# lib/core/limit.sh already uses for this exact shape (limit.sh:322, whose
+# comment at :275-293 says "confirmed against a real rollout"). Before
+# round-2 review P2-1, the assistant branch below had its own, UNCONFIRMED
+# response_item-only anchor instead of sharing this one — the same "no
+# sibling backing this guess" bug round-1 P1-1 found in the user branch,
+# just on the other role: a rollout that (like every other codex scanner in
+# this repo) records replies as event_msg/agent_message showed as EMPTY
+# here while limit.sh read the same file fine.
+#
+# ` *` (a literal space, starred), not `[ \t]*`/`[[:space:]]*`: `lib/core/
+# limit.sh`'s whole codex family (:281, :322, :1160, :1183, and
+# tests/bats/limit-codex-status.bats:215's "confirmed against a real
+# rollout" fixture) matches a SPACED `"type": "user_message"`, so ` *`
+# tolerates that idiom too — the SAME whitespace convention as every other
+# codex scanner in the repo, not a fourth one (round-1 review P1-1).
+# Round-3 review: that confirmation was against an older/other rollout,
+# NOT what this machine's real files look like — the two real 0.154.0
+# `codex_exec` rollouts on this box are COMPACT JSON (zero `"type": "`
+# occurrences, all `"type":"`, no space after the colon). ` *` matches
+# both forms either way, so behaviour is unaffected; this comment used to
+# overstate the evidence as "every codex event on this machine does".
+_CODEX_USER_MESSAGE_TYPE_RE='"type": *"user_message"'
+_CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
+
+# Optional hook (#33; round-1 P1-1/P2-2/P3-1 and round-2 P2-1/P2-2/P3-2/P3-3
+# review fixes folded in): the transcript SHAPE belongs to the adapter.
+# Prints one line per MESSAGE of <role> ("user"/"assistant") — several text
+# parts in one message join with a space onto one line, unlike claude.sh's
+# twin, which prints one line per text BLOCK instead (round-1 review P3-1;
+# docs/adding-an-adapter.md spells out the difference) — text only, newest
+# last — used by `clikae handoff`'s digest (lib/core/handoff.sh,
+# _handoff_extract).
+#
+# A codex rollout can record the SAME turn in two different ways depending
+# on how the session ran, and this hook reads the UNION of both rather than
+# betting on one (round-2 review P2-1 for the assistant side; the user side
+# already did this in round-1, for the injected-context reason below):
+#
+#   Shape A — event_msg (the UI event stream; limit.sh's whole codex family
+#   — :281, :322, :1160, :1183 — reads ONLY this shape, "confirmed against a
+#   real rollout"):
+#     {"type":"event_msg","payload":{"type":"user_message","message":"…"}}
+#     {"type":"event_msg","payload":{"type":"agent_message","message":"…"}}
+#
+#   Shape B — response_item (the OpenAI Responses API conversation state):
+#     {"type":"response_item","payload":{"type":"message","role":"assistant",
+#       "content":[{"type":"output_text","text":"…"}]}}
+#     {"type":"response_item","payload":{"type":"message","role":"user",
+#       "content":[{"type":"input_text","text":"…"}]}}
+#
+# `content` in shape B is an ARRAY of typed parts, so the claude-shaped
+# `"role":"…","content":"…"` string anchor matches neither role — that was
+# the original #33 bug. Round-2 review P3-3: the value scan below only pulls
+# a part's "text" when it is immediately preceded by ITS OWN "type" field
+# naming the part kind this role writes ("output_text" for assistant,
+# "input_text" for user) — matching the field order in the shape shown
+# above, the only order this repo has ever seen (no real rollout was
+# available to confirm another order exists; see "what we didn't verify"
+# below). A bare `"text": *"` key scan also lights up on a DIFFERENT part in
+# the same array that merely happens to carry its own "text" key (a
+# reasoning part, an image part's alt text, …), which would leak non-reply
+# content into a brief meant for another vendor.
+#
+# USER shape B ALSO carries MACHINE-INJECTED context, not just what the
+# human typed, e.g.
+#   {"type":"response_item","payload":{"type":"message","role":"user",
+#     "content":[{"type":"input_text","text":"<environment_context>cwd=…
+#     </environment_context>"}]}}
+#   {"type":"response_item","payload":{"type":"message","role":"user",
+#     "content":[{"type":"input_text","text":"<user_instructions>AGENTS.md
+#     contents here</user_instructions>"}]}}
+# so `<environment_context>` / `<user_instructions>` are stripped
+# defensively below regardless of which shape produced the line (round-1
+# review P2-2) — belt-and-suspenders, the same spirit as claude's own four
+# filters for role:user noise.
+#
+# awk, ONE pass over the whole file. Round-2 review P2-2: the previous
+# version built each matched value with a character-by-character
+# `seg = seg c` loop — O(1) per character on gawk, but O(line length) PER
+# CHARACTER on mawk (Debian/Ubuntu's DEFAULT `awk` on a base image) and
+# busybox awk, i.e. O(n²) overall: measured 95.9s for one 1.6 MB line on
+# mawk vs 0.33s on gawk for the same input (400 kB was already 4.3s on mawk,
+# 48s on busybox awk). `match(rest, /^([^"\\]|\\.)*/)` finds the WHOLE value
+# (escapes included) in ONE call — RLENGTH is the value's length, so
+# `substr()` lifts it in one shot, leaving nothing for mawk's string-concat
+# cost to multiply. This is the same "value body" idiom claude.sh's
+# assistant branch already uses via `grep -aoE`, just expressed for awk's
+# `match()`. The fixed anchor/key patterns (event_re, role_re, part_keyre)
+# stay literal strings either side of a single, non-nested ` *`/`, *` — no
+# ReDoS risk, and no need for the index()/substr()-without-regex workaround
+# a nested-star `[[ =~ ]]` pattern would need (see adapter_title_for_file
+# above for why THAT trap matters for bash's own regex engine).
+#
+# Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
+# has always unescaped, never \uXXXX (parity first; see handoff.sh's own
+# comment on this — a \uXXXX decoder is a follow-up, not a regression, since
+# grep/sed/awk alone can't safely decode one without jq/python).
+#
+# Silent failure is not allowed (round-1 review P1-1) — but round-2 review
+# P3-2: a role with genuinely no turns yet (a brand-new tank the model
+# hasn't replied to) is NOT a shape mismatch, and firing the same stderr
+# line for both trained a reader to ignore it. So the diagnostic now fires
+# only when SCANNED (a line structurally shaped like this role's turn, by
+# EITHER shape's anchor) is > 0 while MATCHED (a value actually pulled out
+# of one) stays 0 — that combination can only mean the anchors are looking
+# at the wrong keys, not "there's nothing here yet" — and it says how many
+# lines it saw, so the reader isn't left guessing which. Zero scanned lines
+# stays silent. handoff.sh's _handoff_extract no longer swallows a hook's
+# stderr (see its own comment), so a real diagnostic still reaches the user.
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  [ -n "$t" ] && [ -f "$t" ] || return 0
+  case "$role" in user|assistant) ;; *) return 0 ;; esac
+  local event_re part_type out
+  if [ "$role" = user ]; then
+    event_re="$_CODEX_USER_MESSAGE_TYPE_RE"; part_type="input_text"
+  else
+    event_re="$_CODEX_AGENT_MESSAGE_TYPE_RE"; part_type="output_text"
+  fi
+  out="$(awk -v role="$role" -v event_re="$event_re" -v part_type="$part_type" '
+    BEGIN {
+      role_re = "\"role\": *\"" role "\""
+      part_keyre = "\"type\": *\"" part_type "\", *\"text\": *\""
+      kinds_re = "\"content_item_kinds\": *\\[[^]]*\\]"
+      scanned = 0; matched = 0; have_prev = 0; prev = ""; kinds_skipped = 0
+    }
+    $0 ~ event_re {
+      scanned++
+      rest = $0; keyre = "\"message\": *\""
+      if (match(rest, keyre)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (match(rest, /^([^"\\]|\\.)*/)) {
+          seg = substr(rest, 1, RLENGTH)
+          # round-3 review P3-3: finding the key AND its (possibly empty)
+          # value body is a MATCH regardless of whether the value itself is
+          # "" — a legitimately empty agent_message is a shape that worked,
+          # not a mismatch, so it must not starve `matched` and trigger the
+          # loud line below. Only an EMPTY-STRING value is skipped from
+          # print+dedup (nothing to show, nothing to compare against).
+          matched++
+          if (seg != "" && (!have_prev || seg != prev)) {
+            print seg; prev = seg; have_prev = 1
+          }
+        }
+      }
+      next
+    }
+    $0 ~ /"type": *"response_item"/ && $0 ~ role_re {
+      # round-3 review P2-1, metadata first: a real 0.154.0 rollout tags
+      # every response_item with content_item_kinds, and a human-typed turn
+      # is the ONLY one with a kind that starts with "user." (machine-
+      # injected context — AGENTS.md dumps, environment_context, plugin
+      # recommendations — never does). A line carrying this field and no
+      # "user."-prefixed kind is skipped WHOLE, before scanned/matched even
+      # see it — same "recognized and filtered, not a mismatch" spirit as
+      # round-2 P3-2 below, not "the anchors are looking at the wrong keys".
+      #
+      # round-4 review P2-1: `has_kinds` records whether THIS line carried
+      # content_item_kinds at all. When it did, kinds is authoritative — a
+      # part that survives to the per-part loop below already passed the
+      # "user."-prefix check above, so the per-part prefix filter (which
+      # exists only to guess at rollouts with no metadata) must not run on
+      # it. Without this, a human prompt that itself opens with a bare tag
+      # (`<div>`, `<template>`, `<script setup>`, a Markdown `# ` heading)
+      # was silently dropped even though content_item_kinds said "user.text".
+      has_kinds = 0
+      if (match($0, kinds_re)) {
+        kinds = substr($0, RSTART, RLENGTH)
+        if (kinds !~ /"user\./) { kinds_skipped++; next }
+        has_kinds = 1
+      }
+      scanned++
+      rest = $0; res = ""; have_part = 0
+      while (match(rest, part_keyre)) {
+        rest = substr(rest, RSTART + RLENGTH)
+        if (!match(rest, /^([^"\\]|\\.)*/)) break
+        seg = substr(rest, 1, RLENGTH)
+        rest = substr(rest, RLENGTH + 2)
+        have_part = 1
+        # round-3 review P2-1, per-part fallback: parts USED to be joined
+        # into one line BEFORE the line-anchored `<environment_context>`
+        # filter below ever saw them, so a real rollout whose first part is
+        # `<recommended_plugins>` and second is `# AGENTS.md instructions`
+        # produced a joined line starting with the FIRST tag only — the
+        # filter matched, but everything after the first part (the rest of
+        # the injected content, and any real text) rode along, unfiltered.
+        # Filtering PER PART before joining, here (not after), is the fix,
+        # and it also covers a shape with no content_item_kinds field at
+        # all (older/other rollouts) — the case the metadata check above
+        # has no way to decide.
+        #
+        # round-4 review P2-1: this fallback is a GUESS for the no-metadata
+        # case only — `!has_kinds` skips it entirely when content_item_kinds
+        # already answered the question above, since a human `user.text`
+        # part is never filtered by prefix. And even in the no-metadata
+        # case, the pattern is narrowed from "any bracketed lowercase tag"
+        # (which swallowed a human prompt pasting `<div>`, `<template>`,
+        # `<script setup>`, `<table>`, …) to the closed set of injected
+        # shapes this file documents by name: `<recommended_plugins>`,
+        # `<environment_context>`, `<user_instructions>`,
+        # `<permissions instructions>`, and the `# AGENTS.md instructions`
+        # heading.
+        if (!has_kinds && (seg ~ /^<(recommended_plugins|environment_context|user_instructions|permissions instructions)>/ || seg ~ /^# AGENTS\.md instructions/)) continue
+        res = (res == "" ? seg : res " " seg)
+      }
+      # round-3 review P2-2: the event_msg and response_item rules above are
+      # a UNION with no dedup, so a turn recorded in both shapes (a prior
+      # report called this a "fallback", but the code is an unconditional
+      # union) printed every prompt/note twice. Adjacent dedup (compare
+      # only to the immediately PRECEDING printed line, shared across both
+      # rules via one `prev`) fixes shape B2 (same turn, both shapes, back
+      # to back) and leaves shape B1 (different turns, each in its own
+      # shape) alone; the one-sentence trade-off: two turns with
+      # byte-identical text that really ARE consecutive (the user typing
+      # "continue" twice in a row) collapse into one line too — accepted,
+      # since a handoff brief cares about what was said, not how many times.
+      if (res != "" && (!have_prev || res != prev)) {
+        print res; matched++; prev = res; have_prev = 1
+      } else if (res == "" && have_part) {
+        # round-4 review P2-1: at least one part matched the shape anchor —
+        # the extractor worked — but the injected-tag filter above removed
+        # every part (a turn that really is ALL machine-injected context,
+        # with no human text alongside it). That is the filter doing its
+        # job, not the anchors looking at the wrong keys, so it must not
+        # starve `matched` and trigger the loud line at the bottom of this
+        # script — same reasoning as the round-3 P3-3 empty-value fix above.
+        matched++
+      }
+    }
+    END {
+      if (scanned > 0 && matched == 0) {
+        printf "handoff: codex extractor scanned %d %s lines, matched 0\n", scanned, role > "/dev/stderr"
+      } else if (scanned == 0 && matched == 0 && kinds_skipped > 0) {
+        # round-4 review P3-2: content_item_kinds present but naming no
+        # "user."-prefixed kind (an empty kinds array, or a future rollout
+        # that renames the kind) skips the WHOLE line before scanned++ ever
+        # runs, so the diagnostic above never fires — a real shape mismatch
+        # went completely silent — the exact thing the "Silent failure is
+        # not allowed" comment at :294 above rules out. This fires only when
+        # EVERY candidate line for this role was filtered by kinds and
+        # nothing was extracted by either shape (matched stays the true
+        # union total, including the event_msg branch own count).
+        printf "handoff: codex extractor found %d %s response_item line(s) but content_item_kinds named no \"user.\"-prefixed kind on any of them\n", kinds_skipped, role > "/dev/stderr"
+      }
+    }
+  ' "$t" \
+    | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+    | grep -avE '^[[:space:]]*<(environment_context|user_instructions)' \
+    | grep -av '^[[:space:]]*$' || true)"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # CHEAP recent sessions for the home board: "<epoch-mtime>\037<sid>", newest
 # first, capped at [limit] (default 5), for sessions whose cwd is $PWD.
 adapter_recent_sids() {
@@ -266,6 +527,13 @@ adapter_session_title() {
 # No customTitle-equivalent here: codex's rollout format has no user-rename
 # event to prefer (checked 2026-07-12 alongside claude.sh's customTitle fix;
 # nothing invented — first user_message stays the only title source).
+#
+# Anchors on _CODEX_USER_MESSAGE_TYPE_RE, the SAME regex
+# adapter_handoff_extract's "user" branch uses above — one model of "what a
+# codex human prompt looks like" shared by both (round-1 review P2-2), not
+# two independent guesses. Bounded to the first 100 lines, so the
+# `[[ =~ ]]` nested-star risk that pushed the whole-file extractor onto
+# awk/index()/substr() doesn't apply here.
 adapter_title_for_file() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
@@ -275,7 +543,7 @@ adapter_title_for_file() {
   while IFS= read -r line_in; do
     idx_in=$((idx_in + 1))
     [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"type":"user_message"'* ]] && [[ $line_in =~ $re_msg ]]; then
+    if [[ "$line_in" =~ $_CODEX_USER_MESSAGE_TYPE_RE ]] && [[ $line_in =~ $re_msg ]]; then
       title_in="${BASH_REMATCH[1]}"
       break
     fi

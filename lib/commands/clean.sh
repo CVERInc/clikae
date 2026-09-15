@@ -1466,6 +1466,13 @@ cmd_clean() {
   _clean_session_id_gc "$dry_run"
   _clean_tank_lock_gc "$dry_run"
   _clean_burn_sidecar_gc "$dry_run"
+  # P3-3 (2026-09-13 fix-round-3 review): burn.sh is already sourced above —
+  # its own day-based log retention (burn-*, and watch-github-* as of this
+  # round) used to run ONLY as a side effect of `clikae burn` itself;
+  # `clikae clean` had no notion of ~/.clikae/logs at all. Runs under
+  # --dry-run too now (P3-2, 2026-09-14 fix-round-4 review) — it just
+  # previews instead of deleting, same as every other GC above.
+  _burn_sweep_old_logs "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by

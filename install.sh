@@ -51,6 +51,12 @@ cp -R "$SRC_DIR/bin" "$SRC_DIR/lib" "$SRC_DIR/templates" "$DEST/"
 cp "$SRC_DIR/LICENSE" "$SRC_DIR/README.md" "$SRC_DIR/CHANGELOG.md" "$DEST/" 2>/dev/null || true
 
 chmod +x "$DEST/bin/clikae"
+# The tmux guard shim (lib/shims/tmux, #97) must stay executable — `cp -R`'s
+# handling of the mode bit is not guaranteed across platforms, and an
+# unreadable-as-executable shim fails open (tmux_usable's `command -v tmux`
+# would then skip straight past it to the next PATH entry, silently unguarded)
+# rather than failing loud.
+[ -f "$DEST/lib/shims/tmux" ] && chmod +x "$DEST/lib/shims/tmux"
 ln -sf "$DEST/bin/clikae" "$BIN_LINK"
 
 say "Installed."
