@@ -88,7 +88,7 @@ EOF
   # this replaces bin/clikae's own EXIT trap, so it chains the same
   # sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "rm -rf '$sb'; _tank_adoption_warn_sentinel_cleanup" EXIT
+  trap "rm -rf '$sb'" EXIT
 
   log_bold "clikae demo — a guided tour in a throwaway sandbox"
   log_dim  "Everything below runs in a temporary sandbox, gone when the tour ends."

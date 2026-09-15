@@ -250,9 +250,14 @@ _unadopt() {
   [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
 }
 
-# --- #61 round-3 P3: the warn-once sentinel neither leaks nor can be
-# silently defeated by pid reuse -------------------------------------------
-@test "adoption warn sentinel: cleaned up after the process exits, not left in TMPDIR forever" {
+# --- #61 round-5 P3-1: the read-only-store warning leaves NOTHING behind on
+# any path, and one user action prints exactly one line. Rounds 3-4 deduped
+# through a sentinel FILE in $TMPDIR removed by an EXIT trap; bash runs no
+# EXIT trap on `exec`, so every launch path left one behind and the exec'd
+# process (a new pid = a new sentinel name) warned all over again. The
+# dedupe is an exported variable now — nothing to clean up, inherited by
+# both forks and execs. ------------------------------------------------------
+@test "adoption warn: one WARN line and NO file left behind in TMPDIR" {
   _unadopt
   mkdir -p "$CLIKAE_HOME/profiles/claude/ro1"
   chmod a-w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
@@ -262,9 +267,9 @@ _unadopt() {
   TMPDIR="$fake_tmp" "$CLIKAE_BIN" tanks >"$out" 2>"$err" || rc=$?
   [ "$rc" -eq 0 ] || { cat "$err"; false; }
   [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "stderr: $(cat "$err")"; false; }
-  # bin/clikae's own EXIT trap removes the sentinel — nothing should remain.
-  [ -z "$(find "$fake_tmp" -maxdepth 1 -name '.clikae-adopt-warn.*' 2>/dev/null)" ] || \
-    { echo "sentinel leaked: $(ls -la "$fake_tmp")"; false; }
+  # No file of any kind: the private TMPDIR must come out exactly as empty as
+  # it went in, with no trap having had to run for that to be true.
+  [ -z "$(ls -A "$fake_tmp")" ] || { echo "left behind: $(ls -la "$fake_tmp")"; false; }
 
   chmod u+w "$CLIKAE_HOME/profiles/claude/ro1" "$CLIKAE_HOME/state" 2>/dev/null || true
 }
@@ -295,7 +300,7 @@ STUB
   PATH="$bin:$PATH"; export PATH
 }
 
-@test "#61 round-4 P2-1: --version on a writable store forks neither ps nor date (sentinel path is only computed when a sentinel is actually created)" {
+@test "#61 round-4 P2-1: --version on a writable store forks neither ps nor date" {
   _stub_ps_date_counters
   run clikae --version
   [ "$status" -eq 0 ]
@@ -303,35 +308,71 @@ STUB
   [ ! -e "$BATS_TEST_TMPDIR/date.calls" ] || { echo "date called: $(cat "$BATS_TEST_TMPDIR/date.calls")"; false; }
 }
 
-@test "#61 round-4 P2-1: --version on a read-only store forks ps exactly once (to name the sentinel it creates), never on the way out again" {
+# #61 round-5 P3-1: round 4 forked `ps` once here, to key the sentinel file's
+# NAME to this process's start time. With no file to name, a read-only store
+# costs the same zero forks a writable one does.
+@test "#61 round-5 P3-1: --version on a read-only store forks neither ps nor date either" {
   _unadopt
   mkdir -p "$CLIKAE_HOME/profiles/claude/ro5"
   chmod a-w "$CLIKAE_HOME/profiles/claude/ro5" "$CLIKAE_HOME/state" 2>/dev/null || true
   _stub_ps_date_counters
   run clikae --version
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/ps.calls" 2>/dev/null || echo 0)" -eq 1 ] || \
-    { echo "ps.calls: $(cat "$BATS_TEST_TMPDIR/ps.calls" 2>/dev/null)"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/ps.calls" ] || { echo "ps called: $(cat "$BATS_TEST_TMPDIR/ps.calls")"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/date.calls" ] || { echo "date called: $(cat "$BATS_TEST_TMPDIR/date.calls")"; false; }
   chmod u+w "$CLIKAE_HOME/profiles/claude/ro5" "$CLIKAE_HOME/state" 2>/dev/null || true
 }
 
-@test "adoption warn sentinel path: keyed by more than bare pid when this platform can report a start time" {
-  # White-box: on any platform where `ps -o lstart=` + `date` parse (macOS
-  # and this suite's own Linux host both do — round-3 review measured a
-  # bare-\$\$ sentinel silently swallowing a warning after a simulated pid
-  # reuse), the path must differ from the bare-\$\$ sentinel name the
-  # pre-fix code always used, so a leftover file from a DIFFERENT process
-  # that reused this pid can never match.
-  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
-  local path; path="$(_tank_adoption_warn_sentinel_path)"
-  local bare="${TMPDIR:-/tmp}/.clikae-adopt-warn.$$"
-  if ps -o lstart= -p "$$" >/dev/null 2>&1; then
-    [ "$path" != "$bare" ] || { echo "sentinel is still bare-\$\$: $path"; false; }
-    [[ "$path" == "$bare".* ]] || { echo "sentinel doesn't extend the bare name: $path"; false; }
-  fi
-  # Calling it twice in the same process is stable (idempotent naming).
-  local path2; path2="$(_tank_adoption_warn_sentinel_path)"
-  [ "$path" = "$path2" ]
+@test "adoption warn dedupe: one line per process AND inherited by every fork and exec (#61 round-5 P3-1)" {
+  # White-box. The dedupe must survive the two things a trap-cleaned file
+  # could not: a forked child (`clikae` calling `clikae`) and an `exec`,
+  # which replaces the image without running any EXIT trap at all.
+  run bash -c '
+    set -e
+    CLIKAE_ROOT="'"$CLIKAE_TEST_ROOT"'"; CLIKAE_LIB="$CLIKAE_ROOT/lib"
+    source "$CLIKAE_LIB/core/log.sh"
+    source "$CLIKAE_LIB/core/adapter_loader.sh"
+    source "$CLIKAE_LIB/core/profile_store.sh"
+    _tank_adoption_warn_once            # 1 line
+    _tank_adoption_warn_once            # same frame: silent
+    ( _tank_adoption_warn_once )        # subshell: silent
+    x="$(_tank_adoption_warn_once)"     # command substitution: silent
+    bash -c "source \"$CLIKAE_LIB/core/log.sh\"; source \"$CLIKAE_LIB/core/profile_store.sh\"; _tank_adoption_warn_once"   # fork: silent
+    exec bash -c "source \"$CLIKAE_LIB/core/log.sh\"; source \"$CLIKAE_LIB/core/profile_store.sh\"; _tank_adoption_warn_once"  # exec: silent
+  ' 2>&1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'WARN')" -eq 1 ] || { echo "$output"; false; }
+}
+
+@test "adoption warn: launching a tank on a read-only store warns ONCE and leaves TMPDIR empty (#61 round-5 P3-1)" {
+  # The launch family the round-5 review measured: `clikae <engine> <tank>`
+  # ends in an `exec` into the engine. stdin/stdout are not TTYs under bats,
+  # so this takes the no-tmux path and execs directly — exactly the shape
+  # that no EXIT trap can ever clean up after.
+  clikae init claude rolaunch --no-template
+  cat > "$TEST_HOME/.testbin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${_CLIKAE_ADOPT_WARNED:-unset}" > "${HOME:?}/engine-saw-warned"
+ls -A "${TMPDIR:-/tmp}" > "${HOME:?}/engine-saw-tmpdir"
+STUB
+  chmod +x "$TEST_HOME/.testbin/claude"
+  _unadopt
+  chmod a-w "$CLIKAE_HOME/state" 2>/dev/null || true
+
+  local fake_tmp="$BATS_TEST_TMPDIR/tmp2"; mkdir -p "$fake_tmp"
+  local err="$BATS_TEST_TMPDIR/err2" rc=0
+  TMPDIR="$fake_tmp" "$CLIKAE_BIN" claude rolaunch >/dev/null 2>"$err" || rc=$?
+  chmod u+w "$CLIKAE_HOME/state" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || { cat "$err"; false; }
+  [ -f "$TEST_HOME/engine-saw-warned" ] || { echo "engine never ran: $(cat "$err")"; false; }
+  [ "$(cat "$TEST_HOME/engine-saw-warned")" = "1" ] || \
+    { echo "engine did not inherit the dedupe: $(cat "$TEST_HOME/engine-saw-warned")"; false; }
+  [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "stderr: $(cat "$err")"; false; }
+  # Nothing left behind — checked both by the engine, while it was the live
+  # process, and from here afterwards.
+  [ -z "$(cat "$TEST_HOME/engine-saw-tmpdir")" ] || \
+    { echo "engine saw: $(cat "$TEST_HOME/engine-saw-tmpdir")"; false; }
+  [ -z "$(ls -A "$fake_tmp")" ] || { echo "left behind: $(ls -la "$fake_tmp")"; false; }
 }
 
 # --- #61 round-3 P3: a marker with a trailing \r or trailing whitespace is

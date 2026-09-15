@@ -654,7 +654,7 @@ _switch_run_ephemeral() {
   # #61 round-4 P2-1: this replaces bin/clikae's own EXIT trap, so it chains
   # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'; _tank_adoption_warn_sentinel_cleanup" EXIT
+  trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'" EXIT
   # A hard terminal close (SIGHUP) or a SIGTERM would otherwise kill the parent
   # WITHOUT running the EXIT trap, leaving memory pointed at the throwaway we're
   # about to delete (dangling) and the real memory stranded in the stash — the

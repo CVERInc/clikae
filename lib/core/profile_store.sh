@@ -545,68 +545,39 @@ tanks_adopted_flag_write() {
   [ -f "$flag" ]
 }
 
-# _tank_adoption_warn_sentinel_path -> the sentinel _tank_adoption_warn_once
-# guards on, keyed by `$$` PLUS this process's own start time when it's
-# readable (same `ps -o lstart=` + dual BSD/GNU `date` parse
-# _burn_pid_matches_marker uses, folded into the sentinel's NAME instead of
-# a value read back later). #61 round-3 P3: a bare `$$` alone means a
-# RECYCLED pid (this process crashed/was killed before cleaning up its own
-# sentinel, and the OS later handed the same number to a new invocation)
-# silently inherits the old file and never warns at all — proven by hand
-# (round-3 review) with a synthetic leftover sentinel. Degrades to bare
-# `$$` when lstart isn't readable/parseable on this platform: a spurious
-# extra warning is cheap, a silently swallowed one is the actual risk this
-# guards against. bin/clikae's own EXIT trap removes this file at the end
-# of every invocation (see there) — this keyed name is defense in depth for
-# the invocations that never reach that trap (SIGKILL, a crash).
-_tank_adoption_warn_sentinel_path() {
-  local lstart epoch key="$$"
-  lstart="$(ps -o lstart= -p "$$" 2>/dev/null)"
-  if [ -n "$lstart" ]; then
-    epoch="$(date -j -f '%a %b %e %T %Y' "$lstart" +%s 2>/dev/null)"
-    [ -n "$epoch" ] || epoch="$(date -d "$lstart" +%s 2>/dev/null)"
-    case "$epoch" in
-      ''|*[!0-9]*) ;;
-      *) key="$$.$epoch" ;;
-    esac
-  fi
-  printf '%s/.clikae-adopt-warn.%s\n' "${TMPDIR:-/tmp}" "$key"
-}
-
-# _tank_adoption_warn_once -> exactly ONE line, ONCE per clikae invocation,
-# when the store's adoption flag cannot be persisted. Sentinel lives OUTSIDE
-# $CLIKAE_HOME (the whole point is that $CLIKAE_HOME can't be written to),
-# keyed by `$$` — bash keeps that as the ORIGINAL process's pid even inside
-# every subshell/command-substitution/background job this invocation forks,
-# so it dedupes across all of them, not just within one shell frame.
+# _tank_adoption_warn_once -> exactly ONE line, ONCE per user action, when
+# the store's adoption flag cannot be persisted (a read-only store).
 #
-# #61 round-2 P2-1: the previous version printed unconditionally, every
-# single call, and scan_clis' 15-adapter fan-out turned ONE read-only tank
-# into 32 identical lines (two read-only tanks: 64).
+# #61 round-2 P2-1: the first version printed unconditionally on every call,
+# and scan_clis' 15-adapter fan-out turned ONE read-only tank into 32
+# identical lines.
 #
-# #61 round-4 P2-1: records the sentinel path it just created into
-# $_CLIKAE_ADOPT_WARN_SENTINEL so the EXIT trap can `rm -f` it directly
-# instead of recomputing (and forking `ps`/`date` for) a path that's empty
-# on every invocation that never gets here — see
-# _tank_adoption_warn_sentinel_cleanup below.
-_CLIKAE_ADOPT_WARN_SENTINEL=""
+# Rounds 3-4 deduped through a SENTINEL FILE in $TMPDIR (the store itself is
+# unwritable, so it could not live there), removed by an EXIT trap. Round-5
+# review measured what that actually bought: the file survived every path
+# that `exec`s — bash runs no EXIT trap on exec, so `clikae claude <tank>`,
+# the board's enter/`R`, `resume`, `clean` all left one behind — and, because
+# an exec'd or forked clikae is a NEW process with a NEW sentinel name, the
+# operator still got 2-3 WARN lines for ONE keypress. Chaining the cleanup
+# into more traps could never fix the second half of that.
+#
+# So the dedupe is an EXPORTED VARIABLE instead: it is inherited across both
+# `fork` and `exec`, needs no cleanup anywhere (there is no file to leak, on
+# any exit, including SIGKILL), and costs no forks. `$$` keeps the original
+# pid inside every subshell and command substitution, so the round-2 fan-out
+# stays deduped exactly as before — and bin/clikae runs the sweep from its
+# top-level shell (the hoist near the bottom of its preamble) BEFORE any
+# subshell can, so the first warning is always the one whose export survives.
+#
+# The deliberate trade: a clikae run from INSIDE an engine session that this
+# clikae exec'd stays quiet about the same store. That operator has already
+# read the line in this terminal; a warning repeated per keypress is how this
+# started (round-2 P2-1), and an unremovable file is what it became.
 _tank_adoption_warn_once() {
-  local sentinel; sentinel="$(_tank_adoption_warn_sentinel_path)"
-  [ -e "$sentinel" ] && return 0
-  : > "$sentinel" 2>/dev/null || true
-  _CLIKAE_ADOPT_WARN_SENTINEL="$sentinel"
+  [ -z "${_CLIKAE_ADOPT_WARNED:-}" ] || return 0
+  _CLIKAE_ADOPT_WARNED=1
+  export _CLIKAE_ADOPT_WARNED
   log_warn "This store's tanks aren't adopted yet and the flag can't be written (read-only store?) — recognising them in memory this run only. \`clikae doctor --adopt\` explains more; fix permissions on $(dirname "$(tanks_adopted_flag_path)") to persist it."
-}
-
-# _tank_adoption_warn_sentinel_cleanup -> the other half of
-# _tank_adoption_warn_once: `rm -f` the sentinel it actually created, zero
-# forks when nothing was (the common case — a writable store never creates
-# one). Meant to run from every EXIT trap in the process, including the
-# TUI's (home.sh/demo.sh/switch.sh replace bin/clikae's own EXIT trap
-# outright, since bash keeps only one), so chain a call to this into
-# whichever trap ends up installed last.
-_tank_adoption_warn_sentinel_cleanup() {
-  rm -f "${_CLIKAE_ADOPT_WARN_SENTINEL:-}" 2>/dev/null || true
 }
 
 _CLIKAE_INMEM_ADOPTED=$'\n'
@@ -635,9 +606,10 @@ _CLIKAE_ADOPT_LAST_FLAG_OK=0
 # would (a) write the one-time flag from a context where tank_engine_known
 # answers for no engine at all — permanently orphaning EVERY tank in the
 # store — and (b) on a read-only store call _tank_adoption_warn_once, whose
-# sentinel only bin/clikae's EXIT trap ever removes (r5 P3-1's leak, in a
-# process that has no such trap). In-memory adoption keeps the hook's own
-# listing honest without it ever deciding anything on disk.
+# WARN would land in the hook's own stderr, which Claude Code shows to the
+# MODEL as the reason for a refusal it has nothing to do with. In-memory
+# adoption keeps the hook's own listing honest without it ever deciding
+# anything on disk, or saying anything about it.
 _tank_adoption_ensure() {
   local flag; flag="$(tanks_adopted_flag_path)"
   _CLIKAE_ADOPT_LAST_COUNT=0
