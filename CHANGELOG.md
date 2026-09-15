@@ -30,38 +30,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written (a read-only or shared store), adoption still runs, safely, in
   memory on every command, with exactly one warning line — never a raw shell
   error — and `clikae doctor --adopt` retries the write once the store is
-  writable again. `clikae doctor` names any directory left without a marker
-  and what to do about it. **Upgrading**: that one warning line now prints on
-  EVERY command against a read-only store, including quiet ones like
-  `clikae --version`/`help`/`adapters` — those used to run before adoption was
-  checked at all; now the check is hoisted ahead of every command uniformly,
-  so they pick it up too.
-- `tank_dir_is_tank`'s marker check reads with the builtin `read`, not a
-  forked `cat` per tank (160ms → 123ms on `clikae tanks` with 30 tanks;
-  519ms → 483ms on `clikae doctor`). **This only compares the marker's FIRST
-  LINE**, a narrower check than the previous exact-whole-file compare — a
-  marker is always written as exactly one line (`tank_marker_write`), so this
-  is a no-op for any marker clikae itself wrote; it matters only for a marker
-  someone else hand-edited to add trailing garbage after the first newline,
-  which now still names a tank instead of being rejected.
+  writable again. `clikae doctor` names any directory left without a marker,
+  and `clikae doctor --adopt` prints, per directory, either the exact
+  `clikae init <engine> <name> --adopt` command that adopts it or the reason
+  no command can (a name with a lock/sidecar suffix, a space, or characters
+  a tank name may not contain has to be renamed first). On such a store that one warning line prints once
+  per command, from every command including quiet ones like
+  `clikae --version`/`help`/`adapters`, and once only — a command that
+  launches an engine, or that clikae runs on your behalf, does not repeat it.
+- **What counts as a valid marker.** Only the marker's FIRST LINE is read,
+  and only its first 64 characters — every marker clikae writes is one short
+  line (the engine name), so this is about hand-edited or tool-mangled ones:
+  garbage after the first newline is ignored, a trailing `\r` (a sync tool
+  turning `\n` into `\r\n`) or trailing whitespace still names the tank, and a
+  first line longer than 64 characters is not an engine name and is not a
+  tank. Reading a marker costs the same whatever its size: `clikae tanks` on a
+  store holding a 200 KB marker is as fast as on any other.
 
 ### Fixed
 
-- The read-only-store warn sentinel's own cleanup (`bin/clikae`'s `EXIT`
-  trap) used to recompute its path from scratch on every single exit —
-  forking `ps`/`date` (two or three processes) to `rm -f` a file that a
-  writable store never creates in the first place, adding ~16ms to every
-  ordinary command including `--version`. It now records the path it
-  actually created (if any) and the trap just removes that: zero forks on
-  the common case. The board (`clikae`'s bare/default screen, by far the
-  most-run command) replaces this trap outright to restore the terminal on
-  abnormal exit — its own trap, and demo's/switch --ephemeral's, now chain
-  the same cleanup, AND every point inside the board's interactive picker
-  that clears the trap for good (quitting, launching a tank, relaying,
-  opening the cross-tank resume picker) explicitly runs the cleanup too —
-  `trap - EXIT INT TERM` throws the trap away outright, and an exec into
-  another program never runs a bash `EXIT` trap at all, so chaining onto the
-  trap alone left the sentinel behind on every one of those paths (#61).
+- `clikae init <engine> <name>` where that name is already taken by
+  something that is not a directory — most often a **broken symlink**, whose
+  target has been deleted — used to print `[ DONE ] Created tank` and then
+  fail, leaving no tank and two contradictory lines. It now names what is in
+  the way (and what the symlink points at) and fails once, before creating
+  anything. `clikae init … --adopt` on a broken symlink says the same thing,
+  instead of "No such directory" followed by a suggestion that could not
+  work.
 - Codex burn now detects a usage-limit line prefixed with codex's own
   `ERROR:` transport tag (captured stderr already reached the classifier
   merged with stdout before this fix — the anchor regex was the gap), and
