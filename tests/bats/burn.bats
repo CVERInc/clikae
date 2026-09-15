@@ -141,6 +141,80 @@ STUB
   [[ "$output" != *"codex/T2"* ]] || false
 }
 
+# --- #61 P2-5 (round-1 review): rc alone used to conflate "stopped on a dry
+# tank because --no-reroute says so" with a REAL task failure — both were rc
+# 1, exactly the ambiguity #61 opened against reroute exhaustion. The status
+# file already wrote `state: dry` for --no-reroute's stop (unchanged by this
+# PR), but the process's own rc disagreed with what it had just written to
+# disk. Fixed: BOTH shapes a burn can stop dry without exhausting the whole
+# reserve — --no-reroute here, and reroute exhaustion in the sibling test
+# below — are $CLIKAE_BURN_RC_NO_TANK (2); only a genuine task failure stays
+# 1. `reason` (not rc) is what still tells the two dry shapes apart — see
+# docs/orchestration.md.
+@test "burn #61 P2-5: --no-reroute's dry stop and a real task failure use DIFFERENT rc (2 vs 1)" {
+  _stub_codex
+  clikae init codex dry1
+  clikae init codex fail1
+  : > "$CLIKAE_HOME/profiles/codex/dry1/.dry"
+
+  run clikae burn codex dry1 --artifact "$BATS_TEST_TMPDIR/d.md" --no-reroute -- run "$BATS_TEST_TMPDIR/d.md"
+  [ "$status" -eq 2 ] || { echo "--no-reroute dry: got rc=$status, want 2"; echo "$output"; false; }
+
+  run clikae burn codex fail1 --artifact "$BATS_TEST_TMPDIR/f.md" --no-reroute -- noop
+  [ "$status" -eq 1 ] || { echo "real task failure: got rc=$status, want 1"; echo "$output"; false; }
+}
+
+@test "burn #61 P2-5: reroute exhaustion (no-tank-available) is the SAME rc as --no-reroute's dry stop" {
+  _stub_codex
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  : > "$CLIKAE_HOME/profiles/codex/T2/.dry"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "got rc=$status, want 2 (CLIKAE_BURN_RC_NO_TANK)"; echo "$output"; false; }
+}
+
+# --- #61 round-3 P1-2 end-to-end: the one-time adoption sweep must close on
+# the FIRST command run against the store, not just the first one that
+# happens to walk it. Reproduces the review's own repro: an upgrade whose
+# FIRST command is a successful burn (never walks the store — no reroute
+# needed) must still close the window right there, so a directory dropped in
+# afterward is never swept up and rerouted onto — issue #61's exact original
+# symptom ("burned a few minutes failing to log in, reported as an
+# indistinguishable generic task failure"), reproduced with a stub engine.
+@test "burn #61 P1-2: a directory dropped in AFTER the first command is never rerouted onto" {
+  _stub_codex
+  # A pre-marker real tank — the shape an upgrade actually finds, not
+  # `clikae init` (which stamps a marker immediately and would close the
+  # window itself, hiding the bug this test exists to catch).
+  mkdir -p "$CLIKAE_HOME/profiles/codex/A"
+  printf 'x\n' > "$CLIKAE_HOME/profiles/codex/A/auth.json"
+  rm -f "$CLIKAE_HOME/state/tanks-adopted-v1"
+  [ ! -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+
+  # Step 1: the upgrade's first command — an ordinary successful burn. It
+  # never walks the store (A is live, no reroute needed), but the hoist at
+  # the top of bin/clikae still runs the sweep here, closing the window.
+  run clikae burn codex A --artifact "$BATS_TEST_TMPDIR/out1.md" -- run "$BATS_TEST_TMPDIR/out1.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$BATS_TEST_TMPDIR/out1.md" ]
+  [ -f "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+  [ -f "$CLIKAE_HOME/profiles/codex/A/.clikae-tank" ]
+
+  # Step 2: something else drops a stray directory in — AFTER the window closed.
+  mkdir -p "$CLIKAE_HOME/profiles/codex/hello"
+
+  # Step 3: A runs dry; burn needs to reroute. `hello` is the only other
+  # directory under codex/ but was never adopted — reroute must exhaust
+  # (no-tank-available), never land on `hello`.
+  : > "$CLIKAE_HOME/profiles/codex/A/.dry"
+  run clikae burn codex A --json --artifact "$BATS_TEST_TMPDIR/out2.md" -- run "$BATS_TEST_TMPDIR/out2.md"
+  [ "$status" -eq 2 ] || { echo "reroute landed somewhere instead of exhausting: $output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/codex/hello/.clikae-tank" ]
+  [ ! -f "$BATS_TEST_TMPDIR/out2.md" ]
+}
+
 # --- agy burn: since the 2026-07-05 Keychain-carry restore, a tank switch is
 # non-interactive, so burn can auto-hop agy tanks on dry (sequential — agy still
 # can't run two tanks in parallel, unlike other engines that's fine for burn's
@@ -207,6 +281,16 @@ STUB
   [[ "$output" == *"ran dry"* ]] || false
   [[ "$output" == *"Done on agy/work"* ]] || false
   [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/work" ]   # actually switched, not just retried
+}
+
+@test "burn #61 P2-5: agy --no-reroute's dry stop is also rc 2, same as codex's" {
+  _stub_agy_burn
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  : > "$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli/.dry"
+  run clikae burn agy default --artifact "$BATS_TEST_TMPDIR/out.md" --no-reroute --prompt "do the thing"
+  [ "$status" -eq 2 ] || { echo "got rc=$status, want 2 (CLIKAE_BURN_RC_NO_TANK)"; echo "$output"; false; }
 }
 
 @test "burn agy fails when every tank is dry" {
@@ -1106,7 +1190,162 @@ STUB
     > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null || true
   run python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['ok'], d['reason'])" "$BATS_TEST_TMPDIR/j.txt"
   [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
-  [[ "$output" == "False every reachable tank is dry" ]] || { echo "got: $output"; false; }
+  [[ "$output" == "False no-tank-available" ]] || { echo "got: $output"; false; }
+}
+
+# --- #61: a stray lock file/sidecar/dotdir/dangling symlink in the profiles
+# dir must never be mistaken for a reroute target, and exhausting the real
+# reserve must say so distinctly (reason "no-tank-available", not a task
+# failure) — both in prose and in --json, with a documented, distinguishable
+# exit code. Fixture mirrors the issue exactly: x/ (dry), hello/ (skipped —
+# another burn is already running on it, #40), hello.lock (a FILE), ghost (a
+# dangling symlink), .cache (a dotdir), world.lock/ (a DIRECTORY-shaped
+# sidecar), a dir under an unknown engine, and zzempty/ (an empty dir with no
+# lock-ish name at all).
+#
+# round-1 review P1-2: the negative control in the PR body ("delete this
+# PR's two new lines and both new tests go red") moved TWO variables at
+# once — the guard AND main's own pre-existing `for … in "$cli_dir"*/` +
+# `[ -d "$profile_path" ] || continue`. hello.lock (a plain FILE), ghost (a
+# dangling symlink) and .cache (a dotdir, which that glob never even yields
+# — bash doesn't match a leading dot without dotglob) were ALL already
+# stopped by that pre-existing glob, with or without this PR's own guard —
+# so the control's red proved main's glob works, not that this PR's code
+# does anything. The one case that actually needs a directory-aware guard —
+# a directory that PASSES the `[ -d ]` glob and has no marker/fingerprint —
+# had no fixture at all. world.lock/ (a lock-SHAPED name, but a directory),
+# an unknown-engine dir, and zzempty/ (no lock-ish name whatsoever — the
+# reviewer's own R61-D reproduction, round-1 P1-3) are that case, three ways.
+#
+# round-1 review P1-1: hello's "skip" signal used to be a real background
+# `env CODEX_HOME=… sleep 60 &`, relying on live_dir_users' env-of-process
+# scan (lib/core/proc.sh) to see it. That scan is HONEST about not working
+# for a no-tty process on macOS (proc.sh:12-21, "Verified 2026-06-04: … a
+# no-tty `sleep` with the same env is listed but its env is not") — the exact
+# shape this fixture used, so on macOS hello was never skipped, burn
+# succeeded on it, and this test's rc=2 / no-tank-available / never-names-a-
+# non-tank assertions never ran there at all (`bats (macos-latest)` fail,
+# `not ok 309`). Fixed by using a DIFFERENT, OS-agnostic "skip" signal:
+# #40's own burn_tank_busy (lib/core/burn_status.sh) reads a status.json, not
+# a process environment — a fake OTHER burn's status file, `state: running`
+# on codex/hello with this test's own (real, alive) pid, produces the same
+# "another burn is already running on it" skip on every platform bats runs
+# on, with no process to spawn or clean up.
+@test "burn --json: reroute never names a lock file, dangling symlink, or dotdir; exhaustion is no-tank-available (#61)" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _stub_codex
+  clikae init codex x
+  clikae init codex hello
+  : > "$CLIKAE_HOME/profiles/codex/x/.dry"
+
+  # hello: SKIPPED because burn_tank_busy sees another burn already running
+  # on codex/hello — the pid is this test's own (kill -0 must see it alive
+  # for the whole call), so nothing needs spawning or killing.
+  local fake_run="$HOME/.clikae/logs/burn-faketest61"
+  mkdir -p "$fake_run"
+  printf '{"ok":null,"engine":"codex","tank":"hello","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-faketest61","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null}' \
+    "$(date +%s)" "$(date +%s)" "$$" > "$fake_run/status.json"
+
+  : > "$CLIKAE_HOME/profiles/codex/hello.lock"
+  ln -s /nonexistent "$CLIKAE_HOME/profiles/codex/ghost"
+  mkdir -p "$CLIKAE_HOME/profiles/codex/.cache"
+  # round-1 P1-2: these three DO pass main's own `*/ ` + `[ -d ]` glob — only
+  # this PR's marker/fingerprint guard (round-1 P1-3) keeps them out.
+  mkdir -p "$CLIKAE_HOME/profiles/codex/world.lock"       # directory-shaped sidecar
+  mkdir -p "$CLIKAE_HOME/profiles/nonsense-engine/ghostly" # unknown-engine dir
+  mkdir -p "$CLIKAE_HOME/profiles/codex/zzempty"           # empty dir, no lock-ish name
+
+  local A="$BATS_TEST_TMPDIR/out.md" rc=0
+  clikae burn codex x --artifact "$A" --json -- run "$A" \
+    > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/err.txt" || rc=$?
+
+  [ "$rc" -eq 2 ] || { echo "rc=$rc"; cat "$BATS_TEST_TMPDIR/err.txt"; false; }
+  [ ! -e "$A" ]
+
+  run jq -e '.ok == false and .reason == "no-tank-available"' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  # reset is x's own — the only tank that actually went dry (hello was
+  # skipped, never judged dry; the fixture's non-tanks were never candidates).
+  run jq -e '.reset | test("Jul 7th, 2026")' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  run jq -e '.tank == "hello.lock" or .tank == "ghost" or .tank == ".cache" or .tank == "world.lock" or .tank == "zzempty" or .engine == "nonsense-engine"' "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 1 ] || { echo "reroute named a non-tank: $(cat "$BATS_TEST_TMPDIR/j.txt")"; false; }
+
+  grep -qF "hello.lock" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned hello.lock"; false; }
+  grep -qF "codex/ghost" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned ghost"; false; }
+  grep -qF "codex/.cache" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned .cache"; false; }
+  grep -qF "codex/world.lock" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned world.lock"; false; }
+  grep -qF "codex/zzempty" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned zzempty"; false; }
+  grep -qF "nonsense-engine" "$BATS_TEST_TMPDIR/err.txt" && { echo "prose mentioned nonsense-engine"; false; }
+  true
+}
+
+# --- #61 P2-7 (round-1 review): the earliest-reset tracking added alongside
+# the reroute fix (_burn_dry_epoch + the earliest_epoch/earliest_reset pair,
+# burn.sh:404-412/2709-2716) was correct but UNTESTED — the PR's own fixture
+# only ever sent one dry tank through the walk, so "track the earliest
+# across every hop" and the old "${reset:-}" (this hop's own) produce
+# byte-identical output on one hop; nothing distinguished them. Three tanks,
+# resets visited out of order, pin the actual logic instead of a case it
+# happens to also satisfy.
+_stub_codex_dry_resets() {
+  # $1/$2/$3 = the reset clause (after "Try again at ") for T1/T2/T3 — each
+  # always reports dry (unconditionally, no .dry marker needed: the fixture
+  # IS three dry tanks, there is no live outcome to also stub).
+  git init -q "$BATS_TEST_TMPDIR"
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<STUB
+#!/usr/bin/env bash
+tank="\${CODEX_HOME##*/}"
+case "\$tank" in
+  T1) echo "You've hit your usage limit. Try again at $1." ;;
+  T2) echo "You've hit your usage limit. Try again at $2." ;;
+  T3) echo "You've hit your usage limit. Try again at $3." ;;
+esac
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+}
+
+@test "burn #61 P2-7: earliest parseable reset wins across three dry tanks, visited out of order" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  # Visit order T1 -> T2 -> T3; resets Jul 9 / Jul 7 / Jul 8 — the EARLIEST
+  # (Jul 7) is the SECOND hop, not the first or the last, so picking "this
+  # hop's own" or "the last hop's" would both silently pass a naive fixture.
+  _stub_codex_dry_resets "Jul 9th, 2026 2:17 PM" "Jul 7th, 2026 2:17 PM" "Jul 8th, 2026 2:17 PM"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || { echo "$output"; false; }
+}
+
+@test "burn #61 P2-7: an unparseable reset mid-walk is skipped — earliest of the PARSEABLE ones wins" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  # T2 (the earliest-VISITED, were it parseable) reports dry with a reset
+  # clause limit_codex_reset can still extract (non-empty, so the tank is
+  # still correctly classified dry — round-4 review P2-2's contract) but
+  # limit_reset_epoch cannot turn into an epoch. It must be skipped for
+  # RANKING purposes without being misread as a task failure: T3 (Jul 8,
+  # parseable) must win over both T1 (Jul 9) and T2 (unparseable).
+  _stub_codex_dry_resets "Jul 9th, 2026 2:17 PM" "some undetermined future time" "Jul 8th, 2026 2:17 PM"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":"Try again at Jul 8th, 2026 2:17 PM"'* ]] || { echo "$output"; false; }
+}
+
+@test "burn #61 P2-7: every dry tank's reset is unparseable -> reset is null, not a stale/wrong phrase" {
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _stub_codex_dry_resets "some undetermined time" "whenever it feels like it" "not a real date at all"
+  clikae init codex T1; clikae init codex T2; clikae init codex T3
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" --json -- run "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"no-tank-available"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reset":null'* ]] || { echo "$output"; false; }
 }
 
 @test "burn without --json prints no JSON at all" {
@@ -1480,7 +1719,7 @@ STUB
   run clikae burn claude C1 --json --artifact "$STUB_ARTIFACT" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
-  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" != *'"reason":"no-tank-available"'* ]] || false   # #61 round-1 P2-4: this used to compare against a retired string (main renamed it to no-tank-available long before this PR) that could never appear, so the assertion was unconditionally true no matter what burn did
   [[ "$output" == *'"rerouted_from":[]'* ]] || false
 }
 
@@ -1574,7 +1813,7 @@ STUB
   run clikae burn codex T1 --json --artifact "$STUB_ARTIFACT" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"no fresh artifact and no limit"'* ]] || false
-  [[ "$output" != *'"reason":"every reachable tank is dry"'* ]] || false
+  [[ "$output" != *'"reason":"no-tank-available"'* ]] || false   # #61 round-1 P2-4: this used to compare against a retired string (main renamed it to no-tank-available long before this PR) that could never appear, so the assertion was unconditionally true no matter what burn did
   run dry_store_read codex T1
   [ "$status" -ne 0 ]                         # no false marker written
 }
@@ -3440,7 +3679,12 @@ for i in {1..12}; do printf work > "$STUB_LEFT_REPO/file$i"; done
 echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
 STUB
   run clikae burn codex T1 --json --no-reroute --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
-  [ "$status" -eq 1 ]
+  # #61 round-6 merge with #87: a DRY tank stopped by --no-reroute is rc 2
+  # (CLIKAE_BURN_RC_NO_TANK), not a task failure's 1 — #61's whole point is
+  # that "no tank was available" and "the task is broken" are different exits.
+  # #87 wrote this test on main, where both were still 1. The left-behind
+  # report itself is unaffected: it is produced on every artifact-less end.
+  [ "$status" -eq 2 ]
   [[ "$output" == *"left behind:"*"ahead - dirty 13"* ]] || false
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
 import json,sys

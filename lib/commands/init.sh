@@ -2,14 +2,16 @@
 # lib/commands/init.sh — `clikae init <engine> <tank> [--alias]`
 
 cmd_init() {
-  local with_alias=0 cli="" profile="" no_template=0
+  local with_alias=0 cli="" profile="" no_template=0 adopt=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --alias) with_alias=1; shift ;;
       --no-template) no_template=1; shift ;;
+      --adopt) adopt=1; shift ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae init <engine> <tank> [--alias] [--no-template]
+       clikae init <engine> <tank> --adopt
 
 Create a new tank (account/config) for an engine.
 
@@ -22,9 +24,19 @@ Options:
                    <engine>-<tank>   (e.g. claude-work)
   --no-template  Skip applying the permissions template to a new claude tank.
                  Same effect as CLIKAE_NO_PERMISSIONS_TEMPLATE=1.
+  --adopt        Mark an EXISTING directory a tank instead of creating one.
+                 Refuses unless the directory already looks like a <engine>
+                 tank (has that engine's own config file) — the one-time
+                 adoption sweep (#61) only ever runs once per store; this is
+                 the way back for a directory that landed there afterward (a
+                 restored backup, a stray you've since confirmed is real).
+                 Does not touch the directory's content, and is a harmless
+                 no-op if it's already a tank. Incompatible with --alias and
+                 --no-template (run `clikae alias` separately if you want one).
 
 Example:
   clikae init claude work --alias       # then:  clikae claude work
+  clikae init claude restored --adopt   # mark an existing dir a tank
 EOF
         return 0
         ;;
@@ -45,6 +57,71 @@ EOF
   validate_name cli "$cli"
   validate_name profile "$profile"
 
+  # #61 round-3 P2-1: --adopt marks an EXISTING directory a tank instead of
+  # creating a new one. Refuses unless the directory already looks like the
+  # named engine's own content (the same read-only fingerprint signal
+  # `doctor` already uses to explain a stray directory) — least-new-surface:
+  # no new flag shape, reuses profile_dir/tank_dir_is_tank/
+  # _tank_fingerprint_match exactly as adoption and doctor already do.
+  if [ "$adopt" -eq 1 ]; then
+    # #61 round-4 P3-1: --adopt only ever writes the marker file (see its
+    # --help text: "Does not touch the directory's content") — --alias and
+    # --no-template belong to the CREATE path below and silently doing
+    # nothing with them here used to look like success while writing no
+    # alias and applying no skip. Refuse the combination instead of
+    # guessing; both have their own one-line follow-up command.
+    if [ "$with_alias" -eq 1 ]; then
+      log_fail "clikae init --adopt does not write shell aliases. Run \`clikae alias $cli $profile\` after adopting."
+    fi
+    if [ "$no_template" -eq 1 ]; then
+      log_fail "clikae init --adopt never applies a permissions template — --no-template has nothing to skip here."
+    fi
+    if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
+      log_fail "clikae init --adopt does not apply to agy — it has no marker-based tanks (see: clikae agy --help)."
+    fi
+    load_adapter "$cli"
+    # #61 round-4 P3-2: the same shapes the one-time sweep refuses BY NAME,
+    # regardless of content (_tank_shape_excluded — dotdirs, lock/sidecar
+    # suffixes) — a directory `--adopt` should never be able to hand a
+    # marker to something the sweep itself would have skipped past on sight.
+    if _tank_shape_excluded "$profile"; then
+      log_fail "Refusing to adopt $cli/$profile — that name shape (dotdir, or a lock/sidecar suffix like .lock/.tmp/.bak) can never be a tank."
+    fi
+    local d
+    d="$(profile_dir "$cli" "$profile")"
+    # #61 round-4 P3-6: a FILE at $d is a different problem than nothing
+    # there at all, and the old single message called it "No such
+    # directory" (wrong — it exists) while suggesting `clikae init $cli
+    # $profile` (which would also fail: ensure_profile --create collides
+    # with the same file). Name what's actually there, suggest something
+    # that works.
+    if [ -e "$d" ] && [ ! -d "$d" ]; then
+      log_fail "$cli/$profile  ($d) is a file, not a directory — nothing to adopt. Move or remove it, then \`clikae init $cli $profile\` to create a tank there."
+    fi
+    # #61 round-5 P3-7: `[ -e ]` FOLLOWS symlinks, so a dangling one answers
+    # no to both tests above and fell into "No such directory … use `clikae
+    # init $cli $profile` instead" — a suggestion that cannot work, because
+    # the name is taken by the broken link (and, before the same round's fix
+    # to the create path, one that printed "Created tank" before failing).
+    if [ -L "$d" ] && [ ! -d "$d" ]; then
+      log_fail "$cli/$profile  ($d) is a broken symlink (it points at $(readlink "$d" 2>/dev/null), which doesn't exist) — nothing to adopt. Remove it (\`rm \"$d\"\`), then \`clikae init $cli $profile\` to create a tank there."
+    fi
+    if [ ! -d "$d" ]; then
+      log_fail "No such directory: $cli/$profile  ($d) — nothing to adopt. Use \`clikae init $cli $profile\` to create a new tank instead."
+    fi
+    if tank_dir_is_tank "$cli" "$d"; then
+      log_pass "Already a tank: $cli/$profile  ($d) — nothing to do."
+      return 0
+    fi
+    if ! _tank_fingerprint_match "$cli" "$d" 2>/dev/null; then
+      log_fail "Refusing to adopt $cli/$profile  ($d) — it doesn't look like a $cli tank (no $cli-shaped content found). If you're certain, add the marker yourself: printf '%s\n' $cli > \"$d/.clikae-tank\""
+    fi
+    tank_marker_write "$cli" "$d"
+    profiles_cache_reset 2>/dev/null || true
+    log_done "Adopted existing directory as tank: $cli/$profile  ($d)"
+    return 0
+  fi
+
   # agy is opt-in symlink-swap, not an env adapter — it has no lib/adapters file,
   # so handle it before load_adapter (which would fail). See docs/grammar.md §6.
   if [ "$cli" = "agy" ] || [ "$cli" = "antigravity" ]; then
@@ -59,9 +136,23 @@ EOF
   if profile_exists "$cli" "$profile"; then
     log_fail "Tank already exists: $cli/$profile  ($(profile_dir "$cli" "$profile"))"
   fi
-
-  local d
-  d="$(ensure_profile --create "$cli" "$profile")"
+  # #61 round-5 P3-7: profile_exists is `[ -d ]`, so a name already taken by
+  # something that is NOT a directory — a broken symlink, a file, a fifo —
+  # sailed past it into ensure_profile, whose `mkdir -p` then failed with its
+  # own error. That failure did not abort: `local d; d="$(…)"` reports the
+  # exit status of `local`, never of the substitution, so `set -e` saw
+  # success and init printed "[ DONE ] Created tank" before the next command
+  # failed for real. One outcome, one line: name what is in the way here.
+  local d; d="$(profile_dir "$cli" "$profile")"
+  if [ -L "$d" ]; then
+    log_fail "Cannot create $cli/$profile: $d is a broken symlink (it points at $(readlink "$d" 2>/dev/null), which doesn't exist). Remove it (\`rm \"$d\"\`), then run this again."
+  fi
+  if [ -e "$d" ]; then
+    log_fail "Cannot create $cli/$profile: $d already exists and is not a directory. Move or remove it, then run this again."
+  fi
+  # `|| return 1`, not a bare assignment: see the note above — an assignment
+  # to a `local` swallows the substitution's exit status entirely.
+  d="$(ensure_profile --create "$cli" "$profile")" || return 1
   log_done "Created tank: $cli/$profile  ($d)"
 
   if declare -F adapter_init >/dev/null; then

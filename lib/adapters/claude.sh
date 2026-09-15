@@ -54,6 +54,24 @@ adapter_init() {
   _claude_link_shared_asset "$profile_dir" "commands"
 }
 
+# Optional hook: paths, relative to a tank dir, that CLAUDE ITSELF writes
+# there — never anything clikae writes. #61 round-2 P1-1: no longer a
+# precondition for adoption (the one-time sweep in profile_store.sh is
+# inclusive) — `doctor` uses this only as a read-only hint explaining why a
+# stray directory looks like it used to be a claude tank.
+#
+# #61 round-2 P2-3 (corrected): `settings.json` used to be listed here too,
+# but that file is what `clikae settings apply`/`init`'s permissions
+# template WRITE — never something claude itself creates — so naming an
+# empty directory on the command line (`clikae settings apply claude
+# zzempty`) seeded exactly the fingerprint this hook is supposed to require
+# the ENGINE to have produced, and the next walk adopted it as a permanent
+# tank. `.claude.json` alone is real: claude writes it the moment it logs
+# in, whether or not a tank was ever touched by `settings apply`.
+adapter_tank_fingerprint() {
+  printf '.claude.json\n'
+}
+
 # Optional hook: path to this tank's config file that holds `mcpServers` (used
 # by `clikae mcp` / fleet_mcp_prelaunch, lib/core/fleet_mcp.sh, to fan the
 # fleet-wide MCP list into every non-solo tank). Claude Code keeps user-scope

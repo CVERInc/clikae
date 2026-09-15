@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `clikae burn`'s `--no-reroute` dry stop now exits **2**
+  (`CLIKAE_BURN_RC_NO_TANK`), not 1 — the same distinguishable code as
+  exhausting the reroute reserve, so a caller checking rc alone can no longer
+  confuse "stopped on purpose because you asked it to" with "the task itself
+  failed" (rc 1 stays real-task-failure-only). Update any script or
+  orchestrator that branches on `clikae burn --no-reroute`'s exit code (#61).
+- A directory under a known engine's `profiles/` dir is now a tank only if it
+  carries a `.clikae-tank` marker file (the engine name, one line) — not by
+  name shape, not by re-checking its content on every read. `clikae tanks`,
+  `burn`'s reroute, `to`/`resume`'s `next_tank`, `doctor`, and every other
+  reader go through the one enumerator (`list_all_profiles`) that owns this
+  decision. **Upgrading**: the very first command run against an existing
+  store performs a one-time, INCLUSIVE sweep — every directory under a known
+  engine is marked a tank unless it's a file, a dotdir, a lock/sidecar-suffixed
+  name, or a symlink alias for a directory already adopted (the real directory
+  always wins that dedupe, never whichever sorts first) — then writes a flag
+  (`state/tanks-adopted-v1`) so it never runs again: a marker-less directory
+  appearing AFTER that point is not a tank, full stop. If the flag can't be
+  written (a read-only or shared store), adoption still runs, safely, in
+  memory on every command, with exactly one warning line — never a raw shell
+  error — and `clikae doctor --adopt` retries the write once the store is
+  writable again. `clikae doctor` names any directory left without a marker,
+  and `clikae doctor --adopt` prints, per directory, either the exact
+  `clikae init <engine> <name> --adopt` command that adopts it or the reason
+  no command can (a name with a lock/sidecar suffix, a space, or characters
+  a tank name may not contain has to be renamed first). On such a store that one warning line prints once
+  per command, from every command including quiet ones like
+  `clikae --version`/`help`/`adapters`, and once only — a command that
+  launches an engine, or that clikae runs on your behalf, does not repeat it.
+- **What counts as a valid marker.** Only the marker's FIRST LINE is read,
+  and only its first 64 characters — every marker clikae writes is one short
+  line (the engine name), so this is about hand-edited or tool-mangled ones:
+  garbage after the first newline is ignored, a trailing `\r` (a sync tool
+  turning `\n` into `\r\n`) or trailing whitespace still names the tank, and a
+  first line longer than 64 characters is not an engine name and is not a
+  tank. Reading a marker costs the same whatever its size: `clikae tanks` on a
+  store holding a 200 KB marker is as fast as on any other.
+
 ### Fixed
 
 - The board's Resume index is built at the same per-tank widened cap
@@ -94,6 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by walking that chain, which is bounded (it materialises a real copy before
   it can grow past 8) and which `clikae clean`'s sweep and the per-publish GC
   both now protect from keep-N (#62).
+- `clikae init <engine> <name>` where that name is already taken by
+  something that is not a directory — most often a **broken symlink**, whose
+  target has been deleted — used to print `[ DONE ] Created tank` and then
+  fail, leaving no tank and two contradictory lines. It now names what is in
+  the way (and what the symlink points at) and fails once, before creating
+  anything. `clikae init … --adopt` on a broken symlink says the same thing,
+  instead of "No such directory" followed by a suggestion that could not
+  work.
 - Codex burn now detects a usage-limit line prefixed with codex's own
   `ERROR:` transport tag (captured stderr already reached the classifier
   merged with stdout before this fix — the anchor regex was the gap), and
@@ -131,6 +179,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since nothing was redacted — the tool crashed. #99 itself (the
   underlying `Argument list too long`) is still open, tracked separately.
 
+- `list_all_profiles` (the one enumerator `clikae tanks`, `burn`'s reroute, and
+  `to`/`resume`'s `next_tank` all read) now requires a candidate's engine to be
+  one an adapter or target actually recognises, and rejects dotdirs and
+  lock/sidecar-suffixed names for a directory that predates the one-time
+  adoption sweep above — a stray `hello.lock` sitting beside real tanks could
+  be rerouted onto and burned a few minutes failing to log in, reported as an
+  indistinguishable generic task failure. `burn`'s own agy reroute walker
+  (`_agy_tank_names`) now routes through the same enumerator instead of
+  globbing its slots directory a second time. Reroute exhaustion (every
+  reachable tank dry or skipped) is now its own `reason: no-tank-available`
+  with a distinct exit code (2, see Changed above) and `reset` set to the
+  earliest parseable reset across the whole walk, both in prose and in
+  `--json` (#61).
+- `clikae settings apply <engine> <tank>` with an explicitly named directory
+  that is not yet a tank now refuses (`Not a tank: …`) instead of writing
+  `settings.json` into it — naming a bare directory used to be enough to seed
+  it into existence as a permanent tank on the next walk (#61 round 2).
+- The profile-store walk no longer dies with `links[@]: unbound variable` on
+  bash 3.2 (every stock macOS) when a caller runs under `set -u` — which is
+  what the `clikae cockpit` guard hook does — and an engine's directory holds
+  only real tanks or only symlinked ones. bash 3.2 treats an empty array as
+  unset, so one of the two lists the walk builds was always "unset" on a
+  typical store (#61 round 6).
+- A `.clikae-tank` marker that exists but cannot be READ (permissions, a
+  changed owner, an ACL) no longer truncates the tank list. It used to print a
+  raw `profile_store.sh: line …: Permission denied` and, in a caller running
+  under `set -u` — which is what `clikae cockpit`'s PreToolUse hook is — abort
+  the walk at that directory and return everything BEFORE it with exit code 0:
+  a silently short list, and a refusal message claiming there was no idle tank
+  while idle tanks sat in the store. Such a directory is now simply not a tank,
+  said once in one warning line and never as a raw shell error (#61 round 6).
+- The refusal `clikae cockpit`'s guard prints now names the reserve even when
+  no cockpit is recorded at all; it used to print neither the reserve nor the
+  "No idle tank in the reserve right now." line in that case (#61 round 6).
+- The one-line "this store's tanks aren't adopted yet and the flag can't be
+  written" warning is now deduplicated PER STORE. It was one boolean for the
+  whole process tree, so a terminal warned about one read-only store then
+  stayed silent about a second, unrelated one — a mounted or shared store
+  whose answers were memory-only too, with nothing said about it (#61 round 6).
+- `CLIKAE_ADOPT_READONLY` in the environment no longer stops clikae adopting a
+  store. It was never a supported knob — it has one setter (the cockpit guard
+  hook) and one reader — but it read like one, and any value at all, `0`
+  included, made every command re-sweep the whole store while writing no
+  marker and no flag and saying nothing, leaving the one-time adoption window
+  open for good. It is now the internal `_CLIKAE_ADOPT_READONLY`, and only the
+  exact value `1` turns it on (#61 round 6).
+- `clikae cockpit --off` now removes the guard from a cockpit tank that is no
+  longer enumerable — one whose `.clikae-tank` marker went missing or became
+  unreadable (a restored backup, a sync tool). It used to sweep the same
+  "what is a tank" list everything else reads, so such a tank was invisible to
+  it: `--off` printed `cockpit: off`, exited 0, and cleared `state/cockpit`
+  with the PreToolUse hook still installed and nothing left on disk naming it,
+  so that tank went on refusing every in-session Agent spawn with no way to
+  find out why. `--off` now unguards the tank the state file names directly,
+  and sweeps every `settings.json` under the profile store that actually
+  carries clikae's guard marker. When the recorded cockpit's directory is gone
+  altogether it says so instead of clearing the record silently (#61 round 6).
+- `doctor`, `board`, and `status` no longer re-walk the whole profile store
+  once per adapter (`doctor` was ~20 full walks on one store via `scan_clis`'
+  15-adapter fan-out); each now warms one per-process cache before rendering.
 - `clikae resume <agy-sid>` now actually hands agy `--conversation <sid>`.
   `adapter_resume_args` built its argv with
   `printf '--conversation\n%s\n' "$sid"` — bash's `printf` builtin parses a

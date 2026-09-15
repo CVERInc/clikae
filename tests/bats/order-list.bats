@@ -11,6 +11,7 @@ load '../helpers'
 _boot() {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
 }
 
 # The ORIGINAL, fork-per-line implementation. Do not "tidy" this — its whole job

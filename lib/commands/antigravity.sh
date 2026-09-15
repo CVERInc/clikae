@@ -34,11 +34,15 @@ _agy_assert_not_running() {
   fi
 }
 
-# Tank basenames, one per line (glob, not ls|grep — handles odd names).
+# Tank basenames, one per line. Routes through list_all_profiles — the ONE
+# enumerator profile_store.sh owns — rather than globbing profiles/antigravity
+# itself: a second, ad-hoc directory walk here would silently disagree with
+# `clikae tanks` and with burn's reroute for every other engine about what
+# counts as a tank (#61 — a lock file/sidecar/dotdir sitting in the slots dir
+# must never come back as an agy tank name, same as it must never come back
+# as a claude or codex one).
 _agy_tank_names() {
-  local slots d; slots="$(_agy_slots)"
-  [ -d "$slots" ] || return 0
-  for d in "$slots"/*/; do [ -d "$d" ] && basename "$d"; done
+  list_all_profiles | awk -F'\t' '$1=="antigravity"{print $2}'
 }
 
 # The tank the ~/.gemini symlink currently points at (basename), or empty.
@@ -250,9 +254,16 @@ EOF
     # after --release) -> a fresh 'restored-<ts>' tank, never clobbering.
     adopt="default"; [ -e "$slots/default" ] && adopt="restored-$ts"
     mv "$link" "$slots/$adopt" && log_done "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
+    # #61 round-1 P1-3: agy never calls ensure_profile (it's symlink-managed,
+    # not an env adapter), so it stamps its own marker at every point it
+    # creates/adopts a tank dir. This one clikae itself just moved into place.
+    tank_marker_write antigravity "$slots/$adopt"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/$adopt" "$link"
   else
     mkdir -p "$slots/default"
+    tank_marker_write antigravity "$slots/default"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/default" "$link"
     log_done "Created an empty 'default' tank."
   fi
@@ -265,6 +276,8 @@ _agy_create_tank() {
   local name="$1" slot; slot="$(_agy_slots)/$name"
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
+  tank_marker_write antigravity "$slot"   # #61 round-1 P1-3 — see _agy_takeover's twin
+  _tank_adoption_ensure                    # #61 round-5 P3-5 — see ensure_profile's twin
   log_done "Created agy tank: $name"
   # The tank comes with the harness on. It does not change how agy talks — it
   # stops a reply from ending with "verified" in a session that ran nothing.

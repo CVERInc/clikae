@@ -33,6 +33,15 @@ adapter_init() {
   : "$profile_dir"
 }
 
+# Optional hook (#61 round-1 P1-3): paths, relative to a tank dir, that CODEX
+# ITSELF writes there — used ONLY to recognise a legacy tank (predates the
+# `.clikae-tank` marker) worth adopting. `config.toml` exists as soon as
+# anyone has run codex against this CODEX_HOME at all; `auth.json` exists
+# once they've logged in — either is proof this dir is a real codex tank.
+adapter_tank_fingerprint() {
+  printf 'auth.json\nconfig.toml\n'
+}
+
 adapter_export_env() {
   local profile_dir="$1"
   printf 'CODEX_HOME=%s\n' "$profile_dir"
@@ -152,8 +161,21 @@ _codex_rollouts_for_cwd() {
   want="${PWD%/}"
   find "$sdir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort -r | while IFS= read -r f; do
     local rec; rec="$(_codex_meta_field "$f" cwd)"
-    [ "${rec%/}" = "$want" ] && printf '%s\n' "$f"
+    # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — same shape as
+    # profile_store.sh's enumerator. `adapter_transcript_path` below assigns
+    # this function's own output through `$(… | head -n 1)`, which DOES trip
+    # `set -e` when the oldest rollout walked (the last one `sort -r`
+    # produces) belongs to a different cwd than $want, even though `head`
+    # already got the one line it needed from an earlier, matching file —
+    # confirmed by direct repro. Every current CALLER of
+    # adapter_transcript_path already wraps it in `|| true`, so this was not
+    # reaching a live abort, but the fix belongs at the source, not at every
+    # future call site.
+    if [ "${rec%/}" = "$want" ]; then
+      printf '%s\n' "$f"
+    fi
   done
+  return 0
 }
 
 # Resume a codex session by id: `codex resume <uuid>` (verified via codex --help).

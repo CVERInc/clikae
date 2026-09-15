@@ -187,6 +187,18 @@ EOF
     esac
   done
 
+  # #61 round-2 P2-4: warm the per-process tank cache before anything below
+  # walks the store — this command's own `list_all_profiles` call below plus
+  # one `resolve_active_profile`/`tanks_for_engine` walk per engine (via
+  # _status_row_for) otherwise re-derive the same rows once each.
+  #
+  # #61 round-3 P3: guarded the same way home.sh's own call already is — a
+  # bare call is "command not found" under `set -eo pipefail` for any test
+  # that sources this file standalone (home.bats already does exactly that
+  # to unit-test home.sh without profile_store.sh in scope; nothing does it
+  # to status.sh today, but the two should not drift on this).
+  declare -F profiles_cache_warm >/dev/null 2>&1 && profiles_cache_warm
+
   # Which CLIs to report on. With an explicit <engine>, just that one. Otherwise
   # every CLI that has at least one profile.
   local clis=""
@@ -224,7 +236,14 @@ EOF
   if [ -n "$recent" ]; then
     printf '\n  %brecent carries%b\n' "$__C_BOLD" "$__C_RESET"
     printf '%s\n' "$recent" | while IFS= read -r _l; do
-      [ -n "$_l" ] && printf '    %b%s%b\n' "$__C_DIM" "$_l" "$__C_RESET"
+      # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — this loop is
+      # cmd_status' own LAST statement, called bare from dispatch under
+      # `set -e`; the same shape that made doctor/board/info die silently
+      # when their last-walked item happened to fail a test.
+      if [ -n "$_l" ]; then
+        printf '    %b%s%b\n' "$__C_DIM" "$_l" "$__C_RESET"
+      fi
     done
   fi
+  return 0
 }

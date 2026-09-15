@@ -222,7 +222,13 @@ object can't give it:
   "ok": null,              // null while running; true/false at a terminal state
   "engine": "codex", "tank": "T1",
   "artifact": "/path/to/out.md", "artifact_bytes": null,
-  "reason": null,           // e.g. "artifact produced", "tank ran dry", "infra"
+  "reason": null,           // e.g. "artifact produced", "tank ran dry" (transient,
+                            // a reroute follows), "no-tank-available" (TERMINAL —
+                            // the whole reserve is dry), "tank ran dry and
+                            // --no-reroute is set" (TERMINAL — stopped after one),
+                            // "infra". The last two are both `state: dry` and both
+                            // rc 2 — `reason` is the ONLY thing that tells them
+                            // apart; see "clikae wait" below
   "reset": null,            // clikae-rendered reset text: the vendor's verbatim
                             // phrase when a tank ran dry, OR — on a HEALTHY
                             // codex run — clikae's own rendered text for its
@@ -321,6 +327,15 @@ or `dry` among the others):
   mix, a `fail`/`infra` among them, or `--timeout` expiring first.
 - `--timeout` expiring is `1` unconditionally, in both modes — never `0`
   just because some other target happened to already be `done`.
+
+**`dry` here is ONE state covering TWO shapes (#61 round-1 review, P2-5):**
+a burn that exhausted its whole auto-reroute reserve (`reason:
+no-tank-available`) and a burn that stopped after ONE dry tank because
+`--no-reroute` said to (`reason: "tank ran dry and --no-reroute is set"`).
+Both write `state: dry` and both give burn's own process rc 2 — `wait`'s rc
+above answers "is anything left to do", which is the same question either
+way. A caller that needs to tell the two apart reads `reason` off the
+printed status object, not `wait`'s own exit code.
 
 **A dead burn can never hang `wait` (2026-09-09 round-1 review, P1-1.)** A
 `running` status whose recorded `pid` is no longer alive is read as a

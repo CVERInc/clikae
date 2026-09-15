@@ -320,9 +320,22 @@ _home_recent_rows() {
     # $( … ) fork below, so the per-tank loads become instant instead of each
     # re-sourcing the adapter file (measured: 47 loads per board render before).
     load_adapter "$name" >/dev/null 2>&1
-    for tdir in "$proot"/*/; do
-      [ -d "$tdir" ] || continue
-      tank="${tdir%/}"; tank="${tank##*/}"
+    # #61 round-1 P2-6: used to be its own `for … in $proot/*/` — this is the
+    # board's OWN "continue" list, so a stray non-tank directory holding
+    # anything transcript-shaped could show up as a resumable row nowhere
+    # else in clikae names as a tank. Routed through tanks_for_engine.
+    # #61 round-6 P2-1 (merge with #93): the enumeration source is this PR's
+    # (tanks_for_engine, not the glob) and the per-tank ask is #93's, unchanged
+    # — the two answer different questions. WHICH directories may contribute a
+    # resumable row is a "what is a tank" question; HOW MANY rows to ask that
+    # tank for is a burn-sidecar question. Taking either side alone lost the
+    # other: main's arm re-opened the stray-directory row, and this PR's arm
+    # left $_ask at the outer loop's leftover value, reviving #34's "burn
+    # sessions eat the whole Resume block" and making the truncation note
+    # describe the previous tank.
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      tdir="$(profile_dir "$name" "$tank")"
       # How wide to ask THIS tank (#34 round-2 P2-1). Per tank, not per store:
       # a row this tank returns can only be dropped by a sid recorded for this
       # tank, so another engine's burn-heavy tank must not push this one's ask
@@ -362,7 +375,9 @@ _home_recent_rows() {
       done <<INNER
 $rows
 INNER
-    done
+    done <<TANKS
+$(tanks_for_engine "$name")
+TANKS
   done <<EOF
 $(list_adapters)
 EOF
@@ -1039,6 +1054,22 @@ _home_timing() {
 # for the plain-globals-keyed-by-sanitized-name replacement.
 _home_refresh() {
   local _CLIKAE_BOARD=1 _start
+  # #61 round-2 P2-4 (main, #91): warm the per-process tank cache for THIS
+  # refresh before anything below walks the store — board was 2.4x slower than
+  # main on 30 tanks. Reset first, not warm-once-for-the-process: the board is
+  # a single long-lived process that mutates tanks (n/a/d/s below) and calls
+  # this again after every mutation, so a stale cache from the FIRST refresh
+  # would otherwise keep answering for the rest of the session. Guarded:
+  # tests/bats/home.bats sources this file standalone (log.sh only) to
+  # unit-test the overlap/fallback logic with fake _home_items/_home_dry_set,
+  # without profile_store.sh in scope — an unguarded call is a bare "command
+  # not found" under this function's own `set -eo pipefail` contract.
+  #
+  # 🔴 FIRST, before the board priming below, not after: `board_generation`'s
+  # per-tank walk goes through the same tank enumeration, so priming ahead of
+  # the warm would pay the uncached store walk it exists to avoid.
+  declare -F profiles_cache_reset >/dev/null 2>&1 && profiles_cache_reset
+  declare -F profiles_cache_warm  >/dev/null 2>&1 && profiles_cache_warm
   declare -F _board_gen_cache_clear >/dev/null 2>&1 && _board_gen_cache_clear
   if declare -F board_generation >/dev/null 2>&1 && declare -F list_all_profiles >/dev/null 2>&1; then
     local _pe _pt _pd
@@ -2237,6 +2268,22 @@ _home_welcome_beside() {
 # parses the output at worst. Nothing to restore when nobody is watching.
 _home_tty_leave() { stty echo 2>/dev/null || true; [ -t 1 ] && tui_screen_leave; return 0; }
 
+# _home_tty_leave_final -> the SAME `_home_tty_leave` every other exit point
+# uses, but for the ones that are leaving the picker for good: it also drops
+# the EXIT/INT/TERM trap `_home_pick` installed (nothing left to restore it
+# on abnormal termination).
+#
+# #61 round-5 P3-2: it used to ALSO run the warn-once sentinel cleanup here.
+# That deleted the dedupe file of a process that was still running, so the
+# very next enumeration warned a second time — cancelling a submenu printed
+# the read-only-store line twice. The dedupe is an exported variable now
+# (profile_store.sh), which nothing needs to clean up and no exit path can
+# accidentally reset.
+_home_tty_leave_final() {
+  _home_tty_leave
+  trap - EXIT INT TERM
+}
+
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
 #   agent  -> the CLI's own binary, default config (no tank)
@@ -2325,6 +2372,8 @@ EOF
   done
 
   tui_screen_enter >&3
+  # #61 round-4 P2-1: also replaces bin/clikae's own EXIT trap, so it chains
+  # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
   trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
   while :; do
@@ -3420,7 +3469,7 @@ _home_pick() {
       enter)
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
@@ -3431,14 +3480,14 @@ _home_pick() {
           }
           return 0
         fi
-        _home_tty_leave; trap - EXIT INT TERM
+        _home_tty_leave_final
         { exec 3<&-; } 2>/dev/null || true
         _home_launch "$sel_row"
         return 0
         ;;
       r)
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           _home_relay "$items" "$sel_row"
           return 0
@@ -3449,7 +3498,7 @@ _home_pick() {
         # idiom every other launch in this board uses): cmd_resume lives in
         # resume.sh, which isn't sourced in the home process — and can't be sourced
         # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
-        _home_tty_leave; trap - EXIT INT TERM
+        _home_tty_leave_final
         { exec 3<&-; } 2>/dev/null || true
         exec "$CLIKAE_BIN" resume
         ;;
@@ -3458,7 +3507,7 @@ _home_pick() {
         # (--ephemeral). A clean, amnesiac session: this run's long-term memory
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
+          _home_tty_leave_final
           { exec 3<&-; } 2>/dev/null || true
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
         fi
@@ -3525,7 +3574,7 @@ EOF
   done
 
   { exec 3<&-; } 2>/dev/null || true
-  _home_tty_leave; trap - EXIT INT TERM
+  _home_tty_leave_final
   # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"
 }

@@ -159,8 +159,19 @@ _grok_summaries_for_cwd() {
   want="${PWD%/}"
   find "$sdir" -maxdepth 3 -type f -name 'summary.json' 2>/dev/null | while IFS= read -r f; do
     local rec; rec="$(_grok_json_str "$f" cwd)"
-    [ "${rec%/}" = "$want" ] && printf '%s\n' "$f"
+    # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — under pipefail this
+    # loop's (and therefore this function's) exit status must not depend on
+    # whether the LAST file walked happens to match $want. Every current
+    # caller reads this through a heredoc (`<<EOF $(…) EOF`), which does not
+    # trip `set -e` on a nonzero command substitution, so this was not
+    # observably broken — hardened anyway so a future direct `$(… | head)`
+    # caller (the exact shape that bit codex's sibling function) doesn't
+    # reintroduce it.
+    if [ "${rec%/}" = "$want" ]; then
+      printf '%s\n' "$f"
+    fi
   done
+  return 0
 }
 
 # _grok_find_summary <dir> <sid> — the summary.json for a session id (the uuid IS
