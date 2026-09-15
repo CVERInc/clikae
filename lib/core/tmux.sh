@@ -890,10 +890,32 @@ tmux_status_fuelv() {
 # AND already failed `kill -0` — normally none per render, and never one per
 # marker.
 #
-# What is left, stated rather than hidden: a pid recycled onto ANY live process
-# (ours or a stranger's) still makes this UNDERCOUNT — we believe the lane is
-# alive and stay quiet. That is the direction a row that must never cry wolf
-# should miss in, and it is now the ONLY direction it misses in.
+# What is left, stated rather than hidden, in BOTH directions — because "the
+# ONLY direction it misses in is undercount" is what this header said after the
+# round-3 fix, and it is not true when `ps` cannot answer (P3-3, 2026-09-14
+# round-4 review):
+#
+#   AS LONG AS `ps` CAN ANSWER, the only miss is an UNDERCOUNT: a pid recycled
+#   onto any live process (ours or a stranger's) reads as "the lane is still
+#   running" and we stay quiet. That is the direction a row that must never cry
+#   wolf should miss in.
+#
+#   WHEN `ps` CANNOT ANSWER, the same recycled pid becomes an OVERCOUNT. Two
+#   ways that happens: `ps` is not installed (there is no `command -v ps` guard
+#   here — a missing `ps` simply returns non-zero), and `/proc` mounted
+#   `hidepid=2`, the default on Proxmox and on plenty of hardened multi-user
+#   hosts, where an ordinary user's `ps -p <another user's pid>` exits 1 exactly
+#   like a pid that does not exist. Measured with a `ps` that always fails, over
+#   nine synthetic run directories: `!5` where a working `ps` gives `!4` — the
+#   extra one being a live process belonging to someone else. So on such a host
+#   this row can report one lane as unattended that is in fact somebody else's
+#   running process; it cannot LOSE a real alert that way.
+#
+# It is left as a statement rather than a guard on purpose: `command -v ps`
+# would only catch the first of the two, and under `hidepid=2` there is no
+# answer to distinguish "gone" from "not yours" — the row would have to invent a
+# third verdict for a case where it has no evidence either way. Naming the
+# environment is what a reader of this function actually needs.
 tmux_status_alertsv() {
   local now="${1:-}" n=0 f e t d s json st pid upd dead_age keep_s
   _TSTAT_ALERTS=0

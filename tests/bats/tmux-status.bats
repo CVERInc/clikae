@@ -431,6 +431,36 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"!1"* ]] || { echo "control: $output"; false; }
 }
 
+# 🔴 P3-3 (2026-09-14 round-4 review): the round-3 fix made the header claim
+# "undercount is now the ONLY direction it misses in". It is not, when `ps`
+# cannot answer — `/proc` mounted `hidepid=2` (Proxmox's default, and plenty of
+# hardened multi-user hosts) makes an ordinary user's `ps -p <a stranger's pid>`
+# exit 1, exactly like a pid that does not exist, and the lane is then counted
+# as dead. This pins the behaviour the header now describes, so the sentence and
+# the code cannot drift apart again: with `ps` unable to answer, a live FOREIGN
+# pid overcounts — one lane reported unattended that is somebody else's running
+# process — and nothing is ever LOST that way.
+@test "alerts: when ps cannot answer, a live foreign pid overcounts (hidepid, stated)" {
+  _src
+  _burn_status burn-1 running 1          # init: alive, and not ours
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"!"* ]] || { echo "control (ps works): $output"; false; }
+
+  # `ps` answering the way it does under hidepid=2 for another user's pid.
+  ps() { return 1; }
+  run tmux_status_render claude wrasse '' '' 120
+  unset -f ps
+  [[ "$output" == *"!1"* ]] \
+    || { echo "with ps unable to answer the header's overcount did not happen: $output"; false; }
+
+  # …and the direction that is NOT affected: a real dead lane is still red.
+  _burn_status burn-1 running "$(_dead_pid)"
+  ps() { return 1; }
+  run tmux_status_render claude wrasse '' '' 120
+  unset -f ps
+  [[ "$output" == *"!1"* ]] || { echo "a dead lane stopped counting: $output"; false; }
+}
+
 # P3-2 (2026-09-14 round-3 review): a `running` status.json whose pid is
 # present but unreadable was silently skipped — `{"state":"running","pid":"x"}`
 # counted `!0`. That made this the third reader of "present but unreadable" in
