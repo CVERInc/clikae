@@ -204,3 +204,56 @@ seed_rollout() {
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 }
+
+# --- #113 item 3: counter-specimens for recent_sids' sid-from-FILENAME fast path.
+# #93 round 2 made adapter_recent_sids take the sid from the rollout name instead
+# of reading session_meta, falling back to the read "when the name carries no
+# uuid" — and produced no specimen where it doesn't. These are those specimens.
+
+@test "codex recent_sids (#113): a rollout whose name carries NO uuid falls back to the body id" {
+  _setup_codex
+  local body="019e0000-0000-7000-8000-00000000b0d1"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$body" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"renamed by hand"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "codex recent_sids (#113): uuid-SHAPED but not hex in the name is not a uuid — the body id wins" {
+  # 36 characters with dashes exactly where a uuid has them. The pre-#113
+  # `????????-????-????-????-????????????` glob accepted this and put
+  # "notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz" on the board as a session id.
+  _setup_codex
+  local body="019e0000-0000-7000-8000-00000000b0d2"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$body" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"odd name"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "codex recent_sids (#113): a uuid-named rollout keeps the FAST path — the name is used, the body id is not read" {
+  # The proof the fast path is still taken: the body's id DIFFERS from the name,
+  # and the answer is the name's. (The repo's own sid->file lookup,
+  # _codex_find_rollout, resolves by that same name, so this is the id resume
+  # can find the file by.)
+  _setup_codex
+  local name_sid="019e0000-0000-7000-8000-0000000fa57a"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "019e0000-0000-7000-8000-00000000d1ff" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"fast path"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$name_sid.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$name_sid" ] || { printf '%q\n' "$output"; false; }
+  # Upper-case hex is still hex.
+  mv "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$name_sid.jsonl" \
+     "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-019E0000-0000-7000-8000-0000000FA57A.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "${output#*$'\037'}" = "019E0000-0000-7000-8000-0000000FA57A" ] || { printf '%q\n' "$output"; false; }
+}

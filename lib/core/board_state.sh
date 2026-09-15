@@ -501,7 +501,7 @@ _board_fingerprint_rows() {
 # (`_burn_tank_hidden`, lib/commands/home.sh; see board_state_refresh), but
 # staleness was fingerprinted from TRANSCRIPTS ONLY — and the sidecar is an
 # input to the cap, not to the transcripts. burn.sh records a burn's sid
-# AFTER the engine process exits (burn.sh:1106, :4288), so "transcript
+# AFTER the engine process exits (the two `sidecar_file` writes in burn.sh), so "transcript
 # appears, board renders, sid lands" is burn's own ordering, not a contrived
 # one: the entry got built at the OLD, narrower cap and nothing afterwards
 # ever disagreed with the fingerprint, so it was never rebuilt. Measured on
@@ -515,14 +515,11 @@ _board_fingerprint_rows() {
 # rebuild stays bounded to that tank, and a tank with no sidecar keeps
 # hashing byte-for-byte what it hashed before.
 #
-# BOTH engine spellings, because burn.sh has always written agy's sidecar
-# under the literal "agy" while this file (and profiles_root) call the engine
-# "antigravity" — the same translation `_burn_tank_hidden` carries and
-# `rename_tank_state` (lib/core/profile_store.sh) warns about. Reading only
-# "$engine" here would leave every agy tank with exactly the bug this fixes.
-# Only antigravity gets the second path: "agy" under some OTHER engine's name
-# is a different engine's tank, and hashing it here would rebuild this tank
-# for a change that cannot affect its cap.
+# ONE path, keyed by engine id for every engine, antigravity included (#113).
+# This used to hash a second, "agy"-spelled path for antigravity, because
+# burn.sh wrote agy's sidecar under that name; the writer now uses the engine
+# id and burn_sidecar_migrate_legacy (lib/core/profile_store.sh) moves an old
+# store onto it before any command runs, so there is nothing to translate.
 #
 # stat, not a content hash: this is ONE file per tank (the transcripts are
 # thousands of them) and mtime+size is already the currency the rest of this
@@ -535,9 +532,6 @@ _board_sidecar_rows() {
   [ -n "$tank" ] || return 0
   base="${CLIKAE_HOME:-$HOME/.clikae}/state/burn-sessions"
   set -- "$base/$engine/$tank"
-  if [ "$engine" = "antigravity" ]; then
-    set -- "$@" "$base/agy/$tank"
-  fi
   _clikae_statv
   for f in "$@"; do
     [ -f "$f" ] || continue

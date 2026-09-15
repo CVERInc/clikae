@@ -117,6 +117,27 @@ _stub_agy() {
   [[ "$output" == *"active agy tank"* ]] || false
 }
 
+@test "rename/remove agy carry and drop the burn sidecar under the engine-id key, 'antigravity' (#113)" {
+  # `clikae rename agy …` / `clikae remove agy …` reach rename_tank_state and
+  # remove_tank_burn_sidecar through antigravity.sh, which names the engine
+  # "antigravity" — the one sidecar key since #113. Pinned end to end so a
+  # future caller passing "agy" shows up here instead of silently orphaning a
+  # sidecar.
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1          # default active, work exists
+  local sc="$CLIKAE_HOME/state/burn-sessions/antigravity"
+  mkdir -p "$sc"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$sc/work"
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$sc/work" ]
+  grep -qF 'aaaaaaaa-1111-4111-8111-111111111111' "$sc/laptop"
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy" ]
+  run clikae remove agy laptop -f
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$sc/laptop" ]
+}
+
 @test "clikae tanks lists agy tanks without crashing (no adapter regression)" {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1

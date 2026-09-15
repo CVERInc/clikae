@@ -4842,3 +4842,71 @@ STUB
   jq -e '.window_pct == 95 and .source == "vendor"' \
     "$CLIKAE_HOME/state/usage/claude/dry1.json"
 }
+
+# --- #113 item 2: ONE engine key for the burn sidecar ------------------------
+# burn.sh wrote agy's sidecar under "agy" (the binary) while every reader walks
+# engine ids ("antigravity"), so each reader carried its own translation and the
+# one that forgot counted 0 (#93 round 2). The key is now the engine id; a store
+# written by an older clikae is moved onto it by burn_sidecar_migrate_legacy,
+# which bin/clikae runs in front of every command — so any command will do here.
+
+_sc() { printf '%s/state/burn-sessions/%s' "$CLIKAE_HOME" "$1"; }
+
+@test "sidecar key (#113): a legacy 'agy' dir is RENAMED onto 'antigravity' when that is absent, and a re-run is a no-op" {
+  mkdir -p "$(_sc agy)"
+  printf 'aaaaaaaa-0000-4000-8000-000000000001\trun-1\t1700000001\naaaaaaaa-0000-4000-8000-000000000002\trun-2\t1700000002\n' > "$(_sc agy)/t1"
+  printf 'bbbbbbbb-0000-4000-8000-000000000001\trun-1\t1700000003\n' > "$(_sc agy)/t2"
+  local want1 want2; want1="$(cat "$(_sc agy)/t1")"; want2="$(cat "$(_sc agy)/t2")"
+  [ ! -e "$(_sc antigravity)" ]
+  run clikae --version
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$(_sc agy)" ] || { ls -la "$(_sc agy)"; false; }
+  [ "$(cat "$(_sc antigravity)/t1")" = "$want1" ] || { cat "$(_sc antigravity)/t1"; false; }
+  [ "$(cat "$(_sc antigravity)/t2")" = "$want2" ] || false
+  # Idempotent: nothing left to move, nothing rewritten.
+  local sum; sum="$(cat "$(_sc antigravity)"/* | cksum)"
+  run clikae --version
+  [ "$status" -eq 0 ]
+  [ ! -e "$(_sc agy)" ]
+  [ "$(cat "$(_sc antigravity)"/* | cksum)" = "$sum" ] || false
+  # No merge temp file left behind (the readers' globs skip dotfiles, but a
+  # leftover would still be litter).
+  [ -z "$(find "$(_sc antigravity)" -name '.*merge*')" ] || false
+}
+
+@test "sidecar key (#113): when BOTH dirs hold a tank, the files are MERGED line by line — canonical order kept, no line twice, idempotent" {
+  mkdir -p "$(_sc agy)" "$(_sc antigravity)"
+  local L1 L2 L3 L4
+  L1=$'cccccccc-0000-4000-8000-000000000001\trun-1\t1700000001'
+  L2=$'cccccccc-0000-4000-8000-000000000002\trun-2\t1700000002'   # in both
+  L3=$'cccccccc-0000-4000-8000-000000000003\trun-3\t1700000003'
+  L4=$'cccccccc-0000-4000-8000-000000000004\trun-4\t1700000004'
+  printf '%s\n%s\n' "$L1" "$L2" > "$(_sc antigravity)/t1"
+  printf '%s\n%s\n%s\n%s\n' "$L2" "$L3" "$L3" "$L4" > "$(_sc agy)/t1"   # legacy: an overlap and a duplicate
+  printf '%s\n' "$L4" > "$(_sc agy)/only-legacy"
+  printf '%s\n' "$L1" > "$(_sc antigravity)/only-canonical"
+  run clikae --version
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$(_sc agy)" ] || { ls -la "$(_sc agy)"; false; }
+  [ "$(cat "$(_sc antigravity)/t1")" = "$(printf '%s\n%s\n%s\n%s' "$L1" "$L2" "$L3" "$L4")" ] \
+    || { cat "$(_sc antigravity)/t1"; false; }
+  [ "$(cat "$(_sc antigravity)/only-legacy")" = "$L4" ] || false
+  [ "$(cat "$(_sc antigravity)/only-canonical")" = "$L1" ] || false
+  # An in-flight burn from the OLD binary appends to "agy" after the first
+  # migration ran: the next command merges just that line, once.
+  local L5=$'cccccccc-0000-4000-8000-000000000005\trun-5\t1700000005'
+  mkdir -p "$(_sc agy)"
+  printf '%s\n%s\n' "$L2" "$L5" > "$(_sc agy)/t1"
+  run clikae --version
+  run clikae --version
+  [ ! -e "$(_sc agy)" ]
+  [ "$(cat "$(_sc antigravity)/t1")" = "$(printf '%s\n%s\n%s\n%s\n%s' "$L1" "$L2" "$L3" "$L4" "$L5")" ] \
+    || { cat "$(_sc antigravity)/t1"; false; }
+  [ -z "$(find "$(_sc antigravity)" -name '.*merge*')" ] || false
+}
+
+@test "sidecar key (#113): no store, no legacy dir => the migration creates nothing" {
+  run clikae --version
+  [ "$status" -eq 0 ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions" ] || { find "$CLIKAE_HOME/state/burn-sessions"; false; }
+}

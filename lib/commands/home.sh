@@ -214,17 +214,14 @@ _burn_sids_file() {
 # be dropped by a sid recorded for THIS tank, so this is the exact count, not a
 # smaller-but-still-safe one.
 _burn_tank_hidden() {
-  # 🔴 The sidecar's engine directory is NOT always the adapter/profile dir
-  # name: burn.sh has always written agy's under the literal "agy" while the
-  # adapter (and profiles_root) call it "antigravity" (burn.sh:731, and see
-  # rename_tank_state in lib/core/profile_store.sh, which carries the same
-  # translation and the same warning). Reading the wrong path here would count 0
-  # burns for every agy tank — which is exactly the pre-fix ask, i.e. the bug
-  # back again, silently. Tested: "an agy tank's ask is widened (its sidecar
-  # lives under the 'agy' alias)".
-  local eng="$1"
-  [ "$eng" = "antigravity" ] && eng="agy"
-  local f="$CLIKAE_HOME/state/burn-sessions/$eng/$2" n=0
+  # <engine> is the engine id, and so is the sidecar's directory — for agy too
+  # ("antigravity", #113). It used to be written under "agy" and read here
+  # through a translation; reading the wrong path counts 0 burns for every agy
+  # tank, which is the pre-#93 ask, i.e. the bug back again, silently. A store
+  # written by an older clikae is moved onto the one key by
+  # burn_sidecar_migrate_legacy (lib/core/profile_store.sh) before any command
+  # runs, so no reader translates anything.
+  local f="$CLIKAE_HOME/state/burn-sessions/$1/$2" n=0
   if [ -f "$f" ]; then
     n="$(LC_ALL=C awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{print $1}' "$f" 2>/dev/null \
           | LC_ALL=C sort -u | LC_ALL=C awk 'END{print NR+0}' 2>/dev/null || printf '0')"
@@ -233,21 +230,47 @@ _burn_tank_hidden() {
   printf '%s' "$n"
 }
 
-# _home_trunc_flag -> path of the marker _home_recent_rows drops when a tank hit
-# CLIKAE_HOME_RECENT_SCAN_MAX and STILL could not hand back
-# CLIKAE_HOME_RECENT_MAX non-burn rows. It holds the hidden count to name in the
-# message; the renderers print T_RESUME_TRUNCATED under the Continue list when
-# it exists.
+# The "Continue list is truncated" signal (#34 round-2 P2-1) travels IN the
+# items stream, as one row of this kind, and never touches the disk.
 #
-# A FILE, not a variable, on purpose: _home_recent_rows runs inside _home_items,
-# which the renderers consume through $( … ) (and which itself forks the recent
-# scan into the background), so nothing it assigns can reach the renderer. `$$`
-# is the MAIN shell's pid in bash even inside a subshell or a background job, so
-# both ends compute the same path without having to pass one. _home_recent_rows
-# clears it at the start of every scan, so a stale file from a recycled pid can
-# never speak for a render that did not truncate.
-_home_trunc_flag() {
-  printf '%s/state/home-recent-truncated.%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$$"
+# 🔴 #113: it used to be a file, `state/home-recent-truncated.$$`, because
+# _home_recent_rows runs inside _home_items, which every caller consumes through
+# `$( … )` — nothing it assigns can reach the renderer. But nothing removed that
+# file when a board exited (or was killed), so every truncating render left one
+# behind in the user's state dir, one per pid, forever. The data already has a
+# channel from the child to the parent: the items text itself. So
+# _home_recent_rows prints `resume-truncated␟<hidden-count>` as one row, and
+# `_home_items_load` — the ONE place a caller turns `_home_items` output into
+# `$items` — lifts it back out into $_HOME_RESUME_TRUNC before any renderer,
+# row index or filter sees the text. Two boards in one tank share nothing, and
+# a killed board leaves nothing, because there is no file.
+_HOME_TRUNC_KIND="resume-truncated"
+_HOME_RESUME_TRUNC=0
+
+# _home_items_load -> sets the caller's $items from _home_items, and
+# $_HOME_RESUME_TRUNC from the truncation row in it (0 when there is none). The
+# row is removed from $items: the pickers index rows by line
+# (_home_row_kind_at), so a row nobody can select must not occupy a line.
+# Anchored to a line START — a tank or a title containing the kind's text
+# mid-row must never be read as the signal.
+_home_items_load() {
+  local _raw _pat _rest
+  _HOME_RESUME_TRUNC=0
+  _raw=$'\n'"$(_home_items)"
+  _pat=$'\n'"$_HOME_TRUNC_KIND"$'\037'
+  case "$_raw" in
+    *"$_pat"*)
+      _rest="${_raw#*"$_pat"}"
+      _HOME_RESUME_TRUNC="${_rest%%$'\n'*}"
+      case "$_HOME_RESUME_TRUNC" in ''|*[!0-9]*) _HOME_RESUME_TRUNC=0 ;; esac
+      case "$_rest" in
+        *$'\n'*) _raw="${_raw%%"$_pat"*}"$'\n'"${_rest#*$'\n'}" ;;
+        *)       _raw="${_raw%%"$_pat"*}" ;;
+      esac
+      ;;
+  esac
+  items="${_raw#$'\n'}"
+  return 0
 }
 
 # _home_trunc_note <printed_resume> -> the one visible line the round-2 review
@@ -256,11 +279,9 @@ _home_trunc_flag() {
 # that (a tank whose burn sidecar outgrew the ceiling and buried every human
 # session) is precisely the case a silent board got wrong.
 _home_trunc_note() {
-  local _tf _th
-  _tf="$(_home_trunc_flag)"
-  [ -f "$_tf" ] || return 0
-  _th="$(cat "$_tf" 2>/dev/null || true)"
+  local _th="${_HOME_RESUME_TRUNC:-0}"
   case "$_th" in ''|*[!0-9]*) _th=0 ;; esac
+  [ "$_th" -gt 0 ] || return 0
   if [ "${1:-0}" -ne 1 ]; then
     printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
   fi
@@ -274,9 +295,6 @@ _home_recent_rows() {
   local name proot tdir tank rows sid mt acc="" _proots
   local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
   local _clamped=0 _got=0 _kept=0 _trunc=0
-  # Every scan starts by clearing last render's marker, so the note can never
-  # outlive the truncation that produced it.
-  rm -f "$(_home_trunc_flag)" 2>/dev/null || true
   # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
   # many rows each adapter has to be asked for depends on it. The filter below
   # always ran before the rank+cut (as its comment promised), but every adapter
@@ -381,12 +399,11 @@ TANKS
   done <<EOF
 $(list_adapters)
 EOF
-  # Leave the marker BEFORE the early return below: the worst truncation is the
-  # one that empties the list completely, and that is the case the note exists
-  # to explain.
+  # Emit the truncation row BEFORE the early returns below: the worst truncation
+  # is the one that empties the list completely, and that is the case the note
+  # exists to explain. A row, not a file (#113) — see _home_items_load.
   if [ "$_trunc" -gt 0 ]; then
-    mkdir -p "$CLIKAE_HOME/state" 2>/dev/null || true
-    printf '%s\n' "$_trunc" > "$(_home_trunc_flag)" 2>/dev/null || true
+    printf '%s\037%s\n' "$_HOME_TRUNC_KIND" "$_trunc"
   fi
   if [ -z "$acc" ]; then
     # What this actually relies on: BOTH ways out of this function remove the
@@ -1080,7 +1097,7 @@ _home_refresh() {
 $(list_all_profiles)
 EOF_PROFILES
   fi
-  items="$(_home_items)"
+  _home_items_load
   _home_clock; _start="$_HOME_MS"
   dry="$(_home_dry_set || true)"
   _HOME_TOTAL_SESSIONS=0
@@ -3399,12 +3416,12 @@ _home_pick() {
       '[')
         # Move the selected tank UP in the burn order (the board IS the order).
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" -1; then
-          items="$(_home_items)"; sel=$(( sel - 1 )); [ "$sel" -lt 0 ] && sel=0
+          _home_items_load; sel=$(( sel - 1 )); [ "$sel" -lt 0 ] && sel=0
         fi ;;
       ']')
         # Move the selected tank DOWN in the burn order.
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" 1; then
-          items="$(_home_items)"; sel=$(( sel + 1 ))
+          _home_items_load; sel=$(( sel + 1 ))
         fi ;;
       # Esc CLEARS an active filter before it leaves. Escape is the universal
       # "undo this mode" reflex, and while filtered the mode IS the filter — so
@@ -3439,7 +3456,7 @@ _home_pick() {
             tui_screen_enter
             case "$_cans" in
               y|Y) tmux kill-session -t "=$_csess" 2>/dev/null || true
-                   items="$(_home_items)"; sel=0 ;;
+                   _home_items_load; sel=0 ;;
             esac
           fi
         fi
@@ -3560,7 +3577,7 @@ _home_pick() {
         if [ "$sel_kind" = "tank" ]; then
           local _sp; _sp="$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
           _home_toggle_solo "$sel_cli" "$_sp"
-          items="$(_home_items)"
+          _home_items_load
           local _vv _i=0 _row2
           _vv="$(_home_filter "$items" "$filter")"
           while IFS= read -r _row2; do

@@ -43,7 +43,7 @@ _over_rows() {  # <cols> -> one "<width>\t<line>" per offending row
 # the whole interactive frame as a string, so it can be measured without a pty.
 _over_rows_interactive() {  # <cols> -> one "<width>\t<line>" per offending row
   local cols="$1" line dw items
-  items="$(_home_items 2>/dev/null)"
+  _home_items_load 2>/dev/null
   while IFS= read -r line || [ -n "$line" ]; do
     line="$(_visible "$line")"
     [ -n "$line" ] || continue
@@ -119,6 +119,43 @@ $(printf '%s' "$rows" | sed 's/^/    /')"
 $(printf '%s' "$rows" | sed 's/^/    /')"
   done
   [ -z "$bad" ] || { echo "rows wider than the terminal:$bad"; false; }
+}
+
+@test "board-width: both renderers print the truncation line from the in-process count, and it fits (#113)" {
+  # #113: the count reaches the renderers as $_HOME_RESUME_TRUNC (lifted out of
+  # the items stream by _home_items_load), not as a state/ file. Pin that BOTH
+  # renderers read it — the static one and the interactive frame — and that the
+  # line obeys the same width rule as every other row.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  _seed_wide_specimen
+  local items out line
+  _home_items_load 2>/dev/null
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  _HOME_RESUME_TRUNC=37
+  out="$(COLUMNS=40 _home_pick_draw_body "$items" 0 "" 2>/dev/null)"
+  [[ "$(_visible "$out")" == *"37 sessions hidden"* ]] || { _visible "$out"; false; }
+  out="$(COLUMNS=40 _home_render_static "$items" "" 2>/dev/null)"
+  [[ "$(_visible "$out")" == *"37 sessions hidden"* ]] || { _visible "$out"; false; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(_visible "$line")"
+    [ "$(_dwidth "$line")" -le 40 ] || { echo "over 40: $line"; false; }
+  done <<< "$out"
+  # And zero means no line at all.
+  _HOME_RESUME_TRUNC=0
+  out="$(COLUMNS=40 _home_render_static "$items" "" 2>/dev/null)"
+  [[ "$out" != *"hidden as burn"* ]] || false
 }
 
 @test "board-width: the measurement itself can see an over-wide row" {

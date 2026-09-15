@@ -941,11 +941,10 @@ _clean_burn_sidecar_gc() {
     for f in "$eng_dir"*; do
       [ -f "$f" ] || continue
       local tank="${f##*/}"
-      # burn.sh has always stored agy's sidecar under the literal dir name
-      # "agy" (see rename_tank_state's comment) — everything else in clikae
-      # (adapters, profile dirs) calls it "antigravity".
+      # The sidecar's directory IS the engine id (#113 — agy's used to be
+      # "agy"; burn_sidecar_migrate_legacy moves an old store onto
+      # "antigravity" before any command, this one included, runs).
       local adapter_name="$engine"
-      [ "$adapter_name" = "agy" ] && adapter_name="antigravity"
       local pdir; pdir="$(profile_dir "$adapter_name" "$tank" 2>/dev/null || true)"
       # #74 round-2 P2-1: load_adapter exit()s the WHOLE PROCESS on a broken
       # adapter (lib/core/adapter_loader.sh) — `|| true` only catches a

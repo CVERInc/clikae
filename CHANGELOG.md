@@ -49,6 +49,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The home board no longer leaves a `state/home-recent-truncated.<pid>` file
+  behind every time its Resume list is truncated (or a board is killed
+  mid-render). The "N sessions hidden as burn runs · list truncated" count now
+  travels from the Resume scan to both renderers inside the board process
+  itself, so nothing is written to disk for it at all, and two boards open on
+  the same tank at once can't read each other's count (#113).
+- `clikae burn agy` records its sessions under the same engine key every other
+  part of clikae reads, `state/burn-sessions/antigravity/<tank>`, instead of
+  `state/burn-sessions/agy/<tank>`. The old spelling meant each reader
+  (the board's Resume list, its freshness check, `rename`, `remove`,
+  `clikae clean`) had to translate it, and one that didn't silently stopped
+  hiding agy burn runs. **Upgrading**: the first command you run moves an
+  existing `agy/` directory onto `antigravity/`, renaming each tank's file
+  when only the old one exists and merging line by line when both do. It
+  keeps checking on every command (one directory test), so a burn that was
+  already running under the old version when you upgraded is picked up too
+  (#113).
+- The codex and grok Resume rows only take a session's id from its
+  rollout/session **name** when that name really ends in a uuid: eight, four,
+  four, four and twelve hex digits. Before, any 36-character name with dashes
+  in those positions counted (e.g. `…-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz`),
+  so the board could offer that string as a session id. Anything else now
+  falls back to the id recorded inside the file, the same id the board's index
+  already used (#113).
 - Four optional adapter hooks (`adapter_cwd_from_args`,
   `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
   `adapter_tank_fingerprint`) no longer leak from one adapter to the next

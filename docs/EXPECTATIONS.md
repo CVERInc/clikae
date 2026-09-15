@@ -215,7 +215,12 @@ burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), so only a sidecar
 larger than `clikae clean`'s GC allows can reach it. If it is ever reached and
 the list still comes up short, the Resume block says so ("N sessions hidden as
 burn runs · list truncated") and points you at `clikae resume --all`; it never
-draws a short list that reads as a complete one.
+draws a short list that reads as a complete one. That note is worked out inside
+the board process and never written to disk, so a board that is killed
+mid-render leaves nothing behind. The record of which sessions were burns lives
+in `state/burn-sessions/<engine>/<tank>`, keyed by engine id for every engine
+(agy's is `antigravity/`). A store an older clikae wrote under `agy/` is moved
+there by the next command you run (merged line by line if both exist).
 
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. codex and grok

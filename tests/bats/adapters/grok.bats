@@ -318,3 +318,46 @@ line two" | tr "\0" "\a" | tr "\n" "@"'
   [[ "$output" != *"--disallowed-tools"* ]] || false
   [[ "$output" != *"workspace"* ]] || false
 }
+
+# --- #113 item 3: counter-specimens for recent_sids' sid-from-DIRECTORY fast
+# path (#93 round 2), which falls back to reading summary.json "when the name is
+# not uuid-shaped" and shipped with no specimen where it isn't.
+
+# _grok_retag <dir-name-now> <dir-name-then> — rename a seeded session's dir,
+# keeping the id recorded in its summary.json.
+_grok_retag() { mv "$SDIR/%2Fgroup/$1" "$SDIR/%2Fgroup/$2"; }
+
+@test "grok recent_sids (#113): a session dir that is NOT a uuid falls back to the id in summary.json" {
+  _setup_grok
+  local body="019fb7b0-9b86-7f82-98a4-00000000b0d1"
+  seed_session "$body" "$WORK" "renamed by hand"
+  _grok_retag "$body" "my-session"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "grok recent_sids (#113): uuid-SHAPED but not hex is not a uuid — the id in summary.json wins" {
+  # Dashes exactly where a uuid has them; the pre-#113 `????????-????-…` glob
+  # accepted it and put this string on the board as a session id.
+  _setup_grok
+  local body="019fb7b0-9b86-7f82-98a4-00000000b0d2"
+  seed_session "$body" "$WORK" "odd name"
+  _grok_retag "$body" "notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "grok recent_sids (#113): a uuid-named session dir keeps the FAST path — the dir name is used, summary.json's id is not read" {
+  # The body id DIFFERS from the directory name and the answer is the name's:
+  # only the fast path can produce that. _grok_find_summary resolves sid -> file
+  # by the same directory name.
+  _setup_grok
+  local body="019fb7b0-9b86-7f82-98a4-00000000d1ff" name_sid="019fb7b0-9b86-7f82-98a4-0000000fa57a"
+  seed_session "$body" "$WORK" "fast path"
+  _grok_retag "$body" "$name_sid"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$name_sid" ] || { printf '%q\n' "$output"; false; }
+}

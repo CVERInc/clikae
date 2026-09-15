@@ -550,11 +550,17 @@ EOF
   # used to go the other way (sid -> file), read here through the one function
   # that owns the rule. A name that does not end in a uuid is not a shape codex
   # writes, so it falls back to the body read rather than guessing.
+  # 🔴 #113: "ends in a uuid" means HEX in the 8-4-4-4-12 shape
+  # ($_CODEX_UUID_GLOB), not "dashes in the right columns" — the old
+  # `????????-????-…` accepted `rollout-…-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz`
+  # and handed the board a sid no session has. Pinned by a counter-specimen in
+  # tests/bats/adapters/codex.bats.
   sessions_by_mtime "${rfiles[@]}" | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
     _codex_sid_from_path "$f"; sid="$_CODEX_SID"
+    # shellcheck disable=SC2254  # the pattern IS the variable, unquoted on purpose
     case "$sid" in
-      ????????-????-????-????-????????????) : ;;
+      $_CODEX_UUID_GLOB) : ;;
       *) sid="$(_codex_meta_field "$f" id)" ;;
     esac
     [ -n "$sid" ] || continue
@@ -647,6 +653,11 @@ adapter_sid_canonical() {
 # hand its caller rc=1 whenever the name is exactly 36 characters, and THAT is
 # the shape `set -e` actually kills (a failing test as a function's last
 # command), not the `[ … ] && cmd` an earlier comment blamed.
+# A uuid, as a `case` glob: 8-4-4-4-12 HEX digits. Explicit digit lists, not
+# `[0-9a-f]` ranges, so no locale's collation order can widen it.
+_CODEX_HX='[0123456789abcdefABCDEF]'
+_CODEX_UUID_GLOB="$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX-$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX-$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX-$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX-$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX$_CODEX_HX"
+
 _codex_sid_from_path() {
   _CODEX_SID="${1##*/}"; _CODEX_SID="${_CODEX_SID%.jsonl}"
   if [ "${#_CODEX_SID}" -gt 36 ]; then

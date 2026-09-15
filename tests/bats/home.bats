@@ -529,7 +529,7 @@ _seed_burn_flood_agy() {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | clikae init agy default >/dev/null 2>&1
   local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
-  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
   local i n sid f
   for i in 1 2 3; do
     sid="11111111-0000-4000-8000-00000000000$i"
@@ -538,7 +538,7 @@ _seed_burn_flood_agy() {
     printf '{"content":"HUMAN-%s content"}\n' "$i" > "$f"
     touch -t "20200101000$i" "$f"
   done
-  : > "$CLIKAE_HOME/state/burn-sessions/agy/default"
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
   for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     n="$(printf '%02d' "$i")"
     sid="22222222-0000-4000-8000-0000000000$n"
@@ -546,7 +546,7 @@ _seed_burn_flood_agy() {
     f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
     printf '{"content":"BURN-%s content"}\n' "$n" > "$f"
     touch -t "2021010100$n" "$f"
-    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/agy/default"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
   done
 }
 
@@ -1543,7 +1543,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | clikae init agy "$1" >/dev/null 2>&1
   local base="$CLIKAE_HOME/profiles/antigravity/$1/antigravity-cli"
-  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/agy"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
   local i sid f
   for ((i=1; i<=$2; i++)); do
     printf -v sid '11111111-0000-4000-8000-%012d' "$i"
@@ -1552,7 +1552,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
     printf '{"content":"HUMAN-%04d content"}\n' "$i" > "$f"
     touch -t 202001010000 "$f"      # humans OLD; burns keep "now" => burns win
   done
-  : > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
   for ((i=1; i<=$3; i++)); do
     printf -v sid '22222222-0000-4000-8000-%012d' "$i"
     mkdir -p "$base/brain/$sid/.system_generated/logs"
@@ -1560,7 +1560,7 @@ _seed_bulk_agy() {   # <tank> <humans> <burns>
       > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
   done
   awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "22222222-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
-    > "$CLIKAE_HOME/state/burn-sessions/agy/$1"
+    > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
 }
 
 _seed_bulk_claude() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
@@ -1618,9 +1618,24 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   # Round 1 gave 5 here (clamped at 200 while asking 10+195=205).
   [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
   [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
-  # An agy tank's sidecar lives under the "agy" alias, not "antigravity" — if
+  # An agy tank's sidecar lives under its engine id, "antigravity" (#113) — if
   # this lookup misses, the ask is never widened and this test reads 5.
-  [ -f "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+}
+
+@test "a store written under the old 'agy' sidecar key is migrated before the board reads it — the ask is still widened (#113)" {
+  # The shape every existing install has: burn.sh wrote agy's sidecar under
+  # "agy". The board no longer translates, so without the startup migration
+  # this reads 5 rows (the #93 round-2 bug) instead of 10.
+  _seed_bulk_agy default 50 195
+  mv "$CLIKAE_HOME/state/burn-sessions/antigravity" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy" ]
 }
 
 @test "195 burns + 50 humans still fill the Continue list — claude (#93 round-2 P2-1)" {
@@ -1691,4 +1706,99 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"list truncated"* ]] || { echo "$output"; false; }
   [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+}
+
+# --- #113 item 3: a codex rollout whose name is not a uuid, on the BOARD ------
+# The adapter-level specimens live in tests/bats/adapters/{codex,grok}.bats; this
+# is the same file seen from the surface the fast path exists for. The resume
+# row's last field is the sid a keypress resumes, so that is what is asserted —
+# on the live adapter path AND on the board index path, which must agree.
+@test "board (#113): a codex rollout with a uuid-SHAPED, non-hex name shows the BODY id, on both the live and the index path" {
+  clikae init codex a >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  local body="019e0000-0000-7000-8000-0000000b0d13" bogus="notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$body" "$work"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-ODDNAME session"}}\n'
+  } > "$sdir/rollout-2026-06-03T09-00-00-$bogus.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-ODDNAME"* ]] || { echo "$output"; false; }
+
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/reading_cache.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/board_state.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items row mode
+  for mode in 0 1; do
+    _CLIKAE_BOARD="$mode" _home_items_load 2>/dev/null
+    row="$(printf '%s\n' "$items" | grep '^resume'$'\037''codex' || true)"
+    [ -n "$row" ] || { echo "mode=$mode: no codex resume row"; printf '%q\n' "$items"; false; }
+    [ "${row##*$'\037'}" = "$body" ] || { echo "mode=$mode: sid=${row##*$'\037'}"; false; }
+    [[ "$row" != *"$bogus"* ]] || { echo "mode=$mode: bogus id on the board"; false; }
+  done
+}
+
+# --- #113 item 1: the truncation signal is a ROW in the items stream, not a
+# `state/home-recent-truncated.$$` file ---------------------------------------
+# The file had no exit-time cleanup, so every truncating render — and every
+# killed board — left one behind in the user's state dir, keyed by a pid. It
+# also had no concurrency test.
+
+@test "two boards rendering one tank at once each print their own truncation line and leave no marker (#113)" {
+  _seed_bulk_agy default 50 50
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  # Same ceiling on both (the board index is shared per tank, and its cap is a
+  # function of the ceiling), different LANGUAGES — so "its own line" is
+  # observable: a board that printed the other's line, or its own twice, shows.
+  local a="$TEST_HOME/board-en.out" b="$TEST_HOME/board-zh.out" pa pb ra=0 rb=0
+  CLIKAE_LANG=en-US CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$a" 2>&1 &
+  pa=$!
+  CLIKAE_LANG=zh-TW CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$b" 2>&1 &
+  pb=$!
+  wait "$pa" || ra=$?
+  wait "$pb" || rb=$?
+  [ "$ra" -eq 0 ] || { cat "$a"; false; }
+  [ "$rb" -eq 0 ] || { cat "$b"; false; }
+  [ "$(grep -c '50 sessions hidden as burn runs · list truncated' "$a")" -eq 1 ] || { cat "$a"; false; }
+  [ "$(grep -c '50 個 session 被當成 burn 隱藏' "$b")" -eq 1 ] || { cat "$b"; false; }
+  ! grep -q '被當成 burn 隱藏' "$a" || { cat "$a"; false; }
+  ! grep -q 'list truncated' "$b" || { cat "$b"; false; }
+  # Nothing on disk speaks for a board that is no longer running.
+  local left; left="$(find "$CLIKAE_HOME" -name 'home-recent-truncated*' 2>/dev/null)"
+  [ -z "$left" ] || { echo "marker left behind: $left"; false; }
+}
+
+@test "_home_items_load lifts the truncation row out of \$items, anchored to a line start (#113)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items
+  # Mid-stream: the recent section's first row, ahead of its resume rows.
+  _home_items() { printf 'tank\037agy\037a\n%s\03742\nresume\037agy\037a\037t\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 42 ] || { echo "got=$_HOME_RESUME_TRUNC"; false; }
+  [ "$items" = "$(printf 'tank\037agy\037a\nresume\037agy\037a\037t')" ] || { printf '%q\n' "$items"; false; }
+  # Last row: the truncation emptied the Resume list entirely.
+  _home_items() { printf 'tank\037agy\037a\n%s\0377\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 7 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || { printf '%q\n' "$items"; false; }
+  # A tank legally NAMED like the kind, mid-row, is a row, not the signal.
+  _home_items() { printf 'tank\037agy\037%s\0379\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037%s\0379' "$_HOME_TRUNC_KIND")" ] || false
+  # A render with no truncation clears the previous render's count.
+  _home_items() { printf 'tank\037agy\037a\n'; }
+  _HOME_RESUME_TRUNC=5
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || false
 }

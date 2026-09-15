@@ -182,7 +182,7 @@ _agy_fixture() {
   _fixture
   _agy_fixture
   _burn agy default
-  _assert_sidecar agy default "$STUB_SID"
+  _assert_sidecar antigravity default "$STUB_SID"
 }
 
 @test "agy session absent from the cache still resolves from its transcript" {
@@ -258,7 +258,7 @@ printf 'done\n' > "$STUB_ARTIFACT"   # artifact written, but NO transcript at al
 STUB
   chmod +x "$TEST_HOME/bin/agy"
   _burn agy default
-  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ] && [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
 }
 
 @test "agy burn records nothing (not the wrong one) when it can't tell its own new session apart from a concurrent one" {
@@ -285,7 +285,7 @@ STUB
   run clikae burn agy default --prompt 'Write the artifact' --add-dir "$PWD" --artifact "$STUB_ARTIFACT"
   [ "$status" -eq 0 ]
   [[ "$output" == *"could not attribute session"* ]] || false
-  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ] && [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
 }
 
 @test "codex burn writes no sidecar line when the run produces zero transcripts" {
