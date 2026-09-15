@@ -495,6 +495,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to read history, swipe down toward live output, and tap to leave copy-mode.
   `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
   (default 2). Desktop wheel and drag bindings are unchanged.
+- Failed `clikae burn` runs report Git work left behind in cwd/`--add-dir`
+  repositories, recent files, and a push hint; `--json` includes `left_behind`
+  without pushing or changing repository state (#84). Round-2 review of #87:
+  every git call in the scan (not just its file-list `find`) is now bounded,
+  plus a 10s global scan budget; the 25-repo cap ranks unpushed commits
+  ahead of file mtime and its push hint prints even past the cap; nested
+  repos at any depth are discovered and files attribute to the innermost
+  repo; `--json` gains `left_behind_truncated`. Round-3 review of #87: the
+  per-call 5s bound now actually catches a hung git call on real bash 3.2
+  (`command git` defeated it there — `$!` was a subshell, not git); the
+  global scan budget now covers repo discovery too, not just the per-repo
+  loop, and a repo whose discovery hangs is counted rather than dropped
+  silently; a failed `--json` burn's stdout no longer waits an extra ~5s
+  for an orphaned watchdog to release its held-open fd. Round-4 review of
+  #87: round-3's own discovery-timeout fix had a regression — a bounded
+  discovery `find` that is merely slow-but-finite (not hung) forced the
+  whole scan budget to read as exhausted, making the burn's own cwd/`--add-dir`
+  repo (the one #84 exists to report on) vanish from the list; a timed-out
+  discovery `find` now counts as one honest "more" instead. `BURN_LB_GIT`
+  is resolved with `type -P`, not `command -v`, which returned a shadowing
+  shell function's bare name instead of a path when the caller had
+  `export -f`'d one named `git`. Round-5 review of #87: the per-call bound
+  now kills the bounded command's whole PROCESS GROUP — `find`'s own
+  `-exec` forks, so killing `find` alone left a `stat` running that held
+  the scan's output open and could hang `burn` indefinitely with no rows
+  and no JSON at all; "did this time out" is decided by the watchdog
+  instead of by an integer `$SECONDS` comparison that reported phantom
+  timeouts for commands that finished in time; a discovery `find` that
+  hits its own ceiling now says "discovery timed out", not "scan budget
+  exhausted"; and `$PWD`/`--add-dir` are resolved before any `find` runs,
+  so a repo already discovered at the budget boundary is reported instead
+  of dropped. Round-6 review of #87: the kill that aims at a process group
+  now verifies the VALUE it is handed, not just the platform's capability
+  (`kill -- -0` is the caller's own group — burn plus the shell that
+  launched it); Ctrl-C reaches the scan again (`set -m` had put the child
+  in a group the terminal's SIGINT never visits, so a cancelled scan kept
+  reading the disk for the rest of its bound); the TERM->KILL escalation
+  reaches the whole group instead of dying with the direct child, so a
+  grandchild that ignores TERM is no longer left running; each repo's
+  file-list scan gets its own temp file, so a writer that outlived one
+  repo's bound can no longer land its rows — and its mtime, and with it
+  the ranking — in the NEXT repo's report; the 137/143 fallback is narrowed
+  to the case its own comment described (no mark could be written) and uses
+  a millisecond clock where one exists, instead of reporting an
+  externally-killed command as a timeout; and the watchdog's kill mark
+  comes from `mktemp` rather than a predictable /tmp path. Everything those
+  rounds deliberately left unfixed is now tracked in #112 rather than in
+  review notes.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

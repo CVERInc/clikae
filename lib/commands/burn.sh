@@ -90,7 +90,8 @@ Give the task in one of two ways:
                       never the exit code", and with rerouting the tank that did
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
-                         reset, rerouted_from[], elapsed_s, run_id}
+                         reset, rerouted_from[], elapsed_s, run_id, left_behind[],
+                         left_behind_truncated}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -128,6 +129,9 @@ is the EARLIEST parseable reset among the dry tanks, null if none parsed);
 tool-host failure -> retry the same tank, then reason: infra (exit 1);
 no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
 on every tank; exit 1).
+
+Without a fresh artifact, report left-behind Git work and up to 10 recent files
+per repository in cwd/--add-dir roots; show a push hint, never push.
 
 Every burn writes ONE machine-readable status file, updated at every
 transition, so a cockpit never has to grep a log for "ran dry" or "[ FAIL ]"
@@ -885,7 +889,7 @@ _agy_burn() {
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
       _burn_result true agy "$cur" "$artifact" "artifact produced"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
     elif printf '%s' "$out" | grep -qi "no output produced"; then
       # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
@@ -921,12 +925,13 @@ _agy_burn() {
         _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "clikae captured stdout into the artifact" ""
         _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
         log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
-        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
         return 0
       fi
       log_err "agy/$cur produced output but clikae could not write $artifact"
       _burn_status_write fail false "$status_engine" "$cur" "$artifact" "clikae could not write the artifact" ""
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      _burn_result false agy "$cur" "$artifact" "clikae could not write the artifact"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     else
       log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
@@ -934,7 +939,7 @@ _agy_burn() {
       _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       _burn_output_tail "$out"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 
@@ -1009,6 +1014,973 @@ _agy_burn() {
   done
 }
 
+# P2-1 (round-2 review): round-1's wall budget wrapped the file-list `find`
+# ONLY — the four `_burn_lb_git` calls below ran bare. Measured: `find` is
+# the CHEAP half (0.016s on a 20k-file repo vs git status's 0.108s with
+# fsmonitor/locks both off — the exact config P3-4 forces on every call
+# here), so the budget guarded the 1/7-cost side and left the expensive,
+# hang-prone side (a FIFO for `.git/HEAD`, a stuck `git status` on a dead
+# NFS mount) able to block `_burn_left_behind` — and therefore all of
+# `burn` — forever. `timeout`/`gtimeout` don't fix this portably: stock
+# macOS ships neither (see `_burn_timeout_bin`'s own comment), and its
+# `perl` fallback is explicitly skipped there because an alarm-killed
+# perl's exit code isn't reliably 124. `_burn_lb_bounded` needs no external
+# binary at all — background, blocking `wait` (not a `kill -0` poll loop —
+# see that tradeoff below), TERM+KILL past the deadline — so it bounds git
+# and find identically on every platform bash itself runs on (P2-1, round-3
+# review: identically requires never backgrounding a builtin — see
+# `_burn_lb_git`'s own comment). P3-3 (round-4 review): "identically" also
+# assumes `"$@"` execs into a single process — TERM+KILL only ever reaches
+# the one pid `$!` names; a child that forks and does NOT exec (or traps
+# TERM) leaves ITS child running past the deadline, still holding
+# `_burn_left_behind`'s pipe open.
+# P2-1 (round-5 review): round-4 answered that with a comment claiming "real
+# git and find don't do this". They do — `find`'s own `-exec` is exactly
+# that shape, and it is THIS FILE's file-list scan that runs it: `-exec test
+# -e {}/.git \;` forks once per directory walked, `-exec stat … {} +` once
+# per batch. Measured on the pre-fix code, with only `stat` stubbed: a stub
+# that slept 25s made a real `clikae burn` take 25s against a 5s bound and a
+# 10s global budget; a stub that never returned made it produce NOTHING —
+# killed by an external `timeout -s KILL 45` with no "left behind:" block
+# and no JSON at all, because the orphaned grandchild still held the scan's
+# own `$(...)` open (so much for "never change burn's exit code or --json
+# shape"); the same shape on real bash 3.2.57 had not returned after 13
+# minutes. The fix is below and it is structural: the bounded child gets its
+# OWN process group and the deadline kills the GROUP. Backgrounding here is safe specifically
+# BECAUSE this whole scan
+# already runs inside `_burn_left_behind`'s own `$(...)` subshell (see the
+# P1 note below): the "&" below can only ever background a child of THAT
+# subshell, so nothing it starts can outlive the one process substitution
+# that already scopes every other failure mode in this function.
+# P2-1 (round-5 review): `kill -- -$pid` is the whole fix, and it is also the
+# one call in this file that could be catastrophic if it silently aimed at the
+# wrong thing — a `-$pid` that is NOT a process group of its own is the
+# SCAN's process group, i.e. burn itself and whatever shell launched it. So
+# the capability is verified once per scan against a throwaway child rather
+# than assumed, and anything short of proof leaves `_BURN_LB_PGROUP=0`, where
+# every kill below falls back to the exact single-pid behaviour this function
+# had before — never worse, just not better.
+# The test is `kill -0 -- -$p`, and it is EXACT rather than approximate: a
+# process group's id is always some process's pid, and that pid here is our
+# own child, so a group with id `$p` can exist only if `$p` itself leads it.
+# It is also the bash builtin, which matters more than it looks — the first
+# cut asked `ps -o pgid= -p "$p"`, and on a real `bash:3.2.57` container
+# (busybox `ps`, no such option) it answered nothing, silently disabling the
+# whole fix on the one bash version this round exists to protect. Measured
+# there: `PGROUP=0`, the grandchild survived, `survivors=1`. With this
+# version, on the same container: `PGROUP=1`, zero survivors.
+_burn_lb_pgroup_probe() {
+  _BURN_LB_PGROUP=0
+  local mflag p
+  case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
+  { set -m; } 2>/dev/null
+  sleep 30 &
+  p=$!
+  [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
+  kill -0 -- "-$p" 2>/dev/null && _BURN_LB_PGROUP=1
+  kill "$p" 2>/dev/null || true
+  wait "$p" 2>/dev/null || true
+  return 0
+}
+
+# Our own process group id, resolved at most once per shell and cached as the
+# empty string when the platform will not say (busybox `ps` has no `-o pgid` —
+# the same platform that made `_burn_lb_pgroup_probe` stop trusting `ps`).
+# `_burn_left_behind` resolves it up front so the per-repo `$(...)` subshells
+# inherit the answer instead of forking a `ps` each.
+_burn_lb_self_pgid() {
+  case "${_BURN_LB_PGID+set}" in set) return 0 ;; esac
+  _BURN_LB_PGID="$(ps -o pgid= -p $$ 2>/dev/null)" || _BURN_LB_PGID=''
+  _BURN_LB_PGID="${_BURN_LB_PGID// /}"
+  _BURN_LB_PGID="${_BURN_LB_PGID//$'\t'/}"
+  case "$_BURN_LB_PGID" in ''|*[!0-9]*) _BURN_LB_PGID='' ;; esac
+  return 0
+}
+
+# Says out loud what it refused and why. `log_warn` (stderr) when log.sh is
+# loaded — burn's `--json` payload goes to fd 4/stdout, never here — and a
+# bare printf when this file was sourced on its own.
+_burn_lb_kill_refused() {
+  if command -v log_warn >/dev/null 2>&1; then
+    log_warn "left-behind scan: refusing to signal \`-$2\` with $1 ($3) — see _burn_lb_kill."
+  else
+    printf 'left-behind scan: refusing to signal -%s with %s (%s)\n' "$2" "$1" "$3" >&2
+  fi
+  return 0
+}
+
+# _burn_lb_kill <signal> <pid> — the pid's whole process group when this
+# platform gave it one, the pid alone otherwise.
+# P3-1 (round-6 review): `_burn_lb_pgroup_probe` above proves the PLATFORM can
+# be aimed at a process group. It proves nothing about the VALUE this function
+# is handed, and `kill -- -$2` is exactly as catastrophic for a bad value as
+# the probe's own comment says: POSIX reads `-0` as "the CALLER's process
+# group", i.e. burn plus whatever shell launched it. Measured on this box (in
+# an isolated `setsid` session, so only that session died): `_burn_lb_kill TERM
+# 0` never returned, the caller exited with rc=15, and its own children went
+# with it. `-1` is the same shape aimed at every process the user may signal.
+# Today no call site can produce either — `$!` after `cmd &` is never 0, 1 or
+# empty — so this is a guard against the next caller, not a live bug; the blast
+# radius is the operator's terminal and the guard is a `case`.
+# Refusals are loud (`log_warn`) and return 1: a caller that gets here has a
+# bug, and silently doing nothing is how the wrong pid got this far.
+_burn_lb_kill() {
+  local sig="$1" target="${2:-}"
+  case "$target" in
+    ''|*[!0-9]*)
+      _burn_lb_kill_refused "$sig" "$target" 'not a pid'
+      return 1 ;;
+  esac
+  if [ "$target" -lt 2 ] 2>/dev/null; then
+    _burn_lb_kill_refused "$sig" "$target" \
+      'reserved: 0 means the callers own process group, 1 means every process'
+    return 1
+  fi
+  # The one value that looks like an ordinary pid and is still the disaster:
+  # our own process group's leader. A child's pgid is always its own fresh pid,
+  # so a legitimate target can never collide with it — but a stale/reused
+  # variable can.
+  _burn_lb_self_pgid
+  if [ -n "${_BURN_LB_PGID:-}" ] && [ "$target" = "$_BURN_LB_PGID" ]; then
+    _burn_lb_kill_refused "$sig" "$target" "that is burn's own process group"
+    return 1
+  fi
+  if [ "${_BURN_LB_PGROUP:-0}" = 1 ]; then
+    kill "-$sig" -- "-$target" 2>/dev/null && return 0
+  fi
+  kill "-$sig" "$target" 2>/dev/null || true
+  return 0
+}
+
+# Milliseconds since the epoch, or nothing at all when neither clock exists.
+# P3-5 (round-6 review): the 137/143 fallback at the end of `_burn_lb_bounded`
+# is the last place in this file that still compares `$SECONDS` — an integer
+# clock that ticks on ABSOLUTE second boundaries, the exact defect round-5's
+# P3-3 removed from the main path. `$EPOCHREALTIME` (bash 5) and GNU `date
+# +%s%N` both give sub-second resolution; BSD `date` prints a literal `N` for
+# `%N`, which the digit test below rejects, and then the caller keeps the old
+# whole-second comparison rather than inventing precision it does not have.
+_burn_lb_now_ms() {
+  local t s f
+  t="${EPOCHREALTIME:-}"
+  case "$t" in
+    *[.,]*)
+      s="${t%%[.,]*}"; f="${t#*[.,]}000"
+      case "$s" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s' "$(( s * 1000 + 10#${f:0:3} ))"; return 0 ;;
+      esac ;;
+  esac
+  t="$(date +%s%N 2>/dev/null)" || t=''
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  # BSD `date` prints a literal `N` (caught by the digit test above), but
+  # busybox `date` — the one on the real `bash:3.2` image — expands `%N` to
+  # NOTHING, which leaves a plain 10-digit epoch that looks like a valid
+  # answer and reads as 1789 milliseconds. Epoch nanoseconds are the epoch's
+  # 10 digits plus 9 more; anything shorter is not this clock.
+  [ "${#t}" -ge 19 ] || return 1
+  printf '%s' "${t%??????}"
+  return 0
+}
+
+# Remembers the caller's own INT disposition once per shell so the trap
+# `_burn_lb_bounded` installs can be taken back off exactly, not with a blanket
+# `trap - INT` — `cmd_burn` installs `_burn_exit_guard` on INT (see below), and
+# a helper that quietly deletes it would trade this round's fix for a worse bug.
+_burn_lb_int_save() {
+  case "${_BURN_LB_INT_PREV+set}" in set) return 0 ;; esac
+  _BURN_LB_INT_PREV="$(trap -p INT 2>/dev/null)" || _BURN_LB_INT_PREV=''
+  return 0
+}
+
+_burn_lb_bounded() {
+  local secs="$1"; shift
+  local start=$SECONDS pid watcher rc mflag kill_mark
+  local start_ms='' now_ms='' timed_out=0
+  # Lazily probed so a direct caller (the unit tests in burn.bats) gets the
+  # same guarantee; `_burn_left_behind` probes ONCE up front so the four
+  # per-repo `_burn_lb_git` calls — each inside its own `$(...)` subshell,
+  # where a global set here would not survive — inherit the answer instead
+  # of re-probing 4x per repo.
+  [ -n "${_BURN_LB_PGROUP:-}" ] || _burn_lb_pgroup_probe
+  # $1 must never be a shell builtin (`command`, `builtin`, `eval`, a
+  # function) — on real bash 3.2 (not this repo's bash 5), backgrounding a
+  # builtin forks an intermediate subshell to run it, so `$!` below is that
+  # subshell, not whatever the builtin itself execs. Every caller passes an
+  # absolute path or a bare external command name for exactly this reason
+  # (P2-1, round-3 review; `_burn_lb_git`'s own comment has the repro).
+  # Job control, on for exactly the length of this fork, is what puts the
+  # child in a process group of its own (pgid == its pid) — real bash 3.2.57
+  # does this too (verified in a `bash:3.2.57` container: the child's pgid is
+  # its own pid and the group kill leaves zero survivors).
+  # `{ set -m; } 2>/dev/null` rather than a bare `set -m`: bash initialises
+  # job control against `fileno(stderr)` and, with a terminal there, can take
+  # the controlling terminal's foreground process group — which would be a
+  # new way to wreck a `clikae burn` running under a pty. Redirecting fd 2
+  # for the duration of the `set` builtin itself keeps that path away from
+  # the tty (verified under `script`: this shell's own pgid AND the
+  # terminal's foreground pgid are unchanged across this block, while the
+  # child still gets its own pgid).
+  case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
+  { set -m; } 2>/dev/null
+  "$@" &
+  pid=$!
+  # P3-3 (round-5 review, same root as r3 P3-1): the watchdog leaves a mark
+  # when it actually fires, so "did this time out" stops being an integer
+  # comparison of a second-granularity clock — see the `return` at the end of
+  # this function for what that comparison got wrong. Cleared first, with a
+  # builtin test so the common (no-timeout) path still forks nothing: the
+  # path is unique among LIVE processes, but a previous call killed between
+  # its own `kill` and its own `rm` could have left one behind under the same
+  # `$$`/pid pair.
+  # P3-6 (round-6 review): this used to be `"${TMPDIR:-/tmp}/clikae-lb-kill.$$.$pid"`
+  # — the only path in this function assembled by hand while `disc`, `scan` and
+  # `rank` all use `mktemp`. Both of its ingredients are readable by every other
+  # user of a shared `/tmp`, which buys them two things: create the file first
+  # and this call reports a timeout that never happened, or point it at a
+  # symlink and the watchdog's write truncates whatever it names (the `rm -f`
+  # that followed removed the link, not the damage). `mktemp` is O_EXCL, 0600
+  # and unguessable, so neither move exists any more.
+  # The file is created EMPTY and now carries the answer in its SIZE, not in
+  # its existence: `mktemp` made it, so "it exists" no longer means "the
+  # watchdog fired" — `[ -s ]` does. An empty `kill_mark` (mktemp failed, e.g.
+  # a full or read-only $TMPDIR) is the one case that has no evidence to read,
+  # and only that case falls back to the clock at the end of this function.
+  kill_mark="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-kill.XXXXXX" 2>/dev/null)" || kill_mark=''
+  if [ -z "$kill_mark" ]; then
+    start_ms="$(_burn_lb_now_ms)" || start_ms=''
+  fi
+  # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
+  # wrong in a way that only showed up under real load: every bounded call
+  # — even one that finishes instantly — pays up to ~1s of pure polling
+  # latency (the loop only notices the child is gone on its NEXT wake-up).
+  # With 4 bounded calls per repo that turned "30 small repos, instant
+  # git" into 3 repos before the 10s global budget (P2-1, same review)
+  # tripped — measured on this box under a normal shared-runner load.
+  # `wait "$pid"` is a real blocking wait (kernel-level, zero polling
+  # tax); the watchdog subshell is the only thing that sleeps, and only
+  # once, for exactly `secs`.
+  # This function is always called from inside `_burn_left_behind`'s own
+  # `$(...)` — a command substitution never returns until every process
+  # holding its output pipe's write end has closed it, INCLUDING a
+  # process that never writes anything. The watchdog's `sleep "$secs"` is
+  # forked as ITS child, not `_burn_lb_bounded`'s — killing the watchdog
+  # subshell (below) does not kill that grandchild, which then runs
+  # orphaned for its full duration, silently holding the pipe open the
+  # whole time. Measured: every bounded call took exactly `secs` — the
+  # RIGHT value came back immediately (rc was correct at $SECONDS+0), the
+  # command substitution just didn't unblock until the orphaned `sleep`
+  # finally exited. `>/dev/null 2>&1` on the watchdog gives it (and
+  # anything it forks) a redirected fd 1 from the start, so an orphaned
+  # `sleep` holds no reference to the real pipe.
+  # P2-3 (round-3 review): 1/2 being redirected wasn't enough — the watchdog
+  # (and its orphaned `sleep`, same reasoning as above) still inherited every
+  # OTHER fd open in the caller, including fd 4, which `cmd_burn` holds open
+  # as `--json`'s real stdout for the whole run. Every failed burn call
+  # measured a fixed ~5s gap between the process exiting and the caller's
+  # `$(clikae burn --json …)`/`| jq` actually seeing EOF — the orphaned
+  # `sleep` was the last writer-side holder of that pipe. `3>&- 4>&-` closes
+  # the two fds this file itself is known to open (fd 3: `_burn_run_and_tee`;
+  # fd 4: the json result pipe) so the watchdog can't hold either past its
+  # own exit.
+  # The watchdog is backgrounded while job control is STILL on, so it gets a
+  # group of its own as well — which is what finally retires the orphaned
+  # `sleep` this function's comments above spend three paragraphs on: killing
+  # the watchdog's GROUP takes its `sleep` with it instead of leaving a
+  # grandchild holding whatever fds it inherited.
+  # TERM first (a child with a cleanup trap gets to run it), then KILL a
+  # second later for one that ignores TERM. `wait "$pid"` below does not
+  # return until the child is actually dead, so the parent cannot reap this
+  # watchdog before that escalation has happened.
+  ( sleep "$secs"
+    # Gate on the child still existing so the deadline and a command that
+    # finished on its own at the very same instant do not both claim it.
+    if kill -0 "$pid" 2>/dev/null; then
+      [ -z "$kill_mark" ] || printf '1\n' > "$kill_mark" 2>/dev/null || true
+      _burn_lb_kill TERM "$pid" || true
+      sleep 1
+      # P3-3 (round-6 review): this KILL is a GROUP kill (`kill -KILL -- -$pid`,
+      # since a bounded child's pgid is its own pid) and it is the only thing
+      # that reaches a grandchild which ignores TERM. It used to be unreachable:
+      # the parent's `wait "$pid"` returns the instant the DIRECT child dies of
+      # TERM, and the parent then killed this watchdog — mid-`sleep 1`, before
+      # the escalation. Measured: child `trap "" TERM` => 0 survivors (the
+      # parent was still blocked in `wait`), but a child that dies of TERM with
+      # a TERM-ignoring GRANDCHILD => 1 survivor, still alive 3s later. The
+      # parent now waits this subshell out instead whenever the mark says it
+      # fired.
+      _burn_lb_kill KILL "$pid" || true
+    fi
+  ) >/dev/null 2>&1 3>&- 4>&- &
+  watcher=$!
+  [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
+  # P3-2 (round-6 review): `set -m` above is what puts the child in a process
+  # group of its own — and a terminal delivers SIGINT only to its FOREGROUND
+  # process group, so from the moment that fix landed, Ctrl-C during a scan
+  # stopped reaching the `find`/`git` the scan is waiting on. Measured: burn
+  # died instantly and its bounded child plus the watchdog's `sleep` kept
+  # running, orphaned (`ppid=1`), chewing the disk for the rest of the bound.
+  # Forwarding INT to the child's GROUP restores the pre-`set -m` behaviour:
+  # the scan stops now, the watchdog's TERM/KILL is still there as the backstop
+  # for a child that ignores INT, and the interrupt is re-raised below so burn
+  # exits the way an interrupted command is supposed to and the operator gets
+  # their shell back.
+  _burn_lb_int_save
+  _BURN_LB_INT=0
+  # `$pid` is baked in ON PURPOSE (SC2064): by the time this fires, `$pid` may
+  # already belong to the NEXT bounded call, and signalling that one's group
+  # would be the very footgun the guard above exists to stop.
+  # shellcheck disable=SC2064
+  trap "_BURN_LB_INT=1; _burn_lb_kill INT $pid || true" INT
+  # This whole function runs under the caller's `set -eo pipefail`
+  # (bin/clikae:6, same as every other git call in this file). `wait`'s
+  # own exit status is the waited-on job's exit status — non-zero for
+  # ANY command this bounds that legitimately fails (not just a timeout:
+  # `git rev-list --count '@{u}..HEAD'` with no upstream configured,
+  # which round-1's own tests exercise constantly). A bare `wait`/`kill`
+  # left unguarded here matches the exact P1 shape (round-1 review)
+  # `_burn_left_behind`'s own comment already warns about — every git call
+  # in this file is individually `||`-guarded for that reason, and a new
+  # function that forgets it reopens the same class of bug even though it
+  # wasn't, in the end, this round's actual macOS failure (see
+  # `_burn_left_behind`'s own comment on the process-substitution bug that
+  # was). Bare `kill` is the same hazard: it returns non-zero when the
+  # target has already exited (the common, non-timeout case).
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  if [ -n "${_BURN_LB_INT_PREV:-}" ]; then eval "$_BURN_LB_INT_PREV"; else trap - INT; fi
+  if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
+    # The watchdog fired and is inside its own TERM→KILL grace (P3-3 above).
+    # Waiting it out costs one extra second on a path that has already spent
+    # `secs`, and it is what makes the group KILL exist at all.
+    timed_out=1
+    wait "$watcher" 2>/dev/null || true
+  else
+    _burn_lb_kill TERM "$watcher" || true
+    wait "$watcher" 2>/dev/null || true
+  fi
+  # P3-3 (round-5 review): this used to be `[ $((SECONDS - start)) -lt
+  # "$secs" ] && return "$rc"; return 124` — an integer comparison of
+  # `$SECONDS`, which ticks on ABSOLUTE second boundaries (bash reads
+  # time(2)), not on this call's own start. A command launched 0.01s before a
+  # tick and finishing in 4.1s measures as 5 under a 5s bound and was
+  # reported as a timeout it never hit. That was already known (r3 P3-1,
+  # deferred); round-4 gave it a consumer that turns it into a visible lie —
+  # a discovery `find` that FINISHED gets counted into `lb_budget_skipped`,
+  # so the report grows an "… and 1 more" repository that does not exist and
+  # `left_behind_truncated` counts it. Measured on the pre-fix code with a
+  # discovery `find` shimmed to 4.6s (well inside the 5s bound, and really
+  # finishing): 4 of 8 identical runs reported a phantom.
+  # The watchdog's own mark answers the question directly instead: it exists
+  # only if the deadline passed with the child still alive.
+  # P3-5 (round-6 review): the fallback below used to run whenever the mark was
+  # absent, which is NOT the same question. With `mktemp` making the file up
+  # front (P3-6), "absent" means one thing only — we could not make a mark at
+  # all — and that is the only case the comment ever claimed to cover. Before,
+  # every ordinary run had no mark, so ANY child killed from outside (the OOM
+  # killer, a maintainer's `pkill`, another lane's cleanup) was reported as a
+  # timeout burn invented, complete with a repo that "timed out" and a
+  # `discovery timed out after 5s` line. Now a usable mark is the whole answer
+  # and the clock is never consulted.
+  if [ -n "$kill_mark" ]; then
+    rm -f "$kill_mark" 2>/dev/null || true
+  else
+    # No mark was possible. A child that died FROM A SIGNAL at or past the
+    # deadline was probably killed by the watchdog — both halves are needed,
+    # since the signal alone misreads an externally-killed command. The clock
+    # is milliseconds when the platform has one (`$EPOCHREALTIME`, GNU `date
+    # +%s%N`); `$SECONDS` is the last resort and keeps its old whole-second
+    # window, which is why it is now reached only when BOTH the mark and every
+    # sub-second clock are unavailable.
+    case "$rc" in
+      137|143)
+        if [ -n "$start_ms" ]; then
+          now_ms="$(_burn_lb_now_ms)" || now_ms=''
+          if [ -n "$now_ms" ] && [ "$(( now_ms - start_ms ))" -ge "$(( secs * 1000 ))" ]; then
+            timed_out=1
+          fi
+        elif [ $((SECONDS - start)) -ge "$secs" ]; then
+          timed_out=1
+        fi
+        ;;
+    esac
+  fi
+  # Re-raise the interrupt we swallowed (P3-2) now that the child is reaped and
+  # the temp file is gone: the caller's own INT disposition is back in place,
+  # so this is `cmd_burn`'s `_burn_exit_guard 130` in a real burn and a plain
+  # 130 exit anywhere else. `$$` is bash's own pid — never 0, never empty —
+  # and is asserted anyway, because this file's one rule about `kill` is that
+  # the target is proven before it is used.
+  if [ "${_BURN_LB_INT:-0}" = 1 ]; then
+    _BURN_LB_INT=0
+    case "$$" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$$" -gt 1 ]; then kill -INT "$$" 2>/dev/null || true; fi ;;
+    esac
+  fi
+  [ "$timed_out" -eq 0 ] || return 124
+  return "$rc"
+}
+
+# Every git call the left-behind scan makes goes through this: `-c
+# core.fsmonitor=false` overrides ANY value the scanned repo's own
+# .git/config sets (command-line -c always wins over repo config), so a
+# `core.fsmonitor` pointed at an arbitrary executable can never run just
+# because burn happened to walk past that repo (P3-4/P1, round-1 review —
+# GIT_OPTIONAL_LOCKS alone only stops writes, not exec). `-c
+# core.hooksPath=/dev/null` is the same defense for every hook name.
+# P2-1 (round-2 review): every call now goes through `_burn_lb_bounded` too
+# — a hung `rev-parse`/`symbolic-ref`/`rev-list`/`status` (dead NFS mount,
+# `.git/HEAD` replaced by a FIFO) gets 5s like the file-list `find` always
+# did, instead of blocking this function — and therefore `burn` itself —
+# indefinitely.
+# P2-1 (round-3 review): `command git …` here defeated the bound it was
+# supposed to feed. `_burn_lb_bounded` records `$!` right after
+# backgrounding `"$@"`; on real bash 3.2.57 (macOS CI's own
+# `/usr/bin/env bash`, not the bash 5 this file was written and tested
+# against) `command <builtin-lookalike-name>` forks an intermediate subshell
+# to run the builtin machinery, so `$!` is THAT subshell, not git. Killing
+# `$!` kills the subshell; git is reparented to init and keeps running,
+# still holding `_burn_left_behind`'s own `$(...)` pipe open — measured:
+# `.git/HEAD` as a FIFO made a real `clikae burn` in a bash:3.2 container
+# hang past ten minutes instead of returning at the 5s bound. `$BURN_LB_GIT`
+# (resolved once, below, via the `command -v git` already needed to decide
+# whether git exists at all) is passed as `$1` instead: an absolute path is
+# never a builtin, so `_burn_lb_bounded` backgrounds git itself on every
+# bash this runs on. See P3-1 (round-4 review) on `BURN_LB_GIT`'s own
+# assignment below for why that resolution is `type -P`, not `command -v` —
+# `command -v` alone does NOT give the function/alias-shadowing immunity
+# this comment used to claim: it happily returns a shadowing function's own
+# bare name instead of a path.
+_burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+
+# Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
+# .git may be a directory OR a worktree/submodule pointer file.
+#
+# P1 (round-1 review): this whole scan runs under the caller's `set -eo
+# pipefail` (bin/clikae:6). A single unguarded pipeline failure in here used
+# to kill the ENTIRE burn process mid-`_burn_result` — before the `--json`
+# printf ever ran — turning a corrupted `.git/index` (exactly the shape a
+# killed/interrupted run leaves behind, i.e. precisely what #84 exists to
+# report on) into exit code 128 and zero JSON output. Two independent layers
+# now stand between a git failure in here and burn's own exit code: (a)
+# every git call below is individually guarded (`|| dirty=0`, `|| ahead=-`,
+# `|| continue`) so `set -e` never sees an unguarded failing statement, and
+# (b) the caller invokes this whole function inside `$(...)` — a real
+# subshell — so even a failure guard (a) misses only kills that subshell;
+# `set -e` never reaches the actual burn process either way.
+# Belt-and-suspenders on purpose: (a) alone was the P1 bug itself (one `||`
+# was missing, and the next missing one would reopen it); (b) alone would
+# still corrupt/lose this function's own human "left behind:" lines (see the
+# stdout-contract note on `_burn_result`'s call site). Every path below ends
+# in `return 0` — this function's own exit status is never the signal;
+# `_burn_result`'s `|| left_behind='[]'` fallback exists for the SUBSHELL
+# dying unexpectedly, not for this function returning non-zero on purpose.
+_burn_left_behind() {
+  local root marker repo seen="" branch ahead dirty files count entry rp_rc
+  local -a repos=() roots=()
+  local GIT_OPTIONAL_LOCKS=0
+  export GIT_OPTIONAL_LOCKS
+  # P2-1 (round-3 review): resolved once here, not `local` — `_burn_lb_git`
+  # (defined outside this function, called only from inside it) reads this
+  # as a global. See `_burn_lb_git`'s own comment for why an absolute path
+  # replaces `command git`.
+  # P3-1 (round-4 review): `command -v git` finds an absolute path for a
+  # real executable, but when the CALLER has `export -f`'d a shell function
+  # named `git` (measured: a real burn called it 6 times), `command -v`
+  # returns the bare string "git" — not a path, and not the immunity from
+  # function/alias shadowing `command` is supposed to give here. `type -P`
+  # only ever resolves an executable file on `$PATH`, never a function or
+  # alias, on both bash 5 and bash 3.2.57 (verified in a real
+  # `bash:3.2.57` container: `command -v git` => `git`, `type -P git` =>
+  # `/usr/bin/git`), so it's what actually delivers the guarantee the
+  # comment on `_burn_lb_git` above claims.
+  BURN_LB_GIT="$(type -P git)" || { printf '[]'; return 0; }
+  # P2-1 (round-5 review): probe the process-group capability ONCE here, not
+  # per bounded call — every `_burn_lb_git` below runs inside its own `$(...)`
+  # subshell, so a lazily-probed global would be recomputed (two `ps` forks
+  # and a `sleep` each) four times per repo and thrown away every time.
+  _burn_lb_pgroup_probe
+  # P3-1 (round-6 review): same reasoning for the `ps` that `_burn_lb_kill`'s
+  # value guard needs — resolved once here so the per-repo subshells inherit it.
+  _burn_lb_self_pgid
+  # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
+  # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
+  # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
+  # silently scanned nothing — `find` doesn't follow a symlink given as its
+  # own start point without `-H`/`-L`. The file-list scan below already
+  # resolved every root with `cd "$root" && pwd -P` (mirroring this at the
+  # repo-discovery loop closes the actual gap the review found); resolving
+  # ONCE here, for both loops, also drops what used to be a redundant
+  # `$(cd "$root" && pwd -P)` subshell fork PER REPO in the file-scan loop
+  # below — the roots don't change per repo, so re-resolving them there was
+  # pure waste (part of the 200-repo/50k-file fixture's wall time).
+  for root in "$PWD" "${add_dirs[@]}"; do
+    [ -d "$root" ] || continue
+    root="$(cd "$root" && pwd -P)" || continue
+    roots+=("$root")
+  done
+  # P2-3 (round-2 review, macOS-only regression found watching real CI):
+  # this used to be a process substitution NESTED inside another process
+  # substitution (`while read … done < <(printf …; while read … done <
+  # <(find …))`) — bash 3.2, which is what `/usr/bin/env bash` actually
+  # resolves to on the macOS CI runner (confirmed: `$BASH_VERSION` traced
+  # as 3.2.57 there, not the bash 5 round-1's own review assumed), was
+  # OBSERVED to fail this construct silently on that runner: the outer
+  # process substitution's subshell never even started (traced: zero
+  # output, not even its own first statement, from inside), and the
+  # enclosing `$(_burn_left_behind …)` command substitution came back empty
+  # with rc=1 — every #84 test with any expected row read back
+  # `left_behind: []`. P3-4 (round-3 review): the RESULT is confirmed
+  # (reverting this fix reproduces the CI-shaped failure in a bash:3.2
+  # container; reapplying it fixes the same container) but the MECHANISM
+  # is not — a minimal single- and double-nested `< <(...)` loop in the
+  # same container ran fine, and 17 other process substitutions elsewhere
+  # in `lib/` are unaffected, so "process substitution is unsafe on bash
+  # 3.2" is broader than what was actually shown; treat this specific
+  # nesting shape as the confirmed trigger, not the general mechanism.
+  # A plain temp file
+  # (`mktemp`, POSIX, no bash-version-dependent process-substitution
+  # machinery at all) replaces BOTH nested substitutions: one `find`,
+  # written once, read once, with the SAME two-step logic (root itself
+  # first, unconditionally — the "cwd/root IS a git repo" case below
+  # doesn't come through `find` at all — then every discovered `.git`
+  # stripped to its parent dir) — just via a `case` on the read-back value
+  # instead of a second `printf`/`read` pipeline.
+  # P2-2 (round-3 review): the global scan budget below used to start its
+  # clock AFTER this whole discovery pass, and neither the `find` above nor
+  # the per-marker `rev-parse` it drives were bounded by it — only the
+  # per-call 5s bound applied. Measured: 200 repos with a slow `rev-parse`
+  # (1s each) took 221s wall to even START the budgeted per-repo loop; 8
+  # repos with a FIFO `.git/HEAD` (5s bound trips on every one) took 40s and
+  # produced ZERO rows, zero "and N more" — the whole scan silently ran to
+  # completion after a 4x-over-budget discovery, with nothing to show for
+  # it. `lb_scan_t0` now starts here, before the first `find`, so discovery
+  # spends the SAME clock the per-repo loop already respected.
+  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
+  # P3-1 (round-5 review): a bounded call that HIT ITS OWN 5s ceiling and a
+  # candidate the 10s global budget never reached are two different facts, and
+  # round-4 reported both with one sentence ("scan budget exhausted").
+  # Measured: a discovery `find` that took 6s of a 10s budget — 4s still
+  # unspent — printed "and 1 more (scan budget exhausted)", which sends a
+  # reader to raise a budget that was never the problem. The root that hung is.
+  local lb_disc_timeout=0 lb_find_bound=5
+  local _lb_disc rc_disc
+  # P3-4 (round-5 review): the roots themselves are resolved FIRST, in their
+  # own pass, before any `find` runs. Measured on the pre-fix code: cwd = the
+  # payload repo plus one `--add-dir`, each root's discovery `find` burning
+  # the full 5s ceiling — root1's `find` spends 5s, root2's spends the other
+  # 5s, and the per-repo loop's budget check then throws away the payload repo
+  # that had ALREADY been discovered and was sitting in `repos[]`. Output:
+  # zero rows, `left_behind_truncated: 4`. Honest, bounded, and useless —
+  # #84's own headline row was the first thing dropped.
+  # A root needs no `find` at all, only one `rev-parse`, and `$PWD` plus every
+  # `--add-dir` are the directories the caller NAMED. Resolving them up front
+  # puts them at the head of `repos[]`; the per-repo loop below then exempts
+  # exactly that many entries from the soft budget (see `lb_root_repos`
+  # there), so what the scan already has in hand is reported and only the
+  # unknown remainder is truncated.
+  local lb_root_repos=0
+  for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
+    rp_rc=0
+    repo="$(_burn_lb_git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+    if [ "$rp_rc" -eq 124 ]; then
+      lb_disc_timeout=$((lb_disc_timeout + 1))
+      continue
+    fi
+    [ "$rp_rc" -eq 0 ] || continue
+    case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+    seen="${seen}"$'\n'"${repo}"$'\n'
+    repos+=("$repo")
+    lb_root_repos=$((lb_root_repos + 1))
+  done
+  for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
+    _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
+    rc_disc=0
+    {
+      # `-maxdepth 3` (round-1) capped repo discovery 2 levels below
+      # $root, so a lane's commits in a repo nested 3+ deep (`a/b/L3`,
+      # `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>` produces)
+      # vanished silently: no row, no hint. `-name .git -prune -print0`
+      # alone (no maxdepth) is unbounded in depth but each repo is still
+      # visited exactly once: pruning `.git` stops find from ever
+      # descending INTO it (irrelevant, expensive), but leaves every
+      # sibling and subdirectory of the surrounding working tree open, so
+      # a repo nested inside another repo's working tree is still found —
+      # this is how nested repos get discovered at all, not a bug to fix.
+      # P2-2 (round-3 review): bounded like every other git/find call in
+      # this file (bare `find`, not `command find` — see P2-1) — a cold
+      # network mount under $root used to be able to hang discovery itself
+      # with no bound at all.
+      _burn_lb_bounded "$lb_find_bound" find "$root" \( -name node_modules -o -name .venv -o -name target \
+        -o -name dist -o -name build -o -name .cache \) -prune \
+        -o \( -name .git -print0 -prune \) 2>/dev/null
+    } > "$_lb_disc" 2>/dev/null || rc_disc=$?
+    # P2-1 (round-4 review): this used to set `lb_budget_hit=1` too, which
+    # forces every remaining root AND every marker already sitting in
+    # `$_lb_disc` (including `$root` itself, printed unconditionally above
+    # before `find` even runs) into `lb_budget_skipped` — a `find` that's
+    # merely slow-but-finite (a big cold tree, not a hang) made the payload
+    # repo itself vanish from the report while `lb_scan_budget` still had
+    # seconds left. A bounded `find` timing out only means "this root has
+    # an unknown number of repos we didn't finish listing" — one honest
+    # "more", not a declaration that the whole scan's budget is spent. The
+    # real budget is still enforced by the `$SECONDS` check both above and
+    # in the marker loop below.
+    if [ "$rc_disc" -eq 124 ]; then
+      lb_disc_timeout=$((lb_disc_timeout + 1))
+    fi
+    while IFS= read -r -d '' marker; do
+      if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+        lb_budget_hit=1
+        lb_budget_skipped=$((lb_budget_skipped + 1))
+        continue
+      fi
+      # Every marker here comes from `-name .git -print0`; the root itself is
+      # no longer printed into this file (it was resolved in the pass above).
+      marker="${marker%/.git}"
+      rp_rc=0
+      repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+      if [ "$rp_rc" -eq 124 ]; then
+        # P2-2 (round-3 review): this is the FIFO-`.git/HEAD` shape itself —
+        # a repo whose discovery `rev-parse` hangs never becomes a `repos[]`
+        # entry, so it used to vanish with no trace anywhere in the output
+        # (not `left_behind[]`, not `left_behind_truncated`, not the human
+        # "and N more" line). Counting it into the same budget-skipped total
+        # the per-repo loop already reports is the "at least say a number"
+        # half of the round-2 fix's own promise ("a repo that trips it is
+        # force-included … worth a human's attention, not silence") —
+        # applied to discovery, not just the per-repo scan.
+        # P3-1 (round-5 review): counted as a TIMEOUT, not as budget
+        # exhaustion — this repo hung, it was not skipped for lack of time.
+        lb_disc_timeout=$((lb_disc_timeout + 1))
+        continue
+      fi
+      [ "$rp_rc" -eq 0 ] || continue
+      case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+      seen="${seen}"$'\n'"${repo}"$'\n'
+      repos+=("$repo")
+    done < "$_lb_disc"
+    rm -f "$_lb_disc"
+  done
+  local entries="" hint="" scan
+  # P2-2/P2-5 (round-1 review): no cap meant "200 repos, 200 lines" for any
+  # failed run whose --add-dir root just happens to be big — one flat wall
+  # of noise for every operator, every time. `activity_ts` (the newest
+  # qualifying file's mtime, or $started_at for a repo that qualified on
+  # dirty/ahead alone with no post-start file) orders the list so a 25-cap
+  # drops the STALEST candidates first, not an arbitrary find-order tail.
+  # Same review, same finding: no wall-time budget either — a single repo
+  # under a huge, cold tree could make the file-list `find` itself run
+  # arbitrarily long. `_burn_lb_bounded 5 find …` (round-2: `timeout`/
+  # `gtimeout` don't ship on stock macOS — see the P2-1 comment above)
+  # bounds that per repo; a repo that trips it is force-included (we
+  # genuinely don't know what's in it, which is worth a human's attention,
+  # not silence) with "(scan timed out)" in place of a files list.
+  local -a lb_repo=() lb_branch=() lb_ahead=() lb_dirty=() lb_files=() lb_ts=() lb_timeout=()
+  _clikae_statv
+  local stat_flag='-c'
+  [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
+  local statline mname mline
+  # P2-1 (round-5 review): the file-list `find` writes HERE instead of into a
+  # `$(... | sort -rn)` command substitution. A command substitution does not
+  # return until every writer of its pipe has closed it, so one grandchild
+  # that outlives the bound (the whole point of the round-5 finding) hangs
+  # `burn` itself even after the bound has done its job. A regular file has
+  # no such reader to block: the bound returns, the file is read, and
+  # whatever the kill did or did not reach cannot hold the scan open.
+  # P3-4 (round-6 review): created per (repo, root) scan, NOT once for the whole
+  # loop. One shared file plus `>` to truncate it per root was one `mktemp` per
+  # scan instead of one per iteration — and a writer that outlived its bound
+  # (the survivor this whole round exists because of) kept an open fd on it.
+  # `>` resets the LENGTH, never a survivor's file OFFSET, so its next write
+  # landed past a sparse hole in the NEXT repo's file. Measured: repo B's own
+  # parser accepted `9999999999 /REPO-A-LEAKED/file9` and three more like it,
+  # and that forged mtime then won repo B's `activity_ts` and its place in the
+  # three-level ranking. Each scan now gets its own `mktemp`, and it is removed
+  # the moment `sort` has read it — a survivor is then writing into an unlinked
+  # inode nothing will ever read again.
+  local _lb_scan_file=""
+  # P2-1 (round-2 review), second layer: per-call 5s bounds any ONE hang,
+  # but nothing capped the SUM — `repos=6` that each trip the 5s bound
+  # measured 30s total, perfectly linear, and a real `--add-dir ~/Developer`
+  # with 200 repos in that shape is 1000s. `$SECONDS` (bash builtin, no
+  # fork) gives a zero-cost wall clock for a global budget on TOP of the
+  # per-call one: once 10s of real time has gone into this loop, every
+  # remaining candidate repo is skipped rather than attempted — reported
+  # honestly as "scan budget exhausted" (lb_budget_skipped below), not
+  # silently dropped the way the pre-fix cap dropped its tail.
+  # P2-2 (round-3 review): `lb_scan_budget`/`lb_scan_t0`/`lb_budget_hit`/
+  # `lb_budget_skipped` are declared once now, before discovery (above) —
+  # this loop shares that same clock and counter instead of starting a
+  # fresh 10s budget of its own on top of whatever discovery already spent.
+  # P3-4 (round-5 review): the first `lb_root_repos` entries are `$PWD` and
+  # the `--add-dir`s the caller named — already discovered, at zero `find`
+  # cost, before the budget could be spent (see the pass that fills them in
+  # above). Dropping one of those because discovery elsewhere ran long is
+  # dropping the answer to the question that was asked. They are exempt from
+  # the soft budget; everything else still respects it. The exemption is not
+  # unbounded: every git/find call inside the loop keeps its own 5s ceiling,
+  # and an absolute 3x ceiling stops even a pathological `--add-dir` list from
+  # turning "bounded scan" back into "runs as long as it likes".
+  local repo_i=0 lb_scan_hard_cap=$((lb_scan_budget * 3))
+  for repo in "${repos[@]}"; do
+    repo_i=$((repo_i + 1))
+    if [ "$repo_i" -le "$lb_root_repos" ]; then
+      if [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_hard_cap" ]; then
+        lb_budget_skipped=$((lb_budget_skipped + 1))
+        continue
+      fi
+    elif [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
+    branch="$(_burn_lb_git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '%s' HEAD)" || branch=HEAD
+    ahead="$(_burn_lb_git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || ahead=-
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=-
+    # P1-1: the one git call the round-1 review found with no guard at all —
+    # a bare assignment is NOT the condition of any if/&&/||, so `set -e`
+    # aborted right here, before `_burn_result`'s printf ever ran.
+    # P3-5: --ignore-submodules=all — without it, a submodule with its own
+    # uncommitted changes counts as "dirty" TWICE: once in its own row
+    # (correct) and again in the superproject's row (wrong — the
+    # superproject's own push never carries the submodule's changes, so
+    # attributing them to it overstates what pushing the superproject
+    # would actually save).
+    # P3-5 (round-3 review, documented not fixed): this is git's own count,
+    # not this function's — a NESTED repo's working-tree directory (already
+    # attributed to its own `repos[]` entry, not double-counted in `files`
+    # below, see P2-3's innermost-attribution fix) still shows up here as
+    # ONE untracked entry in ITS PARENT's `git status`, because from the
+    # parent's perspective an inner `.git` is just an untracked directory.
+    # `dirty` and `files` therefore use different scopes on purpose: `dirty`
+    # is "what `git status` on this repo says", `files` is "what changed
+    # inside this repo's own boundary". Reconciling them (e.g. `-uno` or
+    # walking status output to drop nested-repo paths) is unfixed; this repo
+    # note is the fix.
+    dirty="$(_burn_lb_git -C "$repo" status --porcelain --ignore-submodules=all 2>/dev/null | wc -l | tr -d ' ')" || dirty=0
+    [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
+    # P2-1/P2-2 (round-1 review): the old version forked _clikae_mtime (a
+    # `stat`, or two on macOS) PER FILE under an unbounded `find`, and never
+    # sorted — "ten files" meant "whichever ten readdir happened to visit
+    # first", the newest file often not among them at all (measured: 9 of 10
+    # wrong, the actual newest entirely absent). ONE `find -newer <sentinel>`
+    # (touched at run start — see cmd_burn) does the "since this run began"
+    # filter with zero forks when nothing qualifies (the common case: a
+    # failed run usually touched little); `-exec stat … {} +` batches the
+    # mtime read for whatever DOES qualify into O(1) forks, not O(files);
+    # `sort -rn` makes "newest ten" actually mean newest ten. Same platform
+    # probe every other `stat` caller in this repo already shares
+    # (_clikae_statv/_CLIKAE_STAT_FMT) — not a third one.
+    # P2-3/P3-5 (round-2 review): scanning $repo's tree used to walk STRAIGHT
+    # THROUGH any nested repo or submodule inside it — their files came back
+    # attributed to the outer repo's `files` list even though pushing the
+    # outer repo can never carry them. `-mindepth 1 … -type d -exec test -e
+    # {}/.git \; -prune` prunes at the first NESTED `.git` it meets ($repo's
+    # OWN root is excluded by `-mindepth 1`, so this never prunes $scan
+    # itself) — the inner repo still gets discovered and scanned as its own
+    # `repos[]` entry (the discovery walk above is unbounded now, P2-3), it
+    # just stops being double-counted here.
+    files=""; count=0; seen=""
+    local repo_ts=0 repo_timeout=0 scan_out rc_scan
+    for root in "${roots[@]}"; do
+      case "$root/" in
+        "$repo/"*) scan="$root" ;;
+        *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;
+      esac
+      # No temp file (a full or unwritable $TMPDIR) means no file list for
+      # this repo — the row itself still reports ahead/dirty, which is the
+      # signal #84 is actually about; `files` is corroborating evidence.
+      _lb_scan_file="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-scan.XXXXXX" 2>/dev/null)" || _lb_scan_file=""
+      [ -n "$_lb_scan_file" ] || continue
+      rc_scan=0
+      _burn_lb_bounded 5 find "$scan" -mindepth 1 \
+        \( -name .git -o -name node_modules -o -name .venv -o -name target \
+           -o -name dist -o -name build -o -name .cache -o -name .next \
+           -o -name out -o -name coverage \) -prune \
+        -o -type d -exec test -e {}/.git \; -prune \
+        -o -type f -newer "${started_at_sentinel:-/dev/null}" \
+           -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + \
+        > "$_lb_scan_file" 2>/dev/null || rc_scan=$?
+      if [ "$rc_scan" -eq 124 ]; then
+        rm -f "$_lb_scan_file" 2>/dev/null || true
+        _lb_scan_file=""
+        repo_timeout=1
+        continue
+      fi
+      # `sort` reads a regular file that is already complete and closed —
+      # nothing the bound killed can keep this command substitution open.
+      scan_out="$(sort -rn < "$_lb_scan_file" 2>/dev/null)" || scan_out=""
+      # Unlinked as soon as its contents are in hand: every path out of this
+      # iteration (including the two `break`s below) has already removed it,
+      # and the guard after the loop is the last resort, not the plan (P3-4).
+      rm -f "$_lb_scan_file" 2>/dev/null || true
+      _lb_scan_file=""
+      # P3-3 (round-2 review, documented not fixed): each batched stat
+      # record is newline-delimited (`sort -rn` needs lines), so a filename
+      # containing a literal newline byte splits across two `read`s here —
+      # the first half gets reported as a file path that doesn't exist, the
+      # second half is silently dropped. A NUL-delimited pipeline (stat
+      # --printf/-z, `sort -z`) would fix it but isn't proven portable to
+      # BSD stat/sort (no macOS box to verify against, and this is the exact
+      # kind of untested-on-macOS change this review round exists to catch)
+      # — left as a documented gap rather than an unverified cross-platform
+      # rewrite. Repo names with embedded newlines are unaffected (verified,
+      # round-1): only this per-file batch is exposed.
+      while IFS= read -r statline; do
+        [ -n "$statline" ] || continue
+        mline="${statline%% *}"; mname="${statline#* }"
+        [[ "$mline" =~ ^[0-9]+$ ]] || continue
+        [ "$mline" -le "${repo_ts:-0}" ] || repo_ts="$mline"
+        case "$seen" in *$'\n'"$mname"$'\n'*) continue ;; esac
+        seen="${seen}"$'\n'"${mname}"$'\n'
+        [ "$count" -eq 0 ] || files="$files,"
+        files="$files$(json_str "$mname")"
+        count=$((count + 1))
+        [ "$count" -lt 10 ] || break
+      done <<< "$scan_out"
+      [ "$count" -lt 10 ] || break
+    done
+    if [ "$repo_timeout" -ne 1 ] && { [ "$ahead" = - ] || [ "$ahead" = 0 ]; }; then
+      [ "$dirty" -gt 0 ] || [ "$count" -gt 0 ] || continue
+    fi
+    [ "$repo_ts" -gt 0 ] 2>/dev/null || repo_ts="${started_at:-0}"
+    lb_repo+=("$repo"); lb_branch+=("$branch"); lb_ahead+=("$ahead")
+    lb_dirty+=("$dirty"); lb_files+=("$files"); lb_ts+=("$repo_ts")
+    lb_timeout+=("$repo_timeout")
+  done
+  [ -z "$_lb_scan_file" ] || rm -f "$_lb_scan_file" 2>/dev/null || true
+  local total=${#lb_repo[@]} shown=0 over=0
+  local -a order=()
+  if [ "$total" -gt 0 ]; then
+    # P2-3's own fix (this round): a process substitution here — even a
+    # single-level one, unlike discovery's nested pair — turned out to be
+    # ANOTHER spot this round's added complexity (the ahead/dirty flag
+    # computation below, absent from round-1's simpler single-key sort)
+    # was observed to trip on real macOS CI's bash 3.2: traced all the way
+    # through discovery and every per-repo git/find call with rc=0, then
+    # nothing — not even the caller's very next statement — ever ran
+    # again. Same caveat as discovery's own comment on this (P3-4, round-3
+    # review): the CI-shaped failure is confirmed, the exact trigger within
+    # "a process substitution at this spot" is not. Same fix as discovery:
+    # a `mktemp` file instead of `< <(...)`, no process-substitution
+    # machinery left in this function's ranking path either.
+    local i idx a_flag d_flag _lb_rank
+    _lb_rank="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-rank.XXXXXX" 2>/dev/null)"
+    if [ -n "$_lb_rank" ]; then
+      for i in "${!lb_repo[@]}"; do
+        a_flag=0
+        [ "${lb_ahead[$i]}" = - ] || { [ "${lb_ahead[$i]}" -gt 0 ] 2>/dev/null && a_flag=1; }
+        d_flag=0
+        [ "${lb_dirty[$i]}" -gt 0 ] 2>/dev/null && d_flag=1
+        # P2-2 (round-2 review): the old key was `activity_ts` alone —
+        # `ahead>0` (unpushed commits, the actual thing #84's title is
+        # about) had ZERO weight, so a payload repo with no post-start file
+        # write could be pushed off a 25-cap by pure noise (measured: 29
+        # noise repos with a stray file each buried a real unpushed-commits
+        # repo entirely — not in the JSON, not in the human list, not even
+        # named in "and N more"). Three-level key now: ahead>0 first, then
+        # dirty>0, then newest-activity — noise never outranks real work.
+        printf '%s\t%s\t%s\t%s\n' "$a_flag" "$d_flag" "${lb_ts[$i]}" "$i"
+      done > "$_lb_rank"
+      sort -t "$(printf '\t')" -s -k1,1rn -k2,2rn -k3,3rn "$_lb_rank" | cut -f4 > "$_lb_rank.sorted"
+      while IFS= read -r idx; do order+=("$idx"); done < "$_lb_rank.sorted"
+      rm -f "$_lb_rank" "$_lb_rank.sorted"
+    fi
+  fi
+  for idx in "${order[@]:-}"; do
+    [ -n "$idx" ] || continue
+    repo="${lb_repo[$idx]}"; ahead="${lb_ahead[$idx]}"
+    local idx_ahead_gt0=0
+    [ "$ahead" != - ] && [ "$ahead" -gt 0 ] 2>/dev/null && idx_ahead_gt0=1
+    if [ "$shown" -ge 25 ]; then
+      over=$((over + 1))
+      # P2-2 (round-2 review): the push hint is the whole point of #84 —
+      # losing it for a repo that just didn't make the display cap would
+      # silently un-fix the bug #84 exists for. The cap bounds NOISE
+      # (display rows, JSON size); it was never meant to bound the one
+      # signal (an unpushed commit) that already sorts to the front.
+      if [ "$idx_ahead_gt0" -eq 1 ]; then
+        printf -v hint '  hint: git -C %q push' "$repo"
+        log_info "$hint"
+      fi
+      continue
+    fi
+    branch="${lb_branch[$idx]}"; dirty="${lb_dirty[$idx]}"; files="${lb_files[$idx]}"
+    log_info "left behind: $repo $branch ahead $ahead dirty $dirty"
+    if [ "${lb_timeout[$idx]}" = 1 ]; then
+      log_info "  files: (scan timed out)"
+    elif [ -n "$files" ]; then
+      log_info "  files: [$files]"
+    fi
+    # P3-2 (round-1 review): a push hint used to print for only the FIRST
+    # ahead repo (`[ -z "$hint" ]` gated it), so three repos each one commit
+    # ahead got one copy-pasteable command out of three — silence for the
+    # other two, and not necessarily the most important one (find order,
+    # not relevance). One hint per ahead repo now, printed right under its
+    # own "left behind:"/"files:" block instead of batched at the end.
+    if [ "$idx_ahead_gt0" -eq 1 ]; then
+      printf -v hint '  hint: git -C %q push' "$repo"
+      log_info "$hint"
+    fi
+    # P3-3 (round-1 review): "ahead" used to be a JSON string "-" when there
+    # is no upstream to compare against, and a bare integer otherwise —
+    # multityped in a machine-readable field, which is exactly the field a
+    # dispatcher script is most likely to do `if ahead > 0` on. JSON's own
+    # "I don't know" is `null`, not a sentinel string; a consumer that reads
+    # a number now gets a number or null, never a string that happens to
+    # parse as neither.
+    entry="$(printf '{"repo":%s,"branch":%s,"ahead":%s,"dirty":%s,"files":[%s]}' \
+      "$(json_str "$repo")" "$(json_str "$branch")" \
+      "$(if [ "$ahead" = - ]; then printf 'null'; else printf '%s' "$ahead"; fi)" "$dirty" "$files")"
+    entries="${entries}${entries:+,}${entry}"
+    shown=$((shown + 1))
+  done
+  if [ "$over" -gt 0 ]; then
+    # P3-4 (round-2 review): `${roots[*]}` only ever uses IFS's FIRST
+    # character as the join separator, so `IFS=', '` printed "a,b" not
+    # "a, b" — cosmetic only, but a plain loop says what it means instead
+    # of relying on a two-char IFS that silently gets truncated to one.
+    local roots_desc="" r
+    for r in "${roots[@]}"; do roots_desc="${roots_desc:+$roots_desc, }$r"; done
+    log_info "  … and $over more repositories under $roots_desc"
+  fi
+  # P2-1 (round-2 review): repos the global scan budget never got to are a
+  # DIFFERENT fact from "and N more repositories under …" above — those are
+  # confirmed left-behind candidates trimmed by the display cap; these are
+  # unknowns the budget ran out before even checking (same honesty as a
+  # per-repo scan timeout: say so, don't claim they're clean).
+  if [ "$lb_disc_timeout" -gt 0 ]; then
+    log_info "  … and $lb_disc_timeout more (discovery timed out after ${lb_find_bound}s)"
+  fi
+  if [ "$lb_budget_skipped" -gt 0 ]; then
+    log_info "  … and $lb_budget_skipped more (scan budget exhausted after ${lb_scan_budget}s)"
+  fi
+  # P2-2 (round-2 review): `--json` used to carry no truncation signal at
+  # all — a machine consumer had no way to tell "25 rows, that's everything"
+  # from "25 rows, and an unknown number more" without also parsing the
+  # human `log_info` lines. `left_behind_truncated` folds EVERY reason a
+  # candidate might be missing from `left_behind[]` (cap overflow, budget
+  # exhaustion, a discovery call that hit its own ceiling) into one count —
+  # P3-1 (round-5 review) split the last two apart in the HUMAN lines above,
+  # where a reader has to decide what to DO about it, and deliberately kept
+  # this machine-readable number their sum; `_burn_result` reads it back off this
+  # function's own last line, same convention as the JSON array itself.
+  printf '%s\t[%s]' "$((over + lb_budget_skipped + lb_disc_timeout))" "$entries"
+  return 0
+}
+
 # _burn_result <ok> <engine> <tank> <artifact> <reason> [reset-phrase]
 #
 # 🔴 AGENTS.md's first non-negotiable rule is "judge by the artifact/output,
@@ -1025,6 +1997,52 @@ _agy_burn() {
 # artifact's own measurement travels with the verdict rather than being a second
 # call the caller has to remember to make.
 _burn_result() {
+  local left_behind='[]' left_behind_truncated=0
+  # P2-3 (round-1 review): pinned HERE, before the scan below ever runs —
+  # `_burn_left_behind` can itself take real wall-clock time (P2-2's 97.6s
+  # worst case, pre-fix), and `$SECONDS` keeps ticking through all of it. The
+  # old code read `$((SECONDS - t0))` fresh at printf time, AFTER the scan,
+  # so a slow scan silently became part of "how long did this burn take" —
+  # measured: elapsed_s: 97 here vs status.json's (unaffected, since it's
+  # written a statement earlier, before any scan) elapsed_s: 0 for the SAME
+  # run. Not `local`: the caller's own `summary:` log_info line (cmd_burn /
+  # _agy_burn, always the very next statement after this function returns)
+  # reads it back by the same dynamic-scoping convention this file already
+  # uses for run_dir/t0/tried/etc., so --json and the human summary agree
+  # with each other and with status.json's own (already correct) number.
+  burn_elapsed_s=$((SECONDS - ${t0:-SECONDS}))
+  # P1 (round-1 review): `_burn_left_behind` runs inside `$(...)` — a real
+  # subshell — so a failure it doesn't already guard against only kills
+  # that subshell; `|| left_behind='[]'` catches a non-zero exit (dead
+  # subshell, partial/garbled capture) and the trailing shape check catches
+  # a zero exit that still didn't produce a JSON array. Either way this
+  # function's own contract (never change burn's exit code or --json shape)
+  # holds. The function's stdout is "log_info lines, then the JSON array
+  # last" — json_str escapes every literal newline it's given, so the JSON
+  # itself can never contain one, and splitting on the LAST newline is
+  # unambiguous. The log lines are replayed here (uncaptured) so `--json`'s
+  # `exec 1>&2` swap and non-json's real stdout both still see them — they
+  # would otherwise vanish into this variable instead of ever being printed.
+  if [ "$1" = false ]; then
+    local left_raw
+    left_raw="$(_burn_left_behind 2>/dev/null)" || left_raw=''
+    case "$left_raw" in
+      *$'\n'*) left_behind="${left_raw##*$'\n'}"; printf '%s\n' "${left_raw%$'\n'*}" ;;
+      *)       left_behind="$left_raw" ;;
+    esac
+    # P2-2 (round-2 review): `_burn_left_behind`'s last line is now
+    # "<truncated-count>\t[<json array>]" — same tab-split convention as
+    # the newline-split above, so a garbled/short capture degrades to the
+    # same safe defaults (0, '[]') the array already had.
+    case "$left_behind" in
+      *$'\t'*)
+        left_behind_truncated="${left_behind%%$'\t'*}"
+        left_behind="${left_behind#*$'\t'}"
+        ;;
+    esac
+    [[ "$left_behind_truncated" =~ ^[0-9]+$ ]] || left_behind_truncated=0
+    case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
+  fi
   [ "${as_json:-0}" -eq 1 ] || return 0
   local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
   local bytes=null
@@ -1033,11 +2051,11 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,"left_behind_truncated":%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
-    "$(_burn_tried_json "${tried:-}")" "$((SECONDS - ${t0:-SECONDS}))" \
-    "$(json_or_null "${run_id:-}")" >&4
+    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
+    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_truncated" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
@@ -2370,6 +3388,13 @@ cmd_burn() {
   # above), one thing to find.
   local burn_id="burn-$$" started_at
   started_at="$(date +%s 2>/dev/null || echo 0)"
+  # P2-1/P2-2 (round-1 review): a `find -newer` sentinel, touched right here
+  # at run start, replaces comparing every scanned file's mtime against
+  # `$started_at` with `date`/`stat` per file (which was the O(files) fork
+  # cost — see _burn_left_behind's own comment). `$run_dir` already exists
+  # (0700, private, swept) by this point, so the sentinel lives there.
+  local started_at_sentinel="$run_dir/.burn-started"
+  : > "$started_at_sentinel" 2>/dev/null || true
 
   # #40: agy is always reported as "agy" (never its "antigravity" alias) in
   # both _burn_result and _agy_burn's own log lines — match that here so a
@@ -3135,7 +4160,7 @@ KV
       log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
       _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=${artifact_bytes_snapshot}B"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
     fi
 
@@ -3257,7 +4282,7 @@ KV
       _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
       _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
       _burn_output_tail "$out"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 

@@ -907,7 +907,7 @@ STUB
   load_adapter claude
   declare -F adapter_meta_permission_modes >/dev/null   # claude HAS it
   load_adapter codex
-  ! declare -F adapter_meta_permission_modes >/dev/null # codex must NOT have inherited it
+  ! declare -F adapter_meta_permission_modes >/dev/null || false # codex must NOT have inherited it
   load_adapter claude
   load_adapter grok
   ! declare -F adapter_meta_permission_modes >/dev/null # grok must NOT have inherited it
@@ -3382,4 +3382,1172 @@ STUB
   [ "$reason_field" != '"reason":""' ]
   [[ "$reason_field" == *'engine exited rc=9, output redacted'* ]] || { echo "$reason_field"; false; }
   [[ "$reason_field" != *PRIVATE-PROMPT-FRAGMENT-XYZ* ]] || { echo "$reason_field"; false; }
+}
+
+# Keep the scan away from the source checkout and the stub/config directories.
+_left84_setup() {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return
+}
+
+_left84_repo() {
+  export STUB_LEFT_REPO="$TEST_HOME/repos/work space"
+  git init -q "$STUB_LEFT_REPO"
+  git -C "$STUB_LEFT_REPO" config user.name 'Burn test'
+  git -C "$STUB_LEFT_REPO" config user.email 'burn@example.invalid'
+  git -C "$STUB_LEFT_REPO" commit -qm initial --allow-empty
+  git -C "$STUB_LEFT_REPO" branch baseline
+  git -C "$STUB_LEFT_REPO" branch --set-upstream-to=baseline >/dev/null
+}
+
+@test "burn #84: committed work without artifact is reported and deduplicated in JSON" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 1 dirty 0"* ]] || false
+  [[ "$output" == *"hint: git -C "*" push"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, os, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["repo"] == os.path.realpath(os.environ["STUB_LEFT_REPO"])
+assert r["branch"] and r["ahead"] == 1 and r["dirty"] == 0
+assert r["files"] == [r["repo"] + "/saved.txt"], r
+'
+}
+
+@test "burn #84: clean unchanged repository leaves no block and an empty array" {
+  _left84_setup
+  _left84_repo
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+@test "burn #84: non-git add-dir is skipped silently" {
+  _left84_setup
+  printf 'plain\n' > "$TEST_HOME/scan/plain"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/scan" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  [[ "$output" != *"fatal:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+@test "burn #84: dry failure reports dirty work with no upstream and caps recent files" {
+  _left84_setup
+  _left84_repo
+  git -C "$STUB_LEFT_REPO" branch --unset-upstream
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+mkdir -p "$STUB_LEFT_REPO/node_modules"
+printf ignored > "$STUB_LEFT_REPO/node_modules/ignored"
+for i in {1..12}; do printf work > "$STUB_LEFT_REPO/file$i"; done
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+STUB
+  run clikae burn codex T1 --json --no-reroute --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  # #61 round-6 merge with #87: a DRY tank stopped by --no-reroute is rc 2
+  # (CLIKAE_BURN_RC_NO_TANK), not a task failure's 1 — #61's whole point is
+  # that "no tank was available" and "the task is broken" are different exits.
+  # #87 wrote this test on main, where both were still 1. The left-behind
+  # report itself is unaffected: it is produced on every artifact-less end.
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"left behind:"*"ahead - dirty 13"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json,sys
+r = json.load(sys.stdin)["left_behind"][0]
+assert r["ahead"] is None and r["dirty"] == 13
+assert len(r["files"]) == 10
+assert all("/.git/" not in f and "/node_modules/" not in f for f in r["files"])
+'
+}
+
+@test "burn #84: timeout without artifact reports cwd work" {
+  _left84_setup
+  _left84_repo
+  cd "$STUB_LEFT_REPO"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf work > "$STUB_LEFT_REPO/partial"
+sleep 3
+STUB
+  run clikae burn codex T1 --json --timeout 1 --artifact "$TEST_HOME/missing" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 0 dirty 1"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert len(json.load(sys.stdin)["left_behind"]) == 1'
+}
+
+@test "burn #84: successful artifact leaves JSON array empty despite existing work" {
+  _left84_setup
+  _left84_repo
+  printf work > "$STUB_LEFT_REPO/partial"
+  local artifact="$TEST_HOME/result"
+  run clikae burn codex T1 --json --artifact "$artifact" --add-dir "$STUB_LEFT_REPO" -- run "$artifact"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+# P1 (round-1 review): a `.git/index` truncated to 0 bytes is exactly the
+# shape a run killed mid-write leaves behind — `git rev-parse
+# --show-toplevel` still succeeds (rc=0, so the repo enters the scan) but
+# `git status --porcelain` fails (rc=128, "index file smaller than
+# expected"). Under bin/clikae's `set -eo pipefail`, the ONE bare, unguarded
+# assignment the review found (`burn.sh:808`) used to kill the whole burn
+# process right there — exit code 1 became 128 and the `--json` object never
+# printed at all. This asserts the block can NEVER do that: the JSON still
+# parses, `reason` is unchanged, and the corrupted repo either shows
+# `dirty:0` (the guard's fallback — not "null", since round-1's own
+# suggested fix was literally `|| dirty=0`) or is absent from the array
+# entirely (this fixture has no upstream-ahead commits and no post-start
+# files, so with dirty treated as 0 it doesn't qualify and IS omitted).
+@test "burn #84 P1: a corrupted .git/index never changes burn's exit code or --json shape" {
+  _left84_setup
+  _left84_repo
+  : > "$STUB_LEFT_REPO/.git/index"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["reason"] == "no fresh artifact and no limit", obj["reason"]
+assert isinstance(obj["left_behind"], list)
+rows = [r for r in obj["left_behind"] if r["repo"].endswith("/repos/work space")]
+assert rows == [] or rows[0]["dirty"] in (0, None), rows
+'
+}
+
+# P2-1 (round-1 review): the old code capped "recent files" at readdir
+# order, not mtime — reproduced with f01..f30 (20ms apart) it reported 9 of
+# the 10 newest wrong and dropped the actual newest file entirely.
+#
+# P1-1 (round-2 review): this fixture used `touch -d "@$((now+N))"` — GNU
+# coreutils only, BSD `touch -d` rejects `@epoch`. On macOS CI all 30
+# `touch`es failed, every mtime collapsed to "just created", and `sort -s`
+# fell through to plain string order on the full path — which happened to
+# equal f30..f21 by COINCIDENCE (filenames were assigned in that same
+# order), so this test read green while testing nothing. Two independent
+# fixes, neither optional: (1) `touch -t YYYYMMDDhhmm.SS` — POSIX, works on
+# both — built the same way `tests/bats/live.bats`/`memory.bats` already do
+# (`date -v+NS … 2>/dev/null || date -d "+N seconds" …`), not a new idiom;
+# (2) the offset-to-filename mapping below is a deliberate shuffle (i -> ((i-1)*13
+# mod 30)+1, coprime with 30 so it's a full permutation), asserted NOT to
+# collapse to filename order — a regression back to "all mtimes equal, fall
+# through to string-sort" now fails LOUDLY instead of passing by accident.
+@test "burn #84 P2-1: recent files are the newest ten by mtime, not directory order" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+# One shared epoch base, computed ONCE — not resampled per file. A fresh
+# `date -v+NS`/`date -d "+N seconds"` call PER ITERATION (round-2's first
+# cut here) measures "N seconds from whenever this particular iteration
+# happens to run", and 30 iterations of real subprocess work (date, touch)
+# drift by more than 1 second under any real load — which corrupted the
+# two CLOSEST offsets (26 vs 27) often enough to be a real flake, not a
+# hypothetical one (measured on this box). Adding a fixed epoch instead
+# means every file's timestamp is relative to the SAME instant.
+now="$(date +%s)"
+for i in $(seq -w 1 30); do
+  f="$STUB_LEFT_REPO/f$i"
+  printf '%s' "$i" > "$f"
+  off=$(( ((10#$i - 1) * 13 % 30) + 1 ))
+  target=$((now + off))
+  ts="$(date -d "@$target" '+%Y%m%d%H%M.%S' 2>/dev/null || date -r "$target" '+%Y%m%d%H%M.%S')"
+  touch -t "$ts" "$f"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+row = next(r for r in rows if r["repo"].endswith("/repos/work space"))
+files = [f.rsplit("/", 1)[1] for f in row["files"]]
+offs = {f"f{i:02d}": ((i - 1) * 13 % 30) + 1 for i in range(1, 31)}
+expect = sorted(offs, key=lambda f: -offs[f])[:10]
+# The negative control itself: if this shuffle ever degenerated back into
+# filename order, a broken (all-mtimes-equal) sort could pass by accident,
+# same as the macOS bug this test exists to catch.
+assert expect != sorted(offs, reverse=True)[:10], "offsets collapsed to filename order — negative control is dead"
+assert files == expect, files
+'
+}
+
+# P2-2/P2-5 (round-1 review): no cap meant one line per repo under a big
+# --add-dir root, every time — 200 repos, 200 lines, for a run that failed
+# for an unrelated reason. 30 repos, each with one post-start file at a
+# distinct future-offset mtime (same determinism trick as P2-1), so the
+# 25-cap and "newest activity first" ordering are both exactly assertable:
+# repos r30..r06 (25 of them) are kept, r05..r01 are the "5 more".
+# P1-1 (round-2 review): `touch -d "@epoch"` here is the same GNU-only call
+# P2-1's fixture had — `touch -t` (built the live.bats/memory.bats way,
+# `date -v+NS … || date -d "+N seconds" …`) instead.
+# P2-2 (round-2 review): also asserts the new `left_behind_truncated` field
+# — this cap is a pure display/JSON-size bound, so "25 shown, 5 more" must
+# be a machine-readable fact, not only the human "and N more" line.
+@test "burn #84 P2-2/P2-5: repos are capped at 25, newest-activity first, with a remainder line" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in $(seq -w 1 30); do
+    git init -q "$TEST_HOME/repos/r$i"
+    git -C "$TEST_HOME/repos/r$i" config user.name 'Burn test'
+    git -C "$TEST_HOME/repos/r$i" config user.email 'burn@example.invalid'
+    git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+now="\$(date +%s)"
+for i in \$(seq -w 1 30); do
+  f="$TEST_HOME/repos/r\$i/touched"
+  printf work > "\$f"
+  off=\$(( 10#\$i ))
+  target=\$((now + off))
+  ts="\$(date -d "@\$target" '+%Y%m%d%H%M.%S' 2>/dev/null || date -r "\$target" '+%Y%m%d%H%M.%S')"
+  touch -t "\$ts" "\$f"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"and 5 more repositories under"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+rows = obj["left_behind"]
+assert len(rows) == 25, len(rows)
+names = [r["repo"].rsplit("/", 1)[1] for r in rows]
+expect = [f"r{n:02d}" for n in range(30, 5, -1)]
+assert names == expect, names
+assert obj["left_behind_truncated"] == 5, obj["left_behind_truncated"]
+'
+}
+
+# P2-2 (round-2 review): `activity_ts` alone gave `ahead>0` (unpushed
+# commits — the actual thing #84's title is about) zero ranking weight, so
+# 29 noise repos (a stray post-start file each, ahead=0/dirty=1) could bury
+# a real "payload" repo (a committed-but-unpushed commit, no post-start
+# file at all) off the 25-cap entirely — measured on c42007a: not in the
+# JSON, not in the human list, not even named in "and N more". The fix's
+# whole point is the SAME repo shape here: with the three-level key
+# (ahead>0, dirty>0, ts), payload is row 1 regardless of the 29 noise
+# repos' file-mtime freshness, and its push hint prints even though this
+# fixture keeps `n29` fresh enough that payload would rank last under the
+# old key.
+@test "burn #84 P2-2 (round-2 review): ahead>0 outranks file mtime in the 25-repo cap, and its push hint survives it" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in $(seq -w 1 29); do
+    git init -q "$TEST_HOME/repos/n$i"
+    git -C "$TEST_HOME/repos/n$i" config user.name t
+    git -C "$TEST_HOME/repos/n$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/n$i" commit -q --allow-empty -m init
+  done
+  git init -q "$TEST_HOME/repos/payload"
+  git -C "$TEST_HOME/repos/payload" config user.name t
+  git -C "$TEST_HOME/repos/payload" config user.email t@example.invalid
+  git -C "$TEST_HOME/repos/payload" commit -q --allow-empty -m init
+  git -C "$TEST_HOME/repos/payload" branch base
+  git -C "$TEST_HOME/repos/payload" branch --set-upstream-to=base >/dev/null
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for i in \$(seq -w 1 29); do
+  printf noise > "$TEST_HOME/repos/n\$i/stray"
+done
+git -C "$TEST_HOME/repos/payload" commit -q --allow-empty -m "left behind"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"hint: git -C "*"/repos/payload push"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert rows, "empty left_behind"
+assert rows[0]["repo"].endswith("/repos/payload"), rows[0]["repo"]
+assert rows[0]["ahead"] == 1, rows[0]
+'
+}
+
+# P2-3 (round-1 review): the old code read `elapsed_s` fresh (SECONDS - t0)
+# AFTER _burn_left_behind ran, so a slow scan silently inflated it —
+# measured 97s vs status.json's (unaffected: written a statement earlier,
+# before any scan) 0s for the SAME run. A `find` shim that sleeps 1s makes
+# the scan slow enough here to be measurable at 1-second $SECONDS
+# granularity — a fast scan can't distinguish fixed from broken.
+# P2-2 (round-4 review): a blanket "every `find` call sleeps 1s" shim was
+# fine until #83 (`resume: hide sessions that burn started`, merged to main
+# after this test was written) gave `cmd_burn` its own pre/post
+# `adapter_all_transcripts` snapshot calls (codex.sh's own `find
+# "$1/sessions" …`) — TWO more `find` invocations that run *inside* the
+# timed window `elapsed_s` is pinned against (before `_burn_result`, same as
+# the engine attempt itself), not inside `_burn_left_behind`'s scan. Once
+# main is merged in, a shim that sleeps on every `find` legitimately makes
+# `elapsed_s` read 2-3s — that IS the correct value now, the assertion below
+# was just written against a world where those two calls didn't exist yet.
+# Narrowing the sleep to the scan's own `find` shapes (discovery's
+# `-print0`, the file-list find's `-newer` sentinel) keeps testing the same
+# invariant — scan time must not leak into `elapsed_s` — without the
+# session-attribution snapshot's unrelated `find` calls polluting it.
+# P3-2 (round-5 review): narrowing that shim to the scan's own flags bound it
+# to the implementation, and nothing asserted it still matched. The day
+# discovery stops passing `-print0` (or the file-list find stops passing
+# `-newer`) the shim fires zero times, the scan costs ~0s, and
+# `[ "$json_elapsed" -lt 2 ]` passes unconditionally — the test goes quietly
+# empty instead of going red, which is the failure mode this whole round of
+# review keeps finding. The shim now records every time it fires and the test
+# demands both shapes, so a flag change breaks the test loudly and in the
+# right place.
+@test "burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json" {
+  _left84_setup
+  _left84_repo
+  local fired="$BATS_TEST_TMPDIR/scan-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -print0 "*) printf 'discovery\n' >> "$fired"; sleep 1 ;;
+  *" -newer "*) printf 'filelist\n' >> "$fired"; sleep 1 ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  local json_elapsed status_elapsed status_file
+  json_elapsed="$(printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; print(json.load(sys.stdin)["elapsed_s"])')"
+  status_file="$(find "$TEST_HOME/.clikae/logs" -name status.json | head -1)"
+  [ -n "$status_file" ]
+  status_elapsed="$(python3 -c "import json; print(json.load(open('$status_file'))['elapsed_s'])")"
+  # The scan alone (repo discovery + the file-list find, each shimmed to
+  # sleep 1s) costs >=2s; a pre-fix elapsed_s would show that. Both numbers
+  # here should still read close to 0 (whatever cmd_burn did before the
+  # scan even started) and agree with each other and with the summary line.
+  [ "$json_elapsed" -lt 2 ]
+  [ "$status_elapsed" -lt 2 ]
+  local diff=$((json_elapsed - status_elapsed)); [ "${diff#-}" -le 1 ]
+  [[ "$output" == *"elapsed=${json_elapsed}s"* ]] || false
+  # …and the 2s the assertions above are measured against actually happened:
+  # both scan `find` shapes must have gone through the shim.
+  [ -s "$fired" ] || { echo "the scan find shim never fired — elapsed_s < 2 proved nothing"; false; }
+  grep -q '^discovery$' "$fired" || { echo "discovery find never matched the shim:"; cat "$fired"; false; }
+  grep -q '^filelist$' "$fired" || { echo "file-list find never matched the shim:"; cat "$fired"; false; }
+}
+
+# P2-4 (round-1 review): `find` never follows a symlink given as its own
+# start point without -H/-L. `--add-dir` pointed at a symlink to a directory
+# FULL of repos (this machine has ~/tools -> ~/Developer/cver-tools; macOS's
+# $TMPDIR itself is a symlink, so any --add-dir "$TMPDIR/…" hit this)
+# silently found nothing — the review's own repro. Resolving each root with
+# `cd "$root" && pwd -P` before repo discovery (mirroring what the file
+# scan already did) fixes it.
+@test "burn #84 P2-4: an --add-dir that is a symlink to a directory of repos is still scanned" {
+  _left84_setup
+  _left84_repo
+  ln -s "$TEST_HOME/repos" "$TEST_HOME/repos-link"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos-link" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"ahead 1 dirty 0"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["ahead"] == 1, rows
+'
+}
+
+# P2-1 (round-2 review): round-1's wall budget wrapped the file-list `find`
+# only — every `_burn_lb_git` call ran bare, so a hung git call could block
+# `_burn_left_behind` (and therefore all of `burn`) forever. `.git/HEAD`
+# replaced by a FIFO reproduces the real trigger (a dead NFS/SMB mount, a
+# wedged git process) without one: `git rev-parse`/`symbolic-ref`/`status`
+# all block in open(2) waiting for a writer that never comes (verified: all
+# three hang past a 3s external `timeout` on plain git, no clikae involved).
+# `_burn_lb_bounded`'s 5s per-call bound must catch this and let the whole
+# `clikae burn` process finish — this test's real assertion IS that `run`
+# below returns at all; the wall-clock check just makes "how bounded" concrete.
+# P3-3 (round-3 review): the assertion above was never backed by anything —
+# a regression that hangs `burn` itself hangs `run` right along with it, and
+# a bats test that never returns doesn't fail, it wedges the whole suite
+# (reproduced: 10+ minutes on real bash 3.2 before P2-1's own fix, in a
+# pre-push hook that would have looked exactly like a stuck terminal). An
+# external `timeout -s KILL` around the real binary — NOT around the
+# `clikae` bats helper function above, which `timeout` cannot see or signal
+# — gives this test its own hard ceiling independent of whatever the bound
+# under test does.
+@test "burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget" {
+  # Stock macOS ships neither `timeout` nor `gtimeout` (`_burn_timeout_bin`'s
+  # own comment) — this test's own safety net needs one regardless of what
+  # burn.sh falls back to, so skip rather than wedge the runner without it.
+  # `gtimeout` (coreutils via Homebrew) covers a macOS box that installed it.
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  rm -f "$STUB_LEFT_REPO/.git/HEAD"
+  mkfifo "$STUB_LEFT_REPO/.git/HEAD"
+  local t0 t1
+  t0="$(date +%s)"
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  # Generous ceiling (5s bound + a few other fast calls + engine overhead) —
+  # the point is "finishes", not "finishes in exactly N seconds".
+  [ "$((t1 - t0))" -lt 30 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json, sys; json.load(sys.stdin)'
+}
+
+# P2-3 (round-1 review, unresolved until round-2): `-maxdepth 3` capped repo
+# discovery 2 levels below the scanned root. `--add-dir <root>` with repos at
+# increasing depth (L1/a/L2/a/b/L3/a/b/c/L4 — a/b/c/L4's `.git` is 5 levels
+# below root, well past the old cap) reproduces "a lane's commits in a
+# nested repo" (#84's own title) going completely silent: no row, no hint.
+# `inner` is ACTUALLY nested inside L1's own working tree (not just deep
+# under the same --add-dir root) — the fixture that exercises innermost
+# attribution for real: pre-fix, L1's file scan walked straight through
+# inner's `.git` boundary and inner/WORK.md came back in L1's `files`.
+@test "burn #84 P2-3 (round-2 review): nested repos at any depth get their own row and hint; files attribute to the innermost repo" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan"
+  cd "$TEST_HOME/scan" || return 1
+  local d
+  for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+    git init -q "$TEST_HOME/repos/$d"
+    git -C "$TEST_HOME/repos/$d" config user.name t
+    git -C "$TEST_HOME/repos/$d" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/$d" commit -q --allow-empty -m init
+    git -C "$TEST_HOME/repos/$d" branch base
+    git -C "$TEST_HOME/repos/$d" branch --set-upstream-to=base >/dev/null
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+  printf work > "$TEST_HOME/repos/\$d/WORK.md"
+  git -C "$TEST_HOME/repos/\$d" add WORK.md
+  git -C "$TEST_HOME/repos/\$d" commit -q -m work
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  for d in L1 a/L2 a/b/L3 a/b/c/L4 L1/vendor/inner; do
+    [[ "$output" == *"hint: git -C "*"/repos/$d push"* ]] || { echo "missing hint for $d"; false; }
+  done
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+byname = {r["repo"].rsplit("/repos/", 1)[1]: r for r in rows}
+for d in ["L1", "a/L2", "a/b/L3", "a/b/c/L4", "L1/vendor/inner"]:
+    assert d in byname, (d, sorted(byname))
+    assert byname[d]["ahead"] == 1, byname[d]
+# innermost attribution: inner is INSIDE L1s own working tree — its
+# WORK.md must show up only under inner, never re-listed under L1.
+l1_files = byname["L1"]["files"]
+assert not any("vendor/inner" in f for f in l1_files), l1_files
+assert any("WORK.md" in f for f in byname["L1/vendor/inner"]["files"]), byname["L1/vendor/inner"]
+'
+}
+
+# P3-3/criteria (round-1 review): "ahead" used to be a multityped JSON field
+# (string "-" or a bare integer) — this asserts the fix (an int or JSON
+# null, never a sentinel string) on the qualifying side: ahead>0 alone, with
+# a KNOWN upstream and nothing else touched, still gets reported.
+@test "burn #84 P3-3: ahead>0 alone (known upstream, nothing else changed) qualifies" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+git -C "$STUB_LEFT_REPO" commit -q --allow-empty -m "ahead only"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["ahead"] == 1 and rows[0]["dirty"] == 0, rows
+'
+}
+
+# Same criterion, the non-qualifying side: "ahead" with NO known upstream is
+# "-" (JSON null), and that alone — no dirty state, no post-start files —
+# must not be enough to report the repo.
+@test "burn #84 P3-3: ahead with no known upstream, clean, no new files does not qualify" {
+  _left84_setup
+  _left84_repo
+  git -C "$STUB_LEFT_REPO" branch --unset-upstream
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"left behind:"* ]] || false
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json,sys; assert json.load(sys.stdin)["left_behind"] == []'
+}
+
+# P2-6 (round-1 review): the PR's own headline claim ("Read-only: nothing is
+# pushed or modified") had zero bats coverage — the six existing #84 tests
+# cover shapes, not the read-only guarantee itself. This is the reviewer's
+# own ruler, as a test: a `.git`-wide `find -newer` sentinel (touched, then
+# a 1s sleep so the sentinel sorts strictly before anything the scan might
+# write, regardless of this filesystem's own mtime resolution) proves
+# nothing under `.git` changed, and a sentinel-writing hook installed under
+# every hook name from the review (including the ones `core.fsmonitor`/
+# `core.hooksPath` on the command line — P3-4/decision 1 — are specifically
+# there to defeat) proves none of them fired.
+@test "burn #84 P2-6: the left-behind scan is provably read-only — .git untouched, no hook fires" {
+  _left84_setup
+  _left84_repo
+  local hooks_dir="$STUB_LEFT_REPO/.git/hooks" sentinel_dir="$BATS_TEST_TMPDIR/hook-sentinels"
+  mkdir -p "$hooks_dir" "$sentinel_dir"
+  local h
+  for h in pre-commit post-commit post-index-change pre-auto-gc reference-transaction post-checkout fsmonitor-watchman; do
+    cat > "$hooks_dir/$h" <<HOOK
+#!/usr/bin/env bash
+: > "$sentinel_dir/$h.fired"
+exit 0
+HOOK
+    chmod +x "$hooks_dir/$h"
+  done
+  git -C "$STUB_LEFT_REPO" config core.hooksPath .git/hooks
+  # P3-1 (round-2 review): a mutation test (drop `-c core.hooksPath=/dev/null`
+  # and rerun) found only `core.fsmonitor` below actually fires under
+  # mutation — none of the seven named hooks in this loop do, because the
+  # four read-only git subcommands `_burn_lb_git` ever calls
+  # (rev-parse/symbolic-ref/rev-list/status) don't invoke a NAMED hook to
+  # begin with. Left in as defense-in-depth (a future call site here that
+  # DOES trigger one is still covered), but its seven `not fired` assertions
+  # are honestly air, not evidence — the fire test below the fsmonitor block
+  # is the only one of the eight with independently confirmed teeth.
+  #
+  # P3-4's actual repro: `core.fsmonitor` set to an arbitrary executable
+  # PATH (not the named `fsmonitor-watchman` hook above — git treats these
+  # as two different mechanisms; only `core.fsmonitor=true` invokes the
+  # named hook, so it needed its own sentinel).
+  local fsmon="$BATS_TEST_TMPDIR/fsmonitor-hook"
+  cat > "$fsmon" <<HOOK
+#!/usr/bin/env bash
+: > "$sentinel_dir/core.fsmonitor.fired"
+printf '1\n'
+HOOK
+  chmod +x "$fsmon"
+  git -C "$STUB_LEFT_REPO" config core.fsmonitor "$fsmon"
+  local snap="$BATS_TEST_TMPDIR/git-snapshot-sentinel"
+  : > "$snap"
+  sleep 1
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  local newer; newer="$(find "$STUB_LEFT_REPO/.git" -newer "$snap" 2>/dev/null)"
+  [ -z "$newer" ] || { echo "changed under .git: $newer"; return 1; }
+  [ ! -e "$sentinel_dir/core.fsmonitor.fired" ] || { echo "core.fsmonitor hook fired"; return 1; }
+  for h in pre-commit post-commit post-index-change pre-auto-gc reference-transaction post-checkout fsmonitor-watchman; do
+    [ ! -e "$sentinel_dir/$h.fired" ] || { echo "hook fired: $h"; return 1; }
+  done
+}
+
+# P3-2 (round-2 review): this proves the MEASURING METHOD works (git really
+# does rewrite .git/index on this machine when nothing stops it) — it does
+# NOT exercise `_burn_left_behind`, `clikae burn`, or any production call
+# site (it's a hand-written `git -C … status --porcelain` in the test body).
+# "negative control" implied it was testing the production read-only guard
+# under mutation; renamed to say what it actually is. The read-only claim's
+# real mutation coverage is `:2844`'s "GIT_OPTIONAL_LOCKS"/"core.fsmonitor"
+# drops (see the round-2 review's own mutation table) — this test is
+# evidence that those mutations mean something, not the guard itself.
+@test "burn #84 P2-6 ruler sanity: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index" {
+  _left84_setup
+  _left84_repo
+  # _left84_repo's own commit is --allow-empty (no tracked files), so
+  # there's nothing for git's lazy stat-cache refresh to find stale — a
+  # tracked file, re-touched (same content, new mtime) after its commit, is
+  # what actually makes `git status` want to rewrite the index.
+  printf tracked > "$STUB_LEFT_REPO/tracked.txt"
+  git -C "$STUB_LEFT_REPO" add tracked.txt
+  git -C "$STUB_LEFT_REPO" commit -qm tracked
+  sleep 1
+  touch "$STUB_LEFT_REPO/tracked.txt"
+  local before after
+  before="$(stat -c '%i' "$STUB_LEFT_REPO/.git/index" 2>/dev/null || stat -f '%i' "$STUB_LEFT_REPO/.git/index")"
+  ( unset GIT_OPTIONAL_LOCKS; git -C "$STUB_LEFT_REPO" status --porcelain >/dev/null )
+  after="$(stat -c '%i' "$STUB_LEFT_REPO/.git/index" 2>/dev/null || stat -f '%i' "$STUB_LEFT_REPO/.git/index")"
+  [ "$before" != "$after" ]
+}
+
+# P3-2 (round-1 review): the push hint used to print for only the FIRST
+# ahead repo — three ahead repos, one copy-pasteable command. One hint per
+# ahead repo now.
+@test "burn #84 P3-2: every ahead repo gets its own push hint, not just the first" {
+  _stub_burn_transport
+  clikae init codex T1
+  mkdir -p "$TEST_HOME/scan" "$TEST_HOME/repos"
+  cd "$TEST_HOME/scan" || return 1
+  local i
+  for i in a b c; do
+    git init -q "$TEST_HOME/repos/r$i"
+    git -C "$TEST_HOME/repos/r$i" config user.name t
+    git -C "$TEST_HOME/repos/r$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
+    git -C "$TEST_HOME/repos/r$i" branch base
+    git -C "$TEST_HOME/repos/r$i" branch --set-upstream-to=base >/dev/null
+  done
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
+#!/usr/bin/env bash
+for i in a b c; do
+  git -C "$TEST_HOME/repos/r\$i" commit -q --allow-empty -m "ahead \$i"
+done
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ]
+  for i in a b c; do
+    [[ "$output" == *"hint: git -C "*"/repos/r$i push"* ]] || { echo "missing hint for r$i"; false; }
+  done
+}
+
+# P3-5 (round-1 review): a submodule with its own uncommitted change used to
+# count as "dirty" in BOTH its own row and the superproject's — but the
+# superproject's push never carries the submodule's changes, so attributing
+# them to it overstates what pushing the superproject would salvage.
+# P3-5 (round-2 review, unresolved until now): the SAME contradiction was
+# still open one level down — `--ignore-submodules=all` made `dirty` honest
+# but the superproject's `files` list still walked straight into the
+# submodule and listed its files anyway (self-contradicting: "dirty:0,
+# files:[…/sub/…]" in the same row). A file written into the submodule
+# DURING the run must show up under the submodule's OWN row, never
+# re-listed under the superproject's — the same innermost-repo file pruning
+# P2-3 added for nested repos (they're the same mechanism: a `.git`
+# boundary inside the tree being scanned).
+@test "burn #84 P3-5: a submodule's own dirty state and files are not double-counted into the superproject's" {
+  _left84_setup
+  _left84_repo
+  local sub="$TEST_HOME/repos/subrepo"
+  git init -q "$sub"
+  git -C "$sub" config user.name t; git -C "$sub" config user.email t@example.invalid
+  printf sub > "$sub/s.txt"; git -C "$sub" add s.txt; git -C "$sub" commit -qm sub-init
+  git -c protocol.file.allow=always -C "$STUB_LEFT_REPO" submodule add -q "$sub" sub
+  git -C "$STUB_LEFT_REPO" commit -qm "add submodule"
+  printf changed > "$STUB_LEFT_REPO/sub/s.txt"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf newsub > "$STUB_LEFT_REPO/sub/new-in-sub.txt"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+super_row = next(r for r in rows if r["repo"].rstrip("/").endswith("work space"))
+assert super_row["dirty"] == 0, super_row
+assert super_row["ahead"] == 1, super_row
+assert not any("new-in-sub.txt" in f for f in super_row["files"]), super_row
+sub_row = next((r for r in rows if r["repo"].rstrip("/").endswith("/sub")), None)
+assert sub_row is not None, [r["repo"] for r in rows]
+assert any("new-in-sub.txt" in f for f in sub_row["files"]), sub_row
+'
+}
+
+# --- round-5 review -----------------------------------------------------------
+
+# `_burn_lb_bounded` on its own, with no burn around it: these three assert the
+# bound's own contract (kill the whole process group; report 124 only when the
+# watchdog actually fired) at a granularity a full `clikae burn` cannot reach.
+# Sourcing `lib/commands/burn.sh` directly is this suite's own established
+# pattern for a helper with no command-line surface (see limit.bats,
+# agy-email.bats, antigravity_keychain_real.bats).
+_burn_lb_boot() {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=../../lib/core/log.sh
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=../../lib/commands/burn.sh
+  source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+}
+
+# P2-1 (round-5 review): TERM+KILL aimed at the single pid `$!` names leaves
+# every child that pid forked running past the deadline. `find`'s own `-exec`
+# IS that shape — `-exec test -e {}/.git \;` forks once per directory and
+# `-exec stat … {} +` once per batch — so the bound was never bounding the
+# scan's most expensive call. A process group makes "the child" mean "the
+# child and everything it forked".
+@test "burn #84 P2-1 (round-5 review): the bound kills a forking child's whole process group" {
+  _burn_lb_boot
+  local forker="$BATS_TEST_TMPDIR/forker" pidfile="$BATS_TEST_TMPDIR/grandchild.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# Forks a child and does NOT exec it — exactly \`find -exec\`'s own shape,
+# and the shape TERM+KILL aimed at \`\$!\` alone cannot reach.
+sleep 120 &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0 gpid=""
+  t0="$(date +%s)"
+  _burn_lb_bounded 3 "$forker" || rc=$?
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "forker never recorded its child"; false; }
+  gpid="$(cat "$pidfile")"
+  # Whatever this assertion does, never leave the grandchild behind.
+  sleep 1
+  local alive=0
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  [ "$alive" -eq 0 ] || { echo "grandchild $gpid outlived the bound"; false; }
+}
+
+# P3-3 (round-5 review, same root as r3 P3-1): `[ $((SECONDS - start)) -lt
+# "$secs" ]` is an INTEGER comparison of a clock that ticks on absolute
+# second boundaries — a call that starts 0.01s before a tick and runs 4.1s
+# under a 5s bound measures as 5 and gets reported as a timeout it never hit.
+# Aligning to the boundary on purpose makes that deterministic instead of a
+# coin flip (measured 4/8 on the real thing).
+@test "burn #84 P3-3 (round-5 review): a bounded call that finished in time never reports 124" {
+  _burn_lb_boot
+  local rc=0 s0
+  # $SECONDS ticks on ABSOLUTE second boundaries (bash reads time(2), whole
+  # seconds), so the offset that matters is measured from the boundary, not
+  # from the assignment. Wait for a tick, re-zero on it, then spend 0.9s of
+  # that second before the bounded call starts: the call begins at ~.9 and
+  # ends at ~5.05 — 4.15s of real time under a 5s bound, but two integer
+  # ticks apart.
+  SECONDS=0; s0=$SECONDS
+  while [ "$SECONDS" -eq "$s0" ]; do sleep 0.02; done
+  SECONDS=0
+  sleep 0.9
+  _burn_lb_bounded 5 sleep 4.15 || rc=$?
+  [ "$rc" -ne 124 ] || { echo "phantom timeout: a 4.1s command under a 5s bound reported 124"; false; }
+  [ "$rc" -eq 0 ] || { echo "rc=$rc, expected 0"; false; }
+}
+
+# The other direction of the same assertion: a real timeout must still be 124.
+@test "burn #84 P3-3 (round-5 review): a bounded call that really overran still reports 124" {
+  _burn_lb_boot
+  local rc=0
+  _burn_lb_bounded 2 sleep 30 || rc=$?
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+}
+
+# P2-1 (round-5 review), end to end: the file-list `find`'s batched `stat` is
+# the one call in this scan that can be wedged by a dead mount. With the bound
+# reaching only `find` itself, `clikae burn` produced NOTHING — no "left
+# behind:" block, no JSON, no exit — because the orphaned `stat` still held
+# the scan's own command substitution open.
+@test "burn #84 P2-1 (round-5 review): a never-returning file-list stat cannot hang burn" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  # Only the batched mtime read the file-list scan makes hangs; `stat
+  # --version` (the platform probe, _clikae_statv) and every other caller
+  # must pass straight through or the scan never even gets that far.
+  cat > "$BATS_TEST_TMPDIR/bin/stat" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" %Y %n "*|*" %m %N "*) exec sleep 100000 ;;
+esac
+exec /usr/bin/stat "$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/stat"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  local t0 t1
+  t0="$(date +%s)"
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  [ "$((t1 - t0))" -lt 40 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" == *"(scan timed out)"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json, sys; json.load(sys.stdin)'
+}
+
+# P3-1 (round-5 review): round-4 stopped a merely-slow discovery `find` from
+# declaring the whole budget spent, but kept round-2's one sentence for both
+# outcomes. A `find` that hit its own 5s ceiling with 4s of the 10s budget
+# still unspent printed "and 1 more (scan budget exhausted)" — which points a
+# reader at a budget knob when what actually needs attention is the root that
+# hung. The two facts now say which one they are.
+@test "burn #84 P3-1 (round-5 review): a discovery find that hangs says discovery timed out, not budget exhausted" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  # ONE root (the cwd, which is the payload repo itself) so the 5s discovery
+  # ceiling cannot also exhaust the 10s global budget — this test is about
+  # which sentence gets printed, and both sentences firing would prove
+  # nothing about either.
+  cd "$STUB_LEFT_REPO" || return 1
+  # P3-2 (round-5 review): a shim keyed on the implementation's own flags
+  # goes silently inert the day those flags change, and a test whose shim
+  # never fires passes for the wrong reason. This one records that it fired
+  # and the assertions below demand it.
+  local fired="$BATS_TEST_TMPDIR/discovery-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -name .git -print0 "*) printf 'x' >> "$fired"; exec sleep 100000 ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" -- noop
+  [ -s "$fired" ] || { echo "the discovery find shim never fired — this test asserted nothing"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"discovery timed out after 5s"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" != *"scan budget exhausted"* ]] || { echo "still blaming the budget"; printf '%s\n' "$output"; false; }
+  # round-4's own property, still standing: a bounded discovery call that
+  # times out costs that root's unlisted repos, not the one already in hand.
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
+}
+
+# P3-4 (round-5 review): with two roots whose discovery `find` each burns the
+# full 5s ceiling, the 10s budget is gone by the time the per-repo loop
+# starts — and the loop's own budget check then threw away the payload repo
+# that discovery had ALREADY found and put in `repos[]`. Measured pre-fix:
+# zero rows, `left_behind_truncated: 4`. Honest and bounded, and still the
+# one row #84 exists to print.
+@test "burn #84 P3-4 (round-5 review): a root repo already discovered survives the budget boundary" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  local fired="$BATS_TEST_TMPDIR/discovery-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -name .git -print0 "*) printf 'x' >> "$fired"; exec sleep 100000 ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  local t0 t1
+  t0="$(date +%s)"
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  # Both roots' discovery must really have hung, or this asserts nothing.
+  [ "$(wc -c < "$fired" | tr -d ' ')" -ge 2 ] || { echo "discovery shim fired $(wc -c < "$fired") time(s), expected 2"; false; }
+  [ "$((t1 - t0))" -lt 45 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { echo "the already-discovered root repo vanished"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"hint: git -C "*" push"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+rows = d["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["repo"] == os.path.realpath(os.environ["STUB_LEFT_REPO"]), rows
+assert rows[0]["ahead"] == 1, rows
+# the roots whose discovery hung are still counted, just not INSTEAD of this row
+assert d["left_behind_truncated"] >= 1, d
+'
+}
+# --- round-6 review -----------------------------------------------------------
+
+# P3-1 (round-6 review): `_burn_lb_pgroup_probe` proves the platform can be
+# aimed at a process group; nothing proved the VALUE handed to `_burn_lb_kill`
+# was a pid at all. `kill -- -0` is POSIX for "the caller's own process group",
+# so one bad argument takes burn AND the operator's shell with it. Asserted
+# against a shell FUNCTION named `kill` (a function wins over the builtin) so
+# a regression cannot signal this test runner's own group: the assertion is
+# that the guard returns before `kill` is reached at all.
+@test "burn #84 P3-1 (round-6 review): _burn_lb_kill refuses every value that is not a signalable pid" {
+  _burn_lb_boot
+  local log="$BATS_TEST_TMPDIR/kill-args"
+  : > "$log"
+  kill() { printf '%s\n' "$*" >> "$log"; return 0; }
+  _BURN_LB_PGROUP=1
+  local bad rc
+  for bad in 0 -1 '' abc 1 '2x' '-' ; do
+    rc=0
+    _burn_lb_kill TERM "$bad" || rc=$?
+    [ "$rc" -eq 1 ] || { echo "_burn_lb_kill TERM '$bad' returned $rc, expected 1 (refused)"; false; }
+  done
+  [ ! -s "$log" ] || { echo "the guard let a refused value through to kill:"; cat "$log"; false; }
+  # The one refusal that looks like an ordinary pid: our own process group.
+  local mypgid
+  mypgid="$(ps -o pgid= -p $$ 2>/dev/null || true)"
+  mypgid="${mypgid// /}"
+  case "$mypgid" in ''|*[!0-9]*) mypgid='' ;; esac
+  if [ -n "$mypgid" ]; then
+    rc=0
+    _burn_lb_kill TERM "$mypgid" || rc=$?
+    [ "$rc" -eq 1 ] || { echo "_burn_lb_kill did NOT refuse our own pgid $mypgid (rc=$rc)"; false; }
+    [ ! -s "$log" ] || { echo "our own process group was signalled:"; cat "$log"; false; }
+  fi
+  # …and a real child pid still gets the group signal the fix exists to send.
+  sleep 30 &
+  local child=$!
+  [ "$child" -gt 1 ] || { echo "no child pid to test with"; false; }
+  rc=0
+  _burn_lb_kill TERM "$child" || rc=$?
+  [ "$rc" -eq 0 ] || { echo "a legitimate pid was refused (rc=$rc)"; false; }
+  grep -q -- "-TERM -- -$child" "$log" || { echo "expected a group TERM for $child, got:"; cat "$log"; false; }
+  unset -f kill
+  builtin kill -KILL "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+}
+
+# The same finding with a REAL `kill`, contained: `setsid` gives the probe a
+# session of its own, so a regression kills only that session. Measured on the
+# pre-fix helper exactly this way — the probe never printed its next line, it
+# exited with rc=15, and its own sentinel child died with it.
+@test "burn #84 P3-1 (round-6 review): a real \`_burn_lb_kill TERM 0\` leaves its caller and its children alive" {
+  command -v setsid >/dev/null 2>&1 || skip "setsid needed to contain the group kill this asserts against"
+  local probe="$BATS_TEST_TMPDIR/probe-p31"
+  cat > "$probe" <<STUB
+#!/usr/bin/env bash
+export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+_BURN_LB_PGROUP=1
+sleep 30 &
+sentinel=\$!
+rc=0
+_burn_lb_kill TERM 0 || rc=\$?
+printf 'returned %s\n' "\$rc"
+if kill -0 "\$sentinel" 2>/dev/null; then printf 'sentinel alive\n'; else printf 'sentinel dead\n'; fi
+[ "\$sentinel" -gt 1 ] && kill -KILL "\$sentinel" 2>/dev/null
+printf 'caller survived\n'
+STUB
+  chmod +x "$probe"
+  run setsid -w bash "$probe"
+  [[ "$output" == *"returned 1"* ]] || { echo "no refusal; probe said: $output"; false; }
+  [[ "$output" == *"sentinel alive"* ]] || { echo "the caller's own child was killed: $output"; false; }
+  [[ "$output" == *"caller survived"* ]] || { echo "the caller never came back: $output"; false; }
+}
+
+# P3-6 (round-6 review): the watchdog's mark was the one path in this file
+# assembled by hand (`$TMPDIR/clikae-lb-kill.$$.$pid`) while disc/scan/rank all
+# used `mktemp`. Both ingredients are readable by any other user of a shared
+# /tmp: pre-create that name and the call reports a timeout that never
+# happened; make it a symlink and the watchdog's write truncates whatever it
+# points at. The poller below watches $TMPDIR for the whole bounded call and
+# the assertion is on the NAME, not just on the cleanup.
+@test "burn #84 P3-6 (round-6 review): the watchdog's mark is an unguessable mktemp path, and nothing is left behind" {
+  _burn_lb_boot
+  local tmp="$BATS_TEST_TMPDIR/marktmp"; mkdir -p "$tmp"
+  export TMPDIR="$tmp"
+  local seen="$BATS_TEST_TMPDIR/seen-names"; : > "$seen"
+  ( for _i in $(seq 1 160); do ls -A "$tmp" >> "$seen" 2>/dev/null; sleep 0.05; done ) &
+  local poller=$!
+  local rc=0
+  _burn_lb_bounded 2 sleep 30 || rc=$?
+  [ "$poller" -gt 1 ] 2>/dev/null || { echo "bad poller pid"; false; }
+  kill -TERM "$poller" 2>/dev/null || true
+  wait "$poller" 2>/dev/null || true
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  grep -q '^clikae-lb-kill\.' "$seen" || { echo "never saw a kill mark at all — this test proved nothing:"; cat "$seen"; false; }
+  ! grep -qE '^clikae-lb-kill\.[0-9]+\.[0-9]+$' "$seen" || { echo "the mark still uses the guessable pid-pair name:"; cat "$seen"; false; }
+  [ -z "$(ls -A "$tmp")" ] || { echo "the mark outlived the call:"; ls -A "$tmp"; false; }
+}
+
+# P3-3 (round-6 review): the watchdog's KILL is a GROUP kill and it was
+# unreachable — `wait "$pid"` returns the instant the DIRECT child dies of
+# TERM, and the parent then killed the watchdog mid-grace. Measured pre-fix: a
+# TERM-ignoring direct child => 0 survivors (the parent was still in `wait`),
+# but a child that dies of TERM with a TERM-ignoring child of its own => 1
+# survivor, still alive three seconds later.
+@test "burn #84 P3-3 (round-6 review): the group KILL still fires when the direct child dies of TERM first" {
+  _burn_lb_boot
+  local forker="$BATS_TEST_TMPDIR/forker-term" pidfile="$BATS_TEST_TMPDIR/term.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# This one dies on TERM. Its child does not — only the escalation reaches it.
+bash -c 'trap "" TERM; while :; do sleep 0.5; done' &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0
+  t0="$(date +%s)"
+  _burn_lb_bounded 2 "$forker" || rc=$?
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
+  local gpid; gpid="$(cat "$pidfile")"
+  sleep 1
+  local alive=0
+  [ "$gpid" -gt 1 ] 2>/dev/null || { echo "bad child pid '$gpid'"; false; }
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
+  [ "$alive" -eq 0 ] || { echo "the TERM-ignoring grandchild $gpid outlived the escalation"; false; }
+}
+
+# P3-5 (round-6 review): the 137/143 fallback used to run whenever no mark
+# existed — which, before the mark became an `mktemp` file created up front,
+# was every ordinary run. So ANY child killed from outside (the OOM killer, a
+# maintainer's `pkill`) at or past the deadline was reported as a timeout burn
+# invented. The child below kills ITSELF with TERM 4.2s into a 5s bound, from a
+# start deliberately aligned 0.9s into a `$SECONDS` tick: the old integer clock
+# reads 5 and says 124; the real answer is 143.
+@test "burn #84 P3-5 (round-6 review): a child killed from outside near the deadline reports its signal, not a timeout" {
+  _burn_lb_boot
+  local stub="$BATS_TEST_TMPDIR/selfkill"
+  cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+sleep 4.2
+self=$$
+case "$self" in ''|*[!0-9]*) exit 9 ;; esac
+[ "$self" -gt 1 ] || exit 9
+kill -TERM "$self"
+sleep 5
+STUB
+  chmod +x "$stub"
+  local rc=0 s0
+  SECONDS=0; s0=$SECONDS
+  while [ "$SECONDS" -eq "$s0" ]; do sleep 0.02; done
+  SECONDS=0
+  sleep 0.9
+  _burn_lb_bounded 5 "$stub" || rc=$?
+  [ "$rc" -ne 124 ] || { echo "an externally killed child was reported as a timeout it never hit"; false; }
+  [ "$rc" -eq 143 ] || { echo "rc=$rc, expected 143 (killed by SIGTERM from outside)"; false; }
+}
+
+# P3-2 (round-6 review): `set -m` is what gives the bounded child its own
+# process group — and a terminal sends SIGINT only to its FOREGROUND group, so
+# from that fix onwards Ctrl-C stopped reaching the scan. Measured pre-fix:
+# burn died instantly and the child plus its own children kept running with
+# ppid=1 for the rest of the bound. The bound here (20s) is far longer than
+# this test's own patience on purpose: only the INT forward can end it in time.
+@test "burn #84 P3-2 (round-6 review): an interrupt during a bounded call stops the scan's own process group" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  local forker="$BATS_TEST_TMPDIR/forker-int" pidfile="$BATS_TEST_TMPDIR/int.pid" probe="$BATS_TEST_TMPDIR/probe-int"
+  local probe_out="$BATS_TEST_TMPDIR/probe-int.out"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# A background job of a shell WITHOUT job control inherits SIGINT=SIG_IGN
+# (POSIX), which \`find\`'s own \`-exec\` children never do — find is not a
+# shell. python3 puts the disposition back to default before exec so this
+# fixture has the shape the fix is actually about, not a shell artefact.
+python3 -c 'import os, signal; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp("sleep", ["sleep", "120"])' &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  cat > "$probe" <<STUB
+#!/usr/bin/env bash
+export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+self=\$\$
+( sleep 2; [ "\$self" -gt 1 ] && kill -INT "\$self" 2>/dev/null ) &
+rc=0
+_burn_lb_bounded 20 "$forker" || rc=\$?
+printf 'bounded returned %s\n' "\$rc"
+STUB
+  chmod +x "$probe"
+  local t0 t1
+  t0="$(date +%s)"
+  # The probe's own output goes to a FILE, never to `run`'s capture pipe: a
+  # child that outlives this call would hold that pipe open and wedge the whole
+  # suite (`run` waits for EOF, not for the process — the same fd-lifetime trap
+  # `_burn_lb_bounded`'s watchdog redirects itself away from).
+  run "$timeout_bin" -s KILL 15 bash -c '"$0" > "$1" 2>&1' "$probe" "$probe_out"
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
+  local gpid; gpid="$(cat "$pidfile")"
+  sleep 1
+  local alive=0
+  [ "$gpid" -gt 1 ] 2>/dev/null || { echo "bad child pid '$gpid'"; false; }
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 12 ] || { echo "the interrupt took $((t1 - t0))s to come back"; false; }
+  [ "$status" -eq 130 ] || { echo "probe exited $status, expected 130 (it re-raises the interrupt); it said: $(cat "$probe_out" 2>/dev/null)"; false; }
+  [ "$alive" -eq 0 ] || { echo "the scan's child $gpid outlived the interrupt"; false; }
+}
+
+# P3-4 (round-6 review), end to end: one temp file shared by the whole scan
+# meant a writer that outlived its bound kept an open fd on the file the NEXT
+# repo reuses. `>` resets the file's LENGTH, never a survivor's OFFSET, so its
+# next write lands past a sparse hole — inside the next repo's results.
+# Measured pre-fix at function level: repo B's own parser accepted
+# `9999999999 /REPO-A-LEAKED/…` rows, and that forged mtime then won repo B's
+# activity ranking. The survivor here escapes with `setsid` (the one shape the
+# group kill genuinely cannot reach) and the two scans hand off through marker
+# files, so nothing in this test depends on a race being won.
+@test "burn #84 P3-4 (round-6 review): a write that outlives one repo's scan cannot land in the next repo's file list" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  command -v setsid >/dev/null 2>&1 || skip "setsid needed to build a writer the group kill cannot reach"
+  _left84_setup
+  local a="$TEST_HOME/repos/alpha" b="$TEST_HOME/repos/bravo" r
+  for r in "$a" "$b"; do
+    git init -q "$r"
+    git -C "$r" config user.name 'Burn test'
+    git -C "$r" config user.email 'burn@example.invalid'
+    git -C "$r" commit -qm initial --allow-empty
+    printf 'x\n' > "$r/dirty.txt"
+  done
+  local started="$BATS_TEST_TMPDIR/bravo-started" leaked="$BATS_TEST_TMPDIR/leak-written"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -newer "*)
+    case "\$1" in
+      */alpha)
+        setsid bash -c 'printf "1111111111 /alpha/%0200d\n" 1; while [ ! -e "$started" ]; do sleep 0.05; done; printf "9999999999 /REPO-A-LEAKED/one\n9999999999 /REPO-A-LEAKED/two\n"; : > "$leaked"' &
+        exec sleep 100 ;;
+      */bravo)
+        : > "$started"
+        for _i in \$(seq 1 200); do [ -e "$leaked" ] && break; sleep 0.05; done ;;
+    esac ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$a" --add-dir "$b" -- noop
+  [ "$status" -eq 1 ] || { echo "burn exited $status; output: $output"; false; }
+  # Both halves of the fixture really happened, or the assertion below is empty.
+  [ -e "$started" ] || { echo "bravo's scan never ran — nothing was being tested"; false; }
+  [ -e "$leaked" ] || { echo "the survivor never wrote — nothing was being tested"; false; }
+  [[ "$output" != *"REPO-A-LEAKED"* ]] || { echo "alpha's survivor leaked into the report: $output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+bravo = [r for r in rows if r["repo"].endswith("/bravo")]
+assert bravo, rows
+for f in bravo[0]["files"]:
+    assert "REPO-A-LEAKED" not in f, bravo[0]
+'
 }
