@@ -119,6 +119,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since nothing was redacted — the tool crashed. #99 itself (the
   underlying `Argument list too long`) is still open, tracked separately.
 
+- `clikae resume <agy-sid>` now actually hands agy `--conversation <sid>`.
+  `adapter_resume_args` built its argv with
+  `printf '--conversation\n%s\n' "$sid"` — bash's `printf` builtin parses a
+  leading `--conversation` as an unknown option (rc=2, no stdout), so the
+  resume silently launched agy with no `--conversation` at all, opening a new
+  conversation instead of the one asked for (#34).
+- The home board's "Resume" rows for agy are no longer permanently empty in
+  every real project directory. They used to filter by the session's recorded
+  `workspace` matching `$PWD`, but every real agy install records the same
+  `workspace` (`$HOME`) for every conversation regardless of where it actually
+  ran, so that filter could never match outside `$HOME`. agy's Resume rows are
+  now tank-scoped instead of directory-scoped: every session in every agy tank,
+  newest first, capped board-wide by `CLIKAE_HOME_RECENT_MAX` like every other
+  engine (#34).
+- The home board's "Resume" rows no longer vanish when a tank holds more
+  `clikae burn` sessions than the list is long. Burn sessions have been hidden
+  from that list since #74, but each engine was asked for exactly
+  `CLIKAE_HOME_RECENT_MAX` rows and cut to that *before* the filter ran — so
+  ten-or-more burn one-shots newer than your real sessions left the filter
+  nothing to show and the whole block disappeared. Every engine is now asked
+  for `CLIKAE_HOME_RECENT_MAX` + *that tank's own* recorded burn sessions, so
+  hidden rows give up their slots to real sessions instead of taking the list
+  down with them. The guarantee has one bound, and the board states it rather
+  than hiding it: the ask is capped at `CLIKAE_HOME_RECENT_SCAN_MAX`, which
+  defaults to the burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), and
+  if a tank cannot fill the list within that cap the Resume block says "N
+  sessions hidden as burn runs · list truncated" and points at `clikae resume
+  --all`. Affects claude, codex and agy alike; most visible on agy, whose rows
+  became tank-scoped in the same release (#34).
+- `clikae`'s codex and grok board rows read a session's id from the
+  rollout/session **filename** instead of re-opening the file once per row —
+  the same fact `clikae resume <id>` already used to go the other way. Only a
+  name that does not carry a uuid falls back to the old read. Nothing visible
+  changes; it is what makes the wider Resume ask above cost nothing (measured
+  on a 1,000-session tank, ask 10 → 200: codex was +225…+373 ms and grok
+  +917…+1056 ms before, both inside run-to-run noise after) (#34).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or
@@ -430,6 +466,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to read history, swipe down toward live output, and tap to leave copy-mode.
   `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
   (default 2). Desktop wheel and drag bindings are unchanged.
+- Failed `clikae burn` runs report Git work left behind in cwd/`--add-dir`
+  repositories, recent files, and a push hint; `--json` includes `left_behind`
+  without pushing or changing repository state (#84). Round-2 review of #87:
+  every git call in the scan (not just its file-list `find`) is now bounded,
+  plus a 10s global scan budget; the 25-repo cap ranks unpushed commits
+  ahead of file mtime and its push hint prints even past the cap; nested
+  repos at any depth are discovered and files attribute to the innermost
+  repo; `--json` gains `left_behind_truncated`. Round-3 review of #87: the
+  per-call 5s bound now actually catches a hung git call on real bash 3.2
+  (`command git` defeated it there — `$!` was a subshell, not git); the
+  global scan budget now covers repo discovery too, not just the per-repo
+  loop, and a repo whose discovery hangs is counted rather than dropped
+  silently; a failed `--json` burn's stdout no longer waits an extra ~5s
+  for an orphaned watchdog to release its held-open fd. Round-4 review of
+  #87: round-3's own discovery-timeout fix had a regression — a bounded
+  discovery `find` that is merely slow-but-finite (not hung) forced the
+  whole scan budget to read as exhausted, making the burn's own cwd/`--add-dir`
+  repo (the one #84 exists to report on) vanish from the list; a timed-out
+  discovery `find` now counts as one honest "more" instead. `BURN_LB_GIT`
+  is resolved with `type -P`, not `command -v`, which returned a shadowing
+  shell function's bare name instead of a path when the caller had
+  `export -f`'d one named `git`. Round-5 review of #87: the per-call bound
+  now kills the bounded command's whole PROCESS GROUP — `find`'s own
+  `-exec` forks, so killing `find` alone left a `stat` running that held
+  the scan's output open and could hang `burn` indefinitely with no rows
+  and no JSON at all; "did this time out" is decided by the watchdog
+  instead of by an integer `$SECONDS` comparison that reported phantom
+  timeouts for commands that finished in time; a discovery `find` that
+  hits its own ceiling now says "discovery timed out", not "scan budget
+  exhausted"; and `$PWD`/`--add-dir` are resolved before any `find` runs,
+  so a repo already discovered at the budget boundary is reported instead
+  of dropped. Round-6 review of #87: the kill that aims at a process group
+  now verifies the VALUE it is handed, not just the platform's capability
+  (`kill -- -0` is the caller's own group — burn plus the shell that
+  launched it); Ctrl-C reaches the scan again (`set -m` had put the child
+  in a group the terminal's SIGINT never visits, so a cancelled scan kept
+  reading the disk for the rest of its bound); the TERM->KILL escalation
+  reaches the whole group instead of dying with the direct child, so a
+  grandchild that ignores TERM is no longer left running; each repo's
+  file-list scan gets its own temp file, so a writer that outlived one
+  repo's bound can no longer land its rows — and its mtime, and with it
+  the ranking — in the NEXT repo's report; the 137/143 fallback is narrowed
+  to the case its own comment described (no mark could be written) and uses
+  a millisecond clock where one exists, instead of reporting an
+  externally-killed command as a timeout; and the watchdog's kill mark
+  comes from `mktemp` rather than a predictable /tmp path. Everything those
+  rounds deliberately left unfixed is now tracked in #112 rather than in
+  review notes.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and

@@ -36,14 +36,63 @@ seed_agy_session() {
   [[ "$output" == *"ag-0001"* ]] || false
 }
 
-@test "antigravity recent_sids EXCLUDES sessions recorded in a different cwd" {
+# --- #34: agy rows are TANK-scoped, not directory-scoped ---------------------
+# This used to be "antigravity recent_sids EXCLUDES sessions recorded in a
+# different cwd", asserting the OLD $PWD filter. That filter is exactly the
+# bug: workspace is a constant ($HOME) on every real agy install (measured on
+# #34/#83: 607/607 indexed conversations, one distinct workspace value), so it
+# could never match outside $HOME and this list was permanently empty in any
+# real project directory. See docs/EXPECTATIONS.md "Engines on one board".
+@test "antigravity recent_sids INCLUDES sessions regardless of recorded cwd (#34)" {
   _setup_agy
   seed_agy_session ag-aaaa "$WORK" "here"
   seed_agy_session ag-bbbb "/somewhere/else" "elsewhere"
-  run adapter_recent_sids "$PROFILE"
+  run adapter_recent_sids "$PROFILE" 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"ag-aaaa"* ]] || false
-  [[ "$output" != *"ag-bbbb"* ]] || false
+  [[ "$output" == *"ag-bbbb"* ]] || false
+}
+
+@test "antigravity recent_sids: newest-first, capped at limit, regardless of cwd (#34)" {
+  _setup_agy
+  seed_agy_session ag-old "/elsewhere" "oldest"
+  touch -t 202001010000 "$BRAIN/ag-old/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-mid "$WORK" "middle"
+  touch -t 202101010000 "$BRAIN/ag-mid/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-new "/somewhere/else" "newest"
+  touch -t 202201010000 "$BRAIN/ag-new/.system_generated/logs/transcript.jsonl"
+
+  run adapter_recent_sids "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  local first second
+  first="$(printf '%s\n' "$output" | sed -n 1p | cut -d$'\037' -f2)"
+  second="$(printf '%s\n' "$output" | sed -n 2p | cut -d$'\037' -f2)"
+  [ "$first" = "ag-new" ] || { echo "got: $output"; false; }
+  [ "$second" = "ag-mid" ] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-old"* ]] || false
+}
+
+@test "antigravity recent_sids: a cache entry pointing at a deleted brain dir is skipped, not an error (#34)" {
+  _setup_agy
+  seed_agy_session ag-real "$WORK" "still here"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-ghost-deleted" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-real"* ]] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-ghost"* ]] || false
+}
+
+@test "antigravity recent_sids: a present cache does not truncate a multi-row request (#34)" {
+  _setup_agy
+  seed_agy_session ag-one "$WORK" "one"
+  seed_agy_session ag-two "/elsewhere" "two"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-one" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-one"* ]] || { echo "got: $output"; false; }
+  [[ "$output" == *"ag-two"* ]] || { echo "got: $output"; false; }
 }
 
 @test "antigravity recent_sids: no brain dir at all -> empty, not an error" {
@@ -323,7 +372,14 @@ assert_agy_title() {
   # greedy `.*:` walk gets wrong regardless of which key actually matched.
   printf '{"%s":"%s","%s":"%s"}\n' "$WORK" "$sid_here" "$other_dir" "$sid_other" \
     > "$PROFILE/antigravity-cli/cache/last_conversations.json"
-  run adapter_recent_sids "$PROFILE" 5
+  # limit=1 isolates the cache fast path (returns immediately on the anchored
+  # hit, never reaching the disk scan below) — #34 made recent_sids
+  # tank-scoped, so at limit>1 sid_other's OWN session would legitimately
+  # appear too (it has its own real transcript in this tank); that is no
+  # longer evidence of a mis-anchored cache read, so it can't be asserted
+  # away here. What this test still pins is the cache extraction itself:
+  # the anchored lookup must resolve $want to sid_here, not sid_other.
+  run adapter_recent_sids "$PROFILE" 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"$sid_here"* ]] || false
   [[ "$output" != *"$sid_other"* ]] || false
@@ -341,7 +397,10 @@ assert_agy_title() {
   # shape would have passed this ordering by accident; both orderings must work.
   printf '{"%s":"%s","%s":"%s"}\n' "$other_dir" "$sid_other" "$WORK" "$sid_here" \
     > "$PROFILE/antigravity-cli/cache/last_conversations.json"
-  run adapter_recent_sids "$PROFILE" 5
+  # limit=1: see the sibling test above — isolates the cache extraction from
+  # #34's tank-scoped disk scan, which would otherwise legitimately surface
+  # sid_other's own session too.
+  run adapter_recent_sids "$PROFILE" 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"$sid_here"* ]] || false
   [[ "$output" != *"$sid_other"* ]] || false
@@ -404,4 +463,100 @@ assert_agy_title() {
   [ "$status" -eq 0 ]
   local n; n="$(printf '%s\n' "$output" | grep -c .)"
   [ "$n" -eq 2 ]
+}
+
+# --- #34 round-1 P2-2: the two P1-4 anchoring tests above were narrowed to
+# limit=1 (tank-scoping made their limit=5 exclusion assertion untrue), and
+# nothing replaced them at limit>1. Every other cache test at limit>1 checks
+# only PRESENCE or a line count — so "a stale cache pointer never beats disk
+# truth" had no test there at all, and the review's M2 mutant (make the cached
+# sid sort first and take a slot, whatever its mtime) survived the whole suite
+# green. At limit>1 a mis-anchored or stale cache read cannot change the
+# output SET any more (the disk scan sweeps the tank and dedups), so ORDER and
+# WHO GETS SQUEEZED OUT are the only faces left where it can go wrong — this
+# is the test for that face. ------------------------------------------------
+
+@test "antigravity recent_sids at limit=5: a stale cache pointer does not beat disk mtime order (#34 P2-2)" {
+  _setup_agy
+  local i sid
+  for i in 1 2 3 4 5; do
+    sid="ag-rank-0$i"
+    seed_agy_session "$sid" "$WORK" "rank $i"
+    touch -t "20200101000$i" "$BRAIN/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  # The normal stale case: the CLI wrote this pointer for $WORK, and four
+  # newer sessions have happened on the tank since.
+  printf '{"%s":"%s"}\n' "$WORK" "ag-rank-01" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  # Exact mtime order, newest first — and the cache's own sid in its TRUE
+  # position (last, because it is the oldest), not promoted to the front.
+  local got
+  got="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  [ "$got" = "ag-rank-05 ag-rank-04 ag-rank-03 ag-rank-02 ag-rank-01 " ] \
+    || { echo "order was: [$got]"; false; }
+}
+
+@test "antigravity recent_sids at limit=4: the stale cache pointer is the row that gets squeezed out (#34 P2-2)" {
+  _setup_agy
+  local i sid
+  for i in 1 2 3 4 5; do
+    sid="ag-cut-0$i"
+    seed_agy_session "$sid" "$WORK" "cut $i"
+    touch -t "20200101000$i" "$BRAIN/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-cut-01" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+  run adapter_recent_sids "$PROFILE" 4
+  [ "$status" -eq 0 ]
+  local got
+  got="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  # The oldest session loses its slot even though the cache points at it; the
+  # newest four are the answer. A cache pointer that took a slot by right
+  # would evict ag-cut-02 instead.
+  [ "$got" = "ag-cut-05 ag-cut-04 ag-cut-03 ag-cut-02 " ] \
+    || { echo "order was: [$got]"; false; }
+}
+
+# --- #34 round-1 P3-1: n=1 and n>1 answer two different questions ------------
+# n=1 is "what did THIS DIRECTORY last talk to" (the CLI's own per-directory
+# pointer cache, one stat); n>1 is "this TANK's n newest". The asymmetry is
+# kept on purpose — the docstring gives the measurement — so it gets a test
+# that says so out loud, instead of only living in prose.
+
+@test "antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, n>1 answers the TANK (#34 P3-1)" {
+  _setup_agy
+  seed_agy_session ag-ptr-old "$WORK" "the pointer's session, oldest on the tank"
+  touch -t 202001010000 "$BRAIN/ag-ptr-old/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-ptr-new "/somewhere/else" "the tank's newest"
+  touch -t 202201010000 "$BRAIN/ag-ptr-new/.system_generated/logs/transcript.jsonl"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-ptr-old" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+
+  # n=1 from a directory WITH a pointer: the pointer wins, even though it is
+  # the oldest session on the tank. (This is what keeps the board's Live-row
+  # fallback title off a whole-tank stat walk.)
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n1; n1="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr -d '\n')"
+  [ "$n1" = "ag-ptr-old" ] || { echo "n=1 gave: [$n1]"; false; }
+
+  # n>1 from the same directory: tank ranking, newest first — the pointer's
+  # session is merely one row of it, in its own mtime position.
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  local n5; n5="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  [ "$n5" = "ag-ptr-new ag-ptr-old " ] || { echo "n=5 gave: [$n5]"; false; }
+
+  # n=1 from a directory with NO pointer falls through to the tank's newest —
+  # the documented fallback, and the reason the two answers can differ per cwd.
+  local nokey="$TEST_HOME/no-pointer"; mkdir -p "$nokey"; cd "$nokey" || false
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n1b; n1b="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr -d '\n')"
+  [ "$n1b" = "ag-ptr-new" ] || { echo "n=1 (no pointer) gave: [$n1b]"; false; }
 }

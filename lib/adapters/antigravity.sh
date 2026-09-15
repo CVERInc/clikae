@@ -36,7 +36,11 @@ adapter_run() {
 adapter_resume_args() {
   local sid="$1"
   [ -n "$sid" ] || return 1
-  printf '--conversation\n%s\n' "$sid"
+  # 🔴 #34: NEVER a format string that starts with `-` — bash's printf builtin
+  # parses a leading `--conversation` as an unknown OPTION (rc=2, no stdout),
+  # so `clikae resume <agy-sid>` silently launched agy with no --conversation
+  # at all. Format first, literal args after.
+  printf '%s\n%s\n' '--conversation' "$sid"
 }
 
 # Optional hook: the inverse of adapter_resume_args — see claude.sh's twin for
@@ -319,24 +323,80 @@ _antigravity_title_uncached() {
   printf '%s' "$t"
 }
 
-# Optional hook: CHEAP list of this directory's recent sessions under <dir> —
-# "<epoch-mtime>\037<session-id>" per line, newest first, capped at [limit]
-# (default 5) — the same contract as claude.sh's/codex.sh's twins, and the
-# missing half of why the home board's Live row showed an empty preview for
-# agy: without this hook, `_home_live_rows` (lib/commands/home.sh) never even
-# calls adapter_session_title — its `declare -F adapter_recent_sids` gate
-# failed outright, so title/recap stayed the empty strings they were
-# initialized to. `agy` has no equivalent of $PWD-embedded transcript paths
-# (claude) or in-file cwd records (codex); the only cwd record is
-# history.jsonl's "workspace" field per session, keyed by session id — so scope
-# by reading that back per candidate, same as adapter_session_cwd already does
-# for one session at a time.
+# Optional hook: CHEAP recent sessions under <dir> —
+# "<epoch-mtime>\037<session-id>" per line — the same contract as
+# claude.sh's/codex.sh's twins, and the missing half of why the home board's
+# Live row showed an empty preview for agy: without this hook,
+# `_home_live_rows` (lib/commands/home.sh) never even calls
+# adapter_session_title — its `declare -F adapter_recent_sids` gate failed
+# outright, so title/recap stayed the empty strings they were initialized to.
+#
+# 🔴 [n] (default 5) IS NOT A PURE LIMIT HERE — n=1 and n>1 answer two
+# different questions, deliberately (#34 round-1 P3-1 named the asymmetry;
+# this is it written down rather than removed):
+#
+#   n=1   "what did THIS DIRECTORY last talk to?" — the CLI's own per-directory
+#         pointer cache (cache/last_conversations.json keyed by $PWD), one
+#         stat, no tank walk. Falls through to the n>1 answer when this
+#         directory has no pointer, or the pointer's brain dir is gone.
+#   n>1   "what are this TANK's n newest sessions?" — newest first by
+#         transcript mtime across the whole tank, the cache's own hit folded
+#         in and ranked like any other row (never promoted, never given a
+#         slot by right — tests/bats/adapters/antigravity.bats pins that).
+#
+# Kept rather than unified because the n=1 form is the cheap one and the only
+# caller is a board hot path (home.sh's Live-row fallback title, once per live
+# tank per frame). Measured on a 1,000-session tank: the tank walk this
+# function does for n>1 is 4.7-5.0 s (it stats every session before it cuts —
+# the cut's size makes no difference HERE), against one stat for the pointer. So
+# making n=1 return "the first row of the tank ranking" would put five seconds
+# on a frame render to change one fallback title, on the exact engine whose
+# tanks get the most sessions. The user-visible consequence of keeping it is
+# small and now documented: that one fallback title can differ depending on
+# which directory you opened the board from.
+#
+# 🔴 #34 round-2 P3-1: "the cut's size makes no difference" is a property of
+# THIS adapter (and claude's), not of adapters in general, and the round-1 fix
+# generalised it to all of them after measuring only this one — the single
+# engine with no per-row work after `head -n`. codex and grok did have such a
+# tail (a fork + a file read per row, to get a sid the path did not carry) and
+# paid ~+225…+373 ms / ~+917…+1056 ms going from a 10-row ask to a 200-row one
+# on a 1,000-session tank. That tail is gone as of this PR (they read the sid
+# from the filename now, see their adapter_recent_sids), so the claim is true
+# across the board again — but it was an extrapolation when it was written, and
+# the honest per-engine version now lives beside CLIKAE_HOME_RECENT_SCAN_MAX in
+# lib/commands/home.sh rather than being re-asserted from one sample.
+#
+# (Aside, for whoever reads the mtime field: the n=1 path's mtime comes from
+# _clikae_mtime, which lives in lib/core/adapter_loader.sh. The CLI always has
+# it; a test or probe that sources ONLY this adapter + profile_store + json
+# does not, and gets a literal "?" there. The sid is correct either way, and
+# the sid is all home.sh:571 reads.)
+#
+# 🔴 #34: this used to also filter by "$PWD == the session's recorded
+# history.jsonl workspace field" (the same trick adapter_session_cwd uses for
+# one session at a time). But workspace is a constant ($HOME) on every real
+# agy install — measured on #34/#83: 607/607 indexed conversations share one
+# distinct workspace value — so that filter could never match outside $HOME,
+# and the board's Resume rows for agy were permanently empty in any real
+# project directory. workspace is a constant on real installs, so
+# cwd-scoping would hide everything: dropped in favor of TANK-scoped rows
+# (issue #34's "Option 1") — every session in this tank, newest first,
+# relying on the CALLER's own cap ($n / the board's CLIKAE_HOME_RECENT_MAX)
+# rather than a cwd match to keep the list from flooding. Burn one-shots stay hidden through #83's sidecar, unaffected by
+# this. See docs/EXPECTATIONS.md "Engines on one board" for the trade-off in
+# user-facing terms.
 adapter_recent_sids() {
+  # #62: the board's bounded index answers this whole function when it is
+  # warm. It is a SPEED path, never a narrower answer — an index that cannot
+  # cover the caller's ask returns nothing and the disk scan below runs (see
+  # board_recent's header).
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
     local _bout; _bout="$(board_recent antigravity "$@")"
     if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
-  local dir="$1" limit="${2:-5}" brain want sdir sid f cwd
+  # $n, not $limit: at n=1 this is a MODE, not a count. See the docstring.
+  local dir="$1" n="${2:-5}" brain want sdir sid f
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
@@ -352,7 +412,16 @@ adapter_recent_sids() {
   local -a afiles=()
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.
-  if [ "${3:-}" != disk ] && [ -f "$cache" ]; then
+  # #34 round-2 P3-3: this used to be `[ "${3:-}" != disk ] && [ -f "$cache" ]`
+  # — a third argument meant to let `clikae burn` bypass the cache and read
+  # disk. Nothing has ever passed it: repo-wide, the only non-adapter callers
+  # are home.sh (n=10, n=10, n=1) and the bats suites, all two-argument, and
+  # burn.sh does not call this function at all. Deleted rather than kept
+  # "for later": a dead branch with a docstring describing a caller that does
+  # not exist is worse than no branch. Anything that needs the disk answer can
+  # ask for n>1, which already folds the cache hit into the ranking instead of
+  # letting it win.
+  if [ -f "$cache" ]; then
     local want_esc; want_esc="$(printf '%s' "$want" | sed 's/[.[\*^$]/\\&/g')"
     # #74 round-1 P1-4: json_value_for_key (lib/core/json.sh) ANCHORS the
     # extraction to the matched "<cwd>": "<sid>" pair itself — the previous
@@ -368,17 +437,17 @@ adapter_recent_sids() {
       f="$brain/$sid/.system_generated/logs/transcript.jsonl"
       if [ -f "$f" ]; then
         # #74 round-1 P2-1: the cache is a per-directory POINTER — at most one
-        # candidate for $want, ever — so it can only fully answer a limit=1
-        # ask (burn's own use, via the "disk"-bypassing 3rd arg aside). A
+        # candidate for $want, ever — so it can only fully answer an n=1
+        # ask. A
         # caller wanting more than one (the board's Continue list, home.sh's
         # exclusion-pass retries) used to get back exactly this one anyway: a
         # cache hit returned immediately and the scan below — the only thing
         # that can rank several sessions against each other — never ran.
-        # limit=1 keeps the original single-stat fast path unchanged; only a
+        # n=1 keeps the original single-stat fast path unchanged; only a
         # bigger ask falls through, and even then this hit is kept (not
         # re-discovered) and excluded from the scan below so it isn't listed
         # twice.
-        if [ "$limit" -le 1 ]; then
+        if [ "$n" -le 1 ]; then
           local mt
           mt="$(_clikae_mtime "$f" 2>/dev/null || echo "?")"
           printf '%s\037%s\n' "$mt" "$sid"
@@ -386,6 +455,9 @@ adapter_recent_sids() {
         fi
         afiles=("$f")
       fi
+      # Stale: the cache's pointer no longer has a brain dir (e.g. cleaned up
+      # since the cache was written). Fall through to the disk scan below
+      # rather than erroring or returning nothing.
     fi
   fi
 
@@ -399,14 +471,14 @@ adapter_recent_sids() {
       for _sf in "${afiles[@]}"; do [ "$_sf" = "$f" ] && { _seen=1; break; }; done
     fi
     [ "$_seen" -eq 1 ] && continue
-    sid="${sdir%/}"; sid="${sid##*/}"
-    _agy_ws_lookup "$sid"
-    if [ -n "$_agy_ws_lookup_out" ]; then cwd="$_agy_ws_lookup_out"; else cwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"; fi
-    [ "${cwd%/}" = "$want" ] || continue
+    # #34: tank-scoped — every session in this tank, newest first, capped by
+    # the caller's own $n. No adapter_session_cwd/$want filter here (see
+    # the docstring above): workspace is a constant on real installs, so
+    # cwd-scoping would hide everything.
     afiles+=("$f")
   done
   [ "${#afiles[@]}" -gt 0 ] || return 0
-  sessions_by_mtime "${afiles[@]}" | head -n "$limit" | while read -r mt f; do
+  sessions_by_mtime "${afiles[@]}" | head -n "$n" | while read -r mt f; do
     [ -f "$f" ] || continue
     sid="${f%/.system_generated/*}"; sid="${sid##*/}"
     [ -n "$sid" ] || continue

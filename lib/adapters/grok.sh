@@ -347,9 +347,22 @@ $(_grok_summaries_for_cwd "$dir")
 EOF
   [ "${#sfiles[@]}" -gt 0 ] || return 0
   # plain `read -r mt f` (NOT `IFS= read`) so "<mtime> <path>" splits into two.
+  # 🔴 #34 round-2 P3-1: this tail used to be `sid="$( _grok_json_str "$f" id )"`
+  # — a fork, a grep AND a sed over the file PER ROW, after the cut, so the
+  # board's ask width was a real per-row cost here (codex's twin measured
+  # ≈ +85 ms going from 10 to 200 rows on a 1,000-session tank; grok's shape is
+  # the same, only more expensive per row). The session id IS the directory
+  # name — `sessions/<group>/<uuid>/summary.json` — which is exactly how
+  # _grok_find_summary goes the other way (sid -> file). Anything not uuid-
+  # shaped is not a layout grok writes, so it falls back to the file read
+  # rather than guessing.
   sessions_by_mtime "${sfiles[@]}" | head -n "$limit" | while read -r mt f; do
     [ -f "$f" ] || continue
-    sid="$(_grok_json_str "$f" id)"
+    sid="${f%/summary.json}"; sid="${sid##*/}"
+    case "$sid" in
+      ????????-????-????-????-????????????) : ;;
+      *) sid="$(_grok_json_str "$f" id)" ;;
+    esac
     [ -n "$sid" ] || continue
     printf '%s\037%s\n' "$mt" "$sid"
   done
