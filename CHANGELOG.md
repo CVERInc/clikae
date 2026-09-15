@@ -114,6 +114,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `doctor`, `board`, and `status` no longer re-walk the whole profile store
   once per adapter (`doctor` was ~20 full walks on one store via `scan_clis`'
   15-adapter fan-out); each now warms one per-process cache before rendering.
+- `clikae resume <agy-sid>` now actually hands agy `--conversation <sid>`.
+  `adapter_resume_args` built its argv with
+  `printf '--conversation\n%s\n' "$sid"` — bash's `printf` builtin parses a
+  leading `--conversation` as an unknown option (rc=2, no stdout), so the
+  resume silently launched agy with no `--conversation` at all, opening a new
+  conversation instead of the one asked for (#34).
+- The home board's "Resume" rows for agy are no longer permanently empty in
+  every real project directory. They used to filter by the session's recorded
+  `workspace` matching `$PWD`, but every real agy install records the same
+  `workspace` (`$HOME`) for every conversation regardless of where it actually
+  ran, so that filter could never match outside `$HOME`. agy's Resume rows are
+  now tank-scoped instead of directory-scoped: every session in every agy tank,
+  newest first, capped board-wide by `CLIKAE_HOME_RECENT_MAX` like every other
+  engine (#34).
+- The home board's "Resume" rows no longer vanish when a tank holds more
+  `clikae burn` sessions than the list is long. Burn sessions have been hidden
+  from that list since #74, but each engine was asked for exactly
+  `CLIKAE_HOME_RECENT_MAX` rows and cut to that *before* the filter ran — so
+  ten-or-more burn one-shots newer than your real sessions left the filter
+  nothing to show and the whole block disappeared. Every engine is now asked
+  for `CLIKAE_HOME_RECENT_MAX` + *that tank's own* recorded burn sessions, so
+  hidden rows give up their slots to real sessions instead of taking the list
+  down with them. The guarantee has one bound, and the board states it rather
+  than hiding it: the ask is capped at `CLIKAE_HOME_RECENT_SCAN_MAX`, which
+  defaults to the burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), and
+  if a tank cannot fill the list within that cap the Resume block says "N
+  sessions hidden as burn runs · list truncated" and points at `clikae resume
+  --all`. Affects claude, codex and agy alike; most visible on agy, whose rows
+  became tank-scoped in the same release (#34).
+- `clikae`'s codex and grok board rows read a session's id from the
+  rollout/session **filename** instead of re-opening the file once per row —
+  the same fact `clikae resume <id>` already used to go the other way. Only a
+  name that does not carry a uuid falls back to the old read. Nothing visible
+  changes; it is what makes the wider Resume ask above cost nothing (measured
+  on a 1,000-session tank, ask 10 → 200: codex was +225…+373 ms and grok
+  +917…+1056 ms before, both inside run-to-run noise after) (#34).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or
