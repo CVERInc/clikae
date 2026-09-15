@@ -39,6 +39,22 @@ shows). clikae shows the vendor's words *verbatim* (it never computes a time), s
 `· seen HH:MM` tag states *when we observed it* — read it as a snapshot, not a live
 countdown. claude is exempt (its dry is re-read live and already absolute + timezoned).
 
+**An idle Claude tank reads `⏳ token expired`, not a percentage — and it does not
+need a new login.** Claude's access token lasts a few hours and only a running
+session refreshes it, so a tank nobody has used since yesterday answers the usage
+endpoint with a 401 even though its login is fine and its quota is whatever it was.
+clikae says exactly that (`clikae usage --json`: `source:"expired"`,
+`reason:"expired-token"`) instead of the flat `unknown` it used to print, which
+looked identical to a tank with no login at all — and a dispatcher that reads
+"unknown" as "no data, go ahead" can burn straight into a 99%-weekly wall. It does
+**not** refresh the token itself: that would mean speaking the vendor's OAuth
+refresh protocol from clikae, which is not documented. Run a session on the tank,
+or `clikae usage --wake <tank>` (one trivial headless prompt through `clikae burn`,
+so the cockpit is refused without `--force-cockpit`), and the next read shows
+numbers again — the expired reading is only cached for 60 seconds so that read is
+fresh. "Expired" requires a refresh token in the credentials; a 401 without one
+reads `unknown`/`no-credentials`, because that tank really does need a login.
+
 **Two tanks on the same account both go red at once.** A usage limit is
 **account-level**, not tank-level. So if `claude/L` and `claude/MFC` share one login,
 hitting the limit on one marks both dry (and the reserve skips the sibling — no point

@@ -874,35 +874,66 @@ adapter_migrate_credentials() {
 # P3-5 (round-6 review, a first step toward #107): when this returns
 # non-zero it may print ONE line of JSON naming why, and nothing else —
 # never a vendor body, never anything derived from one. lib/core/usage.sh
-# reads at most `.reason`, through a three-value enum, and discards the
-# rest. See usage_unknown there for what the three words are allowed to
-# mean; the honest boundary is that `expired-token` is PROVEN from the
-# credentials file's own recorded expiry, `no-credentials` from the absence
-# of a usable token, and `network` is the catch-all for everything else
-# (which is exactly the lump #107 exists to take apart).
+# reads at most `.reason`, through a closed enum, and discards the rest. See
+# usage_unknown there for what the words are allowed to mean, and
+# _claude_usage_call_failed below for which observation produces which (#107
+# took the old `network` catch-all apart: an HTTP 401/403 is now observed,
+# not inferred, and an unparseable body has its own word).
 _claude_usage_unreadable() {
   printf '{"source":"unknown","reason":"%s"}\n' "$1"
 }
 
-# "the token had already expired" if the credentials file says so, else the
-# catch-all. Its own function so the two call sites below cannot drift, and
-# so neither has to spell out an `&&`/`||` chain (which would print BOTH
-# words, since the printer above deliberately returns 0).
+# #107: why a call that did not come back usable failed, from what is actually
+# observable — curl's own exit status, the HTTP status curl wrote (see the
+# `-w` below), and two facts the credentials themselves record: is there a
+# refresh token, and has the access token's own expiry passed. Its own
+# function so every failure exit below says the same thing for the same facts.
+#   401/403, or an access token already past its own expiry:
+#     refresh token present  -> expired-token. Only a session (or `clikae usage
+#                               --wake`) refreshes it; nothing is wrong with
+#                               the login, and an operator must not be told so.
+#     no refresh token       -> no-credentials. Nothing here can renew it; it
+#                               needs a login, which is what that word means.
+#   curl rc 63 (body over the byte cap) -> unparseable.
+#   everything else (no connection, timeout, 429, 5xx) -> network.
+# "Expired by its own record" wins over a transport failure on purpose: that
+# token would not have worked on a healthy network either.
 _claude_usage_call_failed() {
-  if [ "${_claude_token_expired:-0}" = 1 ]
+  local rc="${1:-}" code="${2:-}"
+  case "$code" in
+    401|403) _claude_usage_auth_failed; return 0 ;;
+  esac
+  if [ "${_claude_token_expired:-0}" = 1 ]; then _claude_usage_auth_failed; return 0; fi
+  if [ "$rc" = 63 ]; then _claude_usage_unreadable unparseable; return 0; fi
+  _claude_usage_unreadable network
+}
+_claude_usage_auth_failed() {
+  if [ "${_claude_has_refresh:-0}" = 1 ]
   then _claude_usage_unreadable expired-token
-  else _claude_usage_unreadable network
+  else _claude_usage_unreadable no-credentials
   fi
 }
 
 adapter_usage() (
   set +x
   set +a
-  local dir="$1" service token response
-  export -n token response
-  token="$(
+  local dir="$1" service token response creds
+  export -n token response creds
+  # #107: one read yields three tab-separated facts — the access token, whether
+  # a refresh token exists (1/0), and whether the access token's own recorded
+  # expiry has passed (1/0) — so the Keychain path answers the same questions
+  # the file path does (it used to be file-only for the expiry, and neither
+  # path ever looked for a refresh token). The refresh token's VALUE never
+  # leaves jq: only its presence does.
+  local _claude_creds_jq='
+    .claudeAiOauth | select(type == "object") |
+    (.accessToken // empty) as $t |
+    "\($t)\t\(if (.refreshToken|type) == "string" and .refreshToken != "" then 1 else 0 end)\t\(if (.expiresAt|type) == "number" and (.expiresAt / 1000) < $now then 1 else 0 end)"'
+  local _claude_now
+  _claude_now="$(date +%s)"
+  creds="$(
     if [ -f "$dir/.credentials.json" ]; then
-      jq -er '.claudeAiOauth.accessToken // empty' "$dir/.credentials.json" 2>/dev/null
+      jq -er --argjson now "$_claude_now" "$_claude_creds_jq" "$dir/.credentials.json" 2>/dev/null
     elif [[ "${OSTYPE:-}" == darwin* ]]; then
       command -v security >/dev/null 2>&1 || exit 1
       service="$(_claude_keychain_service "$dir")" || exit 1
@@ -915,33 +946,37 @@ adapter_usage() (
       declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
       if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
         "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
       elif [ "$_tbin" = perl ]; then
         perl -e 'alarm shift; exec @ARGV or exit 127' 5 security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
       else
         security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
       fi
     fi
-  )" || { _claude_usage_unreadable no-credentials; return 1; }
+  )" || { creds=""; _claude_usage_unreadable no-credentials; return 1; }
+  local _claude_has_refresh _claude_token_expired _claude_rest
+  token="${creds%%$'\t'*}"
+  _claude_rest="${creds#*$'\t'}"
+  _claude_has_refresh="${_claude_rest%%$'\t'*}"
+  _claude_token_expired="${_claude_rest#*$'\t'}"
+  creds=""; _claude_rest=""
+  [ "$_claude_has_refresh" = 1 ] || _claude_has_refresh=0
+  [ "$_claude_token_expired" = 1 ] || _claude_token_expired=0
   # Restrict to bearer-token characters; reject curl-config injection.
-  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) _claude_usage_unreadable no-credentials; return 1 ;; esac
-  # P3-5 (round-6 review): ask the credentials file, BEFORE the call, whether
-  # the token it just handed over has already expired by its own record. This
-  # is the one failure cause that can be established without guessing at an
-  # HTTP status we never see (`--fail` collapses every 4xx/5xx into curl exit
-  # 22) — and it is exactly the case #107 opens with: an idle tank whose
-  # token lapsed, reported as a flat "unknown" indistinguishable from a tank
-  # with no credentials at all. Keychain-sourced tokens have no such record
-  # here, so they stay in the `network` lump.
-  local _claude_token_expired=0
-  if [ -f "$dir/.credentials.json" ] &&
-     jq -e --argjson now "$(date +%s)" \
-       '((.claudeAiOauth.expiresAt // empty) / 1000) < $now' \
-       "$dir/.credentials.json" >/dev/null 2>&1; then
-    _claude_token_expired=1
-  fi
+  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) token=""; _claude_usage_unreadable no-credentials; return 1 ;; esac
+  # #107: curl's `--fail` stays (a 4xx/5xx body is never read as a reading),
+  # but it collapses every HTTP refusal into exit 22 — so the status itself is
+  # written, and only the status, to a private temp file through `-w
+  # '%{stderr}…'` (stderr carries nothing else: `-s` silences curl's own
+  # messages). That is what makes a 401 observable instead of inferred. No
+  # temp file (mktemp failed) just means no status: the failure falls back to
+  # the pre-#107 inference from the credentials' own expiry.
+  local _claude_code_file="" _claude_http_code=""
+  _claude_code_file="$(mktemp "${TMPDIR:-/tmp}/clikae-usage-status.XXXXXX" 2>/dev/null)" || _claude_code_file=""
+  # shellcheck disable=SC2064  # expand now: the path is fixed for this subshell
+  [ -z "$_claude_code_file" ] || trap "rm -f '$_claude_code_file'" EXIT
   # P3-2 (codex security review, round-5): the whole body used to land in
   # this variable, and jq's own parsing/copying work, with no upper bound —
   # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
@@ -974,16 +1009,22 @@ adapter_usage() (
   response="$(
     printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
       curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
-        --max-filesize "$_claude_usage_max_bytes" \
-        https://api.anthropic.com/api/oauth/usage 2>/dev/null |
+        --max-filesize "$_claude_usage_max_bytes" -w '%{stderr}%{http_code}' \
+        https://api.anthropic.com/api/oauth/usage 2>"${_claude_code_file:-/dev/null}" |
       head -c "$(( _claude_usage_max_bytes + 1 ))"
     _claude_usage_curl_rc="${PIPESTATUS[1]}"
     printf 'X'
     exit "$_claude_usage_curl_rc"
-  )" || { token=""; _claude_usage_call_failed; return 1; }
+  )" || {
+    _claude_usage_curl_rc=$?
+    token=""; response=""
+    [ -z "$_claude_code_file" ] || IFS= read -r _claude_http_code < "$_claude_code_file" || true
+    case "$_claude_http_code" in [0-9][0-9][0-9]) ;; *) _claude_http_code="" ;; esac
+    _claude_usage_call_failed "$_claude_usage_curl_rc" "$_claude_http_code"; return 1
+  }
   response="${response%X}"
   if [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -gt "$_claude_usage_max_bytes" ]; then
-    token=""; response=""; _claude_usage_unreadable network; return 1
+    token=""; response=""; _claude_usage_unreadable unparseable; return 1
   fi
   token=""
   # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
@@ -1000,6 +1041,6 @@ adapter_usage() (
     select(.five_hour.utilization|type == "number") |
     select(.seven_day.utilization|type == "number") |
     {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
-     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}' ||
-    { _claude_usage_call_failed; return 1; }
+     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}' 2>/dev/null ||
+    { _claude_usage_unreadable unparseable; return 1; }
 )

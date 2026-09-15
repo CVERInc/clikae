@@ -1,25 +1,42 @@
 # shellcheck shell=bash
 # Shared, atomic usage cache. Only normalized public readings reach disk.
-# P3-5 (round-6 review, a first step toward #107): an unknown reading may
-# carry a `reason`. THREE values, and nothing else is ever emitted or cached:
+# P3-5 (round-6 review) and #107: a reading with no numbers may carry a
+# `reason`. FOUR values, and nothing else is ever emitted or cached:
+#   expired-token   the vendor refused the token (HTTP 401/403), or its own
+#                   recorded expiry had passed, AND the credentials hold a
+#                   refresh token. The login is fine; the access token only
+#                   needs the refresh a session does. This reason always
+#                   comes with source:"expired", never "unknown" — that is
+#                   the whole of #107: an idle tank at 99% weekly used to read
+#                   exactly like a tank with no login at all.
 #   no-credentials  no usable token was found at all (no credentials file, no
-#                   Keychain entry, or one that does not parse). PROVEN.
-#   expired-token   a token was found and its own recorded expiry is already
-#                   in the past when the call is made. PROVEN, locally, from
-#                   the same file the token itself came out of.
-#   network         the catch-all: the call was attempted with a token that
-#                   does not claim to be expired and did not come back with a
-#                   usable reading. NOT a claim about the wire — an HTTP
-#                   refusal, a timeout, an over-long body and an unparseable
-#                   one all land here. Telling those apart is #107's job;
-#                   this only separates "we never had a key" from "the key
-#                   we had had already expired" from "everything else",
-#                   which is the distinction #107 opens with.
+#                   Keychain entry, one that does not parse), or the vendor
+#                   refused one that has no refresh token to renew it with.
+#   network         the call did not complete usably for a transport or
+#                   server reason: no connection, a timeout, a 429, a 5xx.
+#   unparseable     the call answered 200 and the body was not one usable
+#                   reading (malformed, several documents, over the byte cap).
 # The key is ABSENT (not null) when the reason is unknown, and absent on
 # every vendor/transcript reading, so no existing output shape moves.
+#
+# #107: an auth failure is cached for at most _USAGE_AUTH_FAIL_TTL_SEC, not
+# the full CLIKAE_USAGE_TTL — the next read after a session refreshes the
+# token must see the fresh number, not a minute-old "expired".
+_USAGE_AUTH_FAIL_TTL_SEC=60
+
+# usage_expired_hintv <tank> -> $_UEH, the one line a person reads next to an
+# "expired" reading (`clikae usage` text, the board's note). The words are
+# the remedy, not a diagnosis: the login is fine, only a session (or `clikae
+# usage --wake`) refreshes the access token. A `…v` setter so the board's
+# redraw pays no subshell for it.
+usage_expired_hintv() {
+  _UEH="⏳ token expired — run a session or 'clikae usage --wake $1'"
+}
 usage_unknown() {
   case "${1:-}" in
-    expired-token|no-credentials|network)
+    expired-token)
+      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"%s"}\n' "$1" ;;
+    no-credentials|network|unparseable)
       printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
     *)
       printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
@@ -47,9 +64,12 @@ usage_read() (
   # check should mean, the same thing it already means for a vendor read
   # (where the two coincide). `// .cached_at` falls back for any cache file
   # written before this field existed.
+  # #107: an "expired" reading gets the shorter of the two TTLs.
   if [ "$fresh" != 1 ] && [ -f "$cache" ] &&
-     jq -e --argjson now "$now" --argjson ttl "$ttl" \
-       '(.scanned_at // .cached_at) as $s | $s <= $now and ($now - $s < $ttl)' "$cache" >/dev/null 2>&1; then
+     jq -e --argjson now "$now" --argjson ttl "$ttl" --argjson authttl "$_USAGE_AUTH_FAIL_TTL_SEC" \
+       '(.scanned_at // .cached_at) as $s
+        | (if .source == "expired" and $authttl < $ttl then $authttl else $ttl end) as $t
+        | $s <= $now and ($now - $s < $t)' "$cache" >/dev/null 2>&1; then
     jq -c 'del(.cached_at, .scanned_at)' "$cache"; return
   fi
   reading=""
@@ -77,7 +97,8 @@ usage_read() (
         reading=""
         adapter_reason="$(printf '%s' "$adapter_out" | jq -r '
           if .reason == "expired-token" or .reason == "no-credentials"
-             or .reason == "network" then .reason else empty end' 2>/dev/null)"
+             or .reason == "network" or .reason == "unparseable"
+          then .reason else empty end' 2>/dev/null)"
       fi
     fi
   fi
@@ -96,12 +117,19 @@ usage_read() (
   reading="$(printf '%s' "$reading" | jq -ce '
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})$") then . else null end;
-    (if .reason == "expired-token" or .reason == "no-credentials"
-        or .reason == "network" then .reason else null end) as $reason |
+    (if .reason == "no-credentials" or .reason == "network"
+        or .reason == "unparseable" then .reason else null end) as $reason |
+    # #107: "expired" exists only with its one reason, and never carries a
+    # number — whatever else an adapter put beside it is dropped here.
+    if .source == "expired" and .reason == "expired-token" then
+      {window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,
+       source:"expired",reason:"expired-token"}
+    else
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
      source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)} |
-    if .source == "unknown" and $reason != null then . + {reason:$reason} else . end')" || { reading="$(usage_unknown)"; event_epoch=""; }
+    if .source == "unknown" and $reason != null then . + {reason:$reason} else . end
+    end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   umask 077
   if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" \
