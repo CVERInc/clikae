@@ -1692,3 +1692,60 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   [[ "$output" != *"list truncated"* ]] || { echo "$output"; false; }
   [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
 }
+
+# --- #113 item 1: the truncation signal is a ROW in the items stream, not a
+# `state/home-recent-truncated.$$` file ---------------------------------------
+# The file had no exit-time cleanup, so every truncating render — and every
+# killed board — left one behind in the user's state dir, keyed by a pid. It
+# also had no concurrency test.
+
+@test "two boards rendering one tank at once each print their own truncation line and leave no marker (#113)" {
+  _seed_bulk_agy default 50 50
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  # Same ceiling on both (the board index is shared per tank, and its cap is a
+  # function of the ceiling), different LANGUAGES — so "its own line" is
+  # observable: a board that printed the other's line, or its own twice, shows.
+  local a="$TEST_HOME/board-en.out" b="$TEST_HOME/board-zh.out" pa pb ra=0 rb=0
+  CLIKAE_LANG=en-US CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$a" 2>&1 &
+  pa=$!
+  CLIKAE_LANG=zh-TW CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$b" 2>&1 &
+  pb=$!
+  wait "$pa" || ra=$?
+  wait "$pb" || rb=$?
+  [ "$ra" -eq 0 ] || { cat "$a"; false; }
+  [ "$rb" -eq 0 ] || { cat "$b"; false; }
+  [ "$(grep -c '50 sessions hidden as burn runs · list truncated' "$a")" -eq 1 ] || { cat "$a"; false; }
+  [ "$(grep -c '50 個 session 被當成 burn 隱藏' "$b")" -eq 1 ] || { cat "$b"; false; }
+  ! grep -q '被當成 burn 隱藏' "$a" || { cat "$a"; false; }
+  ! grep -q 'list truncated' "$b" || { cat "$b"; false; }
+  # Nothing on disk speaks for a board that is no longer running.
+  local left; left="$(find "$CLIKAE_HOME" -name 'home-recent-truncated*' 2>/dev/null)"
+  [ -z "$left" ] || { echo "marker left behind: $left"; false; }
+}
+
+@test "_home_items_load lifts the truncation row out of \$items, anchored to a line start (#113)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items
+  # Mid-stream: the recent section's first row, ahead of its resume rows.
+  _home_items() { printf 'tank\037agy\037a\n%s\03742\nresume\037agy\037a\037t\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 42 ] || { echo "got=$_HOME_RESUME_TRUNC"; false; }
+  [ "$items" = "$(printf 'tank\037agy\037a\nresume\037agy\037a\037t')" ] || { printf '%q\n' "$items"; false; }
+  # Last row: the truncation emptied the Resume list entirely.
+  _home_items() { printf 'tank\037agy\037a\n%s\0377\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 7 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || { printf '%q\n' "$items"; false; }
+  # A tank legally NAMED like the kind, mid-row, is a row, not the signal.
+  _home_items() { printf 'tank\037agy\037%s\0379\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037%s\0379' "$_HOME_TRUNC_KIND")" ] || false
+  # A render with no truncation clears the previous render's count.
+  _home_items() { printf 'tank\037agy\037a\n'; }
+  _HOME_RESUME_TRUNC=5
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || false
+}

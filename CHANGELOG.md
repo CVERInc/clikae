@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The home board no longer leaves a `state/home-recent-truncated.<pid>` file
+  behind every time its Resume list is truncated (or a board is killed
+  mid-render). The "N sessions hidden as burn runs · list truncated" count now
+  travels from the Resume scan to both renderers inside the board process
+  itself, so nothing is written to disk for it at all, and two boards open on
+  the same tank at once can't read each other's count (#113).
 - Four optional adapter hooks (`adapter_cwd_from_args`,
   `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
   `adapter_tank_fingerprint`) no longer leak from one adapter to the next
