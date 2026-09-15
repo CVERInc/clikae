@@ -724,6 +724,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comes from `mktemp` rather than a predictable /tmp path. Everything those
   rounds deliberately left unfixed is now tracked in #112 rather than in
   review notes.
+- An idle Claude tank whose access token has lapsed now reads
+  `source:"expired"` with `reason:"expired-token"` instead of a flat
+  `"unknown"` — the vendor's 401/403 is observed (curl still runs `--fail`;
+  only the HTTP status is captured), and "expired" needs a refresh token in
+  the credentials, so a tank that genuinely needs a login still reads
+  `unknown`/`no-credentials`. `reason` gains `unparseable` (a 200 that is not
+  one usable reading); `network` now means only transport and server
+  failures. An expired reading is cached for at most 60 seconds, not the
+  TTL. `clikae usage` text says `⏳ token expired — run a session or
+  'clikae usage --wake <tank>'` (the board: `⏳ expired · usage --wake
+  <tank>`, sized to its gutter), and `clikae usage --wake <tank>`
+  runs one trivial prompt through `clikae burn` (cockpit gate,
+  running-burn lock and 60s bound unchanged; `--force-cockpit` for the
+  cockpit) and re-reads with no cache (#107).
 - `clikae usage [engine] [tank] [--json] [--fresh]` reports Claude's OAuth
   usage windows and Codex's own `rate_limits` evidence (read from its
   rollout transcripts — no `codex` process runs for this), cached for 120
