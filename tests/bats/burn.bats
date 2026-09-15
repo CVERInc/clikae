@@ -3856,3 +3856,49 @@ STUB
   [[ "$output" == *"(scan timed out)"* ]] || { printf '%s\n' "$output"; false; }
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json, sys; json.load(sys.stdin)'
 }
+
+# P3-1 (round-5 review): round-4 stopped a merely-slow discovery `find` from
+# declaring the whole budget spent, but kept round-2's one sentence for both
+# outcomes. A `find` that hit its own 5s ceiling with 4s of the 10s budget
+# still unspent printed "and 1 more (scan budget exhausted)" — which points a
+# reader at a budget knob when what actually needs attention is the root that
+# hung. The two facts now say which one they are.
+@test "burn #84 P3-1 (round-5 review): a discovery find that hangs says discovery timed out, not budget exhausted" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  # ONE root (the cwd, which is the payload repo itself) so the 5s discovery
+  # ceiling cannot also exhaust the 10s global budget — this test is about
+  # which sentence gets printed, and both sentences firing would prove
+  # nothing about either.
+  cd "$STUB_LEFT_REPO" || return 1
+  # P3-2 (round-5 review): a shim keyed on the implementation's own flags
+  # goes silently inert the day those flags change, and a test whose shim
+  # never fires passes for the wrong reason. This one records that it fired
+  # and the assertions below demand it.
+  local fired="$BATS_TEST_TMPDIR/discovery-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -name .git -print0 "*) printf 'x' >> "$fired"; exec sleep 100000 ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" -- noop
+  [ -s "$fired" ] || { echo "the discovery find shim never fired — this test asserted nothing"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"discovery timed out after 5s"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" != *"scan budget exhausted"* ]] || { echo "still blaming the budget"; printf '%s\n' "$output"; false; }
+  # round-4's own property, still standing: a bounded discovery call that
+  # times out costs that root's unlisted repos, not the one already in hand.
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
+}

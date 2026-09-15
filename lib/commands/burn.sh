@@ -1287,6 +1287,13 @@ _burn_left_behind() {
   # it. `lb_scan_t0` now starts here, before the first `find`, so discovery
   # spends the SAME clock the per-repo loop already respected.
   local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
+  # P3-1 (round-5 review): a bounded call that HIT ITS OWN 5s ceiling and a
+  # candidate the 10s global budget never reached are two different facts, and
+  # round-4 reported both with one sentence ("scan budget exhausted").
+  # Measured: a discovery `find` that took 6s of a 10s budget — 4s still
+  # unspent — printed "and 1 more (scan budget exhausted)", which sends a
+  # reader to raise a budget that was never the problem. The root that hung is.
+  local lb_disc_timeout=0 lb_find_bound=5
   local _lb_disc rc_disc
   for root in "${roots[@]}"; do
     if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
@@ -1312,7 +1319,7 @@ _burn_left_behind() {
       # this file (bare `find`, not `command find` — see P2-1) — a cold
       # network mount under $root used to be able to hang discovery itself
       # with no bound at all.
-      _burn_lb_bounded 5 find "$root" \( -name node_modules -o -name .venv -o -name target \
+      _burn_lb_bounded "$lb_find_bound" find "$root" \( -name node_modules -o -name .venv -o -name target \
         -o -name dist -o -name build -o -name .cache \) -prune \
         -o \( -name .git -print0 -prune \) 2>/dev/null
     } > "$_lb_disc" 2>/dev/null || rc_disc=$?
@@ -1328,7 +1335,7 @@ _burn_left_behind() {
     # real budget is still enforced by the `$SECONDS` check both above and
     # in the marker loop below.
     if [ "$rc_disc" -eq 124 ]; then
-      lb_budget_skipped=$((lb_budget_skipped + 1))
+      lb_disc_timeout=$((lb_disc_timeout + 1))
     fi
     while IFS= read -r -d '' marker; do
       if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
@@ -1349,7 +1356,9 @@ _burn_left_behind() {
         # half of the round-2 fix's own promise ("a repo that trips it is
         # force-included … worth a human's attention, not silence") —
         # applied to discovery, not just the per-repo scan.
-        lb_budget_skipped=$((lb_budget_skipped + 1))
+        # P3-1 (round-5 review): counted as a TIMEOUT, not as budget
+        # exhaustion — this repo hung, it was not skipped for lack of time.
+        lb_disc_timeout=$((lb_disc_timeout + 1))
         continue
       fi
       [ "$rp_rc" -eq 0 ] || continue
@@ -1615,17 +1624,23 @@ _burn_left_behind() {
   # confirmed left-behind candidates trimmed by the display cap; these are
   # unknowns the budget ran out before even checking (same honesty as a
   # per-repo scan timeout: say so, don't claim they're clean).
+  if [ "$lb_disc_timeout" -gt 0 ]; then
+    log_info "  … and $lb_disc_timeout more (discovery timed out after ${lb_find_bound}s)"
+  fi
   if [ "$lb_budget_skipped" -gt 0 ]; then
-    log_info "  … and $lb_budget_skipped more (scan budget exhausted)"
+    log_info "  … and $lb_budget_skipped more (scan budget exhausted after ${lb_scan_budget}s)"
   fi
   # P2-2 (round-2 review): `--json` used to carry no truncation signal at
   # all — a machine consumer had no way to tell "25 rows, that's everything"
   # from "25 rows, and an unknown number more" without also parsing the
-  # human `log_info` lines. `left_behind_truncated` folds BOTH reasons a
+  # human `log_info` lines. `left_behind_truncated` folds EVERY reason a
   # candidate might be missing from `left_behind[]` (cap overflow, budget
-  # exhaustion) into one count; `_burn_result` reads it back off this
+  # exhaustion, a discovery call that hit its own ceiling) into one count —
+  # P3-1 (round-5 review) split the last two apart in the HUMAN lines above,
+  # where a reader has to decide what to DO about it, and deliberately kept
+  # this machine-readable number their sum; `_burn_result` reads it back off this
   # function's own last line, same convention as the JSON array itself.
-  printf '%s\t[%s]' "$((over + lb_budget_skipped))" "$entries"
+  printf '%s\t[%s]' "$((over + lb_budget_skipped + lb_disc_timeout))" "$entries"
   return 0
 }
 
