@@ -142,7 +142,9 @@ fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 > file (just the engine name, one line) inside it — that marker, not the
 > directory's name or content, is what `clikae tanks`, `burn`'s reroute, and
 > every other reader treat as "this is a real tank". Only the marker's FIRST
-> LINE is ever read or compared; anything after the first newline is ignored.
+> LINE is ever read or compared, and only its first 64 characters; anything
+> after the first newline is ignored, as is anything past that 64th character
+> (trailing whitespace on the name is still tolerated).
 > `init` (and agy's own tank creation) stamps it the moment a tank is made.
 > **Upgrading from an older clikae:** the first command you run against an existing store
 > performs a one-time sweep that marks every existing tank directory (no

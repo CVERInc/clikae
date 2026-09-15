@@ -426,3 +426,43 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" == *"bigmarker"* ]] || { echo "$output"; false; }
 }
+
+# --- #61 round-5 P3-3: the test above says "stays cheap" and asserts no such
+# thing, and the shape it uses is the cheap one (a short first line). The
+# expensive shape is a LONG FIRST LINE: `claude` followed by trailing
+# whitespace made the tolerant strip quadratic — measured 0.07s at 1,000
+# spaces, 3.5s at 8,000, 13.9s at 16,000 (x4 per doubling, bash 5.2 and bash
+# 3.2 alike), i.e. `clikae tanks` silently hanging on a store it can list
+# perfectly well. The read is bounded to 64 characters now; this is the ruler
+# that says so, in wall-clock seconds rather than adjectives.
+@test "#61 round-5 P3-3: a marker with 16 KB of trailing whitespace still names a tank, in bounded time" {
+  clikae init claude fatmarker
+  clikae init claude normal
+  { printf 'claude'; head -c 16000 /dev/zero | tr '\0' ' '; echo; } \
+    > "$CLIKAE_HOME/profiles/claude/fatmarker/.clikae-tank"
+  local start end elapsed
+  start="$(date +%s)"
+  run clikae tanks
+  end="$(date +%s)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"fatmarker"* ]] || { echo "trailing whitespace lost the tank: $output"; false; }
+  [[ "$output" == *"normal"* ]] || { echo "$output"; false; }
+  elapsed=$(( end - start ))
+  # Linear: ~30ms on the round-5 review's host. The pre-fix quadratic was
+  # 13.9 SECONDS for this exact marker, so a bound of 10 tells the two apart
+  # by a wide margin even on a loaded CI box.
+  [ "$elapsed" -lt 10 ] || { echo "clikae tanks took ${elapsed}s on a 16 KB marker"; false; }
+}
+
+@test "#61 round-5 P3-3: a marker whose first line is longer than the bound is not a tank, and costs nothing to reject" {
+  clikae init claude longline
+  { head -c 200000 /dev/zero | tr '\0' 'x'; echo; } \
+    > "$CLIKAE_HOME/profiles/claude/longline/.clikae-tank"
+  local start end
+  start="$(date +%s)"
+  run clikae tanks
+  end="$(date +%s)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"longline"* ]] || { echo "a 200 KB first line is not an engine name: $output"; false; }
+  [ $(( end - start )) -lt 10 ] || { echo "rejecting a 200 KB first line took $(( end - start ))s"; false; }
+}

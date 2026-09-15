@@ -430,7 +430,19 @@ tank_dir_is_tank() {
     # #61 round-3 P3: builtin `read`, not a forked `cat` per tank on every
     # single read — measured 160ms -> 123ms on `clikae tanks` and
     # 519ms -> 483ms on `clikae doctor` with 30 tanks, same tank count out.
-    IFS= read -r _m < "$marker" 2>/dev/null
+    #
+    # #61 round-5 P3-3: BOUNDED at 64 characters (`-n`, not bash-4-only
+    # `-N`: macOS ships bash 3.2), because the trailing-whitespace strip
+    # below is quadratic in the length of what it is handed — round-5
+    # review measured one marker of `claude` + 16,000 trailing spaces
+    # taking `clikae tanks` 13.9 SECONDS (bash 5 and bash 3.2 alike, x4 per
+    # doubling), which is the whole store silently hanging. 64 is far more
+    # than any engine name and short enough that the strip is free; a first
+    # line longer than that cannot be an engine name anyway, and the one
+    # case where the OVERFLOW is meaningful — a real name followed by a
+    # pile of whitespace — still matches, because the strip runs on the
+    # first 64 characters and the name is at the front of them.
+    IFS= read -r -n 64 _m < "$marker" 2>/dev/null
     if [ "$_m" = "$cli" ]; then
       return 0
     fi
