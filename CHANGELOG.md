@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a silently short list, and a refusal message claiming there was no idle tank
   while idle tanks sat in the store. Such a directory is now simply not a tank,
   said once in one warning line and never as a raw shell error (#61 round 6).
+- The one-line "this store's tanks aren't adopted yet and the flag can't be
+  written" warning is now deduplicated PER STORE. It was one boolean for the
+  whole process tree, so a terminal warned about one read-only store then
+  stayed silent about a second, unrelated one — a mounted or shared store
+  whose answers were memory-only too, with nothing said about it (#61 round 6).
 - `clikae cockpit --off` now removes the guard from a cockpit tank that is no
   longer enumerable — one whose `.clikae-tank` marker went missing or became
   unreadable (a restored backup, a sync tool). It used to sweep the same

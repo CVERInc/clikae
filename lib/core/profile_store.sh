@@ -612,10 +612,44 @@ tanks_adopted_flag_write() {
 # top-level shell (the hoist near the bottom of its preamble) BEFORE any
 # subshell can, so the first warning is always the one whose export survives.
 #
-# The deliberate trade: a clikae run from INSIDE an engine session that this
-# clikae exec'd stays quiet about the same store. That operator has already
-# read the line in this terminal; a warning repeated per keypress is how this
-# started (round-2 P2-1), and an unremovable file is what it became.
+# 🔴 #61 round-6 P3-2: THE VALUE IS A SET OF STORE KEYS, NOT A BOOLEAN — and
+# the trade written here before was measured to be two levels wider than it
+# said. It claimed "stays quiet about THE SAME STORE"; the flag was `1`, keyed
+# by nothing, so:
+#
+#   (a) it silenced EVERY store. A terminal warned about store A then said
+#       nothing about a second, unrelated read-only store B (a mounted shared
+#       store, `CLIKAE_HOME=/mnt/…`) — measured, both directions. Fixed here:
+#       the value is `:<flag path>:<flag path>:` and the check is for THIS
+#       store's key, so each store still gets its own line exactly once.
+#
+#   (b) it outlives this terminal. `tmux new-session` creates a server from
+#       whoever started it when none is running, and that server's GLOBAL
+#       environment table is frozen at birth and outlives every process here
+#       (this file's own header in lib/core/tmux.sh, and roam.bats' lesson).
+#       clikae warns BEFORE it spawns the server, so the server is born
+#       carrying the key — and every pane opened on it afterwards, for days,
+#       including ones a clean client opens, inherits it. switch.sh's explicit
+#       `--env` list (what clikae deliberately passes into a session) does not
+#       contain this variable; it rides in on that inheritance.
+#
+# (b) is NOT fixed here, and this is the honest description of what it costs
+# rather than a claim that it does not happen: what is suppressed is one
+# advisory line about ONE store whose read-only-ness is a stable fact of that
+# machine, in panes belonging to the same operator who already read it. It
+# cannot suppress anything about a different store (that is (a)), it cannot
+# change what is adopted, and it self-clears the moment the store becomes
+# writable — then the flag persists and this function is never reached at all
+# (measured). The two mechanisms that could close it are both worse than the
+# bug: a sentinel file is what rounds 3-4 already tried and had to remove, and
+# stripping the variable in tmux_spawn_session would give the LAUNCH path two
+# warnings for one keypress, which is round-2 P2-1 coming back.
+#
+# The deliberate trade that remains: a clikae run from INSIDE an engine
+# session that this clikae exec'd stays quiet about the SAME store (now
+# literally the same store). That operator has already read the line in this
+# terminal; a warning repeated per keypress is how this started (round-2
+# P2-1), and an unremovable file is what it became.
 # _tank_marker_unreadable_warn_once <dir> -> exactly ONE line per process
 # when a `.clikae-tank` marker exists but cannot be opened (#61 round-6 P3-1).
 # Deduped through the same exported-variable mechanism as the adoption warning
@@ -641,8 +675,15 @@ _tank_marker_unreadable_warn_once() {
 }
 
 _tank_adoption_warn_once() {
-  [ -z "${_CLIKAE_ADOPT_WARNED:-}" ] || return 0
-  _CLIKAE_ADOPT_WARNED=1
+  local _key _seen
+  _key="$(tanks_adopted_flag_path)"
+  _seen="${_CLIKAE_ADOPT_WARNED:-}"
+  case "$_seen" in *":$_key:"*) return 0 ;; esac
+  # A pathological number of distinct stores in one process tree must not grow
+  # an unbounded environment variable; past the cap the oldest keys are simply
+  # forgotten and that store gets its line again, which is the safe direction.
+  [ "${#_seen}" -lt 2000 ] || _seen=""
+  _CLIKAE_ADOPT_WARNED="${_seen:-:}$_key:"
   export _CLIKAE_ADOPT_WARNED
   log_warn "This store's tanks aren't adopted yet and the flag can't be written (read-only store?) — recognising them in memory this run only. \`clikae doctor --adopt\` explains more; fix permissions on $(dirname "$(tanks_adopted_flag_path)") to persist it."
 }

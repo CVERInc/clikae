@@ -406,6 +406,30 @@ STUB
   [ "$(printf '%s\n' "$output" | grep -c 'WARN')" -eq 1 ] || { echo "$output"; false; }
 }
 
+@test "#61 round-6 P3-2: the warn dedupe is keyed by STORE — a second read-only store still gets its line" {
+  # The exported flag used to be a bare `1`, keyed by nothing: a terminal
+  # warned about store A then said nothing about an unrelated store B (a
+  # mounted shared store, CLIKAE_HOME=/mnt/…) — so nobody was told that B's
+  # answers were memory-only too.
+  local A="$BATS_TEST_TMPDIR/storeA" B="$BATS_TEST_TMPDIR/storeB" s
+  for s in "$A" "$B"; do
+    mkdir -p "$s/.clikae/state" "$s/.clikae/profiles/claude/x"
+    printf 'claude\n' > "$s/.clikae/profiles/claude/x/.clikae-tank"
+    chmod a-w "$s/.clikae/state"
+  done
+  local a1 b1 a2
+  a1="$(CLIKAE_HOME="$A/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
+  # Exactly what an exec'd/forked clikae would carry forward from that run.
+  b1="$(_CLIKAE_ADOPT_WARNED=":$A/.clikae/state/tanks-adopted-v1:" \
+        CLIKAE_HOME="$B/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
+  a2="$(_CLIKAE_ADOPT_WARNED=":$A/.clikae/state/tanks-adopted-v1:" \
+        CLIKAE_HOME="$A/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
+  for s in "$A" "$B"; do chmod u+w "$s/.clikae/state"; done
+  [ "$a1" -eq 1 ] || { echo "store A first run: $a1 WARN"; false; }
+  [ "$b1" -eq 1 ] || { echo "store B silenced by store A's key: $b1 WARN"; false; }
+  [ "$a2" -eq 0 ] || { echo "store A warned again despite its own key: $a2 WARN"; false; }
+}
+
 @test "#61 round-6 P3-1: an unreadable marker is one WARN and a COMPLETE list, never a raw shell error" {
   if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
   local t
@@ -481,7 +505,10 @@ STUB
   chmod u+w "$CLIKAE_HOME/state" 2>/dev/null || true
   [ "$rc" -eq 0 ] || { cat "$err"; false; }
   [ -f "$TEST_HOME/engine-saw-warned" ] || { echo "engine never ran: $(cat "$err")"; false; }
-  [ "$(cat "$TEST_HOME/engine-saw-warned")" = "1" ] || \
+  # #61 round-6 P3-2: the dedupe carries a SET OF STORE KEYS now, not `1`, so
+  # the assertion is that THIS store's key crossed the exec — a boolean would
+  # also have silenced every other store (that is the finding).
+  grep -Fq "$CLIKAE_HOME/state/tanks-adopted-v1" "$TEST_HOME/engine-saw-warned" || \
     { echo "engine did not inherit the dedupe: $(cat "$TEST_HOME/engine-saw-warned")"; false; }
   [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "stderr: $(cat "$err")"; false; }
   # Nothing left behind — checked both by the engine, while it was the live
