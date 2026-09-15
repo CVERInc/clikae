@@ -554,6 +554,54 @@ _seed_burn_flood_agy() {
   [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
 }
 
+# --- #61 round-6 P2-1: the merge of #93 and this PR, locked from both sides ---
+# The Resume loop answers two independent questions and #93 and #61 each changed
+# a different one: WHICH directories may contribute a row (this PR: the one
+# enumerator, not a glob) and HOW MANY rows to ask each tank for (#93: N + that
+# tank's own hidden burns). Taking either side of the conflict alone silently
+# lost the other, so assert both in ONE store: keeping only main's arm makes the
+# stray row reappear; keeping only this PR's arm leaves $_ask at the outer
+# loop's leftover value and the Resume block empties out again.
+@test "#61 round-6 P2-1: a stray non-tank dir stays out of the Continue list WHILE burns still give up their slots" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i n sid
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t "20200101000$i" "$d/$sid.jsonl"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2021010100$n" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  # A directory that clikae never named as a tank, appearing AFTER the one-time
+  # adoption sweep the init above completed, holding something transcript-shaped
+  # and newer than everything else in the store.
+  local sd="$CLIKAE_HOME/profiles/claude/strayone/projects/$slug"; mkdir -p "$sd"
+  sid="33333333-0000-4000-8000-000000000001"
+  printf '{"type":"ai-title","aiTitle":"STRAY-1 session","sessionId":"%s"}\n' "$sid" > "$sd/$sid.jsonl"
+  touch -t "202301010001" "$sd/$sid.jsonl"
+  [ ! -e "$CLIKAE_HOME/profiles/claude/strayone/.clikae-tank" ] || false
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # this PR's half: the stray never becomes a resumable row
+  [[ "$output" != *"STRAY-1 session"* ]] || { echo "stray leaked: $output"; false; }
+  # #93's half: the per-tank ask still widens past the burns
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
 @test "12 burn sessions newer than 3 human ones do not empty the continue list (codex tank, #93 P2-1)" {
   clikae init codex a
   local work="$TEST_HOME/work"; mkdir -p "$work"
