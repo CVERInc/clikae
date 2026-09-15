@@ -1822,25 +1822,99 @@ _limit_codex_readings() {
 # _board_cold_sidscope_read's `head -c 512 /dev/null`). `tail` also writes a
 # newline before every banner but the first, so a transcript whose last byte is
 # not a newline cannot run into the next banner.
+#
+# 2026-09-15 round-9 review P2-1 — why a banner is RECONCILED against the
+# scan list instead of pattern matched, and why a batch whose framing did not
+# come out as expected is ANSWERED PER FILE: `tail`'s framing is in-band, and
+# the band it shares is the file CONTENT. This used to accept any physical
+# line matching `^==> … <==$` as "the next file starts here", so one such line
+# inside a transcript (a torn or partial write, anything third-party writing
+# into the tank tree) ended that file's section early — the limit sitting
+# after the line was attributed to a path that was never in the scan list, and
+# the tank drew FULL when it was dry. That is round-8 P1-1's exact failure
+# walking back in through another door, and it made this function disagree
+# with `_limit_claude_reading` on the very fixture the paragraph above
+# promises they agree on.
+#
+# The fix keeps the promise instead of narrowing it, in two layers:
+#
+#   1. STRUCTURAL banner detection. The list is read first (`NR == FNR`), so
+#      the scan knows both WHICH paths are expected and in WHICH ORDER `tail`
+#      was handed them. A banner is accepted only when it names exactly the
+#      next unconsumed path (`pth[next_i]`) — i.e. only where this batch's own
+#      framing can put one. Everything else, `/dev/null`'s own banners
+#      included, is content and goes to scan() like any other line.
+#      The comparison is `bsame` (byte equality), never awk's `==`: on Apple's
+#      awk `==` is answered by `strcoll()`, and macOS' UTF-8 collation gives
+#      most CJK no weight — the same trap `02d8f89` had to fix in
+#      board_state.sh's grouping awk, and paths are exactly where it would
+#      bite. (No `LC_ALL=C` here: `length`/`index` do not consult LC_COLLATE
+#      anyway, and the rest of this awk must keep matching byte-for-byte what
+#      the per-file parser does in the caller's locale.)
+#
+#   2. A FRAMING CHECK, because layer 1 alone can only refuse, not repair —
+#      refusing the wrong line still leaves the batch mis-framed from there
+#      on. So the batch is only TRUSTED when it framed exactly as predicted,
+#      and three independent signals have to agree:
+#        - awk saw no banner-shaped line it did not accept (`/dev/null`'s own
+#          banners, the fixed first argument of every batch, excepted) — a
+#          fabricated one that happens to name the very next path is invisible
+#          to a row count, because it consumes that path's real banner later
+#          and the totals still balance. awk reports this as `exit 3`;
+#        - the pipeline exited 0 — `tail` exits 1 on a file it cannot open and
+#          `xargs` turns that into 123, which is also exactly the case where
+#          `tail` prints no banner at all for that file;
+#        - one row came back per listed path (every readable file gets a
+#          banner and therefore a row, an empty transcript included).
+#      Otherwise the answer comes from the per-file parser for the whole list:
+#      slower, and only in that case, but never narrower. A valid transcript
+#      cannot contain a banner-shaped physical line at all (JSONL escapes its
+#      newlines, and a `tail -c` cut lands mid-record, whose tail ends in `}`),
+#      so this bail-out costs a normal tank nothing.
+#      (The capture is `|| :` rather than bare because that 123 used to abort
+#      the whole refresh under bin/clikae's `set -eo pipefail`.)
 _limit_batched_readings() {
   local engine="$1" list="$2" bytes="${CLIKAE_TX_TAIL_BYTES:-524288}"
   [ -s "$list" ] || return 0
-  tr '\n' '\0' < "$list" \
+  local out want got f rc=0 parser="_limit_${engine}_reading"
+  out="$(tr '\n' '\0' < "$list" \
     | xargs -0 tail -c "$bytes" /dev/null 2>/dev/null \
     | awk -v engine="$engine" "$_LIMIT_READING_AWK"'
+      function bsame(a, b) {
+        if (length(a) != length(b)) return 0
+        if (length(a) == 0) return 1
+        return index(a, b) == 1
+      }
       function emit() {
-        if (path == "" || path == "/dev/null") { path = ""; return }
+        if (path == "") return
         print path U reading()
         path = ""
       }
-      BEGIN { U = sprintf("%c", 31); path = ""; lreset() }
+      BEGIN { U = sprintf("%c", 31); path = ""; n = 0; next_i = 1; suspect = 0; lreset() }
+      NR == FNR { if ($0 != "") { n++; pth[n] = $0 } ; next }
       /^==> .* <==$/ {
-        emit()
-        path = substr($0, 5, length($0) - 8)
-        lreset()
-        next
+        cand = substr($0, 5, length($0) - 8)
+        if (next_i <= n && bsame(cand, pth[next_i])) {
+          emit()
+          path = pth[next_i]
+          next_i++
+          lreset()
+          next
+        }
+        if (!bsame(cand, "/dev/null")) suspect = 1
       }
       { scan($0) }
-      END { emit() }
-    '
+      END { emit(); if (suspect) exit 3 }
+    ' "$list" -)" || rc=$?
+  want="$(grep -c . "$list" 2>/dev/null)" || want=0
+  got=0
+  [ -z "$out" ] || got="$(printf '%s\n' "$out" | grep -c .)" || got=0
+  if { [ "$rc" = 0 ] && [ "$want" = "$got" ]; } || ! declare -F "$parser" >/dev/null 2>&1; then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s\037%s\n' "$f" "$("$parser" "$f")"
+  done < "$list"
 }

@@ -1082,6 +1082,57 @@ _b8_tank() {
   done
 }
 
+@test "board (round-9 P2-1): an ==> path <== line INSIDE a transcript is content, not a tail banner" {
+  # `tail`'s framing is in-band: the `==> name <==` separators travel in the
+  # same stream as the file CONTENT. Matching them by PATTERN meant a physical
+  # line shaped like one — a torn write, anything third-party writing into the
+  # tank tree — ended that file's section early: the limit sitting after it was
+  # attributed to whatever the line named, the file's own reading came back
+  # EMPTY, and the fuel dot drew FULL on a dry tank (round-8 P1-1's failure,
+  # through a second door). Three shapes, all three of which the batched scan
+  # must answer exactly as the per-file parser does:
+  #   2-alien   names a path that is not in the scan list at all
+  #   3-backref names a sibling EARLIER in the order the paths were fed to tail
+  #   4-fwdref  names the sibling that is NEXT in that order — the one shape a
+  #             row COUNT cannot catch, because it consumes that file's real
+  #             banner later and the totals still balance
+  _board_source
+  local d="$TEST_HOME/banner" f ok lim
+  mkdir -p "$d"
+  ok='{"type":"assistant","timestamp":"2026-09-14T09:00:00.000Z","message":{"model":"claude-x"}}'
+  lim='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"limit · resets 11pm"}]},"timestamp":"2026-09-14T10:00:00.000Z"}'
+  printf '%s\n' "$ok" > "$d/1-first.jsonl"
+  printf '%s\n==> /etc/passwd <==\n%s\n' "$ok" "$lim" > "$d/2-alien.jsonl"
+  printf '%s\n==> %s <==\n%s\n' "$ok" "$d/1-first.jsonl" "$lim" > "$d/3-backref.jsonl"
+  printf '%s\n==> %s <==\n%s\n' "$ok" "$d/5-last.jsonl" "$lim" > "$d/4-fwdref.jsonl"
+  printf '%s\n' "$ok" > "$d/5-last.jsonl"
+  # …plus a listed path that does not exist: `tail` prints no banner for it,
+  # which is the same desync from the other side (and used to exit 123 into
+  # `set -eo pipefail`).
+  ls "$d"/*.jsonl > "$d/list"
+  printf '%s\n' "$d/9-gone.jsonl" >> "$d/list"
+
+  _limit_batched_readings claude "$d/list" | LC_ALL=C sort > "$d/batched"
+  : > "$d/perfile"
+  while IFS= read -r f; do
+    printf '%s\037%s\n' "$f" "$(_limit_claude_reading "$f")" >> "$d/perfile"
+  done < "$d/list"
+  LC_ALL=C sort -o "$d/perfile" "$d/perfile"
+  diff "$d/batched" "$d/perfile" || { echo "batched != per-file with a banner-shaped content line"; false; }
+
+  # the limit is the file's OWN, not a neighbour's, and no reading is invented
+  # for a path that was never scanned
+  grep -q "^$d/2-alien.jsonl"$'\037'"2026-09-14T10:00:00.000Z" "$d/batched" \
+    || { echo "2-alien lost its own limit"; false; }
+  grep -q "^$d/4-fwdref.jsonl"$'\037'"2026-09-14T10:00:00.000Z" "$d/batched" \
+    || { echo "4-fwdref lost its own limit"; false; }
+  ! grep -q '^/etc/passwd' "$d/batched" || { echo "invented a reading for /etc/passwd"; false; }
+  cut -d$'\037' -f1 "$d/batched" > "$d/paths"
+  local stray
+  stray="$(grep -vxFf "$d/list" "$d/paths" || true)"
+  [ -z "$stray" ] || { echo "rows for paths that were never scanned: $stray"; false; }
+}
+
 @test "board (P2-2): the batched bounded read agrees with the per-file parser (codex, grok)" {
   # `_board_cold_sidscope` reads the first 512 bytes of many files in one
   # `head`; `_board_engine_sidscope` reads one file properly. The cold build
