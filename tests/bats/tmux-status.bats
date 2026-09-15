@@ -889,8 +889,10 @@ _SEP=' #[fg=colour244]│#[default] '
 @test "width ladder: the alert count and the clock are never cut, at any width or name length" {
   # The invariant the ladder exists for, asserted mechanically instead of
   # trusted: every cell keeps the WHOLE `!N` and leaves the clock its 6
-  # columns. 28 is the arithmetic floor (`clikae <8> │ !10 ` + clock); the
-  # spec only promises 80.
+  # columns. The arithmetic floor is `26 + ${#alerts}` — 28 for the `!10` used
+  # here (P3-2, round-4 review: it is a formula, not the constant 28, which is
+  # a two-digit count written down as if it were all of them). The spec only
+  # promises 80.
   _src
   local w n row plain floor
   for w in 28 40 60 80 100 120; do
@@ -907,6 +909,38 @@ _SEP=' #[fg=colour244]│#[default] '
       plain="${row%%"$_SEP"*}"
       [ "${#plain}" -ge "$(( 7 + floor ))" ] || { echo "w=$w n=$n left no tank: $row"; false; }
     done
+  done
+}
+
+# 🔴 P3-2 (2026-09-14 round-4 review): the arithmetic floor is a FORMULA. The
+# doc (and this file's own comment above) said "28 columns", which is the floor
+# for a two-digit count and one column short for `!100` — measured on real tmux
+# 3.4 with 100 fresh dry markers at 28 columns: the helper produced 23 columns
+# against a 22-column limit and the CLOCK was cut to `0:51`. This is the third
+# time the same three-digit blind spot has been written down (round 3 retired
+# "at most 59 columns for the rest", which was 60 at `!100`, and the same
+# paragraph gained a new constant carrying the same assumption), so the floor is
+# pinned here as arithmetic rather than as a number:
+#
+#   `clikae ` 7 + tank floor 8 + ` │ !` 4 + digits + clock 6 + trailing 1
+#   = 26 + ${#alerts}  →  27 / 28 / 29 for one / two / three digits.
+@test "width ladder: the arithmetic floor is 26 + the alert count's digits" {
+  _src
+  local n w floor
+  for n in 7 10 100; do
+    floor=$(( 26 + ${#n} ))
+    # AT the floor the whole row fits, count and clock intact.
+    tmux_status_rowv "$floor" '' claude "$(_tank 42)" '' '5h 100% · 7d 100%' '23h ago' "$n"
+    [[ "$_TSTAT_ROW" == *"!$n#[default] " ]] || { echo "!$n at $floor: $_TSTAT_ROW"; false; }
+    [ "$(_row_cols "$_TSTAT_ROW")" -le "$(( floor - 6 ))" ] \
+      || { echo "!$n at $floor is $(_row_cols "$_TSTAT_ROW") cols, over $(( floor - 6 ))"; false; }
+    # One column BELOW it, the row can no longer be drawn without eating into
+    # the clock's six columns — which is what makes this the floor and not a
+    # preference. (The row itself never cuts the count; it overflows instead,
+    # and tmux gives the overrun to the clock.)
+    tmux_status_rowv "$(( floor - 1 ))" '' claude "$(_tank 42)" '' '5h 100% · 7d 100%' '23h ago' "$n"
+    [ "$(_row_cols "$_TSTAT_ROW")" -gt "$(( floor - 1 - 6 ))" ] \
+      || { echo "!$n fits at $(( floor - 1 )) — the floor is not $floor"; false; }
   done
 }
 
