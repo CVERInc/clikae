@@ -3902,3 +3902,52 @@ STUB
   # times out costs that root's unlisted repos, not the one already in hand.
   [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
 }
+
+# P3-4 (round-5 review): with two roots whose discovery `find` each burns the
+# full 5s ceiling, the 10s budget is gone by the time the per-repo loop
+# starts — and the loop's own budget check then threw away the payload repo
+# that discovery had ALREADY found and put in `repos[]`. Measured pre-fix:
+# zero rows, `left_behind_truncated: 4`. Honest and bounded, and still the
+# one row #84 exists to print.
+@test "burn #84 P3-4 (round-5 review): a root repo already discovered survives the budget boundary" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  local fired="$BATS_TEST_TMPDIR/discovery-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -name .git -print0 "*) printf 'x' >> "$fired"; exec sleep 100000 ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  local t0 t1
+  t0="$(date +%s)"
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  # Both roots' discovery must really have hung, or this asserts nothing.
+  [ "$(wc -c < "$fired" | tr -d ' ')" -ge 2 ] || { echo "discovery shim fired $(wc -c < "$fired") time(s), expected 2"; false; }
+  [ "$((t1 - t0))" -lt 45 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { echo "the already-discovered root repo vanished"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"hint: git -C "*" push"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+rows = d["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["repo"] == os.path.realpath(os.environ["STUB_LEFT_REPO"]), rows
+assert rows[0]["ahead"] == 1, rows
+# the roots whose discovery hung are still counted, just not INSTEAD of this row
+assert d["left_behind_truncated"] >= 1, d
+'
+}

@@ -1295,6 +1295,39 @@ _burn_left_behind() {
   # reader to raise a budget that was never the problem. The root that hung is.
   local lb_disc_timeout=0 lb_find_bound=5
   local _lb_disc rc_disc
+  # P3-4 (round-5 review): the roots themselves are resolved FIRST, in their
+  # own pass, before any `find` runs. Measured on the pre-fix code: cwd = the
+  # payload repo plus one `--add-dir`, each root's discovery `find` burning
+  # the full 5s ceiling — root1's `find` spends 5s, root2's spends the other
+  # 5s, and the per-repo loop's budget check then throws away the payload repo
+  # that had ALREADY been discovered and was sitting in `repos[]`. Output:
+  # zero rows, `left_behind_truncated: 4`. Honest, bounded, and useless —
+  # #84's own headline row was the first thing dropped.
+  # A root needs no `find` at all, only one `rev-parse`, and `$PWD` plus every
+  # `--add-dir` are the directories the caller NAMED. Resolving them up front
+  # puts them at the head of `repos[]`; the per-repo loop below then exempts
+  # exactly that many entries from the soft budget (see `lb_root_repos`
+  # there), so what the scan already has in hand is reported and only the
+  # unknown remainder is truncated.
+  local lb_root_repos=0
+  for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_budget_skipped=$((lb_budget_skipped + 1))
+      continue
+    fi
+    rp_rc=0
+    repo="$(_burn_lb_git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+    if [ "$rp_rc" -eq 124 ]; then
+      lb_disc_timeout=$((lb_disc_timeout + 1))
+      continue
+    fi
+    [ "$rp_rc" -eq 0 ] || continue
+    case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+    seen="${seen}"$'\n'"${repo}"$'\n'
+    repos+=("$repo")
+    lb_root_repos=$((lb_root_repos + 1))
+  done
   for root in "${roots[@]}"; do
     if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
@@ -1304,7 +1337,6 @@ _burn_left_behind() {
     _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
     rc_disc=0
     {
-      printf '%s\0' "$root"
       # `-maxdepth 3` (round-1) capped repo discovery 2 levels below
       # $root, so a lane's commits in a repo nested 3+ deep (`a/b/L3`,
       # `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>` produces)
@@ -1343,7 +1375,9 @@ _burn_left_behind() {
         lb_budget_skipped=$((lb_budget_skipped + 1))
         continue
       fi
-      [ "$marker" = "$root" ] || marker="${marker%/.git}"
+      # Every marker here comes from `-name .git -print0`; the root itself is
+      # no longer printed into this file (it was resolved in the pass above).
+      marker="${marker%/.git}"
       rp_rc=0
       repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
       if [ "$rp_rc" -eq 124 ]; then
@@ -1411,8 +1445,24 @@ _burn_left_behind() {
   # `lb_budget_skipped` are declared once now, before discovery (above) —
   # this loop shares that same clock and counter instead of starting a
   # fresh 10s budget of its own on top of whatever discovery already spent.
+  # P3-4 (round-5 review): the first `lb_root_repos` entries are `$PWD` and
+  # the `--add-dir`s the caller named — already discovered, at zero `find`
+  # cost, before the budget could be spent (see the pass that fills them in
+  # above). Dropping one of those because discovery elsewhere ran long is
+  # dropping the answer to the question that was asked. They are exempt from
+  # the soft budget; everything else still respects it. The exemption is not
+  # unbounded: every git/find call inside the loop keeps its own 5s ceiling,
+  # and an absolute 3x ceiling stops even a pathological `--add-dir` list from
+  # turning "bounded scan" back into "runs as long as it likes".
+  local repo_i=0 lb_scan_hard_cap=$((lb_scan_budget * 3))
   for repo in "${repos[@]}"; do
-    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+    repo_i=$((repo_i + 1))
+    if [ "$repo_i" -le "$lb_root_repos" ]; then
+      if [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_hard_cap" ]; then
+        lb_budget_skipped=$((lb_budget_skipped + 1))
+        continue
+      fi
+    elif [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
       lb_budget_skipped=$((lb_budget_skipped + 1))
       continue
