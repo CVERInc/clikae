@@ -451,6 +451,173 @@ you what it did.
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
 
+## Ambient: turn GitHub replies into wake events (`watch github`)
+
+A different source under the same verb: instead of watching a tank's own
+transcript for a dry limit, `clikae watch github` polls GitHub's search API
+for every issue/PR update in an org — including replies on issues YOU
+opened — plus @mentions of you, so a collaborator's reply doesn't sit
+unseen until someone happens to run `gh` by hand.
+
+```bash
+clikae watch github --org CVERInc              # foreground, polls every 10m, Ctrl-C to stop
+clikae watch github --org CVERInc --interval 5m # a tighter poll interval
+clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
+clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bound, default 24h ago
+```
+
+`--org` defaults to the login `gh repo view` reports for this directory's
+GitHub remote when omitted. Every new event prints live as one line — this
+is the actual output line for a collaborator's reply that @-mentions you on
+an issue YOU opened (P2-2, 2026-09-13 fix-round-3 review: regenerated from
+what this implementation really prints — the reply's own text decides
+`kind`, but only the issue's TITLE is ever shown, never the reply text
+itself):
+
+```
+[ DONE ] github CVERInc/reef#313 mention by collaborator: auth redirect
+```
+
+— a collaborator's reply reaching you even on an issue YOU opened (the org
+query has no `-author:<self>` filter; see the caveat below for exactly what
+self-exclusion means instead). It's also appended,
+as flat JSON, to `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a
+durable trail, and — the actual wake — every poll that finds at least one
+new event writes a burn-status-shaped file to
+`$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json` — burn's own
+directory layout, not a lookalike location `clikae wait` can't resolve.
+🔴 Deliberately `$HOME`, not `$CLIKAE_HOME` (P3-2, 2026-09-13 fix-round-3
+review) — the one path in this feature that ignores a `$CLIKAE_HOME`
+override, the same as burn's own status files always have; a sandboxed
+`$CLIKAE_HOME` does not sandbox this one file. So
+`clikae wait watch-github-<org>-<epoch>` (the run_id printed inside the
+file) or `clikae wait --latest watch-github-<org>` (a cockpit that doesn't
+know the epoch yet) returns 0 and prints the events, the same reader a
+cockpit already blocks on for `clikae burn` — that's what a cron job or
+Stop hook calling `--once` actually has to consume, not the JSONL log.
+
+The cursor (the EXACT max updated_at this poll actually processed — no lag)
+persists at `$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small
+seen-file next to it de-dupes by (repo, issue number, updated timestamp),
+capped at the last 5,000. Cold start (no cursor yet) bounds to the last 24
+hours by default — `--since` overrides that bound — and each query
+paginates ascending (oldest-unseen-first) up to 500 rows (5 pages of 100)
+per poll. A busy org's backlog therefore can't outrun this permanently: a
+poll cut short by the cap still leaves the cursor at the end of what it
+read, so the next poll picks up exactly there — the trade-off is a
+backlogged cold start crawls forward from `--since`/24h-ago instead of
+surfacing today's newest activity first.
+
+GitHub search's own indexing delay (real writes lag the search index by
+some minutes) is NOT covered by lagging the cursor above — that was tried
+in earlier rounds of this feature and turned out to permanently stall a
+busy org (any 300-second window holding ≥500 rows pinned the cursor
+forever; see CHANGELOG). Instead, a separate bounded "tail sweep" runs
+once every 5 polls, or right after a truncated one: one or more requests,
+oldest-first (same order as the main query), re-reading a window just
+below the cursor and delivering anything the main query may have missed
+while it was still indexing — oldest-first so a busy org's own
+already-seen recent activity can't fill a newest-first page before the
+sweep reaches older rows. Late-indexed rows are spread across the whole
+window, though, not only at its old end, so a truncated sweep (below) can
+still miss some in the newer part it didn't read. That window is the
+time since the last sweep STARTED (at least 300s) plus a fixed 300s
+overlap with the previous sweep, so a row updated just before one sweep
+but indexed just after it is still re-read by the next — an epoch
+persisted next to the cursor and read back directly,
+not inferred from `--interval` or from how many polls elapsed times any
+single one of their gaps (an earlier version of this feature used a flat
+300s window regardless of spacing, which only ever covered the gap
+between sweeps when `--interval <= 60s`; a later version multiplied one
+poll's own gap by how many polls had elapsed, which undercounted the
+moment polling wasn't evenly spaced — a live loop recovering from
+back-off is exactly that case; the default interval is 10m, and a
+`--once` poll run from cron never knows `--interval` at all — see
+CHANGELOG). It never advances the cursor itself, so it cannot re-create
+that stall; reading paginates within the same 5-page/100-per-page budget
+the main query uses, and a window still not fully covered after that is
+reported as "lag window truncated" and dropped rather than read further,
+so it costs at most 5 extra requests per poll.
+
+Every ALREADY-SEEN issue/PR that gets updated again costs one more request —
+`issues/<n>/timeline` — to learn who actually did it (a reply, a review, a
+label, an assignee change) and whether that was you. That endpoint has no
+`direction` parameter, so learning the LATEST event means reading its own
+`Link: rel="last"` page number and fetching that page (up to 2 requests,
+still counted as 1 lookup against the budget below) — the one endpoint
+whose events carry an actor for review/label/assignee shapes too, not just
+a comment. Bounded to 50 such lookups per poll, spent oldest-unseen-first
+(the order the asc-paginated search results stream in), and stopped early
+once GitHub's own
+`X-RateLimit-Remaining` drops under 100. A candidate beyond that bound is
+still reported — never silently dropped — just as `by unknown` instead of a
+real login. If that fetched event's own text @-mentions you, `kind` is
+`mention` instead of `comment`/`review` (P2-2, 2026-09-13 fix-round-3
+review — this REPLACES a separate `mentions:<self>` search query that used
+to run every poll: once the org query above lost its `-author:<self>`
+filter, that second query became a strict subset of the first, so it was
+mostly buying nothing but extra requests. A brand-new issue/PR whose own
+OPENING text mentions you is not covered by this — no lookup happens for a
+fresh number, so there is no body text to check).
+
+Rate limits: normally 1 search request per poll (up to 5 when paginating,
+plus up to 5 more for the tail sweep above), plus up to 50 activity lookups
+(each up to 2 requests) against the core API's much larger budget.
+On a genuine rate limit (429, or a 403 the response attributes to it, or a
+5xx) the interval backs off ×2 up to 1h from a floor of 60s; the cursor is
+never advanced past a page that failed to read, so nothing is silently
+skipped — a poll cut short by the 5-page cap prints "truncated: continuing
+next poll" and it does: pagination runs oldest-unseen-first, so the cursor
+lands EXACTLY at the last row this poll actually read, and the next poll's
+query starts exactly there. No backlog, however large (short of the one
+case under Known limits below), can stall this
+permanently — the cursor only ever advances, never regressing into a
+window it has already re-read. A PERMANENT failure —
+missing OAuth scope, SAML enforcement, a bad org name — is retried once,
+then reported and the command exits 1; it never enters back-off, since no
+amount of retrying fixes those. `--once` returns 0 only when a poll
+actually succeeded (events or none); 1 on any failure, so a cron job can
+tell "quiet today" from "I've been failing silently".
+
+**Known limits.** The one case the cursor above can still get stuck on:
+≥500 issue/PR updates sharing the exact same `updated_at` second (the
+5-page cap) pins the cursor at that second forever, since it can never
+read past all of them in one poll — extremely unlikely given GitHub's own
+secondary rate limits, but not impossible, so it's named here rather than
+covered by the "no backlog, however large" claim above. Within one poll,
+events the tail sweep finds are appended in `updated_at`-ascending order
+(oldest first, same direction as the main query — fixed 2026-09-14
+fix-round-6 review; an earlier version read the sweep's window
+newest-first), but AFTER the main query's own batch, and the sweep's
+window sits below the cursor the main query just advanced to — so
+`events.jsonl` is still no longer strictly non-decreasing the moment a
+sweep delivers anything; no consumer this feature ships relies on that
+ordering today.
+
+Requires `gh` already logged in — this feature never reads or writes a token
+itself, it uses whatever account `gh auth login` already set up, and refuses
+immediately (exit 1) if `gh auth status` fails.
+
+> **Honest caveat.** GitHub's search API returns issue/PR-level rows, not a
+> per-comment feed, so its own `user.login` is always the ISSUE's author,
+> never whoever's activity just touched it. Self-exclusion and the `kind`
+> shown for an update therefore never trust that field: for a number seen
+> before, both come from the timeline lookup above (round 1 of this feature
+> compared the issue's own author against self instead — which meant a
+> collaborator's reply on an issue YOU opened was invisible no matter what,
+> the exact headline case above, not a documented exception to it). A number
+> never seen before needs no lookup — opening IS the event, and the row's
+> own login is unambiguously who did it; a self-authored new issue is
+> recorded as seen but is not itself an event. `kind` is `opened`,
+> `comment`, `review`, `activity` (any other timeline event — a label, an
+> assignee change, …), or `mention` (an ALREADY-SEEN number whose latest
+> fetched activity's own body text @-mentions you — see the P2-2 paragraph
+> above; a fresh number's own OPENING text is not covered, so a brand-new
+> issue/PR that @-mentions you still reads `opened`, never `mention`).
+> Past the 50-lookup budget or the API's own rate limit, an update's actor
+> cannot be verified and is reported as `unknown` rather than guessed — see
+> the rate-limits paragraph above.
+
 ## What is running right now — the board's Live section
 
 Type `clikae` and the top of the board lists the sessions alive on **this
