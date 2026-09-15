@@ -425,9 +425,22 @@ _BURN_REROUTE_REFRESH_CAP=${_BURN_REROUTE_REFRESH_CAP:-3}
 # calling out by name. The unset/empty case above already resolved to the
 # default and is never "invalid" — only a value that's actually SET to
 # something non-numeric reaches this check.
+#
+# P3-4 (round-6 review): "all digits" was not enough. `99999999999999999999`
+# passed the check and then walked straight back into the failure P3-6 above
+# was written to kill: `[ "$calls" -lt 99999999999999999999 ]` is an
+# arithmetic OVERFLOW, not a comparison, so the loop condition errors out
+# (`[: …: integer expression expected`) and never fires — zero live
+# verification calls on every reroute, no warning, one bash-internal stderr
+# line as the only trace. Measured identically on bash 5.2 and bash 3.2.57.
+# So bound the DIGIT COUNT too: `??????????*` is ten characters or more, i.e.
+# anything that cannot fit in a signed 32-bit integer's ten digits with room
+# to spare. Nine digits (999,999,999) is already absurd for either knob — a
+# billion reroute verification calls, or an age ceiling of 31 years — so
+# nothing legitimate is refused here.
 case "$_BURN_REROUTE_REFRESH_CAP" in
-  *[!0-9]*)
-    log_warn "_BURN_REROUTE_REFRESH_CAP=\"$_BURN_REROUTE_REFRESH_CAP\" is not a non-negative integer — using the default (3). A reroute's live verification budget silently drops to zero calls otherwise."
+  *[!0-9]*|??????????*)
+    log_warn "_BURN_REROUTE_REFRESH_CAP=\"$_BURN_REROUTE_REFRESH_CAP\" is not a non-negative integer of at most 9 digits — using the default (3). A reroute's live verification budget silently drops to zero calls otherwise."
     _BURN_REROUTE_REFRESH_CAP=3
     ;;
 esac

@@ -193,9 +193,15 @@ _USAGE_CACHE_PEEK_MAX_AGE_SEC=${_USAGE_CACHE_PEEK_MAX_AGE_SEC:-900}
 # The unset/empty case above already resolved to the default and is never
 # "invalid" — only a value that's actually SET to something non-numeric
 # reaches this check (same shape as _BURN_REROUTE_REFRESH_CAP's, burn.sh).
+# P3-4 (round-6 review): the digit-count bound is that shape too, and for
+# this knob the overflow failure is the QUIETER of the two — an all-digit
+# `99999999999999999999` sails through as a jq --argjson number, turning the
+# age ceiling into 1e20 and making every reading trusted forever (the review
+# measured a 3000-second-old reading accepted), with no warning at all.
+# Nine digits is 31 years of ceiling; nothing legitimate is refused here.
 case "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" in
-  *[!0-9]*)
-    declare -F log_warn >/dev/null && log_warn "_USAGE_CACHE_PEEK_MAX_AGE_SEC=\"$_USAGE_CACHE_PEEK_MAX_AGE_SEC\" is not a non-negative integer — using the default (900). Every cached usage reading silently reads as unknown otherwise."
+  *[!0-9]*|??????????*)
+    declare -F log_warn >/dev/null && log_warn "_USAGE_CACHE_PEEK_MAX_AGE_SEC=\"$_USAGE_CACHE_PEEK_MAX_AGE_SEC\" is not a non-negative integer of at most 9 digits — using the default (900). Every cached usage reading silently reads as unknown otherwise."
     _USAGE_CACHE_PEEK_MAX_AGE_SEC=900
     ;;
 esac

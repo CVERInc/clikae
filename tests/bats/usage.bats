@@ -1220,6 +1220,82 @@ STUB
   [[ "$stderr" == *"_USAGE_CACHE_PEEK_MAX_AGE_SEC"*"not a non-negative integer"* ]] || { echo "stderr: $stderr"; false; }
 }
 
+@test "P3-4 (round-6 review): an all-digit but OVERFLOWING _USAGE_CACHE_PEEK_MAX_AGE_SEC is refused too, not silently trusted forever" {
+  # `abc` was caught by round-5 P3-6. `99999999999999999999` is all digits,
+  # so it sailed through — and jq took it happily as an --argjson number,
+  # turning the ranking ceiling into 1e20: every reading trusted forever,
+  # with no warning at all (the review measured a 3000-second-old reading
+  # accepted as fresh). Same failure mode P3-6 set out to kill, reached by a
+  # value that merely LOOKS numeric. The digit-count bound refuses it.
+  usage_fixture
+  clikae init claude work2
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local old_at; old_at=$(( $(date +%s) - 3000 ))   # 50 minutes — far past the 900s ceiling
+  jq -cn --argjson pct 30 --argjson at "$old_at" \
+    '{window_pct:$pct,weekly_pct:$pct,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/work2.json"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  run --separate-stderr bash -c '
+    export CLIKAE_LIB="'"$CLIKAE_LIB"'" CLIKAE_HOME="'"$CLIKAE_HOME"'"
+    source "$CLIKAE_LIB/core/log.sh"
+    export _USAGE_CACHE_PEEK_MAX_AGE_SEC=99999999999999999999
+    source "$CLIKAE_LIB/core/usage.sh"
+    printf "ceiling=%s\n" "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" >&2
+    usage_cache_peek claude work2
+  '
+  [ "$status" -ne 0 ]                       # 3000s old, default ceiling -> unknown
+  [ -z "$output" ]
+  [[ "$stderr" == *"ceiling=900"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" == *"_USAGE_CACHE_PEEK_MAX_AGE_SEC"*"9 digits"* ]] || { echo "stderr: $stderr"; false; }
+}
+
+@test "P3-4 (round-6 review): an all-digit but OVERFLOWING _BURN_REROUTE_REFRESH_CAP is refused too, not a silently zero budget" {
+  # `[ "$calls" -lt 99999999999999999999 ]` is an arithmetic overflow, not a
+  # comparison: the loop condition errors out and never fires, so Pass 4
+  # spends ZERO live calls on every reroute from then on — exactly the
+  # silent-blindness round-5 P3-6 fixed for `abc`, reached again by an
+  # all-digit value. Measured the same on bash 5.2 and bash 3.2.57.
+  clikae init claude aa; clikae init claude bb
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  export _BURN_REROUTE_REFRESH_CAP=99999999999999999999
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  run --separate-stderr bash -c '
+    export CLIKAE_LIB="'"$CLIKAE_LIB"'" CLIKAE_HOME="'"$CLIKAE_HOME"'"
+    source "$CLIKAE_LIB/core/log.sh"
+    export _BURN_REROUTE_REFRESH_CAP=99999999999999999999
+    source "$CLIKAE_LIB/commands/burn.sh"
+    printf "cap=%s\n" "$_BURN_REROUTE_REFRESH_CAP" >&2
+  '
+  [[ "$stderr" == *"cap=3"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" == *"_BURN_REROUTE_REFRESH_CAP"*"9 digits"* ]] || { echo "stderr: $stderr"; false; }
+
+  # And the budget is really spent: with the fallback in force the ranking
+  # makes real calls, instead of the zero the overflow produced.
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage aa 60; live_usage bb 20
+  export USAGE_CALLS="$TEST_HOME/calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+tok="$(printf '%s' "$config" | sed -n 's/.*Bearer \([^"]*\)".*/\1/p')"
+line="$(awk -v t="$tok" '$1==t{print; exit}' "$CLIKAE_TEST_PCTMAP" 2>/dev/null)"
+if [ -z "$line" ]; then echo '{"error":"unauthorized"}'; exit 22; fi
+read -r _ window weekly <<< "$line"
+printf '{"five_hour":{"utilization":%s,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":%s,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}\n' "$window" "$weekly"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = bb ] || { echo "picked: $output (expected bb)"; false; }
+  [ -s "$USAGE_CALLS" ] || { echo "zero vendor calls spent — the budget went dark"; false; }
+}
+
 @test "P3-6 (round-5 review): a non-numeric _BURN_REROUTE_REFRESH_CAP warns loudly and falls back, instead of silently spending zero reroute calls" {
   clikae init claude a1; clikae init claude b2
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

@@ -278,9 +278,16 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   through `usage_cache_peek`'s own age ceiling — see below), and ONLY THEN
   does burn spend live vendor calls verifying the candidates ranking says
   are worth a call, bounded by `_BURN_REROUTE_REFRESH_CAP` (3 by default;
-  named once in `lib/commands/burn.sh`, never re-typed; a non-numeric
-  override warns loudly and falls back to the default rather than silently
-  spending zero calls — round-5 review, P3-6). Round-3 review, P3-4, found
+  named once in `lib/commands/burn.sh`, never re-typed; an override that is
+  not a non-negative integer of at most 9 digits warns loudly and falls back
+  to the default rather than silently spending zero calls — round-5 review
+  P3-6 for the non-numeric case, round-6 review P3-4 for the all-digit
+  OVERFLOWING one, which passed the first check and then produced the same
+  silent zero budget because `[ "$calls" -lt 99999999999999999999 ]` is an
+  arithmetic overflow, not a comparison. `_USAGE_CACHE_PEEK_MAX_AGE_SEC`
+  below carries the same bound, where an overflow was the quieter failure
+  still: it became a 1e20-second ceiling, i.e. every reading trusted
+  forever, with no warning at all). Round-3 review, P3-4, found
   `candidates * --max-time 8` has no total bound as a fleet grows — the cap
   answers that — but round-4 review, P2, found the round-3 shape spent that
   cap on the first 3 candidates by LISTING (alphabetical) order, refreshed
