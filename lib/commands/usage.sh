@@ -25,8 +25,12 @@ timed from the last SCAN, but its reading is stamped with the underlying
 event's own time, which is often older than 120s on a quiet tank). The
 board never fetches — it only ever shows what is already on disk, aged if
 it must. `clikae burn` does: once for the tank it just ran, when the run
-ends (never before launching), and once per candidate right before
-choosing a reroute target on a dry tank.
+ends (never before launching), and on a dry tank up to 3 calls spent on
+the reroute candidates a first ranking off the on-disk cache says could
+actually win — NOT one call per candidate. A fleet of 20 tanks costs 3 calls
+here, not 20, and fewer still if one of them verifies a 0% window, which
+stops the loop on the spot. (The budget is `_BURN_REROUTE_REFRESH_CAP`;
+docs/DESIGN-board-fuel-dots.md has the ranking.)
 HELP
         return 0 ;;
       -*) log_err "Unknown option: $arg"; return 1 ;;

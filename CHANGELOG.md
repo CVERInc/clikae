@@ -365,8 +365,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to launch is always the one that runs, never silently substituted —
   headroom preference only orders which tank a *dry* burn reroutes to next.
   The board never calls the vendor itself; burn does, but only off its own
-  hot path — once for the tank it just ran, at run end, and once per
-  candidate right before choosing a reroute target on a dry tank, never
+  hot path — once for the tank it just ran, at run end, and, on a dry tank,
+  up to `_BURN_REROUTE_REFRESH_CAP` (3) calls spent on the reroute
+  candidates a first ranking off the on-disk cache says could actually win
+  (never once per candidate: a 20-tank fleet costs 3 calls, not 20, and
+  fewer if a refresh verifies a 0% window and stops the loop), never
   before launching. Unavailable readings retain transcript fallbacks (#72;
   round-1 review: named-tank launch, honest codex `source`, board redraw
   fork removed; round-2 review: the two burn-time refreshes above (nothing

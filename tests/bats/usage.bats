@@ -590,6 +590,21 @@ STUB
   [[ "$_FNOTE" != *%* ]]
 }
 
+@test "P3-6 (round-6 review): --help no longer promises one vendor call per reroute candidate" {
+  # The cap arrived in round 3 and the ranking-first spend in round 4, but
+  # `clikae usage --help`, docs/grammar.md and CHANGELOG.md all still said
+  # "once per candidate right before choosing a reroute target". A user with
+  # 20 tanks reading that expects 20 vendor calls; the real number is at most
+  # _BURN_REROUTE_REFRESH_CAP, and fewer when a refresh verifies a 0% window.
+  run clikae usage --help
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"once per candidate"* ]] \
+    || { echo "--help still claims one call per candidate:"; echo "$output"; false; }
+  [[ "$output" == *"NOT one call per candidate"* ]]
+  [[ "$output" == *"3 calls"* ]]
+  [[ "$output" == *"0% window"* ]]
+}
+
 @test "P3-7 (round-6 review): a FUTURE cached_at counts as age 0 for BOTH rulers, not unknown for one and fresh for the other" {
   # Host clock skew (or a cache copied from a machine that was ahead) makes
   # cached_at land in the future. usage_cache_peek used to reject such a
