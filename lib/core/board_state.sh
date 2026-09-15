@@ -23,11 +23,12 @@
 #     not here: an EARLIER draft of this port defined them in this file, and
 #     tests/bats/adapters/antigravity.bats — which sources antigravity.sh
 #     WITHOUT this file — immediately hit "_agy_ws_load: command not found"
-#     (CI run 34760883667, `bats (ubuntu-latest)`). Moved to where
-#     `adapter_session_cwd_index` already lives, and every call site here
-#     guarded with `declare -F`, same as every other adapter-hook call in
-#     this file — still O(1) forks per RENDER, not per session (P2-2's own
-#     invariant, re-verified this round).
+#     (CI run 34760883667, `bats (ubuntu-latest)`). 🔴 fix round 11: this file
+#     no longer calls any of them. agy's index scope is a per-tank constant
+#     (`_BOARD_TANK_SCOPE`), so there is nothing here left to look a session's
+#     workspace up FOR. The helpers stay where they are, with their receipts in
+#     tests/bats/adapters/antigravity.bats; the port note is kept because the
+#     scheme it describes is still what `board_generation`'s memo uses.
 #   - the cold-build classifier's five per-path maps (`cur_mtime`, `cur_size`,
 #     `sid_of`, `scope_of`, `reading_of`) → parallel INDEXED arrays keyed by
 #     the file's position in `stat_rows`, not by path — bash 3.2 has always
@@ -339,9 +340,29 @@ _board_gen_put() {
 # the writer can never drift on what "this scope" means, AND so a reader can
 # verify the hash it looked up by (see _board_scope_key) against the value
 # actually recorded, not just trust a `board_key` collision.
+# The ONE scope every antigravity session in a tank shares (#34, adopted into
+# the index in fix round 11). Not a path: a cwd can only ever be absolute, so
+# `#tank` cannot collide with a real scope, and `_board_entry_key` percent-
+# encodes it to a stable `%23tank` on both the write and the read side.
+#
+# 🔴 WHY agy is the exception. Every other engine records the directory a
+# session was started in, so "the sessions for THIS cwd" is a real question with
+# a real answer. agy does not: `workspace` in its history.jsonl is a constant on
+# a real install (issue #34 — it is the CLI's own root, not the user's cwd), so
+# a cwd-keyed index answers "no sessions" from every project directory and the
+# Resume block for agy was permanently empty. #93 fixed that in the adapter by
+# deleting the cwd filter from its disk scan; an index keyed by cwd would have
+# put the same bug straight back underneath it, because board_recent RETURNS
+# FIRST and the adapter's now-correct scan never runs. One scope per tank is
+# the index shape that matches the adapter's answer.
+_BOARD_TANK_SCOPE='#tank'
 _board_scope_raw() {
   local engine="$1" scope
-  if [ "$engine" = claude ]; then scope="$(_claude_project_slug "$PWD")"; else scope="${PWD%/}"; fi
+  case "$engine" in
+    claude) scope="$(_claude_project_slug "$PWD")" ;;
+    antigravity) printf '%s' "$_BOARD_TANK_SCOPE"; return 0 ;;
+    *) scope="${PWD%/}" ;;
+  esac
   printf '%s' "${scope%/}"
 }
 
@@ -628,6 +649,13 @@ board_recent() {
   # for board_stale's OWN per-file comparison — dropped along with that
   # signal (superseded by the single whole-tank fingerprint; see this file's
   # own header), since nothing reads them anymore.
+  #
+  # The entry's OWN cap is the bound on this answer, deliberately: an entry
+  # built at cap 2 answers an ask of 10 with 2 rows (tests/bats/home-bounded.bats
+  # "snapshot selects newest main sessions", "…does not reuse a stale
+  # generation…"). That is only safe because `board_state_refresh` builds the
+  # entry at the SAME per-tank widened cap `_home_recent_rows` asks with —
+  # keeping those two in step is where #93 P2-1 is actually handled, not here.
   tail -n +2 "$rf" | head -n "$n"
 }
 board_find() {
@@ -857,30 +885,27 @@ EOF_HDR
 # engine's sid/scope come out of a PATH or a file's own CONTENT —
 # `board_state_refresh` calls this only for a file it has already decided
 # needs a fresh parse (new, changed, or a cold build), never for one it can
-# carry forward unchanged (round-6 fix review P1-2). Antigravity's branch
-# expects `_agy_ws_load` (lib/adapters/antigravity.sh — see its own header)
-# to have already run for this tank (board_state_refresh does so before
-# either of its per-file loops) — guarded by `declare -F`, same as every
-# other adapter-hook call in this file (e.g. `adapter_session_cwd_index`
-# below): this file must stay usable when an adapter hasn't been loaded, not
-# just when antigravity specifically hasn't (round-3 fix review's own
-# `adapter_session_cwd_index` guard already established this; fix7's
-# `_agy_ws_lookup` is one more hook of the same kind, not a new dependency).
+# carry forward unchanged (round-6 fix review P1-2). Antigravity's branch used
+# to read a per-session `workspace` through `_agy_ws_lookup`
+# (lib/adapters/antigravity.sh), loaded in bulk per tank by `_agy_ws_load`;
+# fix round 11 dropped both along with the cwd keying they fed — see
+# `_BOARD_TANK_SCOPE`. This function now opens no file at all for agy, so no
+# adapter hook is needed for it either.
 _board_engine_sidscope() {
   local engine="$1" f="$2" sid="" scope=""
   case "$engine" in
     claude) sid="${f##*/}"; sid="${sid%.jsonl}"; scope="${f%/*}"; scope="${scope##*/}" ;;
     codex) sid="$(_codex_meta_field "$f" id)"; scope="$(_codex_meta_field "$f" cwd)" ;;
     grok) sid="$(_grok_json_str "$f" id)"; scope="$(_grok_json_str "$f" cwd)" ;;
+    # #34, fix round 11: TANK-scoped, so the index answers the same question
+    # the adapter's disk scan does (see `_BOARD_TANK_SCOPE`'s own header). The
+    # per-session `workspace` this used to read through `_agy_ws_lookup` is a
+    # constant on a real install, so it never distinguished two scopes; what it
+    # did do was hide every row from every project directory. No lookup and no
+    # `adapter_session_cwd` fork per file is a side effect, not the reason.
     antigravity)
       sid="${f%/.system_generated/*}"; sid="${sid##*/}"
-      _agy_ws_lookup_out=""
-      declare -F _agy_ws_lookup >/dev/null 2>&1 && _agy_ws_lookup "$sid"
-      if [ -n "$_agy_ws_lookup_out" ]; then
-        scope="$_agy_ws_lookup_out"
-      else
-        scope="$(adapter_session_cwd "$f")"
-      fi
+      scope="$_BOARD_TANK_SCOPE"
       ;;
   esac
   [ -n "$sid" ] || return 0
@@ -1097,9 +1122,9 @@ board_state_refresh() (
   # did before this fork existed) — see adapter_session_cwd_index's header
   # (antigravity.sh) for why this is safe (same source of truth, same
   # "first occurrence wins" semantics).
-  if [ "$engine" = antigravity ] && declare -F _agy_ws_load >/dev/null 2>&1; then
-    _agy_ws_load "$dir"
-  fi
+  # fix round 11: the `_agy_ws_load` bulk read that used to happen here is
+  # gone with the cwd keying it fed (`_BOARD_TANK_SCOPE`). It was one awk pass
+  # over the tank's metadata per refresh for a value nothing reads now.
 
   if [ -z "$oldgen" ]; then
     # ---------------- COLD BUILD ----------------

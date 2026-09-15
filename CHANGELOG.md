@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The board's Resume index keys antigravity by TANK, not by the directory a
+  session was started in. `workspace` in agy's own history is a constant on a
+  real install, so a cwd-keyed index answered "no sessions" from every project
+  directory — and because the index answers BEFORE the adapter's disk scan, it
+  would have re-hidden the rows #93 had just made visible (#62, #34).
 - A tank whose fuel dot said "full" while the account was out of fuel now says
   what is true. The board's rate-limit scan was bounded by a COUNT (the newest
   `CLIKAE_HOME_RECENT_MAX` transcripts per project directory) while the thing

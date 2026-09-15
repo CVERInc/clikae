@@ -400,15 +400,17 @@ adapter_recent_sids() {
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
-  # P2-2 (2026-09-12 round-3 fix review): one bulk index read instead of one
-  # reading_cache_run + fork pipeline PER session — see
-  # adapter_session_cwd_index's header. fix7: the per-session index this used
-  # to hold in a `local -A _ws` (bash 4+) now lives in the plain globals
-  # `_agy_ws_load`/`_agy_ws_lookup` above build and read — bash 3.2 has no
-  # associative arrays; see `_agy_ws_varname`'s own header for why a
-  # fork-free, sanitized-name lookup is what keeps this at O(1) forks per
-  # RENDER rather than one per session.
-  _agy_ws_load "$dir"
+  # #34 + #62 (fix round 11): NO `_agy_ws_load` here any more. That bulk
+  # workspace index existed for ONE reader — the `$want` cwd filter in the
+  # scan below — and #34 deleted that filter (workspace is a constant on real
+  # installs, so cwd-scoping hid everything). Loading it anyway would be one
+  # awk pass over every session's metadata per render, for an answer nothing
+  # reads. The index itself stays (`adapter_session_cwd_index`/`_agy_ws_load`
+  # above) with its receipts in tests/bats/adapters/antigravity.bats: it is
+  # this adapter's own documented bulk-cwd hook, and `adapter_session_cwd` —
+  # the single-session form burn.sh and resume.sh do call — reads the same
+  # file. Nothing on the RENDER path reads it any more: board_state.sh dropped
+  # its own call in the same round (see `_BOARD_TANK_SCOPE` there).
   local -a afiles=()
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.
