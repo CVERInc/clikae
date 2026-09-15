@@ -1076,10 +1076,41 @@ _burn_lb_kill() {
   return 0
 }
 
+# Milliseconds since the epoch, or nothing at all when neither clock exists.
+# P3-5 (round-6 review): the 137/143 fallback at the end of `_burn_lb_bounded`
+# is the last place in this file that still compares `$SECONDS` — an integer
+# clock that ticks on ABSOLUTE second boundaries, the exact defect round-5's
+# P3-3 removed from the main path. `$EPOCHREALTIME` (bash 5) and GNU `date
+# +%s%N` both give sub-second resolution; BSD `date` prints a literal `N` for
+# `%N`, which the digit test below rejects, and then the caller keeps the old
+# whole-second comparison rather than inventing precision it does not have.
+_burn_lb_now_ms() {
+  local t s f
+  t="${EPOCHREALTIME:-}"
+  case "$t" in
+    *[.,]*)
+      s="${t%%[.,]*}"; f="${t#*[.,]}000"
+      case "$s" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s' "$(( s * 1000 + 10#${f:0:3} ))"; return 0 ;;
+      esac ;;
+  esac
+  t="$(date +%s%N 2>/dev/null)" || t=''
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  # BSD `date` prints a literal `N` (caught by the digit test above), but
+  # busybox `date` — the one on the real `bash:3.2` image — expands `%N` to
+  # NOTHING, which leaves a plain 10-digit epoch that looks like a valid
+  # answer and reads as 1789 milliseconds. Epoch nanoseconds are the epoch's
+  # 10 digits plus 9 more; anything shorter is not this clock.
+  [ "${#t}" -ge 19 ] || return 1
+  printf '%s' "${t%??????}"
+  return 0
+}
+
 _burn_lb_bounded() {
   local secs="$1"; shift
   local start=$SECONDS pid watcher rc mflag kill_mark
-  local timed_out=0
+  local start_ms='' now_ms='' timed_out=0
   # Lazily probed so a direct caller (the unit tests in burn.bats) gets the
   # same guarantee; `_burn_left_behind` probes ONCE up front so the four
   # per-repo `_burn_lb_git` calls — each inside its own `$(...)` subshell,
@@ -1130,6 +1161,9 @@ _burn_lb_bounded() {
   # a full or read-only $TMPDIR) is the one case that has no evidence to read,
   # and only that case falls back to the clock at the end of this function.
   kill_mark="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-kill.XXXXXX" 2>/dev/null)" || kill_mark=''
+  if [ -z "$kill_mark" ]; then
+    start_ms="$(_burn_lb_now_ms)" || start_ms=''
+  fi
   # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
   # wrong in a way that only showed up under real load: every bounded call
   # — even one that finishes instantly — pays up to ~1s of pure polling
@@ -1234,14 +1268,38 @@ _burn_lb_bounded() {
   # finishing): 4 of 8 identical runs reported a phantom.
   # The watchdog's own mark answers the question directly instead: it exists
   # only if the deadline passed with the child still alive.
-  [ -z "$kill_mark" ] || rm -f "$kill_mark" 2>/dev/null || true
-  # Fallback for a $TMPDIR the watchdog could not write into: a child that
-  # died FROM A SIGNAL at or past the deadline was almost certainly killed by
-  # it. Both halves are needed — the signal alone would misread an
-  # externally-killed command, the clock alone is the bug above.
-  case "$rc" in
-    137|143) [ $((SECONDS - start)) -lt "$secs" ] || timed_out=1 ;;
-  esac
+  # P3-5 (round-6 review): the fallback below used to run whenever the mark was
+  # absent, which is NOT the same question. With `mktemp` making the file up
+  # front (P3-6), "absent" means one thing only — we could not make a mark at
+  # all — and that is the only case the comment ever claimed to cover. Before,
+  # every ordinary run had no mark, so ANY child killed from outside (the OOM
+  # killer, a maintainer's `pkill`, another lane's cleanup) was reported as a
+  # timeout burn invented, complete with a repo that "timed out" and a
+  # `discovery timed out after 5s` line. Now a usable mark is the whole answer
+  # and the clock is never consulted.
+  if [ -n "$kill_mark" ]; then
+    rm -f "$kill_mark" 2>/dev/null || true
+  else
+    # No mark was possible. A child that died FROM A SIGNAL at or past the
+    # deadline was probably killed by the watchdog — both halves are needed,
+    # since the signal alone misreads an externally-killed command. The clock
+    # is milliseconds when the platform has one (`$EPOCHREALTIME`, GNU `date
+    # +%s%N`); `$SECONDS` is the last resort and keeps its old whole-second
+    # window, which is why it is now reached only when BOTH the mark and every
+    # sub-second clock are unavailable.
+    case "$rc" in
+      137|143)
+        if [ -n "$start_ms" ]; then
+          now_ms="$(_burn_lb_now_ms)" || now_ms=''
+          if [ -n "$now_ms" ] && [ "$(( now_ms - start_ms ))" -ge "$(( secs * 1000 ))" ]; then
+            timed_out=1
+          fi
+        elif [ $((SECONDS - start)) -ge "$secs" ]; then
+          timed_out=1
+        fi
+        ;;
+    esac
+  fi
   [ "$timed_out" -eq 0 ] || return 124
   return "$rc"
 }

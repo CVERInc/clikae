@@ -4099,3 +4099,33 @@ STUB
   [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
   [ "$alive" -eq 0 ] || { echo "the TERM-ignoring grandchild $gpid outlived the escalation"; false; }
 }
+
+# P3-5 (round-6 review): the 137/143 fallback used to run whenever no mark
+# existed — which, before the mark became an `mktemp` file created up front,
+# was every ordinary run. So ANY child killed from outside (the OOM killer, a
+# maintainer's `pkill`) at or past the deadline was reported as a timeout burn
+# invented. The child below kills ITSELF with TERM 4.2s into a 5s bound, from a
+# start deliberately aligned 0.9s into a `$SECONDS` tick: the old integer clock
+# reads 5 and says 124; the real answer is 143.
+@test "burn #84 P3-5 (round-6 review): a child killed from outside near the deadline reports its signal, not a timeout" {
+  _burn_lb_boot
+  local stub="$BATS_TEST_TMPDIR/selfkill"
+  cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+sleep 4.2
+self=$$
+case "$self" in ''|*[!0-9]*) exit 9 ;; esac
+[ "$self" -gt 1 ] || exit 9
+kill -TERM "$self"
+sleep 5
+STUB
+  chmod +x "$stub"
+  local rc=0 s0
+  SECONDS=0; s0=$SECONDS
+  while [ "$SECONDS" -eq "$s0" ]; do sleep 0.02; done
+  SECONDS=0
+  sleep 0.9
+  _burn_lb_bounded 5 "$stub" || rc=$?
+  [ "$rc" -ne 124 ] || { echo "an externally killed child was reported as a timeout it never hit"; false; }
+  [ "$rc" -eq 143 ] || { echo "rc=$rc, expected 143 (killed by SIGTERM from outside)"; false; }
+}
