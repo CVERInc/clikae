@@ -1015,7 +1015,7 @@ _burn_lb_kill() {
 
 _burn_lb_bounded() {
   local secs="$1"; shift
-  local start=$SECONDS pid watcher rc mflag
+  local start=$SECONDS pid watcher rc mflag kill_mark
   # Lazily probed so a direct caller (the unit tests in burn.bats) gets the
   # same guarantee; `_burn_left_behind` probes ONCE up front so the four
   # per-repo `_burn_lb_git` calls — each inside its own `$(...)` subshell,
@@ -1044,6 +1044,16 @@ _burn_lb_bounded() {
   { set -m; } 2>/dev/null
   "$@" &
   pid=$!
+  # P3-3 (round-5 review, same root as r3 P3-1): the watchdog leaves a mark
+  # when it actually fires, so "did this time out" stops being an integer
+  # comparison of a second-granularity clock — see the `return` at the end of
+  # this function for what that comparison got wrong. Cleared first, with a
+  # builtin test so the common (no-timeout) path still forks nothing: the
+  # path is unique among LIVE processes, but a previous call killed between
+  # its own `kill` and its own `rm` could have left one behind under the same
+  # `$$`/pid pair.
+  kill_mark="${TMPDIR:-/tmp}/clikae-lb-kill.$$.$pid"
+  [ -e "$kill_mark" ] && rm -f "$kill_mark" 2>/dev/null
   # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
   # wrong in a way that only showed up under real load: every bounded call
   # — even one that finishes instantly — pays up to ~1s of pure polling
@@ -1087,9 +1097,14 @@ _burn_lb_bounded() {
   # return until the child is actually dead, so the parent cannot reap this
   # watchdog before that escalation has happened.
   ( sleep "$secs"
-    _burn_lb_kill TERM "$pid"
-    sleep 1
-    _burn_lb_kill KILL "$pid"
+    # Gate on the child still existing so the deadline and a command that
+    # finished on its own at the very same instant do not both claim it.
+    if kill -0 "$pid" 2>/dev/null; then
+      : > "$kill_mark" 2>/dev/null || true
+      _burn_lb_kill TERM "$pid"
+      sleep 1
+      _burn_lb_kill KILL "$pid"
+    fi
   ) >/dev/null 2>&1 3>&- 4>&- &
   watcher=$!
   [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
@@ -1111,12 +1126,32 @@ _burn_lb_bounded() {
   wait "$pid" 2>/dev/null || rc=$?
   _burn_lb_kill TERM "$watcher"
   wait "$watcher" 2>/dev/null || true
-  # The watchdog firing and the command finishing on its own race at the
-  # boundary; rather than a marker file (another fork+file per call, on
-  # the hottest path in this function), elapsed wall time already answers
-  # it — the command cannot have taken >= secs without the bound applying.
-  [ $((SECONDS - start)) -lt "$secs" ] && return "$rc"
-  return 124
+  # P3-3 (round-5 review): this used to be `[ $((SECONDS - start)) -lt
+  # "$secs" ] && return "$rc"; return 124` — an integer comparison of
+  # `$SECONDS`, which ticks on ABSOLUTE second boundaries (bash reads
+  # time(2)), not on this call's own start. A command launched 0.01s before a
+  # tick and finishing in 4.1s measures as 5 under a 5s bound and was
+  # reported as a timeout it never hit. That was already known (r3 P3-1,
+  # deferred); round-4 gave it a consumer that turns it into a visible lie —
+  # a discovery `find` that FINISHED gets counted into `lb_budget_skipped`,
+  # so the report grows an "… and 1 more" repository that does not exist and
+  # `left_behind_truncated` counts it. Measured on the pre-fix code with a
+  # discovery `find` shimmed to 4.6s (well inside the 5s bound, and really
+  # finishing): 4 of 8 identical runs reported a phantom.
+  # The watchdog's own mark answers the question directly instead: it exists
+  # only if the deadline passed with the child still alive.
+  if [ -e "$kill_mark" ]; then
+    rm -f "$kill_mark" 2>/dev/null || true
+    return 124
+  fi
+  # Fallback for a $TMPDIR the watchdog could not write into: a child that
+  # died FROM A SIGNAL at or past the deadline was almost certainly killed by
+  # it. Both halves are needed — the signal alone would misread an
+  # externally-killed command, the clock alone is the bug above.
+  case "$rc" in
+    137|143) [ $((SECONDS - start)) -lt "$secs" ] || return 124 ;;
+  esac
+  return "$rc"
 }
 
 # Every git call the left-behind scan makes goes through this: `-c

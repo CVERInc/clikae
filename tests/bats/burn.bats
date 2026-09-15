@@ -3786,6 +3786,30 @@ STUB
   [ "$alive" -eq 0 ] || { echo "grandchild $gpid outlived the bound"; false; }
 }
 
+# P3-3 (round-5 review, same root as r3 P3-1): `[ $((SECONDS - start)) -lt
+# "$secs" ]` is an INTEGER comparison of a clock that ticks on absolute
+# second boundaries — a call that starts 0.01s before a tick and runs 4.1s
+# under a 5s bound measures as 5 and gets reported as a timeout it never hit.
+# Aligning to the boundary on purpose makes that deterministic instead of a
+# coin flip (measured 4/8 on the real thing).
+@test "burn #84 P3-3 (round-5 review): a bounded call that finished in time never reports 124" {
+  _burn_lb_boot
+  local rc=0 s0
+  # $SECONDS ticks on ABSOLUTE second boundaries (bash reads time(2), whole
+  # seconds), so the offset that matters is measured from the boundary, not
+  # from the assignment. Wait for a tick, re-zero on it, then spend 0.9s of
+  # that second before the bounded call starts: the call begins at ~.9 and
+  # ends at ~5.05 — 4.15s of real time under a 5s bound, but two integer
+  # ticks apart.
+  SECONDS=0; s0=$SECONDS
+  while [ "$SECONDS" -eq "$s0" ]; do sleep 0.02; done
+  SECONDS=0
+  sleep 0.9
+  _burn_lb_bounded 5 sleep 4.15 || rc=$?
+  [ "$rc" -ne 124 ] || { echo "phantom timeout: a 4.1s command under a 5s bound reported 124"; false; }
+  [ "$rc" -eq 0 ] || { echo "rc=$rc, expected 0"; false; }
+}
+
 # The other direction of the same assertion: a real timeout must still be 124.
 @test "burn #84 P3-3 (round-5 review): a bounded call that really overran still reports 124" {
   _burn_lb_boot
