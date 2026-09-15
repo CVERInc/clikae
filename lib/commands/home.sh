@@ -383,9 +383,15 @@ EOF
     printf '%s\n' "$_trunc" > "$(_home_trunc_flag)" 2>/dev/null || true
   fi
   if [ -z "$acc" ]; then
-    # `[ … ] && rm` would be an AND-list whose false branch returns 1 — under
-    # the CLI's `set -e` that is an exit, not a no-op. Spell it as an `if`.
-    if [ -n "$_burn_sids_f" ]; then rm -f "$_burn_sids_f"; fi
+    # What this actually relies on: BOTH ways out of this function remove the
+    # sidecar temp file — here, and after the filter below. The `if` is for
+    # reading, not for `set -e`: POSIX and bash exempt every command in an
+    # `&&` list except the one after the final `&&`, so `[ … ] && rm` is a
+    # no-op here too (verified: `set -eo pipefail; f=""; [ -n "$f" ] && rm -f
+    # "$f"; echo SURVIVED` prints SURVIVED, rc=0). The shape that DOES kill
+    # the shell is a failing test as the LAST command of a function — the
+    # function then returns 1 and its CALL is what errexit sees. The `return
+    # 0` two lines down is what rules that out here, not the `if`.
     return 0
   fi
   # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
