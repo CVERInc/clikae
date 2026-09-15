@@ -20,6 +20,13 @@ scan() {
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
 }
 
+# The bash-4 flag pattern, written ONCE. Round-7 fix review P3-1: the negative
+# control below used to re-spell it (and re-spell `scan`'s greps) inline, so it
+# proved "this regex fires", not "THIS RULER fires" — the moment `scan` changed
+# its roots or its comment exemption, the control would have gone on vouching
+# for a ruler that no longer existed.
+BASH4_FLAG_RE='declare -[gAn]|local -[An]|typeset -[An]'
+
 @test "no mapfile / readarray (bash 4+)" {
   run scan '\b(mapfile|readarray)\b'
   [ -z "$output" ]
@@ -33,6 +40,77 @@ scan() {
 @test "no readlink -f (not on macOS/BSD)" {
   run scan 'readlink[[:space:]]+-f'
   [ -z "$output" ]
+}
+
+@test "board GC still RUNS under a real bash 3.2, not just parses" {
+  # 🔴 THE CLASS bash -n CANNOT SEE. Every other guard in this file scans source
+  # TEXT, and `shellcheck -S warning`, `bash -n` and the CI's own syntax gate are
+  # all parsers — but bash 3.2 re-parses the BODY of a `$( … )` only when it
+  # expands it, and its scanner stops at the first unbalanced `)`. So a `case`
+  # pattern inside a command substitution parses clean everywhere and then, on
+  # 3.2 only, fails AT RUNTIME with `command substitution: syntax error near
+  # unexpected token` on stderr — while the substitution yields the empty string
+  # and the caller returns 0. `_board_gc_candidates` shipped exactly that shape
+  # on 6a4aa49: an EMPTY candidate list, no error code, so the board GC swept
+  # nothing on macOS and said nothing. `2f51d15` hoisted the `case` into
+  # `_board_gc_rows`; this asserts the fix by EXECUTING it, because nothing that
+  # reads the file can.
+  command -v docker >/dev/null 2>&1 || skip "docker is unavailable; cannot run a real bash 3.2"
+  docker image inspect bash:3.2 >/dev/null 2>&1 \
+    || skip "the bash:3.2 image is not present locally (docker pull bash:3.2 to enable this guard)"
+
+  local probe="$TEST_HOME/bash32.sh"
+  cat > "$probe" <<'PROBE'
+cd /w || exit 1
+. lib/core/profile_store.sh || exit 1
+. lib/core/board_state.sh   || exit 1
+# The bash:3.2 image is Alpine, so its userland is busybox: `_clikae_statv`
+# sees a `stat` that does not say GNU, takes the BSD branch, and busybox's
+# `stat -f` answers with FILESYSTEM info. That is the container's userland,
+# not this code (macOS' BSD `stat -f %m` is right) — stub it out so the probe
+# measures the thing it is about.
+file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+
+# CONTROL FOR THE RULER: prove this bash really is one that cannot see the
+# class, so a green result below means "fixed", not "ran on bash 5". The bad
+# shape lives in its own FILE, run by its own bash — written inline it would
+# break this probe the same way it breaks the subject.
+case "$BASH_VERSION" in
+  3.2*) ;;
+  *) echo "CONTROL: not bash 3.2 but $BASH_VERSION"; exit 9 ;;
+esac
+printf '%s\n' 'v="$(case x in x) echo alive ;; esac)"' 'printf "CTL=[%s]\n" "$v"' > /tmp/ctl.sh
+bash /tmp/ctl.sh > /tmp/ctl.out 2>/tmp/ctl.err
+if [ ! -s /tmp/ctl.err ] || grep -q 'CTL=\[alive\]' /tmp/ctl.out; then
+  echo "CONTROL-DID-NOT-FIRE: a case inside \$( ) ran clean here"; exit 9
+fi
+
+root="$(mktemp -d)/board"; mkdir -p "$root"
+i=1
+while [ "$i" -le 4 ]; do
+  mkdir -p "$root/generation.g$i"; echo "$i" > "$root/generation.g$i/seq"
+  [ "$i" -eq 1 ] || echo "generation.g$((i-1))" > "$root/generation.g$i/parent"
+  i=$((i + 1))
+done
+mkdir -p "$root/generation.orphan"; echo 0 > "$root/generation.orphan/seq"
+echo "generation.g4" > "$root/current"
+_board_gc_rows "$root" > /tmp/rows 2>/tmp/rows.err || true
+_board_gc_candidates "$root" 2 > /tmp/cand 2>/tmp/cand.err || true
+echo "ROWS=$(grep -c . /tmp/rows)"
+echo "CAND=$(grep -c . /tmp/cand)"
+echo "ERR=$(cat /tmp/rows.err /tmp/cand.err | tr '\n' ' ')"
+PROBE
+
+  run docker run --rm -v "$CLIKAE_TEST_ROOT":/w:ro -v "$TEST_HOME":/p:ro \
+    bash:3.2 bash /p/bash32.sh
+  [ "$status" -eq 0 ] || { echo "probe exited $status: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ROWS=5$' \
+    || { echo "_board_gc_rows saw the wrong number of generations under 3.2: $output"; false; }
+  # keep=2 roots g4 and g3; g2/g1 survive as their chain, orphan does not
+  printf '%s\n' "$output" | grep -q '^CAND=1$' \
+    || { echo "_board_gc_candidates under bash 3.2: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ERR=$' \
+    || { echo "bash 3.2 wrote to stderr: $output"; false; }
 }
 
 # P1-1 (round-2 review): `tests/bats/burn.bats` shipped `touch -d "@epoch"` —
@@ -112,6 +190,41 @@ $f:$ln:$rest"
 @test "no &> redirection (use >file 2>&1)" {
   run grep -rn -- '&>' "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"
   [ -z "$output" ]
+}
+
+# fix7: PR #78's own CI caught what this file's scans missed —
+# `declare -gA _BOARD_GEN_CACHE` in board_state.sh. macOS bash 3.2 has neither
+# `declare -g` (added 4.2) nor associative arrays (`-A`, added 4.0), and a
+# script that hits either at SOURCE time (not even at call time — `declare -gA`
+# runs the moment the file is sourced) exits 2 before a single command runs:
+# `lib/core/board_state.sh: line 205: declare: -g: invalid option`, ~1,000 bats
+# red on every macOS job since this branch's first commit. `[[ … =~ …]]` is
+# deliberately NOT scanned here — 3.2 has that.
+@test "no declare/local/typeset -g / -A / -n (bash 4+ global/assoc-array/nameref flags)" {
+  run scan "$BASH4_FLAG_RE"
+  [ -z "$output" ]
+}
+
+@test "the -g/-A/-n scan does not fire on its own documentation, and does fire on a real occurrence" {
+  # Same shape as "the compat scans do not fire on their own documentation"
+  # above — a control for THIS ruler, not for the code.
+  local probe="$TEST_HOME/probe2"; mkdir -p "$probe/lib" "$probe/bin"
+  : > "$probe/bin/clikae"
+  printf '# we deliberately avoid local -A here, see board_state.sh\n' > "$probe/lib/note.sh"
+
+  # P3-1: point the REAL `scan` at the probe tree and call it with the REAL
+  # pattern. Nothing about the ruler is restated here, so a change to either
+  # can no longer leave this control vouching for a ruler that moved.
+  local saved="$CLIKAE_TEST_ROOT"
+  CLIKAE_TEST_ROOT="$probe"
+
+  run scan "$BASH4_FLAG_RE"
+  [ -z "$output" ] || { CLIKAE_TEST_ROOT="$saved"; echo "still fires on a comment: $output"; false; }
+
+  printf 'local -A x=()\n' > "$probe/lib/real.sh"
+  run scan "$BASH4_FLAG_RE"
+  CLIKAE_TEST_ROOT="$saved"
+  [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
 }
 
 # P3-6 (round-3 review): the guards above scan for known bash-4+ CONSTRUCTS
@@ -233,7 +346,7 @@ _bash32_gate_floor() {
     # The psm1 row keys by the engine name; assert that row carries the same binary,
     # env var (empty for flag-strategy engines), and strategy.
     local row
-    row="$(grep -E "^[[:space:]]*$n[[:space:]]*=" "$psm" || true)"
+    row="$(grep -E "^[[:space:]]*${n}[[:space:]]*=" "$psm" || true)"
     [ -n "$row" ] || { missing="$missing $n(no-row)"; continue; }
     printf '%s' "$row" | grep -q "Binary = '$bin'"     || missing="$missing $n(binary)"
     printf '%s' "$row" | grep -q "EnvVar = '$ev'"       || missing="$missing $n(envvar)"

@@ -375,8 +375,7 @@ _no_unguarded_cockpit() {
 }
 
 _wait_for_file() {
-  local i
-  for i in $(seq 1 400); do [ -e "$1" ] && return 0; sleep 0.05; done
+  for _ in $(seq 1 400); do [ -e "$1" ] && return 0; sleep 0.05; done
   return 1
 }
 

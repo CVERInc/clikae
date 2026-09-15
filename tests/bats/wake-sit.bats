@@ -24,8 +24,11 @@ _src_wake() {
   # Compress the production timings. The VALUES are asserted in wake.bats; here
   # we are testing the loop's shape, and an honest 60s buffer would just make
   # every test in this file a minute long.
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_BUFFER_SECONDS=1
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_RETRY_MAX=2
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_RETRY_BACKOFF=1
 }
 
@@ -191,6 +194,7 @@ teardown() {
   # neither. The session watches itself now.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_WATCH_INTERVAL=1
   # A tank that reports dry the moment it is asked, and a reset instant of NOW.
   # Both are stubs on purpose: the phrase-to-instant parser has its own 12 tests
@@ -268,6 +272,7 @@ teardown() {
   # dropped the user into the countdown window with nothing to type into.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_WATCH_INTERVAL=1
   limit_tank_dry() { return 1; }              # never dry: only the window guard can end this
   # An engine window plus the waiter's own `wake` window — the real shape.

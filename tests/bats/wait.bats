@@ -22,7 +22,7 @@ _mkstatus() {
 }
 
 @test "wait: a target already done exits 0 and prints its status object" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait burn-1
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
@@ -50,7 +50,7 @@ _mkstatus() {
 
 @test "wait: --any (the default) returns on the FIRST terminal target, not all of them" {
   _mkstatus burn-1 running null
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2
   [ "$status" -eq 0 ]
   [[ "$output" == *"burn-2"* ]] || false
@@ -58,8 +58,8 @@ _mkstatus() {
 }
 
 @test "wait: --all waits for every target and exits 0 only when EVERY one is done" {
-  _mkstatus burn-1 done true
-  _mkstatus burn-2 done true
+  _mkstatus burn-1 "done" true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 0 ]
   [[ "$output" == *"burn-1"* ]] || false
@@ -72,7 +72,7 @@ _mkstatus() {
 # the requested condition was NOT met.
 @test "wait: --all exits 1 (not 0) on a done+dry mix — one finishing clean does not save the others" {
   _mkstatus burn-1 dry false
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 1 ]
   [[ "$output" == *"burn-1"* ]] || false
@@ -81,7 +81,7 @@ _mkstatus() {
 
 @test "wait: --all exits 1 (not 0) on a done+fail mix" {
   _mkstatus burn-1 fail false
-  _mkstatus burn-2 done true
+  _mkstatus burn-2 "done" true
   run clikae wait burn-1 burn-2 --all
   [ "$status" -eq 1 ]
 }
@@ -94,13 +94,13 @@ _mkstatus() {
 }
 
 @test "wait: accepts a bare pid as shorthand for burn-<pid>" {
-  _mkstatus burn-4242 done true
+  _mkstatus burn-4242 "done" true
   run clikae wait 4242
   [ "$status" -eq 0 ]
 }
 
 @test "wait: accepts a literal status-file path" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait "$CLIKAE_HOME/logs/burn-1/status.json"
   [ "$status" -eq 0 ]
 }
@@ -123,7 +123,7 @@ _mkstatus() {
 # target still running — `clikae wait A B --all --timeout 2 && ship` shipped
 # on a timeout. `--timeout` expiring is 1, full stop, in both modes.
 @test "wait: --all exits 1 (not 0) on a timeout even when one target is already done" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   _mkstatus burn-2 running null
   run clikae wait burn-1 burn-2 --all --timeout 1
   [ "$status" -eq 1 ]
@@ -138,7 +138,7 @@ _mkstatus() {
 
 @test "wait: actually BLOCKS — a target that flips to done mid-wait is caught, not missed" {
   _mkstatus burn-1 running null
-  ( sleep 2; _mkstatus burn-1 done true ) &
+  ( sleep 2; _mkstatus burn-1 "done" true ) &
   local bgpid=$!
   local t0=$SECONDS
   run clikae wait burn-1 --timeout 20
@@ -153,7 +153,7 @@ _mkstatus() {
 # both on first try. --------------------------------------------------------
 
 @test "wait: --timeout accepts a duration like 20m (both --help examples, as written)" {
-  _mkstatus burn-1 done true
+  _mkstatus burn-1 "done" true
   run clikae wait burn-1 --timeout 20m
   [ "$status" -eq 0 ]
 }
@@ -197,14 +197,14 @@ _mkstatus() {
 # from, instead of being tried (and failing) as a literal directory name. --
 
 @test "wait: --json's own run_id (engine-tank-burn-pid) resolves to the top-level status file" {
-  _mkstatus burn-28186 done true codex T1
+  _mkstatus burn-28186 "done" true codex T1
   run clikae wait codex-T1-burn-28186
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
 }
 
 @test "wait: --json's per-attempt run_id with a -retryN suffix also resolves" {
-  _mkstatus burn-28186 done true codex T1
+  _mkstatus burn-28186 "done" true codex T1
   run clikae wait codex-T1-burn-28186-retry2
   [ "$status" -eq 0 ]
   [[ "$output" == *'"state":"done"'* ]] || false
@@ -249,12 +249,12 @@ STUB
 # epoch suffix a not-yet-finished poll will pick.
 
 @test "wait --latest: resolves to the NEWEST matching run directory by mtime" {
-  _mkstatus watch-github-T-100 done true github T
+  _mkstatus watch-github-T-100 "done" true github T
   local past
   past="$(date -u -d '-10 minutes' +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-10M +%Y%m%d%H%M.%S)"
   touch -t "$past" "$CLIKAE_HOME/logs/watch-github-T-100/status.json"
 
-  _mkstatus watch-github-T-200 done true github T
+  _mkstatus watch-github-T-200 "done" true github T
   run clikae wait --latest watch-github-T
   [ "$status" -eq 0 ]
   [[ "$output" == *'"run_id":"watch-github-T-200"'* ]] || false
@@ -267,8 +267,8 @@ STUB
 }
 
 @test "wait --latest: mixes with a plain target under --all" {
-  _mkstatus burn-1 done true
-  _mkstatus watch-github-T-300 done true github T
+  _mkstatus burn-1 "done" true
+  _mkstatus watch-github-T-300 "done" true github T
   run clikae wait burn-1 --latest watch-github-T --all
   [ "$status" -eq 0 ]
 }
@@ -284,7 +284,7 @@ STUB
 
 @test "wait --latest: waits for a matching file to APPEAR within --timeout (P2-1)" {
   # No watch-github-X-* run directory exists yet when this starts.
-  ( sleep 2; _mkstatus watch-github-X-100 done true github T ) &
+  ( sleep 2; _mkstatus watch-github-X-100 "done" true github T ) &
   local bgpid=$!
   local t0=$SECONDS
   run clikae wait --latest watch-github-X --timeout 5
@@ -295,7 +295,7 @@ STUB
 }
 
 @test "wait --latest: --timeout given AFTER --latest on the command line still applies (parse-all-flags-first, P2-1)" {
-  ( sleep 2; _mkstatus watch-github-Y-100 done true github T ) &
+  ( sleep 2; _mkstatus watch-github-Y-100 "done" true github T ) &
   local bgpid=$!
   run clikae wait --latest watch-github-Y --timeout 5
   wait "$bgpid" 2>/dev/null || true

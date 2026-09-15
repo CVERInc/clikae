@@ -1431,6 +1431,69 @@ _clean_tmux_gc() {
   done
 }
 
+# _clean_board_gc <dry_run> -> per-tank board snapshot generations beyond the
+# newest few. board_state_refresh (lib/core/board_state.sh) already GCs its
+# OWN tank on every publish via board_gc_generations, but a tank nobody has
+# launched in a while (so nothing re-publishes it) still deserves a sweep —
+# same reasoning as _clean_session_id_gc just above. 2026-09-12 round-1 fix
+# review, P2-3.
+_clean_board_gc() {
+  local dry_run="$1" root="${CLIKAE_HOME:-$HOME/.clikae}/state/board"
+  local keep="${CLIKAE_BOARD_KEEP_GENERATIONS:-5}" tdir gd n=0
+  [ -d "$root" ] || return 0
+  for tdir in "$root"/*/; do
+    [ -d "$tdir" ] || continue
+    tdir="${tdir%/}"
+    while IFS= read -r gd; do
+      [ -n "$gd" ] || continue
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] Would remove old board snapshot ${gd#"$root"/}"
+      else
+        rm -rf "$gd" && n=$((n + 1))
+      fi
+    done < <(
+      # P3-4 (2026-09-12 round-3 fix review): this used to keep its OWN copy
+      # of board_gc_generations' ranking (mtime desc, directory name as the
+      # tie-break) so the two could not disagree on which generation keep-N
+      # protects. Round-8 made that rule bigger than a sort — a generation is
+      # now a link in a chain and the whole chain from `current` has to be
+      # protected outright (see _board_gc_candidates' own header,
+      # lib/core/board_state.sh) — and a second copy of a rule that just grew
+      # a second clause is exactly how the two drift. There is one copy now,
+      # and this sweep calls it.
+      _board_gc_candidates "$tdir" "$keep"
+    )
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n old board snapshot generation(s)."
+  return 0
+}
+
+# _clean_readings_gc <dry_run> -> per-file reading-cache entries
+# (lib/core/reading_cache.sh) whose OWN source file no longer exists. Nothing
+# ever wrote these back out: a transcript deleted (by this very command, or by
+# the vendor's own retention) left its cache entry behind forever. The saved
+# key is "<path>:<size>:<mtime>" — strip the two trailing ":"-fields to recover
+# the path even if it itself contained a colon.
+_clean_readings_gc() {
+  local dry_run="$1" root="${CLIKAE_HOME:-$HOME/.clikae}/state/readings"
+  local f saved path n=0
+  [ -d "$root" ] || return 0
+  for f in "$root"/*; do
+    [ -f "$f" ] || continue
+    saved=""
+    IFS= read -r saved < "$f" 2>/dev/null || true
+    path="${saved%:*}"; path="${path%:*}"
+    [ -n "$path" ] && [ -f "$path" ] && continue
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned reading cache ${f##*/}"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned reading cache file(s)."
+  return 0
+}
+
 cmd_clean() {
   local dry_run=0
   local older_than=30 older_given=0
@@ -1465,6 +1528,8 @@ cmd_clean() {
   _clean_scrollback_gc "$dry_run"
   _clean_session_id_gc "$dry_run"
   _clean_tank_lock_gc "$dry_run"
+  _clean_board_gc "$dry_run"
+  _clean_readings_gc "$dry_run"
   _clean_burn_sidecar_gc "$dry_run"
   # P3-3 (2026-09-13 fix-round-3 review): burn.sh is already sourced above —
   # its own day-based log retention (burn-*, and watch-github-* as of this

@@ -176,6 +176,7 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   fn="$(grep -rlE '^tank_is_solo\(\)' "$REPO/lib" | head -1)"
   [ -n "$fn" ] || skip "tank_is_solo moved; pick another predicate"
   cp "$fn" "$fn.bak"                              # the backup keeps the old name
+  # shellcheck disable=SC2046  # the word split IS the argument list here
   perl -pi -e 's/\btank_is_solo\b/tank_is_private/g' $(grep -rl 'tank_is_solo' "$REPO/lib" "$REPO/bin" | grep -v '\.bak$')
   run _gate_in_copy
   [ "$status" -ne 0 ] || { echo "a .bak file answered for the source"; false; }

@@ -885,6 +885,10 @@ STUB
   PATH="$shadow" OSTYPE=darwin run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "vendor"'
+  # `run --separate-stderr` sets $stderr; shellcheck cannot see bats' own
+  # out-variables (same reason burn.bats disables this for cmd_burn's
+  # dynamically scoped locals).
+  # shellcheck disable=SC2154
   [[ "$stderr" == *"running WITHOUT a time bound"* ]] || { echo "stderr: $stderr"; false; }
 }
 

@@ -1031,7 +1031,8 @@ _race_contender() {
   [ "$status" -eq 1 ] || { echo "bare directory previewed as available/removable"; false; }
   rm -rf "$reclaim_link"
 
-  local target="$(dirname "$lock")/FOREIGNDIR3-target"
+  local target
+  target="$(dirname "$lock")/FOREIGNDIR3-target"
   mkdir -p "$target"
   ln -s "$target" "$reclaim_link"
   run _burn_reclaim_mutex_available "$reclaim_link"
@@ -1051,7 +1052,8 @@ _race_contender() {
   local lock; lock="$(_burn_tank_lock_path codex FOREIGNFILE1)"
   mkdir -p "$(dirname "$lock")"
   local reclaim_link="${lock}.reclaim"
-  local target="$(dirname "$lock")/FOREIGNFILE1-target"
+  local target
+  target="$(dirname "$lock")/FOREIGNFILE1-target"
   printf 'not ours\n' > "$target"
   ln -s "$target" "$reclaim_link"    # symlink -> an EXISTING REGULAR FILE, never a directory
 
@@ -1073,8 +1075,10 @@ _race_contender() {
   mkdir -p "$(dirname "$lock")"
   local reclaim_link="${lock}.reclaim"
 
-  local target="$(dirname "$lock")/FOREIGNFILE2-target"
-  local middle="$(dirname "$lock")/FOREIGNFILE2-middle"
+  local target
+  target="$(dirname "$lock")/FOREIGNFILE2-target"
+  local middle
+  middle="$(dirname "$lock")/FOREIGNFILE2-middle"
   printf 'not ours\n' > "$target"
   ln -s "$target" "$middle"
   ln -s "$middle" "$reclaim_link"    # symlink -> symlink -> an existing regular file

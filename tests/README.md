@@ -194,6 +194,55 @@ still exited 0. Every individual check was correct; the only thing that could
 have caught it was the total. So the script now fails with a distinct code when
 it performed no checks at all.
 
+## The class `bash -n` cannot see (bash 3.2 and `$( … )`)
+
+`compat.bats` is a source **scanner**: it greps for bash-4 idioms and GNU-isms.
+That works because those constructs are visible as text. One class is not, and
+it is the one macOS pays for.
+
+bash 3.2 — what macOS ships, and what the `bats (macos-latest)` job really runs
+clikae under — does not parse the body of a command substitution when it parses
+the file. Its scanner walks forward to the first unbalanced `)` and defers the
+rest until the substitution is *expanded*. A `case` pattern inside `$( … )` has
+exactly that `)`:
+
+```sh
+sorted="$(for gd in "$1"/generation.*; do
+  case "$gseq" in ''|*[!0-9]*) gseq=0 ;; esac    # <- this ) ends the substitution, to 3.2
+  …
+done)"
+```
+
+`bash -n` says nothing. `shellcheck -S warning` says nothing. The CI syntax gate
+says nothing. Every source-scanning guard in `compat.bats` says nothing. On
+bash 3.2 and only there, the substitution fails **at runtime** with
+
+```
+command substitution: line NNN: syntax error near unexpected token `newline'
+```
+
+on stderr, yields the empty string, and the enclosing function returns **0**.
+`_board_gc_candidates` shipped that shape (fixed in `2f51d15`): the board GC
+returned an empty candidate list, swept nothing on macOS, and reported success.
+
+Two consequences for anything added here:
+
+* **Hoist the `case` into a helper function** called inside the substitution
+  (`_board_gc_rows`). Do not try to spell the pattern so 3.2 can follow it.
+* **A guard for this class has to EXECUTE, not read.** `compat.bats`'s
+  "board GC still RUNS under a real bash 3.2" does, via
+  `docker run --rm bash:3.2`. It `skip`s — with the reason — when docker or the
+  image is absent, rather than passing, and it carries a **control**: a known-bad
+  `$( … )` in its own file that must fail in that container, so a green result
+  means "fixed", not "quietly ran on bash 5".
+
+One trap if you extend it: `bash:3.2` is an Alpine image, so its userland is
+busybox. `_clikae_statv` asks whether `stat` says GNU, busybox says no, the BSD
+branch runs `stat -f '%m'` — and in busybox that is *filesystem* information, so
+`file_mtime` answers with several lines of the wrong thing and rc=1. That is the
+container, not the code (macOS' BSD `stat -f %m` is correct); the probe stubs
+`file_mtime` so it measures the subject instead of the image.
+
 ## One suite at a time (`scripts/test.sh` takes a lock)
 
 Some tests read the **real process table**. `clean`'s live guard runs

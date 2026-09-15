@@ -229,12 +229,19 @@ file_mtime() {
 # files' own identity (e.g. a per-file cache key) pays one fork total instead
 # of 2*N — the same "ask the kernel once" reasoning as sessions_by_mtime's
 # own header, for a caller that needs the ORIGINAL order back, not recency.
+#
+# P1-A (2026-09-12 round-2 fix review, board62): mtime is nanosecond
+# precision (GNU's `%.9Y` / BSD's `F` sub-format), NOT whole seconds — the
+# same fix _reading_cache_keyv already made (see its own header). A caller
+# comparing this against a whole-second mtime it recorded earlier goes blind
+# to any write landing in the SAME wall-clock second as that earlier record,
+# in EITHER direction (board_state.sh's board_stale was exactly this bug).
 files_mtime_size() {
   _clikae_statv
   if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
-    stat -c '%Y %s' "$@" 2>/dev/null || true
+    stat -c '%.9Y %s' "$@" 2>/dev/null || true
   else
-    stat -f '%m %z' "$@" 2>/dev/null || true
+    stat -f '%Fm %z' "$@" 2>/dev/null || true
   fi
 }
 

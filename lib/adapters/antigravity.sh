@@ -113,6 +113,24 @@ adapter_all_transcripts() {
 
 adapter_session_cwd() {
   local f="$1"
+  if declare -F reading_cache_run >/dev/null; then
+    # P2-A (2026-09-12 round-2 fix review): the cache identity used to be
+    # the SHARED history.jsonl, not this one session's own transcript — so
+    # any write to history.jsonl (e.g. one new agy session anywhere)
+    # invalidated EVERY other session's cached cwd at once. On a synthetic
+    # 500-session tank that turned "one new session" into a 500-entry cache
+    # stampede and a ~10s board_state_refresh (measured: round-2 review's
+    # P2-A, perf3.log). Keying on $f itself means an unrelated session's
+    # cache entry survives a write elsewhere; only the one session whose OWN
+    # transcript actually changed re-derives its cwd.
+    reading_cache_run "agy-cwd" "$f" _agy_cwd_uncached "$@"
+  else
+    _agy_cwd_uncached "$@"
+  fi
+}
+
+_agy_cwd_uncached() {
+  local f="$1"
   [ -f "$f" ] || return 0
   local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
   local sid; sid="${f%/.system_generated/*}"; sid="${sid##*/}"
@@ -144,6 +162,14 @@ adapter_session_title() {
 # unreadable/pre-opening-message transcript still deserves SOME word in that
 # column, not silence that reads as a rendering bug.
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run antigravity-title "$1" _antigravity_title_uncached "$@"
+  else
+    _antigravity_title_uncached "$@"
+  fi
+}
+
+_antigravity_title_uncached() {
   local f="$1" t="" sdir sid db sql_sid
   [ -n "$f" ] && [ -f "$f" ] || return 0
   sdir="${f%/.system_generated/logs/transcript.jsonl}"
@@ -242,11 +268,28 @@ adapter_title_for_file() {
 # this. See docs/EXPECTATIONS.md "Engines on one board" for the trade-off in
 # user-facing terms.
 adapter_recent_sids() {
+  # #62: the board's bounded index answers this whole function when it is
+  # warm. It is a SPEED path, never a narrower answer — an index that cannot
+  # cover the caller's ask returns nothing and the disk scan below runs (see
+  # board_recent's header).
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    local _bout; _bout="$(board_recent antigravity "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
   # $n, not $limit: at n=1 this is a MODE, not a count. See the docstring.
   local dir="$1" n="${2:-5}" brain want sdir sid f
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
+  # #34 + #62: no bulk workspace index here. Round 3's `adapter_session_cwd_index`
+  # (and the `_agy_ws_*` plain-global cache fix 7 built on it) existed for ONE
+  # reader — the `$want` cwd filter in the scan below — and #34 deleted that
+  # filter, because `workspace` is a constant on real installs and cwd-scoping
+  # hid everything. Round 11 then dropped board_state.sh's own call with the cwd
+  # keying it fed (`_BOARD_TANK_SCOPE` there), which left the index with no
+  # caller at all; round 12 deleted it (review P3-1). `adapter_session_cwd` —
+  # the single-session form burn.sh and resume.sh do call — reads the same file
+  # and stays.
   local -a afiles=()
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.

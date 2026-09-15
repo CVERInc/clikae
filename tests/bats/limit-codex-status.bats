@@ -240,12 +240,15 @@ _codex_token_count_line() {
         '{"used_percent":5.0,"window_minutes":10080,"resets_at":1791999999}')"
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr ts
+  local pu pw pr su sw sr
   # P2-4 (round-1 review, PR #89): _limit_codex_rate_limits now returns a 7th
   # field (the winning event's own timestamp, for clikae usage's cached_at) —
-  # name it here too (unused) so plain `read`'s "extra fields glom onto the
-  # last variable" rule doesn't silently append it onto $sr.
-  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
+  # read it here too so plain `read`'s "extra fields glom onto the last
+  # variable" rule doesn't silently append it onto $sr. Into `_`, not a name:
+  # no assertion below reads it, and an assigned-but-never-read name is SC2034
+  # under `find tests -name '*.bats' | xargs shellcheck -S warning` (this
+  # repo's CI gate). `_` absorbs the field identically and is exempt.
+  IFS=$'\037' read -r pu pw pr su sw sr _ <<< "$output"
   [ "$pu" = "0.0" ]; [ "$pw" = "300" ]; [ "$pr" = "1791471936" ]
   [ "$su" = "5.0" ]; [ "$sw" = "10080" ]; [ "$sr" = "1791999999" ]
 }
@@ -260,8 +263,11 @@ _codex_token_count_line() {
         '{"used_percent":40.0,"window_minutes":300,"resets_at":1791475000}' 'null')"
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr ts
-  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
+  # 7th field into `_` — see the note on the same shape further down: this
+  # test reads only the primary window, so a NAMED 7th variable is
+  # assigned-and-never-read (SC2034 under the CI bats shellcheck gate).
+  local pu pw pr su sw sr
+  IFS=$'\037' read -r pu pw pr su sw sr _ <<< "$output"
   [ "$pu" = "40.0" ]
   [ "$pr" = "1791475000" ]
 }
@@ -340,8 +346,13 @@ _codex_token_count_line() {
 
   run _limit_codex_rate_limits "$d"
   [ "$status" -eq 0 ]
-  local pu pw pr su sw sr ts
-  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$output"
+  # Same 7th-field rule as the two tests above — but THIS one asserts only the
+  # primary window, so a NAMED 7th variable is assigned and never read, which
+  # is SC2034 under `find tests -name '*.bats' | xargs shellcheck -S warning`
+  # (this repo's CI gate). `_` absorbs it exactly the same way and is the one
+  # name shellcheck exempts.
+  local pu pw pr su sw sr
+  IFS=$'\037' read -r pu pw pr su sw sr _ <<< "$output"
   [ "$pu" = "5.0" ]        # the FRESH reading, not the stale 100.0
   [ "$pr" = "1900000000" ]
 }
@@ -491,13 +502,12 @@ _codex_token_count_line() {
 
 @test "limit_codex_status_cached: an unchanged rollout's per-file cache entry is reused, not rewritten (P2-2)" {
   _src_limit
-  local d="$CLIKAE_HOME/profiles/codex/perfilecache" now cache fa fb
+  local d="$CLIKAE_HOME/profiles/codex/perfilecache" now cache fb
   now="$(TZ=UTC _at UTC '2026-09-10 10:00:00')"
   cache="$CLIKAE_HOME/cache/codex/perfilecache"
   _seed_codex_token_count "$d" a \
     "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
         '{"used_percent":10.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
-  fa="$d/sessions/2026/09/10/rollout-a.jsonl"
   TZ=UTC limit_codex_status_cached "$d" "$now" "$cache" >/dev/null
   local a_cache_before; a_cache_before="$(cat "$cache.d/rollout-a.jsonl")"
 

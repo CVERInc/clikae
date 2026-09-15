@@ -60,7 +60,15 @@ echo "→ shellcheck (severity=warning)"
 # releases, while every local run stayed green — because the only file the gate
 # never checked was the gate. CI scans the whole tree; make the local run match.
 shellcheck -S warning bin/clikae install.sh "$0"
-find lib tests scripts -name '*.sh' -print0 | xargs -0 shellcheck -S warning
+# `.bats` as well as `.sh`. Round-8 fix review P3-3: this read `find lib tests
+# scripts -name '*.sh'`, which LOOKS like it covers tests/ and does not — two
+# findings this branch introduced in .bats files sat under a green gate, and
+# the CI action does not scan .bats either (ci.yml has its own step now, so
+# the two match by construction rather than by remembering). shellcheck reads
+# the bats dialect off the extension; no -s override, and `run`/`@test` are
+# understood natively.
+find lib tests scripts \( -name '*.sh' -o -name '*.bats' \) -print0 \
+  | xargs -0 shellcheck -S warning
 
 echo "→ doc names (every function a doc names must exist)"
 bash "$(dirname "$0")/doc-names-exist.sh"

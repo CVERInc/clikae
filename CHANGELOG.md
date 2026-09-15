@@ -49,6 +49,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Four optional adapter hooks (`adapter_cwd_from_args`,
+  `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
+  `adapter_tank_fingerprint`) no longer leak from one adapter to the next
+  loaded in the same process — `clikae handoff <a> --to <b>` used to leave
+  `a`'s definitions answering for `b`, so a capability gate that asks
+  `declare -F` believed `b` supported what only `a` does. A test now compares
+  every `adapter_*` definition under `lib/adapters/` against the loader's
+  unset list, so the next hook added cannot go missing quietly (#62).
+- Deleted antigravity's bulk `sid -> workspace` index and the plain-global
+  cache built on it. Its only reader was a cwd filter the board no longer has
+  (agy's index scope is a per-tank constant), so it had been a documented
+  adapter hook with no caller anywhere in `lib/` or `bin/` (#62).
+- The board's Resume index notices when a burn sidecar grows, so a burn no
+  longer costs the Continue list a row permanently. The index's per-tank cap
+  is widened by that tank's recorded burn count, but staleness was
+  fingerprinted from transcripts only — and `clikae burn` records a session's
+  id AFTER the engine exits, so the ordering it actually produces (transcript
+  written, board rendered, id recorded) built the index at the narrower cap
+  and then never disagreed with itself again. Measured: ten sessions plus one
+  burn rendered nine rows, on that frame and on every later one, until
+  `state/board` was deleted; with many burns indexed before their ids landed,
+  the whole Continue block rendered empty with no truncation note. The tank's
+  sidecar (both engine-name spellings — agy's lives under `agy`) is part of
+  the freshness signal now, and a generation records the cap its rows were cut
+  at so a rebuild re-cuts them from its own manifest — no transcript is
+  re-read, and only the tank whose sidecar changed is touched (#62).
+- The board's Resume index is built at the same per-tank widened cap
+  `clikae home` asks with, so a tank full of burn one-shots no longer renders
+  an EMPTY Continue list. Burn sessions are excluded AFTER the adapter
+  answers, so an index cut to 10 rows handed the filter 10 rows to drop and
+  nothing to promote: 195 burns newer than 50 human sessions showed no human
+  row at all. The cap is widened by that tank's own sidecar count, under the
+  same ceiling as the ask (#62, #93).
+- The board's Resume index keys antigravity by TANK, not by the directory a
+  session was started in. `workspace` in agy's own history is a constant on a
+  real install, so a cwd-keyed index answered "no sessions" from every project
+  directory — and because the index answers BEFORE the adapter's disk scan, it
+  would have re-hidden the rows #93 had just made visible (#62, #34).
+- A tank whose fuel dot said "full" while the account was out of fuel now says
+  what is true. The board's rate-limit scan was bounded by a COUNT (the newest
+  `CLIKAE_HOME_RECENT_MAX` transcripts per project directory) while the thing
+  that count approximates — the rolling limit window — is a TIME, so a limit
+  sitting in a session that had gone quiet behind a dozen newer neighbours was
+  invisible, and `clikae burn` dispatched into a tank that had none left. Every
+  transcript inside the window is scanned now, however many share a directory,
+  in one batched read rather than one parser fork per file (#62).
+- A project directory whose name is not ASCII no longer answers with a
+  neighbouring directory's sessions. Board entries were named by folding every
+  byte outside `[A-Za-z0-9._-]` to `_`, so two sibling directories of the same
+  byte length — two Chinese characters is six bytes, and so is two others —
+  shared one Resume list: one of them listed the other's sessions and the other
+  listed none. The name is an injective escape now, and the list is grouped by
+  the directory itself, so a name that two directories could still share reads
+  as a miss rather than as someone else's sessions (#62).
+- A second `clikae` reading the board while the first publishes no longer loses
+  its Resume list. Snapshot generations resolve entries through their
+  ancestors, and the per-publish GC protected only the chain the CURRENT
+  generation walks — so a generation another process was still holding lost its
+  oldest ancestors to a single further publish, and most of its sessions
+  stopped resolving while it still existed and still read as fresh. The GC
+  keeps whole chains now, not whole directories (#62).
+- The antigravity workspace index clears what it loaded last and is namespaced
+  by tank, so a long-lived board no longer accumulates one entry per session
+  id it has ever seen, keeps answering for ids that have left `history.jsonl`,
+  or lets one tank's index answer for another tank's identical id.
+- A `stat` that fails on an individual transcript is no longer swallowed by
+  the tree walk's blanket `2>/dev/null`. The one case that redirect existed
+  for — an engine this tank has never used — is answered directly now.
+- A transcript that changes PATH while keeping its session id — a codex
+  rollout moved, a grok session directory renamed, an antigravity brain
+  directory renamed, a claude session moved between project directories — no
+  longer disappears from `clikae resume`. The rebuild classified it as both
+  removed (old path) and changed (new path) and processed removals LAST, so
+  the entry it had just written was deleted again. Removals are applied first
+  now (#62).
+- The home board's first (cold) render on a large tank is fast again: 5,000
+  transcripts went from 35.6 s to well under 1 s, which is what #62's
+  acceptance text asks for. The cost was never the tree walk — it was about
+  four forks per FILE (two `cksum`s to name an entry, plus a rate-limit parse
+  for every file inside the engine's window). The entry name is now computed
+  without a process; claude's session id comes from the filename and codex's
+  and grok's from ONE batched bounded read instead of one parse per file; and
+  the rate-limit scan reads every transcript inside the engine's window in ONE
+  batched pass instead of forking a parser per file (#62).
+- A render that rebuilds a tank's board snapshot walks and stats that tank
+  once, not twice: the freshness check hands its stat rows to the rebuild it
+  triggers instead of both collecting their own (26 ms of a 127 ms rebuild at
+  5,000 transcripts).
+- A session id or project path containing non-ASCII characters (a Chinese or
+  accented directory name) no longer drops out of `clikae resume` on macOS.
+  The board snapshot's entry name was computed by two different engines whose
+  idea of "one character" differs by platform and by locale, so the name
+  written and the name looked up could disagree — a silent miss, with the
+  transcript still on disk. One implementation now, run byte-wise on both
+  sides.
+- A tank with no transcripts at all — every freshly `clikae init`'d tank, and
+  the first screen a new user sees — is no longer permanently stale. The
+  publisher and the freshness check computed the snapshot fingerprint from two
+  different byte streams that could only agree when the tank held at least one
+  file, so an empty tank rebuilt and published a new generation on every
+  frame, forever, 2.2x slower than doing nothing. There is one fingerprint
+  function now and both sides call it (#62).
+- The home board's per-tank snapshot generations no longer share inodes. A
+  rebuild used to `cp -al` the previous generation's `sids/`/`recent/` entries
+  and then write through those hard links, rewriting a generation the board
+  was still reading from, and costing one `link()` per transcript PRESENT
+  (5,001 at 5,000 files) on every rebuild. A generation now holds only the
+  entries that changed in it plus a `parent` pointer; readers resolve an entry
+  by walking that chain, which is bounded (it materialises a real copy before
+  it can grow past 8) and which `clikae clean`'s sweep and the per-publish GC
+  both now protect from keep-N (#62).
 - `clikae init <engine> <name>` where that name is already taken by
   something that is not a directory — most often a **broken symlink**, whose
   target has been deleted — used to print `[ DONE ] Created tank` and then
@@ -697,6 +808,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already gone, `list-panes` failing, environment unreadable) as "not
   first on PATH" with advice to restart the tank; it prints "unknown,
   could not verify" for those instead.
+
+### Changed
+
+- Home board transcript discovery and usage census now run at session boundaries,
+  with atomic per-file reading caches and bounded recent-session snapshots, and
+  self-heal inline at render time when a tank's snapshot is missing or stale
+  (a launch that never passed through a session boundary — `clikae alias`,
+  `clikae env`, a `.app` bundle — no longer leaves Resume permanently empty or
+  fuel readings frozen). `CLIKAE_HOME_TIMING=1` reports section timings on
+  stderr. `clikae clean` now also sweeps old board snapshot generations and
+  orphaned reading-cache entries.
 
 ## [0.29.0] — 2026-09-11
 

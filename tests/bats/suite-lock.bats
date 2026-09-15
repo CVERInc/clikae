@@ -21,7 +21,7 @@ load '../helpers'
 # not hope for it. Every test here points the door at a file of its own.
 _lockfile() { printf '%s/suite.lock\n' "$TEST_HOME"; }
 
-setup_lock() { export CLIKAE_SUITE_LOCK="$(_lockfile)"; }
+setup_lock() { CLIKAE_SUITE_LOCK="$(_lockfile)"; export CLIKAE_SUITE_LOCK; }
 
 # Hold the real lock from another process, the way a running suite does.
 # 🔴 Killed in teardown without fail: this suite once left fourteen busy loops
@@ -49,7 +49,7 @@ teardown() {
 @test "suite lock: with no suite running, nothing is in the way" {
   setup_lock
   # The control. A door that is always shut is indistinguishable from a wall.
-  CLIKAE_SUITE_LOCKED= run _clikae_refuse_concurrent_suite
+  CLIKAE_SUITE_LOCKED='' run _clikae_refuse_concurrent_suite
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -z "$output" ]
 }
@@ -57,7 +57,7 @@ teardown() {
 @test "suite lock: a bats run started while the suite holds it is REFUSED" {
   setup_lock
   _hold_lock
-  CLIKAE_SUITE_LOCKED= run _clikae_refuse_concurrent_suite
+  CLIKAE_SUITE_LOCKED='' run _clikae_refuse_concurrent_suite
   [ "$status" -ne 0 ] || { echo "let a second suite in"; false; }
   [[ "$output" == *"another clikae test suite is running"* ]] || { echo "$output"; false; }
   # A refusal with no way forward is just an obstacle.
@@ -77,7 +77,7 @@ teardown() {
 @test "suite lock: the override works" {
   setup_lock
   _hold_lock
-  CLIKAE_SUITE_LOCKED= CLIKAE_ALLOW_CONCURRENT_SUITE=1 run _clikae_refuse_concurrent_suite
+  CLIKAE_SUITE_LOCKED='' CLIKAE_ALLOW_CONCURRENT_SUITE=1 run _clikae_refuse_concurrent_suite
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
@@ -86,7 +86,7 @@ teardown() {
   # Its absence is the common case, and a probe that leaves a file behind would
   # make every later run pay for a lock nobody took.
   [ ! -e "$(_lockfile)" ] || { echo "premise broken: the lock already exists"; false; }
-  CLIKAE_SUITE_LOCKED= run _clikae_refuse_concurrent_suite
+  CLIKAE_SUITE_LOCKED='' run _clikae_refuse_concurrent_suite
   [ "$status" -eq 0 ]
   [ ! -e "$(_lockfile)" ] || { echo "the probe created the lock file"; false; }
 }

@@ -76,6 +76,10 @@ source "$CLIKAE_LIB/core/timeout_bin.sh"
 source "$CLIKAE_LIB/core/update_check.sh"
 # shellcheck source=../lib/core/limit.sh
 source "$CLIKAE_LIB/core/limit.sh"
+# shellcheck source=../lib/core/reading_cache.sh
+source "$CLIKAE_LIB/core/reading_cache.sh"
+# shellcheck source=../lib/core/board_state.sh
+source "$CLIKAE_LIB/core/board_state.sh"
 # shellcheck source=../lib/core/usage.sh
 source "$CLIKAE_LIB/core/usage.sh"
 # shellcheck source=../lib/core/history.sh
