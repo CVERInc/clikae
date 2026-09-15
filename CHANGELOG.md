@@ -57,9 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `workspace` matching `$PWD`, but every real agy install records the same
   `workspace` (`$HOME`) for every conversation regardless of where it actually
   ran, so that filter could never match outside `$HOME`. agy's Resume rows are
-  now tank-scoped instead of directory-scoped: every session in the active
-  tank, newest first, capped by `CLIKAE_HOME_RECENT_MAX` like every other
+  now tank-scoped instead of directory-scoped: every session in every agy tank,
+  newest first, capped board-wide by `CLIKAE_HOME_RECENT_MAX` like every other
   engine (#34).
+- The home board's "Resume" rows no longer vanish when a tank holds more
+  `clikae burn` sessions than the list is long. Burn sessions have been hidden
+  from that list since #74, but each engine was asked for exactly
+  `CLIKAE_HOME_RECENT_MAX` rows and cut to that *before* the filter ran — so
+  ten-or-more burn one-shots newer than your real sessions left the filter
+  nothing to show and the whole block disappeared. Every engine is now asked
+  for enough rows to survive the filter (bounded by the new
+  `CLIKAE_HOME_RECENT_SCAN_MAX`, default 200), so hidden rows give up their
+  slots to real sessions instead of taking the list down with them. Affects
+  claude, codex and agy alike; most visible on agy, whose rows became
+  tank-scoped in the same release (#34).
 - Antigravity board rows and the resume picker prefer the conversation title
   from the CLI's summaries database (`conversation_summaries.db`), read via
   the optional `sqlite3` CLI, with opening-prompt fallback when the title or

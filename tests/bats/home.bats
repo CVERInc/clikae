@@ -392,6 +392,31 @@ _agy_log() { # <line>
   [[ "$output" != *"SESSION-ONE content"* ]] || { echo "cap not applied: $output"; false; }
 }
 
+# --- #34 round-1 P3-2: docs said "the active tank", the board shows EVERY tank
+# Not a behaviour change — _home_recent_rows has always walked every tank of
+# every engine — but docs/EXPECTATIONS.md and the CHANGELOG both said "the
+# active tank", so this pins the sentence they now say instead.
+@test "agy Resume rows come from EVERY agy tank, not only the active one (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t1 >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t2 >/dev/null 2>&1
+  local t
+  for t in t1 t2; do
+    local base="$CLIKAE_HOME/profiles/antigravity/$t/antigravity-cli"
+    local sid="eeeeeeee-0000-4000-8000-00000000000$t"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"SESSION-OF-%s content"}\n' "$t" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  # active tank = whatever ~/.gemini points at (default, which has no session)
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t2 content"* ]] || { echo "$output"; false; }
+}
+
 @test "the continue list shows multiple recent sessions, newest first" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"

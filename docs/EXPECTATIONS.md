@@ -184,9 +184,14 @@ other engine.** claude/codex/grok match a session's recorded `cwd` against
 installs, so cwd-scoping would hide everything: every indexed agy conversation
 records the same `workspace` (your home directory), never the project
 directory you actually ran it from, so a `$PWD` filter here could never match
-outside `$HOME`. The Resume list for agy is every session in the active tank,
-newest first, capped the same way every engine's list is
-(`CLIKAE_HOME_RECENT_MAX`, default 10) — not narrowed to "this project".
+outside `$HOME`. The Resume list for agy is every session in **every agy
+tank** — not only the active one; the board's Resume rows have never been
+per-tank for any engine — newest first, capped board-wide the same way every
+engine's list is (`CLIKAE_HOME_RECENT_MAX`, default 10), not narrowed to "this
+project". Sessions a `clikae burn` lane started stay hidden (`clikae resume
+--all`, or `CLIKAE_RESUME_ALL=1`, shows them), and they are filtered out
+*before* the board cuts the list to `CLIKAE_HOME_RECENT_MAX`, so a tank full of
+fresh lane one-shots pushes real sessions down the list rather than off it.
 
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. codex and grok
