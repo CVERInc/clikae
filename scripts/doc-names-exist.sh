@@ -54,6 +54,10 @@ $(list_src)
 SRCLIST
 # A copy of the tree that happens to sit inside some OTHER repo answers
 # `is-inside-work-tree` yes and `ls-files` nothing. Fall back rather than die.
+# P3-6 (round-2 review of #102): `${#SRC[@]:-0}` is a bad substitution on
+# bash 4+/5 (bash 3.2 happens to accept it), so on bash 5 this fallback and the
+# "no source/docs found" guard below never ran. `${#arr[@]}` is already safe
+# under `set -u` on an empty array, 3.2 included.
 if [ "${#SRC[@]}" -eq 0 ]; then
   list_src() { find lib bin -type f ! -name '*.bak' ! -name '*.orig' \
     ! -name '*.rej' ! -name '*~' 2>/dev/null | sort; }
@@ -163,6 +167,23 @@ done <<CALLERS
 $(grep -nE '^# .*[Cc]alled from .*\.sh' "${CORE[@]}" 2>/dev/null || true)
 CALLERS
 
+# 🔴 The `status-*` family joined the list with #77, when DESIGN-tmux started
+# making claims about seven of them. `window-status-format` is deliberately NOT
+# here: Rule 11 names it to say clikae does NOT set it (it is a window option
+# and would reach the wrong scope), and this check reads a named option as a
+# promise that the code sets it.
+# 🔴 P3-6 (2026-09-14 round-1 fix review): the alternation below named five of
+# those seven, not seven — `status-left-length`/`status-right-length` were
+# missing. `\b` doesn't require the alternation to consume the WHOLE name: it
+# only needs a word boundary right after wherever the match ends, and `-` is
+# already a non-word character, so `` `status-left-length` `` in the doc
+# matched the `status-left` alternative and stopped there — this check
+# reported success on a claim it never actually read. (`status-left` really is
+# set, so that report happened to be true; it would not have been for a name
+# whose SHORT form isn't set but whose `-length` form is.) POSIX leftmost-
+# longest alternation (grep -E's own matching rule, not first-alternative-
+# wins) picks the longer alternative once it exists as an option, regardless
+# of list order — adding the two `-length` names is the whole fix.
 # ── 3. Every tmux option a design rule names must actually be set ───────────
 # Rule 1 described `window-size latest` for a year and nothing set it, so the
 # behaviour held on one tmux and not another. A rule that states a setting is a
@@ -171,12 +192,18 @@ CALLERS
 # doc writes `window-size latest` — value inside the quotes — so a regex needing
 # a closing backtick right after the name skipped exactly the option that
 # motivated this check, while quietly matching four others and looking healthy.
-opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size)\b' \
+opts="$(grep -ohE '`(window-size|history-limit|terminal-overrides|terminal-features|extended-keys|set-clipboard|mouse|fill-character|remain-on-exit|exit-empty|aggressive-resize|default-size|status-left-length|status-right-length|status-left|status-right|status-interval|status-justify|status-format)\b' \
   docs/DESIGN-tmux.md 2>/dev/null | tr -d '`' | sort -u || true)"
 while IFS= read -r opt; do
   [ -n "$opt" ] || continue
   [ -f "$ALLOW_OPT" ] && grep -qE "^${opt}[[:space:]]" "$ALLOW_OPT" && continue
-  grep -qE "set-option.*\b${opt}\b" lib/core/tmux.sh 2>/dev/null \
+  # 🔴 P2-5 (2026-09-14 round-2 review): this VERIFY half used `\b${opt}\b`
+  # after the extract half above was fixed, and `-` is a non-word character,
+  # so `status-left` was "set" by the `status-left-length` line: deleting the
+  # real `status-left` (or `status-right`) line left the gate green — the row
+  # itself and its clock, vouched for by their longer siblings. The boundary
+  # is now "not a name character, `-` included", on both sides.
+  grep -qE "set-option.*(^|[^A-Za-z0-9_-])${opt}([^A-Za-z0-9_-]|\$)" lib/core/tmux.sh 2>/dev/null \
     || say_fail "$opt — named in DESIGN-tmux, never set in lib/core/tmux.sh"
 done <<OPTS
 $opts

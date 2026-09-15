@@ -142,6 +142,24 @@ _fake_bin() {
   [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
 }
 
+# P3-5 (2026-09-14 round-2 review): _human_age moved to lib/core/duration.sh,
+# and 20+ test files source lib/commands/home.sh on its own. The status row's
+# call already checked `declare -F`; home.sh's two call sites did not, so the
+# first test that reached one would print "_human_age: command not found".
+# Asserted on every code line that calls it (comments excluded), because
+# reaching either line needs a real adapter store and a live tmux session.
+@test "every _human_age call in home.sh is guarded by declare -F" {
+  local calls unguarded
+  calls="$(grep -nE '^[^#]*_human_age "' "$CLIKAE_TEST_ROOT/lib/commands/home.sh")"
+  [ -n "$calls" ] || { echo "no call sites found — this test proves nothing"; false; }
+  unguarded="$(printf '%s\n' "$calls" | grep -v 'declare -F _human_age' || true)"
+  [ -z "$unguarded" ] || { echo "unguarded: $unguarded"; false; }
+  [ "$(printf '%s\n' "$calls" | grep -c .)" -eq 2 ] || { echo "expected 2 call sites: $calls"; false; }
+  # The guarded shape really degrades to an empty age with the function absent.
+  run bash -c 'unset -f _human_age; age=x; age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age 1)"; printf "[%s]" "$age"'
+  [ "$status" -eq 0 ] && [ "$output" = "[]" ] || { echo "rc=$status $output"; false; }
+}
+
 @test "antigravity slots render as tanks with the active one marked (multi mode)" {
   # Simulate the opt-in multi-account state: slots + consent + the ~/.gemini link.
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/default" "$CLIKAE_HOME/profiles/antigravity/work"

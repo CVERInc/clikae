@@ -69,7 +69,7 @@
   ⚠️ **量的時候 server 必須還活著**：`exit-empty` 讓 server 隨最後一個 session 消失，而對死掉的 server 問選項會**默默起一顆新的**、回答 tmux 的預設值——長得跟 bug 一模一樣，不管 bug 在不在。
   互動模式時使用 `tmux attach -t "clikae-<tank>"`，不再強制使用 `-D` 踢除舊連線（允許在多個視窗中同時查看同一個 session，將控制權交由使用者自行協調）。`window-size latest` 下最近使用的 client 決定尺寸，兩個 client 並存不會坍塌，離開會自動彈回。這是「不需要 -D」的真正理由。
 
-- **每 session（非全域）的 clikae 選項清冊**：`status-left` / `status-left-length`（`tmux_label`，視窗徽章）之外，2026-09 起新增 `@clikae_session_id`（`tmux_set_session_id`，`lib/core/tmux.sh`）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，`live_session_id`（`lib/core/live.sh`）讀回。與上面的全域選項不同，它是單一 session 作用域、`set-option -t "=$session:"`，不會漏到同一 server 的其他 session；但同樣只在 `tmux_spawn_session` 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 `~/.clikae/state/<session>.session_id` 鏡像檔。
+- **每 session（非全域）的 clikae 選項清冊**：`status-left` / `status-left-length` / `status-right` / `status-right-length` / `status-interval` / `status-justify` / `status-format`（全部在 `tmux_status_line`，2026-09 #77 之前只有前兩個、且在 `tmux_label`；見 Rule 11）之外，2026-09 起新增 `@clikae_session_id`（`tmux_set_session_id`，`lib/core/tmux.sh`）—— clikae 寫進 tmux 的第一個 per-session 使用者選項，記錄「這個視窗當初是為了哪個逐字稿 session id 開的」，`live_session_id`（`lib/core/live.sh`）讀回。與上面的全域選項不同，它是單一 session 作用域、`set-option -t "=$session:"`，不會漏到同一 server 的其他 session；但同樣只在 `tmux_spawn_session` 剛建立的那個 session 上寫，且只在真的 spawn（非 attach）時寫——Rule 7 的「出生時繼承」對它不適用（它不是 server 出生時決定的，是每次 spawn 各自決定的），但同一個道理仍然成立：寫的時機只有一個地方，讀的時候永遠先查 option、查不到才退回 `~/.clikae/state/<session>.session_id` 鏡像檔。
 
 - **`base-index` 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0**：2026-09 起 `live_engine_alive`（`lib/core/live.sh`）需要問「這個 session 的引擎視窗還在不在」，一度用 `tmux list-windows -F '#{window_index}'` 比對字面 `0`——跟這條規則本身講的道理正是同一件事（`history-limit` 那個收據）：`tmux_spawn_session` 沒有設 `base-index` 不代表它是 0，代表它繼承使用者 `~/.tmux.conf` 裡設的任何值，而 `set -g base-index 1` 是很常見的一行。在 `base-index 1` 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗**名稱**：是否存在一個不是 `wake` 守望者（`^wake( |$)`，`wake_attach_watcher` 開的那個）的視窗——與 `tmux_sess_has_engine`（`lib/core/tmux.sh`）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。
 
@@ -449,3 +449,274 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   7. **已知、寧可多擋的缺口，排在 #106 後續處理**（clikae#97 review round 3, P3-1／P3-2；兩者都是安全方向的失敗，不會放行任何 kill）：
      - `kill-session -C`（只清 alert、不殺任何東西）照樣被擋，`-C`／`-aC`／`-Ca`／`-a -C` 全部 rc 86。`-aC` 的訊息還說它「kills every OTHER session」，帶 `-C` 時這句不對。
      - PATH 裡的**空項**（代表 `.`，例如 `PATH="<shim>:"`、`"<shim>::/x"`）被跳過，不會被當成目前目錄：cwd 裡有 `tmux` 也回 127。明寫 `<shim>:.` 就找得到。
+
+### Rule 11: 狀態列說的是「回來的指令」與「需要注意的事」(The Status Row, #77)
+
+- **症狀**：每個 session 最下面那一行，從 v0.21 到 2026-09 一直是
+  `[claude/hello] 0:claude* 1:wake … "✳ [ KITT ] tending th" 20:06 12-Sep-26`。
+  它是產品裡**最持久可見的一個字串**（整個 session 都在螢幕上），而操作者每三十秒
+  真正想知道的三件事——「怎麼回到這裡」「還剩多少油」「有沒有東西紅了」——一件都
+  沒回答。視窗清單把 clikae 自己開的 `wake` 守望者當成使用者開的視窗露出來；標題被
+  tmux 截到 20 欄；日期在你盯著它的時候不會變。
+- **收據**（2026-09-14，tmux 3.4，拋棄式 socket `-S "$(mktemp -d)/sock"`）：
+  ```
+  # 1. #{} 在 #() 裡會被展開（這是整個設計的前提，不是假設）
+  $ tmux set-option -t '=probe:' status-left \
+        "#(bash probe.sh W=#{client_width} SID=#{@clikae_session_id} N=#{session_name})"
+  $ # 117 欄的 client attach 之後，probe.sh 收到：
+  args=[W=117 SID=a52bdc12-dead-beef-0000-111122223333 N=probe]
+
+  # 2. 單引號包起來的空引數不會消失（引數數量才是對的）
+  status-left "#(bash probe.sh 'a b' '' 'c' '#{client_width}')"   -> count=4
+
+  # 3. 視窗清單要靠 status-format[0]，正反兩邊都量過
+  設了 status-format[0] 的那一列： LEFTSEG-…                （沒有視窗清單）
+  沒設的同一個 session：          LEFTSEG 0:sleep* 1:wake   （視窗清單在）
+
+  # 4. helper 的成本（每次 20 連發，開發機 reefbox，16 核）
+  閒置時              0m0.284s  ->  14.2 ms / 次
+  load 6.15 時        0m0.612s / 0m0.331s / 0m0.415s  ->  16.6 ~ 30.6 ms / 次
+  （30.6 那一次超出預算，所以把 burn 掃描僅剩的那個 $( ) 也拿掉：
+    burn_status_dirsv 改成填陣列，整條路徑只剩 date 與 tmux 兩個 fork）
+  拿掉之後，對著**活著的** tmux server（production 的條件），load 9.7~10.5：
+                      0m0.298s / 0m0.346s / 0m0.471s  ->  14.9 ~ 23.6 ms / 次
+  ```
+  🔴 **這台機器不是中立的量測場**：上面每一組數字都是在同時跑著五條 sibling
+  lane 的 reefbox 上量的，load 從 6 跑到 10。把它讀成「14 ms」是騙自己；誠實的
+  說法是「閒置 14 ms、滿載 24 ms，預算 30 ms」，而且**超出預算的那一次是真的
+  發生過**，不是雜訊——它就是拿掉最後一個 fork 的理由。成本的組成也量過：
+  裸 bash 5.2 ms、加上四個 source 7.1 ms，其餘全是 `date` 與 `tmux show-options`
+  這兩個 fork。
+
+  🔴 **P3-3（2026-09-14 round-3 review）：上面那組數字是用 load 表達的，而真正的
+  自變數是 run dir 的「數量」。** load 是這台機器當下的雜訊，run dir 數是這一列
+  自己的輸入——`tmux_status_alertsv` 對 `$HOME/.clikae/logs/burn-*` 每一個目錄開一次
+  `status.json`，成本跟目錄數線性成長，而目錄只會單調累積：保存期 7 天，但
+  `_burn_sweep_old_logs` **只在有人跑 `clikae burn` 時才掃**，所以一台「開著 tmux
+  但這週沒 burn」的機器不會自己變便宜。`lib/core/burn_status.sh:46-48` 早就把這件事
+  寫對了，只有這一節停在舊的表達法。
+
+  量（本 commit 的碼，真 helper `lib/core/status_line.sh`、每點 20 連發 ×3 次取中位數、
+  沙箱 HOME／CLIKAE_HOME、reefbox、`uptime` load 5.1–7.9）：
+
+  ```
+  run dir 數   全 done（最便宜：state 讀完就 continue）   全 running（要驗 pid）
+       0                13.3 ms                                   —
+      50                21.8 ms                                   —
+     100                25.9 ms                              27.7 / 31.7 ms
+     200                34.5 ms                                   —
+     400                54.0 ms                              67.1 / 68.3 ms
+  ```
+
+  **每個 run dir 的邊際成本 ≈ 0.10 ms（全 done）／≈ 0.13 ms（全 running）**，
+  固定成本 ≈ 13 ms。所以 30 ms 的預算換算成 run dir 是：在這台機器、這個 load 下
+  **約 170 個**（review 在 load 2.9 量到的是 400 個；固定成本與邊際成本都跟 load 走，
+  「幾個 run dir 會破預算」不是一個常數，**「每個 run dir 要多少錢」才是**）。
+  這台機器現在有 108 個 run dir（`ls -1d ~/.clikae/logs/burn-*`，只數不開檔）。
+  ⚠️ 兩張表都是合成的 `status.json`；真實混合（有 `fail`／`waiting-reset`／
+  torn 的）沒量。
+- **規範**：
+  1. **這一列只在一個地方組出來**：`lib/core/tmux.sh` 的 `tmux_status_render`
+     （內容）與 `tmux_status_line`（唯一寫 `status-left`／`status-right`／
+     `status-interval`／`status-justify`／`status-format` 的地方）。`tmux_label`
+     從此只負責視窗名稱，狀態列交給上面那個函式。
+  2. **`#()` 那一端不做任何判斷**：`lib/core/status_line.sh` 只負責把
+     `$HOME`／`$CLIKAE_HOME` 放到位、問 tmux 這個 session 在跑哪一份逐字稿
+     （`live_session_id`）、然後呼叫 `tmux_status_render`。tmux 沒辦法自己重算一個
+     shell 值，所以會變的東西（油量、警示、client 寬度）一定要走 `#()`；但**會變的
+     只有值，不是規則**。
+  3. **🔴 這條路上不准有 vendor、不准有網路、不准有 `jq`、不准有 `clikae` 自己。**
+     tmux 每 5 秒、每個 attach 的 client 各跑一次，而且是在 tmux server 裡跑——一個
+     會打網路的狀態列會永遠每五秒打一次，失敗了也沒有人看得到。油量只讀 #72 的快取
+     檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
+     `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
+     樁，並斷言它們的 tripwire 檔沒有出現。
+     固定成本只有兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
+     由 `tmux_status_render` 呼叫一次、交給油量與警示兩邊共用——不只省一個 fork，
+     也讓兩半不會對「現在幾點」有不同答案。
+
+     🔴 P2-3（2026-09-14 round-1 fix review）：上面這句直到這次修正之前都是錯的。
+     `dry_store_peekv`（警示那一半，掃 `$CLIKAE_HOME/dry/*/*` 每個乾涸標記各呼叫
+     一次）內部用 `f="$(dry_store_path "$engine" "$tank")"` 重算路徑——一個
+     `$( )`，每個標記一個 fork，跟標記數線性成長，不是「兩個」。
+     `strace -f -e trace=clone,clone3,vfork,execve` 對真 helper（含 burn 那一半）
+     跑一次 render，量到的 clone 數（這條 lane 自己的沙箱，隔離的 `TMUX_TMPDIR`，
+     跟上面 14.2/24 ms 那組數字不是同一次量測，基線因此不同——量的是「隨標記數
+     怎麼變」，不是絕對值）：
+
+     ```
+     dry marker 數   clone（修前）   clone（修後）
+           0              12              11
+           3              15              11
+          33              45              11
+     ```
+
+     修前每多一個標記多一個 clone（+1/marker，跟先前 round-1 審查量到的斜率一致）；
+     burn 那一半（`burn_status_dirsv`/`burn_status_fieldv`）完全不隨標記數變，
+     fork-free 的部分本來就是真的。修法是把 `dry_store_path` 的函式本體
+     （`printf '%s/dry/%s/%s\n' "$CLIKAE_HOME" "$1" "$2"`）直接內聯成
+     `f="$CLIKAE_HOME/dry/$engine/$tank"`，不再透過會 fork 的函式呼叫——
+     跟 `burn_status_dirs`／`burn_status_dir` 已經在用的「兩份字面值放同一段，
+     好過其中一份是從另一份 derive 出來」是同一個取捨（見那兩個函式的註解）。
+     `dry_store_mark`／`dry_store_read`／`dry_store_clear`／`dry_store_epoch` 仍然呼叫 `dry_store_path`——
+     它們都不在 5 秒一次的熱路徑上，那個 fork 從來不是問題。
+
+     🔴 P2-2（2026-09-14 round-2 review）：同一輪修正在三行外又加回一個 fork——油量年齡
+     後綴寫成 `$(_human_age "$ca" "$now")`，一個包住 shell 函式的 `$( )` 就是一個
+     subshell。同一個 strace 量法、真 helper、一次 render：快取剛寫 11 個 clone、
+     **快取 2 小時前 12 個**（超過 1 小時是常態，不是邊角）。改成 `_human_agev suffix …`
+     （`lib/core/duration.sh`，呼叫端傳變數名、函式用 `printf -v` 賦值，bash 3.2 可用、
+     不用 nameref），修後兩者都是 **11**。`_human_age` 留成印出來的薄殼，給不在熱路徑上的
+     board／resume 呼叫點。
+  4. **🔴 這條路上也不准「寫」。** `dry_store_read` 順手刪掉過期標記對「問一次」的
+     呼叫者是對的，對一個每五秒問一次的狀態列則會讓「這個標記什麼時候消失的」變成
+     「剛好有沒有人在看狀態列」的函數。所以狀態列走 `dry_store_peekv`（唯讀孿生，
+     同一條新鮮度規則），收垃圾留給真的在問的人。量過：把稽核範圍放大到整個
+     `$HOME` 會紅，紅在 tmux 自己會建立 socket 目錄——那是 tmux 的家務事，不是
+     clikae 的狀態。
+  5. **警示 `!N` 只數已經存在的狀態，而且 N=0 時整段不畫**：
+     `$CLIKAE_HOME/dry/<engine>/<tank>`（live catcher 寫的乾涸標記，
+     新鮮度由 dry_store 自己的 TTL 決定），加上
+     `$HOME/.clikae/logs/burn-*/status.json` 裡還寫著 `running`／`waiting-reset`
+     但 pid 已經不在的那些（#41 對「沒走到終局、也就是沒有產物的 lane」的定義）。
+     走到 `fail` 的**不算**：它當時已經對著跑它的人印過理由了，而這一列是為「還沒有
+     人被告知」的事存在的。
+     🔴 **CI 紅燈沒有被數進去，這是缺口不是決定**：issue #77 把它列為第三個來源，
+     而這個 repo 唯一的 Stop hook（`scripts/harness-stop-hook.sh`）只把報告閘門的
+     BLOCKED/ALLOWED 記進 `state/harness-hook.log`，從來沒有記過 CI 的判決。要數它
+     得先發明那個狀態，那是另一個改動。（P2-2，2026-09-14 round-1 fix review：PR
+     #102 本文曾經在這句話的反面下錯注——寫著「CI-red seen by the Stop hook」是
+     `!N` 的來源之一，跟這裡、跟 CHANGELOG 都不一致。已經改成 PR 本文照這裡走，不
+     是這裡照 PR 本文走：這段話本來就是對的，錯的是本文那一行。）
+
+     🔴 **P2-1（同一輪 fix review）：死掉的 burn lane 現在會自己從計數裡消失，跟
+     dry 那一半用同一個時鐘。** 修之前：一條被 SIGKILL（或 OOM、斷電）的 lane 最後
+     一次寫的是 `running` 加一個已經不在的 pid，而在這之前，`!N` 會把它算進去——
+     永遠，因為唯一會清掉它的是 `_burn_sweep_old_logs`（7 天、只在下一次
+     `clikae burn` 才跑）。量過：`run dir` 的 mtime 改成 30 天前，紅燈完全不理會
+     年齡。dry 那一半本來就有 `CLIKAE_DRY_TTL`（6 小時）讓一個沒人再看的標記自己
+     退出新鮮度判定，燒的是 6 小時後轉綠而不是靠人手動清；燒那一半沒有這個。
+     ~~round 1 的修法：死 pid 的 lane 一旦 `updated_at` 超過 `CLIKAE_DRY_TTL` 就不再
+     計入 `!N`，「跟 dry 標記變陳舊的判定同一把尺」。~~
+
+     🔴 **P2-3（2026-09-14 round-2 review）：那不是同一把尺。** dry 的時間戳是「觀察到
+     乾涸的那一刻」；burn 的 `updated_at` 對 `running`／`waiting-reset` 而言是**這次
+     attempt 開始的那一刻**——`lib/commands/burn.sh` 在引擎跑的期間沒有任何週期性改寫，
+     它不是心跳。量到：跑了 7 小時才死的 lane → `!0`；等 weekly reset 等了一天才被
+     SIGKILL 的 `waiting-reset` → `!0`。**最可能無人看顧地死掉的 lane，正好是這條規則
+     永遠報不出來的那種。** 現在的規則：**pid 活著就不紅、死了就紅，不論年齡**；
+     `updated_at` 只用來界定「死掉的 lane 最多紅多久」，而那個上限是它自己那份檔案的
+     保存期限 `CLIKAE_BURN_LOG_RETENTION_DAYS`（7 天，`_burn_sweep_old_logs` 刪 run dir
+     用的同一個旋鈕）——計數永遠不會比證據活得久，從此不再跑 `clikae burn` 的機器也會在
+     一週後安靜下來（round 1 的 P2-1 仍然是關的）。代價明說：單一 attempt 開始超過 7 天
+     之後才死的 lane 報不出來。沒有加心跳：burn 在引擎執行期間本來就沒有週期性寫入點，
+     為這一列發明一個不是小改動。
+     **仍然存在的不對稱**：dry 的標記檔本身會被下一次 `dry_store_read`（不是 peek）
+     懶惰刪除；burn 的 `status.json` 不會被這條讀路徑刪除——唯一會真的刪除它的仍然是
+     `_burn_sweep_old_logs`，7 天、只在 `clikae burn` 才跑，因為 burn 的 `status.json`
+     除了 alert-count 之外還有 `clikae wait` 這個真的需要它留著的讀者。兩邊「算不算紅」
+     的時鐘也**不是**同一個：dry 是 6 小時的觀察新鮮度，burn 是 pid 存活＋7 天保存期限。
+
+     🔴 **P2-4（同一輪 round-2 review）：dry 那一半原本也有一種永遠不會消失的紅燈。**
+     `dry_store_peekv` 把讀不懂的時間戳（非數字、空的、整行沒有 TAB）當成 0，而兩條
+     老化分支都要求 `stamp > 0`，於是落到 `fresh`——**永遠**。一次截斷的寫入就會在每個
+     session 的狀態列釘一個 `!1`，直到有人手動刪檔。現在讀不懂的時間戳（含
+     `dry_store_mark` 在 `date` 失敗時寫的 0）一律是 `expired`：跟 `cached_at` 同一條
+     「在，但讀不懂 ⇒ 不可信」的規則。
+
+     🔴 **P2-1（round-4 review）：「讀不讀得懂」這條規則不准把時鐘算進去。** round 3 為了
+     擋住「多一位數 ⇒ 年份 2537 ⇒ 永遠 fresh」，加了第三個條件「不得超前 `now` 60 秒」，
+     於是**會刪檔的那一臂**變成了讀的人自己的時鐘的函式。讀的人的時鐘可以**落後**寫的人：
+     開機時 RTC 快、chrony `makestep` 往回校正、VM snapshot restore、suspend/resume，
+     或 `date` 乾脆失敗（兩個讀者的 fallback 都是 `0`）。實測對 `origin/main` 逐格相反：
+     落後 61 秒／2 小時／24 小時，以及完全沒有 `date`，都會把一個**幾秒前剛寫下的誠實標記**
+     判成 `expired` 並 `rm -f` 掉——burn 立刻回頭撞一個真的在 rate limit 的 tank，
+     vendor 原話的 reset phrase 也一起沒了（狀態列 `!4` → `!1`，而且不說為什麼）。
+     現在的規則是**純形狀**：全是數字、9 或 10 位。round 3 那個「多一位數」的病仍然被擋著，
+     但擋它的是**長度**（11 位是西元 5138 年，沒有任何時鐘寫得出來），不是時鐘。
+     隨之而來的三條，寫死在這裡好讓下一次改動得先跟它吵架：
+     **（一）這個檔唯一的刪除動作不看時鐘**；**（二）形狀合法但在未來的時間戳＝時鐘動了，
+     當成「剛剛記的」（`age` 夾成 0，跟 `tmux_status_fuelv` 對 `cached_at` 同一個決定）、
+     照樣算 fresh、**留著**；**（三）`date` 答不出來時的裁決是 `unknown`——保留檔案、
+     狀態列照算、burn 照樣視為 dry。刻意接受的代價：一個形狀合法卻真的壞掉的未來時間戳
+     現在會被留著而不是被刪掉。判準是不對稱的——判錯 `fresh` 救得回來（下一次成功的 run
+     會 `dry_store_clear`，人也刪得掉那一個檔），判錯 `expired` 把證據銷毀，而且把 burn
+     送進 rate limit。
+  6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
+     （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
+     `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是
+     board 的字彙（`docs/DESIGN-board-fuel-dots.md`）。
+  7. **寬度規則＝一道固定順序的讓步階梯；警示計數與時鐘永遠不在階梯上。**
+     提案指定會截斷的那一段（session 標題）在同一串討論裡被第三次修正拿掉了，之後
+     round 1 與 round 2 各自宣告過一次「剩下唯一長度不固定的東西」是什麼，**兩次都漏**：
+     round 1 說是別人的主機名，漏掉 round 1 自己加的油量年齡後綴（`· 23h ago`，
+     0 或 9–10 欄）；round 2 補上後綴，漏掉 `clikae <engine> <tank>` 這一段本身——
+     `validate_name`（`lib/core/profile_store.sh`）限制的是 tank 名的**字元集，不是長度**。
+     真 tmux 3.4（外層 `new-session -x N` 當精確 N 欄的模擬器、內層 client attach、
+     `capture-pane` 讀最下面那一行）、80 欄、快取 23 小時前，在舊碼 `25a35ff` 上量到：
+     24 字元的 claude tank **切掉時鐘**（`!10 1:43`），27 字元的 antigravity tank
+     **切掉警示計數本身**（`!10` → `!`，時鐘整個不見）。
+     所以規則不再是「哪一段長度不固定」（三段都是），而是「誰先讓」。
+     `tmux_status_rowv`——純函式，不讀檔、不叫 `date`、不碰 tmux，所以這個階梯在
+     `tests/bats/tmux-status.bats` 裡是一張**表**而不是一段關於終端機的故事——就是那個順序：
+
+     1. `ssh <host> -t ` 前綴：**整段拿掉不是截斷**。半個主機名不是任何人跑得起來的
+        指令，而 `clikae resume a52bdc12` 在「你正在讀這一列的那台機器」上本來就完全
+        正確。100 欄以下根本不加；100 欄以上也只在**整列加上前綴之後仍然留得下時鐘的
+        6 欄**時才加。
+     2. 油量的**年齡後綴**（`· 23h ago`）：百分比留著。讀數還是那個讀數，掉的是修飾語。
+     3. **tank 名，從中間省略**（`averyverylongtankname` → `aver…name`），地板 8 欄。
+        是 elide 不是 truncate，而且一定帶著 `…`：尾巴被砍掉的名字會讀成「另一個真的
+        存在的 tank」，**安靜地錯比看得出來短更糟**。
+     4. **engine 那個字**（`clikae claude x` → `clikae x`）：這一階之後它就不再是一道
+        可以貼上去的指令了，所以它排在四階的最後。
+     5. 油量那一段，整段：地板守衛，只有前四階搆不到時才動。它存在的理由是讓下面那
+        句話是**不變式**而不是願望。
+
+     🔴 **P3-1（round-4 review）：後面的階讓出來的欄位要還給 tank 名。**
+     rung 3 算 tank 名寬度時，列裡還帶著 engine 那個字（7 欄）與整段油量；rung 4／
+     rung 5 把它們拿掉之後，騰出來的欄位原本沒有人要——`tshow` 早就釘死了。實測
+     （真 tmux 3.4）：claude ＋ 12 字元 tank、40 欄，畫出來是 `clikae tttt…ttt │ !10`，
+     33 欄只用了 22 欄，而整個名字只要再 4 欄；24 字元的 tank 被砍到 8 欄，而 20 欄放得下。
+     規範承諾的「至少 8 欄」沒有被違反（所以是 P3），但把一個**放得下**的名字省略掉，
+     正是 rung 3 自己要防的「讀成另一個 tank」。
+     現在 rung 5 之後會用**剩下的欄位**重算一次 tank 名寬度（放得下就整個還原）。
+     順序沒有改：還欄位發生在 rung 5 **之後**，所以加寬名字永遠不可能成為油量
+     （或任何更低階的東西）被拿掉的理由。
+
+     🔴 **警示計數與時鐘永遠不切。** `!N` 是這一列存在的理由（「什麼是紅的」），而缺了
+     小時的時鐘不是時鐘。80 欄**保證**的只有三件事：完整的警示計數、完整的時鐘、以及
+     **至少 8 欄的 tank 名**；其餘照上面的順序盡力而為。舊版這裡寫的「其餘最多 59 欄」
+     「80 欄永遠不截斷」兩句都作廢——前者在三位數警示（`!100`）時是 60，後者從來沒有對
+     長 tank 名成立過。
+
+     🔴 **算術地板不是一個常數，是 `26 + 警示數字的位數`**（P3-2，round-4 review）：
+     一位數 27 欄、兩位數 28 欄、三位數 **29** 欄。算法＝`clikae ` 7 ＋ tank 地板 8
+     ＋ ` │ !` 4 ＋ 位數 ＋ 時鐘 6 ＋ 行尾 1。舊版寫死的「28 欄」是把 `!10` 當成了全部，
+     實測 100 個新鮮 dry 標記、28 欄：helper 算出 23 欄、上限 22，**時鐘被切成 `0:51`**。
+     ⚠️ 這是同一個三位數盲點的第三次（round 3 才剛讓「其餘最多 59 欄」退休，
+     fix3 就在同一段放進一個帶著同樣盲點的新常數）——所以這裡寫的是**式子不是數字**。
+     規範仍然只承諾 80 欄，地板只是「還畫得出完整 `!N` ＋ 完整時鐘」的算術下界。
+     階梯表逐階釘住這件事：刪掉任何一階，80 欄那一列就紅。
+  8. **左邊那一段要真的是一道可以貼上去的指令**：有逐字稿 id 就是
+     `clikae resume <8 碼>`（所以 `clikae resume` 必須接受唯一前綴——
+     `_resume_prefix_candidates`，同一次改動的另一半，模稜兩可就列出候選並拒絕）；
+     沒有 id（codex／antigravity 的裸啟動，見 `tmux_set_session_id`）就是
+     `clikae <engine> <tank>`，絕對不是裸的 `clikae resume`——那會開選單，不是回到
+     這裡。
+  9. **主機名在 clikae 自己的行程裡解，不在 helper 裡解**：`#()` 是 tmux **server**
+     的子行程，繼承的是當初啟動 server 的那個環境（可能是好幾天前的另一個 shell）。
+     `tmux_status_line` 跑在人類真正坐著的那個 shell 裡，所以那裡的
+     `$SSH_CONNECTION` 才真的代表「這次啟動是從 ssh 進來的」。這是證據不是證明，而
+     它往安全的方向偏：不知道主機名就顯示不帶前綴的指令，那在讀這一列的地方永遠是
+     對的。`$CLIKAE_HOST` 一律優先——一台機器自己叫自己的名字，常常不是外面解得到的
+     那個名字。
+  10. **不要用 `window-status-format ''` 來藏視窗清單。** 它是**視窗**選項：用
+      `-t "=$session:"` 只會打到那個 session 的**當前**視窗，於是稍後才被
+      `wake_attach_watcher` 開出來的 `wake` 視窗又會帶著預設值回來；改用 `-g` 則會
+      把整台 server 上每一個 session（包含人類自己開的）的視窗清單清掉。
+      `status-format[0]` 是 **session** 選項，換掉的是整列，視窗清單包含在內。
+  11. **沒有 fleet 那一段**（提案裡的 `reefbox x● hi● l○`）。同一串討論第三次修正
+      把它撤掉了：整支艦隊的逐槽油量住在 board（`clikae home`，#72 之後是真數字），
+      狀態列講的是**這一槽、這一個 session**。`tests/bats/tmux-status.bats` 有一條
+      測試守著這個「沒有」，所以哪天要加回來會是有人刻意做的決定。

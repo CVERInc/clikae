@@ -469,6 +469,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a timed `clikae cockpit --allow-agents <dur>`. The settings.json edit
   rides #76/#85's write mechanism (union merge, backup, atomic rename) rather
   than a one-off jq edit (#63).
+- The tmux status row now answers the three questions the old one did not: how
+  to get back here, how much fuel is left, whether anything is red. It reads
+  `clikae resume <8 chars> | 5h 42% . 7d 65% | !2` with the clock at the right
+  edge, and the window list, the truncated pane title and the date are gone
+  (#77). The reconnect command is a real command: `clikae resume` now resolves
+  a unique session-id prefix (case-insensitively, and an ambiguous match's
+  candidate list caps at 10 with a count for the rest) and refuses an
+  ambiguous one with the candidates listed. Fuel comes from #72's usage cache
+  only -- the row never calls a vendor, and falls back to the board's
+  dry/no-reading glyph when there is no cached reading; a reading between 1h
+  and 24h old now carries a `. Nh ago` suffix instead of rendering identically
+  to a fresh one, and percentages clamp to 0-100 so a corrupt cache cannot
+  blow the row's width. `!N` counts tanks the live catchers marked dry and
+  burn lanes whose writer died before reaching a terminal state; it is not
+  drawn at all when N is 0. A `running` lane whose pid cannot be read at all
+  (a torn write) counts too: the writer always records one, so an unreadable
+  pid is itself evidence of a lane that stopped without finishing. A lane whose pid is dead is red however long it
+  ran (its `updated_at` is the attempt's start, not a heartbeat) -- dead
+  meaning gone from the process table, not merely un-signalable, since
+  `kill -0` fails identically for a pid that belongs to another user -- and leaves
+  the count once that stamp is older than the burn log retention (7 days, the
+  same knob that removes the file), so it can neither hide nor pin red
+  forever on a host that never runs `clikae burn` again. A dry marker whose
+  timestamp cannot be read is expired, not fresh forever -- on the board, on
+  the row, and in burn's own "is this tank dry" verdict. Readable is a SHAPE
+  test and nothing else: all digits, 9 or 10 of them. A truncated or doubled
+  write is usually still a NUMBER (one extra digit dates to the year 5138), and
+  length is what catches it. The reader's own clock deliberately takes no part
+  in that judgement, because expiring is what DELETES the file: a reader whose
+  clock sits behind the writer's (an RTC fast at boot and corrected backwards,
+  a VM snapshot restore, suspend/resume) would otherwise destroy a marker
+  written seconds ago, sending burn back into a rate-limited tank and taking
+  the vendor's reset phrase with it. A stamp in the future is therefore read as
+  a clock that moved, aged as if recorded now, and KEPT; and when `date` cannot
+  answer at all the verdict is `unknown` -- still dry, still counted on the
+  row, still on disk. Width is a yield
+  ladder with a fixed order, because three parts of the row are
+  variable-width, not one: the `ssh <host> -t ` prefix goes first (dropped
+  whole, never cut -- half a hostname is not a command), then the fuel age
+  suffix, then the tank name elided from the middle (`aver...name`, floor 8
+  columns, `validate_name` caps a tank name's character set and not its
+  length), then the engine word, and last the fuel segment entirely. The alert
+  count and the clock are never cut: at 80 columns what is guaranteed is the
+  whole `!N`, the whole clock, and at least 8 columns of the tank name, and
+  below 80 the arithmetic floor is `26 + the alert count's digits` (27 / 28 /
+  29 for one / two / three digits). Columns that a later rung frees go back to
+  the tank name, so a name is never elided while it would fit. Cost is a
+  function of how many run directories are on the host, not of load: about
+  0.10-0.13 ms per run directory on top of a fixed ~13 ms (an earlier draft of
+  this entry said "14 ms per redraw idle, up to 24 ms under load", which
+  measures the machine's noise rather than this row's input).
+
+  Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
+  (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion
+  prefix-strip that retries its glob at every byte offset -- measured 1,910 ms
+  at 64 KB, didn't finish in 90s at 1 MB. A single `[[ =~ ]]` regex match
+  replaces it, still fork-free and linear: 2-3 ms at 64 KB, 32-34 ms at 1 MB.
+  (The round-2 review corrected why it mattered: burn never writes objects
+  that size. `reason` is capped at 200 bytes and real status files are ~366
+  bytes, so the change removes an unpredictable cost, not a live one.) Also fixed
+  that round: `dry_store_peekv` forked once per dry marker (now flat
+  regardless of marker count); the PR description's claim that `!N` counted
+  "CI-red seen by the Stop hook" was false and has been corrected (that
+  source remains an intentionally documented gap, not a shipped one).
 - Versioned Claude permissions template and `clikae settings apply` with union
   merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
   template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
