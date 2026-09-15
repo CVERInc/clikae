@@ -247,7 +247,17 @@ quota (0–100); unavailable fields are null. `source` is `"vendor"` (a live
 call actually answered), `"transcript"` (derived from local evidence the
 engine already wrote — currently Codex's `rate_limits`, scanned from
 rollouts modified in the last 7 days, the same `-mmin -10080` window
-`limit_codex_status` uses), or `"unknown"` (no usable reading). The optional
+`limit_codex_status` uses), `"expired"` (#107: the vendor refused an access
+token whose credentials hold a refresh token, or that token's own recorded
+expiry had passed — the login is fine, only a session refreshes it; always
+with `reason:"expired-token"` and no numbers), or `"unknown"` (no usable
+reading; `reason` is `no-credentials`, `network` or `unparseable` when known).
+On the board an expired reading under 24h old draws the no-reading `·` with
+the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not the
+dot: every dot is one column and the row grid is padded around that, an emoji
+is two; and the note is the short form because a tank row leaves 33 columns
+for it on an 80-column terminal — `clikae usage` prints the full sentence,
+`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
 same rollout transcript evidence `limit_codex_status` does, so its source is
@@ -262,7 +272,9 @@ header) and `scanned_at` (when it was actually fetched/scanned; round-2
 review, P3 — the two coincide for a vendor reading but not for codex's
 transcript evidence, whose `cached_at` is the underlying event's own time).
 TTL defaults to 120 seconds against `scanned_at`; `CLIKAE_USAGE_TTL`
-overrides it and `--fresh` bypasses it. Errors are cached too. Writes are
+overrides it and `--fresh` bypasses it. Errors are cached too — except that
+an `"expired"` reading is cached for at most `_USAGE_AUTH_FAIL_TTL_SEC` (60),
+so the read after a session refreshes the token sees numbers (#107). Writes are
 atomic, and `usage_read` is the ONLY writer in the repo.
 
 **Who writes this cache, and who reads what (round-2 review, P2-1):**
@@ -477,4 +489,6 @@ which already had the third arm). The bearer token is passed solely
 through curl configuration on stdin, with shell tracing disabled, never
 through argv or an exported variable. Curl defaults are disabled and
 timeouts bound failures; HTTP errors and network failures become unknown
-without printing response bodies.
+(or expired, above) without printing response bodies. `--fail` stays; the
+HTTP status alone is written by `-w '%{stderr}%{http_code}'` to a private
+temp file, which is what makes a 401 observable rather than inferred (#107).
