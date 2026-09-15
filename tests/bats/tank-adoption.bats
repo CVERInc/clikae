@@ -187,6 +187,47 @@ _unadopt() {
   [ -f "$CLIKAE_HOME/profiles/claude/two/.clikae-tank" ]
 }
 
+# --- #61 round-5 P3-4: every line `doctor --adopt` prints must either BE a
+# command that works, or say plainly that no command does. Round 4 printed
+# `clikae init <engine> <name> --adopt` for every content-shaped stray,
+# including the two kinds `init` can never accept — and reconstructed the
+# name with `awk '{print $1}'`, which cut `claude/my tank` to `claude/my`
+# and named a different, real directory. This test EXECUTES what it is told.
+@test "#61 round-5 P3-4: doctor --adopt prints only commands that work; unadoptable names are named, not commanded" {
+  clikae init claude real --no-template
+  local d
+  for d in "hello.lock" "my tank" "my" "two"; do
+    mkdir -p "$CLIKAE_HOME/profiles/claude/$d"
+    printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/$d/.claude.json"
+  done
+
+  run clikae doctor --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The two shapes `init --adopt` refuses are described, never commanded.
+  [[ "$output" != *"clikae init claude hello.lock --adopt"* ]] || \
+    { echo "commanded a lock-shaped adopt: $output"; false; }
+  [[ "$output" == *"claude/hello.lock — a lock/sidecar-suffixed name can never be a tank"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/my tank — that name can never be a tank"* ]] || \
+    { echo "the name with a space was not reported whole: $output"; false; }
+  # `claude/my` is a REAL, adoptable directory of its own — it must appear
+  # once, on its own account, not as the truncation of `claude/my tank`.
+  [ "$(printf '%s\n' "$output" | grep -c -- 'clikae init claude my --adopt')" -eq 1 ] || \
+    { echo "$output"; false; }
+
+  # Now run every command it printed, exactly as printed.
+  local line n=0
+  while IFS= read -r line; do
+    n=$(( n + 1 ))
+    run $line
+    [ "$status" -eq 0 ] || { echo "suggested command failed: $line"$'\n'"$output"; false; }
+  done < <(printf '%s\n' "$output" | grep -o 'clikae init claude [A-Za-z0-9._-]* --adopt')
+  [ "$n" -eq 2 ] || { echo "expected 2 runnable suggestions, got $n"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/my/.clikae-tank" ]
+  [ -f "$CLIKAE_HOME/profiles/claude/two/.clikae-tank" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/hello.lock/.clikae-tank" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/my tank/.clikae-tank" ]
+}
+
 # --- P2-2: doctor must not call a symlink alias a stray directory ----------
 @test "adoption: a symlink alias for a real, adopted tank is not reported as a stray directory" {
   clikae init codex zreal

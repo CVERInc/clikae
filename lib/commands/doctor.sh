@@ -347,7 +347,7 @@ _doctor_memory() {
   return 0
 }
 
-# _doctor_stray_dirs -> name directories sitting where a tank would be —
+# _doctor_stray_dirs [pairs] -> name directories sitting where a tank would be —
 # directly inside a recognised engine's profiles dir — that list_all_profiles
 # does NOT (and, on the fingerprint it can see right now, would not adopt
 # either): no `.clikae-tank` marker, and no content the engine itself would
@@ -356,7 +356,16 @@ _doctor_memory() {
 # output as the source of truth (diff against what's on disk) rather than
 # re-deriving tank-ness with a second copy of tank_dir_is_tank/adoption — the
 # "ONE ENUMERATOR, REALLY" rule applies to reads too, not just writes.
+#
+# With the argument `pairs` it prints ONE MACHINE-READABLE LINE per stray
+# instead — "<cli>\t<name>\t<1 if it holds engine-shaped content, else 0>" —
+# for `doctor --adopt` below. #61 round-5 P3-4: that caller used to re-parse
+# the HUMAN rows with `awk '{print $1}'`, which cut `claude/my tank` down to
+# `claude/my` and then named a DIFFERENT, real directory in its suggestion.
+# A name is never reconstructed from formatted output; the walk hands it over
+# whole.
 _doctor_stray_dirs() {
+  local mode="${1:-report}"
   local root cli_dir cli tdir name printed=0 known known_real="" real p
   root="$(profiles_root)"
   [ -d "$root" ] || return 0
@@ -393,14 +402,20 @@ EOF
       if [ -n "$real" ]; then
         case "$known_real" in *$'\n'"$real"$'\n'*) continue ;; esac
       fi
+      # #61 round-2: _tank_fingerprint_match is no longer a precondition for
+      # adoption, but it is still a useful READ-ONLY signal here — it tells
+      # you WHY a directory looks like it used to be a tank.
+      local has=0
+      _tank_fingerprint_match "$cli" "${tdir%/}" 2>/dev/null && has=1
+      if [ "$mode" = pairs ]; then
+        printf '%s\t%s\t%s\n' "$cli" "$name" "$has"
+        continue
+      fi
       if [ "$printed" -eq 0 ]; then
         log_bold "Not a tank directory (no .clikae-tank marker):"
         printed=1
       fi
-      # #61 round-2: _tank_fingerprint_match is no longer a precondition for
-      # adoption, but it is still a useful READ-ONLY signal here — it tells
-      # you WHY a directory looks like it used to be a tank.
-      if _tank_fingerprint_match "$cli" "${tdir%/}" 2>/dev/null; then
+      if [ "$has" -eq 1 ]; then
         printf '  %-16s %s\n' "$cli/$name" "${tdir%/}  (has $cli-shaped content)"
       else
         printf '  %-16s %s\n' "$cli/$name" "${tdir%/}"
@@ -554,13 +569,28 @@ EOF
           # anything with recognisable content, point at the per-directory
           # fix instead of claiming there's nothing to do.
           local _strays
-          _strays="$(_doctor_stray_dirs 2>/dev/null | grep -F '(has ')" || true
+          _strays="$(_doctor_stray_dirs pairs 2>/dev/null | awk -F'\t' '$3 == 1')" || true
           if [ -n "$_strays" ]; then
-            log_warn "Adoption flag is set, but at least one directory looks like real content with no marker (a restored backup?) — the one-time sweep won't revisit it. Run \`init --adopt\` for each:"
-            printf '%s\n' "$_strays" | while IFS= read -r _line; do
-              local _pair; _pair="$(printf '%s\n' "$_line" | awk '{print $1}')"
-              [ -n "$_pair" ] && printf '    clikae init %s --adopt\n' "${_pair/\// }"
-            done
+            log_warn "Adoption flag is set, but at least one directory looks like real content with no marker (a restored backup?) — the one-time sweep won't revisit it:"
+            # #61 round-5 P3-4: print the command that WORKS, or say plainly
+            # that none does. The same round's own P3-2 taught `init --adopt`
+            # to refuse a lock/sidecar-shaped name outright, and validate_name
+            # has always refused a name with a space or a leading dot — this
+            # used to suggest `init --adopt` for those anyway, a line the
+            # operator could only ever watch fail.
+            local _c _n _has
+            while IFS="$(printf '\t')" read -r _c _n _has; do
+              [ -n "$_c" ] || continue
+              if _tank_shape_excluded "$_n"; then
+                printf '    %s/%s — a lock/sidecar-suffixed name can never be a tank; rename the directory first, then: clikae init %s <new-name> --adopt\n' "$_c" "$_n" "$_c"
+              elif ! ( validate_name profile "$_n" ) >/dev/null 2>&1; then
+                printf '    %s/%s — that name can never be a tank (allowed: A-Z a-z 0-9 . _ -, no leading dot); rename the directory first, then: clikae init %s <new-name> --adopt\n' "$_c" "$_n" "$_c"
+              else
+                printf '    clikae init %s %s --adopt\n' "$_c" "$_n"
+              fi
+            done <<EOF
+$_strays
+EOF
           else
             log_pass "Already adopted: $_adopt_flag — nothing to do."
           fi
