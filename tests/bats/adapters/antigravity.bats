@@ -470,3 +470,43 @@ assert_agy_title() {
   [ "$got" = "ag-cut-05 ag-cut-04 ag-cut-03 ag-cut-02 " ] \
     || { echo "order was: [$got]"; false; }
 }
+
+# --- #34 round-1 P3-1: n=1 and n>1 answer two different questions ------------
+# n=1 is "what did THIS DIRECTORY last talk to" (the CLI's own per-directory
+# pointer cache, one stat); n>1 is "this TANK's n newest". The asymmetry is
+# kept on purpose — the docstring gives the measurement — so it gets a test
+# that says so out loud, instead of only living in prose.
+
+@test "antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, n>1 answers the TANK (#34 P3-1)" {
+  _setup_agy
+  seed_agy_session ag-ptr-old "$WORK" "the pointer's session, oldest on the tank"
+  touch -t 202001010000 "$BRAIN/ag-ptr-old/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-ptr-new "/somewhere/else" "the tank's newest"
+  touch -t 202201010000 "$BRAIN/ag-ptr-new/.system_generated/logs/transcript.jsonl"
+  mkdir -p "$PROFILE/antigravity-cli/cache"
+  printf '{"%s":"%s"}\n' "$WORK" "ag-ptr-old" \
+    > "$PROFILE/antigravity-cli/cache/last_conversations.json"
+
+  # n=1 from a directory WITH a pointer: the pointer wins, even though it is
+  # the oldest session on the tank. (This is what keeps the board's Live-row
+  # fallback title off a whole-tank stat walk.)
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n1; n1="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr -d '\n')"
+  [ "$n1" = "ag-ptr-old" ] || { echo "n=1 gave: [$n1]"; false; }
+
+  # n>1 from the same directory: tank ranking, newest first — the pointer's
+  # session is merely one row of it, in its own mtime position.
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  local n5; n5="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
+  [ "$n5" = "ag-ptr-new ag-ptr-old " ] || { echo "n=5 gave: [$n5]"; false; }
+
+  # n=1 from a directory with NO pointer falls through to the tank's newest —
+  # the documented fallback, and the reason the two answers can differ per cwd.
+  local nokey="$TEST_HOME/no-pointer"; mkdir -p "$nokey"; cd "$nokey" || false
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  local n1b; n1b="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr -d '\n')"
+  [ "$n1b" = "ag-ptr-new" ] || { echo "n=1 (no pointer) gave: [$n1b]"; false; }
+}
