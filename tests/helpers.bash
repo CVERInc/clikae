@@ -120,6 +120,18 @@ setup() {
   printf '%s\n' "$(sed -n 's/^CLIKAE_STATE_VERSION=//p' \
     "$CLIKAE_TEST_ROOT/lib/core/state_version.sh" | head -1)" > "$CLIKAE_HOME/version"
 
+  # 🔴 Stamp the tank-adoption flag too (#61 round-2 P1-1), same reasoning as
+  # the schema version above. Without this, EVERY bats store starts in the
+  # "just upgraded" state, and the FIRST list_all_profiles call in any test
+  # inclusively sweeps up every directory a fixture happens to have created
+  # under a known engine's profiles dir — exactly the behaviour
+  # tests/bats/tank-adoption.bats exists to test on its own. Stamping this
+  # puts every OTHER test in the same steady state `clikae init` itself
+  # produces (marker-only). Tests that mean to exercise the sweep remove
+  # this file first.
+  mkdir -p "$CLIKAE_HOME/state"
+  printf 'test\n' > "$CLIKAE_HOME/state/tanks-adopted-v1"
+
   # 🔴 PIN THE LIBRARY PATH, or a test inherits the developer's INSTALLED clikae.
   # Eleven test files source library code through $CLIKAE_LIB, and helpers did not
   # set it — so each one set it itself, and any that forgot picked up whatever the

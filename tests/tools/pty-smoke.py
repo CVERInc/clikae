@@ -40,7 +40,15 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     root = tempfile.mkdtemp(prefix='clikae-pty-')
     _SANDBOXES.append(root)
     for engine, tank in tanks:
-        os.makedirs(os.path.join(root, '.clikae', 'profiles', engine, tank), exist_ok=True)
+        d = os.path.join(root, '.clikae', 'profiles', engine, tank)
+        os.makedirs(d, exist_ok=True)
+        # #61 round-1 P1-3: a tank is now a directory clikae MADE or ADOPTED,
+        # never a name shape — a real `clikae init` stamps a `.clikae-tank`
+        # marker at creation, so this fixture (which skips `clikae init` for
+        # speed) does the same, or every board/prompt screen here sees "No
+        # tanks yet" instead of the fixture it just built.
+        with open(os.path.join(d, '.clikae-tank'), 'w') as f:
+            f.write(engine + '\n')
     # Answer the wake question up front. A launch asks once, on a terminal, and
     # this harness IS a terminal — so without this every launched-engine check
     # would sit at that prompt and report the engine's output as missing, which
@@ -262,6 +270,34 @@ def mode_home():
     # would pass on the broken code — decoration, not a gate. It is pinned in
     # tests/bats/home.bats instead, where the fixture can seed transcripts and
     # the test sets `set -o pipefail` itself (the bug does not exist without it).
+
+    # #61 round-4 P2-1: bin/clikae's own EXIT trap cleans up the
+    # read-only-store warn sentinel — but the board (`_home_pick`, the most-run
+    # command of all) REPLACES that trap outright, since bash keeps only one.
+    # A private, empty $TMPDIR + an unwritable $CLIKAE_HOME force the warn path
+    # (tanks_adopted_flag_write's `mkdir -p` fails), then a real pty run of the
+    # bare board (nav, then quit) must leave that TMPDIR exactly as empty as it
+    # started — the round-4 review measured one leftover sentinel file here on
+    # ee63953, from BEFORE this fix chained the cleanup into `_home_pick`'s trap.
+    # A FRESH sandbox, never touched by an earlier `drive()` call above: reusing
+    # `env` would reuse a store whose adoption flag those earlier calls already
+    # persisted (a writable store the whole time), so the read-only path below
+    # would never even be exercised — the flag-present check short-circuits
+    # `_tank_adoption_ensure` before it ever attempts to write anything.
+    ro_env = sandbox()
+    private_tmp = tempfile.mkdtemp(prefix='clikae-pty-sentinel-')
+    ro_env['TMPDIR'] = private_tmp
+    chome = ro_env['CLIKAE_HOME']
+    os.chmod(chome, 0o500)
+    try:
+        rc, out = drive([CLIKAE, 'home'], ['j', 'k', 'q'], ro_env)
+        leaked = [n for n in os.listdir(private_tmp) if n.startswith('.clikae-adopt-warn.')]
+        check('board exits 0 against a read-only store', rc == 0, out[-600:])
+        check('board leaves no adopt-warn sentinel behind in TMPDIR',
+              not leaked, 'leaked: %r in %s' % (leaked, private_tmp))
+    finally:
+        os.chmod(chome, 0o700)
+        shutil.rmtree(private_tmp, ignore_errors=True)
 
 
 def mode_prompts():

@@ -81,7 +81,6 @@
 # clearest repro was the same bytes refusing under en_US.UTF-8 and passing
 # under LC_ALL=C).
 set -uo pipefail
-set -uo pipefail
 
 allow() { if [ -n "${1:-}" ]; then printf '%s\n' "$1" >&2; fi; trap - EXIT; exit 0; }
 # _ckpt_fail_closed <why> -> refuse a call this guard could not read.
@@ -227,10 +226,33 @@ _ckpt_refuse() {
     printf 'cockpit-guard: refused — %s.\n' "$why"
     printf 'Dispatch it instead:\n'
     printf '  clikae burn <engine> <tank> --prompt-file <f> --artifact <path>\n'
+    # shellcheck disable=SC2034  # CLIKAE_LIB/_CLIKAE_ADOPT_READONLY are read by
+    # the files sourced two lines down, not by this script.
     ( [ -n "$_dir" ] &&
+      # #61 round-5 merge: the enumerator now (1) asks tank_engine_known,
+      # which needs list_adapters (CLIKAE_LIB + adapter_loader.sh — this
+      # hook is not `bin/clikae`, nothing sets those for it; without them
+      # NO directory is a tank of any engine and the reserve reads empty),
+      # and (2) runs the one-time adoption sweep, which this hook must
+      # never perform ON DISK: _CLIKAE_ADOPT_READONLY keeps the answers in
+      # memory, so the hook writes no marker, no flag and no WARN sentinel.
+      CLIKAE_ROOT="$(cd "$_dir/../.." 2>/dev/null && pwd)" &&
+      CLIKAE_LIB="$CLIKAE_ROOT/lib" &&
+      _CLIKAE_ADOPT_READONLY=1 &&
+      source "$_dir/../core/adapter_loader.sh" 2>/dev/null &&
       source "$_dir/../core/profile_store.sh" 2>/dev/null &&
       source "$_dir/../core/burn_status.sh" 2>/dev/null &&
-      cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n')" &&
+      # #61 round-6 P3-4: `|| true`, and NOT part of the `&&` chain. With no
+      # `state/cockpit` at all — no cockpit recorded, or P2-2's own aftermath,
+      # where --off cleared the record while a guard stayed installed — `head`
+      # exits 1, and as a link in this chain that took the WHOLE enrichment
+      # block down with it: the refusal printed no reserve and not even the
+      # "No idle tank in the reserve right now." line, which lives further
+      # along the same chain. The most informative moment (a guard refusing
+      # with nothing pointing at a cockpit) produced the least informative
+      # message. An absent record simply means no tank is excluded from the
+      # reserve listing, which is exactly what an empty `cur` already does.
+      cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n' || true)" &&
       lines="$(
         while IFS=$'\t' read -r cli profile _path; do
           [ -n "$cli" ] || continue

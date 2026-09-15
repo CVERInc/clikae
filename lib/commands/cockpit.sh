@@ -432,19 +432,75 @@ _cockpit_move() {
 # per-tank failure into bookkeeping instead of an abort; state and the timed
 # allowance are always cleared regardless, and a non-zero rc (P3-14) names
 # exactly which tanks still need attention rather than staying silent about it.
+#
+# 🔴 #61 round-6 P2-2: and it must never ask "is this a tank?" to decide. It
+# used to sweep `list_all_profiles`, which is the answer to a DIFFERENT
+# question — what clikae NAMES as a tank. The moment a guarded tank lost its
+# `.clikae-tank` marker (a restored backup, a sync tool, a stray `rm` — the
+# very state this PR's `doctor` warns about) it dropped out of that list, the
+# sweep could not see it, and `--off` printed `cockpit: off`, returned 0, and
+# cleared `state/cockpit` with the hook still installed and nothing left on
+# disk pointing at it. That is worse than #63 P1-3's abort: the escape hatch
+# did nothing AND said it succeeded, without so much as a warning.
+#
+# So this function asks "where might a hook be installed?" instead, twice
+# over and from two independent directions:
+#
+#   1. the tank the state file NAMES, resolved straight through profile_dir —
+#      no enumeration, no marker, no adapter gate. If its directory is gone
+#      the record is still cleared, but we SAY so rather than implying the
+#      guard went with it.
+#   2. every `<engine>/<tank>/settings.json` under profiles_root that
+#      actually carries our `"_clikae": "cockpit-guard"` marker. Reading a
+#      settings.json and finding OUR marker in it is a far tighter gate than
+#      "is a tank" — a directory clikae never named cannot have acquired that
+#      marker except from a `clikae cockpit` run that named it.
+#
+# Everything else in clikae that walks the store goes through the one
+# enumerator (#61 P2-6) and must keep doing so. This is the documented
+# exception, and the reason is in the two questions above: an enumerator that
+# correctly EXCLUDES something is exactly what an escape hatch must not
+# inherit.
 _cockpit_off() {
   command -v jq >/dev/null 2>&1 || log_fail "cockpit requires jq to edit settings.json"
-  local cli profile path any=0 had_state=0 failed=""
+  local cli profile path any=0 had_state=0 failed="" d
+  local rec="" rec_engine="" rec_tank="" rec_dir="" rec_phys="" phys
   [ -f "$(_cockpit_state_file)" ] && had_state=1
-  while IFS=$'\t' read -r cli profile path; do
-    [ -n "$cli" ] || continue
+  rec="$(_cockpit_state_read)"
+  case "$rec" in
+    ?*/?*) rec_engine="${rec%%/*}"; rec_tank="${rec#*/}" ;;
+  esac
+  if [ -n "$rec_engine" ] && [ -n "$rec_tank" ]; then
+    rec_dir="$(profile_dir "$rec_engine" "$rec_tank")"
+    if [ -d "$rec_dir" ]; then
+      rec_phys="$(cd -P "$rec_dir" 2>/dev/null && pwd -P)" || rec_phys=""
+      if [ -f "$rec_dir/settings.json" ] \
+         && grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$rec_dir/settings.json" 2>/dev/null; then
+        any=1
+        _cockpit_hook_remove "$rec_engine" "$rec_tank" || failed="$failed $rec_engine/$rec_tank"
+      fi
+    else
+      log_warn "cockpit: recorded cockpit $rec_engine/$rec_tank no longer exists ($rec_dir) — nothing to unguard there; the record is cleared. If that directory comes back with a guard still installed, run \`clikae cockpit --off\` again."
+    fi
+  fi
+  for d in "$(profiles_root)"/*/*/; do
+    [ -d "$d" ] || continue
+    path="${d%/}"
+    profile="${path##*/}"
+    cli="${path%/*}"; cli="${cli##*/}"
+    [ -n "$cli" ] && [ -n "$profile" ] || continue
     [ -f "$path/settings.json" ] || continue
     grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    # Already done above, by name or by physical identity (a symlink alias of
+    # the recorded tank is the same settings.json, and removing twice would
+    # print a second, contradictory "not installed here" line).
+    if [ -n "$rec_phys" ]; then
+      phys="$(cd -P "$path" 2>/dev/null && pwd -P)" || phys=""
+      [ -n "$phys" ] && [ "$phys" = "$rec_phys" ] && continue
+    fi
     any=1
     _cockpit_hook_remove "$cli" "$profile" || failed="$failed $cli/$profile"
-  done <<EOF
-$(list_all_profiles)
-EOF
+  done
   _cockpit_state_clear
   rm -f "$(_cockpit_allow_file)" 2>/dev/null || true
   if [ -n "$failed" ]; then

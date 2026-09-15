@@ -22,6 +22,18 @@ source "$CLIKAE_LIB/core/duration.sh"
 # shellcheck source=./cockpit.sh
 source "$CLIKAE_LIB/commands/cockpit.sh"
 
+# Exit-code contract (also documented in _burn_help's "Outcomes:" below — ONE
+# place, this constant is what both the code and the prose actually use).
+# 0 = done (artifact produced). 1 = ran and produced neither an artifact nor a
+# limit signal — a real task failure, OR a tool-host infra failure after
+# retries; burn does not distinguish those two from EACH OTHER by rc (only
+# `reason` does). 2 (#61) = the reserve is exhausted — every reachable tank is
+# dry, in interactive use, or shares an already-dry account — reason
+# "no-tank-available". This is the one an agent most needs to tell apart from
+# rc 1's "the task itself is broken, don't retry it elsewhere": it means "not
+# this fleet, right now", never "this task fails everywhere".
+CLIKAE_BURN_RC_NO_TANK=2
+
 _burn_help() {
   cat <<'EOF'
 Usage: clikae burn <engine> <tank> --artifact <path>
@@ -110,10 +122,13 @@ Give the task in one of two ways:
                       grammars, both English), falls through to the normal
                       reroute-or-stop behaviour unchanged.
 
-Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
+Outcomes: artifact present -> done (exit 0); every reachable tank dry/skipped
+(in interactive use, or sharing an already-dry account) -> reason:
+no-tank-available (exit 2 — #61, distinguishable from a task failure; reset
+is the EARLIEST parseable reset among the dry tanks, null if none parsed);
 tool-host failure -> retry the same tank, then reason: infra (exit 1);
 no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
-on every tank).
+on every tank; exit 1).
 
 Without a fresh artifact, report left-behind Git work and up to 10 recent files
 per repository in cwd/--add-dir roots; show a push hint, never push.
@@ -448,6 +463,15 @@ case "$_BURN_REROUTE_REFRESH_CAP" in
     _BURN_REROUTE_REFRESH_CAP=3
     ;;
 esac
+# _burn_dry_epoch <reset-phrase> -> the phrase's reset instant as an epoch on
+# stdout, or nothing (rc 1) when it does not parse — limit_reset_epoch's own
+# contract, just anchored to "now" for the caller. A tiny wrapper so both
+# reroute loops (the shared one below and agy's own) rank resets the same way
+# instead of comparing phrase STRINGS (which sort nothing meaningful).
+_burn_dry_epoch() {
+  [ -n "$1" ] || return 1
+  limit_reset_epoch "$1" "$(date +%s)"
+}
 
 # _burn_cockpit_gate <engine> <tank> <force_cockpit> -> 0 when a burn may launch
 # on <engine>/<tank>; 1 (sentence in $_BURN_COCKPIT_REFUSAL) when it is the
@@ -970,6 +994,7 @@ _agy_burn() {
   local cur="$start_tank" tank_count; tank_count="$(_agy_tank_names | grep -c . || true)"
   local -a agy_tried=("$start_tank")
   local tried=""   # "agy/<tank>"-per-hop, mirrors cmd_burn's own $tried — feeds #41's rerouted_from
+  local earliest_reset="" earliest_epoch=""   # #61: earliest parseable reset across every dry hop
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
@@ -1105,6 +1130,14 @@ _agy_burn() {
       fi
 
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
+      # #61: track the EARLIEST parseable reset across the whole walk, not
+      # just this hop's — an earlier hop's window may reopen before this
+      # one's, and that's the number a caller waiting on "no-tank-available"
+      # actually wants.
+      local _rst_epoch; _rst_epoch="$(_burn_dry_epoch "$reset" || true)"
+      if [ -n "$_rst_epoch" ] && { [ -z "$earliest_epoch" ] || [ "$_rst_epoch" -lt "$earliest_epoch" ]; }; then
+        earliest_epoch="$_rst_epoch"; earliest_reset="$reset"
+      fi
     elif [ "$artifact_fresh" -eq 1 ]; then
       log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
       _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
@@ -1167,7 +1200,15 @@ _agy_burn() {
       log_info "Dry, and --no-reroute is set. Stopping."
       _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
-      return 1
+      # #61 round-1 P2-5: this used to `return 1` — the SAME rc a real task
+      # failure gets, even though the status file right above it already
+      # says `state: dry`. `reason` was the only discriminator any consumer
+      # had, and clikae wait's own rc doesn't read `reason` (see docs/
+      # orchestration.md). rc now agrees with the state it just wrote: both
+      # ways a burn can stop on a dry tank without reroute exhausting the
+      # reserve — --no-reroute here, and a fully exhausted walk below — are
+      # $CLIKAE_BURN_RC_NO_TANK; only a REAL task failure keeps rc 1.
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     }
     # P2-2 (2026-09-09 round-1 review): this picker never called
     # burn_tank_busy — the ONE engine where that matters most, since agy's
@@ -1206,9 +1247,18 @@ _agy_burn() {
       break
     done < <(_agy_tank_names)
     if [ -z "$nxt" ]; then
-      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
-      _burn_result false agy "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
-      log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+      # #61 round-2 P3: the order below is deliberate, not what an earlier
+      # version of this comment claimed. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` below actually leave this rc; a caller reading either stream
+      # sees the full picture regardless of which one it reads first. reset
+      # is the EARLIEST parseable reset seen across the whole walk (null if
+      # none parsed), not just this hop's.
+      log_err "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      _burn_result false agy "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     fi
     agy_tried+=("$nxt")
     tried="${tried:+$tried }agy/$cur"
@@ -3803,6 +3853,7 @@ cmd_burn() {
   # _burn_next_same_engine's candidate ordering below, which only runs once
   # `$cur` itself has gone dry (or --to names an explicit next hop, which
   # always wins outright over any ordering).
+  local earliest_reset="" earliest_epoch=""   # #61: earliest parseable reset across every dry hop
   while :; do
     validate_name profile "$cur"
     local dir
@@ -4422,6 +4473,14 @@ KV
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
+      # #61: track the EARLIEST parseable reset across the whole walk, not
+      # just this hop's — an earlier hop's window may reopen before this
+      # one's, and that's the number a caller waiting on "no-tank-available"
+      # actually wants.
+      local _rst_epoch; _rst_epoch="$(_burn_dry_epoch "$reset" || true)"
+      if [ -n "$_rst_epoch" ] && { [ -z "$earliest_epoch" ] || [ "$_rst_epoch" -lt "$earliest_epoch" ]; }; then
+        earliest_epoch="$_rst_epoch"; earliest_reset="$reset"
+      fi
     elif _burn_output_infra "$out_for_class"; then
       if [ "$infra_attempt" -lt "$infra_retries" ]; then
         infra_attempt=$((infra_attempt + 1))
@@ -4508,7 +4567,10 @@ KV
       log_info "Dry, and --no-reroute is set. Stopping."
       _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
       _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
-      return 1
+      # #61 round-1 P2-5: see _agy_burn's identical comment above this one's
+      # twin — rc now matches the `state: dry` this just wrote (both dry
+      # shapes are $CLIKAE_BURN_RC_NO_TANK; only a real task failure is 1).
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     }
     tried="$tried $cli/$cur"
     local nxt=""
@@ -4518,12 +4580,20 @@ KV
       nxt="$(_burn_next_same_engine "$cli" "$tried" "$dried_accts" "$envvar" "$allow_active")"
     fi
     if [ -z "$nxt" ]; then
-      # The reserve is exhausted. log_fail exits, so the machine-readable answer
-      # has to be said first — this is the outcome an agent most needs to tell
-      # apart from a task failure, and prose is the only place it lived.
-      _burn_status_write dry false "$cli" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
-      _burn_result false "$cli" "$cur" "$artifact" "every reachable tank is dry" "${reset:-}"
-      log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+      # The reserve is exhausted. #61: a distinct reason ("no-tank-available")
+      # and exit code from a real task failure — this is the outcome an agent
+      # most needs to tell apart from "the task itself is broken". #61 round-2
+      # P3: the order below is deliberate. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` at the end actually leave this rc; a caller reading either
+      # stream sees the full picture regardless of which one it reads first.
+      # reset is the EARLIEST parseable reset seen across the whole walk
+      # (null if none of the dry hops parsed), not just this last hop's.
+      log_err "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      _burn_result false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      exit "$CLIKAE_BURN_RC_NO_TANK"
     fi
 
     # Resolve the next hop. A bare name = a tank of the same engine; engine/tank =

@@ -254,7 +254,7 @@ _settings_tank() (
 )
 
 cmd_settings() {
-  local engine="" tank="" mode=apply arg template d rc=0
+  local engine="" tank="" mode=apply arg template rc=0
   case "${1:-}" in
     -h|--help) ;;
     apply) shift ;;
@@ -296,6 +296,12 @@ HELP
   # #63 round-5 P2-4: a writing apply holds the cockpit's lock (see
   # _settings_lock_acquire), inside a subshell so its traps never replace a
   # caller's (clikae init runs this too). Read-only modes take no lock.
+  #
+  # #61 round-5 merge: this subshell and #61's two "only ever touch a real
+  # tank" criteria are the SAME walk seen from two sides — the lock decides
+  # WHEN it is safe to write, tank_dir_is_tank/tanks_for_engine decide WHAT
+  # may be written to — so the criteria live INSIDE the lock (every failure
+  # path in here `exit`s, it cannot `return`).
   (
     if [ "$mode" = apply ]; then
       # #63 round-6 P3-3: exit 4 (not 1) specifically when the LOCK itself
@@ -311,15 +317,33 @@ HELP
       trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
     fi
     if [ -n "$tank" ]; then
+      # #61 round-2 P2-3: profile_exists is a bare `[ -d ]` — naming an
+      # existing but not-yet-a-tank directory used to write settings.json
+      # straight into it, and since claude's OLD fingerprint list included
+      # settings.json (a file CLIKAE ITSELF writes, never the engine), the
+      # next walk silently adopted it as a permanent tank — #61's exact
+      # symptom, this time with the enumerator's own blessing. A named
+      # target must be a tank already; there is no more "seed it into
+      # existence" side door.
+      tank_dir_is_tank "$engine" "$(profile_dir "$engine" "$tank")" \
+        || { log_err "Not a tank: $engine/$tank (no .clikae-tank marker — see clikae doctor)"; exit 1; }
       _settings_tank "$engine" "$tank" "$mode" "$template"
       exit $?
     fi
+    # #61 round-1 P2-6: used to be its own `for d in profiles_root/$engine/*`
+    # (no trailing slash — so it did not even need `[ -d ]` to fail: it
+    # happily WROTE settings.json into a directory-shaped `hello.lock/`, the
+    # ONE walker in this whole audit that mutates what it finds). Routed
+    # through tanks_for_engine (lib/core/profile_store.sh) so `settings
+    # apply` only ever touches a real tank.
     found=0
-    for d in "$(profiles_root)/$engine"/*; do
-      [ -d "$d" ] || continue
+    while IFS= read -r d_tank; do
+      [ -n "$d_tank" ] || continue
       found=1
-      _settings_tank "$engine" "${d##*/}" "$mode" "$template" || rc=1
-    done
+      _settings_tank "$engine" "$d_tank" "$mode" "$template" || rc=1
+    done <<EOF
+$(tanks_for_engine "$engine")
+EOF
     [ "$found" -eq 1 ] || printf 'No %s tanks found.\n' "$engine"
     exit "$rc"
   )

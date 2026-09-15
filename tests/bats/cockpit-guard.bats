@@ -144,12 +144,74 @@ _guard_file() { bash "$GUARD" < "$1"; }
     "$CLIKAE_HOME/profiles/claude/cockpit-tank" \
     "$CLIKAE_HOME/profiles/claude/worker1" \
     "$CLIKAE_HOME/profiles/codex/worker2"
+  # #61 round-5 merge: a tank is a directory with clikae's own marker, never
+  # a bare mkdir (helpers.bash stamps this store as already adopted, exactly
+  # like a real one) — so the reserve fixture writes the markers `clikae
+  # init` would have written.
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/cockpit-tank/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/worker1/.clikae-tank"
+  printf 'codex\n' > "$CLIKAE_HOME/profiles/codex/worker2/.clikae-tank"
   printf 'claude/cockpit-tank\n' > "$CLIKAE_HOME/state/cockpit"
   run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
   [ "$status" -eq 2 ]
   [[ "$output" == *"claude/worker1"* ]] || false
   [[ "$output" == *"codex/worker2"* ]] || false
   [[ "$output" != *"claude/cockpit-tank"* ]] || false
+}
+
+@test "#61 round-6 P3-4: with NO state/cockpit the refusal still names the reserve" {
+  # `cur` was fetched inside the enrichment block's `&&` chain, so a missing
+  # state/cockpit (head exits 1, and pipefail carries it) took the whole block
+  # down — the operator got a refusal with no reserve and not even the "No
+  # idle tank in the reserve right now." line, which lives further along the
+  # same chain. An absent record means nothing is EXCLUDED from the listing;
+  # it is not a reason to stop listing.
+  mkdir -p "$CLIKAE_HOME/state" \
+    "$CLIKAE_HOME/profiles/claude/w1" "$CLIKAE_HOME/profiles/codex/w2"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/w1/.clikae-tank"
+  printf 'codex\n'  > "$CLIKAE_HOME/profiles/codex/w2/.clikae-tank"
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Current reserve"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/w1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"codex/w2"* ]] || { echo "$output"; false; }
+}
+
+@test "#61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty" {
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  rm -rf "$CLIKAE_HOME/profiles"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"No idle tank in the reserve right now."* ]] || { echo "$output"; false; }
+}
+
+@test "#61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  # The hook runs under `set -u`. `_m` was left unassigned when the marker
+  # could not be opened, so the enumerator died mid-walk and returned a list
+  # truncated AT that tank with rc 0 — the refusal then claimed there was no
+  # idle tank while idle tanks sat in the store. `b2` sorts between the two.
+  mkdir -p "$CLIKAE_HOME/state" \
+    "$CLIKAE_HOME/profiles/claude/a1" \
+    "$CLIKAE_HOME/profiles/claude/b2" \
+    "$CLIKAE_HOME/profiles/claude/c3"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/a1/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/c3/.clikae-tank"
+  printf 'claude/nowhere\n' > "$CLIKAE_HOME/state/cockpit"
+  chmod 000 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  chmod 644 "$CLIKAE_HOME/profiles/claude/b2/.clikae-tank" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"claude/a1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/c3"* ]] || { echo "truncated at b2: $output"; false; }
+  # The unreadable one is simply not a tank — and the hook's stderr is read by
+  # the MODEL, so neither a WARN nor a raw shell error may appear in it.
+  [[ "$output" != *"claude/b2"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"WARN"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"Permission denied"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"unbound variable"* ]] || { echo "$output"; false; }
 }
 
 @test "fails CLOSED on an empty payload (#63 r5 P2-5)" {
@@ -547,4 +609,49 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
   # (quadratic blowup, an accidental network call) this class of test exists
   # to catch.
   [ "$median" -lt 3000 ]
+}
+
+# #61 round-5 merge — the hook is NOT `clikae`: it runs in its own process,
+# under `set -euo pipefail`, possibly before any clikae command has ever swept
+# this store. Two things must hold no matter what the store looks like.
+
+@test "the hook decides nothing on disk: no marker, no adoption flag, even on a never-swept store (#61 round-5 merge)" {
+  rm -f "$CLIKAE_HOME/state/tanks-adopted-v1"        # the "just upgraded" state
+  mkdir -p "$CLIKAE_HOME/state" \
+    "$CLIKAE_HOME/profiles/claude/keeper" \
+    "$CLIKAE_HOME/profiles/codex/keeper2"
+  printf 'claude/cockpit-tank\n' > "$CLIKAE_HOME/state/cockpit"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  [ "$status" -eq 2 ]
+  # It still NAMES the reserve (in-memory adoption), …
+  [[ "$output" == *"claude/keeper"* ]] || false
+  [[ "$output" == *"codex/keeper2"* ]] || false
+  # … while writing neither the one-time flag nor a single marker: a hook that
+  # wrote the flag here would close the adoption window from a process that
+  # knows no engines, orphaning every tank in the store for good.
+  [ ! -e "$CLIKAE_HOME/state/tanks-adopted-v1" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/keeper/.clikae-tank" ]
+  [ ! -e "$CLIKAE_HOME/profiles/codex/keeper2/.clikae-tank" ]
+  # The store is still adoptable by the real front door afterwards.
+  run "$CLIKAE_BIN" tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"keeper"* ]] || false
+}
+
+@test "a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)" {
+  local tmp; tmp="$(mktemp -d "${BATS_TMPDIR:-/tmp}/clikae-guard-tmp.XXXXXX")"
+  rm -f "$CLIKAE_HOME/state/tanks-adopted-v1"
+  mkdir -p "$CLIKAE_HOME/state" "$CLIKAE_HOME/profiles/claude/keeper"
+  printf 'claude/cockpit-tank\n' > "$CLIKAE_HOME/state/cockpit"
+  chmod 500 "$CLIKAE_HOME"
+  TMPDIR="$tmp" run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  chmod 700 "$CLIKAE_HOME"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"claude/keeper"* ]] || false
+  # The hook has no EXIT trap of clikae's to clean a sentinel up, so it must
+  # never create one — nor emit the store-is-read-only WARN, which belongs to
+  # a clikae invocation the operator actually typed.
+  [ -z "$(ls -A "$tmp")" ]
+  [[ "$output" != *"read-only store"* ]] || false
+  rm -rf "$tmp"
 }

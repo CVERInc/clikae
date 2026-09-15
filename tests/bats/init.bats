@@ -192,3 +192,143 @@ load '../helpers'
   [[ "$out_content" == *"Created tank: claude/b"* ]] || false
   [[ "$out_content" == *"joined the shared memory group"* || "$out_content" == *"could not join the memory group"* ]] || false
 }
+
+# --- #61 round-3 P2-1: `init --adopt` — a real path back to a tank for a
+# directory that predates the one-time adoption sweep and now falls outside
+# it: the sweep only ever runs once, and `init` (without --adopt) refuses
+# ANY existing directory regardless of whether it looks like a tank — so
+# doctor's own "Not a tank directory" listing used to name a `Next:` step
+# (`clikae init <engine> <name>`) that always failed with "Tank already
+# exists", with no automatic way back at all.
+@test "init --adopt marks an existing engine-shaped directory a tank, untouched" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored/.claude.json"
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank" ]
+
+  run clikae init claude restored --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank" ]
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/restored/.clikae-tank")" = "claude" ]
+  # Content is untouched — adopt only ever adds the marker.
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/restored/.claude.json")" = '{"stub":true}' ]
+  run clikae tanks
+  [[ "$output" == *"restored"* ]] || { echo "$output"; false; }
+}
+
+@test "init --adopt refuses a directory that doesn't look like the named engine" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/empty"
+  run clikae init claude empty --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"doesn't look like"* || "$output" == *"no claude-shaped content"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/empty/.clikae-tank" ]
+}
+
+@test "init --adopt refuses a directory that does not exist" {
+  run clikae init claude nosuchdir --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No such directory"* ]] || { echo "$output"; false; }
+  [ ! -d "$CLIKAE_HOME/profiles/claude/nosuchdir" ]
+}
+
+@test "init --adopt on an already-adopted tank is a harmless no-op" {
+  clikae init claude already
+  run clikae init claude already --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"Already a tank"* ]] || { echo "$output"; false; }
+}
+
+@test "#61 round-4 P3-1: init --adopt --alias refuses instead of silently writing no alias" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored3"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored3/.claude.json"
+  run clikae init claude restored3 --adopt --alias
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not write shell aliases"* ]] || { echo "$output"; false; }
+  # Refused loudly, not silently — no marker written, no alias written.
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored3/.clikae-tank" ]
+  [ ! -f "$RC_FILE" ] || { echo "alias leaked into shell rc: $(cat "$RC_FILE")"; false; }
+}
+
+@test "#61 round-4 P3-1: init --adopt --no-template refuses instead of silently doing nothing" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored4"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored4/.claude.json"
+  run clikae init claude restored4 --adopt --no-template
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"never applies a permissions template"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/restored4/.clikae-tank" ]
+}
+
+@test "#61 round-4 P3-2: init --adopt refuses a hello.lock-shaped name even with real content" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/hello.lock"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/hello.lock/.claude.json"
+  run clikae init claude hello.lock --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"can never be a tank"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/profiles/claude/hello.lock/.clikae-tank" ]
+  run clikae tanks
+  [[ "$output" != *"hello.lock"* ]] || { echo "hello.lock listed as a tank: $output"; false; }
+}
+
+@test "#61 round-4 P3-6: init --adopt on a FILE says so and suggests something that works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  : > "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile --adopt
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is a file, not a directory"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"No such directory"* ]] || { echo "still claims it doesn't exist: $output"; false; }
+  # The suggested follow-up (after removing the file) must actually work.
+  rm -f "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "doctor's Next: line for a stray directory names --adopt, and it actually works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude/restored2"
+  printf '{"stub":true}\n' > "$CLIKAE_HOME/profiles/claude/restored2/.claude.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"restored2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"--adopt"* ]] || { echo "doctor's Next: line doesn't mention --adopt: $output"; false; }
+  run clikae init claude restored2 --adopt
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+# --- #61 round-5 P3-7: a name taken by a BROKEN SYMLINK. `[ -e ]` and
+# `[ -d ]` both follow symlinks, so a dangling one reads as "nothing there":
+# `--adopt` suggested `clikae init <engine> <name>`, and that command printed
+# `[ DONE ] Created tank` and THEN failed, because `local d; d="$(…)"` hides
+# the substitution's exit status from `set -e`.
+@test "#61 round-5 P3-7: init --adopt on a dangling symlink names it and suggests something that works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  ln -s /nowhere-at-all "$CLIKAE_HOME/profiles/claude/dangle"
+  run clikae init claude dangle --adopt
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"broken symlink"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"No such directory"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rm "* ]] || { echo "no removal step offered: $output"; false; }
+
+  # Follow the suggestion: remove it, then init — which must now work.
+  rm "$CLIKAE_HOME/profiles/claude/dangle"
+  run clikae init claude dangle --no-template
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/dangle/.clikae-tank" ]
+}
+
+@test "#61 round-5 P3-7: init on a dangling symlink fails with ONE outcome — no DONE line before the failure" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  ln -s /nowhere-at-all "$CLIKAE_HOME/profiles/claude/dangle2"
+  run clikae init claude dangle2 --no-template
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Created tank"* ]] || { echo "announced a tank it did not create: $output"; false; }
+  [[ "$output" == *"broken symlink"* ]] || { echo "$output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/claude/dangle2/.clikae-tank" ]
+}
+
+@test "#61 round-5 P3-7: init on a name taken by a FILE fails the same way, once" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  printf 'x\n' > "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile --no-template
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Created tank"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"not a directory"* ]] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/afile" ]
+}
