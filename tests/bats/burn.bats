@@ -4184,3 +4184,59 @@ STUB
   [ "$status" -eq 130 ] || { echo "probe exited $status, expected 130 (it re-raises the interrupt); it said: $(cat "$probe_out" 2>/dev/null)"; false; }
   [ "$alive" -eq 0 ] || { echo "the scan's child $gpid outlived the interrupt"; false; }
 }
+
+# P3-4 (round-6 review), end to end: one temp file shared by the whole scan
+# meant a writer that outlived its bound kept an open fd on the file the NEXT
+# repo reuses. `>` resets the file's LENGTH, never a survivor's OFFSET, so its
+# next write lands past a sparse hole — inside the next repo's results.
+# Measured pre-fix at function level: repo B's own parser accepted
+# `9999999999 /REPO-A-LEAKED/…` rows, and that forged mtime then won repo B's
+# activity ranking. The survivor here escapes with `setsid` (the one shape the
+# group kill genuinely cannot reach) and the two scans hand off through marker
+# files, so nothing in this test depends on a race being won.
+@test "burn #84 P3-4 (round-6 review): a write that outlives one repo's scan cannot land in the next repo's file list" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  command -v setsid >/dev/null 2>&1 || skip "setsid needed to build a writer the group kill cannot reach"
+  _left84_setup
+  local a="$TEST_HOME/repos/alpha" b="$TEST_HOME/repos/bravo" r
+  for r in "$a" "$b"; do
+    git init -q "$r"
+    git -C "$r" config user.name 'Burn test'
+    git -C "$r" config user.email 'burn@example.invalid'
+    git -C "$r" commit -qm initial --allow-empty
+    printf 'x\n' > "$r/dirty.txt"
+  done
+  local started="$BATS_TEST_TMPDIR/bravo-started" leaked="$BATS_TEST_TMPDIR/leak-written"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" -newer "*)
+    case "\$1" in
+      */alpha)
+        setsid bash -c 'printf "1111111111 /alpha/%0200d\n" 1; while [ ! -e "$started" ]; do sleep 0.05; done; printf "9999999999 /REPO-A-LEAKED/one\n9999999999 /REPO-A-LEAKED/two\n"; : > "$leaked"' &
+        exec sleep 100 ;;
+      */bravo)
+        : > "$started"
+        for _i in \$(seq 1 200); do [ -e "$leaked" ] && break; sleep 0.05; done ;;
+    esac ;;
+esac
+exec /usr/bin/find "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$a" --add-dir "$b" -- noop
+  [ "$status" -eq 1 ] || { echo "burn exited $status; output: $output"; false; }
+  # Both halves of the fixture really happened, or the assertion below is empty.
+  [ -e "$started" ] || { echo "bravo's scan never ran — nothing was being tested"; false; }
+  [ -e "$leaked" ] || { echo "the survivor never wrote — nothing was being tested"; false; }
+  [[ "$output" != *"REPO-A-LEAKED"* ]] || { echo "alpha's survivor leaked into the report: $output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+bravo = [r for r in rows if r["repo"].endswith("/bravo")]
+assert bravo, rows
+for f in bravo[0]["files"]:
+    assert "REPO-A-LEAKED" not in f, bravo[0]
+'
+}

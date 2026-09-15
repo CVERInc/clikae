@@ -1623,10 +1623,18 @@ _burn_left_behind() {
   # `burn` itself even after the bound has done its job. A regular file has
   # no such reader to block: the bound returns, the file is read, and
   # whatever the kill did or did not reach cannot hold the scan open.
-  # Created ONCE for the whole loop — the `>` below truncates it per root, so
-  # this costs one `mktemp` per scan, not one per repo per root.
-  local _lb_scan_file
-  _lb_scan_file="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-scan.XXXXXX" 2>/dev/null)" || _lb_scan_file=""
+  # P3-4 (round-6 review): created per (repo, root) scan, NOT once for the whole
+  # loop. One shared file plus `>` to truncate it per root was one `mktemp` per
+  # scan instead of one per iteration — and a writer that outlived its bound
+  # (the survivor this whole round exists because of) kept an open fd on it.
+  # `>` resets the LENGTH, never a survivor's file OFFSET, so its next write
+  # landed past a sparse hole in the NEXT repo's file. Measured: repo B's own
+  # parser accepted `9999999999 /REPO-A-LEAKED/file9` and three more like it,
+  # and that forged mtime then won repo B's `activity_ts` and its place in the
+  # three-level ranking. Each scan now gets its own `mktemp`, and it is removed
+  # the moment `sort` has read it — a survivor is then writing into an unlinked
+  # inode nothing will ever read again.
+  local _lb_scan_file=""
   # P2-1 (round-2 review), second layer: per-call 5s bounds any ONE hang,
   # but nothing capped the SUM — `repos=6` that each trip the 5s bound
   # measured 30s total, perfectly linear, and a real `--add-dir ~/Developer`
@@ -1718,6 +1726,7 @@ _burn_left_behind() {
       # No temp file (a full or unwritable $TMPDIR) means no file list for
       # this repo — the row itself still reports ahead/dirty, which is the
       # signal #84 is actually about; `files` is corroborating evidence.
+      _lb_scan_file="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-scan.XXXXXX" 2>/dev/null)" || _lb_scan_file=""
       [ -n "$_lb_scan_file" ] || continue
       rc_scan=0
       _burn_lb_bounded 5 find "$scan" -mindepth 1 \
@@ -1729,12 +1738,19 @@ _burn_left_behind() {
            -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + \
         > "$_lb_scan_file" 2>/dev/null || rc_scan=$?
       if [ "$rc_scan" -eq 124 ]; then
+        rm -f "$_lb_scan_file" 2>/dev/null || true
+        _lb_scan_file=""
         repo_timeout=1
         continue
       fi
       # `sort` reads a regular file that is already complete and closed —
       # nothing the bound killed can keep this command substitution open.
       scan_out="$(sort -rn < "$_lb_scan_file" 2>/dev/null)" || scan_out=""
+      # Unlinked as soon as its contents are in hand: every path out of this
+      # iteration (including the two `break`s below) has already removed it,
+      # and the guard after the loop is the last resort, not the plan (P3-4).
+      rm -f "$_lb_scan_file" 2>/dev/null || true
+      _lb_scan_file=""
       # P3-3 (round-2 review, documented not fixed): each batched stat
       # record is newline-delimited (`sort -rn` needs lines), so a filename
       # containing a literal newline byte splits across two `read`s here —
@@ -1768,7 +1784,7 @@ _burn_left_behind() {
     lb_dirty+=("$dirty"); lb_files+=("$files"); lb_ts+=("$repo_ts")
     lb_timeout+=("$repo_timeout")
   done
-  [ -z "$_lb_scan_file" ] || rm -f "$_lb_scan_file"
+  [ -z "$_lb_scan_file" ] || rm -f "$_lb_scan_file" 2>/dev/null || true
   local total=${#lb_repo[@]} shown=0 over=0
   local -a order=()
   if [ "$total" -gt 0 ]; then
