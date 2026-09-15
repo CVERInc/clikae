@@ -667,6 +667,79 @@ SHIM
   [[ "$output" != *"claude/mmm"* ]] || false
 }
 
+# --- #61 round-6 P2-2: --off is the escape hatch of LAST RESORT ---------------
+# It may not inherit an enumerator whose whole job is to EXCLUDE directories.
+# The moment a guarded tank lost its `.clikae-tank` marker it dropped out of
+# `list_all_profiles`, `--off` swept past it without seeing it, printed
+# `cockpit: off`, returned 0, and cleared `state/cockpit` — leaving the hook
+# installed and nothing on disk pointing at it. The hook does not read
+# `state/cockpit`, so it kept refusing every Agent spawn in that tank forever,
+# and `doctor` reported the directory as an ordinary stray without ever
+# mentioning the guard.
+@test "#61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE" {
+  clikae init claude pilot
+  clikae init claude other
+  clikae cockpit claude pilot
+  _guard_installed "$CLIKAE_HOME/profiles/claude/pilot/settings.json"
+  rm -f "$CLIKAE_HOME/profiles/claude/pilot/.clikae-tank"
+  run clikae cockpit --off
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/pilot/settings.json"
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+  # the ruler: no live settings.json anywhere in the store still carries it
+  run bash -c 'grep -l cockpit-guard "$1"/profiles/*/*/settings.json 2>/dev/null' _ "$CLIKAE_HOME"
+  [ -z "$output" ] || { echo "left behind: $output"; false; }
+}
+
+@test "#61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  clikae init claude pilot
+  clikae cockpit claude pilot
+  chmod 000 "$CLIKAE_HOME/profiles/claude/pilot/.clikae-tank"
+  run clikae cockpit --off
+  local st="$status" out="$output"
+  chmod 644 "$CLIKAE_HOME/profiles/claude/pilot/.clikae-tank" 2>/dev/null || true
+  [ "$st" -eq 0 ] || { echo "$out"; false; }
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/pilot/settings.json"
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
+@test "#61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record" {
+  clikae init claude pilot
+  clikae cockpit claude pilot
+  rm -rf "$CLIKAE_HOME/profiles/claude/pilot"
+  run clikae cockpit --off
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"claude/pilot"* ]] || { echo "silent about the missing tank: $output"; false; }
+  [[ "$output" == *"no longer exists"* ]] || { echo "$output"; false; }
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
+@test "#61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept" {
+  # The crash-recovery case from the test above, plus the marker loss: the
+  # state names B, the guard is on A, and A is no longer enumerable.
+  clikae init claude A
+  clikae init claude B
+  clikae cockpit claude A
+  printf 'claude/B\n' > "$CLIKAE_HOME/state/cockpit"
+  rm -f "$CLIKAE_HOME/profiles/claude/A/.clikae-tank"
+  run clikae cockpit --off
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  [ ! -f "$CLIKAE_HOME/state/cockpit" ]
+}
+
+@test "#61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit" {
+  clikae init claude real
+  clikae cockpit claude real
+  ln -s "$CLIKAE_HOME/profiles/claude/real" "$CLIKAE_HOME/profiles/claude/alias"
+  run clikae cockpit --off
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'cockpit guard removed')" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"not installed here"* ]] || { echo "$output"; false; }
+  run ! _guard_installed "$CLIKAE_HOME/profiles/claude/real/settings.json"
+}
+
 @test "--off clears a live timed allowance too, not just the guard and state (#63 P1-3)" {
   clikae init claude A
   clikae cockpit claude A

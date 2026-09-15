@@ -111,6 +111,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not yet a tank now refuses (`Not a tank: …`) instead of writing
   `settings.json` into it — naming a bare directory used to be enough to seed
   it into existence as a permanent tank on the next walk (#61 round 2).
+- `clikae cockpit --off` now removes the guard from a cockpit tank that is no
+  longer enumerable — one whose `.clikae-tank` marker went missing or became
+  unreadable (a restored backup, a sync tool). It used to sweep the same
+  "what is a tank" list everything else reads, so such a tank was invisible to
+  it: `--off` printed `cockpit: off`, exited 0, and cleared `state/cockpit`
+  with the PreToolUse hook still installed and nothing left on disk naming it,
+  so that tank went on refusing every in-session Agent spawn with no way to
+  find out why. `--off` now unguards the tank the state file names directly,
+  and sweeps every `settings.json` under the profile store that actually
+  carries clikae's guard marker. When the recorded cockpit's directory is gone
+  altogether it says so instead of clearing the record silently (#61 round 6).
 - `doctor`, `board`, and `status` no longer re-walk the whole profile store
   once per adapter (`doctor` was ~20 full walks on one store via `scan_clis`'
   15-adapter fan-out); each now warms one per-process cache before rendering.
