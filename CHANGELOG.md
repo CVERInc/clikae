@@ -262,7 +262,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery `find` now counts as one honest "more" instead. `BURN_LB_GIT`
   is resolved with `type -P`, not `command -v`, which returned a shadowing
   shell function's bare name instead of a path when the caller had
-  `export -f`'d one named `git`.
+  `export -f`'d one named `git`. Round-5 review of #87: the per-call bound
+  now kills the bounded command's whole PROCESS GROUP — `find`'s own
+  `-exec` forks, so killing `find` alone left a `stat` running that held
+  the scan's output open and could hang `burn` indefinitely with no rows
+  and no JSON at all; "did this time out" is decided by the watchdog
+  instead of by an integer `$SECONDS` comparison that reported phantom
+  timeouts for commands that finished in time; a discovery `find` that
+  hits its own ceiling now says "discovery timed out", not "scan budget
+  exhausted"; and `$PWD`/`--add-dir` are resolved before any `find` runs,
+  so a repo already discovered at the budget boundary is reported instead
+  of dropped. Everything those rounds deliberately left unfixed is now
+  tracked in #112 rather than in review notes.
 - `clikae burn` guards every headless claude run against sub-agent delegation:
   `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
   tools flag of its own (both the composed recipe and the raw `--` form, and
