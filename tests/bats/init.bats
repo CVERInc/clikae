@@ -291,3 +291,44 @@ load '../helpers'
   run clikae init claude restored2 --adopt
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# --- #61 round-5 P3-7: a name taken by a BROKEN SYMLINK. `[ -e ]` and
+# `[ -d ]` both follow symlinks, so a dangling one reads as "nothing there":
+# `--adopt` suggested `clikae init <engine> <name>`, and that command printed
+# `[ DONE ] Created tank` and THEN failed, because `local d; d="$(…)"` hides
+# the substitution's exit status from `set -e`.
+@test "#61 round-5 P3-7: init --adopt on a dangling symlink names it and suggests something that works" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  ln -s /nowhere-at-all "$CLIKAE_HOME/profiles/claude/dangle"
+  run clikae init claude dangle --adopt
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"broken symlink"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"No such directory"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rm "* ]] || { echo "no removal step offered: $output"; false; }
+
+  # Follow the suggestion: remove it, then init — which must now work.
+  rm "$CLIKAE_HOME/profiles/claude/dangle"
+  run clikae init claude dangle --no-template
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/dangle/.clikae-tank" ]
+}
+
+@test "#61 round-5 P3-7: init on a dangling symlink fails with ONE outcome — no DONE line before the failure" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  ln -s /nowhere-at-all "$CLIKAE_HOME/profiles/claude/dangle2"
+  run clikae init claude dangle2 --no-template
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Created tank"* ]] || { echo "announced a tank it did not create: $output"; false; }
+  [[ "$output" == *"broken symlink"* ]] || { echo "$output"; false; }
+  [ ! -e "$CLIKAE_HOME/profiles/claude/dangle2/.clikae-tank" ]
+}
+
+@test "#61 round-5 P3-7: init on a name taken by a FILE fails the same way, once" {
+  mkdir -p "$CLIKAE_HOME/profiles/claude"
+  printf 'x\n' > "$CLIKAE_HOME/profiles/claude/afile"
+  run clikae init claude afile --no-template
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"Created tank"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"not a directory"* ]] || { echo "$output"; false; }
+  [ -f "$CLIKAE_HOME/profiles/claude/afile" ]
+}

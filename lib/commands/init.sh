@@ -98,6 +98,14 @@ EOF
     if [ -e "$d" ] && [ ! -d "$d" ]; then
       log_fail "$cli/$profile  ($d) is a file, not a directory — nothing to adopt. Move or remove it, then \`clikae init $cli $profile\` to create a tank there."
     fi
+    # #61 round-5 P3-7: `[ -e ]` FOLLOWS symlinks, so a dangling one answers
+    # no to both tests above and fell into "No such directory … use `clikae
+    # init $cli $profile` instead" — a suggestion that cannot work, because
+    # the name is taken by the broken link (and, before the same round's fix
+    # to the create path, one that printed "Created tank" before failing).
+    if [ -L "$d" ] && [ ! -d "$d" ]; then
+      log_fail "$cli/$profile  ($d) is a broken symlink (it points at $(readlink "$d" 2>/dev/null), which doesn't exist) — nothing to adopt. Remove it (\`rm \"$d\"\`), then \`clikae init $cli $profile\` to create a tank there."
+    fi
     if [ ! -d "$d" ]; then
       log_fail "No such directory: $cli/$profile  ($d) — nothing to adopt. Use \`clikae init $cli $profile\` to create a new tank instead."
     fi
@@ -128,9 +136,23 @@ EOF
   if profile_exists "$cli" "$profile"; then
     log_fail "Tank already exists: $cli/$profile  ($(profile_dir "$cli" "$profile"))"
   fi
-
-  local d
-  d="$(ensure_profile --create "$cli" "$profile")"
+  # #61 round-5 P3-7: profile_exists is `[ -d ]`, so a name already taken by
+  # something that is NOT a directory — a broken symlink, a file, a fifo —
+  # sailed past it into ensure_profile, whose `mkdir -p` then failed with its
+  # own error. That failure did not abort: `local d; d="$(…)"` reports the
+  # exit status of `local`, never of the substitution, so `set -e` saw
+  # success and init printed "[ DONE ] Created tank" before the next command
+  # failed for real. One outcome, one line: name what is in the way here.
+  local d; d="$(profile_dir "$cli" "$profile")"
+  if [ -L "$d" ]; then
+    log_fail "Cannot create $cli/$profile: $d is a broken symlink (it points at $(readlink "$d" 2>/dev/null), which doesn't exist). Remove it (\`rm \"$d\"\`), then run this again."
+  fi
+  if [ -e "$d" ]; then
+    log_fail "Cannot create $cli/$profile: $d already exists and is not a directory. Move or remove it, then run this again."
+  fi
+  # `|| return 1`, not a bare assignment: see the note above — an assignment
+  # to a `local` swallows the substitution's exit status entirely.
+  d="$(ensure_profile --create "$cli" "$profile")" || return 1
   log_done "Created tank: $cli/$profile  ($d)"
 
   if declare -F adapter_init >/dev/null; then

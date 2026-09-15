@@ -1089,7 +1089,12 @@ ensure_profile() {
   d="$(profile_dir "$cli" "$profile")"
   case "$mode" in
     --create)
-      mkdir -p "$d"
+      # #61 round-5 P3-7: log_fail, not a bare mkdir. This function runs
+      # inside a command substitution, where a silent failure here reaches
+      # the caller as an empty string and an exit status `local x="$(…)"`
+      # throws away — which is how `init` came to print "Created tank" for a
+      # directory it had not created.
+      mkdir -p "$d" || log_fail "Could not create $d"
       # Stamp the state-schema version alongside the first state we create, so an
       # existing install is always identifiable for future migrations (read commands
       # then never need to write it). Guarded — older callers may not have it sourced.
