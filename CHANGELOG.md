@@ -49,6 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The board's Resume index notices when a burn sidecar grows, so a burn no
+  longer costs the Continue list a row permanently. The index's per-tank cap
+  is widened by that tank's recorded burn count, but staleness was
+  fingerprinted from transcripts only — and `clikae burn` records a session's
+  id AFTER the engine exits, so the ordering it actually produces (transcript
+  written, board rendered, id recorded) built the index at the narrower cap
+  and then never disagreed with itself again. Measured: ten sessions plus one
+  burn rendered nine rows, on that frame and on every later one, until
+  `state/board` was deleted; with many burns indexed before their ids landed,
+  the whole Continue block rendered empty with no truncation note. The tank's
+  sidecar (both engine-name spellings — agy's lives under `agy`) is part of
+  the freshness signal now, and a generation records the cap its rows were cut
+  at so a rebuild re-cuts them from its own manifest — no transcript is
+  re-read, and only the tank whose sidecar changed is touched (#62).
 - The board's Resume index is built at the same per-tank widened cap
   `clikae home` asks with, so a tank full of burn one-shots no longer renders
   an EMPTY Continue list. Burn sessions are excluded AFTER the adapter

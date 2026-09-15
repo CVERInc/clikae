@@ -493,14 +493,14 @@ _board_shims() {
   stamp="$(date -d '30 days ago' '+%Y%m%d%H%M' 2>/dev/null || date -v-30d '+%Y%m%d%H%M')"
   find "$dir" -name '*.jsonl' ! -name session-0.jsonl -exec touch -t "$stamp" {} +
   # Deliberately no `board_state_refresh` call here: the fingerprint
-  # (`_board_transcript_fingerprint`) is independent of any generation ever
+  # (`_board_tank_fingerprint`) is independent of any generation ever
   # having been built — this test is about IT surviving ARG_MAX, not about
   # a full cold rebuild's own (already fork-heavy, already covered by
   # receipt 2's timing table) cost at 20,000 files.
   local before after
-  before="$(_board_transcript_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
+  before="$(_board_tank_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
   printf '{"type":"ai-title","aiTitle":"Fixture 0 appended"}\n' >> "$dir/session-0.jsonl"
-  after="$(_board_transcript_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
+  after="$(_board_tank_fingerprint claude "$CLIKAE_HOME/profiles/claude/work")"
   [ "$before" != "$after" ]
   # Re-run the SAME shape of pipeline `_board_stat_rows` uses, but WITHOUT
   # its `2>/dev/null` (that one only hides a missing directory — see its own
@@ -803,8 +803,8 @@ _b8_tank() {
     # the canonical empty-set value, on both sides
     local gen saved live
     gen="$root/$(cat "$root/current")"
-    saved="$(cat "$gen/transcripts-fp")"
-    live="$(_board_transcript_fingerprint "$eng" "$dir")"
+    saved="$(cat "$gen/tank-fp")"
+    live="$(_board_tank_fingerprint "$eng" "$dir")"
     [ "$saved" = "$live" ]
     [ "$saved" = "$(printf '' | cksum)" ]
     run board_stale "$eng" "$dir" "$gen"
@@ -826,7 +826,7 @@ _b8_tank() {
     _board_gen_cache_clear
     board_state_refresh claude "$dir"
     gen="$root/$(cat "$root/current")"
-    [ "$(cat "$gen/transcripts-fp")" = "$(_board_transcript_fingerprint claude "$dir")" ]
+    [ "$(cat "$gen/tank-fp")" = "$(_board_tank_fingerprint claude "$dir")" ]
   done
 }
 
@@ -1269,9 +1269,166 @@ _b8_tank() {
   local root gen
   root="$(board_root "$B8_TANK")"
   gen="$root/$(cat "$root/current")"
-  [ "$(cat "$gen/transcripts-fp")" = "$(_board_transcript_fingerprint claude "$B8_TANK")" ]
+  [ "$(cat "$gen/tank-fp")" = "$(_board_tank_fingerprint claude "$B8_TANK")" ]
   run board_stale claude "$B8_TANK" "$gen"
   [ "$status" -ne 0 ]
   [ -n "$(board_find claude "$B8_TANK" session-2)" ]
   [ -n "$(board_find claude "$B8_TANK" session-0)" ]
+}
+
+# --- 🔴 P2-1 (2026-09-15, round-10 review): the burn sidecar is part of the
+# tank's freshness signal ------------------------------------------------------
+# The published `recent/` entry is cut at a per-tank cap widened by that tank's
+# hidden burn count, but staleness used to be fingerprinted from TRANSCRIPTS
+# ONLY — and the sidecar is an input to the cap, not to the transcripts. So the
+# one ordering burn.sh actually produces (engine writes the transcript, the
+# board renders, and only THEN does burn record the sid — lib/commands/burn.sh
+# :1106 and :4288, both after the engine process exits) built the entry at the
+# OLD, narrower cap and then never disagreed with its own fingerprint again.
+# Measured before the fix: ten human sessions plus one burn rendered NINE human
+# rows, on that frame and on every later one, permanently — only deleting
+# state/board brought the tenth back. These three tests are that measurement,
+# and the constructed shape that emptied the whole block, as gates.
+
+@test "board (round-10 P2-1): a sid recorded AFTER the render still leaves ten human rows on the next frame" {
+  clikae init claude a >/dev/null
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  local i n sid humans
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    n="$(printf '%02d' "$i")"
+    sid="11111111-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2020010100$n" "$d/$sid.jsonl"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  humans="$(printf '%s\n' "$output" | grep -c 'HUMAN-' || true)"
+  [ "$humans" -eq 10 ] || { echo "baseline is not ten rows: $humans"; echo "$output"; false; }
+
+  # burn's own order, step by step: transcript first …
+  sid="22222222-0000-4000-8000-000000000001"
+  printf '{"type":"ai-title","aiTitle":"BURN-01 session","sessionId":"%s"}\n' "$sid" > "$d/$sid.jsonl"
+  touch -t "202101010001" "$d/$sid.jsonl"
+  # … then a render (the cockpit is drawing while the burn runs) …
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # … and only THEN the sid, once the engine process has exited.
+  printf '%s\trun-1\t1700000000\n' "$sid" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+
+  # The next frame, without anyone touching state/board: ten, not nine.
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  humans="$(printf '%s\n' "$output" | grep -c 'HUMAN-' || true)"
+  [ "$humans" -eq 10 ] || { echo "lost a human row to the sidecar: $humans"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "board (round-10 P2-1): sids appended to an entry already built at the old cap never empty the Continue block" {
+  clikae init claude a >/dev/null
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  local i n sid humans
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    n="$(printf '%02d' "$i")"
+    sid="11111111-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2020010100$n" "$d/$sid.jsonl"
+  done
+  # Fifty burn transcripts, all newer than every human one, none recorded yet.
+  for ((i = 1; i <= 50; i++)); do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "202101010101" "$d/$sid.jsonl"
+  done
+  cd "$work"
+  # Frame 1 builds the entry at the un-widened cap: ten rows, all of them burns.
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Now the sids land, with NO transcript touched.
+  for ((i = 1; i <= 50; i++)); do
+    n="$(printf '%02d' "$i")"
+    printf '%s\trun-%s\t1700000000\n' "22222222-0000-4000-8000-0000000000$n" "$n" \
+      >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  humans="$(printf '%s\n' "$output" | grep -c 'HUMAN-' || true)"
+  # Ten rows, or an explicit truncation line — never a silently empty block.
+  if [ "$humans" -ne 10 ]; then
+    [[ "$output" == *"list truncated"* ]] || {
+      echo "Continue block went quiet: HUMAN rows = $humans, no truncation line"
+      echo "$output"; false; }
+  fi
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "board (round-10 P2-1): a sidecar change rebuilds that tank ONCE, not on every frame" {
+  clikae init claude a >/dev/null
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  # Burn sessions only — the shape where a sidecar write is the ONLY thing that
+  # ever changes, so a fingerprint that disagreed with itself would rebuild the
+  # generation on every single frame.
+  local i n sid
+  for ((i = 1; i <= 5; i++)); do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "202101010101" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  cd "$work"
+  _board_source
+  local root; root="$(board_root "$CLIKAE_HOME/profiles/claude/a")"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local g0 g1 g2 j
+  g0="$(cat "$root/current")"
+  [ -n "$g0" ] || { echo "no generation published"; false; }
+  # One sidecar write, no transcript touched.
+  printf '%s\trun-99\t1700000000\n' "22222222-0000-4000-8000-000000000099" \
+    >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  g1="$(cat "$root/current")"
+  [ "$g1" != "$g0" ] || { echo "the sidecar write did not make the tank stale"; false; }
+  # Every frame after it reuses that generation: exactly one rebuild, not a storm.
+  for j in 1 2 3; do
+    CLIKAE_HOME_RECENT_MAX=10 run clikae
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    g2="$(cat "$root/current")"
+    [ "$g2" = "$g1" ] || { echo "rebuild storm: frame $j published $g2, expected $g1"; false; }
+  done
+}
+
+@test "board (round-10 P2-1): an agy tank's sidecar is fingerprinted under the 'agy' alias" {
+  # burn.sh writes antigravity's sidecar under the literal "agy" while this
+  # file's engine name is "antigravity" — the same trap `_burn_tank_hidden`
+  # documents. Reading only "$engine" here would leave every agy tank with
+  # exactly the bug this round fixes, and no claude/codex fixture can catch it.
+  clikae init antigravity a >/dev/null
+  _board_source
+  local dir="$CLIKAE_HOME/profiles/antigravity/a"
+  local before after
+  before="$(_board_sidecar_rows antigravity "$dir" | wc -l)"
+  [ "$before" -eq 0 ] || { echo "expected no sidecar rows, got $before"; false; }
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/agy"
+  printf 'ag-1\trun-1\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/agy/a"
+  after="$(_board_sidecar_rows antigravity "$dir" | wc -l)"
+  [ "$after" -eq 1 ] || { echo "the agy alias is not in the fingerprint: $after"; false; }
+  # And a claude tank of the SAME name must not be dragged along by it.
+  [ "$(_board_sidecar_rows claude "$CLIKAE_HOME/profiles/claude/a" | wc -l)" -eq 0 ] \
+    || { echo "claude's fingerprint picked up agy's sidecar"; false; }
 }

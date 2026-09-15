@@ -82,7 +82,9 @@
 # The fix is to stop guessing: `board_stale` now re-lists EVERY transcript
 # file under the tank (the exact same `find` `board_state_refresh` already
 # runs to build the generation) and re-stats every one of them in a SINGLE
-# batched call (`_board_transcript_fingerprint`), on every read. That is real
+# batched call (`_board_tank_fingerprint`), on every read — plus one stat of
+# this tank's burn sidecar, the one input to the published entry that is not
+# a transcript (round-10 P2-1). That is real
 # O(files) work, but it is `find` + `stat` ONLY — no file is opened, no line
 # is parsed. #62's actual cost was PARSING (a title/recap read, a rate-limit
 # scan) on every frame; stat never did that. Measured on this host: a single
@@ -99,7 +101,7 @@
 # recorded-file set it replaced, codex's day/month/year scan-root chain, and
 # every per-engine "scan root" mtime signal. All of them existed only to
 # approximate "did anything change under this tank" without paying a full
-# list+stat — which is exactly what `_board_transcript_fingerprint` below now
+# list+stat — which is exactly what `_board_tank_fingerprint` below now
 # does directly, so there is nothing left for them to approximate.
 board_key() { local k; k="$(printf '%s' "$1" | cksum)"; printf '%s' "${k%% *}"; }
 board_root() { printf '%s/state/board/%s' "${CLIKAE_HOME:-$HOME/.clikae}" "$(board_key "$1")"; }
@@ -399,7 +401,7 @@ _board_engine_root() {
 # whose mtime granularity is one whole second (this repo's CI hosts and this
 # developer's ext4/tmpfs are 2-3 ms, measured — but HFS+, SMB and some NFS
 # mounts are not), a `summary.json` rewritten to the SAME size inside the same
-# second changes neither mtime nor size, and `_board_transcript_fingerprint`
+# second changes neither mtime nor size, and `_board_tank_fingerprint`
 # cannot see it. Consequence is bounded: the Resume list's ORDER for that grok
 # session goes one edit stale until anything else in the tank changes. Fuel
 # dots are unaffected (grok has no rate-limit window here) and no answer is
@@ -488,14 +490,91 @@ _board_stat_rows() {
 _board_fingerprint_rows() {
   cksum
 }
-_board_transcript_fingerprint() {
-  _board_stat_rows "$1" "$2" | _board_fingerprint_rows
+
+# _board_sidecar_rows <engine> <dir> -> one stat row, in the exact
+# "<mtime_ns>\037<size>\037<path>" shape `_board_stat_rows` emits, for each
+# burn sidecar file that can hide sessions on THIS tank. Nothing (zero bytes,
+# rc=0) when the tank has no sidecar, which is the common case and costs zero
+# forks.
+#
+# 🔴 P2-1, round-10 review. The `recent/` entry this index publishes is cut at
+# a per-tank cap widened by that tank's hidden burn count
+# (`_burn_tank_hidden`, lib/commands/home.sh; see board_state_refresh), but
+# staleness was fingerprinted from TRANSCRIPTS ONLY — and the sidecar is an
+# input to the cap, not to the transcripts. burn.sh records a burn's sid
+# AFTER the engine process exits (burn.sh:1106, :4288), so "transcript
+# appears, board renders, sid lands" is burn's own ordering, not a contrived
+# one: the entry got built at the OLD, narrower cap and nothing afterwards
+# ever disagreed with the fingerprint, so it was never rebuilt. Measured on
+# this branch before this fix: 10 human sessions + one burn => 9 human rows,
+# on that render and on every later one, permanently — only deleting
+# `state/board` brought the tenth back. Constructed wider (an entry built at
+# cap 10 out of 50 burn transcripts, then 50 sids appended with no transcript
+# touched), the whole Continue block rendered EMPTY, with no truncation note.
+# main does not have either shape. Putting the sidecar in the freshness
+# signal makes a sidecar change stale exactly the tank it belongs to — the
+# rebuild stays bounded to that tank, and a tank with no sidecar keeps
+# hashing byte-for-byte what it hashed before.
+#
+# BOTH engine spellings, because burn.sh has always written agy's sidecar
+# under the literal "agy" while this file (and profiles_root) call the engine
+# "antigravity" — the same translation `_burn_tank_hidden` carries and
+# `rename_tank_state` (lib/core/profile_store.sh) warns about. Reading only
+# "$engine" here would leave every agy tank with exactly the bug this fixes.
+# Only antigravity gets the second path: "agy" under some OTHER engine's name
+# is a different engine's tank, and hashing it here would rebuild this tank
+# for a change that cannot affect its cap.
+#
+# stat, not a content hash: this is ONE file per tank (the transcripts are
+# thousands of them) and mtime+size is already the currency the rest of this
+# fingerprint trusts. The sidecar only ever grows by whole lines or is
+# rewritten shorter by `clikae clean`'s GC, so a change that moves neither
+# size nor mtime is not a shape this store produces.
+_board_sidecar_rows() {
+  local engine="$1" dir="$2" tank base f
+  tank="${dir%/}"; tank="${tank##*/}"
+  [ -n "$tank" ] || return 0
+  base="${CLIKAE_HOME:-$HOME/.clikae}/state/burn-sessions"
+  set -- "$base/$engine/$tank"
+  if [ "$engine" = "antigravity" ]; then
+    set -- "$@" "$base/agy/$tank"
+  fi
+  _clikae_statv
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    if [ "$_CLIKAE_STAT_FMT" = '%Y %n' ]; then
+      stat -c $'%.9Y\037%s\037%n' "$f" 2>/dev/null || true
+    else
+      stat -f $'%Fm\037%z\037%N' "$f" 2>/dev/null || true
+    fi
+  done
+}
+
+# _board_tank_fingerprint <engine> <dir> [transcript-rows-file] [sidecar-rows-file]
+# -> the fingerprint of everything this tank's published generation depends
+# on: every transcript's stat row, then this tank's burn sidecar row(s).
+#
+# THE ONE composition, for both sides — the round-7 P1-2 rule (see
+# `_board_fingerprint_rows` above) applied to the wider signal: reader and
+# writer must hash the same bytes for the same disk state, empty halves
+# included. Either half may be handed over as a FILE the caller already
+# collected (board_stale hands over the rows it just walked; refresh hands
+# over both), never through `$( )`, which strips the trailing newline that
+# tells "no rows" apart from "one empty row".
+_board_tank_fingerprint() {
+  local engine="$1" dir="$2" rows="${3:-}" sc="${4:-}"
+  {
+    if [ -n "$rows" ]; then cat "$rows"; else _board_stat_rows "$engine" "$dir"; fi
+    if [ -n "$sc" ]; then cat "$sc"; else _board_sidecar_rows "$engine" "$dir"; fi
+  } | _board_fingerprint_rows
 }
 
 # board_stale <engine> <dir> <generation-path> -> success (0) when the
 # published generation no longer matches what is on disk for this tank.
-# ONE signal, for every engine: `_board_transcript_fingerprint` re-lists and
-# re-stats every transcript this tank has, right now, and the result is
+# ONE signal, for every engine: `_board_tank_fingerprint` re-lists and
+# re-stats every transcript this tank has — AND its burn sidecar, which is an
+# input to the cap the published entry was cut at, not to the transcripts
+# (round-10 P2-1; see `_board_sidecar_rows`) — right now, and the result is
 # compared for EQUALITY against what `board_state_refresh` recorded at
 # publish — never ">" against a wall-clock stamp, since a fixture (or a
 # clock skew) that dates a file into the future is a legitimate, existing
@@ -518,16 +597,24 @@ _board_transcript_fingerprint() {
 board_stale() {
   local engine="$1" dir="$2" gen="$3" rowsout="${4:-}" saved cur
   [ -f "$gen/updated" ] || return 0
-  [ -f "$gen/transcripts-fp" ] || return 0
+  # `tank-fp`, not round-10's `transcripts-fp`: the signal now covers the burn
+  # sidecar too (see _board_sidecar_rows), and a generation written before
+  # this fix has no file under this name, so it reads as stale and is rebuilt
+  # ONCE — incrementally, since its manifest and format are still valid. The
+  # same is true downgrading: an older clikae finds no `transcripts-fp` and
+  # rebuilds once. Neither direction can read the other's fingerprint as if it
+  # vouched for the same thing, which is the failure this rename exists to
+  # make impossible.
+  [ -f "$gen/tank-fp" ] || return 0
   # An older layout is not "fresh data in a shape I can read" — see
   # _BOARD_GEN_FORMAT's own header.
   _board_gen_format_ok "$gen" || return 0
-  IFS= read -r saved < "$gen/transcripts-fp"
+  IFS= read -r saved < "$gen/tank-fp"
   if [ -n "$rowsout" ]; then
     _board_stat_rows "$engine" "$dir" > "$rowsout" || return 0
-    cur="$(_board_fingerprint_rows < "$rowsout")"
+    cur="$(_board_tank_fingerprint "$engine" "$dir" "$rowsout")"
   else
-    cur="$(_board_transcript_fingerprint "$engine" "$dir")"
+    cur="$(_board_tank_fingerprint "$engine" "$dir")"
   fi
   [ "$cur" = "$saved" ] || return 0
   return 1
@@ -1041,6 +1128,53 @@ _board_cold_sidscope_read() {
     '
 }
 
+# _board_write_recent_entries <gen> <n> <candidates-file> -> writes every
+# `recent/<key(scope)>` entry this generation owns: the newest <n> sessions
+# per scope, cut here and nowhere else. The candidates file is one
+# "<key(scope)>\037<scope>\037<mtime_sec>\037<sid>" line per session, in any
+# order; one `sort` (RAW SCOPE asc, mtime desc) then one awk that writes each
+# scope's entry in a single pass.
+#
+# TWO callers, ONE spelling (round-10 P2-1): the cold build, and the re-cut an
+# incremental rebuild runs when this tank's cap moved (see `recent-cap` in
+# board_state_refresh). The re-cut has to produce byte-identical entries to a
+# cold build of the same disk state — that equality is what makes "the sidecar
+# grew" cheap instead of a full rebuild — and two copies of a sort spec plus an
+# awk is not a thing that stays equal.
+#
+# Grouped by the raw scope, NOT by the entry name (round-8 fix review P1-2):
+# if two scopes ever did land on one name, grouping by the name merges their
+# sessions into a single file under whichever scope's `#scope` header came
+# first, and board_recent's header check then lets THAT scope through holding
+# the other's rows — a wrong answer, which is exactly what the entry-name
+# header promises can never happen. Grouped by scope, the second group reopens
+# the name with `>` and truncates it, so the loser reads as a MISS, which is
+# what that promise actually says.
+# "Is this still the same scope?" is `bsame`, under LC_ALL=C, never
+# `sc != cur`: macOS's awk answers `!=` with strcoll(), and its UTF-8
+# collation calls sibling CJK directories EQUAL, which merged 專案二's
+# sessions into 專案一's entry (see `bsame`'s header).
+_board_write_recent_entries() {
+  local gen="$1" n="$2" cand="$3"
+  [ -s "$cand" ] || return 0
+  LC_ALL=C sort -t$'\037' -k2,2 -k3,3rn "$cand" | LC_ALL=C awk -v gen="$gen" -v n="$n" "$_BOARD_EKEY_AWK"'
+    BEGIN { S = sprintf("%c", 31) }
+    {
+      i = index($0, S); k = substr($0, 1, i - 1); rest = substr($0, i + 1)
+      j = index(rest, S); sc = substr(rest, 1, j - 1); rest = substr(rest, j + 1)
+      j = index(rest, S); mt = substr(rest, 1, j - 1); sid = substr(rest, j + 1)
+      if (NR == 1 || !bsame(sc, cur)) {
+        if (curf != "") close(curf)
+        cur = sc; c = 0
+        curf = gen "/recent/" k
+        print "#scope" S sc > curf
+      }
+      if (c < n) { print mt S sid > curf; c++ }
+    }
+    END { if (curf != "") close(curf) }
+  '
+}
+
 # board_state_refresh <engine> <dir> [rows-file]
 #
 # <rows-file>, when it exists, is `_board_stat_rows` output the CALLER already
@@ -1053,6 +1187,49 @@ board_state_refresh() (
   local _CLIKAE_BOARD=0 n="${CLIKAE_HOME_RECENT_MAX:-10}"
   case "$engine" in claude|codex|antigravity|grok) ;; *) return 0 ;; esac
   case "$n" in ''|*[!0-9]*) n=10 ;; esac
+  umask 077
+  # P3-4 (2026-09-12 round-2 fix review): load_adapter now runs BEFORE
+  # mktemp -d, not after — a load failure used to leave a generation
+  # directory behind that nothing would ever point `current` at (harmless
+  # once board_gc_generations' keep-5 sweep started catching it, but there is
+  # no reason to create it at all when this call is about to bail anyway).
+  load_adapter "$engine" >/dev/null 2>&1 || return 0
+  root="$(board_root "$dir")"
+  mkdir -p "$root" || return 0
+
+  # round-6 fix review P1-2: the generation this call is about to SUPERSEDE
+  # is the carry-forward source everything below reads from — captured
+  # before `mktemp -d` so a concurrent reader's `current` pointer stays
+  # valid until this whole rebuild finishes and is published atomically. No
+  # usable manifest (never refreshed before, or an older pre-round-6
+  # generation) is treated exactly like no previous generation at all: a
+  # cold build.
+  oldgen=""
+  if [ -f "$root/current" ]; then
+    oldname=""
+    IFS= read -r oldname < "$root/current"
+    case "$oldname" in generation.*) [ -d "$root/$oldname" ] && oldgen="$root/$oldname" ;; esac
+  fi
+  [ -n "$oldgen" ] && [ -f "$oldgen/manifest" ] && _board_gen_format_ok "$oldgen" || oldgen=""
+
+  gen="$(mktemp -d "$root/generation.XXXXXX")" || return 0
+  mkdir -p "$gen/recent" "$gen/sids" "$gen/.tmp"
+  printf '%s\n' "$_BOARD_GEN_FORMAT" > "$gen/format"
+
+  # 🔴 P2-1, round-10 review: the sidecar is stat'd HERE, BEFORE
+  # `_burn_tank_hidden` below counts its lines, and THESE bytes — not a
+  # second, later stat — are what gets published as this generation's
+  # fingerprint. The order is the entire guarantee. Fingerprint first, count
+  # second means the published fingerprint describes a sidecar state that is
+  # the same age as, or OLDER than, the one the cap was computed from, so a
+  # sid that lands mid-rebuild makes the NEXT board_stale disagree and rebuild.
+  # The other order manufactures, in miniature, the exact bug this fixes: a
+  # fingerprint vouching for a sidecar the entry's cap never saw, which then
+  # reads as fresh forever. Same reasoning as board_stale's own header, applied
+  # to the second half of the signal.
+  local sc_f="$gen/.tmp/sidecar"
+  _board_sidecar_rows "$engine" "$dir" > "$sc_f"
+
   # 🔴 #93 P2-1, adopted into the index (fix round 11). THE CUT AND THE
   # EXCLUSION ARE NOT COMMUTATIVE. `_home_recent_rows` (lib/commands/home.sh)
   # drops burn one-shots from the Resume rows AFTER the adapter answers, so an
@@ -1086,34 +1263,6 @@ board_state_refresh() (
     [ "$_n_ask" -ge "$n" ] || _n_ask="$n"
   fi
   n="$_n_ask"
-  umask 077
-  # P3-4 (2026-09-12 round-2 fix review): load_adapter now runs BEFORE
-  # mktemp -d, not after — a load failure used to leave a generation
-  # directory behind that nothing would ever point `current` at (harmless
-  # once board_gc_generations' keep-5 sweep started catching it, but there is
-  # no reason to create it at all when this call is about to bail anyway).
-  load_adapter "$engine" >/dev/null 2>&1 || return 0
-  root="$(board_root "$dir")"
-  mkdir -p "$root" || return 0
-
-  # round-6 fix review P1-2: the generation this call is about to SUPERSEDE
-  # is the carry-forward source everything below reads from — captured
-  # before `mktemp -d` so a concurrent reader's `current` pointer stays
-  # valid until this whole rebuild finishes and is published atomically. No
-  # usable manifest (never refreshed before, or an older pre-round-6
-  # generation) is treated exactly like no previous generation at all: a
-  # cold build.
-  oldgen=""
-  if [ -f "$root/current" ]; then
-    oldname=""
-    IFS= read -r oldname < "$root/current"
-    case "$oldname" in generation.*) [ -d "$root/$oldname" ] && oldgen="$root/$oldname" ;; esac
-  fi
-  [ -n "$oldgen" ] && [ -f "$oldgen/manifest" ] && _board_gen_format_ok "$oldgen" || oldgen=""
-
-  gen="$(mktemp -d "$root/generation.XXXXXX")" || return 0
-  mkdir -p "$gen/recent" "$gen/sids" "$gen/.tmp"
-  printf '%s\n' "$_BOARD_GEN_FORMAT" > "$gen/format"
 
   # A file's rate-limit reading is independent of its sid/scope. `window` is
   # the ONLY per-engine knob the rest of this function needs for it.
@@ -1139,8 +1288,18 @@ board_state_refresh() (
   else
     _board_stat_rows "$engine" "$dir" > "$rows_f"
   fi
-  _board_fingerprint_rows < "$rows_f" > "$gen/transcripts-fp"
+  _board_tank_fingerprint "$engine" "$dir" "$rows_f" "$sc_f" > "$gen/tank-fp"
   date +%s > "$gen/updated"
+  # 🔴 P2-1, round-10 review, SECOND HALF. Making the sidecar stale the tank
+  # (above) is necessary and not sufficient: an incremental rebuild rewrites a
+  # `recent/` entry only for a file that CHANGED, and a sidecar write changes
+  # no file — so the rebuild would faithfully carry the entry that was cut at
+  # the OLD cap forward, verbatim, and the ninth row would still be missing.
+  # The cap every entry in this generation is cut at is therefore recorded
+  # here, and the incremental branch re-cuts them all when it moves. A
+  # generation written before this field existed has no `recent-cap`, which
+  # reads as "moved" and re-cuts once, on the first render after upgrading.
+  printf '%s\n' "$n" > "$gen/recent-cap"
 
   # P2-2 (2026-09-12 round-3 fix review): antigravity's cwd lives IN the
   # file, not the path, so a sid/scope lookup below scans the WHOLE
@@ -1242,40 +1401,7 @@ board_state_refresh() (
       END { printf "" > man_out }
     ' "$ss_f" "$rows_f"
 
-    # recent/: newest <n> sessions per scope. One `sort` (RAW SCOPE asc, mtime
-    # desc) then one awk that writes each scope's entry in a single pass.
-    #
-    # Grouped by the raw scope, NOT by the entry name (round-8 fix review
-    # P1-2): if two scopes ever did land on one name, grouping by the name
-    # merges their sessions into a single file under whichever scope's
-    # `#scope` header came first, and board_recent's header check then lets
-    # THAT scope through holding the other's rows — a wrong answer, which is
-    # exactly what the entry-name header above promises can never happen.
-    # Grouped by scope, the second group reopens the name with `>` and
-    # truncates it, so the loser reads as a MISS, which is what that promise
-    # actually says.
-    # "Is this still the same scope?" is `bsame`, under LC_ALL=C, never
-    # `sc != cur`: macOS's awk answers `!=` with strcoll(), and its UTF-8
-    # collation calls sibling CJK directories EQUAL, which merged 專案二's
-    # sessions into 專案一's entry (see `bsame`'s header).
-    if [ -s "$rec_f" ]; then
-      LC_ALL=C sort -t$'\037' -k2,2 -k3,3rn "$rec_f" | LC_ALL=C awk -v gen="$gen" -v n="$n" "$_BOARD_EKEY_AWK"'
-        BEGIN { S = sprintf("%c", 31) }
-        {
-          i = index($0, S); k = substr($0, 1, i - 1); rest = substr($0, i + 1)
-          j = index(rest, S); sc = substr(rest, 1, j - 1); rest = substr(rest, j + 1)
-          j = index(rest, S); mt = substr(rest, 1, j - 1); sid = substr(rest, j + 1)
-          if (NR == 1 || !bsame(sc, cur)) {
-            if (curf != "") close(curf)
-            cur = sc; c = 0
-            curf = gen "/recent/" k
-            print "#scope" S sc > curf
-          }
-          if (c < n) { print mt S sid > curf; c++ }
-        }
-        END { if (curf != "") close(curf) }
-      '
-    fi
+    _board_write_recent_entries "$gen" "$n" "$rec_f"
 
     # readings-bounded: EVERY transcript whose mtime is inside this engine's
     # window, in the order `_board_stat_rows` already sorted them — no count,
@@ -1370,6 +1496,9 @@ board_state_refresh() (
     #     be purged (see _board_purge_recent_row's own header) without this
     #     function ever loading the old manifest into a bash hashtable.
     local unchanged_f="$gen/.manifest-unchanged" changed_f="$gen/.manifest-changed" removed_f="$gen/.manifest-removed"
+    local oldcap=""
+    [ ! -f "$oldgen/recent-cap" ] || IFS= read -r oldcap < "$oldgen/recent-cap" 2>/dev/null
+    case "$oldcap" in ''|*[!0-9]*) oldcap="" ;; esac
     local d6 d7 manf="$oldgen/manifest"
     d6=$'\036'; d7=$'\037'
     awk -v OFS="$d6" -v FS7="$d7" -v now="${reading_now:-0}" -v window="${window:-0}" \
@@ -1527,6 +1656,33 @@ board_state_refresh() (
       [ ! -f "$unchanged_f" ] || cat "$unchanged_f"
       [ "${#manifest_lines[@]}" -eq 0 ] || printf '%s\n' "${manifest_lines[@]}"
     } > "$gen/manifest"
+
+    # 🔴 P2-1 (round-10 review): the tank's cap moved, so every `recent/` entry
+    # this generation resolves to — its own, and every one it would otherwise
+    # inherit from an ancestor — is re-cut at the new one, from the manifest
+    # written immediately above. NO transcript is opened and no sid/scope is
+    # re-parsed: the manifest already carries both, per file, which is the
+    # whole reason this is an awk + a sort over the tank's own metadata rather
+    # than the cold rebuild the naive fix would force on every single burn.
+    # It runs ONLY on the frame where the cap actually moved (a burn recording
+    # its sid, or `clikae clean` GC-ing the sidecar shorter), and it produces
+    # byte-identical entries to a cold build of the same disk state because it
+    # goes through the same one function the cold build does.
+    # Scopes the manifest no longer has are deliberately NOT touched here: a
+    # transcript removed since the previous generation was already tombstoned
+    # by the removed loop above, and re-cutting must not resurrect it.
+    if [ "$oldcap" != "$n" ]; then
+      local recut_f="$gen/.tmp/recut"
+      LC_ALL=C awk -F $'\036' -v out="$recut_f" "$_BOARD_EKEY_AWK"'
+        BEGIN { S = sprintf("%c", 31) }
+        NF >= 6 {
+          if ($3 == "") next
+          mt = $1; sub(/\..*$/, "", mt)
+          print ekey($4) S $4 S mt S $3 > out
+        }
+      ' "$gen/manifest"
+      _board_write_recent_entries "$gen" "$n" "$recut_f"
+    fi
     # Round-8 fix review P3-2: the cold build published `readings-bounded` and
     # the incremental path published nothing, so the presence of that file
     # meant two different things ("this is what cold read" vs "this generation
