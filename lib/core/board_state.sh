@@ -698,16 +698,29 @@ board_find() {
 # taught about the chain separately.
 _board_gc_candidates() {
   local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}"
-  local gd gmt name cur="" p prot=$'\n' roots=$'\n' d=0 kept=0 sorted r
+  local gd gmt gseq name cur="" p prot=$'\n' roots=$'\n' d=0 kept=0 sorted r
   [ -d "$root" ] || return 0
-  # Newest first, deterministic: several publishes inside one wall-clock second
-  # share an mtime (round-2 P3-1), so the directory name breaks the tie.
+  # Newest first, in PUBLISH order. Round-9b: this sorted by whole-second
+  # mtime with the directory name as the tie-break (round-2 P3-1), and the name
+  # is mktemp's random suffix — so when several publishes share a second (every
+  # rebuild in a tight loop, every bats run) "the newest <keep>" was a coin
+  # toss, and the generation a reader still HOLDS could fall out of the roots
+  # and be unlinked on the very next publish, chain protection and all. r8's
+  # own probe (p3b-hold.sh, depth 7) re-run on round 9's tip lost the held
+  # generation on the FIRST publish in 2 of 4 runs. `seq` is written at publish
+  # (the previous `current`'s seq + 1, see board_state_refresh), so the order
+  # no longer depends on the clock at all; mtime, then name, only break a tie
+  # between two processes that published from the same `current`, or rank a
+  # generation written before `seq` existed (seq 0: oldest, swept first).
   sorted="$(
     for gd in "$root"/generation.*; do
       [ -d "$gd" ] || continue
       gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
-      printf '%s\037%s\n' "$gmt" "${gd##*/}"
-    done | sort -t$'\037' -k1,1rn -k2,2r
+      gseq=0
+      [ ! -f "$gd/seq" ] || IFS= read -r gseq < "$gd/seq" 2>/dev/null
+      case "$gseq" in ''|*[!0-9]*) gseq=0 ;; esac
+      printf '%s\037%s\037%s\n' "$gseq" "$gmt" "${gd##*/}"
+    done | sort -t$'\037' -k1,1rn -k2,2rn -k3,3r
   )"
   [ -n "$sorted" ] || return 0
   # roots = what `current` points at, plus the newest <keep> generations
@@ -715,7 +728,7 @@ _board_gc_candidates() {
     IFS= read -r cur < "$root/current" 2>/dev/null || cur=""
     case "$cur" in generation.*) roots="$roots$cur"$'\n' ;; esac
   fi
-  while IFS=$'\037' read -r gmt name; do
+  while IFS=$'\037' read -r gseq gmt name; do
     [ -n "$name" ] || continue
     [ "$kept" -lt "$keep" ] || break
     kept=$((kept + 1))
@@ -739,7 +752,7 @@ EOF_SORTED
   done <<EOF_ROOTS
 $roots
 EOF_ROOTS
-  while IFS=$'\037' read -r gmt name; do
+  while IFS=$'\037' read -r gseq gmt name; do
     [ -n "$name" ] || continue
     case "$prot" in *$'\n'"$name"$'\n'*) continue ;; esac
     printf '%s\n' "$root/$name"
@@ -1469,6 +1482,13 @@ board_state_refresh() (
     antigravity) agy_email "$dir" > "$gen/email" ;;
     codex) _limit_codex_rate_limits_cached "$dir" "$root/codex-cache" > "$gen/codex-usage" || true ;;
   esac
+  # Publish order for GC (see _board_gc_candidates): one more than whatever
+  # `current` is about to stop pointing at.
+  local pcur="" pseq=0
+  [ ! -f "$root/current" ] || IFS= read -r pcur < "$root/current" 2>/dev/null
+  case "$pcur" in generation.*) [ ! -f "$root/$pcur/seq" ] || IFS= read -r pseq < "$root/$pcur/seq" 2>/dev/null ;; esac
+  case "$pseq" in ''|*[!0-9]*) pseq=0 ;; esac
+  printf '%s\n' "$((pseq + 1))" > "$gen/seq"
   rm -rf "$gen/.tmp"
   pointer="$(mktemp "$root/current.XXXXXX")" || return 0
   printf '%s\n' "${gen##*/}" > "$pointer"

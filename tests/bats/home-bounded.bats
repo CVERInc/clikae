@@ -720,6 +720,16 @@ _b8_tank() {
   done
   held="$root/$(cat "$root/current")"
   [ "$(cat "$held/depth")" -eq "$((_BOARD_GEN_MAX_DEPTH - 1))" ]
+  # Round-9b: GC used to rank generations by whole-second mtime with the
+  # random mktemp name as the tie-break, so when these publishes shared a
+  # second (they usually do) whether the held one stayed among "the newest
+  # <keep>" was a coin toss — this test passed or failed on the toss, and r8's
+  # own hold probe lost the held generation on the first publish in 2 of 4
+  # runs. Make the clock disagree with publish order ON PURPOSE, every run:
+  # the held (newest) generation gets the OLDEST mtime. Publish order must win.
+  local gd
+  for gd in "$root"/generation.*; do touch -t 202001010000.01 "$gd"; done
+  touch -t 202001010000.00 "$held"
 
   # one more publish: this is the materialising one, and it is where the held
   # generation's chain used to lose its oldest links
