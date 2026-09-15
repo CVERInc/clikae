@@ -17,18 +17,17 @@
 # check, no bash-4-only fast path, one code path for 3.2 and 5.x alike:
 #   - `board_generation`'s memo → plain globals keyed by a sanitized
 #     (engine,dir) name, indirect-read via `eval` (see its own header).
-#   - `_agy_ws`/`_ws` (antigravity's bulk cwd index) → the same scheme, as
-#     `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` — living in
-#     lib/adapters/antigravity.sh (see `_agy_ws_varname`'s own header there),
-#     not here: an EARLIER draft of this port defined them in this file, and
+#   - `_agy_ws`/`_ws` (antigravity's bulk cwd index, since deleted) → the same
+#     scheme, and it lived in lib/adapters/antigravity.sh rather than here: an
+#     EARLIER draft of that port defined the helpers in this file, and
 #     tests/bats/adapters/antigravity.bats — which sources antigravity.sh
-#     WITHOUT this file — immediately hit "_agy_ws_load: command not found"
-#     (CI run 34760883667, `bats (ubuntu-latest)`). 🔴 fix round 11: this file
-#     no longer calls any of them. agy's index scope is a per-tank constant
-#     (`_BOARD_TANK_SCOPE`), so there is nothing here left to look a session's
-#     workspace up FOR. The helpers stay where they are, with their receipts in
-#     tests/bats/adapters/antigravity.bats; the port note is kept because the
-#     scheme it describes is still what `board_generation`'s memo uses.
+#     WITHOUT this file — immediately hit "command not found" (CI run
+#     34760883667, `bats (ubuntu-latest)`). 🔴 fix round 11 stopped calling
+#     them here (agy's index scope is a per-tank constant, `_BOARD_TANK_SCOPE`,
+#     so there was nothing left to look a session's workspace up FOR) and round
+#     12 deleted them outright — the whole chain, hook included, had no caller
+#     left (review P3-1). The port note is kept because the scheme it describes
+#     is still what `board_generation`'s memo uses.
 #   - the cold-build classifier's five per-path maps (`cur_mtime`, `cur_size`,
 #     `sid_of`, `scope_of`, `reading_of`) → parallel INDEXED arrays keyed by
 #     the file's position in `stat_rows`, not by path — bash 3.2 has always
@@ -301,7 +300,7 @@ _board_gen_format_ok() {
 # live entry under that name. Out-variable, not `$( )`: this runs once per
 # lookup on a render's hot path and once per changed file inside a rebuild, and
 # a subshell fork there is exactly the per-file cost this whole round is about
-# (same pattern `_agy_ws_lookup` already uses in lib/adapters/antigravity.sh).
+# (the same out-variable pattern `_board_entry_key` uses).
 # No fork of any kind: `[ -f ]`/`[ -s ]` are builtins and `read < file` is a
 # redirection, so a full-depth miss costs at most 3 * _BOARD_GEN_MAX_DEPTH
 # syscalls.
@@ -973,11 +972,11 @@ EOF_HDR
 # `board_state_refresh` calls this only for a file it has already decided
 # needs a fresh parse (new, changed, or a cold build), never for one it can
 # carry forward unchanged (round-6 fix review P1-2). Antigravity's branch used
-# to read a per-session `workspace` through `_agy_ws_lookup`
-# (lib/adapters/antigravity.sh), loaded in bulk per tank by `_agy_ws_load`;
-# fix round 11 dropped both along with the cwd keying they fed — see
-# `_BOARD_TANK_SCOPE`. This function now opens no file at all for agy, so no
-# adapter hook is needed for it either.
+# to read a per-session `workspace` through a bulk per-tank index in
+# lib/adapters/antigravity.sh; fix round 11 dropped the read along with the cwd
+# keying it fed (see `_BOARD_TANK_SCOPE`) and round 12 deleted the index. This
+# function now opens no file at all for agy, so no adapter hook is needed for
+# it either.
 _board_engine_sidscope() {
   local engine="$1" f="$2" sid="" scope=""
   case "$engine" in
@@ -986,8 +985,9 @@ _board_engine_sidscope() {
     grok) sid="$(_grok_json_str "$f" id)"; scope="$(_grok_json_str "$f" cwd)" ;;
     # #34, fix round 11: TANK-scoped, so the index answers the same question
     # the adapter's disk scan does (see `_BOARD_TANK_SCOPE`'s own header). The
-    # per-session `workspace` this used to read through `_agy_ws_lookup` is a
-    # constant on a real install, so it never distinguished two scopes; what it
+    # per-session `workspace` this used to read through the adapter's bulk cwd
+    # index is a constant on a real install, so it never distinguished two
+    # scopes; what it
     # did do was hide every row from every project directory. No lookup and no
     # `adapter_session_cwd` fork per file is a side effect, not the reason.
     antigravity)
@@ -1009,8 +1009,8 @@ _board_engine_sidscope() {
 # already encodes, one file at a time:
 #   claude       sid = filename, scope = parent directory name  -> pure awk over
 #                the rows, no file is opened at all.
-#   antigravity  sid = the session directory in the path, scope = the bulk
-#                `_agy_ws_load` index already loaded for this tank -> a bash
+#   antigravity  sid = the session directory in the path, scope = the per-tank
+#                constant `_BOARD_TANK_SCOPE` -> a bash
 #                loop whose body is parameter expansion, with
 #                `_board_engine_sidscope`'s stdout wired straight into this
 #                function's stdout (no `$( )`, which would be a fork per file).
@@ -1301,22 +1301,16 @@ board_state_refresh() (
   # reads as "moved" and re-cuts once, on the first render after upgrading.
   printf '%s\n' "$n" > "$gen/recent-cap"
 
-  # P2-2 (2026-09-12 round-3 fix review): antigravity's cwd lives IN the
-  # file, not the path, so a sid/scope lookup below scans the WHOLE
-  # account's sessions, never just this PWD's — and used to pay one
-  # reading_cache_run + fork pipeline PER session for that (measured ~5s
-  # fixed on a synthetic 500-session tank). One bulk index read replaces
-  # that with plain-global lookups (fix7: bash 3.2 has no associative
-  # arrays — `_agy_ws_load`/`_agy_ws_lookup`/`_agy_ws_varname` now live in
-  # lib/adapters/antigravity.sh — see `_agy_ws_varname`'s own header — not
-  # here: this file must stay usable when antigravity's adapter hasn't been
-  # loaded, same as the `declare -F adapter_session_cwd_index` guard already
-  # did before this fork existed) — see adapter_session_cwd_index's header
-  # (antigravity.sh) for why this is safe (same source of truth, same
-  # "first occurrence wins" semantics).
-  # fix round 11: the `_agy_ws_load` bulk read that used to happen here is
-  # gone with the cwd keying it fed (`_BOARD_TANK_SCOPE`). It was one awk pass
-  # over the tank's metadata per refresh for a value nothing reads now.
+  # P2-2 (2026-09-12 round-3 fix review) is HISTORY here, kept because the
+  # shape it warns about is easy to reintroduce: antigravity's cwd lives IN the
+  # file, not the path, so a per-session cwd lookup scanned the WHOLE account
+  # and paid one reading_cache_run + fork pipeline PER session (measured ~5 s
+  # fixed on a synthetic 500-session tank). Round 3 replaced it with a bulk awk
+  # index; fix round 11 removed the read entirely, because agy's scope here is
+  # a per-tank CONSTANT (`_BOARD_TANK_SCOPE`) and there is nothing left to look
+  # a session's workspace up for; round 12 deleted the index itself, which by
+  # then had no caller anywhere (review P3-1). Nothing in this rebuild opens an
+  # agy session's metadata at all.
 
   if [ -z "$oldgen" ]; then
     # ---------------- COLD BUILD ----------------
@@ -1340,10 +1334,10 @@ board_state_refresh() (
     #     batched BOUNDED read: `head -c 512` over `xargs -0` batches, parsed
     #     by one awk (`_board_cold_sidscope`). Never a `head` per file, never
     #     the whole file, never `reading_cache_run`.
-    #   * antigravity's id is in its path and its scope comes from the bulk
-    #     `_agy_ws_load` index loaded above (round-3 P2-2), so it goes through
+    #   * antigravity's id is in its path and its scope is the per-tank
+    #     constant `_BOARD_TANK_SCOPE`, so it goes through
     #     `_board_engine_sidscope` with its stdout wired straight into the
-    #     table — no `$( )` per file.
+    #     table — no file opened, no `$( )` per file.
     #   * Rate-limit readings are scanned for EVERY transcript inside the
     #     engine's window and for no others (`readings-bounded`, published so
     #     that what was read is inspectable rather than inferred), in ONE

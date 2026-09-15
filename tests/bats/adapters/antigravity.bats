@@ -283,56 +283,6 @@ assert_agy_title() {
   [ "$status" -eq 0 ]
 }
 
-# --- round-7 fix review P3-2 ---------------------------------------------------
-# `_agy_ws_load` populates plain globals (bash 3.2 has no associative arrays).
-# The `local -A _ws=()` it replaced was FUNCTION-scoped, so every call started
-# from an empty map for free. Globals do not, and two things followed: a
-# long-lived TUI accumulated one global per sid it had ever seen and kept
-# answering for sids that had since left history.jsonl, and a lookup after
-# loading a SECOND tank could be answered by the first tank's index.
-
-@test "agy ws index: a sid that leaves history.jsonl stops answering (the index is cleared, not accumulated)" {
-  _setup_agy
-  seed_agy_session ag-keep "$WORK" "stays"
-  seed_agy_session ag-gone "/elsewhere/gone" "leaves"
-  _agy_ws_load "$PROFILE"
-  _agy_ws_lookup ag-gone
-  [ "$_agy_ws_lookup_out" = "/elsewhere/gone" ]
-
-  # rewrite history.jsonl without ag-gone, reload, look it up again
-  printf '{"sessionId":"ag-keep","workspace":"%s"}\n' "$WORK" > "$BRAIN/history.jsonl"
-  _agy_ws_load "$PROFILE"
-  _agy_ws_lookup ag-keep
-  [ "$_agy_ws_lookup_out" = "$WORK" ]
-  _agy_ws_lookup ag-gone
-  [ -z "$_agy_ws_lookup_out" ] || { echo "stale value survived: $_agy_ws_lookup_out"; false; }
-}
-
-@test "agy ws index: one tank's workspace never answers for another tank's identical sid" {
-  _setup_agy
-  seed_agy_session ag-same "/tank/one" "first"
-  _agy_ws_load "$PROFILE"
-  _agy_ws_lookup ag-same
-  [ "$_agy_ws_lookup_out" = "/tank/one" ]
-
-  local P2="$TEST_HOME/bprofile"
-  BRAIN="$P2/antigravity-cli/brain"; mkdir -p "$BRAIN"
-  seed_agy_session ag-same "/tank/two" "second"
-  _agy_ws_load "$P2"
-  _agy_ws_lookup ag-same
-  [ "$_agy_ws_lookup_out" = "/tank/two" ] || { echo "got $_agy_ws_lookup_out"; false; }
-
-  # and the name itself is namespaced, so the two tanks cannot share a slot
-  local v1 v2
-  _AGY_WS_NS="${PROFILE//[^A-Za-z0-9_]/_}"; _agy_ws_varname ag-same
-  # shellcheck disable=SC2154  # _agy_ws_var_out is _agy_ws_varname's out-variable
-  v1="$_agy_ws_var_out"
-  _AGY_WS_NS="${P2//[^A-Za-z0-9_]/_}"; _agy_ws_varname ag-same
-  # shellcheck disable=SC2154  # _agy_ws_var_out is _agy_ws_varname's out-variable
-  v2="$_agy_ws_var_out"
-  [ "$v1" != "$v2" ]
-}
-
 # --- #74 round-1 P1-1: one canonical sid derivation, shared by burn's sidecar
 # writer and resume's picker. ---
 

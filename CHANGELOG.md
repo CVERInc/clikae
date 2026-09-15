@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deleted antigravity's bulk `sid -> workspace` index and the plain-global
+  cache built on it. Its only reader was a cwd filter the board no longer has
+  (agy's index scope is a per-tank constant), so it had been a documented
+  adapter hook with no caller anywhere in `lib/` or `bin/` (#62).
 - The board's Resume index notices when a burn sidecar grows, so a burn no
   longer costs the Continue list a row permanently. The index's per-tank cap
   is widened by that tank's recorded burn count, but staleness was
