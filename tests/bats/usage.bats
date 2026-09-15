@@ -770,7 +770,7 @@ STUB
   echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
 }
 
-@test "P3-4 (round-5 review): a stale-but-evidenced candidate is verified before confident fresh ones, and P3-3 stops early on a verified 0%" {
+@test "P3-4 (round-5 review): a stale-but-evidenced candidate is verified before confident fresh ones" {
   # Reproduces the review's exact board shape: alpha's on-disk 5% is 30
   # minutes old (past the 15-minute ceiling — usage_cache_peek reads it as
   # unknown), while bravo/charlie/delta all have confident FRESH readings
@@ -780,10 +780,15 @@ STUB
   # call, no matter how good its true headroom actually was (measured on
   # 9da32cd-shaped code: alpha's real value, 1%, the emptiest of all four,
   # went undiscovered). After the fix, alpha (stale-but-evidenced) is
-  # refreshed FIRST, revealing its true 1% — and P3-3's early-stop then fires
-  # the moment a later refresh confirms bravo can't beat it: the fixture
-  # gives bravo/charlie/delta unchanged real values, so calls stop at 3, the
-  # same total the review measured, but spent on the right three tanks.
+  # refreshed FIRST, revealing its true 1% — and the budget is then spent on
+  # the right three tanks, so calls stop at the cap (3), the same total the
+  # review measured.
+  #
+  # P3-2 (round-6 review): this test used to claim P3-3's "stop early on a
+  # verified 0%" in its NAME, but alpha's real value here is 1%, not 0% —
+  # `[ "$peak" = 0 ] && break` never fires, and `calls -eq 3` holds whether
+  # or not the early stop exists (a mutant that deleted the break kept this
+  # test green). The early stop has its own fixture and its own test below.
   clikae init claude alpha; clikae init claude bravo
   clikae init claude charlie; clikae init claude delta
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
@@ -830,6 +835,60 @@ STUB
   [ "$status" -eq 0 ]
   [ "$output" = alpha ]
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" -eq 3 ]
+}
+
+@test "P3-3 (round-5 review), tested at last (round-6 P3-2): a VERIFIED 0% window stops the refresh loop on the spot" {
+  # The only difference from the P3-4 fixture above is alpha's real value:
+  # 0% instead of 1%. That is the whole point — 1% cannot exercise
+  # `[ "$peak" = 0 ] && break`, so the assertion that used to carry P3-3's
+  # name (calls -eq 3) was true with or without the early stop, and a mutant
+  # that replaced the break with `:` stayed green (round-6 review P3-2).
+  #
+  # alpha is stale-but-evidenced, so Pass 4 spends its FIRST call on it; that
+  # call verifies 0%, the absolute floor nothing left in the pool can beat.
+  # The loop must stop there: exactly ONE vendor call, not the cap's three,
+  # and alpha still wins. Deleting the break makes this red at `calls -eq 1`.
+  clikae init claude alpha; clikae init claude bravo
+  clikae init claude charlie; clikae init claude delta
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  multi_curl_stub
+  live_usage alpha 0; live_usage bravo 55; live_usage charlie 58; live_usage delta 59
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local now; now="$(date +%s)"
+  local alpha_at=$(( now - 1800 ))   # 30 minutes ago — past the ceiling
+  local fresh_at=$(( now - 60 ))     # 60 seconds ago — well inside it
+  jq -cn --argjson at "$alpha_at" \
+    '{window_pct:5,weekly_pct:5,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/alpha.json"
+  local t
+  for t in bravo charlie delta; do
+    jq -cn --argjson at "$fresh_at" --argjson p "$( [ "$t" = bravo ] && echo 55 || { [ "$t" = charlie ] && echo 58 || echo 59; } )" \
+      '{window_pct:$p,weekly_pct:$p,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+      > "$CLIKAE_HOME/state/usage/claude/$t.json"
+  done
+  export USAGE_CALLS="$TEST_HOME/calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+tok="$(printf '%s' "$config" | sed -n 's/.*Bearer \([^"]*\)".*/\1/p')"
+line="$(awk -v t="$tok" '$1==t{print; exit}' "$CLIKAE_TEST_PCTMAP" 2>/dev/null)"
+if [ -z "$line" ]; then echo '{"error":"unauthorized"}'; exit 22; fi
+read -r _ window weekly <<< "$line"
+printf '{"five_hour":{"utilization":%s,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":%s,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}\n' "$window" "$weekly"
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run _burn_next_same_engine claude '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = alpha ] || { echo "picked: $output (expected alpha)"; false; }
+  local calls; calls="$(wc -l < "$USAGE_CALLS" | tr -d ' ')"
+  [ "$calls" -eq 1 ] || { echo "spent $calls vendor calls, expected exactly 1 (early stop on a verified 0%)"; false; }
 }
 
 @test "P2-3: real vendor reset-instant shape expires correctly (negative control proves the old guard failed open)" {
