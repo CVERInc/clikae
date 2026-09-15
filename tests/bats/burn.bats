@@ -3393,15 +3393,26 @@ assert rows[0]["ahead"] == 1, rows[0]
 # `-print0`, the file-list find's `-newer` sentinel) keeps testing the same
 # invariant — scan time must not leak into `elapsed_s` — without the
 # session-attribution snapshot's unrelated `find` calls polluting it.
+# P3-2 (round-5 review): narrowing that shim to the scan's own flags bound it
+# to the implementation, and nothing asserted it still matched. The day
+# discovery stops passing `-print0` (or the file-list find stops passing
+# `-newer`) the shim fires zero times, the scan costs ~0s, and
+# `[ "$json_elapsed" -lt 2 ]` passes unconditionally — the test goes quietly
+# empty instead of going red, which is the failure mode this whole round of
+# review keeps finding. The shim now records every time it fires and the test
+# demands both shapes, so a flag change breaks the test loudly and in the
+# right place.
 @test "burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json" {
   _left84_setup
   _left84_repo
-  cat > "$BATS_TEST_TMPDIR/bin/find" <<'STUB'
+  local fired="$BATS_TEST_TMPDIR/scan-find-fired"
+  cat > "$BATS_TEST_TMPDIR/bin/find" <<STUB
 #!/usr/bin/env bash
-case " $* " in
-  *" -print0 "*|*" -newer "*) sleep 1 ;;
+case " \$* " in
+  *" -print0 "*) printf 'discovery\n' >> "$fired"; sleep 1 ;;
+  *" -newer "*) printf 'filelist\n' >> "$fired"; sleep 1 ;;
 esac
-exec /usr/bin/find "$@"
+exec /usr/bin/find "\$@"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/find"
   run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
@@ -3419,6 +3430,11 @@ STUB
   [ "$status_elapsed" -lt 2 ]
   local diff=$((json_elapsed - status_elapsed)); [ "${diff#-}" -le 1 ]
   [[ "$output" == *"elapsed=${json_elapsed}s"* ]] || false
+  # …and the 2s the assertions above are measured against actually happened:
+  # both scan `find` shapes must have gone through the shim.
+  [ -s "$fired" ] || { echo "the scan find shim never fired — elapsed_s < 2 proved nothing"; false; }
+  grep -q '^discovery$' "$fired" || { echo "discovery find never matched the shim:"; cat "$fired"; false; }
+  grep -q '^filelist$' "$fired" || { echo "file-list find never matched the shim:"; cat "$fired"; false; }
 }
 
 # P2-4 (round-1 review): `find` never follows a symlink given as its own
