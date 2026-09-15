@@ -828,14 +828,62 @@ _SEP=' #[fg=colour244]│#[default] '
   [[ "$_TSTAT_ROW" == *"clikae antigravity tttttttttttttt…ttttttttttttt "* ]] || { echo "rung3: $_TSTAT_ROW"; false; }
   [[ "$_TSTAT_ROW" == *"5h 100% · 7d 100%"*"!10"* ]] || { echo "rung3: $_TSTAT_ROW"; false; }
 
-  # rung 4 — the engine word. The tank is already at its 8-column floor.
+  # rung 4 — the engine word. The seven columns it frees go BACK to the tank
+  # name (P3-1, round-4 review): rung 3 sized the name while the engine was
+  # still in the row, and a ladder yields only as much as the next rung needs.
   tmux_status_rowv 50 '' antigravity "$t42" '' '5h 100% · 7d 100%' '23h ago' 10
-  [[ "$_TSTAT_ROW" == "clikae tttt…ttt"* ]] || { echo "rung4: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" == "clikae ttttt…tttt"* ]] || { echo "rung4: $_TSTAT_ROW"; false; }
   [[ "$_TSTAT_ROW" == *"5h 100% · 7d 100%"*"!10"* ]] || { echo "rung4: $_TSTAT_ROW"; false; }
 
-  # rung 5 — the fuel segment, whole. The floor guard.
+  # rung 5 — the fuel segment, whole. The floor guard. Its columns go back to
+  # the name too: 20 of them here, not the 8-column floor.
   tmux_status_rowv 40 '' antigravity "$t42" '' '5h 100% · 7d 100%' '23h ago' 10
-  [ "$_TSTAT_ROW" = "clikae tttt…ttt${_SEP}#[fg=red]!10#[default] " ] || { echo "rung5: $_TSTAT_ROW"; false; }
+  [ "$_TSTAT_ROW" = "clikae tttttttttt…ttttttttt${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "rung5: $_TSTAT_ROW"; false; }
+}
+
+# 🔴 P3-1 (2026-09-14 round-4 review): the ladder over-yielded below 80 columns.
+# `tshow` was computed at rung 3, against a row that still had the engine word
+# (7 columns) and the fuel segment in it; rungs 4 and 5 then removed those and
+# nothing gave the freed columns back. Measured on real tmux 3.4: claude with a
+# 12-character tank at 40 columns drew `clikae tttt…ttt │ !10` — 22 columns of
+# the 33 available, while the WHOLE name needed only 4 more; a 24-character tank
+# was cut to 8 where 20 fit. The spec's "at least 8 columns of tank name" was
+# never violated, which is why this is P3 and not P2 — but eliding a name that
+# fits is exactly the "reads as a DIFFERENT tank" hazard rung 3 exists to bound.
+@test "width ladder: columns freed by a later rung go back to the tank name" {
+  _src
+  # The two cells the review measured, at the width it measured them.
+  tmux_status_rowv 40 '' claude "$(_tank 12)" '' '5h 100% · 7d 100%' '23h ago' 10
+  [ "$_TSTAT_ROW" = "clikae $(_tank 12)${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "12-char name still elided at w=40: $_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" != *"…"* ]] || { echo "a name that FITS was elided: $_TSTAT_ROW"; false; }
+
+  tmux_status_rowv 40 '' claude "$(_tank 24)" '' '5h 100% · 7d 100%' '23h ago' 10
+  [ "$_TSTAT_ROW" = "clikae tttttttttt…ttttttttt${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "24-char name did not get the freed columns: $_TSTAT_ROW"; false; }
+
+  # The general form, and the reason this is safe: after the freed columns are
+  # handed back, every cell still fits (the giving-back happens AFTER rung 5, so
+  # it can never be why something else was dropped), and no name is elided while
+  # it would fit whole.
+  local w n row plain vis
+  for w in 28 40 50 60 80 100 120; do
+    for n in 8 12 20 24 27 42 90; do
+      tmux_status_rowv "$w" '' claude "$(_tank "$n")" '' '5h 100% · 7d 100%' '23h ago' 10
+      row="$_TSTAT_ROW"
+      [ "$(_row_cols "$row")" -le "$(( w - 6 ))" ] \
+        || { echo "w=$w n=$n overflowed: $(_row_cols "$row") cols"; false; }
+      plain="${row%%"$_SEP"*}"          # `clikae [engine ]<name>`
+      vis="${plain##* }"                # the name as drawn
+      case "$vis" in
+        *…*) # elided — then the row must be using every column it was given
+          [ "$(_row_cols "$row")" -ge "$(( w - 7 ))" ] \
+            || { echo "w=$w n=$n elided with $(( w - 6 - $(_row_cols "$row") )) columns to spare: $row"; false; } ;;
+        *) [ "${#vis}" -eq "$n" ] || { echo "w=$w n=$n drew a bare prefix: $row"; false; } ;;
+      esac
+    done
+  done
 }
 
 @test "width ladder: the alert count and the clock are never cut, at any width or name length" {

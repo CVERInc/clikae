@@ -1112,6 +1112,34 @@ tmux_status_rowv() {
     if [ $(( base + fcols + acols )) -gt "$avail" ]; then
       drop_fuel=1; fcols=0
     fi
+    # 🔴 GIVE BACK WHAT THE LATER RUNGS FREED (P3-1, 2026-09-14 round-4 review).
+    # Rung 3 sizes the tank name against a row that still contains the engine
+    # word and the fuel segment. When rung 4 or rung 5 then removes one of
+    # those, the columns they freed were nobody's: `tshow` was already pinned,
+    # so the name stayed elided harder than the finished row needs. Measured on
+    # real tmux 3.4: claude + a 12-character tank at 40 columns drew
+    # `clikae tttt…ttt │ !10` — 22 columns used of 33 available, with the WHOLE
+    # name costing 4 more. A 24-character tank kept 8 columns where 20 fit.
+    # A yield ladder yields as much as the next rung needs, not as much as the
+    # rung it happened to be standing on when it did the arithmetic.
+    #
+    # This runs after rung 5 on purpose: the spare it hands back is what is left
+    # once the fuel segment's own fate is settled, so widening the name can
+    # never be the reason the fuel (or anything below it) is dropped. The order
+    # of the ladder is unchanged; only the budget is re-read.
+    if [ -z "$sid" ] && [ "$elide" -gt 0 ]; then
+      local spare=$(( avail - base - fcols - acols ))
+      if [ "$spare" -gt 0 ]; then
+        target=$(( tshow + spare ))
+        if [ "$target" -ge "$tcols" ]; then
+          elide=0; tshow="$tcols"          # the whole name fits after all
+        else
+          elide="$target"; tshow="$target"
+        fi
+        base=$(( 7 + ecols + 1 + tshow ))
+        [ "$drop_engine" = 1 ] && base=$(( 7 + tshow ))
+      fi
+    fi
   fi
 
   name="$tank"
