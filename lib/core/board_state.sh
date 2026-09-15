@@ -696,9 +696,20 @@ board_find() {
 # ONE place that decides this: `clean.sh`'s own sweep (_clean_board_gc) calls
 # it too, rather than keeping a second copy of the rule that would have to be
 # taught about the chain separately.
+_board_gc_rows() {
+  local gd gmt gseq
+  for gd in "$1"/generation.*; do
+    [ -d "$gd" ] || continue
+    gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
+    gseq=0
+    [ ! -f "$gd/seq" ] || IFS= read -r gseq < "$gd/seq" 2>/dev/null
+    case "$gseq" in ''|*[!0-9]*) gseq=0 ;; esac
+    printf '%s\037%s\037%s\n' "$gseq" "$gmt" "${gd##*/}"
+  done
+}
 _board_gc_candidates() {
   local root="$1" keep="${2:-${CLIKAE_BOARD_KEEP_GENERATIONS:-5}}"
-  local gd gmt gseq name cur="" p prot=$'\n' roots=$'\n' d=0 kept=0 sorted r
+  local gseq gmt name cur="" p prot=$'\n' roots=$'\n' d=0 kept=0 sorted r
   [ -d "$root" ] || return 0
   # Newest first, in PUBLISH order. Round-9b: this sorted by whole-second
   # mtime with the directory name as the tie-break (round-2 P3-1), and the name
@@ -712,16 +723,9 @@ _board_gc_candidates() {
   # no longer depends on the clock at all; mtime, then name, only break a tie
   # between two processes that published from the same `current`, or rank a
   # generation written before `seq` existed (seq 0: oldest, swept first).
-  sorted="$(
-    for gd in "$root"/generation.*; do
-      [ -d "$gd" ] || continue
-      gmt="$(file_mtime "$gd" 2>/dev/null)" || continue
-      gseq=0
-      [ ! -f "$gd/seq" ] || IFS= read -r gseq < "$gd/seq" 2>/dev/null
-      case "$gseq" in ''|*[!0-9]*) gseq=0 ;; esac
-      printf '%s\037%s\037%s\n' "$gseq" "$gmt" "${gd##*/}"
-    done | sort -t$'\037' -k1,1rn -k2,2rn -k3,3r
-  )"
+  # (The rows come from a helper, not an inline loop: bash 3.2 cannot parse a
+  # `case … in a|b)` pattern inside `$( … )` — its `)` closes the substitution.)
+  sorted="$(_board_gc_rows "$root" | sort -t$'\037' -k1,1rn -k2,2rn -k3,3r)"
   [ -n "$sorted" ] || return 0
   # roots = what `current` points at, plus the newest <keep> generations
   if [ -f "$root/current" ]; then
@@ -809,10 +813,19 @@ _board_merge_recent_row() {
       done < <(tail -n +2 "$src")
     fi
   fi
-  rows+=("$mt"$'\037'"$sid")
+  # The fresh row goes FIRST and the sort is STABLE (`-s`, GNU and BSD alike).
+  # Round-9b: it was appended last and sorted unstably, and `-k1,1rn`'s `r`
+  # does not reverse sort's last-resort whole-line compare — so among rows
+  # with the SAME whole-second mtime the fresh one ranked by its sid's spelling
+  # (`session-new` after `session-9`), and with <n> older rows from that same
+  # second it was the one `head` cut: a session that had just changed was
+  # missing from Resume. The round-5 P2-1 receipt went red on exactly that,
+  # 1 run in 12, on this branch's pushed tip. Among equals, what just changed
+  # is the newest.
+  rows=("$mt"$'\037'"$sid" ${rows[@]+"${rows[@]}"})
   {
     printf '%s\n' "$hdr"
-    printf '%s\n' "${rows[@]}" | sort -t$'\037' -k1,1rn | head -n "$n"
+    printf '%s\n' "${rows[@]}" | sort -s -t$'\037' -k1,1rn | head -n "$n"
   } | _board_gen_put "$gen" "recent/$key"
 }
 

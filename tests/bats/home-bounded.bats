@@ -454,9 +454,15 @@ _board_shims() {
   # came back to the picker — no new PROCESS starts, so a stale in-process
   # memo (round-5 P2-1) would hide it from the very next refresh.
   printf '{"type":"ai-title","aiTitle":"Fixture NEW"}\n' > "$dir/projects/$slug/session-new.jsonl"
+  # Round-9b: the SAME mtime as the ten fixture sessions, on purpose. This test
+  # used to pass or fail on whether the new file landed in a later second than
+  # the fixture (red 1 run in 12 on the pushed tip): in the same second the
+  # incremental merge ranked the fresh row by its name and cut it. What just
+  # changed must still be listed.
+  touch -r "$dir/projects/$slug/session-0.jsonl" "$dir/projects/$slug/session-new.jsonl"
   _home_refresh
   after="$(board_recent claude "$dir" 20)"
-  [[ "$after" == *session-new* ]] || false
+  [[ "$after" == *session-new* ]] || { echo "after: $after"; false; }
 }
 
 # --- round-6 fix review receipts --------------------------------------------
