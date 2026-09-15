@@ -1048,8 +1048,12 @@ tmux_status_alertsv() {
 # above yields first, all the way down to a row that is `clikae <8 columns of
 # tank> │ !N `. What is GUARANTEED at 80 columns is therefore: the whole alert
 # count, the whole clock, and at least 8 columns of the tank name. The rest is
-# best-effort in the order above. (The arithmetic floor is 28 columns; the spec
-# only promises 80.)
+# best-effort in the order above. (The arithmetic floor is `26 + the alert
+# count's digits` — 27 at `!7`, 28 at `!10`, 29 at `!100`: 7 for `clikae `, the
+# tank's 8, 4 for ` │ !`, the digits, the clock's 6 and this row's own trailing
+# space. P3-2, round-4 review: it was written here as the flat constant 28,
+# which is the two-digit case mistaken for all of them. The spec still promises
+# only 80.)
 #
 # Columns, not bytes: the row can carry `·`, `○`, `│` and `…`, and tmux runs
 # this helper under whatever locale its server has, so every one of them becomes
