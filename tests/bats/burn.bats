@@ -3735,3 +3735,100 @@ assert sub_row is not None, [r["repo"] for r in rows]
 assert any("new-in-sub.txt" in f for f in sub_row["files"]), sub_row
 '
 }
+
+# --- round-5 review -----------------------------------------------------------
+
+# `_burn_lb_bounded` on its own, with no burn around it: these three assert the
+# bound's own contract (kill the whole process group; report 124 only when the
+# watchdog actually fired) at a granularity a full `clikae burn` cannot reach.
+# Sourcing `lib/commands/burn.sh` directly is this suite's own established
+# pattern for a helper with no command-line surface (see limit.bats,
+# agy-email.bats, antigravity_keychain_real.bats).
+_burn_lb_boot() {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=../../lib/core/log.sh
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=../../lib/commands/burn.sh
+  source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+}
+
+# P2-1 (round-5 review): TERM+KILL aimed at the single pid `$!` names leaves
+# every child that pid forked running past the deadline. `find`'s own `-exec`
+# IS that shape — `-exec test -e {}/.git \;` forks once per directory and
+# `-exec stat … {} +` once per batch — so the bound was never bounding the
+# scan's most expensive call. A process group makes "the child" mean "the
+# child and everything it forked".
+@test "burn #84 P2-1 (round-5 review): the bound kills a forking child's whole process group" {
+  _burn_lb_boot
+  local forker="$BATS_TEST_TMPDIR/forker" pidfile="$BATS_TEST_TMPDIR/grandchild.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+# Forks a child and does NOT exec it — exactly \`find -exec\`'s own shape,
+# and the shape TERM+KILL aimed at \`\$!\` alone cannot reach.
+sleep 120 &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0 gpid=""
+  t0="$(date +%s)"
+  _burn_lb_bounded 3 "$forker" || rc=$?
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "forker never recorded its child"; false; }
+  gpid="$(cat "$pidfile")"
+  # Whatever this assertion does, never leave the grandchild behind.
+  sleep 1
+  local alive=0
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  [ "$alive" -eq 0 ] || { echo "grandchild $gpid outlived the bound"; false; }
+}
+
+# The other direction of the same assertion: a real timeout must still be 124.
+@test "burn #84 P3-3 (round-5 review): a bounded call that really overran still reports 124" {
+  _burn_lb_boot
+  local rc=0
+  _burn_lb_bounded 2 sleep 30 || rc=$?
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+}
+
+# P2-1 (round-5 review), end to end: the file-list `find`'s batched `stat` is
+# the one call in this scan that can be wedged by a dead mount. With the bound
+# reaching only `find` itself, `clikae burn` produced NOTHING — no "left
+# behind:" block, no JSON, no exit — because the orphaned `stat` still held
+# the scan's own command substitution open.
+@test "burn #84 P2-1 (round-5 review): a never-returning file-list stat cannot hang burn" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  # Only the batched mtime read the file-list scan makes hangs; `stat
+  # --version` (the platform probe, _clikae_statv) and every other caller
+  # must pass straight through or the scan never even gets that far.
+  cat > "$BATS_TEST_TMPDIR/bin/stat" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" %Y %n "*|*" %m %N "*) exec sleep 100000 ;;
+esac
+exec /usr/bin/stat "$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/stat"
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
+git -C "$STUB_LEFT_REPO" add saved.txt
+git -C "$STUB_LEFT_REPO" commit -qm saved
+STUB
+  local t0 t1
+  t0="$(date +%s)"
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  t1="$(date +%s)"
+  [ "$((t1 - t0))" -lt 40 ] || { echo "took $((t1 - t0))s"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" == *"(scan timed out)"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c 'import json, sys; json.load(sys.stdin)'
+}
