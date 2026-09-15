@@ -590,6 +590,52 @@ STUB
   [[ "$_FNOTE" != *%* ]]
 }
 
+@test "P3-7 (round-6 review): a FUTURE cached_at counts as age 0 for BOTH rulers, not unknown for one and fresh for the other" {
+  # Host clock skew (or a cache copied from a machine that was ahead) makes
+  # cached_at land in the future. usage_cache_peek used to reject such a
+  # reading outright (`select($evidence <= $now)`) while
+  # _home_fuel_dotv_compute clamped the same case to 0 — so the very same
+  # file was "unknown, do not rank on it" for burn and "just read, here are
+  # your percentages" for the board, at the same instant. One rule now: a
+  # future stamp is age 0, everywhere.
+  usage_fixture
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/home.sh"
+  __C_RED=R __C_YELLOW=Y __C_GREEN=G __C_RESET=''
+  _home_is_dryv() { _DRY_RESET=''; return 1; }
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  local now=1789400000
+  # 30 seconds in the FUTURE.
+  jq -cn --argjson at "$(( now + 30 ))" \
+    '{window_pct:30,weekly_pct:30,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/work.json"
+
+  # Ranking ruler: age 0 is inside any ceiling, so this is a usable reading.
+  run usage_cache_peek claude work "$now"
+  [ "$status" -eq 0 ] || { echo "peek refused a future stamp: rc=$status"; false; }
+  [ "$output" = $'30\t30\t30' ]
+
+  # Board ruler: the same age-0 verdict — percentages, and NO age annotation
+  # (age 0 is inside the 120s TTL), which is what the ranking ruler now
+  # agrees with rather than contradicting.
+  _home_fuel_dotv_compute '' claude work "$now"
+  [ "$_FNOTE" = 'window 30% · weekly 30%' ] || { echo "board note: $_FNOTE"; false; }
+
+  # Skew cannot LAUNDER a genuinely old reading: a stamp 30 minutes in the
+  # past is still past the 900s ceiling and still unknown for ranking.
+  jq -cn --argjson at "$(( now - 1800 ))" \
+    '{window_pct:30,weekly_pct:30,window_resets_at:"2099-01-01T00:00:00.000000+00:00",weekly_resets_at:"2099-01-01T00:00:00.000000+00:00",source:"vendor",cached_at:$at,scanned_at:$at}' \
+    > "$CLIKAE_HOME/state/usage/claude/work.json"
+  run usage_cache_peek claude work "$now"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
 @test "Claude Keychain service uses the tank path; malformed credentials never invoke curl" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"

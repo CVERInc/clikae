@@ -225,6 +225,20 @@ esac
 # empty stdout, rc=4 (jq -er's exit status when the pipeline produces no
 # output at all, not rc=1 — rc=1 is "last value was false/null", which
 # never happens here since select() either produces a value or nothing).
+# P3-7 (round-6 review): CLOCK SKEW. A `cached_at` in the FUTURE (a cache
+# written while the host clock was ahead, or copied from a machine that was)
+# counts as AGE 0 — here and on the board, one rule, both rulers. This used
+# to `select($evidence <= $now)`, i.e. reject the reading outright, while
+# lib/commands/home.sh clamped the same case (`[ "$age" -ge 0 ] || age=0`):
+# a cache stamped 30 seconds ahead read as UNKNOWN for burn ranking while
+# the board showed its percentages as freshly read. The three age clocks in
+# docs/DESIGN-board-fuel-dots.md are deliberately reconciled-not-unified
+# about how LONG a reading stays good; they were never meant to disagree
+# about what a NEGATIVE age means. Age 0 rather than rejection, because the
+# reading is real evidence carrying a skewed stamp, and rejecting it would
+# punish the tank for its host clock. A skewed stamp cannot make a reading
+# look OLDER than it is, only younger, so this can never resurrect a reading
+# the ceiling would otherwise have discarded.
 usage_cache_peek() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json" now="${3:-}"
   [ -f "$cache" ] || return 1
@@ -234,7 +248,11 @@ usage_cache_peek() {
     select(.source == "vendor" or .source == "transcript") |
     select(.window_pct != null and .weekly_pct != null) |
     (.cached_at) as $evidence |
-    select($evidence != null and $evidence <= $now and ($now - $evidence) <= $max_age) |
+    select($evidence != null) |
+    # P3-7 (round-6 review): one clock-skew rule, shared with the board.
+    # A timestamp in the FUTURE counts as age 0. See this function header.
+    (if ($now - $evidence) < 0 then 0 else ($now - $evidence) end) as $age |
+    select($age <= $max_age) |
     (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
     (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
     [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null

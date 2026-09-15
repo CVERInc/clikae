@@ -373,6 +373,21 @@ atomic, and `usage_read` is the ONLY writer in the repo.
 not unified, because unifying them would make one of the three lie (round-5
 review, P3-5):**
 
+One thing they are NOT allowed to disagree about is what a NEGATIVE age
+means. A `cached_at` in the FUTURE — a cache written while the host clock was
+ahead, or copied from a machine that was — **counts as age 0**, in both
+rulers (round-6 review, P3-7). Until then `usage_cache_peek` REJECTED such a
+reading (`select($evidence <= $now)`) while `_home_fuel_dotv_compute` clamped
+it (`[ "$age" -ge 0 ] || age=0`), so a cache stamped thirty seconds ahead was
+"unknown" for burn ranking and "freshly read" on the board at the same
+instant — a fourth kind of inconsistency this section did not cover. Age 0
+rather than rejection, because the reading is real evidence carrying a skewed
+stamp and rejecting it punishes the tank for its host clock; and because a
+skewed stamp can only make a reading look YOUNGER than it is, never older, so
+the rule can never resurrect a reading the ceiling would otherwise discard.
+On the board, age 0 also means no age annotation is printed, which is the
+honest rendering: the stamp says "now" and we have no better number.
+
 - `_USAGE_CACHE_PEEK_MAX_AGE_SEC` (`lib/core/usage.sh`, 900s / 15 minutes)
   answers "is this reading recent enough to RANK burn's reroute on". It
   measures the evidence's own `cached_at` (round-5 review, P2-2 — NOT
@@ -383,7 +398,8 @@ review, P3-5):**
   being rescanned, no new evidence from the vendor ever required). Short on
   purpose: burn's ranking is a live decision made once, right now, so a
   number a burn might act on immediately should be barely older than "now".
-- `_home_fuel_dotv`'s 24h cutoff (`lib/commands/home.sh`, 86400s) answers
+- `_home_fuel_dotv_compute`'s 24h cutoff (`lib/commands/home.sh`, 86400s;
+  `_home_fuel_dotv` is the memoizing wrapper around it) answers
   "is this reading still worth SHOWING a percentage for on the board at
   all". Long on purpose: the board is a passive glance, not a live
   decision — a number from this morning is still useful context next to a

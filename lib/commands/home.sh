@@ -1089,6 +1089,13 @@ _home_fuel_dotv_compute() {
   local usage_fields up uw peak cached_at age ttl
   if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
     IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
+    # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
+    # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
+    # (lib/core/usage.sh) now shares — it used to REJECT that same reading
+    # instead, so a cache stamped 30 seconds ahead was unknown for burn
+    # ranking and freshly-read on the board at the same instant. Age 0 also
+    # means no age annotation below, which is the honest rendering: we have
+    # no idea how old it really is, and the stamp says "now".
     age=$(( now - cached_at )); [ "$age" -ge 0 ] || age=0
     if [ "$age" -lt 86400 ]; then
       ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
