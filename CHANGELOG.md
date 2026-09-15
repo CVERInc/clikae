@@ -119,6 +119,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a silently short list, and a refusal message claiming there was no idle tank
   while idle tanks sat in the store. Such a directory is now simply not a tank,
   said once in one warning line and never as a raw shell error (#61 round 6).
+- The refusal `clikae cockpit`'s guard prints now names the reserve even when
+  no cockpit is recorded at all; it used to print neither the reserve nor the
+  "No idle tank in the reserve right now." line in that case (#61 round 6).
 - The one-line "this store's tanks aren't adopted yet and the flag can't be
   written" warning is now deduplicated PER STORE. It was one boolean for the
   whole process tree, so a terminal warned about one read-only store then

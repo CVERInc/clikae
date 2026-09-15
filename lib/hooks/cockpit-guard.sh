@@ -81,7 +81,6 @@
 # clearest repro was the same bytes refusing under en_US.UTF-8 and passing
 # under LC_ALL=C).
 set -uo pipefail
-set -uo pipefail
 
 allow() { if [ -n "${1:-}" ]; then printf '%s\n' "$1" >&2; fi; trap - EXIT; exit 0; }
 # _ckpt_fail_closed <why> -> refuse a call this guard could not read.
@@ -243,7 +242,17 @@ _ckpt_refuse() {
       source "$_dir/../core/adapter_loader.sh" 2>/dev/null &&
       source "$_dir/../core/profile_store.sh" 2>/dev/null &&
       source "$_dir/../core/burn_status.sh" 2>/dev/null &&
-      cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n')" &&
+      # #61 round-6 P3-4: `|| true`, and NOT part of the `&&` chain. With no
+      # `state/cockpit` at all — no cockpit recorded, or P2-2's own aftermath,
+      # where --off cleared the record while a guard stayed installed — `head`
+      # exits 1, and as a link in this chain that took the WHOLE enrichment
+      # block down with it: the refusal printed no reserve and not even the
+      # "No idle tank in the reserve right now." line, which lives further
+      # along the same chain. The most informative moment (a guard refusing
+      # with nothing pointing at a cockpit) produced the least informative
+      # message. An absent record simply means no tank is excluded from the
+      # reserve listing, which is exactly what an empty `cur` already does.
+      cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n' || true)" &&
       lines="$(
         while IFS=$'\t' read -r cli profile _path; do
           [ -n "$cli" ] || continue

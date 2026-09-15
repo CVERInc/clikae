@@ -159,6 +159,33 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" != *"claude/cockpit-tank"* ]] || false
 }
 
+@test "#61 round-6 P3-4: with NO state/cockpit the refusal still names the reserve" {
+  # `cur` was fetched inside the enrichment block's `&&` chain, so a missing
+  # state/cockpit (head exits 1, and pipefail carries it) took the whole block
+  # down — the operator got a refusal with no reserve and not even the "No
+  # idle tank in the reserve right now." line, which lives further along the
+  # same chain. An absent record means nothing is EXCLUDED from the listing;
+  # it is not a reason to stop listing.
+  mkdir -p "$CLIKAE_HOME/state" \
+    "$CLIKAE_HOME/profiles/claude/w1" "$CLIKAE_HOME/profiles/codex/w2"
+  printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/w1/.clikae-tank"
+  printf 'codex\n'  > "$CLIKAE_HOME/profiles/codex/w2/.clikae-tank"
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Current reserve"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/w1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"codex/w2"* ]] || { echo "$output"; false; }
+}
+
+@test "#61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty" {
+  rm -f "$CLIKAE_HOME/state/cockpit"
+  rm -rf "$CLIKAE_HOME/profiles"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"No idle tank in the reserve right now."* ]] || { echo "$output"; false; }
+}
+
 @test "#61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model" {
   if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
   # The hook runs under `set -u`. `_m` was left unassigned when the marker
