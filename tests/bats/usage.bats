@@ -590,6 +590,78 @@ STUB
   [[ "$_FNOTE" != *%* ]]
 }
 
+@test "P3-5 (round-6 review, toward #107): an unknown reading names WHY, and only ever with one of three words" {
+  # #107's complaint: an idle tank whose token lapsed reports exactly the
+  # same flat "unknown" as a tank with no credentials at all — the review
+  # recorded the two outputs as byte-identical. This does not FIX #107 (burn
+  # still ranks unknown ahead of known >=90%, and nothing tries a refresh
+  # token); it separates the two cases so #107 has something to act on.
+  usage_fixture
+
+  # 1. A token that works: no reason key at all. The shape of a good reading
+  #    must not move.
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor" and (has("reason") | not)'
+
+  # 2. Credentials present, token expired by the file's own record, vendor
+  #    401s -> reason "expired-token".
+  jq -cn --argjson exp "$(( ($(date +%s) - 86400) * 1000 ))" \
+    '{claudeAiOauth:{accessToken:"stub-secret-usage72",refreshToken:"rt-stub",expiresAt:$exp}}' \
+    > "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  USAGE_FAIL=1 run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .window_pct == null and .reason == "expired-token"' \
+    || { echo "got: $output"; false; }
+
+  # 3. No credentials at all -> reason "no-credentials", and zero curl calls.
+  rm -f "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  rm -f "$USAGE_CALLS"
+  run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .reason == "no-credentials"' \
+    || { echo "got: $output"; false; }
+  [ ! -s "$USAGE_CALLS" ] || { echo "a call was made with no credentials"; false; }
+
+  # 4. A live token the vendor refuses, with no expiry recorded -> the
+  #    catch-all, not a fabricated "expired".
+  printf '%s\n' '{"claudeAiOauth":{"accessToken":"stub-secret-usage72"}}' \
+    > "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  USAGE_FAIL=1 run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .reason == "network"' \
+    || { echo "got: $output"; false; }
+
+  # 5. The enum is closed: an adapter inventing its own word gets it dropped,
+  #    and so does anything else in a failed adapter's stdout — the "never
+  #    cache a vendor error body" rule is unchanged.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  run bash -c '
+    export CLIKAE_LIB="'"$CLIKAE_LIB"'" CLIKAE_HOME="'"$CLIKAE_HOME"'"
+    source "$CLIKAE_LIB/core/log.sh"
+    source "$CLIKAE_LIB/core/profile_store.sh"
+    source "$CLIKAE_LIB/core/adapter_loader.sh"
+    source "$CLIKAE_LIB/core/usage.sh"
+    load_adapter() { :; }
+    adapter_usage() { printf "%s\n" "{\"source\":\"unknown\",\"reason\":\"teapot\",\"secret\":\"leak\",\"window_pct\":7}"; return 1; }
+    usage_read claude work 1
+  '
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and (has("reason") | not) and (has("secret") | not) and .window_pct == null' \
+    || { echo "got: $output"; false; }
+
+  # 6. The reason survives the cache round-trip (it is written, and read back
+  #    on a cache hit, like every other field).
+  printf '%s\n' '{"claudeAiOauth":{"accessToken":"stub-secret-usage72"}}' \
+    > "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  USAGE_FAIL=1 run clikae usage claude work --fresh --json
+  jq -e '.source == "unknown" and .reason == "network"' \
+    "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null \
+    || { echo "cache: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
+  run clikae usage claude work --json      # cache hit, no call
+  echo "$output" | jq -e '.reason == "network" and (has("cached_at") | not)'
+}
+
 @test "P3-6 (round-6 review): --help no longer promises one vendor call per reroute candidate" {
   # The cap arrived in round 3 and the ranking-first spend in round 4, but
   # `clikae usage --help`, docs/grammar.md and CHANGELOG.md all still said

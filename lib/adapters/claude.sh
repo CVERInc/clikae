@@ -820,6 +820,30 @@ adapter_migrate_credentials() {
 # way to add one. lib/core/timeout_bin.sh's _burn_timeout_bin already has
 # the correct three-arm resolver (timeout, gtimeout, perl, plus an honest
 # warning when none exist); call that instead of re-rolling it narrower.
+# P3-5 (round-6 review, a first step toward #107): when this returns
+# non-zero it may print ONE line of JSON naming why, and nothing else —
+# never a vendor body, never anything derived from one. lib/core/usage.sh
+# reads at most `.reason`, through a three-value enum, and discards the
+# rest. See usage_unknown there for what the three words are allowed to
+# mean; the honest boundary is that `expired-token` is PROVEN from the
+# credentials file's own recorded expiry, `no-credentials` from the absence
+# of a usable token, and `network` is the catch-all for everything else
+# (which is exactly the lump #107 exists to take apart).
+_claude_usage_unreadable() {
+  printf '{"source":"unknown","reason":"%s"}\n' "$1"
+}
+
+# "the token had already expired" if the credentials file says so, else the
+# catch-all. Its own function so the two call sites below cannot drift, and
+# so neither has to spell out an `&&`/`||` chain (which would print BOTH
+# words, since the printer above deliberately returns 0).
+_claude_usage_call_failed() {
+  if [ "${_claude_token_expired:-0}" = 1 ]
+  then _claude_usage_unreadable expired-token
+  else _claude_usage_unreadable network
+  fi
+}
+
 adapter_usage() (
   set +x
   set +a
@@ -849,9 +873,24 @@ adapter_usage() (
           jq -er '.claudeAiOauth.accessToken // empty' 2>/dev/null
       fi
     fi
-  )" || return 1
+  )" || { _claude_usage_unreadable no-credentials; return 1; }
   # Restrict to bearer-token characters; reject curl-config injection.
-  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) return 1 ;; esac
+  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) _claude_usage_unreadable no-credentials; return 1 ;; esac
+  # P3-5 (round-6 review): ask the credentials file, BEFORE the call, whether
+  # the token it just handed over has already expired by its own record. This
+  # is the one failure cause that can be established without guessing at an
+  # HTTP status we never see (`--fail` collapses every 4xx/5xx into curl exit
+  # 22) — and it is exactly the case #107 opens with: an idle tank whose
+  # token lapsed, reported as a flat "unknown" indistinguishable from a tank
+  # with no credentials at all. Keychain-sourced tokens have no such record
+  # here, so they stay in the `network` lump.
+  local _claude_token_expired=0
+  if [ -f "$dir/.credentials.json" ] &&
+     jq -e --argjson now "$(date +%s)" \
+       '((.claudeAiOauth.expiresAt // empty) / 1000) < $now' \
+       "$dir/.credentials.json" >/dev/null 2>&1; then
+    _claude_token_expired=1
+  fi
   # P3-2 (codex security review, round-5): the whole body used to land in
   # this variable, and jq's own parsing/copying work, with no upper bound —
   # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
@@ -890,9 +929,11 @@ adapter_usage() (
     _claude_usage_curl_rc="${PIPESTATUS[1]}"
     printf 'X'
     exit "$_claude_usage_curl_rc"
-  )" || return 1
+  )" || { token=""; _claude_usage_call_failed; return 1; }
   response="${response%X}"
-  [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -le "$_claude_usage_max_bytes" ] || return 1
+  if [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -gt "$_claude_usage_max_bytes" ]; then
+    token=""; response=""; _claude_usage_unreadable network; return 1
+  fi
   token=""
   # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
   # documents used to become multiple cached readings — burn's shell `read`
@@ -908,5 +949,6 @@ adapter_usage() (
     select(.five_hour.utilization|type == "number") |
     select(.seven_day.utilization|type == "number") |
     {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
-     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}'
+     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}' ||
+    { _claude_usage_call_failed; return 1; }
 )

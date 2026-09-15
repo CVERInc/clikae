@@ -1,11 +1,34 @@
 # shellcheck shell=bash
 # Shared, atomic usage cache. Only normalized public readings reach disk.
+# P3-5 (round-6 review, a first step toward #107): an unknown reading may
+# carry a `reason`. THREE values, and nothing else is ever emitted or cached:
+#   no-credentials  no usable token was found at all (no credentials file, no
+#                   Keychain entry, or one that does not parse). PROVEN.
+#   expired-token   a token was found and its own recorded expiry is already
+#                   in the past when the call is made. PROVEN, locally, from
+#                   the same file the token itself came out of.
+#   network         the catch-all: the call was attempted with a token that
+#                   does not claim to be expired and did not come back with a
+#                   usable reading. NOT a claim about the wire — an HTTP
+#                   refusal, a timeout, an over-long body and an unparseable
+#                   one all land here. Telling those apart is #107's job;
+#                   this only separates "we never had a key" from "the key
+#                   we had had already expired" from "everything else",
+#                   which is the distinction #107 opens with.
+# The key is ABSENT (not null) when the reason is unknown, and absent on
+# every vendor/transcript reading, so no existing output shape moves.
 usage_unknown() {
-  printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}'
+  case "${1:-}" in
+    expired-token|no-credentials|network)
+      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
+    *)
+      printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
+  esac
 }
 
 usage_read() (
   local engine="$1" tank="$2" fresh="${3:-0}" cache now ttl reading tmp
+  local adapter_out="" adapter_reason=""
   cache="$CLIKAE_HOME/state/usage/$engine/$tank.json"
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
@@ -43,10 +66,22 @@ usage_read() (
       # vendor-body/secret-bearing subcalls internally (curl, jq, `security`
       # all pipe through their own `2>/dev/null` above this call) — nothing
       # but that kind of safe diagnostic ever reaches this level to leak.
-      reading="$(adapter_usage "$(profile_dir "$engine" "$tank")")" || reading=""
+      # P3-5 (round-6 review): a FAILED adapter_usage still gets its stdout
+      # looked at — but only ever through the enum below, never as a
+      # reading. "Never cache a vendor error body" (the whitelist further
+      # down) stays exactly as strict: at most one of three fixed words
+      # survives this, and anything else is discarded with the body.
+      if adapter_out="$(adapter_usage "$(profile_dir "$engine" "$tank")")"; then
+        reading="$adapter_out"
+      else
+        reading=""
+        adapter_reason="$(printf '%s' "$adapter_out" | jq -r '
+          if .reason == "expired-token" or .reason == "no-credentials"
+             or .reason == "network" then .reason else empty end' 2>/dev/null)"
+      fi
     fi
   fi
-  [ -n "$reading" ] || reading="$(usage_unknown)"
+  [ -n "$reading" ] || reading="$(usage_unknown "$adapter_reason")"
   # P2-4 (round-1 review): a reading can be honest evidence without a LIVE
   # vendor call behind it (codex's is derived from a rollout transcript it
   # already wrote) — pull out the event's own timestamp BEFORE whitelisting
@@ -61,9 +96,12 @@ usage_read() (
   reading="$(printf '%s' "$reading" | jq -ce '
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})$") then . else null end;
+    (if .reason == "expired-token" or .reason == "no-credentials"
+        or .reason == "network" then .reason else null end) as $reason |
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
-     source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)}')" || { reading="$(usage_unknown)"; event_epoch=""; }
+     source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)} |
+    if .source == "unknown" and $reason != null then . + {reason:$reason} else . end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   umask 077
   if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" \

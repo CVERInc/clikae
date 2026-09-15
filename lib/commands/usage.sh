@@ -19,6 +19,18 @@ live call answered), "transcript" (read from evidence the engine already
 wrote locally — no live process invoked; currently Codex), or "unknown"
 (no usable reading).
 
+An "unknown" reading may carry one more field, "reason" — present only
+when it is actually known, never on a vendor/transcript reading:
+  no-credentials  no usable token was found at all.
+  expired-token   a token was found and its own recorded expiry had
+                  already passed when the call was made.
+  network         everything else: the call was attempted and did not
+                  come back with a usable reading. NOT a claim about the
+                  wire — an HTTP refusal, a timeout and an unparseable
+                  body all land here. Taking that lump apart, and acting
+                  on an expired token instead of just naming it, is
+                  issue #107.
+
 Readings are cached for 120s (CLIKAE_USAGE_TTL overrides; --fresh bypasses
 the cache and always calls; codex is the one exception — its cache hit is
 timed from the last SCAN, but its reading is stamped with the underlying
