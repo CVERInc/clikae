@@ -391,8 +391,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   columns, `validate_name` caps a tank name's character set and not its
   length), then the engine word, and last the fuel segment entirely. The alert
   count and the clock are never cut: at 80 columns what is guaranteed is the
-  whole `!N`, the whole clock, and at least 8 columns of the tank name.
-  Measured at 14 ms per redraw idle, up to 24 ms under load.
+  whole `!N`, the whole clock, and at least 8 columns of the tank name, and
+  below 80 the arithmetic floor is `26 + the alert count's digits` (27 / 28 /
+  29 for one / two / three digits). Columns that a later rung frees go back to
+  the tank name, so a name is never elided while it would fit. Cost is a
+  function of how many run directories are on the host, not of load: about
+  0.10-0.13 ms per run directory on top of a fixed ~13 ms (an earlier draft of
+  this entry said "14 ms per redraw idle, up to 24 ms under load", which
+  measures the machine's noise rather than this row's input).
 
   Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
   (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion
