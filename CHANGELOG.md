@@ -372,11 +372,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same knob that removes the file), so it can neither hide nor pin red
   forever on a host that never runs `clikae burn` again. A dry marker whose
   timestamp cannot be read is expired, not fresh forever -- on the board, on
-  the row, and in burn's own "is this tank dry" verdict. Readable means all
-  digits, 9-11 of them, and no more than 60s in the future: a truncated or
-  doubled write is usually still a NUMBER (one extra digit dates to the year
-  2537), and a stamp from a stepped clock is a clock that moved rather than an
-  observation, so neither can be trusted to age out. Width is a yield
+  the row, and in burn's own "is this tank dry" verdict. Readable is a SHAPE
+  test and nothing else: all digits, 9 or 10 of them. A truncated or doubled
+  write is usually still a NUMBER (one extra digit dates to the year 5138), and
+  length is what catches it. The reader's own clock deliberately takes no part
+  in that judgement, because expiring is what DELETES the file: a reader whose
+  clock sits behind the writer's (an RTC fast at boot and corrected backwards,
+  a VM snapshot restore, suspend/resume) would otherwise destroy a marker
+  written seconds ago, sending burn back into a rate-limited tank and taking
+  the vendor's reset phrase with it. A stamp in the future is therefore read as
+  a clock that moved, aged as if recorded now, and KEPT; and when `date` cannot
+  answer at all the verdict is `unknown` -- still dry, still counted on the
+  row, still on disk. Width is a yield
   ladder with a fixed order, because three parts of the row are
   variable-width, not one: the `ssh <host> -t ` prefix goes first (dropped
   whole, never cut -- half a hostname is not a command), then the fuel age

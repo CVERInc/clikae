@@ -623,6 +623,25 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      session 的狀態列釘一個 `!1`，直到有人手動刪檔。現在讀不懂的時間戳（含
      `dry_store_mark` 在 `date` 失敗時寫的 0）一律是 `expired`：跟 `cached_at` 同一條
      「在，但讀不懂 ⇒ 不可信」的規則。
+
+     🔴 **P2-1（round-4 review）：「讀不讀得懂」這條規則不准把時鐘算進去。** round 3 為了
+     擋住「多一位數 ⇒ 年份 2537 ⇒ 永遠 fresh」，加了第三個條件「不得超前 `now` 60 秒」，
+     於是**會刪檔的那一臂**變成了讀的人自己的時鐘的函式。讀的人的時鐘可以**落後**寫的人：
+     開機時 RTC 快、chrony `makestep` 往回校正、VM snapshot restore、suspend/resume，
+     或 `date` 乾脆失敗（兩個讀者的 fallback 都是 `0`）。實測對 `origin/main` 逐格相反：
+     落後 61 秒／2 小時／24 小時，以及完全沒有 `date`，都會把一個**幾秒前剛寫下的誠實標記**
+     判成 `expired` 並 `rm -f` 掉——burn 立刻回頭撞一個真的在 rate limit 的 tank，
+     vendor 原話的 reset phrase 也一起沒了（狀態列 `!4` → `!1`，而且不說為什麼）。
+     現在的規則是**純形狀**：全是數字、9 或 10 位。round 3 那個「多一位數」的病仍然被擋著，
+     但擋它的是**長度**（11 位是西元 5138 年，沒有任何時鐘寫得出來），不是時鐘。
+     隨之而來的三條，寫死在這裡好讓下一次改動得先跟它吵架：
+     **（一）這個檔唯一的刪除動作不看時鐘**；**（二）形狀合法但在未來的時間戳＝時鐘動了，
+     當成「剛剛記的」（`age` 夾成 0，跟 `tmux_status_fuelv` 對 `cached_at` 同一個決定）、
+     照樣算 fresh、**留著**；**（三）`date` 答不出來時的裁決是 `unknown`——保留檔案、
+     狀態列照算、burn 照樣視為 dry。刻意接受的代價：一個形狀合法卻真的壞掉的未來時間戳
+     現在會被留著而不是被刪掉。判準是不對稱的——判錯 `fresh` 救得回來（下一次成功的 run
+     會 `dry_store_clear`，人也刪得掉那一個檔），判錯 `expired` 把證據銷毀，而且把 burn
+     送進 rate limit。
   6. **🔴 不准有 emoji。** `scripts/signet-lint.sh` 對任何印出來的 emoji 都會紅
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是

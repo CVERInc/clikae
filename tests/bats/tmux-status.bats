@@ -470,8 +470,16 @@ _dead_pid() { printf '2147483647'; }
 # as "NON-NUMERIC => expired", and a truncated or doubled write is usually
 # still digits. An 11-digit stamp dates to the year 2537; `age` is hugely
 # negative; neither ageing arm fires; the marker is `fresh` FOREVER, on the row,
-# on the board, and in burn's real dry verdict. The rule is now a shape test and
-# a clock test (lib/core/dry_store.sh's _dry_stamp_okv), and this is its table.
+# on the board, and in burn's real dry verdict.
+#
+# P2-1 (2026-09-14 round-4 review) rewrote HOW that is caught: round 3 caught it
+# with a clock test ("no more than 60s ahead of now"), which made the DELETING
+# verdict depend on the reader's clock. The rule is now a pure SHAPE test — all
+# digits, 9 or 10 of them (lib/core/dry_store.sh's _dry_stamp_okv) — so the
+# extra-digit case is still expired and still removed, by its LENGTH, while a
+# clock that disagrees can no longer remove anything. This is that table: every
+# stamp below is rejected without consulting `now` at all, which is why the same
+# rows hold for a reader whose clock is hours off (the test after next).
 @test "alerts: a dry stamp that is digits but not a date is expired, not fresh forever" {
   _src
   mkdir -p "$CLIKAE_HOME/dry/codex"
@@ -480,8 +488,6 @@ _dead_pid() { printf '2147483647'; }
   # stamp | what it is
   for stamp in \
     "${now}7"           `# one extra digit — a doubled/truncated write, year 2537` \
-    "$(( now + 7200 ))" `# two hours in the future — a clock that stepped` \
-    "$(( now + 315360000 ))" `# ten years in the future` \
     "${now}${now}"      `# the stamp written twice (20 digits)` \
     "12345678"          `# eight digits — not a length date +%s ever produced` \
     "0"                 `# what dry_store_mark writes when date itself failed` \
@@ -489,23 +495,104 @@ _dead_pid() { printf '2147483647'; }
     printf '%s\tresets 3pm\n' "$stamp" > "$CLIKAE_HOME/dry/codex/goby"
     dry_store_peekv codex goby "$now" || { echo "[$stamp] peek rc!=0"; false; }
     [ "$_DRY_PEEK" = expired ] || { echo "[$stamp] peek=$_DRY_PEEK"; false; }
+    # …and the SAME verdict from a reader whose clock is two hours behind and
+    # from one whose clock is two hours ahead: the shape test never asks.
+    dry_store_peekv codex goby "$(( now - 7200 ))"
+    [ "$_DRY_PEEK" = expired ] || { echo "[$stamp] behind: peek=$_DRY_PEEK"; false; }
+    dry_store_peekv codex goby "$(( now + 7200 ))"
+    [ "$_DRY_PEEK" = expired ] || { echo "[$stamp] ahead: peek=$_DRY_PEEK"; false; }
     run tmux_status_render claude wrasse '' '' 120
     [[ "$output" != *"!"* ]] || { echo "[$stamp] counted red: $output"; false; }
   done
 
   # A NEGATIVE stamp is not a number this reader takes either (the `-` fails the
-  # digit test before the clock test ever runs).
+  # digit test).
   printf -- '-100\tresets 3pm\n' > "$CLIKAE_HOME/dry/codex/goby"
   dry_store_peekv codex goby "$now" || { echo "negative: peek rc!=0"; false; }
   [ "$_DRY_PEEK" = expired ] || { echo "negative: peek=$_DRY_PEEK"; false; }
 
-  # …and the boundary in the other direction: 30 seconds ahead is skew on one
-  # host clock, which is READABLE and still fresh. The slack is 60s.
-  printf '%s\tresets 3pm\n' "$(( now + 30 ))" > "$CLIKAE_HOME/dry/codex/goby"
-  dry_store_peekv codex goby "$now" || { echo "+30s: peek rc!=0"; false; }
-  [ "$_DRY_PEEK" = fresh ] || { echo "+30s: peek=$_DRY_PEEK"; false; }
-  run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"!1"* ]] || { echo "+30s: $output"; false; }
+  # …and the direction round 4 flipped, stated as a test so it cannot flip back
+  # by accident: a stamp with a LEGAL shape that sits in the future is a clock
+  # that moved, not a marker that is wrong. Readable, fresh, counted, KEPT.
+  local ahead
+  for ahead in 30 61 7200 315360000; do
+    printf '%s\tresets 3pm\n' "$(( now + ahead ))" > "$CLIKAE_HOME/dry/codex/goby"
+    dry_store_peekv codex goby "$now" || { echo "+${ahead}s: peek rc!=0"; false; }
+    [ "$_DRY_PEEK" = fresh ] || { echo "+${ahead}s: peek=$_DRY_PEEK"; false; }
+    [ -f "$CLIKAE_HOME/dry/codex/goby" ] || { echo "+${ahead}s: marker gone"; false; }
+    run tmux_status_render claude wrasse '' '' 120
+    [[ "$output" == *"!1"* ]] || { echo "+${ahead}s: $output"; false; }
+  done
+}
+
+# 🔴 P2-1 (2026-09-14 round-4 review). The regression this pins is not
+# hypothetical and not cosmetic: round 3's "at most 60s in the future" made the
+# READER's clock decide whether a file is deleted. A reader can be behind a
+# writer they share a host with — an RTC fast at boot and chrony's `makestep`
+# correcting backwards, a VM snapshot restore, suspend/resume — and the marker
+# it then judges "from the future" is a perfectly honest one written seconds
+# ago. Measured against origin/main at the time, cell for cell the opposite:
+# 61s / 2h / 24h behind each turned DRY+phrase+file-kept into not-dry+file-GONE.
+# Deleted is the part that does not come back: burn walks straight back into a
+# rate-limited tank, and the vendor's own reset phrase is gone until a live
+# catcher observes one again.
+@test "dry: a reader whose clock is BEHIND the writer keeps the marker and stays dry" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex"
+  local marker now skew; marker="$CLIKAE_HOME/dry/codex/goby"; now="$(date +%s)"
+  for skew in 61 7200 86400; do
+    printf '%s\tresets 3pm\n' "$now" > "$marker"
+    dry_store_peekv codex goby "$(( now - skew ))" || { echo "[-${skew}s] peek rc!=0"; false; }
+    [ "$_DRY_PEEK" = fresh ] || { echo "[-${skew}s] peek=$_DRY_PEEK"; false; }
+
+    # …and through the reader that actually decides, which reads its own clock:
+    # a `date` shim reporting the local time minus the skew.
+    date() { case "$1" in +%s) printf '%s\n' "$(( now - skew ))" ;; *) command date "$@" ;; esac; }
+    run dry_store_read codex goby
+    run_status="$status"; run_output="$output"
+    run dry_store_epoch codex goby
+    epoch_status="$status"; epoch_output="$output"
+    unset -f date
+
+    [ "$run_status" -eq 0 ] || { echo "[-${skew}s] burn was told NOT dry (rc=$run_status)"; false; }
+    [ "$run_output" = "resets 3pm" ] || { echo "[-${skew}s] phrase lost: [$run_output]"; false; }
+    [ -f "$marker" ] || { echo "[-${skew}s] THE MARKER WAS DELETED"; false; }
+    [ "$epoch_status" -eq 0 ] && [ "$epoch_output" = "$now" ] \
+      || { echo "[-${skew}s] epoch: rc=$epoch_status [$epoch_output]"; false; }
+  done
+}
+
+# The other half of the same finding: `date` not answering AT ALL. Both readers
+# fall back to `0` for "now", which is not a time — so there is nothing to age
+# against. The answer is `unknown`: keep the file, keep counting it, tell burn
+# the tank is dry. A host that cannot say what time it is must not lose its
+# evidence over it.
+@test "dry: a failing date deletes nothing and drops nothing from the row" {
+  _src
+  mkdir -p "$CLIKAE_HOME/dry/codex" "$CLIKAE_HOME/dry/claude"
+  local m1 m2 now; m1="$CLIKAE_HOME/dry/codex/goby"; m2="$CLIKAE_HOME/dry/claude/wrasse"
+  now="$(date +%s)"
+  printf '%s\tresets 3pm\n' "$now" > "$m1"
+  printf '%s\tresets 4pm\n' "$now" > "$m2"
+
+  date() { return 1; }
+  dry_store_peekv codex goby '' || { echo "peek rc!=0"; false; }
+  peek="$_DRY_PEEK"
+  run dry_store_read codex goby
+  read_status="$status"; read_output="$output"
+  run tmux_status_alertsv
+  alerts_status="$status"
+  tmux_status_alertsv
+  alerts="$_TSTAT_ALERTS"
+  unset -f date
+
+  [ "$peek" = unknown ] || { echo "peek=$peek (want unknown)"; false; }
+  [ "$read_status" -eq 0 ] || { echo "burn was told NOT dry with a broken clock"; false; }
+  [ "$read_output" = "resets 4pm" ] || [ "$read_output" = "resets 3pm" ] \
+    || { echo "phrase lost: [$read_output]"; false; }
+  [ -f "$m1" ] && [ -f "$m2" ] || { echo "a marker was deleted by a broken clock"; false; }
+  [ "$alerts_status" -eq 0 ] || { echo "alertsv rc=$alerts_status"; false; }
+  [ "$alerts" = 2 ] || { echo "the row dropped markers when date failed: !$alerts (want !2)"; false; }
 }
 
 # The same rule, through the readers that are NOT decoration: dry_store_read is

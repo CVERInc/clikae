@@ -96,52 +96,60 @@ dry_store_mark() {
 # dry_store_path's `printf` three lines up, and both are on the same screen.
 # dry_store_mark/_read/_clear/_epoch keep calling dry_store_path itself — none
 # of them are on a 5-second timer, so the fork there was never the problem.
-# _dry_stamp_okv <stamp> <now-epoch> -> 0 if this reader can DATE that stamp,
-# 1 if it cannot. The ONE place "readable" is defined, called by both readers
+# _dry_stamp_okv <stamp> -> 0 if this stamp has the SHAPE a `date +%s` writes,
+# 1 if it does not. The ONE place "readable" is defined, called by both readers
 # below so they cannot drift apart.
 #
-# 🔴 P2-2 (2026-09-14 round-3 review): round 2 wrote this rule as "NON-NUMERIC
-# => expired", which is not the same thing as "unreadable => expired", and the
-# gap was exactly the case round 2's own comment named first. A truncated or
-# doubled write is usually STILL DIGITS: one extra digit on a 2026 stamp is the
-# year 2537, `age` is hugely negative, neither ageing arm below fires, and the
-# marker is `fresh` -- forever. Measured on 25a35ff: an 11-digit stamp, a stamp
-# one hour in the future and a stamp ten years in the future each pinned `!1` on
-# every session's status row and a dry dot on the board, permanently. And this
-# is not decoration: dry_store_read runs the same parse, so burn's real "this
-# tank is dry" verdict would route around that tank forever, and nothing would
-# ever clean it up (only `expired` is removed; `fresh` is not).
+# 🔴 THE RULE IS CLOCK-FREE, AND THAT IS THE WHOLE POINT (P2-1, 2026-09-14
+# round-4 review). Round 3 added a third condition here -- "at most 60s ahead
+# of `now`" -- and so made the DELETING verdict a function of the reader's own
+# clock. The reader's clock can be BEHIND the writer's: an RTC that was fast at
+# boot and chrony's `makestep` correcting it backwards, a VM snapshot restore,
+# a suspend/resume, or `date` simply failing (this file's own callers fall back
+# to `0`). Measured against origin/main, cell for cell the opposite: a reader
+# 61s / 2h / 24h behind, and a reader with no `date` at all, turned a perfectly
+# honest marker written seconds ago into `expired` -- and `expired` is the arm
+# that `rm -f`s the file. Three irreversible things at once: burn is told the
+# tank is NOT dry and walks straight back into a rate-limited tank, the vendor's
+# own reset phrase is gone until a live catcher observes it again, and the row
+# drops from `!4` to `!1` without saying why.
 #
-# Three conditions, all necessary:
+# So the fail-safe direction, stated so the next change has to argue with it:
 #
-#   all digits         the shape dry_store_mark writes (`date +%s`).
-#   9 to 11 digits     a second-epoch has been 10 digits since 2001 and stays
-#                      10 until 2286; 9 admits a pre-2001 clock, 11 admits a
-#                      badly-set one. Anything outside that is not a length a
-#                      `date +%s` ever produced -- it is a truncated or doubled
-#                      write. (`0`, what dry_store_mark writes when `date`
-#                      itself failed, is one digit, so it is covered here too.)
-#   at most 60s ahead  a stamp from the future is a clock that moved, not an
-#                      observation. 60s of slack because writer and reader share
-#                      one host clock, so real skew is seconds; an NTP step is
-#                      not. DECIDED, and deliberately the OPPOSITE of the
-#                      decision tmux_status_fuelv makes for `cached_at` (which
-#                      clamps a future stamp to "now" and shows the reading):
-#                      that field carries a VENDOR's number that is still good
-#                      when the clock jumps, while this one carries only the
-#                      clock itself, and a wrong one here pins a tank red and
-#                      diverts burn. When the evidence IS the timestamp, an
-#                      untrustworthy timestamp is no evidence.
+#   THE ONLY DELETION THIS FILE PERFORMS IS DECIDED WITHOUT LOOKING AT A CLOCK.
+#   A stamp that PARSES is evidence; a clock that disagrees with it is a clock.
+#   A stamp that does NOT parse is not evidence of anything and is removed.
+#   When we cannot tell the time at all, we KEEP the marker and say `unknown`.
 #
-# Unreadable is `expired`, never `fresh` or `stale`: expired is the one verdict
-# whose every caller fails safe -- dry_store_read removes the file and reports
-# NOT dry, so burn keeps using the tank and the row goes quiet.
+# Two conditions, both necessary, neither involving `now`:
+#
+#   all digits         the shape dry_store_mark writes (`date +%s`). `-100` and
+#                      `abc` fail here; so does `0`, the sentinel dry_store_mark
+#                      writes when `date` failed at WRITE time -- that one never
+#                      carried a date to fail safe on.
+#   9 or 10 digits     a second-epoch has been 10 digits since 2001-09-09 and
+#                      stays 10 until 2286-11-20; 9 admits a pre-2001 clock.
+#                      11 is the year 5138 -- no clock this code will ever meet
+#                      writes it, and it is exactly the shape a doubled or
+#                      truncated write makes (one extra digit on a 2026 stamp).
+#                      Round 3 caught that case with the clock test; with the
+#                      clock gone, LENGTH is what still catches it, so the
+#                      window that used to be 9-11 is now 9-10. That keeps
+#                      round 3's finding fixed (`${now}7` is still expired and
+#                      still removed) without letting the reader's clock decide.
+#
+# What this deliberately accepts: a stamp that is 10 digits and genuinely in
+# the future -- a stepped clock, or a corrupt write that happens to land inside
+# the window -- now reads FRESH and is kept, where round 3 deleted it. That is
+# the trade, taken on purpose: a wrong `fresh` is recoverable (the next
+# successful run calls dry_store_clear, and the marker is one file a human can
+# delete), a wrong `expired` destroys the evidence and sends burn into a
+# rate-limited tank. Keeping evidence we cannot fully trust beats destroying
+# evidence we could not read the clock for.
 _dry_stamp_okv() {
-  local stamp="$1" now="$2"
+  local stamp="$1"
   case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
-  case "${#stamp}" in 9|10|11) ;; *) return 1 ;; esac
-  # 10#: a zero-padded stamp is not octal (`08` would be an error).
-  [ $(( 10#$stamp - now )) -le 60 ] || return 1
+  case "${#stamp}" in 9|10) ;; *) return 1 ;; esac
   return 0
 }
 
@@ -177,11 +185,24 @@ dry_store_peekv() {
   # reader cannot date cannot be judged fresh, so it is `expired` — the same
   # "present but unreadable ⇒ untrusted" rule tmux_status_fuelv applies to
   # `cached_at`. What counts as readable is _dry_stamp_okv above, and it is a
-  # SHAPE test plus a clock test, not just "is it a number": round 2 shipped
-  # only the second half.
-  case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
-  _dry_stamp_okv "$stamp" "$now" || { _DRY_PEEK=expired; return 0; }
+  # SHAPE test — all digits, 9 or 10 of them — not just "is it a number":
+  # round 2 shipped only "is it a number", round 3 added a clock test that had
+  # to come back out (P2-1, round-4: see _dry_stamp_okv's header).
+  # SHAPE FIRST, and it is the only thing that can lead to a removal below.
+  # Whether this reader can tell the time never decides whether a file dies.
+  _dry_stamp_okv "$stamp" || { _DRY_PEEK=expired; return 0; }
+  case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null)" ;; esac
+  # No usable clock -- `date` failed, or a caller passed the `0` its own
+  # fallback produces. The marker parsed, so it IS evidence; we simply cannot
+  # age it. `unknown` is a verdict no caller deletes on: the row still counts
+  # it, burn still treats the tank as dry, and nothing is lost while the host
+  # has no clock.
+  case "$now" in ''|*[!0-9]*|0) _DRY_PEEK=unknown; return 0 ;; esac
   age=$(( now - 10#$stamp ))   # 10#: a zero-padded stamp is not octal (`08` would be an error)
+  # A stamp from the future is this reader's clock running behind the writer's,
+  # not a marker that is wrong -- clamp to "recorded now", the same decision
+  # tmux_status_fuelv already makes for a future `cached_at`. Never a removal.
+  [ "$age" -lt 0 ] && age=0
   if [ "$age" -ge "$CLIKAE_DRY_MAX_RETAIN" ]; then
     _DRY_PEEK=expired
   elif [ "$age" -ge "$CLIKAE_DRY_TTL" ]; then
@@ -204,6 +225,11 @@ dry_store_read() {
   dry_store_peekv "$engine" "$tank" || return 1
   case "$_DRY_PEEK" in
     expired) rm -f "$(dry_store_path "$engine" "$tank")" 2>/dev/null || true; return 1 ;;
+    # P2-1 (round-4): no clock, so no ageing -- but the marker parsed. Report
+    # DRY with its phrase and touch nothing. The harm this avoids is specific:
+    # answering "not dry" here sends burn back into a tank that really is rate
+    # limited, and the old code additionally deleted the phrase on the way.
+    unknown) ;;
     stale)
       if [ "${3:-}" != --retain-stale ]; then
         rm -f "$(dry_store_path "$engine" "$tank")" 2>/dev/null || true
@@ -224,7 +250,7 @@ dry_store_clear() {
 # dry_store_epoch <engine> <tank> -> echo the epoch this marker was recorded, or
 # return 1 if there's no usable marker. Feeds dry_seen_suffix for the board annotation.
 dry_store_epoch() {
-  local f line stamp now; f="$(dry_store_path "$1" "$2")"
+  local f line stamp; f="$(dry_store_path "$1" "$2")"
   [ -f "$f" ] || return 1
   line=""
   IFS= read -r line < "$f" 2>/dev/null || [ -n "$line" ] || return 1   # P3-2: a last line with no `\n` still counts
@@ -233,10 +259,11 @@ dry_store_epoch() {
   # this reader used to accept `0` and any number of digits, including a
   # timestamp from the year 2537. Its callers fail safe on a refusal
   # (lib/core/limit.sh clears the marker, lib/commands/home.sh drops the
-  # annotation), so refusing is the right direction here too. Not on the
-  # 5-second status path, so one `date` fork is affordable.
-  now="$(date +%s 2>/dev/null || echo 0)"
-  _dry_stamp_okv "$stamp" "$now" || return 1
+  # annotation), so refusing is the right direction here too.
+  # P2-1 (round-4): and it no longer forks `date` — the rule is a shape test,
+  # and this function's contract ("when was this recorded") never needed to
+  # know what time it is now. One less way for a broken clock to matter.
+  _dry_stamp_okv "$stamp" || return 1
   printf '%s' "$stamp"
 }
 

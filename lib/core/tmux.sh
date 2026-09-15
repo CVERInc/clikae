@@ -779,8 +779,10 @@ tmux_status_fuelv() {
 
   _TSTAT_FUEL="·"
   declare -F dry_store_peekv >/dev/null 2>&1 || return 0
-  if dry_store_peekv "$engine" "$tank" "$now" && [ "$_DRY_PEEK" = fresh ]; then
-    _TSTAT_FUEL="○"
+  # `unknown` counts as a dry reading: the marker parsed, only the clock is
+  # missing (P2-1, 2026-09-14 round-4 review — dry_store_peekv's verdicts).
+  if dry_store_peekv "$engine" "$tank" "$now"; then
+    case "$_DRY_PEEK" in fresh|unknown) _TSTAT_FUEL="○" ;; esac
   fi
   return 0
 }
@@ -906,7 +908,11 @@ tmux_status_alertsv() {
       t="${f##*/}"
       e="${f%/*}"; e="${e##*/}"
       dry_store_peekv "$e" "$t" "$now" || continue
-      [ "$_DRY_PEEK" = fresh ] && n=$((n + 1))
+      # fresh, or `unknown` — a marker whose stamp parsed but which no clock
+      # could be aged against (P2-1, round-4). Under-counting there is the
+      # exact harm that finding names: three fresh markers vanishing from `!4`
+      # the moment `date` fails.
+      case "$_DRY_PEEK" in fresh|unknown) n=$((n + 1)) ;; esac
     done
   fi
 
