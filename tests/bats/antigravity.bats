@@ -122,7 +122,7 @@ _stub_agy() {
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
   run clikae tanks
   [ "$status" -eq 0 ]
-  [[ "$output" == *"agy"* ]]          # canonical engine name, not 'antigravity'
+  [[ "$output" == *"agy"* ]] || false   # canonical engine name, not 'antigravity'
   [[ "$output" == *"work"* ]] || false
 }
 

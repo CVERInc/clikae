@@ -35,6 +35,62 @@ scan() {
   [ -z "$output" ]
 }
 
+# P1-1 (round-2 review): `tests/bats/burn.bats` shipped `touch -d "@epoch"` —
+# GNU coreutils only, BSD `touch -d` doesn't take `@epoch` at all — and every
+# macOS CI run since has been silently testing nothing (see burn.bats' own
+# P1-1 comment: with every `touch` failing, 30 fixture files collapsed to one
+# identical mtime, and a broken string-sort fallback happened to produce the
+# "right" answer by coincidence). This GNU-ism slipped past every scan above
+# because it lived in `tests/`, which `scan()` never covered — so this one
+# does, alongside bin/clikae and lib. `touch -t YYYYMMDDhhmm.SS` (POSIX,
+# already this repo's own convention — grep `date -v.*touch -t` in
+# live.bats/memory.bats/agy-harness.bats) is the portable replacement; there
+# is no legitimate use of `touch -d` anywhere in this repo.
+# Same three directories as `scan()`, plus `tests/` — that's where the P1-1
+# GNU-ism actually lived, and `scan()` alone would never have caught it.
+scan_incl_tests() {
+  grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/tests" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+}
+
+@test "no touch(1) -d (BSD form takes ISO-8601, not a GNU @epoch — use touch -t)" {
+  run scan_incl_tests 'touch[[:space:]]+-d\b'
+  [ -z "$output" ]
+}
+
+# P1-1 (round-2 review), same finding, the other two GNU date/stat calls the
+# review named: `date -d`/`stat -c` are NOT a blanket ban like `touch -d`
+# above — this codebase's own established idiom (grep `_limit_date_kind` in
+# lib/core/limit.sh, or `_clikae_statv`/`_CLIKAE_STAT_FMT` in
+# lib/core/profile_store.sh — "the platform probe") is GNU-first with a BSD
+# fallback a few lines away, dozens of times over, and banning the GNU half
+# outright would just break that idiom. What's actually unsafe is a `date
+# -d`/`stat -c` call with NO BSD counterpart anywhere nearby — so this scans
+# a small window around every hit for the fallback shapes this repo already
+# uses (`date -j`/`date -r`/`date -v`, `_limit_date_kind`; `stat -f`,
+# `_clikae_statv`/`_CLIKAE_STAT_FMT`) and only flags a hit that has none.
+_scan_gnu_date_or_stat() {
+  local pattern="$1" markers="$2" f ln rest window hits=""
+  while IFS=: read -r f ln rest; do
+    [[ "$rest" =~ ^[[:space:]]*# ]] && continue
+    window="$(sed -n "$((ln > 3 ? ln - 3 : 1)),$((ln + 3))p" "$f" 2>/dev/null)"
+    printf '%s' "$window" | grep -qE "$markers" && continue
+    hits="$hits
+$f:$ln:$rest"
+  done < <(grep -rnE "$pattern" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/tests" 2>/dev/null)
+  printf '%s' "$hits"
+}
+
+@test "date -d (GNU-only) never appears without a BSD fallback nearby" {
+  run _scan_gnu_date_or_stat 'date[[:space:]]+-d\b' 'date[[:space:]]+-[jrv]|_limit_date_kind'
+  [ -z "$output" ] || { echo "date -d with no BSD fallback nearby:$output"; false; }
+}
+
+@test "stat -c (GNU-only) never appears without a BSD fallback or the platform probe nearby" {
+  run _scan_gnu_date_or_stat 'stat[[:space:]]+-c\b' 'stat[[:space:]]+-f|_clikae_statv|_CLIKAE_STAT_FMT'
+  [ -z "$output" ] || { echo "stat -c with no BSD fallback/platform probe nearby:$output"; false; }
+}
+
 @test "the compat scans do not fire on their own documentation" {
   # 🔴 A CONTROL FOR THE RULER, not for the code. `scan` was a plain grep over
   # source text until a comment saying "not readlink -f" turned it red. Both
