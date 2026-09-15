@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The board's Resume index is built at the same per-tank widened cap
+  `clikae home` asks with, so a tank full of burn one-shots no longer renders
+  an EMPTY Continue list. Burn sessions are excluded AFTER the adapter
+  answers, so an index cut to 10 rows handed the filter 10 rows to drop and
+  nothing to promote: 195 burns newer than 50 human sessions showed no human
+  row at all. The cap is widened by that tank's own sidecar count, under the
+  same ceiling as the ask (#62, #93).
 - The board's Resume index keys antigravity by TANK, not by the directory a
   session was started in. `workspace` in agy's own history is a constant on a
   real install, so a cwd-keyed index answered "no sessions" from every project

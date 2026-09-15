@@ -1053,6 +1053,39 @@ board_state_refresh() (
   local _CLIKAE_BOARD=0 n="${CLIKAE_HOME_RECENT_MAX:-10}"
   case "$engine" in claude|codex|antigravity|grok) ;; *) return 0 ;; esac
   case "$n" in ''|*[!0-9]*) n=10 ;; esac
+  # 🔴 #93 P2-1, adopted into the index (fix round 11). THE CUT AND THE
+  # EXCLUSION ARE NOT COMMUTATIVE. `_home_recent_rows` (lib/commands/home.sh)
+  # drops burn one-shots from the Resume rows AFTER the adapter answers, so an
+  # answer already cut to N gives the filter N rows to throw away and nothing
+  # to promote: 195 burns newer than 50 human sessions render ZERO human rows,
+  # silently. main fixed that by widening what it ASKS each adapter for, per
+  # tank, by that tank's own hidden count. This index is what answers that ask
+  # on the warm path, and a `recent/` entry cut to 10 at BUILD time cannot hand
+  # back 205 rows however wide the ask is — so the widening has to happen here
+  # too, at the same per-tank granularity and under the same ceiling.
+  #
+  # Per TANK, never per store (#93 round-2 P2-1): a row this tank returns can
+  # only be dropped by a sid recorded for THIS tank, so another engine's
+  # burn-heavy tank must not push this one's cap into the ceiling. A tank with
+  # no sidecar keeps the old N exactly — the common entry is byte-for-byte what
+  # rounds 5-10 wrote.
+  #
+  # `declare -F`, because `_burn_tank_hidden` lives in lib/commands/home.sh:
+  # this file must stay usable when home.sh has not been sourced, the same rule
+  # every adapter hook here already follows. Unsourced => no widening => the
+  # pre-#93 cap, which is the answer this file gave for ten rounds.
+  local _n_ask="$n" _n_hidden=0 _n_ceil _tank
+  _n_ceil="${CLIKAE_HOME_RECENT_SCAN_MAX:-${CLIKAE_BURN_SIDECAR_CAP:-2000}}"
+  case "$_n_ceil" in ''|*[!0-9]*) _n_ceil=2000 ;; esac
+  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ] && declare -F _burn_tank_hidden >/dev/null 2>&1; then
+    _tank="${dir%/}"; _tank="${_tank##*/}"
+    _n_hidden="$(_burn_tank_hidden "$engine" "$_tank" 2>/dev/null || printf '0')"
+    case "$_n_hidden" in ''|*[!0-9]*) _n_hidden=0 ;; esac
+    _n_ask=$((n + _n_hidden))
+    [ "$_n_ask" -le "$_n_ceil" ] || _n_ask="$_n_ceil"
+    [ "$_n_ask" -ge "$n" ] || _n_ask="$n"
+  fi
+  n="$_n_ask"
   umask 077
   # P3-4 (2026-09-12 round-2 fix review): load_adapter now runs BEFORE
   # mktemp -d, not after — a load failure used to leave a generation
