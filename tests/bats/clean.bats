@@ -1623,7 +1623,7 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
   [ -f "$f" ]
   grep -qF "$live_sid" "$f"
-  ! grep -qF "$dead_sid" "$f"
+  ! grep -qF "$dead_sid" "$f" || false
   [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
 }
 
@@ -1645,9 +1645,9 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/claude/T1"
   [ "$(wc -l < "$f" | tr -d ' ')" = 5 ]
   # newest 5 (run-4..run-8) kept, oldest 3 dropped
-  ! grep -qF "run-1" "$f"
-  ! grep -qF "run-2" "$f"
-  ! grep -qF "run-3" "$f"
+  ! grep -qF "run-1" "$f" || false
+  ! grep -qF "run-2" "$f" || false
+  ! grep -qF "run-3" "$f" || false
   grep -qF "run-8" "$f"
 }
 
@@ -1701,7 +1701,7 @@ _pin_clean_tank_lock_gc_removals() {
   local f="$CLIKAE_HOME/state/burn-sessions/codex/T1"
   [ -f "$f" ]
   grep -qF "$live_sid" "$f"
-  ! grep -qF "$dead_sid" "$f"
+  ! grep -qF "$dead_sid" "$f" || false
   [ "$(wc -l < "$f" | tr -d ' ')" = 1 ]
 }
 

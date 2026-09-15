@@ -102,7 +102,7 @@ _seed_transcript() {
   clikae init claude a
   run clikae resume "deadbeef-0000-0000-0000-000000000000"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No session"* ]]
+  [[ "$output" == *"No session"* ]] || false
   [ ! -f "$CLAUDE_STUB_LOG" ]
 }
 
@@ -158,14 +158,14 @@ _seed_transcript() {
 @test "resume ask-tank defaults to always, with no setting file" {
   run clikae resume ask-tank
   [ "$status" -eq 0 ]
-  [[ "$output" == *"always"* ]]
+  [[ "$output" == *"always"* ]] || false
   [ ! -f "$CLIKAE_HOME/resume-ask-tank" ]
 }
 
 @test "resume ask-tank <value> persists and reports back" {
   run clikae resume ask-tank dry-only
   [ "$status" -eq 0 ]
-  [[ "$output" == *"dry-only"* ]]
+  [[ "$output" == *"dry-only"* ]] || false
   [ "$(cat "$CLIKAE_HOME/resume-ask-tank")" = "dry-only" ]
   run clikae resume ask-tank
   [[ "$output" == *"dry-only"* ]]
