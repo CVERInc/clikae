@@ -227,6 +227,8 @@ _ckpt_refuse() {
     printf 'cockpit-guard: refused — %s.\n' "$why"
     printf 'Dispatch it instead:\n'
     printf '  clikae burn <engine> <tank> --prompt-file <f> --artifact <path>\n'
+    # shellcheck disable=SC2034  # CLIKAE_LIB/CLIKAE_ADOPT_READONLY are read by
+    # the files sourced two lines down, not by this script.
     ( [ -n "$_dir" ] &&
       # #61 round-5 merge: the enumerator now (1) asks tank_engine_known,
       # which needs list_adapters (CLIKAE_LIB + adapter_loader.sh — this
