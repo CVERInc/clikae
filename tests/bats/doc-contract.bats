@@ -24,6 +24,27 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
 @test "doc gate: passes on the repo as it stands" {
   run _gate
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # P3-6 (round-2 review of #102): it passed while printing two
+  # "bad substitution" lines on bash 5 — the fallback and the empty-tree guard
+  # were dead. A pass has to be clean.
+  [[ "$output" != *"bad substitution"* ]] || { echo "$output"; false; }
+}
+
+@test "doc gate: a copy inside an unrelated git repo falls back to the files on disk" {
+  # `is-inside-work-tree` says yes and `ls-files` says nothing: the fallback
+  # branch is the only thing between this and an empty source list.
+  _copy_repo
+  git -C "$BATS_TEST_TMPDIR" init -q . 2>/dev/null || git init -q "$BATS_TEST_TMPDIR"
+  run _gate_in_copy
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"bad substitution"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"docs name nothing the code lacks"* ]] || { echo "$output"; false; }
+  # …and that pass is real: the same copy still fires on a missing name. With
+  # the fallback dead the source list was empty and the gate passed anyway.
+  printf '\n`tmux_no_such_function` is named here.\n' >> "$REPO/docs/DESIGN-tmux.md"
+  run _gate_in_copy
+  [ "$status" -ne 0 ] || { echo "vacuous pass inside an unrelated repo: $output"; false; }
+  [[ "$output" == *"tmux_no_such_function"* ]] || { echo "$output"; false; }
 }
 
 @test "doc gate: fires when a doc names a function that does not exist" {
@@ -100,6 +121,35 @@ _gate_in_copy() { bash "$REPO/scripts/doc-names-exist.sh"; }
   run _gate_in_copy
   [ "$status" -ne 0 ] || { echo "the gate stayed silent"; false; }
   [[ "$output" == *"window-size"* ]] || { echo "$output"; false; }
+}
+
+# P2-5 (2026-09-14 round-2 review): the verify half matched `\bstatus-left\b`
+# inside `status-left-length`, so two of the seven status options were vouched
+# for by their longer siblings. Every one of the seven is deleted in turn from
+# a copy, and the gate must go red NAMING that option — including the two that
+# only ever exist in the source as a prefix of another option once deleted.
+@test "doc gate: deleting the line that sets any status-* option turns the gate red" {
+  local opt line
+  for opt in status-left status-right status-left-length status-right-length \
+             status-justify status-interval status-format; do
+    _copy_repo
+    # The exact text of the setting line, up to the option name and the
+    # character after it — `status-left ` does not match `status-left-length`.
+    case "$opt" in
+      status-format) line="set-option -t \"=\$session:\" 'status-format[0]'" ;;
+      *)             line="set-option -t \"=\$session:\" $opt " ;;
+    esac
+    grep -vF -- "$line" "$REPO/lib/core/tmux.sh" > "$REPO/tmux.sh.new"
+    mv "$REPO/tmux.sh.new" "$REPO/lib/core/tmux.sh"
+    # The copy must really have lost that line — a no-op edit would make this
+    # test green for the wrong reason.
+    ! grep -qE "set-option.*[\"' ]${opt}[\"' []" "$REPO/lib/core/tmux.sh" \
+      || { echo "$opt: fixture edit did not remove the line"; false; }
+    run _gate_in_copy
+    [ "$status" -ne 0 ] || { echo "$opt: deleted, and the gate stayed green"; false; }
+    [[ "$output" == *"$opt — named in DESIGN-tmux, never set"* ]] || { echo "$opt: $output"; false; }
+    rm -rf "$REPO"
+  done
 }
 
 @test "doc gate: fires on a name whose prefix is not in the legacy list" {

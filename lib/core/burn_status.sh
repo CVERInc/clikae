@@ -10,19 +10,96 @@
 #
 # Purpose-built, not a general JSON parser: the only JSON these functions ever
 # read is the flat, single-line object _burn_status_write itself produces (no
-# nesting except the `rerouted_from` array, no field value ever contains a
-# literal `"`), so a small grep/sed extractor is honest here where it would be
-# a trap on arbitrary JSON.
+# nesting except the `rerouted_from` array; a `"` inside a value is always
+# json_str's escaped `\"` — see burn_status_fieldv), so a small extractor is
+# honest here where it would be a trap on arbitrary JSON.
 
 # burn_status_field <json> <field> -> the RAW JSON-encoded value for <field>
 # (a quoted string, `null`, `true`/`false`, a bare number, or a `[...]`
 # array) — or nothing if the field is absent or the object doesn't match the
 # one shape this reads.
 burn_status_field() {
-  local json="$1" field="$2"
-  printf '%s' "$json" \
-    | grep -oE "\"$field\":(\"[^\"]*\"|null|true|false|-?[0-9]+|\[[^]]*\])" \
-    | head -n 1 | sed -E "s/^\"$field\"://"
+  burn_status_fieldv "$1" "$2"
+  printf '%s' "$_BSF"
+}
+
+# burn_status_fieldv <json> <field> -> the same RAW value, into $_BSF, WITHOUT
+# FORKING. Empty when the field is absent.
+#
+# 🔴 WHY THE FORK-FREE TWIN. The echoing form above costs a `grep`, a
+# `head`, a `sed` and a command substitution — four processes — for one field,
+# and both of its callers ask for several fields of several files in a loop:
+# burn_tank_busy walks every run directory on the machine before a burn may
+# start, and the tmux status line (lib/core/tmux.sh's tmux_status_render) does
+# the same walk every 5 seconds inside tmux's own server, under a 30 ms budget
+# that four processes per field cannot meet.
+#
+# 🔴 P1-1 (2026-09-14 round-1 fix review). The FIRST fork-free shape here was
+# `rest="${json#*\"$field\":}"` — a bash parameter-expansion prefix strip.
+# That is O(n²) on this input, not O(n): bash's shortest-match search for a
+# pattern beginning with `*` retries the glob at every byte offset, so asking
+# for a field that sits AFTER a large one (exactly `state`/`pid`, which sit
+# after `reason` in `_burn_status_write`'s own field order — see that
+# function) pays for scanning the large field's bytes at EVERY offset it
+# tries, not once. Measured on this box (bash 5.2, single field, last-field
+# worst case): 1,338 B → 2 ms, 8,338 B → 33 ms, 64,338 B → 1,910 ms, 1,000,338
+# B → didn't finish in 90 s.
+#
+# 🔴 P2-6 (2026-09-14 round-2 review): what those sizes are NOT is sizes this
+# writer produces. Round 1 said `reason` could reach 64 KB because burn.sh
+# reads `_BURN_REDACT_TAIL_BYTES` (65536) of a failed run's stderr — but that
+# bounds how much stderr is read to FIND a reason, not how much is written:
+# lib/commands/burn.sh passes the chosen line through
+# `_burn_truncate_utf8 "$stderr_first" 200`, and every other
+# `_burn_status_write` call site passes a short literal. So `reason` is at
+# most 200 bytes before JSON escaping (400 if every byte were `"` or `\`),
+# and 97 real status.json files on the development host measured 349-414
+# bytes whole (median 366). At that size the old reader cost well under a
+# millisecond. The swap stays because the old shape was quadratic in the
+# object's size and its cost could not be read off the code, not because a
+# real object was ever large; tests/bats/burn-status.bats pins the real bound
+# through the writer itself, so a change that lifts it is a visible decision.
+#
+# The replacement is a single `[[ =~ ]]` regex match — still one process (no
+# fork, no subshell: `[[` and `BASH_REMATCH` are shell builtins), but glibc's
+# regex engine walks the string once. Re-measured, single field, same worst
+# case: 1,338 B → 1 ms, 8,338 B → 1 ms, 64,338 B → 2-3 ms, 1,000,338 B →
+# 32-34 ms — linear.
+#
+# Three alternatives: a JSON string (quotes kept), the `rerouted_from` array
+# (bracket-delimited, first `]` — the "no nesting" assumption the header
+# makes), or a bare token cut at the next `,` or `}` (null/true/false/number).
+#
+# 🔴 P3-1 (2026-09-14 round-2 review): this comment used to say the bare and
+# quoted alternatives always matched the same span, so the earlier one won.
+# Both halves were wrong. POSIX ERE alternation is leftmost-LONGEST: with a
+# `,` or `}` inside a string the quoted alternative is longer and wins on
+# length, not order; and the quoted alternative was `"[^"]*"`, which stops at
+# an ESCAPED quote, so with `\"` inside a string the BARE one was longer.
+# `{"reason":"say \"hi\", ok"}` read `"say \"hi\"` here and `"say \"` in the
+# pre-83946cb reader: two different truncations, neither the value. The header
+# note that no value contains a `"` was false too — json_str (lib/core/json.sh)
+# escapes one as `\"`, and `reason` is engine stderr. The string alternative is
+# now JSON's own: `"` then any run of non-quote-non-backslash bytes or a
+# backslash pair, then `"`. On writer output that string ends at its real
+# closing quote, which is immediately followed by `,`/`}`, so the bare
+# alternative can never be longer than it and the whole encoded value is
+# returned — exactly what json_str wrote (tests/bats/burn-status.bats compares
+# against json_str, not against another reader). A `"field":` inside a string
+# can never match either: every `"` json_str emits inside a value is preceded
+# by `\`. The pattern lives in a variable because a literal backslash inside
+# `[[ =~ ]]` is quoted differently across bash versions; a variable is not.
+#
+# The `"` and `:` around the name are load-bearing and are why a prefix cannot
+# be confused with a longer name: asking for `artifact` cannot match
+# `"artifact_bytes":`.
+# shellcheck disable=SC2034  # _BSF is an output slot, read by lib/core/tmux.sh.
+burn_status_fieldv() {
+  local json="$1" field="$2" re
+  _BSF=""
+  re='"'"$field"'":("([^"\\]|\\.)*"|\[[^]]*\]|[^,}]*)'
+  [[ $json =~ $re ]] && _BSF="${BASH_REMATCH[1]}"
+  return 0
 }
 
 # burn_status_str <json> <field> -> <field>'s value with quotes stripped, or
@@ -44,6 +121,43 @@ burn_status_state() { burn_status_str "$1" state; }
 # $CLIKAE_HOME: the two agree by default but a caller overriding $CLIKAE_HOME
 # alone would otherwise read from a directory burn never wrote to).
 burn_status_dir() { printf '%s/.clikae/logs/%s\n' "$HOME" "$1"; }
+
+# burn_status_dirs -> every burn run directory that exists on this machine, one
+# per line, newest LAST (glob order). Fork-free: a plain glob, no `find`, no
+# command substitution — the tmux status line (lib/core/tmux.sh) walks this on
+# a 5-second timer inside tmux's own server process.
+#
+# The literal below is the same layout burn_status_dir six lines up prints, and
+# deliberately sits next to it rather than being derived from it: deriving it
+# would mean an unquoted command substitution, which word-splits a $HOME
+# containing a space. Two literals in the same paragraph drift far less easily
+# than two in different files — and if this layout ever moves, both lines are
+# on the same screen.
+burn_status_dirs() {
+  burn_status_dirsv
+  [ "${#_BSDIRS[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${_BSDIRS[@]}"
+}
+
+# shellcheck disable=SC2034  # _BSDIRS is an output slot, read by lib/core/tmux.sh.
+# burn_status_dirsv -> the same list into the $_BSDIRS ARRAY, with NO fork at
+# all — not even the command substitution that reading the printing form costs.
+#
+# The …v suffix is this repo's existing name for "sets a variable instead of
+# printing, because the caller is on a hot path": tmux_sessv, _home_fuel_dotv,
+# dry_store_peekv. Here the hot path is #77's status row, which walks this list
+# every five seconds per attached client, and a `$( )` around it was measurably
+# a third of the remaining budget on a loaded host.
+#
+# Indexed array assignment by length, not `+=`: bash 3.2.
+burn_status_dirsv() {
+  local d
+  _BSDIRS=()
+  for d in "$HOME"/.clikae/logs/burn-*; do
+    [ -d "$d" ] || continue
+    _BSDIRS[${#_BSDIRS[@]}]="$d"
+  done
+}
 
 # burn_status_resolve <run_id|status-file> -> echo the status.json PATH to
 # read, or return 1 if none can be found. Accepts, in order:

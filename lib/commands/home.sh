@@ -17,19 +17,10 @@
 # pure helpers that never read T_*.
 if declare -F i18n_load >/dev/null 2>&1; then i18n_load "$(clikae_lang)"; fi
 
-# _human_age <epoch-mtime> [now-epoch] — "just now" / "5m ago" / "3h ago" /
-# "2d ago". One formatter for the board's Continue list and the resume picker
-# (each used to carry its own copy).
-_human_age() {
-  local mt="$1" now="${2:-}" d
-  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo "$mt")"
-  d=$(( now - mt ))
-  if   [ "$d" -lt 60 ];    then printf 'just now'
-  elif [ "$d" -lt 3600 ];  then printf '%dm ago' "$(( d / 60 ))"
-  elif [ "$d" -lt 86400 ]; then printf '%dh ago' "$(( d / 3600 ))"
-  else                          printf '%dd ago' "$(( d / 86400 ))"
-  fi
-}
+# _human_age lives in lib/core/duration.sh now (P2-5, 2026-09-14 round-1 fix
+# review) — the tmux status row needed it too and couldn't justify sourcing
+# this whole file to get it. bin/clikae sources duration.sh globally, same as
+# every other core lib, so nothing here changes at the call sites.
 
 # _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.
@@ -429,8 +420,10 @@ EOF
         fi
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
-        # has no recap, so the expand is always visible.
-        age="$(_human_age "$mt")"
+        # has no recap, so the expand is always visible. Guarded like tmux.sh's
+        # call (P3-5, 2026-09-14 round-2 review): _human_age lives in
+        # lib/core/duration.sh, and 20+ test files source this file without it.
+        age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$mt")"
         # Is this session on the tank you're currently using? (● vs ○). Packed into
         # the active field as "<flag> <age>" so the draw has both.
         aflag="0"; _act="$(_home_active_for "$engine" 2>/dev/null || true)"
@@ -736,7 +729,8 @@ EOF
     fi
     [ "$mark" -eq 1 ] && title="${title}"$'\001'
 
-    age="$(_human_age "$created" 2>/dev/null || true)"
+    age=""   # P3-5: same declare -F guard as the Continue rows above
+    declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$created" 2>/dev/null || true)"
     # A waiter's countdown rides in its window name, so this costs one call and
     # keeps no state. Empty unless one is actually counting.
     wake_left="$(live_wake_note "$name" 2>/dev/null || true)"

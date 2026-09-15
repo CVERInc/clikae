@@ -22,7 +22,8 @@ elapsed_s          ditto
 run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
 started_at         a field in #41's status.json, not a function
-updated_at         a field GitHub's search API returns per issue/PR (the tail-sweep/cursor field name), not a function
+updated_at         two unrelated fields, both quoted on purpose: a field in #41's status.json (P2-1, 2026-09-14 round-1 fix review), and the field GitHub's search API returns per issue/PR (#92's tail-sweep/cursor field name) — neither is a function
+cached_at          a field in #72's usage cache, state/usage/<engine>/<tank>.json (P2-5, 2026-09-14 round-1 fix review), not a function
 token_count        codex's own rollout event type name, quoted in docs/DESIGN-board-fuel-dots.md
 used_percent       a field in codex's own rate_limits JSON, not a function
 window_minutes     ditto

@@ -115,6 +115,83 @@ _field() {
   [[ "$(_field "$f" rerouted_from)" == *"codex/T1"* ]] || false
 }
 
+# P2-6 (2026-09-14 round-2 review): round 1 sized this at a 64 KB `reason`
+# on the premise that burn writes up to `_BURN_REDACT_TAIL_BYTES` of stderr
+# into it. It does not — that constant bounds how much stderr is READ; the
+# line written is cut by `_burn_truncate_utf8 … 200`, every other writer call
+# passes a short literal, and 97 real status.json files measured 349-414
+# bytes. So the true bound is pinned where it is decided — through the real
+# writer — and the reader is exercised at that bound and 10x it. No timing
+# claim: at these sizes the old quadratic reader was also sub-millisecond, and
+# a stopwatch that cannot tell the two apart is not a guard.
+@test "burn-status: a failed lane's reason is capped at 200 bytes in status.json, whatever stderr held" {
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 100000 /dev/zero | tr '\0' 'x' >&2   # one 100 KB stderr line, past the redaction read window too
+printf '\n' >&2
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- noop
+  [ "$status" -ne 0 ]
+  local f; f="$(_the_status_file)"
+  [ "$(_field "$f" state)" = '"fail"' ] || { cat "$f"; false; }
+  local reason; reason="$(_field "$f" reason)"
+  [ "${#reason}" -eq 202 ] || { echo "reason is ${#reason} bytes with quotes, want 202"; false; }
+  local size; size="$(wc -c < "$f" | tr -d ' ')"
+  [ "$size" -lt 1024 ] || { echo "status.json is $size bytes"; false; }
+}
+
+@test "burn-status: burn_status_fieldv reads every field at the real reason cap and at 10x it" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local n reason json
+  for n in 200 2000; do
+    reason="$(head -c "$n" /dev/zero | tr '\0' 'x')"
+    json="$(printf '{"ok":false,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":12,"run_id":"burn-1","state":"fail","started_at":1,"updated_at":2,"pid":123,"log":"/x","reset_at":null}' "$reason")"
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "$n: state got [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = "123" ] || { echo "$n: pid got [$_BSF]"; false; }
+    burn_status_fieldv "$json" reason
+    [ "${#_BSF}" -eq $((n + 2)) ] || { echo "$n: reason length ${#_BSF}"; false; }
+    # prefix trap: artifact vs artifact_bytes
+    burn_status_fieldv "$json" artifact
+    [ "$_BSF" = '"/x"' ] || { echo "$n: artifact got [$_BSF]"; false; }
+    burn_status_fieldv "$json" artifact_bytes
+    [ "$_BSF" = "null" ] || { echo "$n: artifact_bytes got [$_BSF]"; false; }
+  done
+}
+
+# P3-1 (2026-09-14 round-2 review): `reason` is engine stderr, json_str escapes
+# a `"` in it as `\"`, and the reader's string alternative stopped at that
+# escaped quote — `say "hi", ok` came back as `"say \"hi\"`. The expectation
+# here is the WRITER's own encoding, not a second reader.
+@test "burn-status: burn_status_fieldv returns a string field exactly as json_str wrote it" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local s enc json
+  for s in 'say "hi", ok' 'a}b' 'ends in \' 'x\"y' 'q"state":"LIE"' 'tab	and
+newline' 'plain'; do
+    enc="$(json_str "$s")"
+    json="{\"ok\":false,\"artifact\":\"/x\",\"artifact_bytes\":null,\"reason\":$enc,\"rerouted_from\":[\"codex/T1\"],\"state\":\"fail\",\"pid\":42}"
+    burn_status_fieldv "$json" reason
+    [ "$_BSF" = "$enc" ] || { echo "[$s]: got [$_BSF], writer wrote [$enc]"; false; }
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "[$s]: state [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = 42 ] || { echo "[$s]: pid [$_BSF]"; false; }
+    burn_status_fieldv "$json" rerouted_from
+    [ "$_BSF" = '["codex/T1"]' ] || { echo "[$s]: rerouted_from [$_BSF]"; false; }
+  done
+}
+
 @test "burn-status: every burn writes a status file even without --json" {
   # #41 is "every burn", not "every --json burn" — the whole point is that a
   # cockpit reading a DIFFERENT process never needs the burn to have opted in.

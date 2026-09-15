@@ -2214,7 +2214,17 @@ STUB
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
   local elapsed=$((t1 - t0))
-  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on an 8MB capture — expected single-digit seconds"; false; }
+  # P2-4 (2026-09-14 round-1 fix review of #102/#77): this guard is a WALL-CLOCK
+  # ceiling on a SHARED CI runner, not a stopwatch on a specific number (see the
+  # P1-2 comment above) — it went red on macOS CI at 11s against the old 10s
+  # ceiling, confirmed unrelated to #102's own change (that PR touches
+  # burn_status.sh/tmux.sh, which this classification path never calls — grep
+  # for dry_store_read/dry_store_peekv/burn_status_field/burn_status_dirs in
+  # lib/commands/burn.sh returns zero hits). 45s is still ~5x below the 240s
+  # this guard's regression measured at (and ~23x its 1.9s baseline), while not
+  # flaking on ordinary runner noise a single-digit ceiling has no room to
+  # absorb. (Round 2 corrected "~20x" here: 240/45 is 5.3.)
+  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on an 8MB capture — this guard's regression measured 240s (against 1.9s), so 45s is runner noise headroom, not the regression"; false; }
 }
 
 # P1-1 (round-3 fix review, this PR): the guard above only exercises the
@@ -2243,7 +2253,14 @@ STUB
   # the WALL TIME is.
   [[ "$output" == *'"ok":false'* ]] || false
   local elapsed=$((t1 - t0))
-  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — expected single-digit seconds"; false; }
+  # P2-4 (2026-09-14 round-1 fix review of #102/#77): loosened from a 10s to a
+  # 45s wall-clock ceiling — this exact test was the one seen red on macOS CI
+  # (11s), on a shared runner, unrelated to #102 (see the sibling guard above
+  # for the grep that rules it out). This guard's own regression is 727x its
+  # baseline (~3s here, so tens of minutes at 8MB), which 45s sits far below.
+  # Only this guard and the one above keep 45s — the dense-needle guard below
+  # is a ratio, because its regression (26.5s) is under 45s.
+  [ "$elapsed" -le 45 ] || { echo "classification took ${elapsed}s on a healthy 8MB capture — this guard's regression is 727x (measured at 2MB, REVIEW-stderr81-r3.md P1-1), not a few seconds of runner noise"; false; }
 }
 
 # --- P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (classification
@@ -2256,28 +2273,166 @@ STUB
 # line (53774 hits) took 26.5s. The 8MB/0-hit guard above would NOT have
 # caught this — it exercises the "no match" path, not "many matches".
 
-@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
-  _stub_burn_transport
-  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+# 🔴 P1-1 (2026-09-14 round-2 review of #102/#77): round 1 loosened this guard
+# to the same 45s as the two above, and that switched it OFF — its regression
+# was measured at 26.5s, so 45s is ~1.7x ABOVE the thing it exists to catch,
+# not below it, and it had never flaked (0.56s against a 10s ceiling; the CI
+# red was the healthy-capture guard above). So this one is a RATIO, not a
+# constant: the same capture shape with the needle absent is timed in the same
+# test, on the same runner, under the same load, and the dense-needle run must
+# stay within 8x of it. A slow runner slows both halves; only the per-match
+# cost this guard is about slows one. The baseline is floored at 500 ms so a
+# near-zero baseline's scheduling jitter cannot become the ceiling. Measured on
+# reefbox (gawk, load ~2.5, 3 runs each): clean baseline 605-647 ms, dense
+# 466-472 ms; with the round-5 regression put back (perl's single pass
+# bypassed, the per-match `substr(t, i)` awk loop classifying) dense went to
+# 9124-9243 ms — ~13x its own baseline, red. macOS's BWK awk is the slower one.
+#
+# 🔴 THE MARGIN, WIDENED (P1-1, 2026-09-14 round-3 review). The round-3 review
+# re-measured the ratio and put a number on how much room it actually has:
+# clean baseline 621 ms, injected-regression dense 9679 ms, ceiling 6080 ms —
+# 1.59x. That is the margin with a GOOD baseline sample. With a bad one there
+# is none: a single 1210 ms baseline (a runner hiccup, well inside ordinary
+# noise on a shared box) raises the ceiling to 9680 ms and the regression walks
+# straight through it, silently, exactly the way round 1's 45 s constant
+# switched this guard off. A one-sample baseline is the fragile part, not the
+# multiplier. So the baseline is now the MEDIAN OF THREE runs of the same
+# shape, on three separate tanks (each run marks its tank dry): one slow sample
+# can no longer set the ceiling, and three runs cost about two seconds.
+#
+# 🔴 THE 60 s BOUND WAS AN EMPTY PROMISE AND IS GONE (P2-2, 2026-09-14 round-4
+# review). Round 3 added it as "a SECOND, coarser bound for what the ratio
+# structurally cannot see: a baseline so slow that 8x of it no longer excludes
+# the regression". Measured, with the regression actually injected (burn.sh's
+# `command -v perl` forced false, so redaction goes through the per-MATCH awk
+# loop): dense was 17.1 s at load 5 and 47.1 s at load 19 — it NEVER reaches
+# 60 s, so on the very case it was written for it stays silent. Both bounds
+# only fired when the regression was absolutely huge; they were the same
+# direction, not complementary, and between them sat a band nobody watched
+# (baseline in [dense/8, ~7.5 s]; the baselines measured in those same runs,
+# 1.5-1.8 s and 5.0-5.3 s, were 21% and 11% below its lower edge).
+#
+# What replaces it is an absolute ceiling LOW ENOUGH TO FIRE, chosen from both
+# ends of the measurement and stated so the next person can check the
+# arithmetic instead of the intent. Every number below was measured on this
+# guard, with the regression injected by forcing burn.sh's `command -v perl`
+# false:
+#
+#   healthy dense      469 ms (16 cores idle), 511 ms (pinned to 2 cores),
+#                      1387 ms (load ~5), 2428 ms (2 contended cores, 4x
+#                      oversubscribed) — the slowest healthy reading anyone has
+#                      taken is 2.4 s.
+#   regression dense   9.08 s (16 cores idle), 17.1 s (load 5), 47.1 s
+#                      (load 19), and 26.5 s in the original round-5 report on
+#                      a 4 MB/53774-hit capture — the fastest reading of the
+#                      regression anyone has taken is 9.1 s.
+#   ceiling            8 s: 3.3x above the slowest healthy measurement and
+#                      1.13x below the fastest regression measurement. It is
+#                      not generous, and it is not supposed to be — a ceiling
+#                      with 100x of headroom is a ceiling that never fires.
+#
+# The two halves are now genuinely complementary rather than both waiting for a
+# big absolute number: on a FAST box the ratio has 14.5x of margin (dense 9.08 s
+# against a 626 ms baseline) and the absolute is redundant; on a SLOW or loaded
+# box the ratio's margin collapses toward the multiplier (1.59x at load 3.9,
+# 1.34x at load 5, 1.16x at load 19 — measured, monotonic) and the absolute is
+# what still fires, because every measured regression there is 17-47 s.
+#
+# The ratio stays the sensitive half (it is what would catch a regression too
+# small for 15 s), and it is now written in the shape it always implied: pass
+# if dense is within 8x the median baseline OR if dense is under 2 s in
+# absolute terms. That second disjunct is the anti-flake floor — it replaces
+# `base_ms=500`, and it is TIGHTER (2 s, not 8 x 500 ms = 4 s) — and it is a
+# floor on FAILING, never a rescue for the regression: 17 s is not under 2 s.
+#
+# 🔴 AND THE RULER IS NOT THE SAME EVERYWHERE. The same 1.4 MB dense input
+# through the same `_burn_redact_one_awk` program (round-4 review's bench):
+# gawk 5.2.1 8.76 s, mawk 0.43 s (20x faster), busybox awk 16.67 s — a 40x
+# spread, and on mawk the injected regression comes in at 3336 ms and this
+# guard is GREEN. So what this file protects depends on which `awk` is first on
+# PATH, and until now nothing wrote down which one was measured. The test
+# prints its awk's identity with every failure, and the numbers above were
+# taken on GNU Awk 5.2.1 (/usr/bin/awk -> gawk) on Linux. macOS's BWK awk
+# remains UNMEASURED by anyone — fix2 inferred it is slower, round 3 agreed it
+# is an inference, and round 4 did not measure it either.
+_burn_now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000'; }
+
+_stub_dense_capture() {
+  # <path mentioned on every line>
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<STUB
 #!/usr/bin/env bash
 i=0
-while [ "$i" -lt 20000 ]; do
-  printf 'line %d mentions /home/build/workspace/project-checkout-dir again\n' "$i"
-  i=$((i + 1))
+while [ "\$i" -lt 20000 ]; do
+  printf 'line %d mentions $1 again\n' "\$i"
+  i=\$((i + 1))
 done
 printf "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM.\n"
 STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+}
+
+@test "burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)" {
+  command -v perl >/dev/null 2>&1 || skip "perl not installed (the ms clock)"
+  _stub_burn_transport
   clikae init codex T1
-  local t0 t1
-  t0="$(date +%s)"
-  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+  clikae init codex T2
+  clikae init codex T3
+  clikae init codex T4
+  local t0 t1 base_ms dense_ms ceiling_ms tank
+  local samples=""
+
+  # Baseline: identical shape and size, but the path on every line is NOT the
+  # -C needle, so the redaction pass runs over the whole capture with 0 hits.
+  # THREE runs, one per tank (each run marks its own tank dry), and the MEDIAN
+  # is the baseline — a single slow sample must not be allowed to set the
+  # ceiling. See the margin note above.
+  _stub_dense_capture /home/build/workspace/unrelated-other-directory
+  for tank in T1 T2 T3; do
+    t0="$(_burn_now_ms)"
+    run clikae burn codex "$tank" --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
+      -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
+    t1="$(_burn_now_ms)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
+    samples="$samples$((t1 - t0))
+"
+  done
+  base_ms="$(printf '%s' "$samples" | sort -n | sed -n 2p)"
+  case "$base_ms" in ''|*[!0-9]*) echo "no median baseline from [$samples]"; false ;; esac
+
+  # The case under test: the needle on every line (20000 hits). A fourth tank,
+  # because the three baselines just marked T1-T3 dry.
+  _stub_dense_capture /home/build/workspace/project-checkout-dir
+  t0="$(_burn_now_ms)"
+  run clikae burn codex T4 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" \
     -- exec -C /home/build/workspace/project-checkout-dir -s workspace-write "refactor the parser"
-  t1="$(date +%s)"
+  t1="$(_burn_now_ms)"
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [[ "$output" == *'"reset":"Try again at Jul 7th, 2026 2:17 PM"'* ]] || false
-  local elapsed=$((t1 - t0))
-  [ "$elapsed" -le 10 ] || { echo "classification took ${elapsed}s on a dense-needle capture — expected single-digit seconds"; false; }
+  dense_ms=$((t1 - t0))
+
+  # Which ruler measured this, printed on every failure — a 40x spread between
+  # awk implementations decides how much this guard can see (note above).
+  local awk_id; awk_id="$( { awk --version 2>/dev/null || awk -W version 2>&1; } | head -1)"
+  [ -n "$awk_id" ] || awk_id="unknown awk at $(command -v awk 2>/dev/null)"
+
+  # The sensitive half: within 8x the MEDIAN baseline, OR under 2 s in absolute
+  # terms. The second disjunct is the anti-flake floor (a sub-2 s measurement is
+  # runner noise, not a per-match regression) and never rescues the regression,
+  # which measures 17-47 s.
+  ceiling_ms=$((base_ms * 8))
+  [ "$dense_ms" -le "$ceiling_ms" ] || [ "$dense_ms" -le 2000 ] || {
+    echo "dense-needle classification took ${dense_ms}ms, over 8x the MEDIAN no-needle baseline (${ceiling_ms}ms, from [$samples]) and over the 2000ms noise floor — this guard's regression is per-MATCH (measured 26.5s on a 4MB/53774-hit capture, against a ~2s baseline). Measured with: ${awk_id}"
+    false; }
+
+  # The absolute half, and the reason it is 8 s and not 60 s: at 60 s it never
+  # fired on the regression it was written for (measured 9.1-47.1 s). This one
+  # fires however slow the baseline was — which is exactly the case the ratio
+  # goes blind on.
+  [ "$dense_ms" -le 8000 ] || {
+    echo "dense-needle classification took ${dense_ms}ms — past the absolute ceiling (8000ms: 3.3x the slowest healthy reading ever taken here, 2428ms on two contended cores, and below the fastest reading of the per-match regression, 9080ms). The ratio (baseline ${base_ms}ms, ceiling ${ceiling_ms}ms) is the half that goes blind when the baseline alone is slow; this half does not. Measured with: ${awk_id}"
+    false; }
 }
 
 # --- P2-1 (2026-09-08 ROUND-3 review): the raw `-- <argv>` redaction had no

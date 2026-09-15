@@ -14,6 +14,52 @@
 #
 # bash 3.2 safe: no `${var,,}`, no associative arrays, no `[[ =~ ]]`.
 
+# _human_age <epoch-mtime> [now-epoch] -> "just now" / "5m ago" / "3h ago" /
+# "2d ago". One formatter for the board's Continue list, the resume picker,
+# and (P2-5, 2026-09-14 round-1 fix review) the tmux status row's stale-fuel
+# suffix — each used to carry its own copy, or (the status row) would have
+# needed one. Moved here from lib/commands/home.sh for the same reason
+# _burn_parse_duration lives here rather than in lib/commands/burn.sh: a
+# caller that has no other reason to source home.sh's much larger command
+# machinery (lib/core/status_line.sh, sourced standalone as tmux's `#()`
+# helper — see that file's own "leaf library, no top-level side effects"
+# rule) still gets it. home.sh keeps calling this same function; it no
+# longer defines its own.
+_human_age() {
+  local _ha_out
+  _human_agev _ha_out "$@"
+  printf '%s' "$_ha_out"
+}
+
+# _human_agev <varname> <epoch-mtime> [now-epoch] -> the same string, assigned
+# to <varname> instead of printed. NO FORK when <now> is given.
+#
+# 🔴 P2-2 (2026-09-14 round-2 review): the tmux status row called the printing
+# form as `$(_human_age …)` — a command substitution around a shell function
+# is a subshell fork, on a 5-second timer, one clone more per render whenever
+# the fuel reading is over an hour old (measured with strace on the real
+# helper: 11 clones fresh, 12 at 2h), in the same round that removed a fork
+# per dry marker from the same row. This is the repo's `…v` convention
+# (burn_status_fieldv, dry_store_peekv, tmux_sessv): the caller on the hot path
+# passes a variable NAME and `printf -v` assigns it — bash 3.1+, no nameref,
+# so bash 3.2 is fine. The locals are `_hav_`-prefixed because printf -v on a
+# name that is also a local here would write the local, not the caller's
+# variable — so a caller must not pass a `_hav_…` name.
+_human_agev() {
+  local _hav_var="$1" _hav_mt="$2" _hav_now="${3:-}" _hav_d
+  [ -n "$_hav_now" ] || _hav_now="$(date +%s 2>/dev/null || echo "$_hav_mt")"
+  _hav_d=$(( _hav_now - _hav_mt ))
+  # P3-4 (2026-09-14 round-2 review): a stamp in the future is "just now" by
+  # decision, not by the accident of a negative number being < 60 — no
+  # formatter change below may turn clock skew into "-2h ago".
+  [ "$_hav_d" -lt 0 ] && _hav_d=0
+  if   [ "$_hav_d" -lt 60 ];    then printf -v "$_hav_var" 'just now'
+  elif [ "$_hav_d" -lt 3600 ];  then printf -v "$_hav_var" '%dm ago' "$(( _hav_d / 60 ))"
+  elif [ "$_hav_d" -lt 86400 ]; then printf -v "$_hav_var" '%dh ago' "$(( _hav_d / 3600 ))"
+  else                               printf -v "$_hav_var" '%dd ago' "$(( _hav_d / 86400 ))"
+  fi
+}
+
 # _burn_parse_duration <dur> -> whole seconds, or return 1 (nothing echoed)
 # for anything that doesn't parse. Accepts a bare integer (seconds) or an
 # integer with one trailing unit s/m/h/d. The caller must refuse rather than
