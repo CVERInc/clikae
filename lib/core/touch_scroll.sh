@@ -1,6 +1,34 @@
 #!/usr/bin/env bash
-# Translate a click-pair touch. Args: release row, pane id, pane_mode.
-# Invoked by tmux run-shell; no clikae state or engine initialization needed.
+# Translate a touch. Args: row, pane id, pane_mode, [phase], [column].
+# Invoked by tmux run-shell / if-shell; no clikae state or engine
+# initialization needed.
+#
+# THREE PHASES, ONE FILE. `phase` is the 4th argument and selects which event
+# of a touch this call is translating:
+#
+#   ''    MouseUp1Pane        — the click pair (#88 swipe, #108 tap zones)
+#   drag  MouseDrag1Pane      — one row of motion (#108, this file's drag phase)
+#   end   MouseDragEnd1Pane   — the finger left the glass
+#
+# 🔴 WHY A DRAG PHASE EXISTS AT ALL. #88 hung its whole translation on
+# MouseUp1Pane-with-displacement. Measured on a real iPhone (2026-09-16,
+# a-Shell -> ssh -> tmux 3.4, passive event log): a TAP is `MouseDown1Pane` +
+# `MouseUp1Pane` on the same row, but a FLICK or a press-and-drag is
+# `MouseDown1Pane` + one `MouseDrag1Pane` per row crossed + `MouseDragEnd1Pane`
+# — and NO MouseUp1Pane at all. #88's displacement branch therefore never fired
+# on the device it was written for: tmux's own root `MouseDrag1Pane ->
+# copy-mode -M` and `MouseDragEnd1Pane -> copy-pipe-and-cancel` won every time,
+# which is why the gesture ended in "copied N chars to tmux buffer" instead of
+# scrolling.
+#
+# 🔴 THE DRAG PHASE'S EXIT STATUS IS LOAD-BEARING. The drag/end bindings call
+# this file through tmux's `if-shell` (not `run-shell`), so the exit status
+# chooses between "clikae handled it" (0) and "run tmux's own stock command
+# for this key" (non-zero). That is the whole of `@clikae_touch_drag off` ==
+# stock tmux: not an approximation of the default, the default itself,
+# including mouse drag-selection on a desktop. `_decline` is how any branch
+# that does not want this gesture says so; in the '' (MouseUp) phase it is a
+# plain `exit 0`, because run-shell has no branch to choose.
 #
 # ONE HANDLER, ONE DECISION TREE (#108). Two features arrive through the same
 # MouseUp1Pane binding and must not be able to disagree about a single touch:
@@ -17,7 +45,33 @@
 # MouseDown binding), never from the release — the two must come from one
 # geometry or a pane that resized mid-touch measures the band against the wrong
 # height.
-y2=${1:-}; TS_PANE_ID=${2:-}; mode=${3:-}
+y2=${1:-}; TS_PANE_ID=${2:-}; mode=${3:-}; phase=${4:-}; mouse_x=${5:-}
+# 🔴 EVERY FORMAT ARGUMENT IN THE BINDING IS QUOTED, AND THIS IS WHY. `#{pane_mode}`
+# expands to the EMPTY STRING outside a mode — not to a placeholder, not to a
+# space, to nothing at all. Unquoted in the binding's argument list it therefore
+# does not produce an empty argument, it produces NO argument, and every
+# argument after it shifts left one place: `phase` would arrive in `mode`.
+# #88 could not see this (pane_mode was its LAST argument, so an empty
+# expansion just left `$3` unset, which `${3:-}` already handled); the drag
+# phase puts two arguments after it, so the binding quotes all five.
+phase=$(printf '%s' "$phase" | tr -d '[:space:]')
+# _decline — "clikae is not translating this gesture". In the drag/end phases
+# the caller is `if-shell`, so a non-zero status is what makes tmux fall
+# through to its OWN stock binding for this key; in the MouseUp phase the
+# caller is `run-shell`, which has no branch, so the same word means exit 0.
+_decline() {
+  case "$phase" in
+    drag|end) exit 1 ;;
+    *) exit 0 ;;
+  esac
+}
+case "$phase" in
+  ''|drag|end) ;;
+  # An unrecognised phase is a binding this build did not write. Decline as a
+  # drag would, so an older/newer binding left in a live tmux server falls
+  # through to stock rather than being silently eaten.
+  *) exit 1 ;;
+esac
 # P2-1 (2026-09 R2 review). mode is #{pane_mode} — the mode NAME, not a stacked
 # layer count — and this helper only ever acts in the two mode NAMES it knows
 # how to talk to: '' (no mode; a live pane, the swipe-in case) and the two
@@ -28,12 +82,12 @@ y2=${1:-}; TS_PANE_ID=${2:-}; mode=${3:-}
 # old failure actually looked like on screen.
 case "$mode" in
   ''|copy-mode|view-mode) ;;
-  *) exit 0 ;;
+  *) _decline ;;
 esac
 # TS_PANE_ID is #{pane_id} from the binding (`%3`): an ID, already exact. tmux
 # 3.4 rejects `=%3` (can't find pane), so the exact-target lint names this
 # variable as an exception instead of the `=` prefix it wants for names.
-[ -n "$TS_PANE_ID" ] || exit 0
+[ -n "$TS_PANE_ID" ] || _decline
 
 # _touch_opt <option> -> the value tmux would actually apply to this pane,
 # walking the scope chain by hand. tmux's own -A only chains WITHIN one
@@ -61,6 +115,122 @@ _touch_opt() {
 # written in. bash 3.2 has no ${var,,}; `tr` is POSIX and needs no bashism.
 _touch_fold() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# _touch_lines -> @clikae_touch_scroll_lines, validated. Shared by the MouseUp
+# swipe branch and the drag phase on purpose: one gesture translated through
+# two event shapes must move the history at the same speed, or the same flick
+# scrolls a different distance depending on whether the terminal bothered to
+# send motion.
+_touch_lines() {
+  local m
+  m=$(_touch_opt @clikae_touch_scroll_lines)
+  case "$m" in ''|*[!0-9]*) m=2 ;; esac
+  m=$((10#$m))
+  [ "$m" -gt 0 ] || m=2
+  printf '%s' "$m"
+}
+
+# _touch_drag — one MouseDrag1Pane event: the finger is still down and has
+# crossed to row $y2. Scrolls by the delta since the LAST row recorded for this
+# pane, so a flick arrives as a stream of small scrolls that track the finger,
+# not as one jump at the end (there is no end — see the header; a-Shell sends
+# no MouseUp after a drag).
+#
+# Direction: the finger pulls the CONTENT with it. Moving DOWN the glass (y
+# increases) drags older lines into view, which is `scroll-up` in copy-mode and
+# WHEEL UP to an application — the same convention as every touch surface, and
+# the opposite of the naive "y increased so scroll down".
+_touch_drag() {
+  local y1 dy distance multiplier lines geom alt height notches button seq i
+  case "$y2" in ''|*[!0-9]*) _decline ;; esac
+  case "$mouse_x" in ''|*[!0-9]*) mouse_x=0 ;; esac
+  # The reference row is @clikae_touch_y — the SAME pane option MouseDown1Pane
+  # already writes, read and rewritten on every motion event so it always holds
+  # "where the finger was last seen". Reusing it rather than inventing a second
+  # option is what makes press -> first motion produce a real delta immediately
+  # instead of swallowing the first row of every gesture.
+  y1=$(tmux show-options -pqv -t "$TS_PANE_ID" @clikae_touch_y 2>/dev/null)
+  tmux set-option -p -t "$TS_PANE_ID" @clikae_touch_y "$y2" 2>/dev/null || true
+  # No reference row yet (a drag whose press this table never saw). Recording
+  # $y2 is the whole of the work; report SUCCESS anyway, because declining here
+  # would hand tmux's `copy-mode -M` the first event of a gesture we are about
+  # to translate, and the user would get a selection started under their finger.
+  case "$y1" in ''|*[!0-9]*) return 0 ;; esac
+  dy=$((10#$y2 - 10#$y1))
+  [ "$dy" -ne 0 ] || return 0
+  distance=${dy#-}
+  geom=$(tmux display-message -p -t "$TS_PANE_ID" '#{alternate_on} #{pane_height}' 2>/dev/null)
+  alt=${geom%% *}; height=${geom##* }
+  case "$height" in ''|*[!0-9]*) height=0 ;; esac
+  # A finger cannot cross more rows than the pane has. Clamping is not
+  # cosmetic: a resize, a reattach at another size, or two events coalesced
+  # into one can produce a delta far larger than the gesture, and an unclamped
+  # delta on the wheel path below becomes that many escape sequences typed into
+  # somebody's editor.
+  if [ "$height" -gt 0 ] && [ "$distance" -gt "$height" ]; then distance=$height; fi
+  multiplier=$(_touch_lines)
+  lines=$((distance * multiplier))
+  # 🔴 THE ALTERNATE SCREEN HAS NO HISTORY TO SCROLL. Measured 2026-09-16: the
+  # Claude Code pane runs with `alternate_on` 1 and `history_size` 0 — entering
+  # copy-mode there shows the current screen and nothing above it, so #88's
+  # translation is a no-op with a mode change attached. What the application
+  # DOES respond to is a mouse wheel, which it is already asking for.
+  #
+  # 🔴 AND THE WHEEL IS SENT AS BYTES, NOT AS A KEY NAME. `tmux send-keys -t
+  # <pane> WheelUpPane` does not deliver a wheel event; it TYPES THE WORD
+  # (verified on a throwaway server with a pane running `cat -v`: the app read
+  # the literal characters `WheelUpPane`). tmux's mouse key names exist for
+  # bind-key, not for send-keys. The wheel has to go out as the raw SGR report
+  # the terminal itself would have sent: ESC [ < Cb ; Cx ; Cy M, with Cb 64 for
+  # wheel-up and 65 for wheel-down, and 1-based coordinates.
+  if [ -z "$mode" ] && [ "$alt" = "1" ]; then
+    notches=$((lines / 2))
+    [ "$notches" -ge 1 ] || notches=1
+    button=64
+    [ "$dy" -gt 0 ] || button=65
+    seq=$(printf '\033[<%s;%s;%sM' "$button" "$((10#$mouse_x + 1))" "$((10#$y2 + 1))")
+    i=0
+    while [ "$i" -lt "$notches" ]; do
+      tmux send-keys -t "$TS_PANE_ID" -l "$seq" 2>/dev/null || true
+      i=$((i + 1))
+    done
+    return 0
+  fi
+  case "$mode" in
+    '') tmux copy-mode -t "$TS_PANE_ID" 2>/dev/null || _decline ;;
+  esac
+  if [ "$dy" -gt 0 ]; then
+    tmux send-keys -t "$TS_PANE_ID" -X -N "$lines" scroll-up 2>/dev/null || true
+  else
+    tmux send-keys -t "$TS_PANE_ID" -X -N "$lines" scroll-down 2>/dev/null || true
+  fi
+}
+
+# _touch_end — MouseDragEnd1Pane: the finger left the glass.
+#
+# Two jobs, and the first is the one that keeps the next gesture honest:
+# destroy the recorded geometry, both halves together, exactly as the MouseUp
+# path does. A row left behind here would be measured against the next touch's
+# row and scroll the history by a distance no finger travelled.
+#
+# The second is the way back. A touch device has no scroll wheel and no End
+# key; once copy-mode has been entered by a flick, the only cheap way out is
+# the gesture that got there. So a drag that ends at the live bottom
+# (`scroll_position` 0 — nothing left to come back from) cancels copy-mode and
+# returns the pane to the live view, the same ending #88 gives a tap.
+_touch_end() {
+  local state pos
+  tmux set-option -pu -t "$TS_PANE_ID" @clikae_touch_y 2>/dev/null || true
+  tmux set-option -pu -t "$TS_PANE_ID" @clikae_touch_h 2>/dev/null || true
+  [ -n "$mode" ] || return 0
+  state=$(tmux display-message -p -t "$TS_PANE_ID" '#{pane_in_mode} #{scroll_position}' 2>/dev/null)
+  [ "${state%% *}" = "1" ] || return 0
+  pos=${state##* }
+  case "$pos" in ''|*[!0-9]*) pos=0 ;; esac
+  if [ "$((10#$pos))" -le 0 ]; then
+    tmux send-keys -t "$TS_PANE_ID" -X cancel 2>/dev/null || true
+  fi
+}
+
 # 🔴 THE TWO GATES ARE ASYMMETRIC, AND DELIBERATELY SO. touch-scroll has
 # shipped ON since #88, so anything that is not a recognised off-word leaves it
 # on (an unreadable option must not silently remove a feature people already
@@ -76,6 +246,36 @@ esac
 pages_on=0
 case "$(_touch_fold "$(_touch_opt @clikae_touch_pages)")" in
   on|1|yes|true) pages_on=1 ;;
+esac
+# 🔴 DRAG TRANSLATION SHIPS OFF, AND NOT OUT OF TIMIDITY. The drag bindings
+# take `MouseDrag1Pane`, whose stock meaning on a pane with no mouse-tracking
+# program is MOUSE DRAG-SELECTION — the way every desktop user of this tool
+# selects text with a trackpad. Turning that into scrolling by default would
+# remove a working feature from every Mac to add one to the phones, and unlike
+# #88's MouseUp translation (which forwards the click first and so costs
+# nothing) there is no runtime signal that separates a finger from a trackpad:
+# a-Shell's drag and a trackpad's drag are the SAME tmux events. So it follows
+# #108's tap-zone precedent exactly — a gesture that currently reaches the
+# program or the selection has to be asked for:
+#
+#   tmux set -g @clikae_touch_drag on
+#
+# `@clikae_touch_scroll` stays the master switch over both: turning touch
+# scrolling off turns drag translation off with it, because a user who said
+# "stop translating my touches" meant all of them.
+drag_on=0
+case "$(_touch_fold "$(_touch_opt @clikae_touch_drag)")" in
+  on|1|yes|true) drag_on=1 ;;
+esac
+case "$phase" in
+  drag|end)
+    [ "$scroll_on" -eq 1 ] && [ "$drag_on" -eq 1 ] || _decline
+    case "$phase" in
+      drag) _touch_drag ;;
+      *) _touch_end ;;
+    esac
+    exit 0
+    ;;
 esac
 [ "$scroll_on" -eq 1 ] || [ "$pages_on" -eq 1 ] || exit 0
 
@@ -131,10 +331,7 @@ case "$y2" in ''|*[!0-9]*) exit 0 ;; esac
 dy=$((10#$y1 - 10#$y2)); distance=${dy#-}
 if [ "$distance" -ge 2 ]; then
   [ "$scroll_on" -eq 1 ] || exit 0
-  multiplier=$(_touch_opt @clikae_touch_scroll_lines)
-  case "$multiplier" in ''|*[!0-9]*) multiplier=2 ;; esac
-  multiplier=$((10#$multiplier))
-  [ "$multiplier" -gt 0 ] || multiplier=2
+  multiplier=$(_touch_lines)
   lines=$((distance * multiplier))
   # already_in_mode: mode was narrowed to ''/copy-mode/view-mode above, so
   # non-empty here means copy-mode or view-mode — the P2-2 stacked-view-mode
