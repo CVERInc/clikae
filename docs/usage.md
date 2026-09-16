@@ -949,6 +949,58 @@ to override the in-use skip, or `--to <tank>` to name a hop explicitly.
 unrelated to tanks. So you can spend a cheap tank's quota to chew on *any* file —
 including another tank's transcript.
 
+### What a failed burn left behind
+
+When a burn **fails**, `burn` scans the directories it was pointed at (`$PWD` and
+every `--add-dir`) for git repositories the run left work in — unpushed commits,
+uncommitted changes, files written since the run started — and prints one
+`left behind:` line per repository, with a copy-pasteable `git push` hint for
+anything ahead of its upstream. The scan is read-only (it never pushes, commits
+or writes) and bounded: 5s per git/`find` call, a 10s budget for the whole scan,
+25 rows on screen. `--json` carries the same facts:
+
+```json
+{"left_behind": [{"repo": "/path/repo", "branch": "main", "ahead": 1,
+                  "dirty": 3, "files": ["/path/repo/out.md"],
+                  "git_timeout": false}],
+ "left_behind_truncated": 0,
+ "left_behind_truncation": {"repos_over_cap": 0, "roots_budget_skipped": 0,
+                            "markers_budget_skipped": 0,
+                            "repos_budget_skipped": 0,
+                            "roots_discovery_timeout": 0},
+ "left_behind_kill_mode": "pgroup",
+ "left_behind_unavailable": null}
+```
+
+`left_behind_kill_mode` says how the scan stopped a bounded git/`find` call that
+overran: `pgroup` (the normal case — the call and everything it forked are
+killed together) or `single-pid` on a platform that will not give the bounded
+child a process group of its own, where a grandchild it forked can outlive the
+bound. `null` means no scan ran.
+
+`left_behind_unavailable` is `null` whenever the scan ran. When it could not run
+at all it names the reason — today the only one is `"git-not-on-PATH"`, which
+also prints one line (`left-behind scan: not run — git is not on PATH.`) so an
+empty report is never mistaken for "scanned everything, found nothing".
+
+**What `left_behind_truncation` counts.** Anything missing from `left_behind[]`
+is counted by *why*, because the buckets are in different units:
+`repos_over_cap` is exactly that many repositories (the 25-row display cap);
+`repos_budget_skipped` is that many repositories the 10s budget never reached;
+`markers_budget_skipped` is that many discovered `.git` markers it never
+resolved; `roots_budget_skipped` and `roots_discovery_timeout` are *roots* —
+one of those may stand for forty repositories or none. `left_behind_truncated`
+is the sum of all five and is **deprecated**: it mixes those units, and it is
+kept only so an existing consumer keeps working for one release.
+
+`ahead` is `null` when the branch has no upstream to compare against. A git call
+that hits its 5s ceiling — a dead NFS mount, a `.git/HEAD` that is really a FIFO,
+a wedged `git status` — makes the row **say so** instead of falling back to a
+number nobody measured: `git_timeout: true`, `dirty: null`, and
+`dirty ? (git timed out)` on the human line. Such a repository is always
+reported, even when nothing else about it qualified: "the scan could not answer"
+is exactly the case worth a human's attention.
+
 **Using agy as a cheap read-only worker.** `clikae burn agy <tank>` does work
 (since v0.10.0 — the Keychain carry made a tank switch non-interactive, so burn can
 hop to the next agy tank on dry). What it can't do is run two agy tanks at once:

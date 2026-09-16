@@ -20,6 +20,15 @@ rerouted_from      a field in `clikae burn --json`'s result object, not a functi
 artifact_bytes     ditto
 elapsed_s          ditto
 run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
+left_behind_truncated  a field in `clikae burn --json`'s result object, not a function (deprecated since #112: the sum of left_behind_truncation's buckets)
+left_behind_truncation a field in `clikae burn --json`'s result object, not a function
+left_behind_kill_mode  ditto
+left_behind_unavailable ditto
+repos_over_cap     a bucket inside `clikae burn --json`'s left_behind_truncation object, not a function
+roots_budget_skipped ditto
+markers_budget_skipped ditto
+repos_budget_skipped ditto
+roots_discovery_timeout ditto
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
 started_at         a field in #41's status.json, not a function
 updated_at         two unrelated fields, both quoted on purpose: a field in #41's status.json (P2-1, 2026-09-14 round-1 fix review), and the field GitHub's search API returns per issue/PR (#92's tail-sweep/cursor field name) — neither is a function

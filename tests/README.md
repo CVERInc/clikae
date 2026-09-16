@@ -14,6 +14,8 @@ tests/
     ├── app.bats              # macOS-only, skipped elsewhere
     ├── compat.bats           # bash 3.2 / GNU-ism guards + the PowerShell adapter-table mirror
     ├── tui.bats              # the shared keyboard decoder
+    ├── helpers/              # `load`-able helpers (not tests; bats -r ignores them)
+    │   └── bounded.bash      # `bounded_run` — a wall-clock bound with no timeout(1)
     └── adapters/             # claude, codex, extra, session-meta
 ```
 
@@ -55,6 +57,21 @@ bats -r tests/bats            # -r recurses into adapters/ (without it, those sk
 
 The `app.bats` cases need `osacompile` (a macOS built-in) and are skipped
 automatically on Linux.
+
+**A test that needs its own ceiling uses `bounded_run`, never a bare
+`timeout`.** A test that deliberately wedges a `find`, a `stat` or a
+`.git/HEAD` needs a hard bound around the real binary, because a bats test that
+never returns does not fail — it wedges the whole suite. Reaching for
+`timeout`/`gtimeout` and skipping when neither is there means skipping on stock
+macOS, which is how burn.bats ended up with six tests that had never run on the
+platform they were written for (#112). `bounded_run <secs> <cmd…>`
+(`tests/bats/helpers/bounded.bash`, `load 'helpers/bounded'`) prefers
+`timeout`/`gtimeout` when present and otherwise enforces the same ceiling in
+bash itself — background in its own process group, sleep, kill the group.
+
+```bash
+CLIKAE_TEST_FORCE_BASH_BOUND=1 bats tests/bats/burn.bats   # take the in-bash path on a box that has timeout
+```
 
 ## Never read the result through a pipe
 
