@@ -54,7 +54,14 @@ y2=${1:-}; TS_PANE_ID=${2:-}; mode=${3:-}; phase=${4:-}; mouse_x=${5:-}
 # #88 could not see this (pane_mode was its LAST argument, so an empty
 # expansion just left `$3` unset, which `${3:-}` already handled); the drag
 # phase puts two arguments after it, so the binding quotes all five.
-phase=$(printf '%s' "$phase" | tr -d '[:space:]')
+#
+# `phase` itself is a LITERAL in the binding (`drag`, `end`), never a format,
+# so it is matched exactly and never normalised: nothing here sanitises it,
+# because a value that is not one of the three known words is not a typo to
+# repair, it is a binding this build did not write. That matters on the hot
+# path — a flick fires one of these per row crossed, and a normalising
+# `printf | tr` would have cost two processes per event to protect against
+# nothing.
 # _decline — "clikae is not translating this gesture". In the drag/end phases
 # the caller is `if-shell`, so a non-zero status is what makes tmux fall
 # through to its OWN stock binding for this key; in the MouseUp phase the
