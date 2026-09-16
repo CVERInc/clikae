@@ -165,6 +165,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The "this store's tanks aren't adopted yet and the flag can't be written"
+  warning is no longer silenced for good inside sessions started after it was
+  shown. A tmux server, burn or engine started from a terminal that had seen it
+  kept that store's dedupe in its environment for its whole life, so a store
+  that was replaced at the same path (a restored backup) or repaired and then
+  read-only again got no warning in any of those panes. The dedupe now also
+  records the identity and modification time of where the flag would be
+  written: an unchanged read-only store still warns once, and a changed one
+  warns again (#114).
 - A codex message with **many content parts** no longer takes quadratic time
   to extract. The shape-B branch walked the parts by matching the next part
   key and re-slicing everything still to come (`substr(rest, RLENGTH + 2)`),

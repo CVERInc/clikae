@@ -739,6 +739,37 @@ SHIM
   run ! _guard_installed "$CLIKAE_HOME/profiles/claude/real/settings.json"
 }
 
+@test "#114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance" {
+  # The round-6 P2-2 tests above are claude-only and one state at a time. The
+  # sweep reads settings.json, never the engine or the marker, so every engine
+  # must come out the same: a move that crashed after arming the NEW tank and
+  # before disarming the OLD one (both guarded, state still names the old),
+  # the new tank's marker gone, the old one's unreadable, and --allow-agents live.
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  local e d
+  for e in claude codex antigravity; do
+    mkdir -p "$CLIKAE_HOME/profiles/$e/old" "$CLIKAE_HOME/profiles/$e/new"
+    printf '%s\n' "$e" > "$CLIKAE_HOME/profiles/$e/old/.clikae-tank"
+    printf '%s\n' "$e" > "$CLIKAE_HOME/profiles/$e/new/.clikae-tank"
+    clikae cockpit "$e" old
+    d="$CLIKAE_HOME/profiles/$e"
+    cp "$d/old/settings.json" "$d/new/settings.json"
+    rm -f "$d/new/.clikae-tank"
+    chmod 000 "$d/old/.clikae-tank"
+    clikae cockpit --allow-agents 1h
+    run clikae cockpit --off
+    local st="$status" out="$output"
+    chmod 644 "$d/old/.clikae-tank"
+    [ "$st" -eq 0 ] || { echo "$e: $out"; false; }
+    [ "$(printf '%s\n' "$out" | grep -c 'cockpit guard removed')" -eq 2 ] || { echo "$e: $out"; false; }
+    [[ "$out" != *"Permission denied"* ]] || { echo "$e: raw error: $out"; false; }
+    run bash -c 'grep -l cockpit-guard "$1"/profiles/*/*/settings.json 2>/dev/null' _ "$CLIKAE_HOME"
+    [ -z "$output" ] || { echo "$e: left behind: $output"; false; }
+    [ ! -f "$CLIKAE_HOME/state/cockpit" ] || { echo "$e: state kept"; false; }
+    [ ! -f "$CLIKAE_HOME/state/cockpit-allow" ] || { echo "$e: allowance kept"; false; }
+  done
+}
+
 @test "--off clears a live timed allowance too, not just the guard and state (#63 P1-3)" {
   clikae init claude A
   clikae cockpit claude A
