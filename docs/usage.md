@@ -98,9 +98,9 @@ wheel and drag-selection bindings are unchanged.
 
 Needs tmux **3.1 or newer** (`set-option -p`, pane-scoped options). Older
 tmux keeps `mouse on` — installed unconditionally, before this check — and
-silently skips the six key bindings and the two `@clikae_touch_scroll`/
-`@clikae_touch_scroll_lines` options;
-nothing breaks, but nothing translates either.
+silently skips the six key bindings and the four `@clikae_touch_scroll`/
+`@clikae_touch_scroll_lines`/`@clikae_touch_pages`/`@clikae_touch_pages_rows`
+options; nothing breaks, but nothing translates either.
 
 The six bindings are installed when clikae creates a tmux session, and apply
 to the whole tmux **server** — every session on it, not only clikae's own —
@@ -117,6 +117,34 @@ These server-wide settings survive later clikae launches; put them in
 session instead. The multiplier must be a positive integer (invalid values
 fall back to 2); the `off` value is matched case-insensitively (`OFF`, `Off`,
 `0`, `no`, `false`, any case, all disable).
+
+#### Tap the top or bottom of the pane to page (off by default)
+
+A swipe asks for a distance; a page asks for one tap. With
+`set -g @clikae_touch_pages on`, a **tap in the top three rows** of a pane
+pages the history back one screen (entering copy-mode if it isn't already
+there) and a **tap in the bottom three rows** pages forward one screen — then,
+at the newest line, the next tap in that band returns to the live view, the
+same ending a tap anywhere in copy-mode already has. A tap anywhere between
+the two bands stays an ordinary click, and so does a bottom-band tap on a live
+pane: there is nothing newer than the live view to page into, so the click
+goes to the program unchanged.
+
+This one is **off by default**, unlike touch scrolling: it takes a click that
+currently reaches the program and gives it to tmux, so it has to be asked for.
+Only `on`/`1`/`yes`/`true` (any case) turn it on — a value this option does not
+recognise leaves today's behaviour exactly as it is.
+`set -g @clikae_touch_pages_rows 5` changes the band height (default 3; a value
+that isn't a positive integer falls back to 3). On a short pane the bands are
+narrowed so a middle row always survives — the two can never meet and leave
+nowhere to click — and a pane under three rows tall has no bands at all. Drop
+the `-g` for the current session, or `set -p` for one pane, exactly as with the
+touch-scroll options.
+
+Both features are decided by one binding: a movement of two rows or more is a
+scroll, a tap inside a band is a page, everything else is left alone. Turning
+paging on therefore cannot cost you a swipe, and `@clikae_touch_scroll off`
+does not turn paging off — the two options gate independently.
 
 ### Make & manage tanks
 
