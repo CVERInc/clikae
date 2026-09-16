@@ -2356,10 +2356,14 @@ _wg_timeline_fixture() {
   [ "$out" -eq 5000 ]
   # 20s. Measured on this project's own bench, 5,000 elements: gawk 5.2.1
   # 0.20s, mawk 1.3.4 0.17s, busybox awk 1.36.1 1.04s, BWK awk 20250116
-  # 6.9s. The pre-rewrite loop needed 20.6s on busybox and ~3,845s
-  # (extrapolated from 4x-per-doubling) on BWK — so this bound leaves >=3x
-  # headroom for every awk measured and still catches the shape on the two
-  # that charge by source length.
+  # 6.9s, BWK awk 20200816 0.81s. The pre-rewrite loop needed 20.6s on
+  # busybox, 23.3s on BWK 20200816 and ~3,845s (extrapolated from
+  # 4x-per-doubling) on BWK 20250116 — so this bound leaves >=3x headroom
+  # for every awk measured and still catches the shape on all three that
+  # charge by source length. `awk version 20200816` is the exact version
+  # string macOS's own /usr/bin/awk prints, so the leg of CI most likely to
+  # run a charge-by-source-length awk has ~25x headroom here and WOULD have
+  # failed on the old parser.
   [ "$elapsed" -lt 20 ] || { echo "5,000 elements took ${elapsed}s (bound 20s)"; false; }
 
   # One last check that the body extraction still works at this scale — the

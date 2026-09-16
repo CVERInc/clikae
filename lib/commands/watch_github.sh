@@ -689,6 +689,12 @@ _wg_latest_actor() {
 #   BWK 20250116   0.73 / 1.20 / 6.86s   (was 6.77s at 200, 25.07s at 400,
 #                                        98.44s at 800 — x4 per doubling,
 #                                        i.e. ~3,845s extrapolated at 5,000)
+#   BWK 20200816     - / 0.56 / 0.81s    (was  - / 1.21 / 23.28s)
+# — that last row is the one that matters on a Mac: `awk version 20200816`
+# is the exact string macOS's own /usr/bin/awk prints, built here from the
+# last onetrue-awk commit before 2020-08-17 (there is no 2020 tag; the tags
+# jump 20180827 -> 20220122). It is quadratic too (5x the input for 19x the
+# time) and needed 23.28s at 5,000 — over the 20s bound the test asserts.
 # Output is byte-for-byte identical to the old loop on all four awks, over
 # the fixtures in tests/bats/watch-github.bats plus adversarial ones (a
 # `},{` inside a body, escaped quotes, a nested array of objects, a nested
