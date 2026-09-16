@@ -4977,6 +4977,48 @@ assert obj["left_behind_truncated"] == 0, obj["left_behind_truncated"]
 '
 }
 
+# Item 5 (#112; round-5 review, "passed" note 4): with no `git` on `$PATH` the
+# scan returned `[]` and said nothing — the same output as "scanned everything,
+# found nothing". Asserted at function level because the whole point is what
+# happens when `type -P git` fails, and a test that can still see a git binary
+# cannot reach it. `_burn_left_behind`'s own stdout is "log lines, then the
+# machine-readable last line" (`_burn_result` splits them apart), so both halves
+# of the contract are visible here at once.
+@test "burn #112 item 5: no git on PATH is reported, not silently an empty list" {
+  _burn_lb_boot
+  local nogit="$BATS_TEST_TMPDIR/nogit"
+  mkdir -p "$nogit"
+  local out last
+  add_dirs=()
+  started_at=0
+  out="$(PATH="$nogit" _burn_left_behind)"
+  [[ "$out" == *"left-behind scan: not run — git is not on PATH."* ]] || { printf '%s\n' "$out"; false; }
+  last="${out##*$'\n'}"
+  [[ "$last" == *'"left_behind_unavailable":"git-not-on-PATH"'* ]] || { printf '%s\n' "$last"; false; }
+  # …and it is still the same shape every other caller parses: meta, tab, array.
+  [[ "$last" == *$'\t''[]' ]] || { printf '%s\n' "$last"; false; }
+}
+
+# The control: a scan that really ran says so by leaving the field null — and
+# the field is in the real `--json` object, not only in the function's own line.
+@test "burn #112 item 5 control: a scan that ran reports left_behind_unavailable null" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"git is not on PATH"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["left_behind_unavailable"] is None, obj["left_behind_unavailable"]
+assert obj["left_behind"], obj
+'
+}
+
 # --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
 # --- cache at run end, off the launch path                                 ---
 

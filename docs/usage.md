@@ -939,8 +939,14 @@ or writes) and bounded: 5s per git/`find` call, a 10s budget for the whole scan,
  "left_behind_truncation": {"repos_over_cap": 0, "roots_budget_skipped": 0,
                             "markers_budget_skipped": 0,
                             "repos_budget_skipped": 0,
-                            "roots_discovery_timeout": 0}}
+                            "roots_discovery_timeout": 0},
+ "left_behind_unavailable": null}
 ```
+
+`left_behind_unavailable` is `null` whenever the scan ran. When it could not run
+at all it names the reason — today the only one is `"git-not-on-PATH"`, which
+also prints one line (`left-behind scan: not run — git is not on PATH.`) so an
+empty report is never mistaken for "scanned everything, found nothing".
 
 **What `left_behind_truncation` counts.** Anything missing from `left_behind[]`
 is counted by *why*, because the buckets are in different units:

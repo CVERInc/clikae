@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `clikae burn` says when its left-behind scan could not run at all instead of
+  reporting an empty list. With no `git` on `$PATH` the scan used to return
+  `left_behind: []` — the same output as "scanned everything, found nothing" —
+  and print nothing. It now prints one line and sets
+  `"left_behind_unavailable": "git-not-on-PATH"` in `--json` (the field is
+  `null` whenever the scan did run) (#112).
 - `clikae burn --json` now reports what the left-behind scan left out **by
   reason**, in `left_behind_truncation`: `repos_over_cap` (the 25-row display
   cap), `roots_budget_skipped`, `markers_budget_skipped`,

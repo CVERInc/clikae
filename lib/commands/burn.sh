@@ -91,7 +91,8 @@ Give the task in one of two ways:
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
                          reset, rerouted_from[], elapsed_s, run_id, left_behind[],
-                         left_behind_truncated, left_behind_truncation{}}
+                         left_behind_truncated, left_behind_truncation{},
+                         left_behind_unavailable}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -1727,9 +1728,14 @@ _burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c co
 # spliced straight into `_burn_result`'s printf next to the fields it already
 # owns. Every argument is an integer this file computed; nothing user-supplied
 # reaches it, so no escaping is needed or attempted.
+# `$6` (optional) is the reason the scan could not run at all — a short, fixed
+# token this file chooses, never anything from outside — and is JSON `null` when
+# the scan did run.
 _burn_lb_meta() {
-  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s}' \
-    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5"
+  local unavailable=null
+  [ -z "${6:-}" ] || unavailable="\"$6\""
+  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s},"left_behind_unavailable":%s' \
+    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5" "$unavailable"
 }
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
@@ -1773,7 +1779,18 @@ _burn_left_behind() {
   # `bash:3.2.57` container: `command -v git` => `git`, `type -P git` =>
   # `/usr/bin/git`), so it's what actually delivers the guarantee the
   # comment on `_burn_lb_git` above claims.
-  BURN_LB_GIT="$(type -P git)" || { printf '[]'; return 0; }
+  # #112 item 5 (round-5 review, "passed" note 4): this used to be a silent
+  # `printf '[]'; return 0` — correct, and indistinguishable from "scanned
+  # everything, found nothing". Both the human stream and `--json` now say which
+  # one happened: a machine consumer reads `left_behind_unavailable`, and a
+  # person gets one line rather than an empty report they would reasonably
+  # believe. Not a warning: `git` missing is an ordinary state on a machine that
+  # burns non-git work, and burn's own outcome is unaffected.
+  if ! BURN_LB_GIT="$(type -P git)"; then
+    log_info "left-behind scan: not run — git is not on PATH."
+    printf '%s\t[]' "$(_burn_lb_meta 0 0 0 0 0 git-not-on-PATH)"
+    return 0
+  fi
   # P2-1 (round-5 review): probe the process-group capability ONCE here, not
   # per bounded call — every `_burn_lb_git` below runs inside its own `$(...)`
   # subshell, so a lazily-probed global would be recomputed (two `ps` forks
@@ -2381,8 +2398,10 @@ _burn_result() {
         left_behind="${left_behind#*$'\t'}"
         ;;
     esac
+    # First key and last key, both present: a capture truncated anywhere in
+    # between fails this and keeps the all-zero default.
     case "$lb_meta_raw" in
-      '"left_behind_truncated":'[0-9]*'}') left_behind_meta="$lb_meta_raw" ;;
+      '"left_behind_truncated":'[0-9]*'"left_behind_unavailable":'?*) left_behind_meta="$lb_meta_raw" ;;
     esac
     case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
   fi
