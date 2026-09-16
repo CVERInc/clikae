@@ -5144,6 +5144,82 @@ assert all(r["git_timeout"] for r in obj["left_behind"]), obj["left_behind"]
 '
 }
 
+# Milliseconds since the epoch, by the same three-step ladder `_burn_lb_now_ms`
+# walks: $EPOCHREALTIME (bash 5), GNU `date +%s%N`, and — on bash 3.2 with a BSD
+# `date`, which is stock macOS — whole seconds, which the caller asks about
+# first via `_ms_precise` so it can loosen its own bound instead of measuring
+# precision it does not have.
+_ms_precise() {
+  case "${EPOCHREALTIME:-}" in *[.,]*) return 0 ;; esac
+  local t; t="$(date +%s%N 2>/dev/null)" || return 1
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#t}" -ge 19 ]
+}
+_ms_now() {
+  local t s f
+  t="${EPOCHREALTIME:-}"
+  case "$t" in
+    *[.,]*)
+      s="${t%%[.,]*}"; f="${t#*[.,]}000"
+      printf '%s' "$(( s * 1000 + 10#${f:0:3} ))"; return 0 ;;
+  esac
+  t="$(date +%s%N 2>/dev/null)" || t=''
+  case "$t" in
+    ''|*[!0-9]*) ;;
+    *) if [ "${#t}" -ge 19 ]; then printf '%s' "${t%??????}"; return 0; fi ;;
+  esac
+  printf '%s000' "$(date +%s)"
+}
+
+# Item 8 (#112; round-3 review P3-3 ③): the watchdog closing fds 3 and 4 is what
+# stopped a failed `clikae burn --json | jq` from sitting ~5s past the process's
+# own exit — the orphaned `sleep` was the last writer-side holder of the json
+# pipe. Nothing regression-tested it, so re-opening those fds would go unnoticed
+# until someone timed a pipeline by hand.
+#
+# The measurement is exit-to-EOF, not total runtime: the subshell records the
+# clock the instant burn returns and then exits, so `cat`'s EOF can only be
+# later than that if something ELSE is still holding the pipe. Run under
+# CLIKAE_BURN_LB_SINGLE_PID=1 on purpose — with a real process group the
+# watchdog's `sleep` dies with its group and the fd closing is belt to that
+# braces; on the fallback the fds are the only thing standing between a failed
+# burn and a five-second stall, which is exactly the shape that was measured.
+@test "burn #112 item 8: a failed \`burn --json | cat\` reaches EOF within 1s of the process exiting" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  local exit_ts="$BATS_TEST_TMPDIR/exit-ms" out="$BATS_TEST_TMPDIR/burn.json"
+  (
+    # `|| true`: a failed burn is the whole fixture, and this subshell inherits
+    # the suite's `set -e`.
+    CLIKAE_BURN_LB_SINGLE_PID=1 "$CLIKAE_BIN" burn codex T1 --json \
+      --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop || true
+    _ms_now > "$exit_ts"
+  ) 2>/dev/null | cat > "$out"
+  local eof_ms exit_ms delay
+  eof_ms="$(_ms_now)"
+  [ -s "$exit_ts" ] || { echo "the burn never recorded its own exit"; false; }
+  exit_ms="$(cat "$exit_ts")"
+  delay=$((eof_ms - exit_ms))
+  # The run really produced the json object, or EOF timing proves nothing.
+  grep -q '"left_behind"' "$out" || { echo "no json came out of the pipe:"; cat "$out"; false; }
+  if _ms_precise; then
+    [ "$delay" -lt 1000 ] || { echo "EOF came ${delay}ms after the process exited — something still holds the pipe"; false; }
+  else
+    # Whole-second clock (bash 3.2 + BSD date): the pre-fix stall measured ~5s,
+    # so a one-tick bound still separates fixed from broken.
+    [ "$delay" -le 1000 ] || { echo "EOF came ${delay}ms (whole-second clock) after the process exited"; false; }
+  fi
+  # …and the reason it is fast is still in the code: the watchdog closes the two
+  # fds burn itself opens (fd 3 the run's tee, fd 4 the --json pipe). This is the
+  # line, named, so removing it fails here and not only in someone's terminal.
+  grep -q '3>&- 4>&-' "$CLIKAE_TEST_ROOT/lib/commands/burn.sh" \
+    || { echo "the watchdog no longer closes fds 3 and 4"; false; }
+}
+
 # --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
 # --- cache at run end, off the launch path                                 ---
 
