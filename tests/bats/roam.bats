@@ -61,20 +61,25 @@ def width():
 # then the first width is whatever that run used, not ours.
 tmux("kill-session", "-t", "clikae-codex-roam")
 
-def wait_for(cond, secs=20):
+def wait_for(cond, secs=20, what="condition"):
     """Wait for the thing, do not guess how long it takes.
 
     These used to be fixed sleeps. They were long enough on an idle machine and
     not on a loaded one, so this test failed intermittently in a full-suite run
     while passing 3/3 on its own — the classic shape of a timing guess rather
     than a defect. The conditions below are the states the assertions actually
-    depend on."""
+    depend on.
+
+    A timeout RAISES, naming what it waited for (#101). The old version returned
+    False and every caller dropped it, so a slow resize on a loaded host reached
+    the assertion below as "SECOND_WIDTH 100" — a wrong-value failure that reads
+    like a roaming defect, when the truth was "the resize had not landed yet"."""
     end = time.time() + secs
     while time.time() < end:
         if cond():
             return True
         time.sleep(0.25)
-    return False
+    raise SystemExit(f"TIMEOUT after {secs}s waiting for {what}")
 
 runs = os.environ.get("STUB_RUNS", "")
 
@@ -86,13 +91,13 @@ def started(n):
         return False
 
 attach(100, 30)
-wait_for(lambda: "clikae-codex-roam" in tmux("ls") and started(1))
+wait_for(lambda: "clikae-codex-roam" in tmux("ls") and started(1), what="session up and engine started once")
 # …and wait for the RESIZE too, not just for the session to exist. The second
 # measurement below already waits for its width; this one did not, so it raced
 # tmux propagating the client size and read default-size 80 instead of 100 —
 # intermittently on ubuntu CI, never on macOS. The file's own wait_for docstring
 # names this shape: a timing guess, not a defect.
-wait_for(lambda: width() == "100")
+wait_for(lambda: width() == "100", secs=60, what="first client resize to 100 columns")
 print("FIRST_WIDTH", width())
 
 tmux("detach-client", "-s", "clikae-codex-roam")
@@ -103,11 +108,11 @@ tmux("detach-client", "-s", "clikae-codex-roam")
 # attach created a NEW one, and the "engine started exactly once" assertion
 # failed for a reason that had nothing to do with roaming.
 wait_for(lambda: tmux("display-message", "-p", "-t", "clikae-codex-roam",
-                      "#{session_attached}").strip() == "0")
+                      "#{session_attached}").strip() == "0", what="first client detached")
 print("SURVIVED_DETACH", "yes" if "clikae-codex-roam" in tmux("ls") else "no")
 
 attach(60, 20)
-wait_for(lambda: width() == "60")
+wait_for(lambda: width() == "60", secs=60, what="second client resize to 60 columns")
 print("SECOND_WIDTH", width())
 
 tmux("kill-session", "-t", "clikae-codex-roam")
@@ -233,18 +238,18 @@ def started(n):
     except OSError:
         return False
 
-def wait_for(cond, secs=20):
+def wait_for(cond, secs=20, what="condition"):
     end = time.time() + secs
     while time.time() < end:
         if cond():
             return True
         time.sleep(0.25)
-    return False
+    raise SystemExit(f"TIMEOUT after {secs}s waiting for {what}")
 
 launch("codex", "roam2")
-wait_for(lambda: started(1))
+wait_for(lambda: started(1), what="engine started once")
 launch("codex", "roam2", "--", "resume", "SESSION-TWO")
-wait_for(lambda: started(2))
+wait_for(lambda: started(2), what="engine started twice")
 
 names = sorted(n for n in tmux("list-sessions", "-F", "#{session_name}").split()
                if n.startswith("clikae-codex-roam2"))
