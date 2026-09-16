@@ -286,16 +286,28 @@ _burn_pid_matches_marker() {
 # would collide with the re-fire this one is about to make, exactly like the
 # `running` case #40 already guards.
 burn_tank_busy() {
-  local eng="$1" tk="$2" self_pid="${3:-}" base d f json st feng ftk fpid fstarted
+  local eng="$1" tk="$2" self_pid="${3:-}" base d f json feng ftk fpid fstarted
   base="$HOME/.clikae/logs"
   [ -d "$base" ] || return 1
+  # 🔴 #114: ZERO forks per run directory until one is actually `running`. This
+  # walk is O(tanks × run directories) for every caller that asks per tank —
+  # lib/hooks/cockpit-guard.sh's refusal lists the reserve that way — and it
+  # used to cost a `cat` exec plus three nested command substitutions
+  # (burn_status_state -> _str -> _field, each a subshell) for EVERY finished
+  # run on the machine. Measured with 225 finished runs (what a
+  # real cockpit had accumulated): a refusal took 5.7 s at 10 tanks and 30.8 s
+  # at 50, past the hook's 5 s timeout — and a hook that times out is
+  # NON-blocking, so the refused spawn went through. The builtin `read` (the
+  # writer emits one line) and the fork-free field reader keep a finished run
+  # at a regex match; only a live-looking one pays for the checks below.
   for d in "$base"/burn-*; do
     [ -d "$d" ] || continue
     f="$d/status.json"
     [ -f "$f" ] || continue
-    json="$(cat "$f" 2>/dev/null)" || continue
-    st="$(burn_status_state "$json")"
-    case "$st" in running|waiting-reset) ;; *) continue ;; esac
+    json=""
+    { IFS= read -r json < "$f"; } 2>/dev/null || [ -n "$json" ] || continue
+    burn_status_fieldv "$json" state
+    case "$_BSF" in '"running"'|'"waiting-reset"') ;; *) continue ;; esac
     feng="$(burn_status_str "$json" engine)"
     ftk="$(burn_status_str "$json" tank)"
     [ "$feng" = "$eng" ] && [ "$ftk" = "$tk" ] || continue

@@ -108,6 +108,39 @@ _mark_busy() {
   [[ "$output" == *"dry"* ]] || false   # reserve exhausted (T1 dry, T2 busy) — not a real task failure
 }
 
+@test "#114: burn_tank_busy forks nothing for a FINISHED run, and still sees a live one" {
+  # It is asked once per tank (the cockpit guard's refusal lists the reserve
+  # that way) and walks every run directory each time. With a `cat` and three
+  # command-substitution subshells per finished run, 225 finished runs made a refusal
+  # take 5.7 s at 10 tanks — past the hook's 5 s timeout, which is non-blocking.
+  local i d bin="$BATS_TEST_TMPDIR/countbin" tool real
+  for i in $(seq 1 40); do
+    d="$CLIKAE_HOME/logs/burn-9$i"; mkdir -p "$d"
+    printf '{"ok":true,"engine":"codex","tank":"T1","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":3,"run_id":"burn-9%s","state":"done","started_at":1,"updated_at":2,"pid":99999,"log":null}\n' "$i" > "$d/status.json"
+  done
+  # a live run on T2 whose writer left no trailing newline: must still count
+  d="$CLIKAE_HOME/logs/burn-live"; mkdir -p "$d"
+  printf '{"ok":null,"engine":"codex","tank":"T2","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-live","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null}' \
+    "$(date +%s)" "$(date +%s)" "$$" > "$d/status.json"
+  mkdir -p "$bin"
+  for tool in cat grep sed head tr awk; do
+    real="$(command -v "$tool")"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %s >> "%s/fork.calls"\nexec "%s" "$@"\n' "$tool" "$BATS_TEST_TMPDIR" "$real" > "$bin/$tool"
+    chmod +x "$bin/$tool"
+  done
+  run env PATH="$bin:$PATH" bash -c '
+    set -u
+    source "'"$CLIKAE_TEST_ROOT"'/lib/core/burn_status.sh"
+    burn_tank_busy codex T1 && echo "T1 busy" || echo "T1 idle"'
+  [ "$output" = "T1 idle" ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/fork.calls" ] || { echo "forked for finished runs: $(sort "$BATS_TEST_TMPDIR/fork.calls" | uniq -c)"; false; }
+  run env PATH="$bin:$PATH" bash -c '
+    set -u
+    source "'"$CLIKAE_TEST_ROOT"'/lib/core/burn_status.sh"
+    burn_tank_busy codex T2 && echo "T2 busy" || echo "T2 idle"'
+  [ "$output" = "T2 busy" ] || { echo "$output"; false; }
+}
+
 @test "burn-collision: reroute still lands on a THIRD tank when only one is busy" {
   _stub_codex
   clikae init codex T1
