@@ -640,32 +640,99 @@ _wg_latest_actor() {
 # a `},{` inside a string or a nested array of objects never splits an
 # element and a nested object's "body" key is never mistaken for the
 # event's own. awk, not jq: this file needs no external jq (see _wg_fetch).
-# LC_ALL=C: byte-wise substr, O(1) per character in every awk.
+# LC_ALL=C: byte-wise, never a UTF-8 character walk.
+#
+# 🔴 LINEAR IN EVERY AWK — READ BEFORE PUTTING `substr($BIG_STRING, i, 1)`
+# BACK IN THIS LOOP (P3-1, #111, carried from the 2026-09-14 fix-round-8
+# review). This function used to claim "O(1) per character in every awk".
+# That claim was false, and the correction matters because the awk clikae
+# runs under is whatever the host ships: gawk and mawk both index a string
+# in constant time, but busybox awk (and BWK awk, which is what macOS's
+# /usr/bin/awk is) pay a cost PROPORTIONAL TO THE LENGTH OF THE SOURCE
+# STRING on every single substr call, whatever the length of the slice
+# asked for. `s` here is the whole timeline page — ~1.5MB for a 5,000-event
+# page — so one substr per character made the scan O(n^2): measured on
+# busybox awk 1.36.1, 5,000 elements took 20.6s against 0.17s on gawk, and
+# the shape was unmistakable (0.06s / 0.73s / 20.62s for 200 / 1,000 /
+# 5,000 elements — 25x the input for 343x the time).
+#
+# FIXED by never taking a substr of `s` inside the per-character loop.
+# Characters are read through a BOUNDED WINDOW: `win` holds W=1024 bytes of
+# `s`, refilled once every W characters, and the per-character substr comes
+# from `win` — a 1KB source instead of a 1.5MB one — so the awks that charge
+# by source length now charge 1024 per character instead of n.
+#
+# The three OTHER substrs of `s` the old loop took (the element text at every
+# `}`, the body value, and every depth-2 key) are gone the same way: each is
+# ACCUMULATED out of the window it lies in (`ebuf`/`sbuf`, appended once per
+# window boundary the span happens to cross — a handful of concatenations per
+# element, not one n-length substr per element). Nothing but the refill ever
+# touches `s`.
+#
+# No new builtin: NOT `split(s, a, "")` and NOT `FS=""`. Both do split a
+# string into characters in gawk/mawk/busybox — and both were measured doing
+# it — but neither is portable to the older BWK awk still shipped as
+# /usr/bin/awk on macOS, where the silent fallback is "one field holding the
+# whole line", i.e. a MIS-PARSE rather than a slow parse. A correctness
+# regression on the platform this was meant to help is not a speedup.
+#
+# WHAT IS STILL NOT LINEAR, honestly: the refill itself is one substr of `s`
+# per W characters, so on a charge-by-source-length awk the total keeps an
+# n*(n/W) term. With W=1024 that term is ~1/1000 of what the old loop paid
+# and W sits at the sqrt(n) optimum for a page this size; it is a constant
+# factor away, not a shape change, and it is the price of not depending on a
+# builtin that would mis-parse on macOS. Measured, 200 / 1,000 / 5,000
+# elements, same host (numbers in the PR body):
+#   gawk 5.2.1     0.01 / 0.04 / 0.20s   (was 0.01 / 0.04 / 0.17s)
+#   mawk 1.3.4     0.01 / 0.04 / 0.17s   (was 0.01 / 0.03 / 0.13s)
+#   busybox 1.36.1 0.04 / 0.20 / 1.04s   (was 0.06 / 0.73 / 20.62s)
+#   BWK 20250116   0.73 / 1.20 / 6.86s   (was 6.77s at 200, 25.07s at 400,
+#                                        98.44s at 800 — x4 per doubling,
+#                                        i.e. ~3,845s extrapolated at 5,000)
+#   BWK 20200816     - / 0.56 / 0.81s    (was  - / 1.21 / 23.28s)
+# — that last row is the one that matters on a Mac: `awk version 20200816`
+# is the exact string macOS's own /usr/bin/awk prints, built here from the
+# last onetrue-awk commit before 2020-08-17 (there is no 2020 tag; the tags
+# jump 20180827 -> 20220122). It is quadratic too (5x the input for 19x the
+# time) and needed 23.28s at 5,000 — over the 20s bound the test asserts.
+# Output is byte-for-byte identical to the old loop on all four awks, over
+# the fixtures in tests/bats/watch-github.bats plus adversarial ones (a
+# `},{` inside a body, escaped quotes, a nested array of objects, a nested
+# `body` key, `[]`, a pretty-printed page, and an element deliberately
+# straddling several window boundaries).
 _wg_timeline_events() {
   printf '%s' "$1" | LC_ALL=C awk '
     { s = s $0 }
     END {
       US = sprintf("%c", 31)
-      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0
-      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""
+      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0; scap = 0
+      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""; ebuf = ""; sbuf = ""
+      W = 1024; wbeg = 1; wend = 0; win = ""
       for (i = 1; i <= n; i++) {
-        c = substr(s, i, 1)
+        if (i > wend) {
+          if (estart > 0) { ebuf = ebuf substr(win, estart - wbeg + 1); estart = i }
+          if (instr && scap) { sbuf = sbuf substr(win, sstart - wbeg + 1); sstart = i }
+          wbeg = i; win = substr(s, i, W); wend = i + length(win) - 1
+        }
+        c = substr(win, i - wbeg + 1, 1)
         if (instr) {
           if (esc) { esc = 0; continue }
           if (c == "\\") { esc = 1; continue }
           if (c == "\"") {
             instr = 0
-            if (depth == 2) {
-              str = substr(s, sstart, i - sstart)
-              if (isval && key == "body") body = str
-              if (!isval) laststr = str
+            if (scap) {
+              str = sbuf substr(win, sstart - wbeg + 1, i - sstart)
+              if (isval) body = str
+              else laststr = str
+              sbuf = ""; scap = 0
             }
           }
           continue
         }
         if (c == "\"") {
-          instr = 1; sstart = i + 1
-          if (depth == 2) { isval = want; want = 0 }
+          instr = 1; sstart = i + 1; sbuf = ""
+          if (depth == 2) { isval = want; want = 0; scap = (isval ? (key == "body") : 1) }
+          else scap = 0
           continue
         }
         if (c == " " || c == "\t" || c == "\r") continue
@@ -673,14 +740,14 @@ _wg_timeline_events() {
         if (depth == 2) want = 0
         if (c == "{" || c == "[") {
           depth++
-          if (depth == 2 && c == "{") { estart = i; body = ""; key = ""; laststr = "" }
+          if (depth == 2 && c == "{") { estart = i; ebuf = ""; body = ""; key = ""; laststr = "" }
           continue
         }
         if (c == "}" || c == "]") {
           depth--
           if (depth == 1 && c == "}" && estart > 0) {
-            print body US substr(s, estart, i - estart + 1)
-            estart = 0
+            print body US ebuf substr(win, estart - wbeg + 1, i - estart + 1)
+            estart = 0; ebuf = ""
           }
           continue
         }
@@ -1013,12 +1080,66 @@ _wg_status_write() {
   _wg_runs_rotate "$org"
 }
 
-# _wg_runs_rotate <org> -> keep only the newest 200 watch-github-<org>-*
-# run directories under $HOME/.clikae/logs (P3-10) — a count-based floor
-# independent of burn.sh's own day-based sweep (_burn_sweep_old_logs, which
-# now also globs `watch-github-*`, P3-3), which only runs when `clikae
-# burn` or `clikae clean` actually gets invoked, not on every poll. Sorted
-# by mtime (not name — no assumption about epoch digit width).
+# _wg_is_run_dir <org> <path> -> 0 when <path>'s BASENAME is exactly
+# `watch-github-<org>-<digits>` or `watch-github-<org>-<digits>-<digits>`
+# (the `-N` collision suffix _wg_status_write adds when two polls land in
+# the same second) — the only two shapes this file ever creates.
+#
+# 🔴 P3-3 (#111): the rotate below used to select with the bare glob
+# `watch-github-<org>-*`, which for org `foo` also matches every single run
+# directory of org `foo-bar` (`watch-github-foo-bar-1789…`). Rotating `foo`
+# therefore COUNTED and DELETED `foo-bar`'s runs — the two orgs shared one
+# 200-directory budget, and the loser was whichever had the older mtimes.
+# The status.json check alone never caught this: a sibling org's run
+# directories have status.json too, by construction. Anchoring the digits
+# is what makes `foo` and `foo-bar` disjoint.
+_wg_is_run_dir() {
+  local org="$1" name="${2##*/}" prefix rest epoch suffix=""
+  prefix="watch-github-$org-"
+  case "$name" in
+    "$prefix"*) rest="${name#"$prefix"}" ;;
+    *) return 1 ;;
+  esac
+  epoch="${rest%%-*}"
+  case "$rest" in *-*) suffix="${rest#*-}" ;; esac
+  case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "$suffix" ]; then
+    case "$suffix" in ''|*[!0-9]*) return 1 ;; esac
+  fi
+  return 0
+}
+
+# _wg_runs_rotate <org> -> keep only the newest 200 of THIS org's own
+# watch-github-<org>-<epoch> run directories under $HOME/.clikae/logs
+# (P3-10) — a count-based floor independent of burn.sh's own day-based
+# sweep (_burn_sweep_old_logs, which also globs `watch-github-*`, P3-3),
+# which only runs when `clikae burn` or `clikae clean` actually gets
+# invoked, not on every poll. Sorted by mtime (not name — no assumption
+# about epoch digit width).
+#
+# NO-status.json POLICY, DECIDED (P3-3, #111 — the round-8 review asked for
+# a decision either way; this is it, and docs/EXPECTATIONS.md says the same
+# thing). Such a directory is a poll that created its run directory and then
+# died before writing a terminal state: `clikae wait` can never resolve it,
+# nothing will ever add the missing file, and until now BOTH sweeps kept it
+# forever (this one skipped it, burn's own `case` skipped it too). It is now
+# deleted once its mtime is more than CLIKAE_BURN_LOG_RETENTION_DAYS (7)
+# days old — the same knob and the same default as burn's log retention,
+# and `0` disables it there and here alike.
+#
+# 🔴 TWO THINGS ARE DELIBERATELY EXEMPT FROM THAT DELETE, because the name
+# alone cannot tell them from a crashed run (read before removing either):
+#   · a directory still holding `events.jsonl`. An org's DURABLE log
+#     (`_wg_log_dir`, `watch-github-<org>/events.jsonl`) has no status.json
+#     and an mtime that never moves on append, and for an org literally
+#     called `foo-2024` its name — `watch-github-foo-2024` — is a perfectly
+#     legal run-directory name for org `foo`. Deleting one loses that org's
+#     entire history; keeping a rare half-written run directory costs a few
+#     kilobytes. This is the same trap fix-round-7's P2-3 already fixed once
+#     in burn.sh; it must not be re-opened from this side.
+#   · a directory whose name, after `watch-github-`, IS an org this host
+#     watches (it has a seen-file in the state dir). Same reason, checked
+#     from the other end.
 _wg_runs_rotate() {
   local org="$1" base="$HOME/.clikae/logs" d keep=200 i=0
   [ -d "$base" ] || return 0
@@ -1033,10 +1154,135 @@ _wg_runs_rotate() {
     if [ "$i" -gt "$keep" ]; then rm -rf "$d" 2>/dev/null; fi
   done < <(
     for d in "$base/watch-github-$org-"*; do
+      _wg_is_run_dir "$org" "$d" || continue
       [ -f "$d/status.json" ] || continue
       printf '%s\t%s\n' "$(file_mtime "$d" 2>/dev/null || echo 0)" "$d"
     done | sort -rn | cut -f2-
   )
+  return 0
+}
+
+# _wg_runs_sweep_statusless <org> -> the no-status.json half of the policy
+# documented on _wg_runs_rotate above. Called from _wg_poll on EVERY poll,
+# not from _wg_runs_rotate: rotate only runs when a poll actually found
+# something (it hangs off _wg_status_write, which is what creates a new run
+# directory in the first place), and a crashed run directory left behind by
+# a quiet org would otherwise never be reached at all.
+_wg_runs_sweep_statusless() {
+  local org="$1" base="$HOME/.clikae/logs" d name orgish mt now
+  local days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$days" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  [ -d "$base" ] || return 0
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$now" -gt 0 ] || return 0
+  for d in "$base/watch-github-$org-"*; do
+    [ -d "$d" ] || continue
+    _wg_is_run_dir "$org" "$d" || continue
+    [ -f "$d/status.json" ] && continue
+    [ -f "$d/events.jsonl" ] && continue
+    name="${d##*/}"; orgish="${name#watch-github-}"
+    [ -f "$(_wg_seen_file "$orgish")" ] && continue
+    mt="$(file_mtime "$d" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    [ "$mt" -gt 0 ] || continue
+    if [ "$((now - mt))" -gt "$((days * 86400))" ]; then
+      rm -rf "$d" 2>/dev/null || true
+    fi
+  done
+  return 0
+}
+
+# _wg_seen_cutoff_iso <org> <cursor> -> the ISO8601 instant BELOW which a
+# seen-file row can never be looked at again, so dropping it cannot cause a
+# re-announce; nothing (rc 1) when this poll has no sound base to measure
+# from (P3-2, #111 — see the cap block in _wg_poll for the whole story).
+#
+# WHY THIS INSTANT. The only thing that ever re-reads already-processed
+# ground is _wg_tail_sweep, and its lower bound is `cursor - window` with
+# `window = max(300, now - sweepat) + 300` (_wg_tail_sweep_window). Both
+# terms move forward as time passes, and `cursor` tracks real time for an
+# active org, so the floor the NEXT sweep will read from is about
+# `sweepat - 300` — the start of the last sweep that completed, minus its
+# own deliberate 300s overlap. Nothing below that is ever requeried.
+#
+# We keep 1800s BELOW the lower of (that floor, this poll's cursor), i.e.
+# 6x the 300s overlap and 3x the 600s minimum sweep window: enough slack to
+# absorb the skew between GitHub's `updated_at` clock (what the rows carry)
+# and this host's own (what `.sweepat` carries) — those are two different
+# clocks and comparing them is only safe with a margin this size — plus a
+# cron schedule sparse enough that the next sweep's window is much wider
+# than the last one's. Taking the LOWER of the two anchors means a quiet
+# org, whose cursor lags real time by hours, is measured against its own
+# cursor rather than against a wall clock that has run on without it.
+_wg_seen_cutoff_iso() {
+  local org="$1" cursor="$2" now sweepat_file sweepat base="" cursor_epoch=""
+  now="$(date +%s 2>/dev/null || echo 0)"
+  sweepat_file="$(_wg_sweep_at_file "$org")"
+  if [ -f "$sweepat_file" ]; then
+    sweepat="$(cat "$sweepat_file" 2>/dev/null)"
+    sweepat="$(_wg_sane_epoch "$sweepat" "$now")" && base="$sweepat"
+  fi
+  [ -n "$cursor" ] && cursor_epoch="$(_limit_iso_epoch "$cursor" "")"
+  case "$cursor_epoch" in ''|*[!0-9]*) cursor_epoch="" ;; esac
+  if [ -n "$cursor_epoch" ]; then
+    if [ -z "$base" ] || [ "$cursor_epoch" -lt "$base" ]; then base="$cursor_epoch"; fi
+  fi
+  [ -n "$base" ] || return 1
+  [ "$base" -gt 1800 ] || return 1
+  _wg_iso_from_epoch "$((base - 1800))"
+}
+
+# _wg_seen_compact <seen-file> <cutoff-iso> -> rewrite <seen-file> keeping
+# every row that is EITHER newer than <cutoff-iso> (the age rule) OR among
+# the newest 5,000 rows (the floor). Atomic mktemp+mv. An empty <cutoff-iso>
+# means "no sound age to measure from this poll" and degrades to exactly the
+# old behaviour, `tail -n 5000`.
+#
+# 🔴 THE 5,000 IS A FLOOR, NOT A CAP — READ BEFORE "SIMPLIFYING" THIS TO A
+# PURE AGE RULE (P3-2, #111). The seen file answers TWO questions, with two
+# completely different retention needs:
+#   1. "have I already announced THIS exact update?" — `repo|number|updated`,
+#      exact-match, needed only as long as something can re-read that ground,
+#      i.e. the age rule above. This is the one the round-8 review found
+#      broken: a burst of >5,000 rows in one poll pushed the oldest ~1,000
+#      out of a `tail -n 5000` that ran in the SAME poll that wrote them, and
+#      the next sweep, still inside its own window, announced them again.
+#   2. "have I EVER seen this issue?" — the `^repo|number|` prefix probe in
+#      _wg_process, which is what decides `opened` vs `comment`. That needs
+#      retention measured in WEEKS, not minutes: evict issue #12's row and
+#      the next comment on #12 reads as brand new, reported as `opened` by
+#      whoever filed it — and if that is YOU, _wg_process silently swallows
+#      it as "my own new issue" and the collaborator's reply is LOST.
+# An age-only cap set to twice the sweep window would evict essentially
+# everything every twenty minutes and turn (2) into exactly that event loss —
+# a worse bug than the one being fixed. So age is the binding rule for (1),
+# and the 5,000 newest rows are kept unconditionally for (2). The file is
+# still bounded: by max(5,000, rows inside the retention window), and a poll
+# reads at most 500 rows.
+_wg_seen_compact() {
+  local f="$1" cutoff="$2" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null)" || return 0
+  # Two passes over the same file: the first only counts, so the second
+  # knows where the newest-5,000 tail begins. `[|]` (an ERE, not a bare
+  # `|`) as the field separator: a one-character FS is taken literally by
+  # every awk this runs under, but the bracket form cannot be read as an
+  # alternation by any of them. Comparisons are forced to STRING with `""`
+  # concatenation — an ISO8601 stamp is not a number, and a locale-free
+  # lexicographic compare is exactly right for a fixed-width one.
+  if LC_ALL=C awk -v cut="$cutoff" -v keep=5000 -F'[|]' '
+        NR == FNR { n++; next }
+        FNR > n - keep { print; next }
+        cut == "" { next }
+        NF != 3 { print; next }
+        ($3 "") >= (cut "") { print }
+      ' "$f" "$f" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
   return 0
 }
 
@@ -1488,21 +1734,32 @@ _wg_poll() {
     printf '%s\n' "$sweep_n" > "$sweep_count_file" 2>/dev/null || true
   fi
 
-  # Cap the seen-file at the last 5,000 keys (brief's stated cap; P2-10 —
-  # 500 was smaller than a single cold-start backlog could legitimately
-  # be, so a busy first run would evict entries it had just written and
-  # then re-announce them as "opened" a second time next poll). Atomic
-  # `mktemp`+`mv` (P2-11): the old fixed `.tmp` name could collide with a
-  # concurrent poll's own compaction even under the lock above if a
-  # previous crashed run left a stale `.tmp` sitting there. Runs AFTER the
-  # tail sweep above so a sweep-found row's own seen-file entry is covered
-  # by the same compaction pass.
+  # Compact the seen-file: BY AGE, with the 5,000-row tail as a floor
+  # (P3-2, #111 — read _wg_seen_compact's own comment before changing
+  # either half; the 5,000 is not a cap any more and must not become one
+  # again). The round-8 review's finding: a burst of more than 5,000 rows
+  # in ONE poll fell straight off the old unconditional `tail -n 5000`,
+  # which ran in that same poll — and the next tail sweep, whose window
+  # still covered them, announced the evicted ones a second time, as
+  # `opened`. Rows inside the window anything can still re-read are now
+  # kept whatever the row count, and the newest 5,000 are kept whatever
+  # their age (that is what keeps `opened` vs `comment` honest for an issue
+  # nobody has touched in months). Atomic mktemp+mv (P2-11): the old fixed
+  # `.tmp` name could collide with a concurrent poll's own compaction even
+  # under the lock above if a previous crashed run left a stale `.tmp`
+  # sitting there. Runs AFTER the tail sweep above so a sweep-found row's
+  # own seen-file entry is covered by the same compaction pass — and reads
+  # `.sweepat` after that sweep has written it.
   if [ -f "$seen_file" ]; then
-    local seen_tmp
-    seen_tmp="$(mktemp "${seen_file}.XXXXXX" 2>/dev/null)" && \
-      tail -n 5000 "$seen_file" > "$seen_tmp" 2>/dev/null && \
-      mv -f "$seen_tmp" "$seen_file" 2>/dev/null
+    local seen_cutoff
+    seen_cutoff="$(_wg_seen_cutoff_iso "$org" "${new_cursor:-$since}")" || seen_cutoff=""
+    _wg_seen_compact "$seen_file" "$seen_cutoff"
   fi
+
+  # The day-based half of the run-directory policy (P3-3, #111). Here, not
+  # in _wg_runs_rotate, because rotate only runs on a poll that found
+  # something — see _wg_runs_sweep_statusless' own comment.
+  _wg_runs_sweep_statusless "$org"
 
   # P3-12 (2026-09-13 fix-round-2 review): the durable events.jsonl had no
   # cap at all (unlike the seen-file, above) — an org active enough to need

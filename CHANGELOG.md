@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`clikae watch github`'s run-directory rotation is anchored to the org, and
+  a run directory with no `status.json` is no longer kept forever.** Rotating
+  org `foo` selected with a bare `watch-github-foo-*` glob, which also matches
+  every run directory of org `foo-bar` — the two orgs shared one 200-directory
+  budget and whichever had the older mtimes lost. The `status.json` check that
+  was supposed to guard this never could: a sibling org's run directories have
+  one too, by construction. Selection now requires
+  `watch-github-<org>-<digits>` (optionally plus the `-<N>` same-second
+  collision suffix). And a directory with no `status.json` — a poll that died
+  before writing any terminal state, which `clikae wait` can never resolve and
+  which both sweeps used to skip — is now deleted once it is older than
+  `CLIKAE_BURN_LOG_RETENTION_DAYS` (default 7; `0` disables). Two exemptions,
+  written down in [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md): a directory
+  still holding `events.jsonl`, and one whose name is an org this host watches
+  — either could be an org's durable log, which is never swept (#111).
+- **`clikae watch github`'s seen-file is compacted by AGE now, with the
+  5,000-row tail kept as a floor rather than a cap.** A burst of more than
+  5,000 rows in one poll fell off the old unconditional `tail -n 5000` that
+  ran in that same poll, and the next tail sweep — whose window still
+  covered that ground, and which paginates oldest-first — announced the
+  evicted rows a second time, as `opened`. Rows newer than 1800s below the
+  lower of (the last completed sweep's start, this poll's cursor) are now
+  kept whatever the row count. The 5,000 newest rows are still kept whatever
+  their age, deliberately: that is the retention the `opened`-vs-`comment`
+  decision depends on, and an age-only cap would have evicted a year-old
+  issue's row and then reported the next reply on it as a new issue opened
+  by whoever filed it — which, when that is you, is swallowed silently and
+  the reply is lost (#111).
+- **`clikae watch github`'s timeline parser is now linear on every awk, not
+  just gawk and mawk.** It read the page one `substr(<whole page>, i, 1)` at a
+  time, and busybox awk and the current BWK awk (the family macOS ships as
+  `/usr/bin/awk`) charge by the length of the SOURCE string on every substr
+  call — so the scan was O(n²) there while being O(n) on gawk. Measured on a
+  5,000-element timeline page: 20.6s on busybox awk 1.36.1, and ~4× per
+  doubling on BWK awk 20250116 (6.8s / 25.1s / 98.4s at 200 / 400 / 800
+  elements), against 0.17s on gawk. Characters are now read through a bounded
+  1024-byte window, and the element text, the `body` value and each key are
+  accumulated out of those windows rather than re-cut from the whole page:
+  1.04s on busybox and 6.9s on BWK for the same 5,000 elements, with output
+  byte-for-byte identical to the old parser on all four awks. No new awk
+  builtin was used — `split(s, a, "")` and `FS=""` would both have been
+  faster still, and both mis-parse rather than merely run slow on the older
+  BWK awk macOS ships. The file header's "O(1) per character in every awk"
+  claim was wrong and has been corrected (#111).
 - **The cockpit guard now checks `fable` the same way it checks opus and
   sonnet** — `fable`, `claude-fable-*` and every provider spelling of them
   (`us.anthropic.claude-fable-…-v1:0`, `claude-fable-…@…`, `fable[1m]`). The

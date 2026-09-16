@@ -899,14 +899,17 @@ STUB
   [[ "$output" == *"0 new event(s)"* ]] || false
 }
 
-@test "watch github --once: seen-file caps at 5,000 lines, not 500 (P2-10)" {
+@test "watch github --once: seen-file keeps the newest 5,000 lines, not 500 (P2-10)" {
   _gh_stub_install
   local state_dir="$CLIKAE_HOME/state/watch-github"
   mkdir -p "$state_dir"
-  # 5,100 pre-existing keys, well past the OLD 500 cap and past the NEW
-  # 5,000 one too — P2-10's finding was that 500 was smaller than a single
+  # 5,100 pre-existing keys, well past the OLD 500 cap and past the 5,000
+  # row floor too — P2-10's finding was that 500 was smaller than a single
   # cold-start backlog could legitimately be, evicting entries the SAME
-  # poll had just written and re-announcing them next time.
+  # poll had just written and re-announcing them next time. Every key here
+  # is from 2026-01-01, far outside any sweep window, so the age rule added
+  # for P3-2 (#111) keeps none of them and the 5,000-row floor is what
+  # decides — the exact behaviour this test was written to pin.
   seq 1 5100 | sed 's/^/reef|/; s/$/|2026-01-01T00:00:00Z/' > "$state_dir/CVERInc.seen"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
@@ -2126,16 +2129,30 @@ STUB
     "$HOME/.clikae/logs/watch-github-CVERInc-1700000000-2/status.json"
 }
 
+# _fake_runs_write <n> -> <n> run directories for org CVERInc, each with a
+# status.json and a directory mtime <n>..1 minutes further into the past, so
+# a count cap has an unambiguous oldest end to drop.
+#
+# 🔴 Named `watch-github-CVERInc-<epoch>` since #111 — these used to be
+# `watch-github-CVERInc-fake<i>`, a name _wg_status_write cannot produce.
+# Once rotation started anchoring the epoch (P3-3) it correctly ignored all
+# of them, and both tests below went red on a fixture problem, not a code
+# one. A fixture has to look like the thing it stands for.
+_fake_runs_write() {
+  local n="$1" base="$HOME/.clikae/logs" i past
+  mkdir -p "$base"
+  for i in $(seq 1 "$n"); do
+    mkdir -p "$base/watch-github-CVERInc-18000000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-18000000$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-18000000$i"   # the DIRECTORY's own mtime — that's what rotation sorts on
+  done
+}
+
 @test "watch github --once: run directories rotate, keeping the newest 200 (P3-10)" {
   _gh_stub_install
-  local base="$HOME/.clikae/logs" i past
-  mkdir -p "$base"
-  for i in $(seq 1 205); do
-    mkdir -p "$base/watch-github-CVERInc-fake$i"
-    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
-    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
-    touch -t "$past" "$base/watch-github-CVERInc-fake$i"   # the DIRECTORY's own mtime — that's what rotation sorts on
-  done
+  local base="$HOME/.clikae/logs"
+  _fake_runs_write 205
 
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
@@ -2145,30 +2162,25 @@ STUB
   local n; n="$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-*' | wc -l)"
   [ "$n" -eq 200 ]
   # The OLDEST fake ones (lowest i, backdated furthest) are gone...
-  [ ! -d "$base/watch-github-CVERInc-fake1" ]
+  [ ! -d "$base/watch-github-CVERInc-180000001" ]
   # ...the newest fake ones, and this poll's own real run, survive.
-  [ -d "$base/watch-github-CVERInc-fake205" ]
+  [ -d "$base/watch-github-CVERInc-18000000205" ]
 }
 
 @test "watch github --once: rotating org CVERInc's runs never removes org CVERInc-labs' durable log dir (P2-3 sibling, fix-round-7)" {
   _gh_stub_install
-  local base="$HOME/.clikae/logs" i past
+  local base="$HOME/.clikae/logs"
   mkdir -p "$base/watch-github-CVERInc-labs"
   printf '{"n":1}\n' > "$base/watch-github-CVERInc-labs/events.jsonl"
   # Oldest of everything — the first thing a count cap would drop.
   touch -t 202601010000 "$base/watch-github-CVERInc-labs"
-  for i in $(seq 1 205); do
-    mkdir -p "$base/watch-github-CVERInc-fake$i"
-    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
-    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
-    touch -t "$past" "$base/watch-github-CVERInc-fake$i"
-  done
+  _fake_runs_write 205
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [ -f "$base/watch-github-CVERInc-labs/events.jsonl" ]
-  [ ! -d "$base/watch-github-CVERInc-fake1" ]
+  [ ! -d "$base/watch-github-CVERInc-180000001" ]
 }
 
 @test "watch github --once: the durable events.jsonl rotates at 10MB (P3-12)" {
@@ -2204,4 +2216,467 @@ STUB
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" run clikae watch claude --check
   [ "$status" -eq 0 ]
   [[ "$output" == *"No genuine limit marker"* ]] || false
+}
+
+# --- P3-1 (#111): _wg_timeline_events must be linear in the HOST awk -------
+#
+# The parser used to take one `substr($WHOLE_PAGE, i, 1)` per character.
+# gawk and mawk index a string in constant time; busybox awk and the current
+# BWK awk charge by the length of the SOURCE string on every substr call, so
+# on those the scan was O(n^2) — 20.6s for a 5,000-element page on busybox
+# 1.36.1 against 0.17s on gawk, and ~4x per doubling on BWK 20250116 (6.77s
+# / 25.07s / 98.44s at 200 / 400 / 800 elements, i.e. ~3,845s extrapolated
+# at 5,000). clikae runs under whatever awk the host ships, so these tests
+# run under the host awk too, with no skip.
+#
+# Two tests, because neither alone is enough:
+#   1. equivalence — the rewrite must produce byte-identical output to the
+#      pre-rewrite loop, which is kept here verbatim as the reference (same
+#      shape as tests/bats/dry-lookup.bats: do not tidy it, it is the
+#      reference, not code);
+#   2. a stopwatch — 5,000 elements under a wall-clock bound. The bound is
+#      enormously generous on gawk (0.20s measured) and still generous on
+#      the slowest awk measured (6.9s, BWK 20250116 in docker), but the old
+#      quadratic loop cannot meet it on any awk that charges by source
+#      length. On gawk the stopwatch proves nothing about the shape — gawk
+#      was never the problem — which is exactly why test 1 exists.
+
+# The pre-rewrite parser, verbatim. Do not tidy — it is the reference.
+_wg_timeline_events_reference() {
+  printf '%s' "$1" | LC_ALL=C awk '
+    { s = s $0 }
+    END {
+      US = sprintf("%c", 31)
+      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0
+      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (instr) {
+          if (esc) { esc = 0; continue }
+          if (c == "\\") { esc = 1; continue }
+          if (c == "\"") {
+            instr = 0
+            if (depth == 2) {
+              str = substr(s, sstart, i - sstart)
+              if (isval && key == "body") body = str
+              if (!isval) laststr = str
+            }
+          }
+          continue
+        }
+        if (c == "\"") {
+          instr = 1; sstart = i + 1
+          if (depth == 2) { isval = want; want = 0 }
+          continue
+        }
+        if (c == " " || c == "\t" || c == "\r") continue
+        if (c == ":" && depth == 2) { key = laststr; want = 1; continue }
+        if (depth == 2) want = 0
+        if (c == "{" || c == "[") {
+          depth++
+          if (depth == 2 && c == "{") { estart = i; body = ""; key = ""; laststr = "" }
+          continue
+        }
+        if (c == "}" || c == "]") {
+          depth--
+          if (depth == 1 && c == "}" && estart > 0) {
+            print body US substr(s, estart, i - estart + 1)
+            estart = 0
+          }
+          continue
+        }
+      }
+    }'
+}
+
+# _wg_timeline_fixture <n> -> a compact one-line JSON array of <n>
+# timeline-shaped elements (~300 bytes each, the size of a real commented
+# event), written to stdout. Deliberately carries an escaped quote inside
+# every body so the escape path is on the timed path too.
+_wg_timeline_fixture() {
+  LC_ALL=C awk -v n="$1" 'BEGIN{
+    printf "["
+    for (i = 1; i <= n; i++) {
+      if (i > 1) printf ","
+      printf "{\"event\":\"commented\",\"id\":%d,\"actor\":{\"login\":\"zed%d\",\"type\":\"User\"},\"user\":{\"login\":\"zed%d\"},\"body\":\"reply %d with a \\\"quoted\\\" word and some padding text to make this element a realistic size, about right for a comment body on a busy pull request timeline\",\"created_at\":\"2026-09-16T00:00:00Z\"}", i, i, i, i
+    }
+    printf "]\n"
+  }'
+}
+
+@test "watch github: the timeline parser is byte-identical to the pre-rewrite one, host awk (P3-1, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local f new old
+  # Adversarial shapes first: a literal `},{` inside a body, an escaped
+  # quote, a nested array of objects, a nested `body` key that is NOT the
+  # event's own, a null body, an empty array, and an element long enough to
+  # straddle several of the rewrite's 1024-byte windows (the one thing the
+  # old loop, which never had a window, cannot have got wrong by
+  # construction).
+  local pad; pad="$(LC_ALL=C awk 'BEGIN{ for (i = 0; i < 3000; i++) printf "x" }')"
+  local cases=0
+  for f in \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"a },{ b \"q\" c"},{"event":"labeled","actor":{"login":"carol"}},{"event":"reviewed","user":{"login":"amy"},"body":null,"sub":{"body":"NOT MINE"}},{"event":"x","list":[{"body":"nested"},{"body":"nested2"}],"body":"mine"}]' \
+    '[]' \
+    '[{"body":""}]' \
+    "[{\"body\":\"$pad\",\"event\":\"commented\"},{\"body\":\"short\"}]" \
+  ; do
+    new="$(_wg_timeline_events "$f")"
+    old="$(_wg_timeline_events_reference "$f")"
+    [ "$new" = "$old" ] || { echo "MISMATCH on: $f"; echo "new: $new"; echo "old: $old"; false; }
+    cases=$((cases + 1))
+  done
+  # A pretty-printed (multi-line) page — the other input shape gh can hand
+  # this function.
+  local pretty
+  pretty="$(printf '[\n  {\n    "event": "commented",\n    "actor": { "login": "zed" },\n    "body": "hello"\n  },\n  {\n    "event": "labeled",\n    "actor": { "login": "carol" }\n  }\n]\n')"
+  [ "$(_wg_timeline_events "$pretty")" = "$(_wg_timeline_events_reference "$pretty")" ]
+  cases=$((cases + 1))
+  # And a real-sized page, 1,000 elements.
+  local big; big="$(_wg_timeline_fixture 1000)"
+  [ "$(_wg_timeline_events "$big" | cksum)" = "$(_wg_timeline_events_reference "$big" | cksum)" ]
+  cases=$((cases + 1))
+  # The loop above must actually have run — an empty `for` list would leave
+  # every assertion unexecuted and the test green.
+  [ "$cases" -eq 6 ]
+}
+
+@test "watch github: a 5,000-element timeline page parses within the bound, host awk (P3-1, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local json; json="$(_wg_timeline_fixture 5000)"
+  # Sanity on the fixture itself before timing anything: ~1.5MB, which is
+  # what makes the quadratic shape visible at all.
+  [ "${#json}" -gt 1400000 ]
+
+  local t0=$SECONDS out n
+  out="$(_wg_timeline_events "$json" | wc -l)"
+  local elapsed=$((SECONDS - t0))
+
+  # Correct first, fast second — a parser that returns nothing is very fast.
+  [ "$out" -eq 5000 ]
+  # 20s. Measured on this project's own bench, 5,000 elements: gawk 5.2.1
+  # 0.20s, mawk 1.3.4 0.17s, busybox awk 1.36.1 1.04s, BWK awk 20250116
+  # 6.9s, BWK awk 20200816 0.81s. The pre-rewrite loop needed 20.6s on
+  # busybox, 23.3s on BWK 20200816 and ~3,845s (extrapolated from
+  # 4x-per-doubling) on BWK 20250116 — so this bound leaves >=3x headroom
+  # for every awk measured and still catches the shape on all three that
+  # charge by source length. `awk version 20200816` is the exact version
+  # string macOS's own /usr/bin/awk prints, so the leg of CI most likely to
+  # run a charge-by-source-length awk has ~25x headroom here and WOULD have
+  # failed on the old parser.
+  [ "$elapsed" -lt 20 ] || { echo "5,000 elements took ${elapsed}s (bound 20s)"; false; }
+
+  # One last check that the body extraction still works at this scale — the
+  # rewrite accumulates a body across window refills, and a body that came
+  # back empty would also be very fast.
+  n="$(_wg_timeline_events "$json" | grep -c '^reply 4999 with a ')"
+  [ "$n" -eq 1 ]
+}
+
+# --- P3-2 (#111): the seen-file is capped by AGE, with a row-count FLOOR --
+#
+# The round-8 review's finding: a burst of more than 5,000 rows pushed the
+# oldest of them off the unconditional `tail -n 5000` that ran in the SAME
+# poll that wrote them, and the next tail sweep — whose window still covered
+# that ground — announced them a second time, as `opened`.
+#
+# _honest_corpus_write_burst <n> <rows_per_second> -> <n> rows, numbers
+# 2000+1..2000+n, all inside one 2026-09-01T00:MM:SSZ ten-minute span with
+# <rows_per_second> rows sharing each second. No `date` calls at all (one
+# per row would be 6,000 forks): the span is short enough that the minute
+# and second fields can be computed directly, which is also what keeps the
+# whole burst inside a single 600s sweep window.
+_honest_corpus_write_burst() {
+  local n="$1" rps="$2"
+  LC_ALL=C awk -v n="$n" -v rps="$rps" 'BEGIN{
+    for (i = 1; i <= n; i++) {
+      sec = int((i - 1) / rps)
+      printf "%d\t2026-09-01T00:%02d:%02dZ\talice\treef\thttps://x/%d\t0\tissue %d\t0\n", \
+        2000 + i, int(sec / 60), sec % 60, 2000 + i, i
+    }
+  }' > "$GH_STUB_DIR/honest_corpus.tsv"
+}
+
+# _burst_state_write -> the state a poll that just delivered a 6,000-row
+# burst leaves behind: the corpus, a seen-file holding all 6,000 keys, the
+# cursor at the newest of them, and a sweep counter one short of firing.
+# The whole burst spans 600 seconds, which is exactly the window the next
+# tail sweep re-reads (no `.sweepat` yet, so _wg_tail_sweep_window sits at
+# its 300s floor plus the 300s overlap).
+_burst_state_write() {
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  _honest_corpus_write_burst 6000 10
+  awk -F'\t' '{ print $4 "|" $1 "|" $2 }' "$GH_STUB_DIR/honest_corpus.tsv" \
+    > "$state_dir/CVERInc.seen"
+  awk -F'\t' 'END{ print $2 }' "$GH_STUB_DIR/honest_corpus.tsv" \
+    > "$state_dir/CVERInc.cursor"
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+}
+
+@test "watch github --once: a 6,000-row burst is not evicted by the compaction in its own poll (P3-2, #111)" {
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  local seen="$state_dir/CVERInc.seen"
+  _burst_state_write
+  [ "$(wc -l < "$seen")" -eq 6000 ]
+  local oldest
+  oldest="$(head -n1 "$GH_STUB_DIR/honest_corpus.tsv" | awk -F'\t' '{ print $4 "|" $1 "|" $2 }')"
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  # Nothing inside the re-readable window was evicted. The old
+  # `tail -n 5000` dropped exactly the oldest 1,000 rows here — including
+  # the one the sweep reads FIRST, since the sweep paginates ascending.
+  [ "$(wc -l < "$seen")" -ge 6000 ]
+  grep -qxF "$oldest" "$seen" || { echo "the oldest burst row was evicted: $oldest"; false; }
+  [ "$(grep -c '^reef|' "$seen")" -eq 6000 ]
+}
+
+@test "watch github --once: after a 6,000-row burst the next sweep announces nothing a second time (P3-2, #111)" {
+  # Two polls, each with a tail sweep over the burst's own ground. The
+  # round-8 symptom lands on the SECOND one: rows the first poll's
+  # compaction evicted come back with no seen-file entry at all, so
+  # _wg_process reads them as brand-new issues and reports them as
+  # `opened` by whoever filed them. Kept separate from the test above so
+  # each half fails on its own evidence rather than one aborting the other.
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  _burst_state_write
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  [[ "$output" != *"opened by alice"* ]] || { echo "re-announced: $output"; false; }
+  [ ! -s "$events" ]
+}
+
+@test "watch github --once: an issue whose seen-file row is a YEAR old still reads 'comment', not 'opened' (P3-2 floor, #111)" {
+  # The reason the 5,000 rows are a floor and not a cap. An age-only rule
+  # would evict this row (it is far outside any sweep window), and the next
+  # comment on #203 would read as a brand-new issue opened by whoever filed
+  # it — which, when that is YOU, _wg_process silently swallows as "my own
+  # new issue". That is event loss, not a cosmetic wrong label.
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|203|2025-09-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 203 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"a reply"}]'
+  _gh_stub_page org 1 \
+    "$(_row 203 2026-09-07T06:05:00Z alice reef https://x/203 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#203 comment by zed: some issue"* ]] || false
+  [[ "$output" != *"opened by alice"* ]] || false
+  # And the year-old row is still on disk after this poll's compaction.
+  grep -qxF "reef|203|2025-09-01T00:00:00Z" "$state_dir/CVERInc.seen"
+}
+
+@test "watch github: the seen-file cutoff is anchored to the cursor, never to a wall clock that ran on without it (P3-2, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  # No `.sweepat`: the only anchor is the cursor, and the cutoff must sit
+  # 1800s below it — in the cursor's own (GitHub's) clock, not this host's.
+  local cut; cut="$(_wg_seen_cutoff_iso CVERInc 2026-09-01T12:00:00Z)"
+  [ "$cut" = "2026-09-01T11:30:00Z" ]
+  # A completed sweep LOWER than the cursor wins: that is the floor a
+  # future sweep can still read back to.
+  printf '1000000000\n' > "$state_dir/CVERInc.sweepat"
+  cut="$(_wg_seen_cutoff_iso CVERInc 2026-09-01T12:00:00Z)"
+  [ "$cut" = "2001-09-09T01:16:40Z" ]
+  # Nothing to measure from at all -> rc 1, and the caller degrades to the
+  # old row-count behaviour rather than inventing a cutoff.
+  rm -f "$state_dir/CVERInc.sweepat"
+  run _wg_seen_cutoff_iso CVERInc ""
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "watch github: _wg_seen_compact keeps by age OR by the 5,000 floor, and degrades to tail -n 5000 with no cutoff (P3-2, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local f="$TEST_HOME/compact.seen"
+  # 1,000 old rows then 5,000 recent ones, plus one malformed row.
+  LC_ALL=C awk 'BEGIN{
+    for (i = 1; i <= 1000; i++) printf "reef|%d|2026-01-01T00:00:00Z\n", i
+    for (i = 1001; i <= 6000; i++) printf "reef|%d|2026-09-16T12:00:00Z\n", i
+    printf "a-row-with-no-fields-at-all\n"
+  }' > "$f"
+  [ "$(wc -l < "$f")" -eq 6001 ]
+
+  _wg_seen_compact "$f" 2026-09-16T00:00:00Z
+  # Every recent row survives (age), and so does the malformed one (it sits
+  # inside the newest-5,000 tail; a row this function cannot read is never
+  # what it chooses to drop).
+  [ "$(grep -c '2026-09-16' "$f")" -eq 5000 ]
+  grep -qxF 'a-row-with-no-fields-at-all' "$f"
+  # The 1,000 old rows are outside BOTH rules here (older than the cutoff,
+  # and pushed out of the newest 5,000 by the recent ones) — gone.
+  [ "$(grep -c '2026-01-01' "$f")" -eq 0 ]
+  [ "$(wc -l < "$f")" -eq 5001 ]
+
+  # No cutoff -> exactly the old behaviour, tail -n 5000, nothing clever.
+  LC_ALL=C awk 'BEGIN{ for (i = 1; i <= 6000; i++) printf "reef|%d|2026-09-16T12:00:00Z\n", i }' > "$f"
+  _wg_seen_compact "$f" ""
+  [ "$(wc -l < "$f")" -eq 5000 ]
+  grep -qxF 'reef|6000|2026-09-16T12:00:00Z' "$f"
+  # `! cmd` does not fail a bats test (SC2314) — assert on the count.
+  [ "$(grep -cxF 'reef|1|2026-09-16T12:00:00Z' "$f")" -eq 0 ]
+}
+
+# --- P3-3 (#111): the rotate is anchored to the org, and the no-status.json
+# --- case has a policy instead of living forever ------------------------
+#
+# _touch_days_ago <days> <path>... -> set each path's mtime <days> days back.
+_touch_days_ago() {
+  local days="$1"; shift
+  local stamp
+  stamp="$(date -u -d "-${days} days" +%Y%m%d%H%M.%S 2>/dev/null \
+    || date -u -v-"${days}"d +%Y%m%d%H%M.%S)"
+  touch -t "$stamp" "$@"
+}
+
+@test "watch github --once: rotating org CVERInc never counts or deletes org CVERInc-labs' RUN dirs (P3-3, #111)" {
+  # The sibling guard used to be half a guard: the status.json check caught
+  # CVERInc-labs' DURABLE log (it has none), but its RUN directories have
+  # status.json by construction, so a bare `watch-github-CVERInc-*` glob
+  # swept them into CVERInc's own 200-directory budget — and they are the
+  # oldest here, so they are exactly what a count cap deletes first.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" i past
+  mkdir -p "$base"
+  # 10 sibling run dirs, the oldest mtimes of everything.
+  for i in $(seq 1 10); do
+    mkdir -p "$base/watch-github-CVERInc-labs-17000000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-labs-17000000$i/status.json"
+  done
+  _touch_days_ago 30 "$base"/watch-github-CVERInc-labs-*
+  # 205 of CVERInc's own, all newer.
+  for i in $(seq 1 205); do
+    mkdir -p "$base/watch-github-CVERInc-18000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-18000$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-18000$i"
+  done
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  # Every sibling run dir survives, oldest mtimes and all.
+  [ "$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-labs-*' | wc -l)" -eq 10 ]
+  [ -f "$base/watch-github-CVERInc-labs-170000001/status.json" ]
+  # And CVERInc's own budget was spent on CVERInc's own runs: 205 existing
+  # plus this poll's new one, rotated down to 200.
+  [ "$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-1*' | wc -l)" -eq 200 ]
+  [ ! -d "$base/watch-github-CVERInc-180001" ]
+}
+
+@test "watch github --once: a run dir with no status.json is deleted after 7 days, kept before (P3-3, #111)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000001" "$base/watch-github-CVERInc-1700000002"
+  _touch_days_ago 10 "$base/watch-github-CVERInc-1700000001"
+  _touch_days_ago 2 "$base/watch-github-CVERInc-1700000002"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  [ ! -d "$base/watch-github-CVERInc-1700000001" ]   # 10 days, terminal state never written
+  [ -d "$base/watch-github-CVERInc-1700000002" ]     # 2 days — a crash today is not litter yet
+}
+
+@test "watch github --once: the 7-day statusless sweep never touches a durable-log lookalike (P3-3, #111)" {
+  # Two exemptions, both because the NAME cannot tell a crashed run from an
+  # org's durable log: a directory that still holds events.jsonl, and one
+  # whose name after `watch-github-` is an org this host watches. For an org
+  # literally called `CVERInc-2024`, `watch-github-CVERInc-2024` is BOTH a
+  # legal run-directory name for CVERInc and that org's whole history.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$base/watch-github-CVERInc-1700000003" "$base/watch-github-CVERInc-2024" "$state_dir"
+  printf '{"n":1}\n' > "$base/watch-github-CVERInc-1700000003/events.jsonl"
+  printf 'reef|1|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc-2024.seen"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000003" "$base/watch-github-CVERInc-2024"
+  # A control in the same poll: no events.jsonl, no matching org — this one
+  # MUST go, or the test proves only that the sweep never fires at all.
+  mkdir -p "$base/watch-github-CVERInc-1700000004"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000004"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  [ -f "$base/watch-github-CVERInc-1700000003/events.jsonl" ]
+  [ -d "$base/watch-github-CVERInc-2024" ]
+  [ ! -d "$base/watch-github-CVERInc-1700000004" ]
+}
+
+@test "watch github --once: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the statusless sweep (P3-3, #111)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000005"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000005"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  export CLIKAE_BURN_LOG_RETENTION_DAYS=0
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ -d "$base/watch-github-CVERInc-1700000005" ]
+}
+
+@test "watch github --once: a poll that finds NOTHING still sweeps a stale statusless run dir (P3-3, #111)" {
+  # The reason this half hangs off _wg_poll and not _wg_runs_rotate: rotate
+  # is reached through _wg_status_write, which only runs when a poll found
+  # at least one new event. A quiet org's crashed run directories would
+  # otherwise be unreachable forever — which is the state the round-8
+  # review found them in.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000006"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000006"
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [ ! -d "$base/watch-github-CVERInc-1700000006" ]
+}
+
+# _not_run_dir <org> <path> -> fails (and says why) when _wg_is_run_dir
+# accepts <path>. A bare `! _wg_is_run_dir …` would NOT fail a bats test
+# (SC2314: bash's errexit skips a `!`-negated command), so every negative
+# case below would have been decoration.
+_not_run_dir() {
+  if _wg_is_run_dir "$1" "$2"; then
+    echo "_wg_is_run_dir accepted a path it must reject: org=$1 path=$2"
+    return 1
+  fi
+  return 0
+}
+
+@test "watch github: _wg_is_run_dir accepts only this org's own epoch-suffixed dirs (P3-3, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_is_run_dir foo /logs/watch-github-foo-1789538639
+  _wg_is_run_dir foo /logs/watch-github-foo-1789538639-2     # the -N collision suffix
+  _wg_is_run_dir CVERInc-labs /logs/watch-github-CVERInc-labs-1789538639
+  _not_run_dir foo /logs/watch-github-foo-bar-1789538639     # the sibling org, P3-3 itself
+  _not_run_dir foo /logs/watch-github-foo-bar
+  _not_run_dir foo /logs/watch-github-foo                    # the durable log
+  _not_run_dir foo /logs/watch-github-foo-
+  _not_run_dir foo /logs/watch-github-foobar-123             # no separator at all
+  _not_run_dir foo /logs/watch-github-foo-abc
+  _not_run_dir foo /logs/watch-github-foo-12-34-56
+  _not_run_dir CVERInc /logs/watch-github-CVERInc-labs-1789538639
 }
