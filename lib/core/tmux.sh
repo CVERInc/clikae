@@ -608,8 +608,59 @@ tmux_spawn_session() {
   # `@clikae_touch_y` — the band has to be measured against the geometry the
   # finger actually landed on, not whatever the pane has resized to by the
   # time the release is translated.
-  local touch_helper
-  touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_mode}"
+  # DRAG MOTION (#108, second half). Measured on a real iPhone 2026-09-16
+  # (a-Shell -> ssh -> tmux 3.4, passive event log on the server): a TAP is
+  # MouseDown1Pane + MouseUp1Pane on the same row, but a FLICK or a
+  # press-and-drag is MouseDown1Pane + one MouseDrag1Pane per row crossed +
+  # MouseDragEnd1Pane — and NO MouseUp1Pane at all. Everything above this
+  # paragraph translates the click pair, so on the device it was written for it
+  # never fired: tmux's own root `MouseDrag1Pane -> copy-mode -M` and
+  # `MouseDragEnd1Pane -> copy-pipe-and-cancel` won every time, and the gesture
+  # ended in "copied N chars to tmux buffer" instead of scrolling. The
+  # MouseDown/MouseUp pair above is NOT replaced — a terminal that sends no
+  # motion still needs it, and a tap still has no motion to send.
+  #
+  # 🔴 THESE SIX USE if-shell, NOT run-shell, AND THAT IS THE DESIGN. run-shell
+  # throws the helper's exit status away, so a binding built on it can only
+  # ever CONSUME the key. MouseDrag1Pane's stock meaning on a pane with no
+  # mouse-tracking program is mouse drag-SELECTION — the way every desktop user
+  # of this tool selects text — and there is no runtime signal that separates a
+  # finger from a trackpad, because a-Shell's drag and a trackpad's drag are
+  # the same tmux events. So the helper's status chooses: 0 means clikae
+  # translated the gesture, non-zero means run tmux's OWN command for this key,
+  # written out below verbatim from `list-keys` on a stock server
+  # (`tmux -f /dev/null`). `@clikae_touch_drag off` is therefore not an
+  # approximation of the default — it IS the default, drag-selection included.
+  # Verified that a mouse event survives into an if-shell branch: a binding
+  # whose shell command exited 1 ran `copy-mode -M` against the real press
+  # (tmux 3.4, a client driven with raw SGR bytes).
+  #
+  # OFF BY DEFAULT for the same reason, on #108's tap-zone precedent: a gesture
+  # that today reaches the program or the selection has to be asked for
+  # (`set -g @clikae_touch_drag on`). @clikae_touch_scroll remains the master
+  # switch over both halves.
+  #
+  # 🔴 EVERY FORMAT ARGUMENT IS QUOTED HERE AND NOT ABOVE. `#{pane_mode}`
+  # expands to the EMPTY STRING outside a mode — not to a placeholder, to
+  # nothing — so unquoted it produces NO argument and everything after it
+  # shifts left one place. The MouseUp line above survives unquoted only
+  # because #{pane_mode} is its LAST argument; the drag lines put two more
+  # after it, so all five are quoted. The quotes are single quotes inside a
+  # tmux double-quoted string: tmux expands the format first and `sh -c` then
+  # sees a genuine empty argument.
+  #
+  # root MouseDragEnd1Pane is bound even though stock tmux leaves it UNBOUND:
+  # declining there runs no else-command, which is exactly what an unbound key
+  # does, so the two agree.
+  local touch_helper touch_base touch_drag touch_end
+  local bind_drag_root bind_drag_copy bind_end_copy
+  touch_base="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh")"
+  touch_helper="$touch_base #{mouse_y} #{pane_id} #{pane_mode}"
+  touch_drag="$touch_base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' drag '#{mouse_x}'"
+  touch_end="$touch_base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' end '#{mouse_x}'"
+  bind_drag_root="if-shell \"$touch_drag\" '' 'if -F \"#{||:#{pane_in_mode},#{mouse_any_flag}}\" \"send-keys -M\" \"copy-mode -M\"'"
+  bind_drag_copy="if-shell \"$touch_drag\" '' 'select-pane ; send-keys -X begin-selection'"
+  bind_end_copy="if-shell \"$touch_end\" '' 'send-keys -X copy-pipe-and-cancel'"
   # 🔴 THE FLOOR. `set-option -p` / `-pu` (pane-scoped options, used by every
   # binding below) needs tmux >= 3.1 (added CHANGES-3.0-to-3.1); the
   # copy-mode-vi key table needs only >= 2.4 (CHANGES-2.3-to-2.4) — 3.1 is the
@@ -626,12 +677,19 @@ tmux_spawn_session() {
       \; set-option -og @clikae_touch_scroll_lines 2 \
       \; set-option -og @clikae_touch_pages off \
       \; set-option -og @clikae_touch_pages_rows 3 \
+      \; set-option -og @clikae_touch_drag off \
       \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M' \
       \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
       \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
       \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
       \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
       \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
+      \; bind-key -T root MouseDrag1Pane "$bind_drag_root" \
+      \; bind-key -T root MouseDragEnd1Pane "if-shell \"$touch_end\" ''" \
+      \; bind-key -T copy-mode MouseDrag1Pane "$bind_drag_copy" \
+      \; bind-key -T copy-mode MouseDragEnd1Pane "$bind_end_copy" \
+      \; bind-key -T copy-mode-vi MouseDrag1Pane "$bind_drag_copy" \
+      \; bind-key -T copy-mode-vi MouseDragEnd1Pane "$bind_end_copy" \
       2>/dev/null || true
   fi
   tmux set-option -s set-clipboard on 2>/dev/null || true
