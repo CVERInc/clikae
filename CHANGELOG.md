@@ -86,6 +86,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tank. Reading a marker costs the same whatever its size: `clikae tanks` on a
   store holding a 200 KB marker is as fast as on any other.
 
+### Added
+
+- **Drag to scroll a pane live on a touch terminal — off by default
+  (`@clikae_touch_drag`, #108).** #88 translated a swipe as a press/release
+  *pair*. Measured on a real iPhone (a-Shell → ssh → tmux 3.4, 2026-09-16,
+  reading tmux's own event stream), that is only what a **tap** sends: a flick
+  or a press-and-drag sends `MouseDown1Pane`, one `MouseDrag1Pane` per row
+  crossed, and `MouseDragEnd1Pane` — **no `MouseUp1Pane` at all**. #88's
+  translation therefore never fired on the device it was written for, and
+  tmux's own `MouseDrag1Pane → copy-mode -M` won instead: the gesture ended in
+  "copied N chars to tmux buffer" rather than scrolling. With
+  `set -g @clikae_touch_drag on` the motion is translated as it arrives, so the
+  history follows your finger instead of jumping when you let go, at the same
+  `@clikae_touch_scroll_lines` speed; moving down the glass reveals older
+  output, and letting go at the newest line returns to the live view.
+  **Applications that draw their own screen get the wheel, not copy-mode**: a
+  full-screen TUI runs on the alternate screen where tmux keeps no scrollback
+  (measured `alternate_on` 1, `history_size` 0), so clikae sends it real
+  mouse-wheel events (one notch per two lines) as raw SGR bytes and never
+  enters copy-mode there.
+  **Off by default, and that default carries more weight than #108's other
+  one**: `MouseDrag1Pane` on a pane with no mouse-tracking program is how you
+  select text with a mouse or trackpad, and a finger's drag and a trackpad's
+  drag are *the same tmux events* — nothing at runtime can tell them apart. So
+  the six new bindings go through `if-shell` rather than `run-shell` and hand
+  the key back when the option is off: `off` is not an approximation of stock
+  tmux, it runs tmux's own command for that key, drag-selection included. Only
+  `on`/`1`/`yes`/`true` (any case) enable it, and `@clikae_touch_scroll off`
+  disables it along with everything else. Verified against a real tmux 3.4
+  server and, for the three questions only tmux's key tables can answer,
+  against a real client driven with real SGR mouse bytes; a physical iPhone
+  run remains unverified (see `docs/EXPECTATIONS.md`).
+
 ### Fixed
 
 - An oversized integer in `state/cockpit-allow` (400 digits, say) no longer

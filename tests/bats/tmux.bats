@@ -81,9 +81,40 @@ release() {
     [[ "$output" == *"<bind-key><-T><$table><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; set-option -p -t = -F @clikae_touch_h \"#{pane_height}\"; select-pane -t =>"* ]] || false
     [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_mode}>"* ]] || false
   done
+  # #108 second half: the drag stream. `@clikae_touch_drag` rides the same `-og`
+  # chain and ships OFF — MouseDrag1Pane's stock meaning on a pane with no
+  # mouse-tracking program is mouse drag-SELECTION, and a-Shell's drag and a
+  # trackpad's drag are the same tmux events, so there is no runtime signal
+  # that could tell them apart and the gesture has to be asked for.
+  [[ "$output" == *'<set-option><-og><@clikae_touch_drag><off>'* ]] || false
+  # 🔴 if-shell, NOT run-shell, and the third argument is what makes `off` mean
+  # stock tmux: run-shell throws the exit status away, so a binding built on it
+  # could only ever CONSUME the key. The else-branch is tmux's own command for
+  # this key, copied from `list-keys` on a stock server.
+  [[ "$output" == *"<bind-key><-T><root><MouseDrag1Pane><if-shell \"bash '"* ]] || false
+  [[ "$output" == *"' drag '#{mouse_x}'\" '' 'if -F \"#{||:#{pane_in_mode},#{mouse_any_flag}}\" \"send-keys -M\" \"copy-mode -M\"'>"* ]] || false
+  # root's DragEnd has no else-command, because stock tmux leaves root's
+  # MouseDragEnd1Pane UNBOUND — declining has to do exactly nothing there.
+  [[ "$output" == *"' end '#{mouse_x}'\" ''>"* ]] || false
+  for table in copy-mode copy-mode-vi; do
+    [[ "$output" == *"<bind-key><-T><$table><MouseDrag1Pane><if-shell \"bash '"* ]] || false
+    [[ "$output" == *"<bind-key><-T><$table><MouseDragEnd1Pane><if-shell \"bash '"* ]] || false
+  done
+  # copy-mode's stock pair, verbatim, as the two else-branches.
+  [[ "$output" == *"'select-pane ; send-keys -X begin-selection'>"* ]] || false
+  [[ "$output" == *"'send-keys -X copy-pipe-and-cancel'>"* ]] || false
+  # 🔴 EVERY FORMAT ARGUMENT ON THE DRAG LINES IS QUOTED. #{pane_mode} expands
+  # to the EMPTY STRING outside a mode — not to a placeholder, to nothing — so
+  # unquoted it produces NO argument and `drag` would arrive in `mode`. The
+  # MouseUp line above survives unquoted only because #{pane_mode} is its last
+  # argument. tests/bats/touch-drag.bats runs both forms against a real pane.
+  [[ "$output" == *"'#{mouse_y}' '#{pane_id}' '#{pane_mode}' drag '#{mouse_x}'"* ]] || false
+  [[ "$output" == *"'#{mouse_y}' '#{pane_id}' '#{pane_mode}' end '#{mouse_x}'"* ]] || false
   # choose-mode is deliberately left unbound (a tap there must select, not cancel).
   [[ "$output" != *'<-T><choose'* ]] || false
-  [[ "$output" != *'<MouseDrag'* ]] || false
+  # The wheel is still tmux's own everywhere: clikae binds no Wheel key. On the
+  # alternate screen the helper SENDS wheel bytes to the application; it does
+  # not take the key away from tmux.
   [[ "$output" != *'<Wheel'* ]] || false
 }
 
@@ -100,6 +131,7 @@ release() {
   [[ "$output" == *'<set-option><-g><mouse><on>'* ]] || false
   [[ "$output" != *'@clikae_touch_scroll'* ]] || false
   [[ "$output" != *'@clikae_touch_pages'* ]] || false
+  [[ "$output" != *'@clikae_touch_drag'* ]] || false
   [[ "$output" != *'<bind-key>'* ]] || false
 }
 

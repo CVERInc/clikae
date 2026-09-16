@@ -84,8 +84,9 @@ command in the shell you land in, and you get the tmux session:
 
 ### Touch scrolling over ssh
 
-On a-Shell (iPhone), swipes arrive as a left-button press and release at different
-rows, even when the app requests SGR mouse tracking (measured 2026-09-13).
+Some touch terminals report a swipe as nothing but a left-button press and a
+release at different rows, with no motion in between, even when the app
+requests SGR mouse tracking (measured on a-Shell/iPhone, 2026-09-13).
 clikae translates movements of at least two rows into tmux history scrolling:
 finger up reads older output; finger down moves toward live output. Each row of
 movement scrolls two lines by default. Tap in copy-mode to return to the live
@@ -98,16 +99,21 @@ wheel and drag-selection bindings are unchanged.
 
 Needs tmux **3.1 or newer** (`set-option -p`, pane-scoped options). Older
 tmux keeps `mouse on` — installed unconditionally, before this check — and
-silently skips the six key bindings and the four `@clikae_touch_scroll`/
-`@clikae_touch_scroll_lines`/`@clikae_touch_pages`/`@clikae_touch_pages_rows`
-options; nothing breaks, but nothing translates either.
+silently skips the twelve key bindings and the five `@clikae_touch_scroll`/
+`@clikae_touch_scroll_lines`/`@clikae_touch_pages`/`@clikae_touch_pages_rows`/
+`@clikae_touch_drag` options; nothing breaks, but nothing translates either.
 
-The six bindings are installed when clikae creates a tmux session, and apply
+The bindings are installed when clikae creates a tmux session, and apply
 to the whole tmux **server** — every session on it, not only clikae's own —
-so if `~/.tmux.conf` binds its own root-table `MouseDown1Pane`/`MouseUp1Pane`,
+so if `~/.tmux.conf` binds its own root-table `MouseDown1Pane`/`MouseUp1Pane`
+— or, with drag translation on, `MouseDrag1Pane`/`MouseDragEnd1Pane` —
 clikae's `bind-key` overwrites it (there is no `-o`, and tmux has no per-key
 opt-out). Setting `@clikae_touch_scroll off` (below) does not restore your
-binding; it only makes clikae's copy of it a no-op. In tmux's command prompt
+binding; it only makes clikae's copy of it a no-op. The drag pair is the one
+exception, and only as far as **tmux's** default goes: with
+`@clikae_touch_drag off` those four bindings run tmux's own command for the
+key, so the stock behaviour is intact — but a binding *you* wrote is still
+gone. In tmux's command prompt
 (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable translation
 server-wide, or `set -g @clikae_touch_scroll on` to restore it. Set
 `set -g @clikae_touch_scroll_lines 3` to scroll three lines per row of movement.
@@ -145,6 +151,54 @@ Both features are decided by one binding: a movement of two rows or more is a
 scroll, a tap inside a band is a page, everything else is left alone. Turning
 paging on therefore cannot cost you a swipe, and `@clikae_touch_scroll off`
 does not turn paging off — the two options gate independently.
+
+#### Drag to scroll live (off by default)
+
+Everything above translates a press/release **pair**. Not every touch terminal
+sends one. Measured on a real iPhone (a-Shell → ssh → tmux 3.4, 2026-09-16,
+reading tmux's own event stream):
+
+| gesture | what tmux receives |
+|---|---|
+| a tap | `MouseDown1Pane` + `MouseUp1Pane` on the same row |
+| a flick, or press-and-drag | `MouseDown1Pane` + one `MouseDrag1Pane` per row crossed + `MouseDragEnd1Pane` — **and no `MouseUp1Pane` at all** |
+
+So on that device the swipe translation above never fired, and tmux's own
+`MouseDrag1Pane → copy-mode -M` won instead: the gesture ended in *"copied N
+chars to tmux buffer"* rather than scrolling.
+
+With `set -g @clikae_touch_drag on`, that motion is translated as it arrives —
+the history follows your finger rather than jumping when you let go — at the
+same `@clikae_touch_scroll_lines` speed. Moving **down** the glass reveals
+**older** output, the way every touch surface works. Letting go at the newest
+line returns the pane to the live view.
+
+**It is off by default, and that default matters more than the others.**
+`MouseDrag1Pane` on a pane with no mouse-tracking program is how you select
+text with a mouse or trackpad, and a finger's drag and a trackpad's drag are
+*the same tmux events* — there is no signal that could tell them apart. So this
+option would cost every desktop its text selection to give the phones their
+scrolling. With it off, the six drag bindings hand the key straight back to
+tmux and you get stock behaviour, drag-selection included. Only
+`on`/`1`/`yes`/`true` (any case) turn it on; `@clikae_touch_scroll off` turns
+it off along with everything else.
+
+Two things you do **not** need it for, on a-Shell specifically:
+
+* **Selecting text** — a-Shell's own long-press selection works whether tmux's
+  mouse mode is on or off, so nothing is lost by giving `MouseDrag1Pane` to
+  scrolling on a phone.
+* **Two-finger swipes** — a-Shell consumes those itself and sends arrow keys;
+  they never reach tmux.
+
+**Applications that draw their own screen get the wheel, not copy-mode.** A
+full-screen TUI (Claude Code among them) runs on the terminal's *alternate
+screen*, where tmux keeps no scrollback at all — copy-mode there would show the
+current screen and nothing above it. When the pane is on the alternate screen
+and not already in copy-mode, clikae sends the application mouse-**wheel**
+events instead (one notch per two lines, at least one), which is the scrolling
+it is already asking for. The application scrolls itself; tmux stays out of the
+way.
 
 ### Make & manage tanks
 
