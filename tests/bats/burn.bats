@@ -5,6 +5,10 @@
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
 
 load '../helpers'
+# `bounded_run` — a wall-clock ceiling for the tests that deliberately wedge a
+# `find`/`stat`/`.git/HEAD`, on a runner with no `timeout`/`gtimeout` (#112 item
+# 10). Every one of those used to `skip` there, which is stock macOS.
+load 'helpers/bounded'
 
 # Stub `codex` on PATH. Per-tank behaviour keyed off $CODEX_HOME:
 #   a ".dry" marker in the tank dir  -> emit the limit line, write nothing (exit 0)
@@ -4026,19 +4030,18 @@ assert rows[0]["ahead"] == 1, rows
 # under test does.
 @test "burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget" {
   # Stock macOS ships neither `timeout` nor `gtimeout` (`_burn_timeout_bin`'s
-  # own comment) — this test's own safety net needs one regardless of what
-  # burn.sh falls back to, so skip rather than wedge the runner without it.
-  # `gtimeout` (coreutils via Homebrew) covers a macOS box that installed it.
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  # own comment), and this test's own safety net needs one regardless of what
+  # burn.sh falls back to. `bounded_run` (tests/bats/helpers/bounded.bash) is
+  # that net: `timeout`/`gtimeout` when present, the same ceiling enforced in
+  # bash itself when not — so this test stops skipping on the runner it was
+  # written for (#112 item 10).
   _left84_setup
   _left84_repo
   rm -f "$STUB_LEFT_REPO/.git/HEAD"
   mkfifo "$STUB_LEFT_REPO/.git/HEAD"
   local t0 t1
   t0="$(date +%s)"
-  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  run bounded_run 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   t1="$(date +%s)"
   # Generous ceiling (5s bound + a few other fast calls + engine overhead) —
   # the point is "finishes", not "finishes in exactly N seconds".
@@ -4380,9 +4383,6 @@ STUB
 # behind:" block, no JSON, no exit — because the orphaned `stat` still held
 # the scan's own command substitution open.
 @test "burn #84 P2-1 (round-5 review): a never-returning file-list stat cannot hang burn" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   # Only the batched mtime read the file-list scan makes hangs; `stat
@@ -4404,7 +4404,7 @@ git -C "$STUB_LEFT_REPO" commit -qm saved
 STUB
   local t0 t1
   t0="$(date +%s)"
-  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  run bounded_run 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   t1="$(date +%s)"
   [ "$((t1 - t0))" -lt 40 ] || { echo "took $((t1 - t0))s"; false; }
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
@@ -4420,9 +4420,6 @@ STUB
 # reader at a budget knob when what actually needs attention is the root that
 # hung. The two facts now say which one they are.
 @test "burn #84 P3-1 (round-5 review): a discovery find that hangs says discovery timed out, not budget exhausted" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   # ONE root (the cwd, which is the payload repo itself) so the 5s discovery
@@ -4449,7 +4446,7 @@ printf 'saved work\n' > "$STUB_LEFT_REPO/saved.txt"
 git -C "$STUB_LEFT_REPO" add saved.txt
 git -C "$STUB_LEFT_REPO" commit -qm saved
 STUB
-  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" -- noop
+  run bounded_run 60 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" -- noop
   [ -s "$fired" ] || { echo "the discovery find shim never fired — this test asserted nothing"; false; }
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
   [[ "$output" == *"discovery timed out after 5s"* ]] || { printf '%s\n' "$output"; false; }
@@ -4477,9 +4474,6 @@ assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_trunca
 # zero rows, `left_behind_truncated: 4`. Honest and bounded, and still the
 # one row #84 exists to print.
 @test "burn #84 P3-4 (round-5 review): a root repo already discovered survives the budget boundary" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   local fired="$BATS_TEST_TMPDIR/discovery-find-fired"
@@ -4499,7 +4493,7 @@ git -C "$STUB_LEFT_REPO" commit -qm saved
 STUB
   local t0 t1
   t0="$(date +%s)"
-  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  run bounded_run 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   t1="$(date +%s)"
   # Both roots' discovery must really have hung, or this asserts nothing.
   [ "$(wc -c < "$fired" | tr -d ' ')" -ge 2 ] || { echo "discovery shim fired $(wc -c < "$fired") time(s), expected 2"; false; }
@@ -4688,9 +4682,6 @@ STUB
 # ppid=1 for the rest of the bound. The bound here (20s) is far longer than
 # this test's own patience on purpose: only the INT forward can end it in time.
 @test "burn #84 P3-2 (round-6 review): an interrupt during a bounded call stops the scan's own process group" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   local forker="$BATS_TEST_TMPDIR/forker-int" pidfile="$BATS_TEST_TMPDIR/int.pid" probe="$BATS_TEST_TMPDIR/probe-int"
   local probe_out="$BATS_TEST_TMPDIR/probe-int.out"
   cat > "$forker" <<STUB
@@ -4722,7 +4713,7 @@ STUB
   # child that outlives this call would hold that pipe open and wedge the whole
   # suite (`run` waits for EOF, not for the process — the same fd-lifetime trap
   # `_burn_lb_bounded`'s watchdog redirects itself away from).
-  run "$timeout_bin" -s KILL 15 bash -c '"$0" > "$1" 2>&1' "$probe" "$probe_out"
+  run bounded_run 15 bash -c '"$0" > "$1" 2>&1' "$probe" "$probe_out"
   t1="$(date +%s)"
   [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
   local gpid; gpid="$(cat "$pidfile")"
@@ -4746,9 +4737,6 @@ STUB
 # group kill genuinely cannot reach) and the two scans hand off through marker
 # files, so nothing in this test depends on a race being won.
 @test "burn #84 P3-4 (round-6 review): a write that outlives one repo's scan cannot land in the next repo's file list" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   command -v setsid >/dev/null 2>&1 || skip "setsid needed to build a writer the group kill cannot reach"
   _left84_setup
   local a="$TEST_HOME/repos/alpha" b="$TEST_HOME/repos/bravo" r
@@ -4776,7 +4764,7 @@ esac
 exec /usr/bin/find "\$@"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/find"
-  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$a" --add-dir "$b" -- noop
+  run bounded_run 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$a" --add-dir "$b" -- noop
   [ "$status" -eq 1 ] || { echo "burn exited $status; output: $output"; false; }
   # Both halves of the fixture really happened, or the assertion below is empty.
   [ -e "$started" ] || { echo "bravo's scan never ran — nothing was being tested"; false; }
@@ -4835,9 +4823,6 @@ STUB
 # status` never returns: the pre-fix output is `dirty 0` with `"dirty": 0` in the
 # JSON, i.e. a number burn invented.
 @test "burn #112 item 1: a wedged \`git status\` is reported as unanswered, not \`dirty 0\`" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
@@ -4845,7 +4830,7 @@ STUB
 printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
 STUB
   _stub_wedged_git status
-  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json \
+  run bounded_run 60 "$CLIKAE_BIN" burn codex T1 --json \
     --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
   [[ "$output" == *"left behind:"*"dirty ? (git timed out)"* ]] || { printf '%s\n' "$output"; false; }
@@ -4889,9 +4874,6 @@ assert rows[0]["git_timeout"] is False, rows[0]
 # every root's own `rev-parse` wedged, so the 10s budget is gone inside the roots
 # pass itself and the roots that follow are skipped there.
 @test "burn #112 item 2: roots the budget never reached count as roots_budget_skipped" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   local i
   for i in 1 2 3 4; do
@@ -4901,7 +4883,7 @@ assert rows[0]["git_timeout"] is False, rows[0]
     git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
   done
   _stub_wedged_git rev-parse
-  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" \
+  run bounded_run 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" \
     --add-dir "$TEST_HOME/repos/r1" --add-dir "$TEST_HOME/repos/r2" \
     --add-dir "$TEST_HOME/repos/r3" --add-dir "$TEST_HOME/repos/r4" -- noop
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
@@ -4923,9 +4905,6 @@ assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_trunca
 # loop and the rest are skipped there, which is a different unit again (a marker
 # is one repository; a root is an unknown number of them).
 @test "burn #112 item 2: markers the budget never reached count as markers_budget_skipped" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   local i
   for i in 1 2 3 4 5 6 7 8; do
@@ -4938,7 +4917,7 @@ assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_trunca
   # directory) still answer instantly, so the budget is spent in the marker loop
   # and nowhere else.
   _stub_wedged_git rev-parse /repos/m
-  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json \
+  run bounded_run 90 "$CLIKAE_BIN" burn codex T1 --json \
     --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
   [[ "$output" == *"scan budget exhausted after 10s"* ]] || { printf '%s\n' "$output"; false; }
@@ -5063,16 +5042,13 @@ STUB
 # behaviour. The seam only forces the fallback; the assertion is on burn's own
 # machine-readable output.
 @test "burn #112 item 6: --json names the kill mode the scan actually used" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   _left84_repo
   cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
 STUB
-  CLIKAE_BURN_LB_SINGLE_PID=1 run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json \
+  CLIKAE_BURN_LB_SINGLE_PID=1 run bounded_run 60 "$CLIKAE_BIN" burn codex T1 --json \
     --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
   printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
@@ -5108,9 +5084,6 @@ assert obj["left_behind_kill_mode"] == "pgroup", obj["left_behind_kill_mode"]
 # discovered repo goes through exactly that branch; a `symbolic-ref` wedged to
 # its 5s ceiling spends the 10s budget inside the per-repo loop, two repos in.
 @test "burn #112 item 7: repos the per-repo loop never reached say scan budget exhausted" {
-  local timeout_bin
-  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
-  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
   _left84_setup
   local i
   for i in 1 2 3 4 5; do
@@ -5123,7 +5096,7 @@ assert obj["left_behind_kill_mode"] == "pgroup", obj["left_behind_kill_mode"]
   # Discovery stays fast (it is `rev-parse` that walks the markers); only the
   # per-repo loop's first git call hangs, so the budget is spent there.
   _stub_wedged_git symbolic-ref /repos/p
-  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json \
+  run bounded_run 90 "$CLIKAE_BIN" burn codex T1 --json \
     --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
   [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
   [[ "$output" == *"scan budget exhausted after 10s"* ]] || { printf '%s\n' "$output"; false; }
@@ -5218,6 +5191,50 @@ STUB
   # line, named, so removing it fails here and not only in someone's terminal.
   grep -q '3>&- 4>&-' "$CLIKAE_TEST_ROOT/lib/commands/burn.sh" \
     || { echo "the watchdog no longer closes fds 3 and 4"; false; }
+}
+
+# Item 10 (#112): the bound the six tests above now rely on when the runner has
+# no `timeout`/`gtimeout`. This test calls the in-bash path DIRECTLY rather than
+# through `bounded_run`, so it exercises that code on every runner — including
+# the ones that do have `timeout` and would otherwise never take the branch.
+# What it asserts is the property the whole round-5 fix rests on: the deadline
+# kills the child's process GROUP, so a grandchild the child forked (what `find
+# -exec` and `clikae burn` really do) does not outlive it holding the pipe the
+# caller is waiting on for EOF.
+@test "burn #112 item 10: the in-bash bound kills a forking child's whole group, with no timeout(1)" {
+  local forker="$BATS_TEST_TMPDIR/forker-nb" pidfile="$BATS_TEST_TMPDIR/nb.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+sleep 120 &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0 gpid=""
+  t0="$(date +%s)"
+  _bounded_in_bash 2 "$forker" || rc=$?
+  t1="$(date +%s)"
+  [ -s "$pidfile" ] || { echo "the forker never recorded its child"; false; }
+  gpid="$(cat "$pidfile")"
+  sleep 1
+  local alive=0
+  [ "$gpid" -gt 1 ] 2>/dev/null || { echo "bad child pid '$gpid'"; false; }
+  kill -0 "$gpid" 2>/dev/null && alive=1
+  # Never leave it running, whatever the assertions below decide.
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 10 ] || { echo "the bound took $((t1 - t0))s"; false; }
+  [ "$rc" -eq 137 ] || { echo "rc=$rc, expected 137 (128+SIGKILL, what \`timeout -s KILL\` also reports)"; false; }
+  [ "$alive" -eq 0 ] || { echo "grandchild $gpid outlived the bound"; false; }
+}
+
+# …and the other half of a bound worth having: a command that finishes inside it
+# is not touched — its own exit status and its own output come back unchanged.
+# Without this, a bound that killed everything instantly would still "pass".
+@test "burn #112 item 10: a command that finishes inside the in-bash bound keeps its status and output" {
+  local out rc=0
+  out="$(_bounded_in_bash 10 bash -c 'printf inside; exit 7')" || rc=$?
+  [ "$rc" -eq 7 ] || { echo "rc=$rc, expected the command's own 7"; false; }
+  [ "$out" = inside ] || { echo "output was '$out'"; false; }
 }
 
 # --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---

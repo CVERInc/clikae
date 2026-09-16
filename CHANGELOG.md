@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The six `clikae burn` tests that bound a deliberately-wedged `find`/`stat`/
+  `.git/HEAD` no longer skip on a machine without `timeout`/`gtimeout` — which
+  is stock macOS, the platform they were written for. They go through
+  `bounded_run` (`tests/bats/helpers/bounded.bash`), which keeps
+  `timeout`/`gtimeout` as the preferred path and otherwise enforces the same
+  ceiling in bash itself (own process group, sleep, kill the group). The
+  left-behind scan's "scan budget exhausted" path and the EOF-delay fix also
+  gained tests (#112).
 - `clikae burn --json` reports `left_behind_kill_mode`: how the left-behind
   scan stopped a bounded git/`find` call that overran — `pgroup` (the call and
   everything it forked, the normal case) or `single-pid` on a platform that
