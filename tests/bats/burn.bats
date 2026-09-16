@@ -918,7 +918,7 @@ STUB
   load_adapter claude
   declare -F adapter_meta_permission_modes >/dev/null   # claude HAS it
   load_adapter codex
-  ! declare -F adapter_meta_permission_modes >/dev/null || false # codex must NOT have inherited it
+  [ "$(adapter_meta_permission_modes)" = "acceptEdits bypassPermissions plan default" ]
   load_adapter claude
   load_adapter grok
   ! declare -F adapter_meta_permission_modes >/dev/null # grok must NOT have inherited it
@@ -2863,7 +2863,7 @@ _permission_argv() (
 
 @test "burn #60: invalid or missing permission is refused with one usage line" {
   local value
-  for value in bypassPermissions AUTO ''; do
+  for value in invalid AUTO ''; do
     run clikae burn claude T1 --permission "$value"
     [ "$status" -ne 0 ]
     [ "${#lines[@]}" -eq 1 ]
@@ -2904,7 +2904,7 @@ _permission_argv() (
   ! grep -q -- '--permission-mode acceptEdits' "$L"
 }
 
-@test "burn #60: codex acceptEdits (explicit) also degrades once on stderr with unchanged argv" {
+@test "burn #60: codex acceptEdits (explicit) maps without a warning and keeps default argv" {
   # Same reason as the auto-degrade test above: add_dirs[0] must be a real
   # git work tree for the #66 round-1 codex git-cwd check to pass.
   local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
@@ -2913,8 +2913,7 @@ _permission_argv() (
   permission_argv_file="$TEST_HOME/accept.argv"
   _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/accept.argv"
-  [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
-  grep -F 'codex has no equivalent for --permission acceptEdits; keeping its existing burn flags.' "$TEST_HOME/warning"
+  [ ! -s "$TEST_HOME/warning" ]
 }
 
 # --- P2-2 (round-1 review): grok ships its OWN --permission-mode (always
@@ -3053,9 +3052,9 @@ STUB
     >/dev/null 2>"$E"
   [ -f "$A" ]   # codex/T2 actually ran and produced the artifact
 
-  # The capability gate must fire for codex: codex never defines
-  # adapter_meta_permission_modes, so --permission auto must degrade truthfully
-  # on it — exactly once, the SAME wording the single-engine codex test above
+  # Codex declares its own modes (#129), which exclude auto. The capability
+  # gate must use that list rather than inherit Claude's auto support — exactly
+  # once, with the SAME wording the single-engine codex test above
   # (burn #60: codex auto degrades once on stderr with unchanged argv) uses.
   [ "$(grep -Fc 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$E" | tr -d ' ')" = 1 ]
 
@@ -5372,4 +5371,78 @@ _sc() { printf '%s/state/burn-sessions/%s' "$CLIKAE_HOME" "$1"; }
   run clikae --version
   [ "$status" -eq 0 ]
   [ ! -e "$CLIKAE_HOME/state/burn-sessions" ] || { find "$CLIKAE_HOME/state/burn-sessions"; false; }
+}
+
+# #129: exercise the real burn loop, including its tank-local configuration.
+_codex_sandbox_argv() {
+  local expected="$1"; shift
+  local artifact="$BATS_TEST_TMPDIR/out.md" log="$BATS_TEST_TMPDIR/argv.log"
+  STUB_ARTIFACT="$artifact" STUB_ARGV_LOG="$log" run clikae burn codex T1 \
+    --artifact "$artifact" --prompt 'write it' "$@"
+  [ "$status" -eq 0 ]
+  [ -f "$artifact" ]
+  printf 'exec -C %s %swrite it\n' "$BATS_TEST_TMPDIR" "$expected" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$log"
+}
+
+@test "burn #129: acceptEdits overrides the tank with workspace-write" {
+  _stub_codex; clikae init codex T1
+  printf 'sandbox_mode = "danger-full-access"\n' > "$CLIKAE_HOME/profiles/codex/T1/config.toml"
+  _codex_sandbox_argv '-s workspace-write ' --permission acceptEdits
+}
+
+@test "burn #129: bypassPermissions maps to danger-full-access" {
+  _stub_codex; clikae init codex T1
+  printf 'sandbox_mode = "read-only"\n' > "$CLIKAE_HOME/profiles/codex/T1/config.toml"
+  _codex_sandbox_argv '-s danger-full-access ' --permission bypassPermissions
+}
+
+@test "burn #129: plan maps to read-only" {
+  _stub_codex; clikae init codex T1
+  _codex_sandbox_argv '-s read-only ' --permission plan
+}
+
+@test "burn #129: default maps to read-only" {
+  _stub_codex; clikae init codex T1
+  _codex_sandbox_argv '-s read-only ' --permission default
+}
+
+@test "burn #129: configured sandbox omits -s without explicit permission" {
+  _stub_codex; clikae init codex T1
+  printf '  sandbox_mode = "danger-full-access" # operator ruling\n' > "$CLIKAE_HOME/profiles/codex/T1/config.toml"
+  _codex_sandbox_argv ''
+}
+
+@test "burn #129: no config and no permission keeps workspace-write" {
+  _stub_codex; clikae init codex T1
+  [ ! -e "$CLIKAE_HOME/profiles/codex/T1/config.toml" ]
+  _codex_sandbox_argv '-s workspace-write '
+}
+
+@test "burn #129: commented sandbox and unrelated config keep workspace-write" {
+  _stub_codex; clikae init codex T1
+  printf '# sandbox_mode = "danger-full-access"\n  # sandbox_mode = "read-only"\nmodel = "example"\n' > "$CLIKAE_HOME/profiles/codex/T1/config.toml"
+  _codex_sandbox_argv '-s workspace-write '
+}
+
+@test "burn #129: same-engine reroute reads the destination tank configuration" {
+  _stub_codex; clikae init codex T1; clikae init codex T2
+  touch "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  printf 'sandbox_mode = "danger-full-access"\n' > "$CLIKAE_HOME/profiles/codex/T2/config.toml"
+  local artifact="$BATS_TEST_TMPDIR/out.md" log="$BATS_TEST_TMPDIR/argv.log"
+  STUB_ARTIFACT="$artifact" STUB_ARGV_LOG="$log" run clikae burn codex T1 \
+    --artifact "$artifact" --prompt 'write it' --to T2
+  [ "$status" -eq 0 ]
+  printf 'exec -C %s -s workspace-write write it\nexec -C %s write it\n' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/expected"
+  cmp "$BATS_TEST_TMPDIR/expected" "$log"
+}
+
+@test "burn #129: a Codex-only mode degrades to Claude's existing default" {
+  local permission_argv_file="$TEST_HOME/plan.argv"
+  _permission_argv claude T1 --artifact out --permission plan --prompt 'review' \
+    --add-dir /workspace 2> "$TEST_HOME/warning"
+  printf '%s\0' -p review --permission-mode acceptEdits --add-dir /workspace > "$TEST_HOME/expected.argv"
+  cmp "$TEST_HOME/plan.argv" "$TEST_HOME/expected.argv"
+  grep -F 'claude has no equivalent for --permission plan; keeping its existing burn flags.' "$TEST_HOME/warning"
 }
