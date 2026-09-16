@@ -1101,6 +1101,98 @@ _wg_runs_rotate() {
   return 0
 }
 
+# _wg_seen_cutoff_iso <org> <cursor> -> the ISO8601 instant BELOW which a
+# seen-file row can never be looked at again, so dropping it cannot cause a
+# re-announce; nothing (rc 1) when this poll has no sound base to measure
+# from (P3-2, #111 — see the cap block in _wg_poll for the whole story).
+#
+# WHY THIS INSTANT. The only thing that ever re-reads already-processed
+# ground is _wg_tail_sweep, and its lower bound is `cursor - window` with
+# `window = max(300, now - sweepat) + 300` (_wg_tail_sweep_window). Both
+# terms move forward as time passes, and `cursor` tracks real time for an
+# active org, so the floor the NEXT sweep will read from is about
+# `sweepat - 300` — the start of the last sweep that completed, minus its
+# own deliberate 300s overlap. Nothing below that is ever requeried.
+#
+# We keep 1800s BELOW the lower of (that floor, this poll's cursor), i.e.
+# 6x the 300s overlap and 3x the 600s minimum sweep window: enough slack to
+# absorb the skew between GitHub's `updated_at` clock (what the rows carry)
+# and this host's own (what `.sweepat` carries) — those are two different
+# clocks and comparing them is only safe with a margin this size — plus a
+# cron schedule sparse enough that the next sweep's window is much wider
+# than the last one's. Taking the LOWER of the two anchors means a quiet
+# org, whose cursor lags real time by hours, is measured against its own
+# cursor rather than against a wall clock that has run on without it.
+_wg_seen_cutoff_iso() {
+  local org="$1" cursor="$2" now sweepat_file sweepat base="" cursor_epoch=""
+  now="$(date +%s 2>/dev/null || echo 0)"
+  sweepat_file="$(_wg_sweep_at_file "$org")"
+  if [ -f "$sweepat_file" ]; then
+    sweepat="$(cat "$sweepat_file" 2>/dev/null)"
+    sweepat="$(_wg_sane_epoch "$sweepat" "$now")" && base="$sweepat"
+  fi
+  [ -n "$cursor" ] && cursor_epoch="$(_limit_iso_epoch "$cursor" "")"
+  case "$cursor_epoch" in ''|*[!0-9]*) cursor_epoch="" ;; esac
+  if [ -n "$cursor_epoch" ]; then
+    if [ -z "$base" ] || [ "$cursor_epoch" -lt "$base" ]; then base="$cursor_epoch"; fi
+  fi
+  [ -n "$base" ] || return 1
+  [ "$base" -gt 1800 ] || return 1
+  _wg_iso_from_epoch "$((base - 1800))"
+}
+
+# _wg_seen_compact <seen-file> <cutoff-iso> -> rewrite <seen-file> keeping
+# every row that is EITHER newer than <cutoff-iso> (the age rule) OR among
+# the newest 5,000 rows (the floor). Atomic mktemp+mv. An empty <cutoff-iso>
+# means "no sound age to measure from this poll" and degrades to exactly the
+# old behaviour, `tail -n 5000`.
+#
+# 🔴 THE 5,000 IS A FLOOR, NOT A CAP — READ BEFORE "SIMPLIFYING" THIS TO A
+# PURE AGE RULE (P3-2, #111). The seen file answers TWO questions, with two
+# completely different retention needs:
+#   1. "have I already announced THIS exact update?" — `repo|number|updated`,
+#      exact-match, needed only as long as something can re-read that ground,
+#      i.e. the age rule above. This is the one the round-8 review found
+#      broken: a burst of >5,000 rows in one poll pushed the oldest ~1,000
+#      out of a `tail -n 5000` that ran in the SAME poll that wrote them, and
+#      the next sweep, still inside its own window, announced them again.
+#   2. "have I EVER seen this issue?" — the `^repo|number|` prefix probe in
+#      _wg_process, which is what decides `opened` vs `comment`. That needs
+#      retention measured in WEEKS, not minutes: evict issue #12's row and
+#      the next comment on #12 reads as brand new, reported as `opened` by
+#      whoever filed it — and if that is YOU, _wg_process silently swallows
+#      it as "my own new issue" and the collaborator's reply is LOST.
+# An age-only cap set to twice the sweep window would evict essentially
+# everything every twenty minutes and turn (2) into exactly that event loss —
+# a worse bug than the one being fixed. So age is the binding rule for (1),
+# and the 5,000 newest rows are kept unconditionally for (2). The file is
+# still bounded: by max(5,000, rows inside the retention window), and a poll
+# reads at most 500 rows.
+_wg_seen_compact() {
+  local f="$1" cutoff="$2" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null)" || return 0
+  # Two passes over the same file: the first only counts, so the second
+  # knows where the newest-5,000 tail begins. `[|]` (an ERE, not a bare
+  # `|`) as the field separator: a one-character FS is taken literally by
+  # every awk this runs under, but the bracket form cannot be read as an
+  # alternation by any of them. Comparisons are forced to STRING with `""`
+  # concatenation — an ISO8601 stamp is not a number, and a locale-free
+  # lexicographic compare is exactly right for a fixed-width one.
+  if LC_ALL=C awk -v cut="$cutoff" -v keep=5000 -F'[|]' '
+        NR == FNR { n++; next }
+        FNR > n - keep { print; next }
+        cut == "" { next }
+        NF != 3 { print; next }
+        ($3 "") >= (cut "") { print }
+      ' "$f" "$f" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
 # _wg_events_rotate <file> -> keep the durable events.jsonl (P3-12) under
 # 10MB — the newest tail, byte-bounded then trimmed to a whole line so the
 # survivor is still valid one-JSON-object-per-line. Same shape as the
@@ -1549,20 +1641,26 @@ _wg_poll() {
     printf '%s\n' "$sweep_n" > "$sweep_count_file" 2>/dev/null || true
   fi
 
-  # Cap the seen-file at the last 5,000 keys (brief's stated cap; P2-10 —
-  # 500 was smaller than a single cold-start backlog could legitimately
-  # be, so a busy first run would evict entries it had just written and
-  # then re-announce them as "opened" a second time next poll). Atomic
-  # `mktemp`+`mv` (P2-11): the old fixed `.tmp` name could collide with a
-  # concurrent poll's own compaction even under the lock above if a
-  # previous crashed run left a stale `.tmp` sitting there. Runs AFTER the
-  # tail sweep above so a sweep-found row's own seen-file entry is covered
-  # by the same compaction pass.
+  # Compact the seen-file: BY AGE, with the 5,000-row tail as a floor
+  # (P3-2, #111 — read _wg_seen_compact's own comment before changing
+  # either half; the 5,000 is not a cap any more and must not become one
+  # again). The round-8 review's finding: a burst of more than 5,000 rows
+  # in ONE poll fell straight off the old unconditional `tail -n 5000`,
+  # which ran in that same poll — and the next tail sweep, whose window
+  # still covered them, announced the evicted ones a second time, as
+  # `opened`. Rows inside the window anything can still re-read are now
+  # kept whatever the row count, and the newest 5,000 are kept whatever
+  # their age (that is what keeps `opened` vs `comment` honest for an issue
+  # nobody has touched in months). Atomic mktemp+mv (P2-11): the old fixed
+  # `.tmp` name could collide with a concurrent poll's own compaction even
+  # under the lock above if a previous crashed run left a stale `.tmp`
+  # sitting there. Runs AFTER the tail sweep above so a sweep-found row's
+  # own seen-file entry is covered by the same compaction pass — and reads
+  # `.sweepat` after that sweep has written it.
   if [ -f "$seen_file" ]; then
-    local seen_tmp
-    seen_tmp="$(mktemp "${seen_file}.XXXXXX" 2>/dev/null)" && \
-      tail -n 5000 "$seen_file" > "$seen_tmp" 2>/dev/null && \
-      mv -f "$seen_tmp" "$seen_file" 2>/dev/null
+    local seen_cutoff
+    seen_cutoff="$(_wg_seen_cutoff_iso "$org" "${new_cursor:-$since}")" || seen_cutoff=""
+    _wg_seen_compact "$seen_file" "$seen_cutoff"
   fi
 
   # P3-12 (2026-09-13 fix-round-2 review): the durable events.jsonl had no

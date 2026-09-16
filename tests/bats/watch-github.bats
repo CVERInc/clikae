@@ -899,14 +899,17 @@ STUB
   [[ "$output" == *"0 new event(s)"* ]] || false
 }
 
-@test "watch github --once: seen-file caps at 5,000 lines, not 500 (P2-10)" {
+@test "watch github --once: seen-file keeps the newest 5,000 lines, not 500 (P2-10)" {
   _gh_stub_install
   local state_dir="$CLIKAE_HOME/state/watch-github"
   mkdir -p "$state_dir"
-  # 5,100 pre-existing keys, well past the OLD 500 cap and past the NEW
-  # 5,000 one too — P2-10's finding was that 500 was smaller than a single
+  # 5,100 pre-existing keys, well past the OLD 500 cap and past the 5,000
+  # row floor too — P2-10's finding was that 500 was smaller than a single
   # cold-start backlog could legitimately be, evicting entries the SAME
-  # poll had just written and re-announcing them next time.
+  # poll had just written and re-announcing them next time. Every key here
+  # is from 2026-01-01, far outside any sweep window, so the age rule added
+  # for P3-2 (#111) keeps none of them and the 5,000-row floor is what
+  # decides — the exact behaviour this test was written to pin.
   seq 1 5100 | sed 's/^/reef|/; s/$/|2026-01-01T00:00:00Z/' > "$state_dir/CVERInc.seen"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
@@ -2355,4 +2358,161 @@ _wg_timeline_fixture() {
   # back empty would also be very fast.
   n="$(_wg_timeline_events "$json" | grep -c '^reply 4999 with a ')"
   [ "$n" -eq 1 ]
+}
+
+# --- P3-2 (#111): the seen-file is capped by AGE, with a row-count FLOOR --
+#
+# The round-8 review's finding: a burst of more than 5,000 rows pushed the
+# oldest of them off the unconditional `tail -n 5000` that ran in the SAME
+# poll that wrote them, and the next tail sweep — whose window still covered
+# that ground — announced them a second time, as `opened`.
+#
+# _honest_corpus_write_burst <n> <rows_per_second> -> <n> rows, numbers
+# 2000+1..2000+n, all inside one 2026-09-01T00:MM:SSZ ten-minute span with
+# <rows_per_second> rows sharing each second. No `date` calls at all (one
+# per row would be 6,000 forks): the span is short enough that the minute
+# and second fields can be computed directly, which is also what keeps the
+# whole burst inside a single 600s sweep window.
+_honest_corpus_write_burst() {
+  local n="$1" rps="$2"
+  LC_ALL=C awk -v n="$n" -v rps="$rps" 'BEGIN{
+    for (i = 1; i <= n; i++) {
+      sec = int((i - 1) / rps)
+      printf "%d\t2026-09-01T00:%02d:%02dZ\talice\treef\thttps://x/%d\t0\tissue %d\t0\n", \
+        2000 + i, int(sec / 60), sec % 60, 2000 + i, i
+    }
+  }' > "$GH_STUB_DIR/honest_corpus.tsv"
+}
+
+# _burst_state_write -> the state a poll that just delivered a 6,000-row
+# burst leaves behind: the corpus, a seen-file holding all 6,000 keys, the
+# cursor at the newest of them, and a sweep counter one short of firing.
+# The whole burst spans 600 seconds, which is exactly the window the next
+# tail sweep re-reads (no `.sweepat` yet, so _wg_tail_sweep_window sits at
+# its 300s floor plus the 300s overlap).
+_burst_state_write() {
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  _honest_corpus_write_burst 6000 10
+  awk -F'\t' '{ print $4 "|" $1 "|" $2 }' "$GH_STUB_DIR/honest_corpus.tsv" \
+    > "$state_dir/CVERInc.seen"
+  awk -F'\t' 'END{ print $2 }' "$GH_STUB_DIR/honest_corpus.tsv" \
+    > "$state_dir/CVERInc.cursor"
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+}
+
+@test "watch github --once: a 6,000-row burst is not evicted by the compaction in its own poll (P3-2, #111)" {
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  local seen="$state_dir/CVERInc.seen"
+  _burst_state_write
+  [ "$(wc -l < "$seen")" -eq 6000 ]
+  local oldest
+  oldest="$(head -n1 "$GH_STUB_DIR/honest_corpus.tsv" | awk -F'\t' '{ print $4 "|" $1 "|" $2 }')"
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  # Nothing inside the re-readable window was evicted. The old
+  # `tail -n 5000` dropped exactly the oldest 1,000 rows here — including
+  # the one the sweep reads FIRST, since the sweep paginates ascending.
+  [ "$(wc -l < "$seen")" -ge 6000 ]
+  grep -qxF "$oldest" "$seen" || { echo "the oldest burst row was evicted: $oldest"; false; }
+  [ "$(grep -c '^reef|' "$seen")" -eq 6000 ]
+}
+
+@test "watch github --once: after a 6,000-row burst the next sweep announces nothing a second time (P3-2, #111)" {
+  # Two polls, each with a tail sweep over the burst's own ground. The
+  # round-8 symptom lands on the SECOND one: rows the first poll's
+  # compaction evicted come back with no seen-file entry at all, so
+  # _wg_process reads them as brand-new issues and reports them as
+  # `opened` by whoever filed them. Kept separate from the test above so
+  # each half fails on its own evidence rather than one aborting the other.
+  _gh_stub_install_honest_corpus
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  _burst_state_write
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  printf '4\n' > "$state_dir/CVERInc.sweepn"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s) this poll."* ]] || false
+  [[ "$output" != *"opened by alice"* ]] || { echo "re-announced: $output"; false; }
+  [ ! -s "$events" ]
+}
+
+@test "watch github --once: an issue whose seen-file row is a YEAR old still reads 'comment', not 'opened' (P3-2 floor, #111)" {
+  # The reason the 5,000 rows are a floor and not a cap. An age-only rule
+  # would evict this row (it is far outside any sweep window), and the next
+  # comment on #203 would read as a brand-new issue opened by whoever filed
+  # it — which, when that is YOU, _wg_process silently swallows as "my own
+  # new issue". That is event loss, not a cosmetic wrong label.
+  _gh_stub_install
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  printf 'reef|203|2025-09-01T00:00:00Z\n' > "$state_dir/CVERInc.seen"
+  _gh_stub_timeline_page reef 203 1 \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"a reply"}]'
+  _gh_stub_page org 1 \
+    "$(_row 203 2026-09-07T06:05:00Z alice reef https://x/203 0 "some issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github CVERInc/reef#203 comment by zed: some issue"* ]] || false
+  [[ "$output" != *"opened by alice"* ]] || false
+  # And the year-old row is still on disk after this poll's compaction.
+  grep -qxF "reef|203|2025-09-01T00:00:00Z" "$state_dir/CVERInc.seen"
+}
+
+@test "watch github: the seen-file cutoff is anchored to the cursor, never to a wall clock that ran on without it (P3-2, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$state_dir"
+  # No `.sweepat`: the only anchor is the cursor, and the cutoff must sit
+  # 1800s below it — in the cursor's own (GitHub's) clock, not this host's.
+  local cut; cut="$(_wg_seen_cutoff_iso CVERInc 2026-09-01T12:00:00Z)"
+  [ "$cut" = "2026-09-01T11:30:00Z" ]
+  # A completed sweep LOWER than the cursor wins: that is the floor a
+  # future sweep can still read back to.
+  printf '1000000000\n' > "$state_dir/CVERInc.sweepat"
+  cut="$(_wg_seen_cutoff_iso CVERInc 2026-09-01T12:00:00Z)"
+  [ "$cut" = "2001-09-09T01:16:40Z" ]
+  # Nothing to measure from at all -> rc 1, and the caller degrades to the
+  # old row-count behaviour rather than inventing a cutoff.
+  rm -f "$state_dir/CVERInc.sweepat"
+  run _wg_seen_cutoff_iso CVERInc ""
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "watch github: _wg_seen_compact keeps by age OR by the 5,000 floor, and degrades to tail -n 5000 with no cutoff (P3-2, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local f="$TEST_HOME/compact.seen"
+  # 1,000 old rows then 5,000 recent ones, plus one malformed row.
+  LC_ALL=C awk 'BEGIN{
+    for (i = 1; i <= 1000; i++) printf "reef|%d|2026-01-01T00:00:00Z\n", i
+    for (i = 1001; i <= 6000; i++) printf "reef|%d|2026-09-16T12:00:00Z\n", i
+    printf "a-row-with-no-fields-at-all\n"
+  }' > "$f"
+  [ "$(wc -l < "$f")" -eq 6001 ]
+
+  _wg_seen_compact "$f" 2026-09-16T00:00:00Z
+  # Every recent row survives (age), and so does the malformed one (it sits
+  # inside the newest-5,000 tail; a row this function cannot read is never
+  # what it chooses to drop).
+  [ "$(grep -c '2026-09-16' "$f")" -eq 5000 ]
+  grep -qxF 'a-row-with-no-fields-at-all' "$f"
+  # The 1,000 old rows are outside BOTH rules here (older than the cutoff,
+  # and pushed out of the newest 5,000 by the recent ones) — gone.
+  [ "$(grep -c '2026-01-01' "$f")" -eq 0 ]
+  [ "$(wc -l < "$f")" -eq 5001 ]
+
+  # No cutoff -> exactly the old behaviour, tail -n 5000, nothing clever.
+  LC_ALL=C awk 'BEGIN{ for (i = 1; i <= 6000; i++) printf "reef|%d|2026-09-16T12:00:00Z\n", i }' > "$f"
+  _wg_seen_compact "$f" ""
+  [ "$(wc -l < "$f")" -eq 5000 ]
+  grep -qxF 'reef|6000|2026-09-16T12:00:00Z' "$f"
+  ! grep -qxF 'reef|1|2026-09-16T12:00:00Z' "$f"
 }

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`clikae watch github`'s seen-file is compacted by AGE now, with the
+  5,000-row tail kept as a floor rather than a cap.** A burst of more than
+  5,000 rows in one poll fell off the old unconditional `tail -n 5000` that
+  ran in that same poll, and the next tail sweep — whose window still
+  covered that ground, and which paginates oldest-first — announced the
+  evicted rows a second time, as `opened`. Rows newer than 1800s below the
+  lower of (the last completed sweep's start, this poll's cursor) are now
+  kept whatever the row count. The 5,000 newest rows are still kept whatever
+  their age, deliberately: that is the retention the `opened`-vs-`comment`
+  decision depends on, and an age-only cap would have evicted a year-old
+  issue's row and then reported the next reply on it as a new issue opened
+  by whoever filed it — which, when that is you, is swallowed silently and
+  the reply is lost (#111).
 - **`clikae watch github`'s timeline parser is now linear on every awk, not
   just gawk and mawk.** It read the page one `substr(<whole page>, i, 1)` at a
   time, and busybox awk and the current BWK awk (the family macOS ships as
