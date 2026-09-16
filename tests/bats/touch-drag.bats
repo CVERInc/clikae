@@ -17,9 +17,14 @@
 # bytes arriving on the client's terminal.
 #
 # Every server is this file's own socket from `mktemp -d` and is killed through
-# that socket by path (`env -u TMUX`, `-S <path>`, `-f /dev/null`, always) —
-# `-f /dev/null` because this machine's own ~/.tmux.conf otherwise answers the
-# question "what does stock tmux do here", and it is not stock.
+# that socket by path (`env -u TMUX`, `-S <path>`, always). The servers this
+# file creates directly also pass `-f /dev/null`, because the developer
+# machine's own ~/.tmux.conf otherwise answers the question "what does stock
+# tmux do here" and it is not stock — a first pass at these tests read clikae's
+# own installed bindings back as the default. The three client tests instead go
+# through the product's own installer (`_install`), which passes no `-f`; they
+# are safe because tests/helpers.bash gives every test a throwaway $HOME, so
+# there is no ~/.tmux.conf to read.
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
 
 load '../helpers'
@@ -35,7 +40,9 @@ _helper() { printf '%s/lib/core/touch_scroll.sh' "$CLIKAE_TEST_ROOT"; }
 _base() {
   CK_PATH="$PATH"
   CK_TMUX="$(command -v tmux)"
-  CK_SOCKDIR="$(mktemp -d)"
+  # Reuse a directory a test made first (the tap test has to write its pane
+  # script before the server exists); one directory per test, cleaned once.
+  [ -n "${CK_SOCKDIR:-}" ] || CK_SOCKDIR="$(mktemp -d)"
   mkdir -p "$CK_SOCKDIR/bin"
   {
     printf '#!/usr/bin/env bash\n'
@@ -431,29 +438,35 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
 
 # ─── a real client, real mouse bytes ─────────────────────────────────────────
 
-# _bindings — the six drag bindings, built by the SAME expressions
-# lib/core/tmux.sh builds them with, plus the MouseDown/MouseUp pair they sit
-# beside. Kept next to the source by tests/bats/tmux.bats, which asserts the
-# strings the real constructor emits.
-_bindings() {
-  local base drag end root_drag copy_drag copy_end
-  base="bash '$(_helper)'"
-  drag="$base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' drag '#{mouse_x}'"
-  end="$base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' end '#{mouse_x}'"
-  root_drag="if-shell \"$drag\" '' 'if -F \"#{||:#{pane_in_mode},#{mouse_any_flag}}\" \"send-keys -M\" \"copy-mode -M\"'"
-  copy_drag="if-shell \"$drag\" '' 'select-pane ; send-keys -X begin-selection'"
-  copy_end="if-shell \"$end\" '' 'send-keys -X copy-pipe-and-cancel'"
-  _t set-option -g mouse on
+# _install <pane command> — THE PRODUCT'S OWN INSTALLER, NOT A COPY OF ITS
+# STRINGS. A copy of the command list written out here would be green whatever
+# lib/core/tmux.sh does; touch-pages.bats already learned that (its own note
+# says the copy stayed green against origin/main while six real cases went
+# red). These three tests are the only ones in the suite where a real key press
+# meets a real binding, so the binding they meet has to be the shipped one.
+#
+# `bind-key` validates its command list AT BIND TIME, so a chain tmux accepts
+# is also proof that `if-shell "<helper>" '' '<tmux's own command>'` is
+# something this tmux version will take.
+_install() {
+  _base
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  tmux() { command env -u TMUX PATH="$CK_PATH" "$CK_TMUX" -S "$(_sock)" "$@"; }
+  _tmux_ssh_agent_link() { return 1; }
+  tmux_server_born_note() { :; }
+  CK_SESSION=clikae-drag-install
+  run tmux_spawn_session --session "$CK_SESSION" -- "$1"
+  local rc="$status" out="$output"
+  unset -f tmux
+  [ "$rc" -eq 0 ] || { echo "spawn failed: $out"; return 1; }
+  CK_PANE="$(_t display-message -p -t "=$CK_SESSION:" '#{pane_id}')"
+  CK_H="$(_t display-message -p -t "$CK_PANE" '#{pane_height}')"
+  # Cosmetic only, and not part of what is under test: one fewer row to reason
+  # about when converting an injected terminal row to a pane row.
   _t set-option -g status off
-  _t bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M'
-  _t bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$base #{mouse_y} #{pane_id} #{pane_mode}\""
-  _t bind-key -T root MouseDrag1Pane "$root_drag"
-  _t bind-key -T root MouseDragEnd1Pane "if-shell \"$end\" ''"
-  local table
-  for table in copy-mode copy-mode-vi; do
-    _t bind-key -T "$table" MouseDrag1Pane "$copy_drag"
-    _t bind-key -T "$table" MouseDragEnd1Pane "$copy_end"
-  done
 }
 
 # _client — a second tmux server whose pane runs `tmux -S <our socket> attach`.
@@ -462,7 +475,7 @@ _client() {
   CK_HOSTDIR="$(mktemp -d)"
   command env -u TMUX "$CK_TMUX" -S "$CK_HOSTDIR/sock" -f /dev/null \
     new-session -d -s host -x 90 -y 30 \
-    "env -u TMUX '$CK_TMUX' -S '$(_sock)' attach -t drag"
+    "env -u TMUX '$CK_TMUX' -S '$(_sock)' attach -t '$CK_SESSION'"
   local waited=0
   while [ "$waited" -lt 40 ]; do
     [ "$(_t list-clients 2>/dev/null | wc -l)" -gt 0 ] && break
@@ -493,9 +506,11 @@ _flick() {
 
 @test "drag (client): with @clikae_touch_drag OFF a drag is stock tmux — it still selects and copies" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
-  _server 24
-  _bindings
-  _t set-option -g @clikae_touch_drag off
+  _install 'sh -c "seq 1 400; sleep 300"' || { _cleanup; false; }
+  # off is what the installer writes; saying so here is the assertion that it
+  # keeps being what the installer writes.
+  [ "$(_t show-options -gqv @clikae_touch_drag)" = "off" ] \
+    || { _cleanup; echo "the shipped default is no longer off"; false; }
   _client
   _t delete-buffer 2>/dev/null || true
 
@@ -516,8 +531,7 @@ _flick() {
 
 @test "drag (client): with it ON the same gesture scrolls the history and copies nothing" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
-  _server 24
-  _bindings
+  _install 'sh -c "seq 1 400; sleep 300"' || { _cleanup; false; }
   _t set-option -g @clikae_touch_drag on
   _t set-option -g @clikae_touch_scroll_lines 2
   _client
@@ -537,14 +551,13 @@ _flick() {
 
 @test "drag (client): a tap still forwards BOTH the press and the release to the program" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
-  _base
+  # _install runs _base itself; the pane script has to exist before it.
+  CK_SOCKDIR="$(mktemp -d)"
   _echo_pane "$CK_SOCKDIR/app.sh" 0
-  _t -f /dev/null new-session -d -s drag -x 80 -y 24 "bash '$CK_SOCKDIR/app.sh'"
-  CK_PANE="$(_t display-message -p -t '=drag:' '#{pane_id}')"
-  CK_H=24
+  local script="$CK_SOCKDIR/app.sh"
+  _install "bash '$script'" || { _cleanup; false; }
   _t set-option -g @clikae_touch_scroll on
   _t set-option -g @clikae_touch_drag on
-  _bindings
   local waited=0
   while [ "$waited" -lt 25 ]; do
     [ "$(_t display-message -p -t "$CK_PANE" '#{mouse_any_flag}')" = "1" ] && break
