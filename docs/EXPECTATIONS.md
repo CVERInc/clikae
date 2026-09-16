@@ -267,7 +267,10 @@ sitting open past process exit. Any other inherited descriptor — a caller's ow
 fd 5, the collision lock's fd 9 — is still inherited. With a real process group
 this is moot, because the watchdog's `sleep` dies with its group; on the
 single-pid fallback (a platform that will not give the bounded child a process
-group of its own) the pre-fix shape remains.
+group of its own) the pre-fix shape remains — and on that fallback a grandchild
+a bounded call forked can outlive the bound. `--json`'s
+`left_behind_kill_mode` (`pgroup` / `single-pid`) says which shape a given run
+got, so this is a fact you can read rather than one you have to infer.
 
 ## Management verbs
 

@@ -940,8 +940,15 @@ or writes) and bounded: 5s per git/`find` call, a 10s budget for the whole scan,
                             "markers_budget_skipped": 0,
                             "repos_budget_skipped": 0,
                             "roots_discovery_timeout": 0},
+ "left_behind_kill_mode": "pgroup",
  "left_behind_unavailable": null}
 ```
+
+`left_behind_kill_mode` says how the scan stopped a bounded git/`find` call that
+overran: `pgroup` (the normal case — the call and everything it forked are
+killed together) or `single-pid` on a platform that will not give the bounded
+child a process group of its own, where a grandchild it forked can outlive the
+bound. `null` means no scan ran.
 
 `left_behind_unavailable` is `null` whenever the scan ran. When it could not run
 at all it names the reason — today the only one is `"git-not-on-PATH"`, which

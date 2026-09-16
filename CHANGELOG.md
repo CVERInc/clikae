@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `clikae burn --json` reports `left_behind_kill_mode`: how the left-behind
+  scan stopped a bounded git/`find` call that overran — `pgroup` (the call and
+  everything it forked, the normal case) or `single-pid` on a platform that
+  will not give the bounded child a process group of its own, where a
+  grandchild can outlive the bound. That fallback path now has tests, including
+  one that asserts the grandchild it leaves behind, so its cost is written down
+  rather than assumed (#112).
 - `clikae burn` says when its left-behind scan could not run at all instead of
   reporting an empty list. With no `git` on `$PATH` the scan used to return
   `left_behind: []` — the same output as "scanned everything, found nothing" —

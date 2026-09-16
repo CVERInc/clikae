@@ -92,7 +92,7 @@ Give the task in one of two ways:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
                          reset, rerouted_from[], elapsed_s, run_id, left_behind[],
                          left_behind_truncated, left_behind_truncation{},
-                         left_behind_unavailable}
+                         left_behind_kill_mode, left_behind_unavailable}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -1328,6 +1328,15 @@ _agy_burn() {
 # version, on the same container: `PGROUP=1`, zero survivors.
 _burn_lb_pgroup_probe() {
   _BURN_LB_PGROUP=0
+  # #112 item 6: the fallback below ("every kill is a single-pid kill, exactly
+  # what this function did before process groups") is deliberate and, until now,
+  # exercised by nothing — it only happens on a platform that will not give a
+  # backgrounded child a group of its own, and neither CI runner is one. This
+  # seam forces it, so the path has a test instead of an assumption. It is not a
+  # tuning knob and is documented nowhere a user would look: turning it on makes
+  # a forking child's grandchildren outlive the bound, which is the very defect
+  # round-5's P2-1 fixed.
+  if [ "${CLIKAE_BURN_LB_SINGLE_PID:-0}" = 1 ]; then return 0; fi
   local mflag p
   case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
   { set -m; } 2>/dev/null
@@ -1728,14 +1737,19 @@ _burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c co
 # spliced straight into `_burn_result`'s printf next to the fields it already
 # owns. Every argument is an integer this file computed; nothing user-supplied
 # reaches it, so no escaping is needed or attempted.
-# `$6` (optional) is the reason the scan could not run at all — a short, fixed
-# token this file chooses, never anything from outside — and is JSON `null` when
-# the scan did run.
+# `$6` (optional) is how the scan's bounded calls killed what they bounded
+# (`pgroup` or `single-pid`, empty when no scan ran) and `$7` (optional) is the
+# reason the scan could not run at all — a short, fixed token this file chooses,
+# never anything from outside. Both are JSON `null` when empty.
+# `left_behind_unavailable` stays LAST: `_burn_result`'s shape check reads the
+# first key and the last one, so a capture truncated anywhere between them is
+# rejected rather than printed.
 _burn_lb_meta() {
-  local unavailable=null
-  [ -z "${6:-}" ] || unavailable="\"$6\""
-  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s},"left_behind_unavailable":%s' \
-    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5" "$unavailable"
+  local kill_mode=null unavailable=null
+  [ -z "${6:-}" ] || kill_mode="\"$6\""
+  [ -z "${7:-}" ] || unavailable="\"$7\""
+  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s},"left_behind_kill_mode":%s,"left_behind_unavailable":%s' \
+    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5" "$kill_mode" "$unavailable"
 }
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
@@ -1788,7 +1802,7 @@ _burn_left_behind() {
   # burns non-git work, and burn's own outcome is unaffected.
   if ! BURN_LB_GIT="$(type -P git)"; then
     log_info "left-behind scan: not run — git is not on PATH."
-    printf '%s\t[]' "$(_burn_lb_meta 0 0 0 0 0 git-not-on-PATH)"
+    printf '%s\t[]' "$(_burn_lb_meta 0 0 0 0 0 '' git-not-on-PATH)"
     return 0
   fi
   # P2-1 (round-5 review): probe the process-group capability ONCE here, not
@@ -1799,6 +1813,12 @@ _burn_left_behind() {
   # P3-1 (round-6 review): same reasoning for the `ps` that `_burn_lb_kill`'s
   # value guard needs — resolved once here so the per-repo subshells inherit it.
   _burn_lb_self_pgid
+  # #112 item 6: which of the two kill shapes this scan got is a property of the
+  # run, not of any one row, so it travels with the scan's other top-level keys.
+  # `single-pid` is the honest admission that a bounded call's grandchildren can
+  # outlive the bound here — see `_burn_lb_kill`.
+  local lb_kill_mode=single-pid
+  [ "${_BURN_LB_PGROUP:-0}" != 1 ] || lb_kill_mode=pgroup
   # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
   # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
   # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
@@ -2330,7 +2350,8 @@ _burn_left_behind() {
   # `_burn_result` reads this whole fragment back off this function's own last
   # line, same tab convention as the JSON array itself.
   printf '%s\t[%s]' \
-    "$(_burn_lb_meta "$over" "$lb_skip_roots" "$lb_skip_markers" "$lb_skip_repos" "$lb_disc_timeout")" \
+    "$(_burn_lb_meta "$over" "$lb_skip_roots" "$lb_skip_markers" "$lb_skip_repos" \
+        "$lb_disc_timeout" "$lb_kill_mode")" \
     "$entries"
   return 0
 }

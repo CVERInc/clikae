@@ -4989,7 +4989,10 @@ assert obj["left_behind_truncated"] == 0, obj["left_behind_truncated"]
   local nogit="$BATS_TEST_TMPDIR/nogit"
   mkdir -p "$nogit"
   local out last
+  # Both are read by `_burn_left_behind` through bash's dynamic scope, the same
+  # way `cmd_burn` supplies them in production (shellcheck cannot see that).
   add_dirs=()
+  # shellcheck disable=SC2034
   started_at=0
   out="$(PATH="$nogit" _burn_left_behind)"
   [[ "$out" == *"left-behind scan: not run — git is not on PATH."* ]] || { printf '%s\n' "$out"; false; }
@@ -5016,6 +5019,85 @@ import json, sys
 obj = json.load(sys.stdin)
 assert obj["left_behind_unavailable"] is None, obj["left_behind_unavailable"]
 assert obj["left_behind"], obj
+'
+}
+
+# Item 6 (#112; round-5 fix work): when `_burn_lb_pgroup_probe` cannot prove the
+# child got a process group of its own, every kill falls back to the pre-fix
+# single-pid behaviour — deliberately (never worse than before), and until now
+# exercised by nothing. Neither CI runner is such a platform, so the seam
+# `CLIKAE_BURN_LB_SINGLE_PID=1` forces it. Two assertions, and the second is the
+# uncomfortable one: the bound still returns and still kills what it launched,
+# AND the grandchild survives — the documented old shape, asserted so that a
+# future reader knows the fallback's cost rather than assuming it has none.
+@test "burn #112 item 6: the single-pid fallback still kills its child (and leaves the grandchild, by design)" {
+  _burn_lb_boot
+  export CLIKAE_BURN_LB_SINGLE_PID=1
+  local forker="$BATS_TEST_TMPDIR/forker-single" pidfile="$BATS_TEST_TMPDIR/single.pid"
+  cat > "$forker" <<STUB
+#!/usr/bin/env bash
+sleep 120 &
+echo \$! > "$pidfile"
+wait
+STUB
+  chmod +x "$forker"
+  local t0 t1 rc=0 gpid=""
+  t0="$(date +%s)"
+  _burn_lb_bounded 3 "$forker" || rc=$?
+  t1="$(date +%s)"
+  # The probe really did fall back, or everything below is about the other path.
+  [ "${_BURN_LB_PGROUP:-unset}" = 0 ] || { echo "_BURN_LB_PGROUP=${_BURN_LB_PGROUP:-unset}, expected 0"; false; }
+  [ -s "$pidfile" ] || { echo "forker never recorded its child"; false; }
+  gpid="$(cat "$pidfile")"
+  sleep 1
+  local child_alive=0
+  kill -0 "$gpid" 2>/dev/null && child_alive=1
+  # Whatever this test asserts, it never leaves the grandchild running.
+  kill -KILL "$gpid" 2>/dev/null || true
+  [ "$((t1 - t0))" -lt 10 ] || { echo "bounded call took $((t1 - t0))s"; false; }
+  [ "$rc" -eq 124 ] || { echo "rc=$rc, expected 124"; false; }
+  [ "$child_alive" -eq 1 ] || { echo "the fallback is documented as leaving the grandchild; it did not — if that is now FIXED, fix this test and docs/EXPECTATIONS.md with it"; false; }
+}
+
+# …and the run says which shape it used, so nobody has to infer it from
+# behaviour. The seam only forces the fallback; the assertion is on burn's own
+# machine-readable output.
+@test "burn #112 item 6: --json names the kill mode the scan actually used" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  CLIKAE_BURN_LB_SINGLE_PID=1 run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json \
+    --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["left_behind_kill_mode"] == "single-pid", obj["left_behind_kill_mode"]
+assert obj["left_behind"], obj
+'
+}
+
+# The control, and the assertion that actually protects the fix round-5 landed:
+# with nothing forced, this platform DOES give the bounded child its own group.
+@test "burn #112 item 6 control: an ordinary run reports kill_mode pgroup" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["left_behind_kill_mode"] == "pgroup", obj["left_behind_kill_mode"]
 '
 }
 
