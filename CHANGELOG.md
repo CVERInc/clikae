@@ -171,8 +171,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   processes per directory — once per tank. With 225 finished runs (a week of
   a busy cockpit) a refusal took 5.7 s at 10 tanks and 30.8 s at 50, past the
   hook's 5-second timeout, and Claude Code treats a hook that times out as
-  non-blocking: the spawn it was refusing went ahead. A finished run now costs
-  no process at all; the same refusal takes 0.16 s at 10 tanks and 0.7 s at 50
+  non-blocking: the spawn it was refusing went ahead. The guard now walks the
+  burn runs once and only checks the tanks that walk names as running, and a
+  finished run costs no process at all: the same refusal takes 52 ms at
+  10 tanks and 78 ms at 50, and 128 ms at 50 tanks with 1,000 finished runs
   (#114).
 - The "this store's tanks aren't adopted yet and the flag can't be written"
   warning is no longer silenced for good inside sessions started after it was

@@ -305,11 +305,20 @@ _ckpt_refuse() {
       # message. An absent record simply means no tank is excluded from the
       # reserve listing, which is exactly what an empty `cur` already does.
       cur="$(head -n 1 "$CLIKAE_HOME/state/cockpit" 2>/dev/null | tr -d '\n' || true)" &&
+      # #114: one walk of the burn run directories, then burn_tank_busy only
+      # for a tank that walk named. Asking it for every tank walked every run
+      # once PER TANK, and a refusal that outlives the 5 s hook timeout is not
+      # a refusal: Claude Code treats the timeout as non-blocking (measured
+      # 30.8 s at 50 tanks × 225 finished runs before burn_tank_busy went
+      # fork-free, 3.4 s at 50 × 1,000 after).
+      active=$'\n'"$(burn_status_active_tanks 2>/dev/null || true)"$'\n' &&
       lines="$(
         while IFS=$'\t' read -r cli profile _path; do
           [ -n "$cli" ] || continue
           [ "$cli/$profile" = "$cur" ] && continue
-          burn_tank_busy "$cli" "$profile" 2>/dev/null && continue
+          case "$active" in
+            *$'\n'"$cli/$profile"$'\n'*) burn_tank_busy "$cli" "$profile" 2>/dev/null && continue ;;
+          esac
           printf '  %s/%s\n' "$cli" "$profile"
         done <<PROFILES
 $(list_all_profiles 2>/dev/null)
