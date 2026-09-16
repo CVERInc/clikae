@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/8be36370ee2fcd280c4f74904e9a55e808170747/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/c7125b0ebb3bb5ead5f310ecc96c4edee1256ec7/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -258,3 +258,25 @@ not silent damage.
 **`clikae <name>` refuses when the name exists in two engines.** A tank's name is its
 identity, but if `work` exists under both claude and codex, clikae can't guess which —
 it lists both and asks you to qualify (`clikae claude work`).
+
+## Touch terminals over ssh
+
+**Copying from a phone is not something clikae has measured.** The touch
+bindings ([usage.md](/usage.md#touch-scrolling-over-ssh)) were measured against
+a-Shell on iPhone for one thing only: what a swipe and a tap send on the wire,
+and what tmux does with them. Two halves of "copy text on a phone" are still
+**unverified** (#108):
+
+- **a-Shell's own long-press selection.** It selects what the terminal is
+  drawing. Nobody here has checked how it behaves while tmux is in copy-mode,
+  or across a pane boundary.
+- **OSC 52 reaching the iOS clipboard.** clikae sets `set-clipboard on`, so a
+  copy-mode yank is emitted as OSC 52 — but whether a-Shell honours it, and
+  whether a selection spanning several pages survives, has not been measured on
+  a device. The server-side half is all that is claimed.
+
+Tap-to-page (`@clikae_touch_pages`, off by default) was measured the same way
+the scroll half was: against a real tmux server, asserting tmux's own
+`#{scroll_position}`. **It has not been run on a physical iPhone** — the
+gesture reaching tmux as a press/release pair is inherited from #88's
+measurement, not re-measured for this feature.
