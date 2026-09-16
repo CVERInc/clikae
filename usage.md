@@ -626,8 +626,17 @@ Stop hook calling `--once` actually has to consume, not the JSONL log.
 
 The cursor (the EXACT max updated_at this poll actually processed — no lag)
 persists at `$CLIKAE_HOME/state/watch-github/<org>.cursor`; a small
-seen-file next to it de-dupes by (repo, issue number, updated timestamp),
-capped at the last 5,000. Cold start (no cursor yet) bounds to the last 24
+seen-file next to it de-dupes by (repo, issue number, updated timestamp).
+That file is compacted every poll **by age, with a row-count floor**: every
+row newer than 1800 seconds below the lower of (the last completed tail
+sweep's start, this poll's cursor) is kept whatever the row count — that is
+the only ground anything re-reads, so nothing inside it can be announced
+twice — and the newest 5,000 rows are kept whatever their age, because that
+second, much longer retention is what decides `opened` vs `comment` for an
+issue nobody has touched in months. It used to be an unconditional
+`tail -n 5000`, which meant a burst of more than 5,000 rows in one poll lost
+its oldest rows to the compaction in that same poll and got them announced
+again, as `opened`, by the next sweep (#111). Cold start (no cursor yet) bounds to the last 24
 hours by default — `--since` overrides that bound — and each query
 paginates ascending (oldest-unseen-first) up to 500 rows (5 pages of 100)
 per poll. A busy org's backlog therefore can't outrun this permanently: a

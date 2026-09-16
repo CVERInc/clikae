@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/307caa4ac55ff5eb6152b63ad6f17ac6c71d52bb/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/e48f39cdff1fec7b8388ddaddf00f415397159c8/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -271,6 +271,37 @@ group of its own) the pre-fix shape remains — and on that fallback a grandchil
 a bounded call forked can outlive the bound. `--json`'s
 `left_behind_kill_mode` (`pgroup` / `single-pid`) says which shape a given run
 got, so this is a fact you can read rather than one you have to infer.
+
+## Ambient GitHub watching (`watch github`) — run directories
+
+**A run directory with no `status.json` is deleted after 7 days.** Every poll
+that finds at least one new event writes
+`$HOME/.clikae/logs/watch-github-<org>-<epoch>/status.json` — the file
+`clikae wait` resolves. A directory without one is a poll that created its
+directory and then died before writing any terminal state: nothing will ever
+add the missing file, and `clikae wait` can never resolve it. Both sweeps used
+to skip exactly those and keep them forever. They are now removed once their
+mtime is older than `CLIKAE_BURN_LOG_RETENTION_DAYS` (default 7, the same knob
+as burn's own log retention; `0` disables the sweep here too).
+
+**Two things are deliberately exempt from that delete**, because the directory
+name alone cannot tell them from a crashed run: one that still holds an
+`events.jsonl`, and one whose name after `watch-github-` is an org this host
+watches. An org's *durable* log lives at `watch-github-<org>/events.jsonl`,
+never has a `status.json`, and has a directory mtime that does not move when
+the log is appended to — and for an org literally called `foo-2024`, its name
+is also a perfectly legal run-directory name for org `foo`. Deleting one would
+lose that org's entire event history; keeping a rare half-written run directory
+costs a few kilobytes. So a crashed run directory that got as far as writing
+`events.jsonl` is kept, on purpose, rather than risking the other mistake.
+
+**Run-directory rotation is per org, and orgs sharing a name prefix are
+disjoint.** Rotating org `foo` (newest 200 kept) only ever considers
+directories named `watch-github-foo-<digits>` or
+`watch-github-foo-<digits>-<digits>`. It used to select with a bare
+`watch-github-foo-*` glob, which also matched every run directory of org
+`foo-bar` — so two orgs shared one 200-directory budget and the older mtimes
+lost, whoever they belonged to (#111).
 
 ## Management verbs
 
