@@ -105,10 +105,15 @@ silently skips the twelve key bindings and the five `@clikae_touch_scroll`/
 
 The bindings are installed when clikae creates a tmux session, and apply
 to the whole tmux **server** — every session on it, not only clikae's own —
-so if `~/.tmux.conf` binds its own root-table `MouseDown1Pane`/`MouseUp1Pane`,
+so if `~/.tmux.conf` binds its own root-table `MouseDown1Pane`/`MouseUp1Pane`
+— or, with drag translation on, `MouseDrag1Pane`/`MouseDragEnd1Pane` —
 clikae's `bind-key` overwrites it (there is no `-o`, and tmux has no per-key
 opt-out). Setting `@clikae_touch_scroll off` (below) does not restore your
-binding; it only makes clikae's copy of it a no-op. In tmux's command prompt
+binding; it only makes clikae's copy of it a no-op. The drag pair is the one
+exception, and only as far as **tmux's** default goes: with
+`@clikae_touch_drag off` those four bindings run tmux's own command for the
+key, so the stock behaviour is intact — but a binding *you* wrote is still
+gone. In tmux's command prompt
 (`Ctrl-b :`), use `set -g @clikae_touch_scroll off` to disable translation
 server-wide, or `set -g @clikae_touch_scroll on` to restore it. Set
 `set -g @clikae_touch_scroll_lines 3` to scroll three lines per row of movement.
