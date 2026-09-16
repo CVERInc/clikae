@@ -60,6 +60,16 @@ chmod +x "$DEST/bin/clikae"
 ln -sf "$DEST/bin/clikae" "$BIN_LINK"
 
 say "Installed."
+
+# clikae itself is pure bash; the cockpit guard (lib/hooks/cockpit-guard.sh)
+# is the one feature with a runtime dependency — it parses each Agent tool
+# call with jq AT HOOK EXECUTION TIME, and fails closed (refuses every spawn
+# on the cockpit tank) when jq is missing. Warn, don't install: this script
+# has no package manager of its own and picking one for the operator is not
+# its job.
+command -v jq >/dev/null 2>&1 || \
+  printf '\033[1;33m==>\033[0m %s\n' "jq is not on PATH — everything works except \`clikae cockpit\`, whose guard refuses every Agent spawn without it. Install jq (brew install jq / apt install jq) if you want that feature."
+
 echo ""
 echo "  Binary  : $BIN_LINK"
 echo "  Library : $DEST"
