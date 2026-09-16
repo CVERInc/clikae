@@ -637,6 +637,17 @@ EOF
   else
     printf '  %-16s %s\n' "shell rc"   "$rc  (no clikae aliases yet)"
   fi
+  # #109 P3-6: jq is clikae's ONE runtime dependency, and only the cockpit
+  # guard needs it — at HOOK EXECUTION TIME, where a missing jq refuses every
+  # Agent spawn on the cockpit tank (fail closed) with no other symptom. The
+  # PATH the hook runs under is the tank's, not necessarily this shell's, so
+  # this line names the path it found rather than just saying "yes".
+  local jq_path; jq_path="$(command -v jq 2>/dev/null || true)"
+  if [ -n "$jq_path" ]; then
+    printf '  %-16s %s\n' "jq"         "$jq_path  (needed by the cockpit guard; nothing else uses it)"
+  else
+    printf '  %-16s %s\n' "jq"         "not found — clikae cockpit cannot install its guard, and an installed guard refuses every Agent spawn"
+  fi
   echo ""
 
   # Trailing newline matters: $(...) strips it, and a final line with no newline

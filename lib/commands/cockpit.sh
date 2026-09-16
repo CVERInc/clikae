@@ -110,6 +110,29 @@ _cockpit_state_write() {
 
 _cockpit_state_clear() { rm -f "$(_cockpit_state_file)" 2>/dev/null || true; }
 
+# _cockpit_engine_canon <engine> -> the engine's ON-DISK name. `agy` is what
+# you type (docs/grammar.md §6); `antigravity` is the directory under
+# profiles/ and the name every store predicate (profile_dir, profile_exists,
+# list_all_profiles) speaks. #109 P3-8: this used to be two open-coded lines
+# inside _cockpit_is_recorded, so the two halves of this command disagreed —
+# `_cockpit_is_recorded agy work` said yes while `clikae cockpit agy work`
+# said `Tank does not exist: agy/work`, and only the `antigravity` spelling
+# could mark the tank (`clikae burn agy work` has always accepted the alias).
+# One function, so the resolve path and the is-it-the-cockpit predicate can
+# never drift apart again.
+#
+# Two forms, the house pattern (profile_dirv/profile_dir, engine_labelv/
+# engine_label): the `v` form sets a variable and costs no fork, for
+# _cockpit_is_recorded — the predicate every burn launch and every reroute hop
+# asks; the printf form is for callers already inside a command substitution.
+_cockpit_engine_canonv() {
+  case "$1" in
+    agy) _COCKPIT_ENGINE=antigravity ;;
+    *)   _COCKPIT_ENGINE="$1" ;;
+  esac
+}
+_cockpit_engine_canon() { _cockpit_engine_canonv "$1"; printf '%s' "$_COCKPIT_ENGINE"; }
+
 # _cockpit_is_recorded <engine> <tank> -> 0 when <engine>/<tank> IS the
 # recorded cockpit: by name (agy and antigravity are one engine), or by the
 # physical identity of the tank directory (`-ef`: a symlink alias of the
@@ -121,8 +144,8 @@ _cockpit_is_recorded() {
   cur="$(_cockpit_state_read)"
   [ -n "$cur" ] || return 1
   ce="${cur%%/*}"; ct="${cur#*/}"
-  [ "$ce" = agy ] && ce=antigravity
-  [ "$e" = agy ] && e=antigravity
+  _cockpit_engine_canonv "$ce"; ce="$_COCKPIT_ENGINE"
+  _cockpit_engine_canonv "$e";  e="$_COCKPIT_ENGINE"
   [ "$ce" = "$e" ] && [ "$ct" = "$t" ] && return 0
   _cockpit_same_physical_tank "$e" "$t" "$ce" "$ct"
 }
@@ -291,6 +314,8 @@ _cockpit_show() {
 _cockpit_resolve() {
   case "$#" in
     1)
+      # The one-arg path resolves through the STORE (list_all_profiles), so it
+      # already hands back the on-disk engine name — nothing to canonicalise.
       local matches n
       matches="$(resolve_tank_name "$1" 2>/dev/null || true)"
       n="$(printf '%s\n' "$matches" | grep -c . || true)"
@@ -305,7 +330,10 @@ _cockpit_resolve() {
       fi
       printf '%s\n' "$matches"
       ;;
-    2) printf '%s\t%s\n' "$1" "$2" ;;
+    # #109 P3-8: `agy` is an engine you type, `antigravity` is the one on
+    # disk — canonicalise here, or `clikae cockpit agy work` dies on
+    # profile_exists while `clikae burn agy work` works fine.
+    2) printf '%s\t%s\n' "$(_cockpit_engine_canon "$1")" "$2" ;;
     *) log_fail "Usage: clikae cockpit [<engine>] <tank>  |  --off  |  --allow-agents <dur>" ;;
   esac
 }

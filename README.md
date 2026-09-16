@@ -335,7 +335,10 @@ Version by version: **[Releases](https://github.com/CVERInc/clikae/releases)**
 
 ## Testing & quality
 
-Pure bash, no runtime dependencies, held to a deliberate bar:
+Pure bash, one runtime dependency and only for one feature — the cockpit guard
+(`clikae cockpit`) parses each tool call with **`jq`**, and refuses every Agent
+spawn on the cockpit tank if jq isn't on PATH when the hook runs. Everything
+else in clikae needs nothing but bash. Held to a deliberate bar:
 
 - **`bats-core` suite (640+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
