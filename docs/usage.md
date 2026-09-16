@@ -935,8 +935,22 @@ or writes) and bounded: 5s per git/`find` call, a 10s budget for the whole scan,
 {"left_behind": [{"repo": "/path/repo", "branch": "main", "ahead": 1,
                   "dirty": 3, "files": ["/path/repo/out.md"],
                   "git_timeout": false}],
- "left_behind_truncated": 0}
+ "left_behind_truncated": 0,
+ "left_behind_truncation": {"repos_over_cap": 0, "roots_budget_skipped": 0,
+                            "markers_budget_skipped": 0,
+                            "repos_budget_skipped": 0,
+                            "roots_discovery_timeout": 0}}
 ```
+
+**What `left_behind_truncation` counts.** Anything missing from `left_behind[]`
+is counted by *why*, because the buckets are in different units:
+`repos_over_cap` is exactly that many repositories (the 25-row display cap);
+`repos_budget_skipped` is that many repositories the 10s budget never reached;
+`markers_budget_skipped` is that many discovered `.git` markers it never
+resolved; `roots_budget_skipped` and `roots_discovery_timeout` are *roots* —
+one of those may stand for forty repositories or none. `left_behind_truncated`
+is the sum of all five and is **deprecated**: it mixes those units, and it is
+kept only so an existing consumer keeps working for one release.
 
 `ahead` is `null` when the branch has no upstream to compare against. A git call
 that hits its 5s ceiling — a dead NFS mount, a `.git/HEAD` that is really a FIFO,

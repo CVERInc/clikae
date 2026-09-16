@@ -3855,6 +3855,13 @@ names = [r["repo"].rsplit("/", 1)[1] for r in rows]
 expect = [f"r{n:02d}" for n in range(30, 5, -1)]
 assert names == expect, names
 assert obj["left_behind_truncated"] == 5, obj["left_behind_truncated"]
+# #112 item 2: the display cap is its OWN bucket — five repositories, not five
+# roots and not five unknowns.
+t = obj["left_behind_truncation"]
+assert t["repos_over_cap"] == 5, t
+assert t["roots_budget_skipped"] == 0 and t["markers_budget_skipped"] == 0, t
+assert t["repos_budget_skipped"] == 0 and t["roots_discovery_timeout"] == 0, t
+assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_truncated"], t)
 '
 }
 
@@ -4450,6 +4457,17 @@ STUB
   # round-4's own property, still standing: a bounded discovery call that
   # times out costs that root's unlisted repos, not the one already in hand.
   [[ "$output" == *"left behind:"*"ahead 1"* ]] || { printf '%s\n' "$output"; false; }
+  # #112 item 2: the machine-readable side says the same thing the sentence
+  # does — a discovery timeout, in its own bucket, not budget exhaustion.
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+t = obj["left_behind_truncation"]
+assert t["roots_discovery_timeout"] >= 1, t
+assert t["roots_budget_skipped"] == 0, t
+assert t["markers_budget_skipped"] == 0 and t["repos_budget_skipped"] == 0, t
+assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_truncated"], t)
+'
 }
 
 # P3-4 (round-5 review): with two roots whose discovery `find` each burns the
@@ -4861,6 +4879,101 @@ rows = json.load(sys.stdin)["left_behind"]
 assert len(rows) == 1, rows
 assert rows[0]["dirty"] == 1, rows[0]
 assert rows[0]["git_timeout"] is False, rows[0]
+'
+}
+
+# Item 2 (#112; round-4 review P3-4): `left_behind_truncated` was the sum of the
+# display cap, three different budget-skip loops and the discovery timeouts — so
+# `4` could mean four repositories or one root that might have held forty. Each
+# bucket is asserted on its own here, by the loop that fills it. Roots first:
+# every root's own `rev-parse` wedged, so the 10s budget is gone inside the roots
+# pass itself and the roots that follow are skipped there.
+@test "burn #112 item 2: roots the budget never reached count as roots_budget_skipped" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  local i
+  for i in 1 2 3 4; do
+    git init -q "$TEST_HOME/repos/r$i"
+    git -C "$TEST_HOME/repos/r$i" config user.name t
+    git -C "$TEST_HOME/repos/r$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/r$i" commit -q --allow-empty -m init
+  done
+  _stub_wedged_git rev-parse
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json --artifact "$TEST_HOME/missing" \
+    --add-dir "$TEST_HOME/repos/r1" --add-dir "$TEST_HOME/repos/r2" \
+    --add-dir "$TEST_HOME/repos/r3" --add-dir "$TEST_HOME/repos/r4" -- noop
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"scan budget exhausted after 10s"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+t = obj["left_behind_truncation"]
+assert t["roots_budget_skipped"] >= 1, t
+assert t["roots_discovery_timeout"] >= 1, t
+assert t["repos_over_cap"] == 0, t
+assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_truncated"], t)
+'
+}
+
+# The markers half of the same finding: the roots resolve instantly (neither is a
+# repository), discovery lists eight `.git` markers under one root, and each
+# marker`s own `rev-parse` wedges — so the budget runs out INSIDE the marker
+# loop and the rest are skipped there, which is a different unit again (a marker
+# is one repository; a root is an unknown number of them).
+@test "burn #112 item 2: markers the budget never reached count as markers_budget_skipped" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    git init -q "$TEST_HOME/repos/m$i"
+    git -C "$TEST_HOME/repos/m$i" config user.name t
+    git -C "$TEST_HOME/repos/m$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/m$i" commit -q --allow-empty -m init
+  done
+  # Only the repos discovery FINDS wedge; the two roots ($PWD and the container
+  # directory) still answer instantly, so the budget is spent in the marker loop
+  # and nowhere else.
+  _stub_wedged_git rev-parse /repos/m
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json \
+    --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"scan budget exhausted after 10s"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+t = obj["left_behind_truncation"]
+assert t["markers_budget_skipped"] >= 1, t
+assert t["roots_discovery_timeout"] >= 1, t
+assert t["repos_over_cap"] == 0, t
+assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_truncated"], t)
+'
+}
+
+# The control for the whole shape: a scan that truncated nothing still reports
+# every bucket, at zero, and the deprecated total agrees with them.
+@test "burn #112 item 2 control: an untruncated scan reports all five buckets at zero" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"scan budget exhausted"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+t = obj["left_behind_truncation"]
+assert sorted(t) == ["markers_budget_skipped", "repos_budget_skipped",
+                     "repos_over_cap", "roots_budget_skipped",
+                     "roots_discovery_timeout"], sorted(t)
+assert set(t.values()) == {0}, t
+assert obj["left_behind_truncated"] == 0, obj["left_behind_truncated"]
 '
 }
 

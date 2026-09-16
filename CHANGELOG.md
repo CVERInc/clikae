@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `clikae burn --json` now reports what the left-behind scan left out **by
+  reason**, in `left_behind_truncation`: `repos_over_cap` (the 25-row display
+  cap), `roots_budget_skipped`, `markers_budget_skipped`,
+  `repos_budget_skipped` and `roots_discovery_timeout`. The single
+  `left_behind_truncated` number mixed units — one skipped root might stand for
+  forty repositories, one display-cap overflow is exactly one — so a consumer
+  reading `4` could not tell what was missing. `left_behind_truncated` is still
+  present, as the sum of all five, and is **deprecated**: it is kept for one
+  release so existing consumers keep working (#112).
 - `clikae burn`'s left-behind scan no longer reports a repository it could not
   read as clean. Each of the per-repo git calls (`symbolic-ref`, `rev-list
   --count`, `status --porcelain`) used to fall back to a default when it hit its

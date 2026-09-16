@@ -91,7 +91,7 @@ Give the task in one of two ways:
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
                          reset, rerouted_from[], elapsed_s, run_id, left_behind[],
-                         left_behind_truncated}
+                         left_behind_truncated, left_behind_truncation{}}
                       `artifact_bytes` is the artifact's own measurement, so the
                       evidence travels with the verdict.
   --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
@@ -1622,7 +1622,7 @@ _burn_lb_bounded() {
   # tick and finishing in 4.1s measures as 5 under a 5s bound and was
   # reported as a timeout it never hit. That was already known (r3 P3-1,
   # deferred); round-4 gave it a consumer that turns it into a visible lie —
-  # a discovery `find` that FINISHED gets counted into `lb_budget_skipped`,
+  # a discovery `find` that FINISHED gets counted as a truncation,
   # so the report grows an "… and 1 more" repository that does not exist and
   # `left_behind_truncated` counts it. Measured on the pre-fix code with a
   # discovery `find` shimmed to 4.6s (well inside the 5s bound, and really
@@ -1709,6 +1709,20 @@ _burn_lb_bounded() {
 # this comment used to claim: it happily returns a shadowing function's own
 # bare name instead of a path.
 _burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+
+# _burn_lb_meta <over> <roots> <markers> <repos> <disc-timeout>
+#
+# The left-behind scan's own top-level `--json` keys, rendered once, here, so
+# `_burn_left_behind` (which has the counts) and `_burn_result` (which needs a
+# default for a successful burn, and a fallback for a capture that came back
+# garbled) cannot drift apart. It is a FRAGMENT — `"k":v,"k":v`, no braces —
+# spliced straight into `_burn_result`'s printf next to the fields it already
+# owns. Every argument is an integer this file computed; nothing user-supplied
+# reaches it, so no escaping is needed or attempted.
+_burn_lb_meta() {
+  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s}' \
+    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5"
+}
 
 # Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
 # .git may be a directory OR a worktree/submodule pointer file.
@@ -1813,7 +1827,17 @@ _burn_left_behind() {
   # completion after a 4x-over-budget discovery, with nothing to show for
   # it. `lb_scan_t0` now starts here, before the first `find`, so discovery
   # spends the SAME clock the per-repo loop already respected.
-  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0 lb_budget_skipped=0
+  # P3-4 (round-4 review, #112 item 2): one `lb_budget_skipped` counter used to
+  # take skips from three different loops — roots, the markers a root's `find`
+  # discovered, and the per-repo scan — and the JSON then added the display cap
+  # and the discovery timeouts on top. A consumer reading
+  # `left_behind_truncated: 4` could not tell whether four repositories were
+  # missing or one root that might have held forty. The three loops now keep
+  # their own counters and `--json` reports every bucket by name; the human
+  # "scan budget exhausted" sentence below is still their sum, because a person
+  # reading it has one decision to make (raise the budget) either way.
+  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0
+  local lb_skip_roots=0 lb_skip_markers=0 lb_skip_repos=0
   # P3-1 (round-5 review): a bounded call that HIT ITS OWN 5s ceiling and a
   # candidate the 10s global budget never reached are two different facts, and
   # round-4 reported both with one sentence ("scan budget exhausted").
@@ -1840,7 +1864,7 @@ _burn_left_behind() {
   for root in "${roots[@]}"; do
     if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
-      lb_budget_skipped=$((lb_budget_skipped + 1))
+      lb_skip_roots=$((lb_skip_roots + 1))
       continue
     fi
     rp_rc=0
@@ -1858,7 +1882,7 @@ _burn_left_behind() {
   for root in "${roots[@]}"; do
     if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
-      lb_budget_skipped=$((lb_budget_skipped + 1))
+      lb_skip_roots=$((lb_skip_roots + 1))
       continue
     fi
     _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
@@ -1885,7 +1909,7 @@ _burn_left_behind() {
     # P2-1 (round-4 review): this used to set `lb_budget_hit=1` too, which
     # forces every remaining root AND every marker already sitting in
     # `$_lb_disc` (including `$root` itself, printed unconditionally above
-    # before `find` even runs) into `lb_budget_skipped` — a `find` that's
+    # before `find` even runs) into the budget-skipped buckets — a `find` that's
     # merely slow-but-finite (a big cold tree, not a hang) made the payload
     # repo itself vanish from the report while `lb_scan_budget` still had
     # seconds left. A bounded `find` timing out only means "this root has
@@ -1899,7 +1923,7 @@ _burn_left_behind() {
     while IFS= read -r -d '' marker; do
       if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
         lb_budget_hit=1
-        lb_budget_skipped=$((lb_budget_skipped + 1))
+        lb_skip_markers=$((lb_skip_markers + 1))
         continue
       fi
       # Every marker here comes from `-name .git -print0`; the root itself is
@@ -1974,10 +1998,10 @@ _burn_left_behind() {
   # fork) gives a zero-cost wall clock for a global budget on TOP of the
   # per-call one: once 10s of real time has gone into this loop, every
   # remaining candidate repo is skipped rather than attempted — reported
-  # honestly as "scan budget exhausted" (lb_budget_skipped below), not
+  # honestly as "scan budget exhausted" (`lb_skip_repos` below), not
   # silently dropped the way the pre-fix cap dropped its tail.
-  # P2-2 (round-3 review): `lb_scan_budget`/`lb_scan_t0`/`lb_budget_hit`/
-  # `lb_budget_skipped` are declared once now, before discovery (above) —
+  # P2-2 (round-3 review): `lb_scan_budget`/`lb_scan_t0`/`lb_budget_hit` and
+  # the three skip counters are declared once now, before discovery (above) —
   # this loop shares that same clock and counter instead of starting a
   # fresh 10s budget of its own on top of whatever discovery already spent.
   # P3-4 (round-5 review): the first `lb_root_repos` entries are `$PWD` and
@@ -1994,12 +2018,12 @@ _burn_left_behind() {
     repo_i=$((repo_i + 1))
     if [ "$repo_i" -le "$lb_root_repos" ]; then
       if [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_hard_cap" ]; then
-        lb_budget_skipped=$((lb_budget_skipped + 1))
+        lb_skip_repos=$((lb_skip_repos + 1))
         continue
       fi
     elif [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
       lb_budget_hit=1
-      lb_budget_skipped=$((lb_budget_skipped + 1))
+      lb_skip_repos=$((lb_skip_repos + 1))
       continue
     fi
     # P3-5 (round-4 review, #112 item 1): every per-repo git call below used to
@@ -2264,20 +2288,25 @@ _burn_left_behind() {
   if [ "$lb_disc_timeout" -gt 0 ]; then
     log_info "  … and $lb_disc_timeout more (discovery timed out after ${lb_find_bound}s)"
   fi
-  if [ "$lb_budget_skipped" -gt 0 ]; then
-    log_info "  … and $lb_budget_skipped more (scan budget exhausted after ${lb_scan_budget}s)"
+  local lb_skip_total=$((lb_skip_roots + lb_skip_markers + lb_skip_repos))
+  if [ "$lb_skip_total" -gt 0 ]; then
+    log_info "  … and $lb_skip_total more (scan budget exhausted after ${lb_scan_budget}s)"
   fi
   # P2-2 (round-2 review): `--json` used to carry no truncation signal at
   # all — a machine consumer had no way to tell "25 rows, that's everything"
   # from "25 rows, and an unknown number more" without also parsing the
-  # human `log_info` lines. `left_behind_truncated` folds EVERY reason a
+  # human `log_info` lines. `left_behind_truncated` folded EVERY reason a
   # candidate might be missing from `left_behind[]` (cap overflow, budget
-  # exhaustion, a discovery call that hit its own ceiling) into one count —
-  # P3-1 (round-5 review) split the last two apart in the HUMAN lines above,
-  # where a reader has to decide what to DO about it, and deliberately kept
-  # this machine-readable number their sum; `_burn_result` reads it back off this
-  # function's own last line, same convention as the JSON array itself.
-  printf '%s\t[%s]' "$((over + lb_budget_skipped + lb_disc_timeout))" "$entries"
+  # exhaustion, a discovery call that hit its own ceiling) into one count.
+  # P3-4 (round-4 review, #112 item 2): that count mixed UNITS — one root
+  # skipped by the budget might have held forty repositories, one display-cap
+  # overflow is exactly one repository — so it is now reported bucket by
+  # bucket. `left_behind_truncated` stays, as their sum, for one release.
+  # `_burn_result` reads this whole fragment back off this function's own last
+  # line, same tab convention as the JSON array itself.
+  printf '%s\t[%s]' \
+    "$(_burn_lb_meta "$over" "$lb_skip_roots" "$lb_skip_markers" "$lb_skip_repos" "$lb_disc_timeout")" \
+    "$entries"
   return 0
 }
 
@@ -2297,7 +2326,8 @@ _burn_left_behind() {
 # artifact's own measurement travels with the verdict rather than being a second
 # call the caller has to remember to make.
 _burn_result() {
-  local left_behind='[]' left_behind_truncated=0
+  local left_behind='[]' left_behind_meta
+  left_behind_meta="$(_burn_lb_meta 0 0 0 0 0)"
   # P2-3 (round-1 review): pinned HERE, before the scan below ever runs —
   # `_burn_left_behind` can itself take real wall-clock time (P2-2's 97.6s
   # worst case, pre-fix), and `$SECONDS` keeps ticking through all of it. The
@@ -2330,17 +2360,22 @@ _burn_result() {
       *$'\n'*) left_behind="${left_raw##*$'\n'}"; printf '%s\n' "${left_raw%$'\n'*}" ;;
       *)       left_behind="$left_raw" ;;
     esac
-    # P2-2 (round-2 review): `_burn_left_behind`'s last line is now
-    # "<truncated-count>\t[<json array>]" — same tab-split convention as
-    # the newline-split above, so a garbled/short capture degrades to the
-    # same safe defaults (0, '[]') the array already had.
+    # P2-2 (round-2 review): `_burn_left_behind`'s last line is
+    # "<meta-fragment>\t[<json array>]" — same tab-split convention as the
+    # newline-split above, so a garbled/short capture degrades to the same safe
+    # defaults (all-zero counts, '[]') the array already had. The fragment is
+    # checked for the shape it must have, not merely for being non-empty: half a
+    # line is worse than none, because it would be printed into the JSON.
+    local lb_meta_raw=""
     case "$left_behind" in
       *$'\t'*)
-        left_behind_truncated="${left_behind%%$'\t'*}"
+        lb_meta_raw="${left_behind%%$'\t'*}"
         left_behind="${left_behind#*$'\t'}"
         ;;
     esac
-    [[ "$left_behind_truncated" =~ ^[0-9]+$ ]] || left_behind_truncated=0
+    case "$lb_meta_raw" in
+      '"left_behind_truncated":'[0-9]*'}') left_behind_meta="$lb_meta_raw" ;;
+    esac
     case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
   fi
   [ "${as_json:-0}" -eq 1 ] || return 0
@@ -2351,11 +2386,11 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,"left_behind_truncated":%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
     "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
-    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_truncated" >&4
+    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_meta" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
