@@ -508,6 +508,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tap the top or bottom of a pane to page its history — off by default
+  (`@clikae_touch_pages`, #108).** #88 gave a touch terminal the swipe; this
+  gives it the page. With `set -g @clikae_touch_pages on`, a tap in the top
+  three rows of a pane pages the history back one screen (entering copy-mode
+  if needed) and a tap in the bottom three rows pages forward, returning to
+  the live view once there is nothing newer to page into — the same ending a
+  tap in copy-mode already had. A tap between the bands is still an ordinary
+  click, and so is a bottom-band tap on a live pane. `@clikae_touch_pages_rows`
+  (default 3) sets the band height; on a short pane the bands are narrowed so
+  a middle row always survives, because a touch device has no second button
+  and nowhere to click is unrecoverable. Both options take `set -g` and
+  `set -p` like #88's, and only `on`/`1`/`yes`/`true` (any case) enable the
+  feature: it re-purposes a click that currently reaches the program, so an
+  unreadable value leaves today's behaviour alone. The decision lives in the
+  **same** `MouseUp1Pane` handler as the swipe (displacement first, then zone,
+  then leave it alone) — two bindings on one key is not a design, tmux keeps
+  the last one and the loser fails silently. `@clikae_touch_scroll off` does
+  not disable paging; the two gate independently. Measured against a real tmux
+  3.4 server on tmux's own `#{scroll_position}`; a physical iPhone run, and
+  a-Shell's own selection/OSC 52 copy path, remain unverified (see
+  `docs/EXPECTATIONS.md`).
 - `clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]`
   — a second source under `watch` (alongside the existing dry-tank watcher):
   polls GitHub's search API for every issue/PR update in an org — including
