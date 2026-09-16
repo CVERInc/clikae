@@ -243,6 +243,32 @@ with `--print`, so leaving no trace at all is available in the headless shape
 on screen says which one you got, deliberately: incognito means *it doesn't know
 you*, not *it never happened*.
 
+## Headless tasks (`burn`) — the left-behind scan
+
+**A file whose name contains a newline is reported as two paths, one of which
+does not exist.** The scan's per-file `stat` batch is newline-delimited because
+`sort -rn` needs lines, so such a name splits across two reads: the first half is
+listed as a path that isn't there and the second half is dropped. A
+NUL-delimited pipeline would fix it and is not proven against BSD `stat`/`sort`,
+so this is a known limit rather than an unverified cross-platform rewrite.
+Repository *names* containing newlines are unaffected; only the per-file list is.
+
+**`dirty` and `files` count different things on purpose.** `dirty` is git's own
+`status` count for that repository, and from a parent repository's point of view
+a nested repository's whole working tree is *one* untracked entry — so a nested
+repo adds 1 to its parent's `dirty` while its files appear only on its own row.
+`files` is attributed to the innermost repository that owns them, because that is
+the repository whose `push` would carry them.
+
+**The scan's watchdog closes fds 3 and 4, not every fd it inherits.** Those two
+are the ones `burn` itself is known to open (the run's tee, and `--json`'s real
+stdout), and closing them is what stops a failed `clikae burn --json | jq` from
+sitting open past process exit. Any other inherited descriptor — a caller's own
+fd 5, the collision lock's fd 9 — is still inherited. With a real process group
+this is moot, because the watchdog's `sleep` dies with its group; on the
+single-pid fallback (a platform that will not give the bounded child a process
+group of its own) the pre-fix shape remains.
+
 ## Management verbs
 
 **`clikae migrate` makes claude ask you to log in again.** claude stores its OAuth

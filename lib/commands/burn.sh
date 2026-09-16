@@ -1539,6 +1539,14 @@ _burn_lb_bounded() {
   # the two fds this file itself is known to open (fd 3: `_burn_run_and_tee`;
   # fd 4: the json result pipe) so the watchdog can't hold either past its
   # own exit.
+  # P3-2 (round-4 review, #112 item 9 — a documented limit, deliberately not
+  # fixed): those two are the only descriptors closed by name. Every OTHER fd
+  # open in the caller is still inherited here — a caller's own fd 5, the
+  # collision lock's fd 9 in the launched wrapper. With a real process group
+  # that is moot (the watchdog's `sleep` dies with its group instead of
+  # orphaning while holding whatever it inherited); on the single-pid fallback
+  # (`_BURN_LB_PGROUP=0`) the pre-fix shape remains, the same trade that
+  # fallback makes everywhere else: never worse than before, just not better.
   # The watchdog is backgrounded while job control is STILL on, so it gets a
   # group of its own as well — which is what finally retires the orphaned
   # `sleep` this function's comments above spend three paragraphs on: killing

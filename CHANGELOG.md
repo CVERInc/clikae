@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Three known limits of `clikae burn`'s left-behind scan are now written down in
+  [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md) instead of living only in the
+  source: a filename containing a newline is reported as two paths (one of which
+  does not exist); `dirty` is git's own count while `files` is attributed to the
+  innermost repository, so a nested repo adds 1 to its parent's `dirty` without
+  its files appearing there; and the scan's watchdog closes fds 3 and 4 by name,
+  not every descriptor it inherits. None of the three changed behaviour (#112).
 - **Breaking:** `clikae burn`'s `--no-reroute` dry stop now exits **2**
   (`CLIKAE_BURN_RC_NO_TANK`), not 1 — the same distinguishable code as
   exhausting the reroute reserve, so a caller checking rc alone can no longer
