@@ -2129,16 +2129,30 @@ STUB
     "$HOME/.clikae/logs/watch-github-CVERInc-1700000000-2/status.json"
 }
 
+# _fake_runs_write <n> -> <n> run directories for org CVERInc, each with a
+# status.json and a directory mtime <n>..1 minutes further into the past, so
+# a count cap has an unambiguous oldest end to drop.
+#
+# 🔴 Named `watch-github-CVERInc-<epoch>` since #111 — these used to be
+# `watch-github-CVERInc-fake<i>`, a name _wg_status_write cannot produce.
+# Once rotation started anchoring the epoch (P3-3) it correctly ignored all
+# of them, and both tests below went red on a fixture problem, not a code
+# one. A fixture has to look like the thing it stands for.
+_fake_runs_write() {
+  local n="$1" base="$HOME/.clikae/logs" i past
+  mkdir -p "$base"
+  for i in $(seq 1 "$n"); do
+    mkdir -p "$base/watch-github-CVERInc-18000000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-18000000$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-18000000$i"   # the DIRECTORY's own mtime — that's what rotation sorts on
+  done
+}
+
 @test "watch github --once: run directories rotate, keeping the newest 200 (P3-10)" {
   _gh_stub_install
-  local base="$HOME/.clikae/logs" i past
-  mkdir -p "$base"
-  for i in $(seq 1 205); do
-    mkdir -p "$base/watch-github-CVERInc-fake$i"
-    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
-    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
-    touch -t "$past" "$base/watch-github-CVERInc-fake$i"   # the DIRECTORY's own mtime — that's what rotation sorts on
-  done
+  local base="$HOME/.clikae/logs"
+  _fake_runs_write 205
 
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
@@ -2148,30 +2162,25 @@ STUB
   local n; n="$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-*' | wc -l)"
   [ "$n" -eq 200 ]
   # The OLDEST fake ones (lowest i, backdated furthest) are gone...
-  [ ! -d "$base/watch-github-CVERInc-fake1" ]
+  [ ! -d "$base/watch-github-CVERInc-180000001" ]
   # ...the newest fake ones, and this poll's own real run, survive.
-  [ -d "$base/watch-github-CVERInc-fake205" ]
+  [ -d "$base/watch-github-CVERInc-18000000205" ]
 }
 
 @test "watch github --once: rotating org CVERInc's runs never removes org CVERInc-labs' durable log dir (P2-3 sibling, fix-round-7)" {
   _gh_stub_install
-  local base="$HOME/.clikae/logs" i past
+  local base="$HOME/.clikae/logs"
   mkdir -p "$base/watch-github-CVERInc-labs"
   printf '{"n":1}\n' > "$base/watch-github-CVERInc-labs/events.jsonl"
   # Oldest of everything — the first thing a count cap would drop.
   touch -t 202601010000 "$base/watch-github-CVERInc-labs"
-  for i in $(seq 1 205); do
-    mkdir -p "$base/watch-github-CVERInc-fake$i"
-    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-fake$i/status.json"
-    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
-    touch -t "$past" "$base/watch-github-CVERInc-fake$i"
-  done
+  _fake_runs_write 205
   _gh_stub_page org 1 \
     "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
   run clikae watch github --org CVERInc --once
   [ "$status" -eq 0 ]
   [ -f "$base/watch-github-CVERInc-labs/events.jsonl" ]
-  [ ! -d "$base/watch-github-CVERInc-fake1" ]
+  [ ! -d "$base/watch-github-CVERInc-180000001" ]
 }
 
 @test "watch github --once: the durable events.jsonl rotates at 10MB (P3-12)" {
@@ -2514,5 +2523,156 @@ _burst_state_write() {
   _wg_seen_compact "$f" ""
   [ "$(wc -l < "$f")" -eq 5000 ]
   grep -qxF 'reef|6000|2026-09-16T12:00:00Z' "$f"
-  ! grep -qxF 'reef|1|2026-09-16T12:00:00Z' "$f"
+  # `! cmd` does not fail a bats test (SC2314) — assert on the count.
+  [ "$(grep -cxF 'reef|1|2026-09-16T12:00:00Z' "$f")" -eq 0 ]
+}
+
+# --- P3-3 (#111): the rotate is anchored to the org, and the no-status.json
+# --- case has a policy instead of living forever ------------------------
+#
+# _touch_days_ago <days> <path>... -> set each path's mtime <days> days back.
+_touch_days_ago() {
+  local days="$1"; shift
+  local stamp
+  stamp="$(date -u -d "-${days} days" +%Y%m%d%H%M.%S 2>/dev/null \
+    || date -u -v-"${days}"d +%Y%m%d%H%M.%S)"
+  touch -t "$stamp" "$@"
+}
+
+@test "watch github --once: rotating org CVERInc never counts or deletes org CVERInc-labs' RUN dirs (P3-3, #111)" {
+  # The sibling guard used to be half a guard: the status.json check caught
+  # CVERInc-labs' DURABLE log (it has none), but its RUN directories have
+  # status.json by construction, so a bare `watch-github-CVERInc-*` glob
+  # swept them into CVERInc's own 200-directory budget — and they are the
+  # oldest here, so they are exactly what a count cap deletes first.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" i past
+  mkdir -p "$base"
+  # 10 sibling run dirs, the oldest mtimes of everything.
+  for i in $(seq 1 10); do
+    mkdir -p "$base/watch-github-CVERInc-labs-17000000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-labs-17000000$i/status.json"
+  done
+  _touch_days_ago 30 "$base"/watch-github-CVERInc-labs-*
+  # 205 of CVERInc's own, all newer.
+  for i in $(seq 1 205); do
+    mkdir -p "$base/watch-github-CVERInc-18000$i"
+    printf '{"ok":true}\n' > "$base/watch-github-CVERInc-18000$i/status.json"
+    past="$(date -u -d "-$((300 - i)) minutes" +%Y%m%d%H%M.%S 2>/dev/null || date -u -v-"$((300 - i))"M +%Y%m%d%H%M.%S)"
+    touch -t "$past" "$base/watch-github-CVERInc-18000$i"
+  done
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  # Every sibling run dir survives, oldest mtimes and all.
+  [ "$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-labs-*' | wc -l)" -eq 10 ]
+  [ -f "$base/watch-github-CVERInc-labs-170000001/status.json" ]
+  # And CVERInc's own budget was spent on CVERInc's own runs: 205 existing
+  # plus this poll's new one, rotated down to 200.
+  [ "$(find "$base" -maxdepth 1 -type d -name 'watch-github-CVERInc-1*' | wc -l)" -eq 200 ]
+  [ ! -d "$base/watch-github-CVERInc-180001" ]
+}
+
+@test "watch github --once: a run dir with no status.json is deleted after 7 days, kept before (P3-3, #111)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000001" "$base/watch-github-CVERInc-1700000002"
+  _touch_days_ago 10 "$base/watch-github-CVERInc-1700000001"
+  _touch_days_ago 2 "$base/watch-github-CVERInc-1700000002"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  [ ! -d "$base/watch-github-CVERInc-1700000001" ]   # 10 days, terminal state never written
+  [ -d "$base/watch-github-CVERInc-1700000002" ]     # 2 days — a crash today is not litter yet
+}
+
+@test "watch github --once: the 7-day statusless sweep never touches a durable-log lookalike (P3-3, #111)" {
+  # Two exemptions, both because the NAME cannot tell a crashed run from an
+  # org's durable log: a directory that still holds events.jsonl, and one
+  # whose name after `watch-github-` is an org this host watches. For an org
+  # literally called `CVERInc-2024`, `watch-github-CVERInc-2024` is BOTH a
+  # legal run-directory name for CVERInc and that org's whole history.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs" state_dir="$CLIKAE_HOME/state/watch-github"
+  mkdir -p "$base/watch-github-CVERInc-1700000003" "$base/watch-github-CVERInc-2024" "$state_dir"
+  printf '{"n":1}\n' > "$base/watch-github-CVERInc-1700000003/events.jsonl"
+  printf 'reef|1|2026-01-01T00:00:00Z\n' > "$state_dir/CVERInc-2024.seen"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000003" "$base/watch-github-CVERInc-2024"
+  # A control in the same poll: no events.jsonl, no matching org — this one
+  # MUST go, or the test proves only that the sweep never fires at all.
+  mkdir -p "$base/watch-github-CVERInc-1700000004"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000004"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+
+  [ -f "$base/watch-github-CVERInc-1700000003/events.jsonl" ]
+  [ -d "$base/watch-github-CVERInc-2024" ]
+  [ ! -d "$base/watch-github-CVERInc-1700000004" ]
+}
+
+@test "watch github --once: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the statusless sweep (P3-3, #111)" {
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000005"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000005"
+
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  export CLIKAE_BURN_LOG_RETENTION_DAYS=0
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ -d "$base/watch-github-CVERInc-1700000005" ]
+}
+
+@test "watch github --once: a poll that finds NOTHING still sweeps a stale statusless run dir (P3-3, #111)" {
+  # The reason this half hangs off _wg_poll and not _wg_runs_rotate: rotate
+  # is reached through _wg_status_write, which only runs when a poll found
+  # at least one new event. A quiet org's crashed run directories would
+  # otherwise be unreachable forever — which is the state the round-8
+  # review found them in.
+  _gh_stub_install
+  local base="$HOME/.clikae/logs"
+  mkdir -p "$base/watch-github-CVERInc-1700000006"
+  _touch_days_ago 30 "$base/watch-github-CVERInc-1700000006"
+
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"0 new event(s)"* ]] || false
+  [ ! -d "$base/watch-github-CVERInc-1700000006" ]
+}
+
+# _not_run_dir <org> <path> -> fails (and says why) when _wg_is_run_dir
+# accepts <path>. A bare `! _wg_is_run_dir …` would NOT fail a bats test
+# (SC2314: bash's errexit skips a `!`-negated command), so every negative
+# case below would have been decoration.
+_not_run_dir() {
+  if _wg_is_run_dir "$1" "$2"; then
+    echo "_wg_is_run_dir accepted a path it must reject: org=$1 path=$2"
+    return 1
+  fi
+  return 0
+}
+
+@test "watch github: _wg_is_run_dir accepts only this org's own epoch-suffixed dirs (P3-3, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_is_run_dir foo /logs/watch-github-foo-1789538639
+  _wg_is_run_dir foo /logs/watch-github-foo-1789538639-2     # the -N collision suffix
+  _wg_is_run_dir CVERInc-labs /logs/watch-github-CVERInc-labs-1789538639
+  _not_run_dir foo /logs/watch-github-foo-bar-1789538639     # the sibling org, P3-3 itself
+  _not_run_dir foo /logs/watch-github-foo-bar
+  _not_run_dir foo /logs/watch-github-foo                    # the durable log
+  _not_run_dir foo /logs/watch-github-foo-
+  _not_run_dir foo /logs/watch-github-foobar-123             # no separator at all
+  _not_run_dir foo /logs/watch-github-foo-abc
+  _not_run_dir foo /logs/watch-github-foo-12-34-56
+  _not_run_dir CVERInc /logs/watch-github-CVERInc-labs-1789538639
 }

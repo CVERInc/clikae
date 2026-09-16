@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`clikae watch github`'s run-directory rotation is anchored to the org, and
+  a run directory with no `status.json` is no longer kept forever.** Rotating
+  org `foo` selected with a bare `watch-github-foo-*` glob, which also matches
+  every run directory of org `foo-bar` — the two orgs shared one 200-directory
+  budget and whichever had the older mtimes lost. The `status.json` check that
+  was supposed to guard this never could: a sibling org's run directories have
+  one too, by construction. Selection now requires
+  `watch-github-<org>-<digits>` (optionally plus the `-<N>` same-second
+  collision suffix). And a directory with no `status.json` — a poll that died
+  before writing any terminal state, which `clikae wait` can never resolve and
+  which both sweeps used to skip — is now deleted once it is older than
+  `CLIKAE_BURN_LOG_RETENTION_DAYS` (default 7; `0` disables). Two exemptions,
+  written down in [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md): a directory
+  still holding `events.jsonl`, and one whose name is an org this host watches
+  — either could be an org's durable log, which is never swept (#111).
 - **`clikae watch github`'s seen-file is compacted by AGE now, with the
   5,000-row tail kept as a floor rather than a cap.** A burst of more than
   5,000 rows in one poll fell off the old unconditional `tail -n 5000` that

@@ -1074,12 +1074,66 @@ _wg_status_write() {
   _wg_runs_rotate "$org"
 }
 
-# _wg_runs_rotate <org> -> keep only the newest 200 watch-github-<org>-*
-# run directories under $HOME/.clikae/logs (P3-10) — a count-based floor
-# independent of burn.sh's own day-based sweep (_burn_sweep_old_logs, which
-# now also globs `watch-github-*`, P3-3), which only runs when `clikae
-# burn` or `clikae clean` actually gets invoked, not on every poll. Sorted
-# by mtime (not name — no assumption about epoch digit width).
+# _wg_is_run_dir <org> <path> -> 0 when <path>'s BASENAME is exactly
+# `watch-github-<org>-<digits>` or `watch-github-<org>-<digits>-<digits>`
+# (the `-N` collision suffix _wg_status_write adds when two polls land in
+# the same second) — the only two shapes this file ever creates.
+#
+# 🔴 P3-3 (#111): the rotate below used to select with the bare glob
+# `watch-github-<org>-*`, which for org `foo` also matches every single run
+# directory of org `foo-bar` (`watch-github-foo-bar-1789…`). Rotating `foo`
+# therefore COUNTED and DELETED `foo-bar`'s runs — the two orgs shared one
+# 200-directory budget, and the loser was whichever had the older mtimes.
+# The status.json check alone never caught this: a sibling org's run
+# directories have status.json too, by construction. Anchoring the digits
+# is what makes `foo` and `foo-bar` disjoint.
+_wg_is_run_dir() {
+  local org="$1" name="${2##*/}" prefix rest epoch suffix=""
+  prefix="watch-github-$org-"
+  case "$name" in
+    "$prefix"*) rest="${name#"$prefix"}" ;;
+    *) return 1 ;;
+  esac
+  epoch="${rest%%-*}"
+  case "$rest" in *-*) suffix="${rest#*-}" ;; esac
+  case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "$suffix" ]; then
+    case "$suffix" in ''|*[!0-9]*) return 1 ;; esac
+  fi
+  return 0
+}
+
+# _wg_runs_rotate <org> -> keep only the newest 200 of THIS org's own
+# watch-github-<org>-<epoch> run directories under $HOME/.clikae/logs
+# (P3-10) — a count-based floor independent of burn.sh's own day-based
+# sweep (_burn_sweep_old_logs, which also globs `watch-github-*`, P3-3),
+# which only runs when `clikae burn` or `clikae clean` actually gets
+# invoked, not on every poll. Sorted by mtime (not name — no assumption
+# about epoch digit width).
+#
+# NO-status.json POLICY, DECIDED (P3-3, #111 — the round-8 review asked for
+# a decision either way; this is it, and docs/EXPECTATIONS.md says the same
+# thing). Such a directory is a poll that created its run directory and then
+# died before writing a terminal state: `clikae wait` can never resolve it,
+# nothing will ever add the missing file, and until now BOTH sweeps kept it
+# forever (this one skipped it, burn's own `case` skipped it too). It is now
+# deleted once its mtime is more than CLIKAE_BURN_LOG_RETENTION_DAYS (7)
+# days old — the same knob and the same default as burn's log retention,
+# and `0` disables it there and here alike.
+#
+# 🔴 TWO THINGS ARE DELIBERATELY EXEMPT FROM THAT DELETE, because the name
+# alone cannot tell them from a crashed run (read before removing either):
+#   · a directory still holding `events.jsonl`. An org's DURABLE log
+#     (`_wg_log_dir`, `watch-github-<org>/events.jsonl`) has no status.json
+#     and an mtime that never moves on append, and for an org literally
+#     called `foo-2024` its name — `watch-github-foo-2024` — is a perfectly
+#     legal run-directory name for org `foo`. Deleting one loses that org's
+#     entire history; keeping a rare half-written run directory costs a few
+#     kilobytes. This is the same trap fix-round-7's P2-3 already fixed once
+#     in burn.sh; it must not be re-opened from this side.
+#   · a directory whose name, after `watch-github-`, IS an org this host
+#     watches (it has a seen-file in the state dir). Same reason, checked
+#     from the other end.
 _wg_runs_rotate() {
   local org="$1" base="$HOME/.clikae/logs" d keep=200 i=0
   [ -d "$base" ] || return 0
@@ -1094,10 +1148,43 @@ _wg_runs_rotate() {
     if [ "$i" -gt "$keep" ]; then rm -rf "$d" 2>/dev/null; fi
   done < <(
     for d in "$base/watch-github-$org-"*; do
+      _wg_is_run_dir "$org" "$d" || continue
       [ -f "$d/status.json" ] || continue
       printf '%s\t%s\n' "$(file_mtime "$d" 2>/dev/null || echo 0)" "$d"
     done | sort -rn | cut -f2-
   )
+  return 0
+}
+
+# _wg_runs_sweep_statusless <org> -> the no-status.json half of the policy
+# documented on _wg_runs_rotate above. Called from _wg_poll on EVERY poll,
+# not from _wg_runs_rotate: rotate only runs when a poll actually found
+# something (it hangs off _wg_status_write, which is what creates a new run
+# directory in the first place), and a crashed run directory left behind by
+# a quiet org would otherwise never be reached at all.
+_wg_runs_sweep_statusless() {
+  local org="$1" base="$HOME/.clikae/logs" d name orgish mt now
+  local days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$days" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  [ -d "$base" ] || return 0
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$now" -gt 0 ] || return 0
+  for d in "$base/watch-github-$org-"*; do
+    [ -d "$d" ] || continue
+    _wg_is_run_dir "$org" "$d" || continue
+    [ -f "$d/status.json" ] && continue
+    [ -f "$d/events.jsonl" ] && continue
+    name="${d##*/}"; orgish="${name#watch-github-}"
+    [ -f "$(_wg_seen_file "$orgish")" ] && continue
+    mt="$(file_mtime "$d" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    [ "$mt" -gt 0 ] || continue
+    if [ "$((now - mt))" -gt "$((days * 86400))" ]; then
+      rm -rf "$d" 2>/dev/null || true
+    fi
+  done
   return 0
 }
 
@@ -1662,6 +1749,11 @@ _wg_poll() {
     seen_cutoff="$(_wg_seen_cutoff_iso "$org" "${new_cursor:-$since}")" || seen_cutoff=""
     _wg_seen_compact "$seen_file" "$seen_cutoff"
   fi
+
+  # The day-based half of the run-directory policy (P3-3, #111). Here, not
+  # in _wg_runs_rotate, because rotate only runs on a poll that found
+  # something — see _wg_runs_sweep_statusless' own comment.
+  _wg_runs_sweep_statusless "$org"
 
   # P3-12 (2026-09-13 fix-round-2 review): the durable events.jsonl had no
   # cap at all (unlike the seen-file, above) — an org active enough to need
