@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The cockpit guard now checks `fable` the same way it checks opus and
+  sonnet** — `fable`, `claude-fable-*` and every provider spelling of them
+  (`us.anthropic.claude-fable-…-v1:0`, `claude-fable-…@…`, `fable[1m]`). The
+  guard exists to move build/review lanes off the cockpit tank and onto a
+  worker via `clikae burn`, and a fable spawn spends the cockpit's weekly
+  budget exactly like an opus one; until now `fable` was completely exempt, so
+  a build brief — or a 5,000-character prompt — spawned in-session on fable was
+  allowed with no output at all. **haiku stays exempt.** If you were relying on
+  fable spawns going through, `--allow-agents <dur>` (or
+  `CLIKAE_COCKPIT_ALLOW_AGENTS=1`) is the door (#109).
+- The guard's haiku EXEMPTION now matches exact, explicit prefixes only —
+  `haiku`, `claude-haiku-…`, `claude-3-5-haiku…`, `claude-3-haiku…`, and an
+  explicit list of Bedrock region prefixes. The old normalisation stripped
+  everything up to the LAST `anthropic.` in the string and matched
+  `claude-*-haiku*`, which exempted strings like `opus.anthropic.haiku` and
+  `claude-opus-4-haiku`. Neither is a real model id; both are now checked.
+  Every real haiku spelling is unaffected (#109).
+- A `\u0000` escape anywhere in the tool-call payload is now refused, fail
+  closed. jq decodes `\u0000` by dropping it, so `"hai\u0000ku"` used to reach
+  the exemption as a clean `haiku` — a verdict about a string Claude Code never
+  sent. A prompt that merely *talks* about NUL escapes (`\\u0000` in JSON) is
+  not affected (#109).
+- `clikae cockpit agy <tank>` now works, like `clikae burn agy <tank>` always
+  has; it was refused with `Tank does not exist: agy/work` while only the
+  `antigravity` spelling could mark the tank. The role is still recorded under
+  the on-disk name (`antigravity/<tank>`) (#109).
+- `clikae doctor` now reports **jq**, and the path it found it at. jq is
+  clikae's one runtime dependency and only the cockpit guard needs it — at
+  hook execution time, where a jq missing from the tank's PATH refuses every
+  Agent spawn on the cockpit with no other symptom. `install.sh` prints one
+  warning line when jq is absent (it does not install it), and README no
+  longer says "no runtime dependencies" without naming the exception (#109).
 - Three known limits of `clikae burn`'s left-behind scan are now written down in
   [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md) instead of living only in the
   source: a filename containing a newline is reported as two paths (one of which
@@ -56,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An oversized integer in `state/cockpit-allow` (400 digits, say) no longer
+  makes the guard print `integer expression expected` onto the very stderr the
+  model reads before refusing. The value is validated for digits and length
+  first, and an unusable expiry is treated as no allowance at all — fail
+  closed, same as an expired one (#109).
 - The six `clikae burn` tests that bound a deliberately-wedged `find`/`stat`/
   `.git/HEAD` no longer skip on a machine without `timeout`/`gtimeout` — which
   is stock macOS, the platform they were written for. They go through
