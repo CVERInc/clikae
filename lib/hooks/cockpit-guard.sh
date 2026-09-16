@@ -14,8 +14,9 @@
 # means: print the reason to stderr, `exit 2`.
 #
 # Refuses only Agent (subagent) spawns whose model is missing, or whose model
-# is opus/sonnet (any family-prefixed form — `claude-opus-*`, `claude-
-# sonnet-*`, `opusplan`, or the bare alias — #63 P3-1) AND whose prompt reads
+# is fable/opus/sonnet (any family-prefixed form — `claude-fable-*`,
+# `claude-opus-*`, `claude-sonnet-*`, `opusplan`, or the bare alias — #63
+# P3-1, #109 P3-5) AND whose prompt reads
 # as a build/review lane. The prompt heuristic is a TRIPWIRE, not a
 # classifier: it is the issue's own narrow phrases (worktree, a git
 # commit/push, REVIEWER/adversarial review, a test run) OR'd with a widened
@@ -27,7 +28,8 @@
 # cockpit section for the measured hit rate and the specific misses in both
 # directions. `--allow-agents`/CLIKAE_COCKPIT_ALLOW_AGENTS is the real door;
 # this tripwire is cheap insurance, not a permission gate. Untouched: the
-# haiku and fable families (named, below), any checked model whose prompt
+# haiku family (named, below — and ONLY haiku since #109 P3-5), any checked
+# model whose prompt
 # doesn't trip, and every OTHER tool. A model id the guard does not recognise
 # is CHECKED like opus/sonnet, never waved through (#63 round-5 P3-2, see
 # _ckpt_model_class). This is a check on MODEL, never on `subagent_type`:
@@ -74,6 +76,15 @@
 # Earlier rounds' size findings still hold as requirements: nothing is
 # pre-sliced (round 2: a byte window cut multi-byte characters and hid
 # `model`), and a large prompt costs one jq parse, not a per-field scan.
+#
+# NUL (#109 P3-7): a `\u0000` escape is refused on sight, because neither jq
+# nor a shell word can carry the character through to the decision — see
+# _ckpt_has_nul_escape. KNOWN GAP, stated rather than papered over: a payload
+# carrying a RAW NUL BYTE (not the escape) is stripped by bash's own command
+# substitution in `payload="$(cat)"` before this script sees anything, so the
+# guard cannot detect that shape either. Such a payload is not well-formed
+# JSON in the first place (RFC 8259 requires U+0000 to be escaped), and bash
+# announces the strip on stderr — but it is not refused here.
 #
 # LOCALE: pinned to C.UTF-8 (falling back to en_US.UTF-8, then a documented-
 # degraded C) right below, so grep's case folding and word boundaries in the
@@ -150,6 +161,17 @@ fi
 _allow_file="$CLIKAE_HOME/state/cockpit-allow"
 if [ -f "$_allow_file" ]; then
   _exp="$(head -n 1 "$_allow_file" 2>/dev/null | tr -dc '0-9' || true)"
+  # #109 P3-9: validate before `[` sees it. `tr -dc` already guarantees
+  # digits-only when tr ran, but it says nothing about MAGNITUDE — a file
+  # holding 400 digits made `[ "$_now" -lt "$_exp" ]` print `integer
+  # expression expected` to stderr (stderr the MODEL reads, mixed into a
+  # refusal that was otherwise correct) before falling through to refuse.
+  # 18 digits is comfortably inside a 64-bit signed integer (19 digits is
+  # where it can overflow), and an expiry that large is not a timestamp
+  # anyone wrote on purpose. An unusable value is treated as no allowance at
+  # all — fail closed, same as an expired one.
+  case "$_exp" in ''|*[!0-9]*) _exp="" ;; esac
+  [ "${#_exp}" -le 18 ] || _exp=""
   _now="$(date +%s 2>/dev/null || echo 0)"
   if [ -n "$_exp" ] && [ "$_now" -lt "$_exp" ]; then
     _hhmm="$(date -d "@$_exp" '+%H:%M' 2>/dev/null || date -r "$_exp" '+%H:%M' 2>/dev/null || true)"
@@ -161,6 +183,35 @@ fi
 
 [ -n "$payload" ] || _ckpt_fail_closed "the hook received an empty payload"
 command -v jq >/dev/null 2>&1 || _ckpt_fail_closed "jq is not installed (the guard parses the call with jq; clikae cockpit needed it to install this hook)"
+
+# _ckpt_has_nul_escape <raw payload> -> 0 when the payload's TEXT carries a
+# real `\u0000` escape (#109 P3-7).
+#
+# Why this is checked on the RAW payload and not on a parsed field: jq decodes
+# `\u0000` by DROPPING it (measured on jq 1.7 AND on jq 1.8.2, the version
+# the macOS CI runner ships — `"hai\u0000ku" | length` is 5 and `explode`
+# has no 0 in it), so by the time the guard holds a decoded
+# `model` the NUL is already gone and every after-the-fact test for it returns
+# false. A shell word cannot hold a NUL either. So the guard has exactly one
+# place left to see it: the bytes it was handed. `\u0000` inside a JSON string
+# is VALID JSON — that is what made this a silent allow rather than a parse
+# failure — and a decided-on `haiku` that was literally `hai\u0000ku` on the
+# wire is a verdict about a string Claude Code never sent. Refuse the whole
+# payload instead, before the Agent gate: `tool_name` is one of the two fields
+# the finding names, and this hook's matcher only ever routes Agent calls here
+# anyway.
+#
+# Two stages, so the common path forks nothing: a builtin `case` rejects
+# every payload with no `\u0000` text in it at all, and only a hit pays for
+# the parity pass. Parity matters because `\\u0000` is an escaped backslash
+# followed by the five ordinary characters `u0000` — a prompt that TALKS about
+# NUL escapes, not one that contains one. Collapsing every `\\` pair first leaves
+# only the real escapes behind.
+_ckpt_has_nul_escape() {
+  case "$1" in *'\u0000'*) ;; *) return 1 ;; esac
+  case "$(printf '%s' "$1" | sed 's/\\\\//g')" in *'\u0000'*) return 0 ;; esac
+  return 1
+}
 
 # Only the reserve listing in a refusal needs our own directory; failing to
 # find it costs that listing, not the verdict.
@@ -193,6 +244,7 @@ ck_prompt_type="" ck_prompt_len=0 ck_prompt=""
 eval "$_ckpt_fields" || _ckpt_fail_closed "the guard could not read its own parse"
 
 [ "$ck_tool_type" = string ] || _ckpt_fail_closed "the payload has no tool_name field"
+_ckpt_has_nul_escape "$payload" && _ckpt_fail_closed "the payload carries a \\u0000 (NUL) escape"
 [ "$ck_tool" = "Agent" ] || allow   # matcher is "Agent" already; belt & suspenders
 [ "$ck_input_type" = object ] || _ckpt_fail_closed "the payload has no tool_input field (or it is not an object)"
 case "$ck_model_type" in
@@ -305,21 +357,51 @@ _CKPT_HEURISTIC='worktree|git commit|git push|REVIEWER|adversarial review|bats |
 #
 # Provider spellings are normalised before matching: lowercase; a `[...]`
 # suffix (`sonnet[1m]`); a Vertex `@version`; a Bedrock `<region>.anthropic.`
-# prefix and `-v<n>[:<n>]` suffix. Exempt stays exactly the families the
-# guard always left alone (haiku, fable).
+# prefix and `-v<n>[:<n>]` suffix.
+#
+# #109 P3-5 (operator decision, not a reviewer's call): fable is CHECKED, like
+# opus and sonnet. The guard exists to push build/review lanes out of the
+# cockpit into `clikae burn`; a fable spawn spends the cockpit's budget
+# exactly like an opus one does, so exempting it was the biggest hole in the
+# guard's own reason for existing. haiku stays exempt — it is the one family
+# cheap enough that an in-session spawn is not the thing this guard is for.
+#
+# #109 P3-7: the EXEMPTION is the only side where a loose match is dangerous
+# (a wrong "exempt" is a silent allow; a wrong "checked"/"unknown" costs at
+# worst a false refusal, and `--allow-agents` is right there). So:
+#
+#   · the Bedrock prefix strip is an EXPLICIT list of region prefixes, never
+#     the old `*anthropic.*` glob — that glob stripped to the LAST
+#     `anthropic.` anywhere in the string, so `opus.anthropic.haiku`
+#     normalised to a bare `haiku` and was waved through.
+#   · the exempt patterns are exact, explicit prefixes (`haiku`,
+#     `claude-haiku-`, `claude-3-5-haiku`, `claude-3-haiku`) — never the old
+#     `claude-*-haiku*` glob, which exempted `claude-opus-4-haiku`.
+#
+# Neither string is a real model id; both are now checked rather than exempt.
 _ckpt_model_class() {
   local m
   m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   m="${m%%\[*}"
   m="${m%%@*}"
-  case "$m" in *anthropic.*) m="${m##*anthropic.}" ;; esac
+  # Bedrock inference-profile prefixes, listed one by one (#109 P3-7).
+  case "$m" in
+    anthropic.*)        m="${m#anthropic.}" ;;
+    us.anthropic.*)     m="${m#us.anthropic.}" ;;
+    us-gov.anthropic.*) m="${m#us-gov.anthropic.}" ;;
+    eu.anthropic.*)     m="${m#eu.anthropic.}" ;;
+    apac.anthropic.*)   m="${m#apac.anthropic.}" ;;
+    jp.anthropic.*)     m="${m#jp.anthropic.}" ;;
+    au.anthropic.*)     m="${m#au.anthropic.}" ;;
+    ca.anthropic.*)     m="${m#ca.anthropic.}" ;;
+  esac
   case "$m" in *-v[0-9]|*-v[0-9]:[0-9]|*-v[0-9][0-9]|*-v[0-9]:[0-9][0-9]) m="${m%-v[0-9]*}" ;; esac
   case "$m" in
-    haiku|claude-haiku-*|claude-*-haiku|claude-*-haiku-*|fable|claude-fable-*) printf 'exempt' ;;
+    haiku|claude-haiku-*|claude-3-5-haiku|claude-3-5-haiku-*|claude-3-haiku|claude-3-haiku-*) printf 'exempt' ;;
     # #63 P3-1: family-prefix match — the short aliases, every
-    # `claude-opus-*`/`claude-sonnet-*` id (and the older
+    # `claude-opus-*`/`claude-sonnet-*`/`claude-fable-*` id (and the older
     # `claude-3-5-sonnet-*` word order), and `opusplan` (a real value).
-    opus|sonnet|opusplan|claude-opus-*|claude-sonnet-*|claude-*-opus|claude-*-opus-*|claude-*-sonnet|claude-*-sonnet-*) printf 'checked' ;;
+    opus|sonnet|fable|opusplan|claude-opus-*|claude-sonnet-*|claude-fable-*|claude-*-opus|claude-*-opus-*|claude-*-sonnet|claude-*-sonnet-*|claude-*-fable|claude-*-fable-*) printf 'checked' ;;
     *) printf 'unknown' ;;
   esac
 }

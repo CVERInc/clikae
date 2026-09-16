@@ -388,7 +388,7 @@ _CKPT_CORPUS=(
 )
 
 @test "the 14-item corpus: heuristic hit rate matches its documented, measured behavior" {
-  local row ideal actual_expected prompt esc want_status got_status hits=0 misses=""
+  local row ideal actual_expected prompt esc want_status got_status hits=0 misses="" model
   for row in "${_CKPT_CORPUS[@]}"; do
     ideal="${row%%$'\t'*}"
     row="${row#*$'\t'}"
@@ -400,13 +400,19 @@ _CKPT_CORPUS=(
     # the JSON string early and the test measures its own bug, not the guard.
     esc="${prompt//\\/\\\\}"
     esc="${esc//\"/\\\"}"
-    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"%s"}}' "$esc")"
-    got_status="$status"
-    [ "$got_status" -eq "$want_status" ] || {
-      echo "MISMATCH (expected the code's own documented behavior, got something else): $prompt" >&2
-      echo "  expected actual=$actual_expected (status $want_status), got status $got_status" >&2
-      false
-    }
+    # #109 P3-5: the SAME corpus on fable as on sonnet, row for row. fable was
+    # completely exempt until this round, so every one of these 14 was rc=0
+    # with empty stderr on it — running the corpus twice is what makes "fable
+    # is checked exactly like sonnet" a measured claim instead of a comment.
+    for model in sonnet fable; do
+      run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$model" "$esc")"
+      got_status="$status"
+      [ "$got_status" -eq "$want_status" ] || {
+        echo "MISMATCH (expected the code's own documented behavior, got something else): $prompt" >&2
+        echo "  model=$model expected actual=$actual_expected (status $want_status), got status $got_status" >&2
+        false
+      }
+    done
     [ "$ideal" = "$actual_expected" ] && hits=$((hits + 1)) || misses="$misses|$prompt"
   done
   echo "corpus: ${hits}/14 match the ideal outcome (target >= 12; misses are documented in docs/usage.md, not silently accepted): $misses" >&2
@@ -558,8 +564,9 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
     [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
     [[ "$output" != *"unrecognised"* ]] || { echo "$m should be recognised: $output" >&2; false; }
   done
-  # exempt families, in provider spellings: silent allow
-  for m in haiku us.anthropic.claude-haiku-4-5-v1:0 'claude-haiku-4-5@20251001' claude-3-5-haiku-20241022 fable; do
+  # exempt families, in provider spellings: silent allow. #109 P3-5 took
+  # fable OUT of this list — it is checked now, see the fable tests below.
+  for m in haiku us.anthropic.claude-haiku-4-5-v1:0 'claude-haiku-4-5@20251001' claude-3-5-haiku-20241022 claude-3-haiku-20240307; do
     run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
     [ "$status" -eq 0 ] || { echo "expected allow for $m" >&2; false; }
     [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
@@ -636,6 +643,128 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
   run "$CLIKAE_BIN" tanks
   [ "$status" -eq 0 ]
   [[ "$output" == *"keeper"* ]] || false
+}
+
+# --- #109 P3-5: fable is checked, like opus and sonnet ----------------------
+# Operator decision (issue #109, KITT): the guard exists to push build/review
+# lanes out of the cockpit and into `clikae burn`, and a fable spawn spends
+# the cockpit's weekly budget exactly like an opus one. Before this, `fable`
+# and `claude-fable-5-1` were rc=0 with EMPTY stderr on a build brief and on a
+# 5,000-word prompt alike — the biggest hole in the guard's own reason for
+# existing. haiku stays exempt. The corpus test above runs all 14 rows on
+# fable as well; this pins the family spellings and both directions.
+
+@test "#109 P3-5: a fable build brief refuses, in every family spelling" {
+  local lane='make a worktree and implement the feature' m
+  for m in fable claude-fable-5-1 'claude-fable-5-1@20260101' 'us.anthropic.claude-fable-5-1-v1:0' 'fable[1m]'; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for model=$m" >&2; false; }
+    [[ "$output" == *"build/review lane"* ]] || { echo "$m: $output" >&2; false; }
+    # placed in its family, not merely caught by the unknown-id net
+    [[ "$output" != *"unrecognised"* ]] || { echo "$m should be recognised: $output" >&2; false; }
+    [[ "$output" == *"clikae burn <engine> <tank>"* ]] || false
+  done
+}
+
+@test "#109 P3-5: a short non-lane fable prompt is still allowed, silently" {
+  local short='summarize these three files in plain english' m
+  for m in fable claude-fable-5-1 'us.anthropic.claude-fable-5-1-v1:0'; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$short")"
+    [ "$status" -eq 0 ] || { echo "expected allow for model=$m: $output" >&2; false; }
+    [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
+  done
+}
+
+@test "#109 P3-5: a long fable prompt refuses on the length tripwire alone" {
+  # No heuristic keyword anywhere in it — this is the tripwire the issue
+  # measured as rc=0 on fable (a 5,000-word prompt sailed through).
+  run _guard_file <(python3 "$GEN" long-plain 0 | sed 's/"model": *"sonnet"/"model": "fable"/; s/"model":"sonnet"/"model":"fable"/')
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"length tripwire"* ]] || { echo "$output" >&2; false; }
+  [[ "$output" != *"unrecognised"* ]] || { echo "$output" >&2; false; }
+}
+
+# --- #109 P3-7: NUL, and exemption by exact prefix only ---------------------
+
+@test "#109 P3-7: a \\u0000 escape in model or tool_name fails closed instead of being cleaned up" {
+  # jq decodes \u0000 by DROPPING it (measured on jq 1.7: "hai\u0000ku" has
+  # length 5 and no 0 in `explode`), so the pre-fix guard exempted a literal
+  # model id Claude Code never sends. The escape is built here from two
+  # pieces so this file never has to contain a NUL of its own.
+  local nul_esc='\u'"0000"
+  run _guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"hai${nul_esc}ku\",\"prompt\":\"summarize these files\"}}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"(NUL) escape"* ]] || { echo "$output" >&2; false; }
+  [[ "$output" == *"fails closed"* ]] || false
+
+  run _guard "{\"tool_name\":\"Age${nul_esc}nt\",\"tool_input\":{\"model\":\"haiku\",\"prompt\":\"summarize these files\"}}"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"(NUL) escape"* ]] || { echo "$output" >&2; false; }
+}
+
+@test "#109 P3-7: a prompt that merely TALKS about a NUL escape is not refused for it" {
+  # `\\u0000` inside a JSON string is a literal backslash followed by u0000 —
+  # six characters of prose, not a NUL. A guard that matched on the text
+  # alone would false-refuse every prompt that discusses JSON escapes.
+  local nul_text='\\u'"0000"
+  run _guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"haiku\",\"prompt\":\"explain what ${nul_text} means in JSON\"}}"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  [ -z "$output" ]
+  run _guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"model\":\"sonnet\",\"prompt\":\"explain what ${nul_text} means in JSON\"}}"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+}
+
+@test "#109 P3-7: haiku LOOKALIKES are checked, not exempted" {
+  # `*anthropic.*` stripped to the LAST `anthropic.` anywhere in the string,
+  # and `claude-*-haiku*` matched any family with haiku on the end. Neither
+  # is a real model id; both were silent allows.
+  local lane='make a worktree and implement the feature' m
+  for m in opus.anthropic.haiku claude-opus-4-haiku claude-sonnet-4-5-haiku haiku.anthropic.opus; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for model=$m: $output" >&2; false; }
+  done
+  # ...while the real Bedrock/Vertex haiku spellings stay exempt and silent.
+  for m in haiku claude-haiku-4-5 'us.anthropic.claude-haiku-4-5-v1:0' 'eu.anthropic.claude-haiku-4-5-v1:0' 'claude-haiku-4-5@20251001' claude-3-5-haiku-20241022 claude-3-haiku-20240307; do
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    [ "$status" -eq 0 ] || { echo "expected allow for model=$m: $output" >&2; false; }
+    [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
+  done
+}
+
+# --- #109 P3-9: an oversized integer in the allow file ----------------------
+
+@test "#109 P3-9: an oversized integer in the allow file refuses WITHOUT shell noise" {
+  # `tr -dc '0-9'` guarantees digits, never magnitude: 400 digits made `[
+  # "$_now" -lt "$_exp" ]` print `integer expression expected` onto the very
+  # stderr the model reads, ahead of an otherwise-correct refusal.
+  mkdir -p "$CLIKAE_HOME/state"
+  python3 -c "import sys; sys.stdout.write('9'*400 + '\n')" > "$CLIKAE_HOME/state/cockpit-allow"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"make a worktree and implement the feature"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"build/review lane"* ]] || { echo "$output" >&2; false; }
+  [[ "$output" != *"integer expression"* ]] || { echo "shell noise leaked to the model: $output" >&2; false; }
+  [[ "$output" != *"allowed until"* ]] || { echo "an unusable expiry must not allow: $output" >&2; false; }
+}
+
+@test "#109 P3-9: a non-numeric allow file refuses without noise, and a live one still allows" {
+  mkdir -p "$CLIKAE_HOME/state"
+  printf 'not a timestamp\n' > "$CLIKAE_HOME/state/cockpit-allow"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"make a worktree and implement the feature"}}'
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"integer expression"* ]] || { echo "$output" >&2; false; }
+  # the validation must not have broken the ordinary live allowance
+  printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$CLIKAE_HOME/state/cockpit-allow"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"make a worktree and implement the feature"}}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"allowed until"* ]] || false
+}
+
+@test "#109 P3-9: the guard sets its shell options exactly once" {
+  # `set -uo pipefail` was written twice; a second copy is harmless and
+  # invites the reader to wonder which one is load-bearing.
+  local n
+  n="$(grep -c '^set -' "$GUARD" || true)"
+  [ "$n" -eq 1 ] || { grep -n '^set -' "$GUARD" >&2; false; }
 }
 
 @test "a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)" {
