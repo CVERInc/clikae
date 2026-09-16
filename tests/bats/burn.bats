@@ -5101,6 +5101,49 @@ assert obj["left_behind_kill_mode"] == "pgroup", obj["left_behind_kill_mode"]
 '
 }
 
+# Item 7 (#112; round-3 review P3-3 ②): round-5 gave `discovery timed out after
+# Ns` a test and left the other sentence — `scan budget exhausted after Ns` —
+# and the `repo_i > lb_root_repos` skip path that produces it reachable only by
+# hand. Neither root here is a repository, so `lb_root_repos` is 0 and every
+# discovered repo goes through exactly that branch; a `symbolic-ref` wedged to
+# its 5s ceiling spends the 10s budget inside the per-repo loop, two repos in.
+@test "burn #112 item 7: repos the per-repo loop never reached say scan budget exhausted" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  local i
+  for i in 1 2 3 4 5; do
+    git init -q "$TEST_HOME/repos/p$i"
+    git -C "$TEST_HOME/repos/p$i" config user.name t
+    git -C "$TEST_HOME/repos/p$i" config user.email t@example.invalid
+    git -C "$TEST_HOME/repos/p$i" commit -q --allow-empty -m init
+    printf 'x\n' > "$TEST_HOME/repos/p$i/dirty.txt"
+  done
+  # Discovery stays fast (it is `rev-parse` that walks the markers); only the
+  # per-repo loop's first git call hangs, so the budget is spent there.
+  _stub_wedged_git symbolic-ref /repos/p
+  run "$timeout_bin" -s KILL 90 "$CLIKAE_BIN" burn codex T1 --json \
+    --artifact "$TEST_HOME/missing" --add-dir "$TEST_HOME/repos" -- noop
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"scan budget exhausted after 10s"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+t = obj["left_behind_truncation"]
+assert t["repos_budget_skipped"] >= 1, t
+# the budget was spent in the per-repo loop, not in discovery
+assert t["roots_budget_skipped"] == 0 and t["markers_budget_skipped"] == 0, t
+assert t["roots_discovery_timeout"] == 0, t
+assert t["repos_over_cap"] == 0, t
+assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_truncated"], t)
+# and the repos it DID reach are the ones whose git call was wedged (item 1),
+# so the run is not silently reporting nothing at all.
+assert obj["left_behind"], obj
+assert all(r["git_timeout"] for r in obj["left_behind"]), obj["left_behind"]
+'
+}
+
 # --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
 # --- cache at run end, off the launch path                                 ---
 
