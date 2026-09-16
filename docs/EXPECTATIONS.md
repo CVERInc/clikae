@@ -288,6 +288,29 @@ not silent damage.
 identity, but if `work` exists under both claude and codex, clikae can't guess which —
 it lists both and asks you to qualify (`clikae claude work`).
 
+## Two screens on one tank
+
+**With two terminals attached to the same tank at once, the window is the size of
+the one that attached MOST RECENTLY — not of the smaller one.** clikae sets
+`window-size latest` deliberately (`lib/core/tmux.sh`): roaming means the screen
+follows whoever just sat down. The cost is that while both are attached, the
+other terminal is looking at a window wider or taller than itself and loses the
+columns that do not fit. Nothing is wrong and nothing needs resetting — detach
+the one you walked away from and the window snaps to the one you are at, within
+a fraction of a second. (Measured on tmux 3.4: 0.29s with one client; indefinite
+while a larger client is still attached, and immediate the moment it leaves.)
+
+**A tank exists, and its engine is already running, before anything is attached
+to it.** `clikae <engine> <tank>` creates the tmux session **detached** and
+already sized from your terminal (`new-session -d -x … -y …`, so the engine's
+first frame is painted for the terminal you are actually on), and only then
+attaches. So there is a short window — longer on a loaded machine — in which
+`tmux ls` shows the session, the engine has started, the window is already the
+right width, and `#{session_attached}` is `0`. That is a launch in progress, not
+a session nobody is watching. Anything that wants to know whether *you* are
+looking at it has to ask for the client (`tmux list-clients -t <session>`), not
+for the session (#101).
+
 ## Touch terminals over ssh
 
 **Copying from a phone is not something clikae has measured.** The touch

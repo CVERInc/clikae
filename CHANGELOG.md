@@ -88,6 +88,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tests/bats/roam.bats` — "a second client attaches to the running tank
+  instead of starting it again" no longer reports a **timeout as a wrong
+  value**, and no longer races clikae's own launch. Two faults, one red: (1)
+  `wait_for`'s return was dropped at every call site, so a bounded wait that ran
+  out printed the stale width and the failure read as a broken resize; it now
+  says `timed out after 20s waiting for <what>; last observed <state>`. (2) The
+  test waited for the session, the engine and the window width — all three of
+  which are already true while clikae is still between `new-session -d` and its
+  `tmux attach` — and then "detached" a client that had never attached. Measured
+  on this host: **12 of 12 runs on `main` reached the detach with no client on
+  the session at all**, and three seconds later the window was back to 100
+  columns with *two* clients attached, because under `window-size latest` the
+  late-arriving first client wins. Whether that read red depended only on which
+  side of a 0.25s poll the width landed on — which is why the rate tracked the
+  machine's load and was identical on every branch. The test now waits for the
+  client, not the session (#101).
 - An oversized integer in `state/cockpit-allow` (400 digits, say) no longer
   makes the guard print `integer expression expected` onto the very stderr the
   model reads before refusing. The value is validated for digits and length
