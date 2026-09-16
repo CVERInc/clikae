@@ -808,6 +808,49 @@ SHIM
   [[ "$output" == *"--off"* ]] || false
 }
 
+# --- #109 P3-8: `agy` is accepted where `antigravity` is ---------------------
+# `clikae burn agy work` has always worked, and `_cockpit_is_recorded` has
+# always treated agy and antigravity as one engine — but `clikae cockpit agy
+# work` died on `Tank does not exist: agy/work`, because the two-arg resolve
+# handed `agy` straight to profile_exists, which only knows the ON-DISK name.
+# Installing the Claude hook on an agy tank has no real meaning; a CLI surface
+# that accepts a name in one command and rejects it in the next does.
+
+_cockpit_make_agy_tank() {   # <tank> — a tank dir with the marker `clikae init` writes
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/$1"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/$1/.clikae-tank"
+}
+
+@test "#109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name" {
+  _cockpit_make_agy_tank work
+  run clikae cockpit agy work
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  [[ "$output" != *"Tank does not exist"* ]] || { echo "$output" >&2; false; }
+  [[ "$output" == *"cockpit guard installed"* ]] || { echo "$output" >&2; false; }
+  # state records the store's spelling, not the alias — `antigravity` is what
+  # profile_dir/list_all_profiles speak, and the guard's reserve listing reads
+  # state with those same names.
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "antigravity/work" ]
+  _guard_installed "$CLIKAE_HOME/profiles/antigravity/work/settings.json"
+}
+
+@test "#109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op" {
+  _cockpit_make_agy_tank work
+  clikae cockpit antigravity work
+  run clikae cockpit agy work
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  [ "$(cat "$CLIKAE_HOME/state/cockpit")" = "antigravity/work" ]
+  _guard_installed "$CLIKAE_HOME/profiles/antigravity/work/settings.json"
+  # the role did not move to a second tank on the way: still exactly one
+  [ "$(grep -c . "$CLIKAE_HOME/state/cockpit")" -eq 1 ]
+}
+
+@test "#109 P3-8: an unknown agy tank still fails, naming the on-disk engine" {
+  run clikae cockpit agy nosuch
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Tank does not exist: antigravity/nosuch"* ]] || { echo "$output" >&2; false; }
+}
+
 @test "installing from a git checkout warns that the guard's path is not stable (#63 P3-12)" {
   # This test environment (CLIKAE_LIB pointing at the checkout/worktree this
   # suite runs from) IS the shape the warning exists for -- a real install
