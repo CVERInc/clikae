@@ -2205,3 +2205,154 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" == *"No genuine limit marker"* ]] || false
 }
+
+# --- P3-1 (#111): _wg_timeline_events must be linear in the HOST awk -------
+#
+# The parser used to take one `substr($WHOLE_PAGE, i, 1)` per character.
+# gawk and mawk index a string in constant time; busybox awk and the current
+# BWK awk charge by the length of the SOURCE string on every substr call, so
+# on those the scan was O(n^2) — 20.6s for a 5,000-element page on busybox
+# 1.36.1 against 0.17s on gawk, and ~4x per doubling on BWK 20250116 (6.77s
+# / 25.07s / 98.44s at 200 / 400 / 800 elements, i.e. ~3,845s extrapolated
+# at 5,000). clikae runs under whatever awk the host ships, so these tests
+# run under the host awk too, with no skip.
+#
+# Two tests, because neither alone is enough:
+#   1. equivalence — the rewrite must produce byte-identical output to the
+#      pre-rewrite loop, which is kept here verbatim as the reference (same
+#      shape as tests/bats/dry-lookup.bats: do not tidy it, it is the
+#      reference, not code);
+#   2. a stopwatch — 5,000 elements under a wall-clock bound. The bound is
+#      enormously generous on gawk (0.20s measured) and still generous on
+#      the slowest awk measured (6.9s, BWK 20250116 in docker), but the old
+#      quadratic loop cannot meet it on any awk that charges by source
+#      length. On gawk the stopwatch proves nothing about the shape — gawk
+#      was never the problem — which is exactly why test 1 exists.
+
+# The pre-rewrite parser, verbatim. Do not tidy — it is the reference.
+_wg_timeline_events_reference() {
+  printf '%s' "$1" | LC_ALL=C awk '
+    { s = s $0 }
+    END {
+      US = sprintf("%c", 31)
+      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0
+      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (instr) {
+          if (esc) { esc = 0; continue }
+          if (c == "\\") { esc = 1; continue }
+          if (c == "\"") {
+            instr = 0
+            if (depth == 2) {
+              str = substr(s, sstart, i - sstart)
+              if (isval && key == "body") body = str
+              if (!isval) laststr = str
+            }
+          }
+          continue
+        }
+        if (c == "\"") {
+          instr = 1; sstart = i + 1
+          if (depth == 2) { isval = want; want = 0 }
+          continue
+        }
+        if (c == " " || c == "\t" || c == "\r") continue
+        if (c == ":" && depth == 2) { key = laststr; want = 1; continue }
+        if (depth == 2) want = 0
+        if (c == "{" || c == "[") {
+          depth++
+          if (depth == 2 && c == "{") { estart = i; body = ""; key = ""; laststr = "" }
+          continue
+        }
+        if (c == "}" || c == "]") {
+          depth--
+          if (depth == 1 && c == "}" && estart > 0) {
+            print body US substr(s, estart, i - estart + 1)
+            estart = 0
+          }
+          continue
+        }
+      }
+    }'
+}
+
+# _wg_timeline_fixture <n> -> a compact one-line JSON array of <n>
+# timeline-shaped elements (~300 bytes each, the size of a real commented
+# event), written to stdout. Deliberately carries an escaped quote inside
+# every body so the escape path is on the timed path too.
+_wg_timeline_fixture() {
+  LC_ALL=C awk -v n="$1" 'BEGIN{
+    printf "["
+    for (i = 1; i <= n; i++) {
+      if (i > 1) printf ","
+      printf "{\"event\":\"commented\",\"id\":%d,\"actor\":{\"login\":\"zed%d\",\"type\":\"User\"},\"user\":{\"login\":\"zed%d\"},\"body\":\"reply %d with a \\\"quoted\\\" word and some padding text to make this element a realistic size, about right for a comment body on a busy pull request timeline\",\"created_at\":\"2026-09-16T00:00:00Z\"}", i, i, i, i
+    }
+    printf "]\n"
+  }'
+}
+
+@test "watch github: the timeline parser is byte-identical to the pre-rewrite one, host awk (P3-1, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local f new old
+  # Adversarial shapes first: a literal `},{` inside a body, an escaped
+  # quote, a nested array of objects, a nested `body` key that is NOT the
+  # event's own, a null body, an empty array, and an element long enough to
+  # straddle several of the rewrite's 1024-byte windows (the one thing the
+  # old loop, which never had a window, cannot have got wrong by
+  # construction).
+  local pad; pad="$(LC_ALL=C awk 'BEGIN{ for (i = 0; i < 3000; i++) printf "x" }')"
+  local cases=0
+  for f in \
+    '[{"event":"commented","actor":{"login":"zed"},"body":"a },{ b \"q\" c"},{"event":"labeled","actor":{"login":"carol"}},{"event":"reviewed","user":{"login":"amy"},"body":null,"sub":{"body":"NOT MINE"}},{"event":"x","list":[{"body":"nested"},{"body":"nested2"}],"body":"mine"}]' \
+    '[]' \
+    '[{"body":""}]' \
+    "[{\"body\":\"$pad\",\"event\":\"commented\"},{\"body\":\"short\"}]" \
+  ; do
+    new="$(_wg_timeline_events "$f")"
+    old="$(_wg_timeline_events_reference "$f")"
+    [ "$new" = "$old" ] || { echo "MISMATCH on: $f"; echo "new: $new"; echo "old: $old"; false; }
+    cases=$((cases + 1))
+  done
+  # A pretty-printed (multi-line) page — the other input shape gh can hand
+  # this function.
+  local pretty
+  pretty="$(printf '[\n  {\n    "event": "commented",\n    "actor": { "login": "zed" },\n    "body": "hello"\n  },\n  {\n    "event": "labeled",\n    "actor": { "login": "carol" }\n  }\n]\n')"
+  [ "$(_wg_timeline_events "$pretty")" = "$(_wg_timeline_events_reference "$pretty")" ]
+  cases=$((cases + 1))
+  # And a real-sized page, 1,000 elements.
+  local big; big="$(_wg_timeline_fixture 1000)"
+  [ "$(_wg_timeline_events "$big" | cksum)" = "$(_wg_timeline_events_reference "$big" | cksum)" ]
+  cases=$((cases + 1))
+  # The loop above must actually have run — an empty `for` list would leave
+  # every assertion unexecuted and the test green.
+  [ "$cases" -eq 6 ]
+}
+
+@test "watch github: a 5,000-element timeline page parses within the bound, host awk (P3-1, #111)" {
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local json; json="$(_wg_timeline_fixture 5000)"
+  # Sanity on the fixture itself before timing anything: ~1.5MB, which is
+  # what makes the quadratic shape visible at all.
+  [ "${#json}" -gt 1400000 ]
+
+  local t0=$SECONDS out n
+  out="$(_wg_timeline_events "$json" | wc -l)"
+  local elapsed=$((SECONDS - t0))
+
+  # Correct first, fast second — a parser that returns nothing is very fast.
+  [ "$out" -eq 5000 ]
+  # 20s. Measured on this project's own bench, 5,000 elements: gawk 5.2.1
+  # 0.20s, mawk 1.3.4 0.17s, busybox awk 1.36.1 1.04s, BWK awk 20250116
+  # 6.9s. The pre-rewrite loop needed 20.6s on busybox and ~3,845s
+  # (extrapolated from 4x-per-doubling) on BWK — so this bound leaves >=3x
+  # headroom for every awk measured and still catches the shape on the two
+  # that charge by source length.
+  [ "$elapsed" -lt 20 ] || { echo "5,000 elements took ${elapsed}s (bound 20s)"; false; }
+
+  # One last check that the body extraction still works at this scale — the
+  # rewrite accumulates a body across window refills, and a body that came
+  # back empty would also be very fast.
+  n="$(_wg_timeline_events "$json" | grep -c '^reply 4999 with a ')"
+  [ "$n" -eq 1 ]
+}

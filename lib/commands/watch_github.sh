@@ -640,32 +640,93 @@ _wg_latest_actor() {
 # a `},{` inside a string or a nested array of objects never splits an
 # element and a nested object's "body" key is never mistaken for the
 # event's own. awk, not jq: this file needs no external jq (see _wg_fetch).
-# LC_ALL=C: byte-wise substr, O(1) per character in every awk.
+# LC_ALL=C: byte-wise, never a UTF-8 character walk.
+#
+# 🔴 LINEAR IN EVERY AWK — READ BEFORE PUTTING `substr($BIG_STRING, i, 1)`
+# BACK IN THIS LOOP (P3-1, #111, carried from the 2026-09-14 fix-round-8
+# review). This function used to claim "O(1) per character in every awk".
+# That claim was false, and the correction matters because the awk clikae
+# runs under is whatever the host ships: gawk and mawk both index a string
+# in constant time, but busybox awk (and BWK awk, which is what macOS's
+# /usr/bin/awk is) pay a cost PROPORTIONAL TO THE LENGTH OF THE SOURCE
+# STRING on every single substr call, whatever the length of the slice
+# asked for. `s` here is the whole timeline page — ~1.5MB for a 5,000-event
+# page — so one substr per character made the scan O(n^2): measured on
+# busybox awk 1.36.1, 5,000 elements took 20.6s against 0.17s on gawk, and
+# the shape was unmistakable (0.06s / 0.73s / 20.62s for 200 / 1,000 /
+# 5,000 elements — 25x the input for 343x the time).
+#
+# FIXED by never taking a substr of `s` inside the per-character loop.
+# Characters are read through a BOUNDED WINDOW: `win` holds W=1024 bytes of
+# `s`, refilled once every W characters, and the per-character substr comes
+# from `win` — a 1KB source instead of a 1.5MB one — so the awks that charge
+# by source length now charge 1024 per character instead of n.
+#
+# The three OTHER substrs of `s` the old loop took (the element text at every
+# `}`, the body value, and every depth-2 key) are gone the same way: each is
+# ACCUMULATED out of the window it lies in (`ebuf`/`sbuf`, appended once per
+# window boundary the span happens to cross — a handful of concatenations per
+# element, not one n-length substr per element). Nothing but the refill ever
+# touches `s`.
+#
+# No new builtin: NOT `split(s, a, "")` and NOT `FS=""`. Both do split a
+# string into characters in gawk/mawk/busybox — and both were measured doing
+# it — but neither is portable to the older BWK awk still shipped as
+# /usr/bin/awk on macOS, where the silent fallback is "one field holding the
+# whole line", i.e. a MIS-PARSE rather than a slow parse. A correctness
+# regression on the platform this was meant to help is not a speedup.
+#
+# WHAT IS STILL NOT LINEAR, honestly: the refill itself is one substr of `s`
+# per W characters, so on a charge-by-source-length awk the total keeps an
+# n*(n/W) term. With W=1024 that term is ~1/1000 of what the old loop paid
+# and W sits at the sqrt(n) optimum for a page this size; it is a constant
+# factor away, not a shape change, and it is the price of not depending on a
+# builtin that would mis-parse on macOS. Measured, 200 / 1,000 / 5,000
+# elements, same host (numbers in the PR body):
+#   gawk 5.2.1     0.01 / 0.04 / 0.20s   (was 0.01 / 0.04 / 0.17s)
+#   mawk 1.3.4     0.01 / 0.04 / 0.17s   (was 0.01 / 0.03 / 0.13s)
+#   busybox 1.36.1 0.04 / 0.20 / 1.04s   (was 0.06 / 0.73 / 20.62s)
+#   BWK 20250116   0.73 / 1.20 / 6.86s   (was 6.77s at 200, 25.07s at 400,
+#                                        98.44s at 800 — x4 per doubling,
+#                                        i.e. ~3,845s extrapolated at 5,000)
+# Output is byte-for-byte identical to the old loop on all four awks, over
+# the fixtures in tests/bats/watch-github.bats plus adversarial ones (a
+# `},{` inside a body, escaped quotes, a nested array of objects, a nested
+# `body` key, `[]`, a pretty-printed page, and an element deliberately
+# straddling several window boundaries).
 _wg_timeline_events() {
   printf '%s' "$1" | LC_ALL=C awk '
     { s = s $0 }
     END {
       US = sprintf("%c", 31)
-      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0
-      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""
+      n = length(s); depth = 0; instr = 0; esc = 0; want = 0; isval = 0; scap = 0
+      estart = 0; sstart = 0; key = ""; laststr = ""; body = ""; ebuf = ""; sbuf = ""
+      W = 1024; wbeg = 1; wend = 0; win = ""
       for (i = 1; i <= n; i++) {
-        c = substr(s, i, 1)
+        if (i > wend) {
+          if (estart > 0) { ebuf = ebuf substr(win, estart - wbeg + 1); estart = i }
+          if (instr && scap) { sbuf = sbuf substr(win, sstart - wbeg + 1); sstart = i }
+          wbeg = i; win = substr(s, i, W); wend = i + length(win) - 1
+        }
+        c = substr(win, i - wbeg + 1, 1)
         if (instr) {
           if (esc) { esc = 0; continue }
           if (c == "\\") { esc = 1; continue }
           if (c == "\"") {
             instr = 0
-            if (depth == 2) {
-              str = substr(s, sstart, i - sstart)
-              if (isval && key == "body") body = str
-              if (!isval) laststr = str
+            if (scap) {
+              str = sbuf substr(win, sstart - wbeg + 1, i - sstart)
+              if (isval) body = str
+              else laststr = str
+              sbuf = ""; scap = 0
             }
           }
           continue
         }
         if (c == "\"") {
-          instr = 1; sstart = i + 1
-          if (depth == 2) { isval = want; want = 0 }
+          instr = 1; sstart = i + 1; sbuf = ""
+          if (depth == 2) { isval = want; want = 0; scap = (isval ? (key == "body") : 1) }
+          else scap = 0
           continue
         }
         if (c == " " || c == "\t" || c == "\r") continue
@@ -673,14 +734,14 @@ _wg_timeline_events() {
         if (depth == 2) want = 0
         if (c == "{" || c == "[") {
           depth++
-          if (depth == 2 && c == "{") { estart = i; body = ""; key = ""; laststr = "" }
+          if (depth == 2 && c == "{") { estart = i; ebuf = ""; body = ""; key = ""; laststr = "" }
           continue
         }
         if (c == "}" || c == "]") {
           depth--
           if (depth == 1 && c == "}" && estart > 0) {
-            print body US substr(s, estart, i - estart + 1)
-            estart = 0
+            print body US ebuf substr(win, estart - wbeg + 1, i - estart + 1)
+            estart = 0; ebuf = ""
           }
           continue
         }

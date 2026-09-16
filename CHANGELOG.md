@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`clikae watch github`'s timeline parser is now linear on every awk, not
+  just gawk and mawk.** It read the page one `substr(<whole page>, i, 1)` at a
+  time, and busybox awk and the current BWK awk (the family macOS ships as
+  `/usr/bin/awk`) charge by the length of the SOURCE string on every substr
+  call — so the scan was O(n²) there while being O(n) on gawk. Measured on a
+  5,000-element timeline page: 20.6s on busybox awk 1.36.1, and ~4× per
+  doubling on BWK awk 20250116 (6.8s / 25.1s / 98.4s at 200 / 400 / 800
+  elements), against 0.17s on gawk. Characters are now read through a bounded
+  1024-byte window, and the element text, the `body` value and each key are
+  accumulated out of those windows rather than re-cut from the whole page:
+  1.04s on busybox and 6.9s on BWK for the same 5,000 elements, with output
+  byte-for-byte identical to the old parser on all four awks. No new awk
+  builtin was used — `split(s, a, "")` and `FS=""` would both have been
+  faster still, and both mis-parse rather than merely run slow on the older
+  BWK awk macOS ships. The file header's "O(1) per character in every awk"
+  claim was wrong and has been corrected (#111).
 - **The cockpit guard now checks `fable` the same way it checks opus and
   sonnet** — `fable`, `claude-fable-*` and every provider spelling of them
   (`us.anthropic.claude-fable-…-v1:0`, `claude-fable-…@…`, `fable[1m]`). The
