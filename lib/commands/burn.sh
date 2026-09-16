@@ -40,7 +40,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
-                   [--permission <acceptEdits|auto>] [--force-cockpit]
+                   [--permission <mode>] [--force-cockpit]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -76,11 +76,20 @@ Give the task in one of two ways:
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
-  --permission <mode> claude-only: acceptEdits (default) or auto. Other engines
-                      have no mapping and print one degradation line, keeping
-                      their existing fixed mode — see docs/orchestration.md.
+  --permission <mode> Claude: acceptEdits (default) or auto. Codex maps
+                      acceptEdits -> workspace-write, bypassPermissions ->
+                      danger-full-access, plan/default -> read-only. Without
+                      this flag, Codex honours the tank's sandbox_mode in
+                      config.toml, else uses workspace-write. Unmapped modes
+                      warn and keep existing flags — see docs/orchestration.md.
                       Applies to composed prompt argv; raw commands after --
                       stay verbatim.
+  Codex sandbox vs --add-dir: only the first directory becomes the cwd; extras
+  are not writable roots under workspace-write. A git worktree cannot commit
+  there: its gitdir is under the main repository. Lanes needing commit/push/network
+  use --permission bypassPermissions or a profile sandbox_mode = "danger-full-access"
+  with no explicit --permission.
+
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.

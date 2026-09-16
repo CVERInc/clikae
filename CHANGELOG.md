@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `clikae burn codex` honours an uncommented `sandbox_mode` in the current
+  tank's `config.toml` when `--permission` is omitted, including after rerouting.
+  Otherwise the default remains `workspace-write`. Explicit `--permission`
+  maps `acceptEdits` to `workspace-write`, `bypassPermissions` to
+  `danger-full-access`, and `plan`/`default` to `read-only`. Help and orchestration
+  docs explain why worktree commit/push/network lanes need the broader sandbox
+  (#129).
+
 ## [0.30.0] — 2026-09-17
 
 ### Changed
