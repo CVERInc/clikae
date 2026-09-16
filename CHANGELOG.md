@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Three known limits of `clikae burn`'s left-behind scan are now written down in
+  [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md) instead of living only in the
+  source: a filename containing a newline is reported as two paths (one of which
+  does not exist); `dirty` is git's own count while `files` is attributed to the
+  innermost repository, so a nested repo adds 1 to its parent's `dirty` without
+  its files appearing there; and the scan's watchdog closes fds 3 and 4 by name,
+  not every descriptor it inherits. None of the three changed behaviour (#112).
 - **Breaking:** `clikae burn`'s `--no-reroute` dry stop now exits **2**
   (`CLIKAE_BURN_RC_NO_TANK`), not 1 — the same distinguishable code as
   exhausting the reroute reserve, so a caller checking rc alone can no longer
@@ -49,6 +56,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The six `clikae burn` tests that bound a deliberately-wedged `find`/`stat`/
+  `.git/HEAD` no longer skip on a machine without `timeout`/`gtimeout` — which
+  is stock macOS, the platform they were written for. They go through
+  `bounded_run` (`tests/bats/helpers/bounded.bash`), which keeps
+  `timeout`/`gtimeout` as the preferred path and otherwise enforces the same
+  ceiling in bash itself (own process group, sleep, kill the group). The
+  left-behind scan's "scan budget exhausted" path and the EOF-delay fix also
+  gained tests (#112).
+- `clikae burn --json` reports `left_behind_kill_mode`: how the left-behind
+  scan stopped a bounded git/`find` call that overran — `pgroup` (the call and
+  everything it forked, the normal case) or `single-pid` on a platform that
+  will not give the bounded child a process group of its own, where a
+  grandchild can outlive the bound. That fallback path now has tests, including
+  one that asserts the grandchild it leaves behind, so its cost is written down
+  rather than assumed (#112).
+- `clikae burn` says when its left-behind scan could not run at all instead of
+  reporting an empty list. With no `git` on `$PATH` the scan used to return
+  `left_behind: []` — the same output as "scanned everything, found nothing" —
+  and print nothing. It now prints one line and sets
+  `"left_behind_unavailable": "git-not-on-PATH"` in `--json` (the field is
+  `null` whenever the scan did run) (#112).
+- `clikae burn --json` now reports what the left-behind scan left out **by
+  reason**, in `left_behind_truncation`: `repos_over_cap` (the 25-row display
+  cap), `roots_budget_skipped`, `markers_budget_skipped`,
+  `repos_budget_skipped` and `roots_discovery_timeout`. The single
+  `left_behind_truncated` number mixed units — one skipped root might stand for
+  forty repositories, one display-cap overflow is exactly one — so a consumer
+  reading `4` could not tell what was missing. `left_behind_truncated` is still
+  present, as the sum of all five, and is **deprecated**: it is kept for one
+  release so existing consumers keep working (#112).
+- `clikae burn`'s left-behind scan no longer reports a repository it could not
+  read as clean. Each of the per-repo git calls (`symbolic-ref`, `rev-list
+  --count`, `status --porcelain`) used to fall back to a default when it hit its
+  5s ceiling, and `status`'s default is `dirty=0` — so a repository wedged on a
+  dead NFS mount was indistinguishable from one with nothing in it. Such a row
+  now carries `"git_timeout": true` and `"dirty": null` in `--json`, reads
+  `dirty ? (git timed out)` on screen, and is always listed even when nothing
+  else about it qualified (#112).
 - The home board no longer leaves a `state/home-recent-truncated.<pid>` file
   behind every time its Resume list is truncated (or a board is killed
   mid-render). The "N sessions hidden as burn runs · list truncated" count now
