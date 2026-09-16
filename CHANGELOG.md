@@ -121,6 +121,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The codex handoff extractor's three filters are now **individually
+  load-bearing**: mutation-testing found that deleting any one of them — the
+  `content_item_kinds` check, the per-part injected-tag prefix filter, or the
+  `response_item`-side half of the adjacent dedupe — left the whole suite
+  green. One injection fixture carried BOTH injection signals at once (kinds
+  naming injected kinds AND every part opening with an injected tag), so
+  either filter alone kept it passing; and the dual-shape fixture always wrote
+  `response_item` before `event_msg`, so only the `event_msg` rule's copy of
+  the dedupe ever fired. The fixture is now three variants (`real`, plus one
+  where each filter is the only thing standing), there is a B2 fixture with
+  `event_msg` FIRST, and the documented "two consecutive identical turns
+  collapse" trade-off is pinned by a test of its own. No behaviour change —
+  `scripts/mutate.sh` carries the three rows as a re-runnable receipt (#110).
 - `tests/bats/roam.bats` — "a second client attaches to the running tank
   instead of starting it again" no longer reports a **timeout as a wrong
   value**, and no longer races clikae's own launch. Two faults, one red: (1)
