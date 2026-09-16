@@ -73,7 +73,7 @@
 
 - **`base-index` 是全域選項，clikae 從來沒有設過它，讀的一方不能假設它是 0**：2026-09 起 `live_engine_alive`（`lib/core/live.sh`）需要問「這個 session 的引擎視窗還在不在」，一度用 `tmux list-windows -F '#{window_index}'` 比對字面 `0`——跟這條規則本身講的道理正是同一件事（`history-limit` 那個收據）：`tmux_spawn_session` 沒有設 `base-index` 不代表它是 0，代表它繼承使用者 `~/.tmux.conf` 裡設的任何值，而 `set -g base-index 1` 是很常見的一行。在 `base-index 1` 的機器上，引擎唯一的視窗落在 index 1，字面比對 0 因此把每一個健康 session 都判成「引擎已死」（2026-09-12 R4 review, R4-P2-1）。修法改問視窗**名稱**：是否存在一個不是 `wake` 守望者（`^wake( |$)`，`wake_attach_watcher` 開的那個）的視窗——與 `tmux_sess_has_engine`（`lib/core/tmux.sh`）同一個問法，同一層已經有正典答案。任何要問「這是不是某個特定視窗」的呼叫點，一律用名稱或這個 per-session 選項，不用數字位置。
 
-- **2026-09 起新增六條全域 key binding ＋ 四個全域選項（touch-scroll，P3-4 2026-09 R2 review；tap zones，#108）**：`bind-key -T root/copy-mode/copy-mode-vi MouseDown1Pane`／`MouseUp1Pane`（六條，`lib/core/tmux.sh` 的 touch-scroll 區塊）與 `@clikae_touch_scroll`／`@clikae_touch_scroll_lines`／`@clikae_touch_pages`／`@clikae_touch_pages_rows`（`set-option -og`）。**binding 仍然是六條，不是十二條**：#108 的 tap zones 跟 #88 的 swipe 共用同一組 MouseDown/MouseUp，判斷全部收在 `lib/core/touch_scroll.sh` 一棵決策樹裡（先位移、再 zone、其餘不動）——同一顆按鍵綁兩次的話 tmux 只留最後一條，輸掉的那個功能會安靜地消失。MouseDown 因此多寫一個 pane 選項 `@clikae_touch_h`（`#{pane_height}`，按下當時的幾何），跟 `@clikae_touch_y` 一樣讀完立刻 unset。跟 `history-limit`／`mouse on` 同一條鏈、同一個作用域（整台 server，不是這個 session），但多一層閘門：`_tmux_touch_scroll_floor_met` 要求 **tmux ≥ 3.1**（`set-option -p`/`-pu`，CHANGES FROM 3.0 TO 3.1）——低於這個版本，`mouse on` 照裝，這六條 binding 與兩個選項整串跳過（不是裝一半，見 Rule 1 開頭 `history-limit` 那條「串在同一個指令」的規範）。`bind-key` 沒有 `-o`，會覆寫使用者自己在 root table 上已經設過的 `MouseDown1Pane`/`MouseUp1Pane`（`docs/usage.md` 已寫明）。細節、每個 binding 的理由、以及 choose-mode/clock-mode 的邊界見 `lib/core/tmux.sh` 本體的行內註解（Rule 9 收 `mouse on`/`set-clipboard` 那兩個更早的全域選項）。
+- **2026-09 起新增十二條全域 key binding ＋ 五個全域選項（touch-scroll，P3-4 2026-09 R2 review；tap zones 與 drag，#108）**：`bind-key -T root/copy-mode/copy-mode-vi` 的 `MouseDown1Pane`／`MouseUp1Pane`／`MouseDrag1Pane`／`MouseDragEnd1Pane`（十二條，`lib/core/tmux.sh` 的 touch-scroll 區塊）與 `@clikae_touch_scroll`／`@clikae_touch_scroll_lines`／`@clikae_touch_pages`／`@clikae_touch_pages_rows`／`@clikae_touch_drag`（`set-option -og`）。**tap zones 沒有自己的 binding**：#108 的 tap zones 跟 #88 的 swipe 共用同一組 MouseDown/MouseUp，判斷全部收在 `lib/core/touch_scroll.sh` 一棵決策樹裡（先位移、再 zone、其餘不動）——同一顆按鍵綁兩次的話 tmux 只留最後一條，輸掉的那個功能會安靜地消失。MouseDown 因此多寫一個 pane 選項 `@clikae_touch_h`（`#{pane_height}`，按下當時的幾何），跟 `@clikae_touch_y` 一樣讀完立刻 unset。**drag／dragEnd 那六條則是真的新按鍵**（2026-09-16 真機量測：a-Shell 的滑動只送 motion、不送 MouseUp，詳見 Rule 9），而且是**唯一**走 `if-shell` 而非 `run-shell` 的一組——離開狀態非 0 時把按鍵原封不動還給 tmux 自己的指令，這就是 `@clikae_touch_drag off`（預設）等於原生 tmux（含拖曳選取）的全部機制。跟 `history-limit`／`mouse on` 同一條鏈、同一個作用域（整台 server，不是這個 session），但多一層閘門：`_tmux_touch_scroll_floor_met` 要求 **tmux ≥ 3.1**（`set-option -p`/`-pu`，CHANGES FROM 3.0 TO 3.1）——低於這個版本，`mouse on` 照裝，這六條 binding 與兩個選項整串跳過（不是裝一半，見 Rule 1 開頭 `history-limit` 那條「串在同一個指令」的規範）。`bind-key` 沒有 `-o`，會覆寫使用者自己在 root table 上已經設過的 `MouseDown1Pane`/`MouseUp1Pane`（`docs/usage.md` 已寫明）。細節、每個 binding 的理由、以及 choose-mode/clock-mode 的邊界見 `lib/core/tmux.sh` 本體的行內註解（Rule 9 收 `mouse on`/`set-clipboard` 那兩個更早的全域選項）。
 
 ### Rule 2: tmux 是便利層，不是相依（三個出口）
 
@@ -317,7 +317,21 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ```
   代價要講清楚：要用終端機**原生**選取（貼到 tmux 以外的地方）得按著 `⌥`。這是刻意換的——預設情境是「我要複製剛剛畫面上的東西」，那條路現在直通。
 
-- **同一條全域鏈上另外掛著 touch 的六條 binding 與四個選項**（`@clikae_touch_scroll`／`@clikae_touch_scroll_lines`，P3-4 2026-09 R2 review；`@clikae_touch_pages`／`@clikae_touch_pages_rows`，#108，**預設 off**——它把原本會送到程式的那一下點擊改交給 tmux，所以要人家開口才給）——`mouse on` 讓滾輪捲得到歷史，touch-scroll 是同一個問題在沒有滾輪的觸控裝置（a-Shell/iPhone）上的另一半答案：把兩指觸控的按下/放開翻譯成同一段 `copy-mode` 歷史的捲動。裝載條件、tmux ≥ 3.1 的版本閘門、與清冊全文見 Rule 1；行為與 mode 的邊界（copy-mode/view-mode 才動作，tree-mode/clock-mode/choose-* 不動）見 `lib/core/tmux.sh`/`lib/core/touch_scroll.sh` 的行內註解與 `docs/usage.md`。
+- **同一條全域鏈上另外掛著 touch 的十二條 binding 與五個選項**（`@clikae_touch_scroll`／`@clikae_touch_scroll_lines`，P3-4 2026-09 R2 review；`@clikae_touch_pages`／`@clikae_touch_pages_rows`，#108；`@clikae_touch_drag`，#108 後半——後三個**預設 off**，理由都一樣：它們把原本會送到程式或會做選取的那一下改交給 tmux，所以要人家開口才給）——`mouse on` 讓滾輪捲得到歷史，touch-scroll 是同一個問題在沒有滾輪的觸控裝置（a-Shell/iPhone）上的另一半答案。裝載條件、tmux ≥ 3.1 的版本閘門、與清冊全文見 Rule 1；行為與 mode 的邊界（copy-mode/view-mode 才動作，tree-mode/clock-mode/choose-* 不動）見 `lib/core/tmux.sh`/`lib/core/touch_scroll.sh` 的行內註解與 `docs/usage.md`。
+
+- 🔴 **2026-09-16 真機量測推翻了 #88 的前提，而這條規則的「選取」正是它撞上的東西。** 用 a-Shell → ssh → tmux 3.4、在伺服器端被動記錄事件流，量到的是：
+  ```
+  輕點 (tap)        MouseDown1Pane + MouseUp1Pane（同一列）
+  滑動 (flick/drag) MouseDown1Pane + 每跨一列一個 MouseDrag1Pane + MouseDragEnd1Pane
+                    ——完全沒有 MouseUp1Pane
+  ```
+  #88 把整套翻譯掛在「MouseUp 帶位移」上，所以在它所為之而寫的那台裝置上**一次都沒觸發**；贏的是 tmux 自己的 `MouseDrag1Pane → copy-mode -M` 與 `MouseDragEnd1Pane → copy-pipe-and-cancel`，使用者看到的是 “copied N chars to tmux buffer”——**本規則的選取行為**，出現在他想捲動的時候。
+  四件必須記在這裡的事實：
+  1. **drag 的六條 binding 走 `if-shell` 而不是 `run-shell`。** `run-shell` 丟掉離開狀態，所以用它蓋的 binding 只會「吃掉」按鍵。`MouseDrag1Pane` 在沒有 mouse-tracking 程式的 pane 上的原意就是**滑鼠拖曳選取**，而手指的拖曳跟觸控板的拖曳是**同一組 tmux 事件**，沒有任何 runtime 訊號分得出來。因此由 helper 的離開狀態決定：0＝clikae 翻譯了，非 0＝跑 tmux 自己的那條指令（else 分支是從 `tmux -f /dev/null` 的 `list-keys` 逐字抄回來的）。`@clikae_touch_drag off` 因此不是「近似預設」，它**就是**預設，含拖曳選取。（已驗證 mouse event 進得了 if-shell 的分支：一條 shell 指令回傳 1 的 binding，確實對著真正的按下跑出了 `copy-mode -M`。）
+  2. **替代畫面的 app 拿到的是滾輪，不是 copy-mode。** 量到 Claude Code 的 pane 是 `alternate_on` 1、`history_size` 0——copy-mode 在那裡沒有東西可捲。它要的是滑鼠滾輪，而且它本來就在要。
+  3. 🔴 **`tmux send-keys -t <pane> WheelUpPane` 不會送出滾輪事件，它會把那個「字」打進去。**（丟棄式 server、pane 跑 `cat -v` 驗過：app 讀到的是字面上的 `WheelUpPane`。）tmux 的滑鼠鍵名是給 `bind-key` 用的，不是給 `send-keys` 用的。要送的是終端機自己會送的那串原始 SGR：`ESC [ < Cb ; Cx ; Cy M`，`Cb` 64＝滾輪上、65＝滾輪下，座標 1-based。
+  4. 🔴 **`#{pane_mode}` 在不在 mode 裡時展開成空字串**——不是佔位符，是什麼都沒有。在 `run-shell`／`if-shell` 的參數列裡沒加引號的話，它產生的不是一個空參數而是**沒有參數**，後面每一個都往左移一格。#88 之所以躲過，只因為 `#{pane_mode}` 是它的最後一個參數；drag 那兩行後面還有兩個，所以五個格式參數**全部加引號**。
+  5. a-Shell 自己的長按選取不受 tmux mouse mode 影響，所以在手機上把 `MouseDrag1Pane` 讓給捲動不會失去選取；雙指滑動則被 a-Shell 自己吃掉、變成方向鍵，根本到不了 tmux。
 
 - 🔴 **附帶修掉一個累積型 bug**：`terminal-overrides` / `terminal-features` 是 **append**，而選項區塊每次建立 session 都跑，所以每 spawn 一次就多一份。實測兩天大的 server：
   ```
