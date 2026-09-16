@@ -165,6 +165,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The cockpit guard no longer lets a refused Agent spawn through on a machine
+  with many finished burns.** A refusal lists the idle reserve, and checking
+  each tank for a running burn read every burn run directory with several
+  processes per directory — once per tank. With 225 finished runs (a week of
+  a busy cockpit) a refusal took 5.7 s at 10 tanks and 30.8 s at 50, past the
+  hook's 5-second timeout, and Claude Code treats a hook that times out as
+  non-blocking: the spawn it was refusing went ahead. The guard now walks the
+  burn runs once and only checks the tanks that walk names as running, and a
+  finished run costs no process at all: the same refusal takes 52 ms at
+  10 tanks and 78 ms at 50, and 128 ms at 50 tanks with 1,000 finished runs
+  (#114).
+- The "this store's tanks aren't adopted yet and the flag can't be written"
+  warning is no longer silenced for good inside sessions started after it was
+  shown. A tmux server, burn or engine started from a terminal that had seen it
+  kept that store's dedupe in its environment for its whole life, so a store
+  that was replaced at the same path (a restored backup) or repaired and then
+  read-only again got no warning in any of those panes. The dedupe now also
+  records the identity and modification time of where the flag would be
+  written: an unchanged read-only store still warns once, and a changed one
+  warns again (#114).
 - A codex message with **many content parts** no longer takes quadratic time
   to extract. The shape-B branch walked the parts by matching the next part
   key and re-slicing everything still to come (`substr(rest, RLENGTH + 2)`),

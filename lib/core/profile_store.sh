@@ -635,8 +635,10 @@ tanks_adopted_flag_write() {
 #   (a) it silenced EVERY store. A terminal warned about store A then said
 #       nothing about a second, unrelated read-only store B (a mounted shared
 #       store, `CLIKAE_HOME=/mnt/…`) — measured, both directions. Fixed here:
-#       the value is `:<flag path>:<flag path>:` and the check is for THIS
-#       store's key, so each store still gets its own line exactly once.
+#       the value is `:<key>:<key>:` and the check is for THIS store's key, so
+#       each store still gets its own line exactly once. (#114: the key is the
+#       flag path plus the identity and mtime of where the flag would land —
+#       see the function — so it also stops matching once the store changes.)
 #
 #   (b) it outlives this terminal. `tmux new-session` creates a server from
 #       whoever started it when none is running, and that server's GLOBAL
@@ -649,20 +651,24 @@ tanks_adopted_flag_write() {
 #       contain this variable; it rides in on that inheritance.
 #
 # (b) is NOT fixed here, and this is the honest description of what it costs
-# rather than a claim that it does not happen: what is suppressed is one
-# advisory line about ONE store whose read-only-ness is a stable fact of that
-# machine, in panes belonging to the same operator who already read it. It
-# cannot suppress anything about a different store (that is (a)), it cannot
-# change what is adopted, and it self-clears the moment the store becomes
-# writable — then the flag persists and this function is never reached at all
-# (measured). The two mechanisms that could close it are both worse than the
+# rather than a claim that it does not happen (#114 re-measured it end to end:
+# real `clikae claude <tank>` on a read-only store, private tmux socket — the
+# server's global table held the key and a pane a CLEAN client opened later
+# inherited it): what is suppressed is one advisory line about ONE store, while
+# that store is unchanged, in panes belonging to the same operator who already
+# read it. It cannot suppress anything about a different store (that is (a)),
+# nor about the same path once the store there changed (#114, the key below),
+# it cannot change what is adopted, and it self-clears the moment the store
+# becomes writable — then the flag persists and this function is never reached
+# at all (measured). The two mechanisms that could close it are both worse than the
 # bug: a sentinel file is what rounds 3-4 already tried and had to remove, and
 # stripping the variable in tmux_spawn_session would give the LAUNCH path two
 # warnings for one keypress, which is round-2 P2-1 coming back.
 #
 # The deliberate trade that remains: a clikae run from INSIDE an engine
-# session that this clikae exec'd stays quiet about the SAME store (now
-# literally the same store). That operator has already read the line in this
+# session that this clikae exec'd stays quiet about the SAME store, for as
+# long as that store is unchanged (#114: repaired-then-broken or replaced at
+# the same path is a new fact, and gets its own line). That operator has already read the line in this
 # terminal; a warning repeated per keypress is how this started (round-2
 # P2-1), and an unremovable file is what it became.
 # _tank_marker_unreadable_warn_once <dir> -> exactly ONE line per process
@@ -690,8 +696,22 @@ _tank_marker_unreadable_warn_once() {
 }
 
 _tank_adoption_warn_once() {
-  local _key _seen
-  _key="$(tanks_adopted_flag_path)"
+  local _key _seen _flag _sdir
+  _flag="$(tanks_adopted_flag_path)"
+  # #114 item 3: the key is the flag path PLUS the identity and mtime of the
+  # directory the flag would land in (device, inode, mtime — nearest existing
+  # of state/ then the store root). A path alone outlived the facts it was
+  # about: a store repaired and then read-only again before any clikae wrote
+  # its flag, or a DIFFERENT read-only store put back at the same path (a
+  # restored backup), stayed silent in every engine session and tmux pane that
+  # inherited the old key — measured, burn -> inner `clikae tanks`: 0 lines.
+  # While a store stays read-only none of the three can move, so the one-line-
+  # per-keypress dedupe above is untouched. Only this warning path pays the
+  # fork; a store whose flag is on disk never gets here.
+  _sdir="${_flag%/*}"
+  [ -d "$_sdir" ] || _sdir="$CLIKAE_HOME"
+  _key="$_flag@$(stat -c '%d,%i,%Y' "$_sdir" 2>/dev/null \
+                 || stat -f '%d,%i,%m' "$_sdir" 2>/dev/null || echo 0)"
   _seen="${_CLIKAE_ADOPT_WARNED:-}"
   case "$_seen" in *":$_key:"*) return 0 ;; esac
   # A pathological number of distinct stores in one process tree must not grow

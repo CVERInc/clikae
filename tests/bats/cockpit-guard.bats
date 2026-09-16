@@ -186,6 +186,38 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" == *"No idle tank in the reserve right now."* ]] || { echo "$output"; false; }
 }
 
+@test "#114: the reserve still hides a tank with a LIVE burn, and a store full of finished burns cannot push a refusal past the hook timeout" {
+  # A refusal that outlives the hook's 5 s timeout is non-blocking: the spawn
+  # goes through. The reserve used to ask burn_tank_busy per tank, and each ask
+  # walked every burn run with a `cat` and three subshells — 225 finished runs
+  # measured 5.7 s at 10 tanks. The ceiling below is ~8x the old code's time on
+  # this fixture's shape and ~40x the new code's, so it is not a timing race.
+  local t i d now
+  now="$(date +%s)"
+  for t in cockpit live stale idle $(seq -f 'w%02g' 1 16); do
+    mkdir -p "$CLIKAE_HOME/profiles/claude/$t"
+    printf 'claude\n' > "$CLIKAE_HOME/profiles/claude/$t/.clikae-tank"
+  done
+  printf 'claude/cockpit\n' > "$CLIKAE_HOME/state/cockpit"
+  for i in $(seq 1 400); do
+    d="$HOME/.clikae/logs/burn-8$i"; mkdir -p "$d"
+    printf '{"ok":true,"engine":"claude","tank":"w%02d","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":3,"run_id":"burn-8%s","state":"done","started_at":1,"updated_at":2,"pid":99999,"log":null}\n' "$(( i % 16 + 1 ))" "$i" > "$d/status.json"
+  done
+  mkdir -p "$HOME/.clikae/logs/burn-live" "$HOME/.clikae/logs/burn-stale"
+  printf '{"ok":null,"engine":"claude","tank":"live","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-live","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null}\n' "$now" "$now" "$$" > "$HOME/.clikae/logs/burn-live/status.json"
+  printf '{"ok":null,"engine":"claude","tank":"stale","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"burn-stale","state":"running","started_at":%s,"updated_at":%s,"pid":99999,"log":null}\n' "$now" "$now" > "$HOME/.clikae/logs/burn-stale/status.json"
+  local start end
+  start="$(date +%s)"
+  run _guard '{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"worktree git push"}}'
+  end="$(date +%s)"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" != *"claude/live"* ]] || { echo "a tank with a live burn was offered: $output"; false; }
+  [[ "$output" == *"claude/stale"* ]] || { echo "a dead burn's tank was hidden: $output"; false; }
+  [[ "$output" == *"claude/idle"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude/w16"* ]] || { echo "$output"; false; }
+  [ "$((end - start))" -le 3 ] || { echo "refusal took $((end - start)) s with 400 finished runs"; false; }
+}
+
 @test "#61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model" {
   if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
   # The hook runs under `set -u`. `_m` was left unassigned when the marker

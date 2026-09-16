@@ -13,6 +13,19 @@ _unadopt() {
   rm -f "$CLIKAE_HOME/state/tanks-adopted-v1"
 }
 
+# _adopt_warned_value <clikae_home> -> the exported dedupe value a clikae that
+# warned about that store right now hands to everything it forks or execs.
+_adopt_warned_value() {
+  CLIKAE_HOME="$1" bash -c '
+    CLIKAE_LIB="'"$CLIKAE_TEST_ROOT"'/lib"
+    source "$CLIKAE_LIB/core/log.sh"
+    source "$CLIKAE_LIB/core/adapter_loader.sh"
+    source "$CLIKAE_LIB/core/profile_store.sh"
+    unset _CLIKAE_ADOPT_WARNED
+    _tank_adoption_warn_once 2>/dev/null
+    printf "%s" "$_CLIKAE_ADOPT_WARNED"'
+}
+
 # --- P1-1: inclusive, one-time, no fingerprint required ----------------------
 # Mirrors the round-2 review's own reproduction: a store shaped like
 # origin/main's clikae left it (no marker at all) — 8 real tanks across 5
@@ -417,12 +430,13 @@ STUB
     printf 'claude\n' > "$s/.clikae/profiles/claude/x/.clikae-tank"
     chmod a-w "$s/.clikae/state"
   done
-  local a1 b1 a2
+  local a1 b1 a2 akey
   a1="$(CLIKAE_HOME="$A/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
   # Exactly what an exec'd/forked clikae would carry forward from that run.
-  b1="$(_CLIKAE_ADOPT_WARNED=":$A/.clikae/state/tanks-adopted-v1:" \
+  akey="$(_adopt_warned_value "$A/.clikae")"
+  b1="$(_CLIKAE_ADOPT_WARNED="$akey" \
         CLIKAE_HOME="$B/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
-  a2="$(_CLIKAE_ADOPT_WARNED=":$A/.clikae/state/tanks-adopted-v1:" \
+  a2="$(_CLIKAE_ADOPT_WARNED="$akey" \
         CLIKAE_HOME="$A/.clikae" "$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN')" || true
   for s in "$A" "$B"; do chmod u+w "$s/.clikae/state"; done
   [ "$a1" -eq 1 ] || { echo "store A first run: $a1 WARN"; false; }
@@ -540,6 +554,42 @@ STUB
   [ -z "$(cat "$TEST_HOME/engine-saw-tmpdir")" ] || \
     { echo "engine saw: $(cat "$TEST_HOME/engine-saw-tmpdir")"; false; }
   [ -z "$(ls -A "$fake_tmp")" ] || { echo "left behind: $(ls -la "$fake_tmp")"; false; }
+}
+
+@test "#114: an engine that inherited the warn dedupe is quiet about the SAME store and warns again once the store changed" {
+  # The exported key used to be the flag PATH only, so an engine session (or a
+  # tmux pane, or a burn) started from a clikae that had warned stayed silent
+  # about whatever store sat at that path afterwards — a store put back from a
+  # backup, or repaired and read-only again, is a new fact and got no line.
+  if [ "$(id -u)" = "0" ]; then skip "root writes a read-only directory"; fi
+  clikae init claude rochange --no-template
+  cat > "$TEST_HOME/.testbin/claude" <<STUB
+#!/usr/bin/env bash
+S="\$CLIKAE_HOME/state"
+printf '%s\n' "\${_CLIKAE_ADOPT_WARNED:-unset}" > "\$HOME/engine-saw-warned"
+"$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN' > "\$HOME/warn-unchanged"
+# the store is replaced at the same path (a restored backup), still read-only
+chmod u+w "\$S"; mv "\$S" "\$S.prev"; mkdir "\$S"; cp -R "\$S.prev/." "\$S/"; chmod a-w "\$S"
+"$CLIKAE_BIN" tanks 2>&1 >/dev/null | grep -c 'WARN' > "\$HOME/warn-changed"
+chmod u+w "\$S"
+exit 0
+STUB
+  chmod +x "$TEST_HOME/.testbin/claude"
+  _unadopt
+  chmod a-w "$CLIKAE_HOME/state"
+  local err="$BATS_TEST_TMPDIR/err" rc=0
+  "$CLIKAE_BIN" claude rochange >/dev/null 2>"$err" || rc=$?
+  chmod u+w "$CLIKAE_HOME/state" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || { cat "$err"; false; }
+  [ "$(grep -c '\[ WARN \]' "$err")" -eq 1 ] || { echo "launch: $(cat "$err")"; false; }
+  # the key the engine inherited still dedupes while the store is the one it was about
+  [ "$(cat "$TEST_HOME/warn-unchanged")" -eq 0 ] || { echo "unchanged store warned again"; false; }
+  # ...and no longer matches once the store changed: that store gets its line
+  [ "$(cat "$TEST_HOME/warn-changed")" -eq 1 ] || \
+    { echo "changed store: $(cat "$TEST_HOME/warn-changed") WARN; engine env: $(cat "$TEST_HOME/engine-saw-warned")"; false; }
+  # (and it was this store's key that crossed the exec, not a boolean)
+  grep -Fq "$CLIKAE_HOME/state/tanks-adopted-v1@" "$TEST_HOME/engine-saw-warned" || \
+    { echo "engine env: $(cat "$TEST_HOME/engine-saw-warned")"; false; }
 }
 
 # --- #61 round-3 P3: a marker with a trailing \r or trailing whitespace is
