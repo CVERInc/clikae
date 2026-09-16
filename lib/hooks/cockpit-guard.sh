@@ -311,14 +311,22 @@ _ckpt_refuse() {
       # a refusal: Claude Code treats the timeout as non-blocking (measured
       # 30.8 s at 50 tanks × 225 finished runs before burn_tank_busy went
       # fork-free, 3.4 s at 50 × 1,000 after).
+      #
+      # 🔴 The membership test inside the command substitution below is a
+      # double-bracket match, with NO case statement and NO comment inside that
+      # substitution. bash 3.2 (stock macOS) finds the end of a dollar-paren
+      # by scanning for the matching close paren without understanding case
+      # patterns or comments, so a case pattern can end it early (and an
+      # apostrophe in a comment can open a quote). The first version used a case
+      # there: on macOS CI every refusal lost its whole reserve listing, and the
+      # 2>/dev/null around this block hid the error. Linux (bash 5) was green.
       active=$'\n'"$(burn_status_active_tanks 2>/dev/null || true)"$'\n' &&
       lines="$(
         while IFS=$'\t' read -r cli profile _path; do
           [ -n "$cli" ] || continue
           [ "$cli/$profile" = "$cur" ] && continue
-          case "$active" in
-            *$'\n'"$cli/$profile"$'\n'*) burn_tank_busy "$cli" "$profile" 2>/dev/null && continue ;;
-          esac
+          [[ "$active" == *$'\n'"$cli/$profile"$'\n'* ]] &&
+            burn_tank_busy "$cli" "$profile" 2>/dev/null && continue
           printf '  %s/%s\n' "$cli" "$profile"
         done <<PROFILES
 $(list_all_profiles 2>/dev/null)
