@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-09-17
+
 ### Changed
 
 - **`clikae watch github`'s run-directory rotation is anchored to the org, and
