@@ -12,8 +12,14 @@
 # never call the function it names at all. The only evidence that a guard is
 # load-bearing is watching the suite go red when you remove it.
 #
-# The four rows below are docs/memory.md §4's locked values, the promises clikae
-# makes about the human's data. All four fire.
+# The first four rows below are docs/memory.md §4's locked values, the promises
+# clikae makes about the human's data. The rest are added as guards earn a row.
+#
+# Not all of them fire. As of 2026-09-16, `share: copy becomes move` is HOLLOW:
+# turn memory.sh's `cp -R` into `mv` and memory.bats is still green, so nothing
+# in the suite actually holds "aggregate, never mutate the source". That line is
+# left in the output on purpose — a row reporting 🔴 is this script working, and
+# deleting it to get a clean run is the one thing that would make it useless.
 #
 # ── Two traps this harness exists to avoid ──────────────────────────────────
 #
@@ -80,6 +86,35 @@ run_one "cross-account note: never shown" notice.bats lib/core/notice.sh \
 # "Aggregate, never mutate the source. Seed by copy."
 run_one "share: copy becomes move" memory.bats lib/commands/memory.sh \
   perl -pi -e 's!\bcp -R\b!mv!g' lib/commands/memory.sh
+
+echo ""
+echo "mutating the codex handoff extractor's three filters (#110 P3-1):"
+
+# The codex user-turn extractor has three independent guards, and #110's
+# round-4 review found none of them individually load-bearing: one fixture
+# carried BOTH injection signals at once, and the B2 fixture always wrote
+# response_item first, so the response-side dedupe never had to fire. These
+# three rows are the receipt that the split fixtures fixed that — delete any
+# one guard and a test that names it goes red.
+#
+# Rows 1 and 2 delete a whole line rather than rewriting it: `perl -ni -e
+# 'print unless /…/'` needs no s/// delimiter at all, which is the cheapest
+# way out of this file's delimiter trap — the target lines contain `!~`, `|`
+# and `{`, i.e. three of the delimiters you would reach for first.
+
+# "Machine-injected context never reaches the brief" — via content_item_kinds.
+run_one "codex: kinds check deleted" handoff.bats lib/adapters/codex.sh \
+  perl -ni -e 'print unless /kinds_skipped\+\+; next/' lib/adapters/codex.sh
+
+# "Machine-injected context never reaches the brief" — via the per-part tag
+# prefix, the fallback for rollouts that carry no content_item_kinds.
+run_one "codex: per-part prefix filter deleted" handoff.bats lib/adapters/codex.sh \
+  perl -ni -e 'print unless /recommended_plugins\|environment_context/' lib/adapters/codex.sh
+
+# "A turn recorded in BOTH shapes is printed once" — the response_item rule's
+# own half of the adjacent dedupe (the event_msg rule carries the other half).
+run_one "codex: response-side dedupe deleted" handoff.bats lib/adapters/codex.sh \
+  perl -pi -e 's~ && \(!have_prev \|\| res != prev\)~~' lib/adapters/codex.sh
 
 printf '\n%d guard(s) proven, %d hollow, %d mutation(s) that never applied\n' \
   "$pass" "$hollow" "$broken"

@@ -356,6 +356,27 @@ _CODEX_AGENT_MESSAGE_TYPE_RE='"type": *"agent_message"'
 # a nested-star `[[ =~ ]]` pattern would need (see adapter_title_for_file
 # above for why THAT trap matters for bash's own regex engine).
 #
+# Round-4 review P3-3 (#110): the shape-B branch used to walk the parts of a
+# message by matching the next part key and then RE-SLICING the remainder
+# (`rest = substr(rest, RLENGTH + 2)`) — one fresh copy of everything still
+# to come, per part. That is O(parts x line length): the value scan itself
+# was already linear (above), but the walk around it was not. Measured on
+# one 1 MB message of ~4,400 parts: gawk 5.2s, busybox awk 4.0s, BWK
+# 20250116 12.1s (mawk was the exception at 0.27s, its substr being cheap
+# enough to hide it). `split($0, parts, part_keyre)` cuts the line on the
+# part key ONCE, in one linear pass the awk does in C, and each element then
+# STARTS with its own value body, so the same `match(…, /^([^"\\]|\\.)*/)`
+# lifts it with no remainder-copying at all. Element 1 is whatever came
+# before the first key (the envelope), hence the loop from 2. The join that
+# follows it was quadratic for a SECOND reason — see the note on the binary
+# merge at the loop body below. Same input after both: gawk 0.22s, busybox
+# 0.15s, BWK 0.18s, mawk 0.11s, and doubling the part count now doubles the
+# time instead of quadrupling it (at 8,800 parts: 20.1s/16.0s/48.8s before,
+# 0.44s/0.37s/0.39s after). Byte-identical output at every size, on every
+# one of the four. Real messages have a few parts, so this was never a
+# user-visible hang — it is the kind of quadratic that waits for one
+# pathological transcript.
+#
 # Escapes: only \n \t \" \\ are unescaped — the SAME subset the claude path
 # has always unescaped, never \uXXXX (parity first; see handoff.sh's own
 # comment on this — a \uXXXX decoder is a follow-up, not a regression, since
@@ -435,12 +456,16 @@ adapter_handoff_extract() {
         has_kinds = 1
       }
       scanned++
-      rest = $0; res = ""; have_part = 0
-      while (match(rest, part_keyre)) {
-        rest = substr(rest, RSTART + RLENGTH)
-        if (!match(rest, /^([^"\\]|\\.)*/)) break
-        seg = substr(rest, 1, RLENGTH)
-        rest = substr(rest, RLENGTH + 2)
+      res = ""; have_part = 0; top = 0
+      # round-4 review P3-3 (#110): one linear split on the part key instead
+      # of match-then-re-slice-the-remainder; see the P3-3 note in the
+      # comment above this function. parts[1] is the envelope before the
+      # first key, so the values start at 2; split() clears the array itself,
+      # so there is nothing to reset between lines.
+      nparts = split($0, parts, part_keyre)
+      for (i = 2; i <= nparts; i++) {
+        if (!match(parts[i], /^([^"\\]|\\.)*/)) continue
+        seg = substr(parts[i], 1, RLENGTH)
         have_part = 1
         # round-3 review P2-1, per-part fallback: parts USED to be joined
         # into one line BEFORE the line-anchored `<environment_context>`
@@ -466,7 +491,39 @@ adapter_handoff_extract() {
         # `<permissions instructions>`, and the `# AGENTS.md instructions`
         # heading.
         if (!has_kinds && (seg ~ /^<(recommended_plugins|environment_context|user_instructions|permissions instructions)>/ || seg ~ /^# AGENTS\.md instructions/)) continue
-        res = (res == "" ? seg : res " " seg)
+        # round-4 review P3-3 (#110), the OTHER half: `res = res " " seg` per
+        # kept part is quadratic too, and once split() made the walk linear it
+        # was ALL that was left — measured, it was 0.64s of the 0.65s gawk
+        # spent in the loop at 4,400 parts, and doubling the part count still
+        # quadrupled the time.
+        # So parts are merged pairwise instead, in a binary counter: acc[k]
+        # holds 2^k already-merged parts, and pushing one merges upward while
+        # the level below is occupied — total bytes copied O(n log n) rather
+        # than O(n^2), with no awk extension (no gensub, no length(array), no
+        # asort) and no per-part array bookkeeping to reset, since the drain
+        # loop below empties every level it used.
+        #
+        # The merge treats "" as the IDENTITY (an empty part contributes no
+        # separator), which is what makes pairwise merging legal at all: the
+        # old left-to-right `res == "" ? seg : res " " seg` is NOT associative
+        # — an empty part in the MIDDLE produced a double space, and merging
+        # the same parts in a different order would not reproduce it. The
+        # identity form is associative, and the only output it changes is
+        # that double space, which no caller wanted.
+        lvl = 0
+        while (used[lvl]) {
+          seg = (acc[lvl] == "" ? seg : (seg == "" ? acc[lvl] : acc[lvl] " " seg))
+          acc[lvl] = ""; used[lvl] = 0; lvl++
+        }
+        acc[lvl] = seg; used[lvl] = 1
+        if (lvl > top) top = lvl
+      }
+      # Drain high level (earliest parts) to low (latest) — at most log2(n)
+      # pieces, so this last left-to-right join is O(n log n) at worst.
+      for (lvl = top; lvl >= 0; lvl--) {
+        if (!used[lvl]) continue
+        res = (res == "" ? acc[lvl] : (acc[lvl] == "" ? res : res " " acc[lvl]))
+        acc[lvl] = ""; used[lvl] = 0
       }
       # round-3 review P2-2: the event_msg and response_item rules above are
       # a UNION with no dedup, so a turn recorded in both shapes (a prior
