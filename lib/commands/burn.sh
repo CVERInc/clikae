@@ -1728,7 +1728,7 @@ _burn_lb_bounded() {
 # bare name instead of a path.
 _burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
 
-# _burn_lb_meta <over> <roots> <markers> <repos> <disc-timeout>
+# _burn_lb_meta <over> <roots> <markers> <repos> <disc-timeout> [kill-mode] [unavailable]
 #
 # The left-behind scan's own top-level `--json` keys, rendered once, here, so
 # `_burn_left_behind` (which has the counts) and `_burn_result` (which needs a
@@ -2304,9 +2304,8 @@ _burn_left_behind() {
     # "I don't know" is `null`, not a sentinel string; a consumer that reads
     # a number now gets a number or null, never a string that happens to
     # parse as neither.
-    # `dirty` follows `ahead`'s own precedent (P3-3, round-1 review): JSON's way
-    # of saying "I don't know" is `null`, never a sentinel a consumer's `>` test
-    # would read as zero. `git_timeout` is always present (true/false), so a
+    # #112 item 1: `dirty` now follows the same rule as `ahead` directly above,
+    # for the same reason. `git_timeout` is always present (true/false) so a
     # consumer can branch on it without a `.get`.
     entry="$(printf '{"repo":%s,"branch":%s,"ahead":%s,"dirty":%s,"files":[%s],"git_timeout":%s}' \
       "$(json_str "$repo")" "$(json_str "$branch")" \
