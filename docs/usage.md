@@ -921,6 +921,31 @@ to override the in-use skip, or `--to <tank>` to name a hop explicitly.
 unrelated to tanks. So you can spend a cheap tank's quota to chew on *any* file —
 including another tank's transcript.
 
+### What a failed burn left behind
+
+When a burn **fails**, `burn` scans the directories it was pointed at (`$PWD` and
+every `--add-dir`) for git repositories the run left work in — unpushed commits,
+uncommitted changes, files written since the run started — and prints one
+`left behind:` line per repository, with a copy-pasteable `git push` hint for
+anything ahead of its upstream. The scan is read-only (it never pushes, commits
+or writes) and bounded: 5s per git/`find` call, a 10s budget for the whole scan,
+25 rows on screen. `--json` carries the same facts:
+
+```json
+{"left_behind": [{"repo": "/path/repo", "branch": "main", "ahead": 1,
+                  "dirty": 3, "files": ["/path/repo/out.md"],
+                  "git_timeout": false}],
+ "left_behind_truncated": 0}
+```
+
+`ahead` is `null` when the branch has no upstream to compare against. A git call
+that hits its 5s ceiling — a dead NFS mount, a `.git/HEAD` that is really a FIFO,
+a wedged `git status` — makes the row **say so** instead of falling back to a
+number nobody measured: `git_timeout: true`, `dirty: null`, and
+`dirty ? (git timed out)` on the human line. Such a repository is always
+reported, even when nothing else about it qualified: "the scan could not answer"
+is exactly the case worth a human's attention.
+
 **Using agy as a cheap read-only worker.** `clikae burn agy <tank>` does work
 (since v0.10.0 — the Keychain carry made a tank switch non-interactive, so burn can
 hop to the next agy tank on dry). What it can't do is run two agy tanks at once:

@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `clikae burn`'s left-behind scan no longer reports a repository it could not
+  read as clean. Each of the per-repo git calls (`symbolic-ref`, `rev-list
+  --count`, `status --porcelain`) used to fall back to a default when it hit its
+  5s ceiling, and `status`'s default is `dirty=0` — so a repository wedged on a
+  dead NFS mount was indistinguishable from one with nothing in it. Such a row
+  now carries `"git_timeout": true` and `"dirty": null` in `--json`, reads
+  `dirty ? (git timed out)` on screen, and is always listed even when nothing
+  else about it qualified (#112).
 - The home board no longer leaves a `state/home-recent-truncated.<pid>` file
   behind every time its Resume list is truncated (or a board is killed
   mid-render). The "N sessions hidden as burn runs · list truncated" count now

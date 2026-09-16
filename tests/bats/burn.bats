@@ -4774,6 +4774,96 @@ for f in bravo[0]["files"]:
 '
 }
 
+# --- #112: the P3s #87's review rounds deferred -------------------------------
+
+# A `git` shim that wedges ONE subcommand (the first bare word after the `-c`
+# flags `_burn_lb_git` always passes) and lets every other call through to the
+# real binary — the portable stand-in for a dead NFS mount, without needing one.
+# $1 is the subcommand to wedge ("status", "rev-parse", …), $2 (optional) a
+# path fragment the `-C <repo>` argument must contain for the wedge to apply.
+_stub_wedged_git() {
+  local real; real="$(command -v git)"
+  cat > "$BATS_TEST_TMPDIR/bin/git" <<STUB
+#!/usr/bin/env bash
+_want="$1"
+_only="${2:-}"
+_sub=""
+_dir=""
+_prev=""
+for _a in "\$@"; do
+  case "\$_prev" in
+    -C) _dir="\$_a"; _prev=""; continue ;;
+    -c) _prev=""; continue ;;
+  esac
+  case "\$_a" in
+    -c|-C) _prev="\$_a"; continue ;;
+    -*) continue ;;
+  esac
+  [ -n "\$_sub" ] || _sub="\$_a"
+done
+if [ "\$_sub" = "\$_want" ]; then
+  if [ -z "\$_only" ]; then exec sleep 100000; fi
+  case "\$_dir" in *"\$_only"*) exec sleep 100000 ;; esac
+fi
+exec "$real" "\$@"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/git"
+}
+
+# Item 1 (#112; round-4 review P3-5): `repo_timeout` was set only by the file-list
+# `find`. The four `_burn_lb_git` calls each fell back to a DEFAULT at their 5s
+# ceiling, and `git status`'s default is `dirty=0` — so a repo wedged on a dead
+# mount was reported as clean. Here the repo is genuinely dirty AND its `git
+# status` never returns: the pre-fix output is `dirty 0` with `"dirty": 0` in the
+# JSON, i.e. a number burn invented.
+@test "burn #112 item 1: a wedged \`git status\` is reported as unanswered, not \`dirty 0\`" {
+  local timeout_bin
+  timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+  [ -n "$timeout_bin" ] || skip "no \`timeout\`/\`gtimeout\` on PATH to bound this test itself"
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  _stub_wedged_git status
+  run "$timeout_bin" -s KILL 60 "$CLIKAE_BIN" burn codex T1 --json \
+    --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ] || { echo "status=$status"; printf '%s\n' "$output"; false; }
+  [[ "$output" == *"left behind:"*"dirty ? (git timed out)"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" != *"dirty 0"* ]] || { echo "still reporting a dirty count it never got"; printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["dirty"] is None, rows[0]
+assert rows[0]["git_timeout"] is True, rows[0]
+'
+}
+
+# The control: an ordinary repo must keep the old shape exactly — `git_timeout`
+# false, `dirty` a number. Without this, item 1 could "pass" by reporting every
+# repo as unanswered.
+@test "burn #112 item 1 control: a repo git could answer for reports git_timeout false and a dirty count" {
+  _left84_setup
+  _left84_repo
+  cat > "$BATS_TEST_TMPDIR/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+printf 'unsaved work\n' > "$STUB_LEFT_REPO/dirty.txt"
+STUB
+  run clikae burn codex T1 --json --artifact "$TEST_HOME/missing" --add-dir "$STUB_LEFT_REPO" -- noop
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"left behind:"*"dirty 1"* ]] || { printf '%s\n' "$output"; false; }
+  [[ "$output" != *"git timed out"* ]] || { printf '%s\n' "$output"; false; }
+  printf '%s\n' "$output" | sed -n '/^{/p' | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["left_behind"]
+assert len(rows) == 1, rows
+assert rows[0]["dirty"] == 1, rows[0]
+assert rows[0]["git_timeout"] is False, rows[0]
+'
+}
+
 # --- P2-1(a) (round-2 review): burn refreshes the launched tank's own usage ---
 # --- cache at run end, off the launch path                                 ---
 
