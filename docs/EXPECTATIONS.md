@@ -268,8 +268,10 @@ and what tmux does with them. Two halves of "copy text on a phone" are still
 **unverified** (#108):
 
 - **a-Shell's own long-press selection.** It selects what the terminal is
-  drawing. Nobody here has checked how it behaves while tmux is in copy-mode,
-  or across a pane boundary.
+  drawing, and it was measured (2026-09-16) to work whether or not tmux's mouse
+  mode is on — which is why `@clikae_touch_drag` can give `MouseDrag1Pane` to
+  scrolling on a phone without taking selection away. How it behaves *while tmux
+  is in copy-mode*, or across a pane boundary, is still unchecked.
 - **OSC 52 reaching the iOS clipboard.** clikae sets `set-clipboard on`, so a
   copy-mode yank is emitted as OSC 52 — but whether a-Shell honours it, and
   whether a selection spanning several pages survives, has not been measured on
@@ -279,4 +281,16 @@ Tap-to-page (`@clikae_touch_pages`, off by default) was measured the same way
 the scroll half was: against a real tmux server, asserting tmux's own
 `#{scroll_position}`. **It has not been run on a physical iPhone** — the
 gesture reaching tmux as a press/release pair is inherited from #88's
-measurement, not re-measured for this feature.
+measurement, not re-measured for this feature. That inheritance turned out to
+be safe for a *tap* and wrong for a *flick*: the 2026-09-16 device measurement
+found a flick sends motion events and no `MouseUp1Pane` at all, which is what
+`@clikae_touch_drag` exists for. Read it as the standing warning it is —
+"inherited from an earlier measurement" is not the same claim as "measured".
+
+Drag-to-scroll (`@clikae_touch_drag`, off by default) is the one touch feature
+whose *input* was measured on a physical iPhone. Its **output** was not: every
+assertion about what then happens — the history scrolling, the wheel bytes
+reaching an alternate-screen application, `off` still selecting text — comes
+from a real tmux 3.4 server on Linux, three of them from a real client driven
+with synthetic SGR bytes. Nobody has yet watched the finished feature under a
+thumb.
