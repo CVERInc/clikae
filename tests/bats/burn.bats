@@ -4901,7 +4901,7 @@ assert obj["left_behind_truncated"] == sum(t.values()), (obj["left_behind_trunca
 
 # The markers half of the same finding: the roots resolve instantly (neither is a
 # repository), discovery lists eight `.git` markers under one root, and each
-# marker`s own `rev-parse` wedges — so the budget runs out INSIDE the marker
+# marker's own `rev-parse` wedges — so the budget runs out INSIDE the marker
 # loop and the rest are skipped there, which is a different unit again (a marker
 # is one repository; a root is an unknown number of them).
 @test "burn #112 item 2: markers the budget never reached count as markers_budget_skipped" {
