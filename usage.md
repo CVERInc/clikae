@@ -222,29 +222,52 @@ problem instead of memory's:
 | Command | What it does |
 |---|---|
 | `cockpit` | Show the current cockpit tank (or that none is set). |
-| `cockpit [<engine>] <tank>` | Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like `clikae <name>`. |
+| `cockpit [<engine>] <tank>` | Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like `clikae <name>`, and `agy` is accepted for `antigravity` the same way `clikae burn` accepts it. |
 | `cockpit --off` | Remove the guard everywhere and forget the role. |
 | `cockpit --allow-agents <dur>` | Temporarily lift the guard (e.g. `4h`) without removing it. |
 
 The guard is a PreToolUse hook on the cockpit tank's `Agent` tool: it refuses
-a spawn whose model is missing, or whose model is opus/sonnet (any family-
-prefixed form too — `claude-opus-*`, `claude-sonnet-*`, `opusplan`, or the
-bare alias) **and** whose prompt reads as a build/review lane — naming the
+a spawn whose model is missing, or whose model is fable/opus/sonnet (any
+family-prefixed form too — `claude-fable-*`, `claude-opus-*`,
+`claude-sonnet-*`, `opusplan`, or the bare alias) **and** whose prompt reads
+as a build/review lane — naming the
 current idle reserve and the exact `clikae burn <engine> <tank>
---prompt-file <f> --artifact <path>` shape to use instead. It also refuses an
-opus/sonnet spawn outright when the prompt is over 1,500 characters,
+--prompt-file <f> --artifact <path>` shape to use instead. It also refuses a
+checked spawn outright when the prompt is over 1,500 characters,
 regardless of content. **The guard never reads `subagent_type`** — `model` is
-the only thing that decides whether a spawn gets examined at all. A haiku or
-fable spawn is untouched regardless of `subagent_type` or prompt content; an
-opus/sonnet spawn — `Explore` included — is checked against the prompt
-heuristic below exactly like any other. Provider spellings are placed in
-their family (`us.anthropic.claude-sonnet-4-5-v1:0`, `claude-sonnet-4-5@…`,
-`sonnet[1m]`). A model id the guard does not recognise is **checked like
+the only thing that decides whether a spawn gets examined at all.
+
+**fable, opus and sonnet are checked; haiku is not.** A fable spawn spends
+the cockpit's weekly budget the same way an opus one does, and this guard
+exists to move that spend onto a worker tank — so the only exempt family is
+haiku. A haiku spawn is untouched regardless of `subagent_type` or prompt
+content; a fable/opus/sonnet spawn — `Explore` included — is checked against
+the prompt heuristic below exactly like any other. Provider spellings are
+placed in their family (`us.anthropic.claude-sonnet-4-5-v1:0`,
+`claude-sonnet-4-5@…`, `sonnet[1m]`); the exemption itself matches only
+exact, explicit prefixes (`haiku`, `claude-haiku-…`, `claude-3-5-haiku…`,
+`claude-3-haiku…`), so a lookalike such as `claude-opus-4-haiku` or
+`opus.anthropic.haiku` is checked, not exempted. A model id the guard does
+not recognise is **checked like
 opus/sonnet**, not waved through: a refusal names it as unrecognised, and a
 spawn that passes prints one line saying the id was unrecognised. The hook **fails closed**: a call it cannot read (an empty or
-malformed payload, no tool input object) is refused with the reason, and the
+malformed payload, no tool input object, a `\u0000` escape anywhere in the
+payload) is refused with the reason, and the
 escape hatches below are checked before the payload, so that refusal can
-always be lifted. This is not a general permission gate. The role, and the hook, live on
+always be lifted.
+
+**jq is a runtime dependency of the hook, not just of the install.** At hook
+execution time jq must be on PATH or every Agent spawn on the cockpit is
+refused with `cockpit-guard: refused — jq is not installed (the guard parses
+the call with jq; clikae cockpit needed it to install this hook). The guard
+fails closed: a call it cannot read is not let through.` — including haiku
+spawns, which the guard would otherwise never look at. That is the correct
+behaviour (fail closed), but it bites when PATH differs from the shell you
+installed from: a GUI launch, or any PATH without `/opt/homebrew/bin`. If
+every spawn is suddenly refused, check `command -v jq` **in the tank's own
+environment** first. `clikae doctor` reports jq and where it found it.
+
+This is not a general permission gate. The role, and the hook, live on
 exactly one tank at a time; moving it with `clikae cockpit` arms the new
 tank first and only cleans up the old one once the new one is armed and
 recorded, so a failure partway through never leaves you with no cockpit

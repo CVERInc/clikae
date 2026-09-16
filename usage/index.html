@@ -291,7 +291,7 @@ problem instead of memory's:</p>
 </tr>
 <tr>
 <td><code>cockpit [&lt;engine&gt;] &lt;tank&gt;</code></td>
-<td>Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like <code>clikae &lt;name&gt;</code>.</td>
+<td>Mark this tank as the cockpit: installs a guard there and removes it from wherever it was before. A bare unique tank name resolves like <code>clikae &lt;name&gt;</code>, and <code>agy</code> is accepted for <code>antigravity</code> the same way <code>clikae burn</code> accepts it.</td>
 </tr>
 <tr>
 <td><code>cockpit --off</code></td>
@@ -304,23 +304,41 @@ problem instead of memory's:</p>
 </tbody>
 </table>
 <p>The guard is a PreToolUse hook on the cockpit tank's <code>Agent</code> tool: it refuses
-a spawn whose model is missing, or whose model is opus/sonnet (any family-
-prefixed form too — <code>claude-opus-*</code>, <code>claude-sonnet-*</code>, <code>opusplan</code>, or the
-bare alias) <strong>and</strong> whose prompt reads as a build/review lane — naming the
-current idle reserve and the exact <code>clikae burn &lt;engine&gt; &lt;tank&gt; --prompt-file &lt;f&gt; --artifact &lt;path&gt;</code> shape to use instead. It also refuses an
-opus/sonnet spawn outright when the prompt is over 1,500 characters,
+a spawn whose model is missing, or whose model is fable/opus/sonnet (any
+family-prefixed form too — <code>claude-fable-*</code>, <code>claude-opus-*</code>,
+<code>claude-sonnet-*</code>, <code>opusplan</code>, or the bare alias) <strong>and</strong> whose prompt reads
+as a build/review lane — naming the
+current idle reserve and the exact <code>clikae burn &lt;engine&gt; &lt;tank&gt; --prompt-file &lt;f&gt; --artifact &lt;path&gt;</code> shape to use instead. It also refuses a
+checked spawn outright when the prompt is over 1,500 characters,
 regardless of content. <strong>The guard never reads <code>subagent_type</code></strong> — <code>model</code> is
-the only thing that decides whether a spawn gets examined at all. A haiku or
-fable spawn is untouched regardless of <code>subagent_type</code> or prompt content; an
-opus/sonnet spawn — <code>Explore</code> included — is checked against the prompt
-heuristic below exactly like any other. Provider spellings are placed in
-their family (<code>us.anthropic.claude-sonnet-4-5-v1:0</code>, <code>claude-sonnet-4-5@…</code>,
-<code>sonnet[1m]</code>). A model id the guard does not recognise is <strong>checked like
+the only thing that decides whether a spawn gets examined at all.</p>
+<p><strong>fable, opus and sonnet are checked; haiku is not.</strong> A fable spawn spends
+the cockpit's weekly budget the same way an opus one does, and this guard
+exists to move that spend onto a worker tank — so the only exempt family is
+haiku. A haiku spawn is untouched regardless of <code>subagent_type</code> or prompt
+content; a fable/opus/sonnet spawn — <code>Explore</code> included — is checked against
+the prompt heuristic below exactly like any other. Provider spellings are
+placed in their family (<code>us.anthropic.claude-sonnet-4-5-v1:0</code>,
+<code>claude-sonnet-4-5@…</code>, <code>sonnet[1m]</code>); the exemption itself matches only
+exact, explicit prefixes (<code>haiku</code>, <code>claude-haiku-…</code>, <code>claude-3-5-haiku…</code>,
+<code>claude-3-haiku…</code>), so a lookalike such as <code>claude-opus-4-haiku</code> or
+<code>opus.anthropic.haiku</code> is checked, not exempted. A model id the guard does
+not recognise is <strong>checked like
 opus/sonnet</strong>, not waved through: a refusal names it as unrecognised, and a
 spawn that passes prints one line saying the id was unrecognised. The hook <strong>fails closed</strong>: a call it cannot read (an empty or
-malformed payload, no tool input object) is refused with the reason, and the
+malformed payload, no tool input object, a <code>\u0000</code> escape anywhere in the
+payload) is refused with the reason, and the
 escape hatches below are checked before the payload, so that refusal can
-always be lifted. This is not a general permission gate. The role, and the hook, live on
+always be lifted.</p>
+<p><strong>jq is a runtime dependency of the hook, not just of the install.</strong> At hook
+execution time jq must be on PATH or every Agent spawn on the cockpit is
+refused with <code>cockpit-guard: refused — jq is not installed (the guard parses the call with jq; clikae cockpit needed it to install this hook). The guard fails closed: a call it cannot read is not let through.</code> — including haiku
+spawns, which the guard would otherwise never look at. That is the correct
+behaviour (fail closed), but it bites when PATH differs from the shell you
+installed from: a GUI launch, or any PATH without <code>/opt/homebrew/bin</code>. If
+every spawn is suddenly refused, check <code>command -v jq</code> <strong>in the tank's own
+environment</strong> first. <code>clikae doctor</code> reports jq and where it found it.</p>
+<p>This is not a general permission gate. The role, and the hook, live on
 exactly one tank at a time; moving it with <code>clikae cockpit</code> arms the new
 tank first and only cleans up the old one once the new one is armed and
 recorded, so a failure partway through never leaves you with no cockpit
