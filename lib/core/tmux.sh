@@ -587,6 +587,27 @@ tmux_spawn_session() {
   # a tmux call, so the picker and the clock are left exactly as tmux's own
   # default leaves them. Selecting a tree-mode row on tap is still out of
   # scope for this fix — the gap is now a silent no-op, not an error overlay.
+  # TAP ZONES (#108). The same touch that #88 reads for DISPLACEMENT carries a
+  # second, unused signal: where on the pane it happened. A tap in the top
+  # band pages the history back one screen, a tap in the bottom band pages
+  # forward and then returns to the live view — a page per tap is the gesture
+  # a phone can actually aim, where a swipe's two-row threshold on a 40-row
+  # pane is a lot of thumb for a little history.
+  #
+  # 🔴 IT IS THE SAME BINDING, ON PURPOSE. Both features are decided inside
+  # ONE MouseUp1Pane handler (touch_scroll.sh's decision tree: displacement
+  # first, then zone, then leave it alone), because two bindings on one key
+  # is not a design — tmux keeps the last one bound, and the feature that
+  # lost would fail silently and only on a device nobody here owns.
+  #
+  # OFF BY DEFAULT (`@clikae_touch_pages off`), unlike #88's options, which
+  # default on: this one takes a click that currently reaches the program and
+  # gives it to tmux, so it has to be asked for. `@clikae_touch_pages_rows`
+  # (default 3) is the band height. The press handlers also record
+  # `@clikae_touch_h` (`#{pane_height}` at press time) next to
+  # `@clikae_touch_y` — the band has to be measured against the geometry the
+  # finger actually landed on, not whatever the pane has resized to by the
+  # time the release is translated.
   local touch_helper
   touch_helper="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh") #{mouse_y} #{pane_id} #{pane_mode}"
   # 🔴 THE FLOOR. `set-option -p` / `-pu` (pane-scoped options, used by every
@@ -603,11 +624,13 @@ tmux_spawn_session() {
   if _tmux_touch_scroll_floor_met; then
     tmux set-option -og @clikae_touch_scroll on \
       \; set-option -og @clikae_touch_scroll_lines 2 \
-      \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =; send-keys -M' \
+      \; set-option -og @clikae_touch_pages off \
+      \; set-option -og @clikae_touch_pages_rows 3 \
+      \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M' \
       \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
-      \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+      \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
       \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
-      \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; select-pane -t =' \
+      \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
       \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
       2>/dev/null || true
   fi
