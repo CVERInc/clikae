@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/c7125b0ebb3bb5ead5f310ecc96c4edee1256ec7/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/413a87df4c5c2097af923bbdc4a1f2ae00a4c7cf/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -242,6 +242,35 @@ with `--print`, so leaving no trace at all is available in the headless shape
 (`clikae claude <tank> --ephemeral -- -p "…"`) and not interactively. The wording
 on screen says which one you got, deliberately: incognito means *it doesn't know
 you*, not *it never happened*.
+
+## Headless tasks (`burn`) — the left-behind scan
+
+**A file whose name contains a newline is reported as two paths, one of which
+does not exist.** The scan's per-file `stat` batch is newline-delimited because
+`sort -rn` needs lines, so such a name splits across two reads: the first half is
+listed as a path that isn't there and the second half is dropped. A
+NUL-delimited pipeline would fix it and is not proven against BSD `stat`/`sort`,
+so this is a known limit rather than an unverified cross-platform rewrite.
+Repository *names* containing newlines are unaffected; only the per-file list is.
+
+**`dirty` and `files` count different things on purpose.** `dirty` is git's own
+`status` count for that repository, and from a parent repository's point of view
+a nested repository's whole working tree is *one* untracked entry — so a nested
+repo adds 1 to its parent's `dirty` while its files appear only on its own row.
+`files` is attributed to the innermost repository that owns them, because that is
+the repository whose `push` would carry them.
+
+**The scan's watchdog closes fds 3 and 4, not every fd it inherits.** Those two
+are the ones `burn` itself is known to open (the run's tee, and `--json`'s real
+stdout), and closing them is what stops a failed `clikae burn --json | jq` from
+sitting open past process exit. Any other inherited descriptor — a caller's own
+fd 5, the collision lock's fd 9 — is still inherited. With a real process group
+this is moot, because the watchdog's `sleep` dies with its group; on the
+single-pid fallback (a platform that will not give the bounded child a process
+group of its own) the pre-fix shape remains — and on that fallback a grandchild
+a bounded call forked can outlive the bound. `--json`'s
+`left_behind_kill_mode` (`pgroup` / `single-pid`) says which shape a given run
+got, so this is a fact you can read rather than one you have to infer.
 
 ## Management verbs
 
