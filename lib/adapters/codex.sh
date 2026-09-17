@@ -12,6 +12,7 @@ adapter_meta_cli_binary()  { echo "codex"; }
 adapter_meta_env_var()     { echo "CODEX_HOME"; }
 adapter_meta_strategy()    { echo "env-dir"; }
 adapter_meta_description() { echo "OpenAI Codex CLI (auth + config + history in CODEX_HOME)"; }
+adapter_meta_permission_modes() { echo "acceptEdits bypassPermissions plan default"; }
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @openai/codex"; }
 
@@ -63,7 +64,23 @@ adapter_burn_flags() {
   local prompt="$1"; shift
   printf 'exec\0'
   [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
-  printf -- '-s\0workspace-write\0%s\0' "$prompt"
+  # Like Claude's burn_permission, permission_set and dir are cmd_burn locals
+  # inherited through Bash dynamic scope. dir names the current tank, including
+  # after rerouting; direct hook callers retain the historical default.
+  local sandbox=workspace-write
+  if [ "${permission_set:-0}" -eq 1 ]; then
+    case "${burn_permission:-acceptEdits}" in
+      acceptEdits) sandbox=workspace-write ;;
+      bypassPermissions) sandbox=danger-full-access ;;
+      plan|default) sandbox=read-only ;;
+    esac
+  elif [ -n "${dir:-}" ] && [ -f "$dir/config.toml" ] &&
+       grep -Eq '^[[:space:]]*sandbox_mode[[:space:]]*=[[:space:]]*"[^"]+"[[:space:]]*(#.*)?$' "$dir/config.toml"; then
+    # #129: the tank's ruling wins; omit -s so Codex reads its sandbox_mode.
+    sandbox=""
+  fi
+  [ -z "$sandbox" ] || printf -- '-s\0%s\0' "$sandbox"
+  printf '%s\0' "$prompt"
 }
 
 # Optional hook: how to run codex HEADLESS READ-ONLY for `clikae conduct`'s

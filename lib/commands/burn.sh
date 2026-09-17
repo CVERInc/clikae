@@ -40,7 +40,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
-                   [--permission <acceptEdits|auto>] [--force-cockpit]
+                   [--permission <mode>] [--force-cockpit]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -76,11 +76,20 @@ Give the task in one of two ways:
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
-  --permission <mode> claude-only: acceptEdits (default) or auto. Other engines
-                      have no mapping and print one degradation line, keeping
-                      their existing fixed mode — see docs/orchestration.md.
+  --permission <mode> Claude: acceptEdits (default) or auto. Codex maps
+                      acceptEdits -> workspace-write, bypassPermissions ->
+                      danger-full-access, plan/default -> read-only. Without
+                      this flag, Codex honours the tank's sandbox_mode in
+                      config.toml, else uses workspace-write. Unmapped modes
+                      warn and keep existing flags — see docs/orchestration.md.
                       Applies to composed prompt argv; raw commands after --
                       stay verbatim.
+  Codex sandbox vs --add-dir: only the first directory becomes the cwd; extras
+  are not writable roots under workspace-write. A git worktree cannot commit
+  there: its gitdir is under the main repository. Lanes needing commit/push/network
+  use --permission bypassPermissions or a profile sandbox_mode = "danger-full-access"
+  with no explicit --permission.
+
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.
@@ -927,7 +936,7 @@ _burn_compose() {
   BURN_ARGV=()
   local line
   # P2-1/P2-2 (2026-09-12 round-1 review): gate on whether an adapter DECLARES
-  # a --permission mapping (adapter_meta_permission_modes, claude-only today),
+  # a --permission mapping (adapter_meta_permission_modes),
   # not on its binary name — and gate on whether the caller ASKED for a mode
   # ($permission_set), not on which mode. An explicit acceptEdits on an unmapped
   # engine used to be silent, which read as "you got what you asked for" even
@@ -935,12 +944,18 @@ _burn_compose() {
   # --permission-mode bypassPermissions, never acceptEdits). cli/burn_permission/
   # permission_set are cmd_burn locals, inherited here via bash dynamic scoping,
   # same convention as adapter_burn_flags' own burn_permission read below.
-  if [ "${permission_set:-0}" -eq 1 ] && ! declare -F adapter_meta_permission_modes >/dev/null; then
+  local modes=""
+  if declare -F adapter_meta_permission_modes >/dev/null; then
+    modes=" $(adapter_meta_permission_modes) "
+  fi
+  if [ "${permission_set:-0}" -eq 1 ] && [[ "$modes" != *" ${burn_permission:-acceptEdits} "* ]]; then
     if [ "$cli" = grok ]; then
       log_warn "clikae does not map --permission for grok; the grok burn runs with the adapter's fixed permission mode."
     else
       log_warn "$cli has no equivalent for --permission ${burn_permission:-acceptEdits}; keeping its existing burn flags."
     fi
+    # Shadow only for this composition; preserve the requested mode for reroutes.
+    local burn_permission=acceptEdits
   fi
   # NUL-delimited read so a multi-line prompt survives as a single argv item.
   while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
@@ -3629,8 +3644,8 @@ cmd_burn() {
       --permission)
         shift
         case "${1:-}" in
-          acceptEdits|auto) burn_permission="$1"; permission_set=1; shift ;;
-          *) log_fail "--permission must be acceptEdits or auto" ;;
+          acceptEdits|auto|bypassPermissions|plan|default) burn_permission="$1"; permission_set=1; shift ;;
+          *) log_fail "--permission must be acceptEdits or auto, bypassPermissions, plan, default" ;;
         esac
         ;;
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
@@ -3939,6 +3954,7 @@ cmd_burn() {
     _burn_status_write fail false "$cli" "$tank" "$artifact" "'$binary' is not on PATH" ""
     log_fail "'$binary' is not on PATH."
   fi
+  local dir; dir="$(profile_dir "$cli" "$tank")"   # dynamic scope for adapter_burn_flags
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
   if [ "$prompt_set" -eq 1 ]; then
     if ! declare -F adapter_burn_flags >/dev/null; then
@@ -4732,6 +4748,13 @@ KV
       */*) nx_cli="${nxt%%/*}"; nx_tank="${nxt#*/}" ;;
       *)   nx_cli="$cli";       nx_tank="$nxt" ;;
     esac
+    # Resolve the destination before composing: each tank owns its sandbox (#129).
+    dir="$(profile_dir "$nx_cli" "$nx_tank")"
+    if [ "$nx_cli" = "$cli" ] && [ "$prompt_set" -eq 1 ]; then
+      _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
+      cmd=("${BURN_ARGV[@]}")
+      _burn_claude_headless_guards
+    fi
     if [ "$nx_cli" != "$cli" ]; then
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
       envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
