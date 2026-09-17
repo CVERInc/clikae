@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Shared, atomic usage cache. Only normalized public readings reach disk.
 # P3-5 (round-6 review) and #107: a reading with no numbers may carry a
-# `reason`. FOUR values, and nothing else is ever emitted or cached:
+# `reason`. FIVE values (#136 added the last), and nothing else is ever
+# emitted or cached:
 #   expired-token   the vendor refused the token (HTTP 401/403), or its own
 #                   recorded expiry had passed, AND the credentials hold a
 #                   refresh token. The login is fine; the access token only
@@ -13,11 +14,31 @@
 #                   Keychain entry, one that does not parse), or the vendor
 #                   refused one that has no refresh token to renew it with.
 #   network         the call did not complete usably for a transport or
-#                   server reason: no connection, a timeout, a 429, a 5xx.
+#                   server reason: no connection, a timeout, a 5xx. Up to
+#                   #136 this also swallowed every 429.
+#   rate-limited    (#136) HTTP 429. May carry ONE more key, `retry_after`:
+#                   the vendor's own `Retry-After` header, and only when it
+#                   was delta-seconds in 1..86400 — absent for a missing,
+#                   negative, zero, non-numeric, HTTP-date or out-of-range
+#                   header, so a caller that sees the key can trust it
+#                   without re-validating, and one that does not see it falls
+#                   back to its own backoff.
 #   unparseable     the call answered 200 and the body was not one usable
 #                   reading (malformed, several documents, over the byte cap).
 # The key is ABSENT (not null) when the reason is unknown, and absent on
 # every vendor/transcript reading, so no existing output shape moves.
+#
+# THE AUTH CLASS IS TWO WORDS, NOT ONE. #136 asked for a single `reauth`;
+# `expired-token` and `no-credentials` already are that class, split by the
+# one fact that changes the remedy (is there a refresh token?). A caller that
+# wants "this will never succeed on its own" asks for either word — see
+# lib/commands/watch.sh's `_watch_usage_poll_one`.
+#
+# #137: a VENDOR reading may carry one extra key, `models` — an array of
+# `{name, pct, resets_at}`, the vendor's own per-model weekly rows. Read by
+# `clikae usage` only; no ranking, dot or backoff looks at it. See
+# lib/adapters/claude.sh's `adapter_usage` for where it comes from and
+# docs/usage.md for why the board's dot stays all-models.
 #
 # #107: an auth failure is cached for at most _USAGE_AUTH_FAIL_TTL_SEC, not
 # the full CLIKAE_USAGE_TTL — the next read after a session refreshes the
@@ -41,10 +62,22 @@ usage_expired_hintv() {
 usage_expired_board_notev() {
   _UEH="⏳ expired · usage --wake $1"
 }
+# usage_unknown [reason] [retry_after]
+# $2 is honoured for `rate-limited` only, and only as an integer in 1..86400
+# — same bound, same digit-count guard against arithmetic overflow, as the
+# adapter's own `_claude_usage_rate_limited`. Two gates on purpose: the
+# adapter is one of several possible producers, this is the only writer.
 usage_unknown() {
+  local _u_retry=""
+  case "${2:-}" in
+    ''|*[!0-9]*|??????*) ;;
+    *) if [ "$2" -ge 1 ] && [ "$2" -le 86400 ]; then _u_retry=",\"retry_after\":$2"; fi ;;
+  esac
   case "${1:-}" in
     expired-token)
       printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"%s"}\n' "$1" ;;
+    rate-limited)
+      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
     no-credentials|network|unparseable)
       printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
     *)
@@ -54,7 +87,7 @@ usage_unknown() {
 
 usage_read() (
   local engine="$1" tank="$2" fresh="${3:-0}" cache now ttl reading tmp
-  local adapter_out="" adapter_reason=""
+  local adapter_out="" adapter_reason="" adapter_retry=""
   cache="$CLIKAE_HOME/state/usage/$engine/$tank.json"
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
@@ -107,11 +140,22 @@ usage_read() (
         adapter_reason="$(printf '%s' "$adapter_out" | jq -r '
           if .reason == "expired-token" or .reason == "no-credentials"
              or .reason == "network" or .reason == "unparseable"
+             or .reason == "rate-limited"
           then .reason else empty end' 2>/dev/null)"
+        # #136: the ONE extra fact a failed call may carry out. Read only for
+        # the reason that defines it, and only as a whole number of seconds —
+        # `usage_unknown` re-checks the range anyway (a producer is not the
+        # writer), but a non-integer must not reach it as `30.5`.
+        if [ "$adapter_reason" = rate-limited ]; then
+          adapter_retry="$(printf '%s' "$adapter_out" | jq -r '
+            if (.retry_after|type) == "number" and .retry_after >= 1
+               and .retry_after <= 86400 and (.retry_after|floor) == .retry_after
+            then (.retry_after|tostring) else empty end' 2>/dev/null)"
+        fi
       fi
     fi
   fi
-  [ -n "$reading" ] || reading="$(usage_unknown "$adapter_reason")"
+  [ -n "$reading" ] || reading="$(usage_unknown "$adapter_reason" "$adapter_retry")"
   # P2-4 (round-1 review): a reading can be honest evidence without a LIVE
   # vendor call behind it (codex's is derived from a rollout transcript it
   # already wrote) — pull out the event's own timestamp BEFORE whitelisting
@@ -127,7 +171,26 @@ usage_read() (
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})$") then . else null end;
     (if .reason == "no-credentials" or .reason == "network"
-        or .reason == "unparseable" then .reason else null end) as $reason |
+        or .reason == "unparseable" or .reason == "rate-limited"
+     then .reason else null end) as $reason |
+    # #136: `retry_after` exists only beside `rate-limited`, only as a whole
+    # number of seconds in 1..86400. Anything else is dropped here, so a
+    # reader that finds the key never has to re-validate it.
+    (if .reason == "rate-limited" and (.retry_after|type) == "number"
+        and .retry_after >= 1 and .retry_after <= 86400
+        and (.retry_after|floor) == .retry_after
+     then (.retry_after|floor) else null end) as $retry |
+    # #137: the per-model weekly rows, whitelisted field by field
+    # like everything else that reaches this cache — a bounded array of
+    # at most 8 `{name, pct, resets_at}` with a name of at most 40 characters,
+    # a percentage in 0..100 and a timestamp of the one shape `stamp` accepts.
+    # Never carried on a non-vendor reading.
+    (if (.models|type) == "array" then
+       [ .models[] | select(type == "object") |
+         {name: .name, pct: .pct, resets_at: (.resets_at|stamp)} |
+         select((.name|type) == "string" and (.name|length) > 0 and (.name|length) <= 40) |
+         select((.pct|type) == "number" and .pct >= 0 and .pct <= 100) ] | .[0:8]
+     else [] end) as $models |
     # #107: "expired" exists only with its one reason, and never carries a
     # number — whatever else an adapter put beside it is dropped here.
     if .source == "expired" and .reason == "expired-token" then
@@ -137,7 +200,10 @@ usage_read() (
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
      source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)} |
-    if .source == "unknown" and $reason != null then . + {reason:$reason} else . end
+    if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
+    if .source == "unknown" and $reason == "rate-limited" and $retry != null
+    then . + {retry_after:$retry} else . end |
+    if .source == "vendor" and ($models|length) > 0 then . + {models:$models} else . end
     end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   umask 077
   if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then

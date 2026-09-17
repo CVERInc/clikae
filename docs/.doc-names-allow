@@ -49,3 +49,5 @@ scanned_at         a field in the on-disk usage cache only (#72 round-2 review, 
 subagent_type      a JSON field name in Claude Code's PreToolUse hook payload (tool_input.subagent_type); docs/usage.md's cockpit section names it to say the guard deliberately never reads it (#63 P3-2)
 alternate_on       a tmux FORMAT name (#{alternate_on}), not a function; #108's drag translation reads it to tell an alternate-screen application apart from a pane with scrollback, and Rule 9 / EXPECTATIONS quote the measured value
 history_size       a tmux FORMAT name (#{history_size}), not a function; quoted alongside alternate_on to record that the measured alternate-screen pane had NO scrollback for copy-mode to scroll
+retry_after        a field in `clikae usage --json`'s result object and in the on-disk usage cache (#136) — the vendor's own Retry-After header in whole seconds, 1..86400; not a function
+weekly_scoped      the vendor's own `kind` value in the OAuth usage API's limits[] array (#137), quoted in docs/DESIGN-board-fuel-dots.md as where the per-model weekly row lives; not a function

@@ -19,7 +19,22 @@ config="$(cat)"
 # (measured, curl 8.5: an HTTP refusal exits 22 and writes its 3-digit
 # status to stderr; a DNS failure exits 6 and writes 000). USAGE_FAIL above
 # stays as the pre-#107 shape — exit 22 with no status written at all.
-if [ -n "${USAGE_HTTP:-}" ]; then printf '%s' "$USAGE_HTTP" >&2; exit 22; fi
+# #136: and what it does with `-D <file>` — measured on curl 8.5 against a
+# real 429: `--fail` suppresses the BODY but STILL writes the header dump,
+# status line included, with CRLF line endings. $USAGE_RETRY_AFTER (unset =
+# no such header) and $USAGE_RETRY_HDR (the field name, default lowercase
+# as HTTP/2 sends it) drive the one field adapter_usage reads.
+if [ -n "${USAGE_HTTP:-}" ]; then
+  _hdr=""; _prev=""
+  for _a in "$@"; do [ "$_prev" = "-D" ] && _hdr="$_a"; _prev="$_a"; done
+  if [ -n "$_hdr" ] && [ "$_hdr" != /dev/null ]; then
+    { printf 'HTTP/2 %s\r\n' "$USAGE_HTTP"
+      printf 'content-type: application/json\r\n'
+      [ -z "${USAGE_RETRY_AFTER:-}" ] || printf '%s: %s\r\n' "${USAGE_RETRY_HDR:-retry-after}" "$USAGE_RETRY_AFTER"
+      printf '\r\n'; } > "$_hdr"
+  fi
+  printf '%s' "$USAGE_HTTP" >&2; exit 22
+fi
 if [ "${USAGE_NETFAIL:-0}" = 1 ]; then printf '000' >&2; exit 6; fi
 if [ "${USAGE_GARBAGE:-0}" = 1 ]; then printf '200' >&2; echo 'not json'; exit 0; fi
 # P2-3 (round-1 review): the vendor's real shape is microseconds + a numeric
@@ -1587,11 +1602,11 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   USAGE_NETFAIL=1 run clikae usage claude work --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "unknown" and .reason == "network"' || { echo "got: $output"; false; }
-  # A 5xx and a 429 are the network lump too, never "expired".
+  # A 5xx is the network lump, never "expired". (#136 took the 429 out of
+  # this lump and gave it its own word — see the #136 block below; it is
+  # still never "expired".)
   USAGE_HTTP=503 run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.source == "unknown" and .reason == "network"' || { echo "503 got: $output"; false; }
-  USAGE_HTTP=429 run clikae usage claude work --fresh --json
-  echo "$output" | jq -e '.source == "unknown" and .reason == "network"' || { echo "429 got: $output"; false; }
   USAGE_GARBAGE=1 run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.source == "unknown" and .reason == "unparseable"' || { echo "garbage got: $output"; false; }
 }
@@ -1724,4 +1739,154 @@ STUB
   # Two vendor calls: burn's own run-end refresh, and --wake's TTL-0 re-read.
   # A re-read that honoured the cache would make this 1.
   [ "$(_usage107_calls)" = 2 ] || { echo "calls: $(_usage107_calls)"; false; }
+}
+
+# --- #136: 429 and Retry-After get their own word --------------------------
+# Up to #136 adapter_usage collapsed 401/403/timeout/5xx/429 into "network"
+# (see _claude_usage_call_failed). `clikae watch`'s usage poll therefore
+# guessed at a backoff on the one failure the vendor tells you how long to
+# wait for. These pin the taxonomy at the reading level; the poll loop's own
+# behaviour is pinned in tests/bats/watch-usage-poll.bats.
+
+@test "#136: a 429 with a sane Retry-After reads unknown / rate-limited and carries retry_after" {
+  usage_fixture
+  _usage107_creds rt-stub-value "$(( ($(date +%s) + 3600) * 1000 ))"
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .reason == "rate-limited" and .retry_after == 45' \
+    || { echo "got: $output"; false; }
+  # The cache carries it too — the poll loop reads usage_read's output, and
+  # a cache hit must not silently drop the hint it was scheduled off.
+  jq -e '.reason == "rate-limited" and .retry_after == 45' \
+    "$CLIKAE_HOME/state/usage/claude/work.json" || { echo "cache: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
+  # Field names are case-insensitive (RFC 9110); HTTP/2 lowercases them, HTTP/1.1 need not.
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=45 USAGE_RETRY_HDR=Retry-After run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.retry_after == 45' || { echo "capitalised got: $output"; false; }
+}
+
+@test "#136: a 429 with no Retry-After, or an unusable one, is rate-limited WITHOUT retry_after" {
+  usage_fixture
+  _usage107_creds rt-stub-value "$(( ($(date +%s) + 3600) * 1000 ))"
+  # No header at all.
+  USAGE_HTTP=429 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "rate-limited" and (has("retry_after") | not)' \
+    || { echo "no-header got: $output"; false; }
+  # Every unusable shape the adapter is asked to refuse. 0 and -5 are not a
+  # wait; "abc" is not a number; 999999999 is 31 years and past the 86400
+  # bound (and its digit count is the overflow guard); an HTTP-date is legal
+  # per RFC 9110 and deliberately not parsed; 30.5 is not whole seconds.
+  local bad
+  for bad in 0 -5 abc 999999999 99999999999999999999 30.5 'Wed, 21 Oct 2026 07:28:00 GMT'; do
+    USAGE_HTTP=429 USAGE_RETRY_AFTER="$bad" run clikae usage claude work --fresh --json
+    [ "$status" -eq 0 ] || { echo "status $status for Retry-After=$bad"; false; }
+    echo "$output" | jq -e '.reason == "rate-limited" and (has("retry_after") | not)' \
+      || { echo "Retry-After=$bad got: $output"; false; }
+  done
+  # The boundaries themselves are usable, on both ends.
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=1 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.retry_after == 1' || { echo "1 got: $output"; false; }
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=86400 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.retry_after == 86400' || { echo "86400 got: $output"; false; }
+}
+
+@test "#136: 401/403 keep #107's two-word auth split — a 429 never overrides an expired-by-its-own-record token" {
+  usage_fixture
+  # (a) The auth class was NOT collapsed into one "reauth" word: the remedy
+  # differs, so the word does. This is the regression #117 exists to prevent.
+  _usage107_creds rt-stub-value
+  USAGE_HTTP=401 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token" and (has("retry_after") | not)' \
+    || { echo "401 got: $output"; false; }
+  USAGE_HTTP=403 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token"' || { echo "403 got: $output"; false; }
+  _usage107_creds
+  USAGE_HTTP=401 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "no-credentials"' || { echo "401/no-rt got: $output"; false; }
+  # (b) Precedence, unchanged from #107: a token already past its OWN recorded
+  # expiry would not have worked on a healthy connection either, so it stays
+  # "expired" even when the status we got back was a 429.
+  _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token"' \
+    || { echo "expired+429 got: $output"; false; }
+}
+
+# --- #137: the per-model weekly rows the vendor does send -------------------
+# #133's PR body recorded that the API "has no fields at all" for the REPL's
+# per-model weekly line. Probed 2026-09-17 against a real tank: it does — not
+# beside five_hour/seven_day (the seven_day_opus/seven_day_sonnet keys there
+# were null), and not in seven_day_breakdown (whose rows are SURFACES), but as
+# a limits[] entry with kind "weekly_scoped" and the model under
+# scope.model.display_name. This fixture is that shape, verbatim.
+
+_usage137_stub() {
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+cat <<'BODY'
+{"five_hour":{"utilization":9.0,"resets_at":"2099-01-01T00:00:00.001049+00:00"},
+ "seven_day":{"utilization":14.0,"resets_at":"2099-01-07T00:00:00.001070+00:00"},
+ "seven_day_opus":null,"seven_day_sonnet":null,
+ "seven_day_breakdown":{"rows":[{"key":"claude_code","display_name":"Claude Code","percent":100}]},
+ "limits":[
+  {"kind":"session","percent":9,"scope":null,"resets_at":"2099-01-01T00:00:00.001049+00:00"},
+  {"kind":"weekly_all","percent":14,"scope":null,"resets_at":"2099-01-07T00:00:00.001070+00:00"},
+  {"kind":"weekly_scoped","percent":11,"resets_at":"2099-01-07T00:00:00.001273+00:00",
+   "scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}
+BODY
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+}
+
+@test "#137: a vendor reading carries the per-model weekly rows, and the board's dot still reads all-models" {
+  usage_fixture
+  _usage137_stub
+  run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.window_pct == 9 and .weekly_pct == 14' || { echo "got: $output"; false; }
+  echo "$output" | jq -e '(.models|length) == 1 and .models[0].name == "Fable"
+                          and .models[0].pct == 11
+                          and .models[0].resets_at == "2099-01-07T00:00:00.001273+00:00"' \
+    || { echo "models got: $output"; false; }
+  # Not the surface breakdown: "Claude Code" is a surface row, never a model.
+  echo "$output" | jq -e '[.models[].name] | index("Claude Code") == null' || { echo "surface leaked: $output"; false; }
+  # The board is unchanged: usage_board_fields still answers with the
+  # ALL-MODELS pair and its age, four columns, no per-model anything. clikae
+  # has no per-tank model to pick the relevant row with (`--model` is a
+  # pass-through argument on burn/relay, not a property of a tank).
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  run usage_board_fields claude work
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | awk -F'\t' '{print NF}')" = 4 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = "9.0" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "14.0" ]
+}
+
+@test "#137: junk in limits[] never reaches the cache — models is whitelisted field by field" {
+  usage_fixture
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+config="$(cat)"
+cat <<'BODY'
+{"five_hour":{"utilization":9,"resets_at":"2099-01-01T00:00:00.000000+00:00"},
+ "seven_day":{"utilization":14,"resets_at":"2099-01-07T00:00:00.000000+00:00"},
+ "limits":[
+  {"kind":"weekly_scoped","percent":101,"scope":{"model":{"display_name":"TooHigh"}}},
+  {"kind":"weekly_scoped","percent":-1,"scope":{"model":{"display_name":"Negative"}}},
+  {"kind":"weekly_scoped","percent":"7","scope":{"model":{"display_name":"NotANumber"}}},
+  {"kind":"weekly_scoped","percent":5,"scope":{"model":{"display_name":null}}},
+  {"kind":"weekly_scoped","percent":5,"scope":null},
+  {"kind":"weekly_scoped","percent":5,"scope":{"model":{"display_name":"Ok","secret":"tok-leak"}},
+   "resets_at":"not-a-timestamp","severity":"normal"}]}
+BODY
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '(.models|length) == 1 and .models[0] == {name:"Ok",pct:5,resets_at:null}' \
+    || { echo "got: $output"; false; }
+  # Nothing but name/pct/resets_at survives into the cache.
+  run ! grep -R 'tok-leak\|severity\|TooHigh\|Negative\|NotANumber' "$CLIKAE_HOME/state"
 }
