@@ -79,6 +79,126 @@ _watch_weekly_capture() {
   { printf '%s\n' "$phrase"; date '+captured %Y-%m-%d %H:%M' 2>/dev/null; } > "$cache" 2>/dev/null || true
 }
 
+# --- usage polling heartbeat (#132, redirected) ----------------------------
+#
+# The issue as filed assumed clikae had no non-interactive way to ask a vendor
+# "how much quota is left" — wrong for claude: lib/core/usage.sh's usage_read
+# already calls the vendor's own OAuth usage API (adapter_usage in
+# lib/adapters/claude.sh, eb58aab / #72 / #89). So this is NOT a keystroke
+# prober: it never sends a single key into any pane, live or otherwise. It is
+# a periodic HEARTBEAT bolted onto `clikae watch`'s existing tail loop — the
+# loop already sits idle on `read <&3` between transcript lines, so a timeout
+# on that same read is a free place to also refresh the usage cache, on a
+# schedule, so `clikae`'s board (home.sh's usage_board_fields) has a fresher
+# number to show than "whatever the last manual `clikae usage` happened to
+# leave behind". Nothing here computes a percentage or talks to a vendor
+# directly — usage_read remains the only thing that does either.
+#
+# Cadence: every tank gets its OWN next-poll time and its OWN backoff, kept in
+# parallel arrays (bash 3.2 — macOS's shipped bash — has no associative
+# arrays; every other per-tank memo in this codebase, e.g. home.sh's
+# _FUEL_MEMO_*, uses the same shape). A tank whose last poll came back as a
+# real reading (source vendor/transcript) polls again after the base interval
+# (CLIKAE_WATCH_USAGE_INTERVAL, default: the usage cache's own TTL — polling
+# faster than the cache refreshes buys nothing). A tank whose last poll came
+# back anything else (unknown/expired — no-credentials, network, 429,
+# unparseable, an expired token) DOUBLES its own interval, capped at
+# CLIKAE_WATCH_USAGE_MAX_BACKOFF (default 1800s/30min) — so a vendor outage or
+# a run of 429s does not get hammered once per loop tick forever. A success
+# resets the tank straight back to the base interval.
+#
+# What this does NOT try to do, on purpose: distinguish a 429 from any other
+# transport failure. adapter_usage (lib/adapters/claude.sh) already collapses
+# 401/403/timeout/5xx/429 into one "network" reason before usage_read ever
+# sees it (see _claude_usage_call_failed there) — teasing 429 specifically
+# back out, or reading a Retry-After header, means editing that adapter, which
+# is out of this PR's file scope (lib/commands/watch.sh + lib/commands/
+# home.sh only). Backing off on ANY repeated failure is the same defensive
+# shape a 429-specific backoff would be — it just can't yet tell a rate limit
+# apart from a network blip, and says so here rather than pretending to.
+_WATCH_USAGE_POLL_TANK=(); _WATCH_USAGE_POLL_NEXT=(); _WATCH_USAGE_POLL_BACKOFF=()
+
+# _watch_usage_poll_interval -> the base seconds between polls of one tank.
+_watch_usage_poll_interval() {
+  local v="${CLIKAE_WATCH_USAGE_INTERVAL:-}"
+  case "$v" in ''|*[!0-9]*) v="${CLIKAE_USAGE_TTL:-120}" ;; esac
+  case "$v" in ''|*[!0-9]*) v=120 ;; esac
+  [ "$v" -ge 10 ] 2>/dev/null || v=10
+  printf '%s\n' "$v"
+}
+
+# _watch_usage_poll_max_backoff -> the ceiling a failing tank's interval never
+# grows past (seconds).
+_watch_usage_poll_max_backoff() {
+  local v="${CLIKAE_WATCH_USAGE_MAX_BACKOFF:-1800}"
+  case "$v" in ''|*[!0-9]*) v=1800 ;; esac
+  printf '%s\n' "$v"
+}
+
+# _watch_usage_poll_indexv <cli> <tank> -> $_WUPI, its slot in the parallel
+# arrays above, or -1 if this tank has never been polled by THIS process.
+_watch_usage_poll_indexv() {
+  local key="$1/$2" n="${#_WATCH_USAGE_POLL_TANK[@]}" i
+  _WUPI=-1
+  for (( i = 0; i < n; i++ )); do
+    if [ "${_WATCH_USAGE_POLL_TANK[i]}" = "$key" ]; then _WUPI=$i; return 0; fi
+  done
+}
+
+# _watch_usage_poll_one <cli> <tank> <now> — refresh one tank's usage cache
+# via the existing usage_read (never a new vendor call site), IF this tank's
+# own cadence says it's due; otherwise a no-op. usage_read has its own TTL
+# cache and is safe to call every tick — this function's whole job is to also
+# widen the gap between calls when a tank is failing, which usage_read's flat
+# TTL alone doesn't do.
+_watch_usage_poll_one() {
+  local cli="$1" tank="$2" now="$3" base max idx
+  base="$(_watch_usage_poll_interval)"; max="$(_watch_usage_poll_max_backoff)"
+  _watch_usage_poll_indexv "$cli" "$tank"; idx="$_WUPI"
+  if [ "$idx" -lt 0 ]; then
+    idx="${#_WATCH_USAGE_POLL_TANK[@]}"
+    _WATCH_USAGE_POLL_TANK[idx]="$cli/$tank"
+    _WATCH_USAGE_POLL_NEXT[idx]=0
+    _WATCH_USAGE_POLL_BACKOFF[idx]="$base"
+  fi
+  [ "$now" -ge "${_WATCH_USAGE_POLL_NEXT[idx]:-0}" ] || return 0
+  local reading source
+  reading="$(usage_read "$cli" "$tank" 2>/dev/null)"
+  source="$(printf '%s' "$reading" | jq -r '.source // empty' 2>/dev/null)"
+  case "$source" in
+    vendor|transcript)
+      _WATCH_USAGE_POLL_BACKOFF[idx]="$base"
+      ;;
+    *)
+      local cur="${_WATCH_USAGE_POLL_BACKOFF[idx]:-$base}"
+      cur=$(( cur * 2 ))
+      [ "$cur" -le "$max" ] || cur="$max"
+      _WATCH_USAGE_POLL_BACKOFF[idx]="$cur"
+      ;;
+  esac
+  _WATCH_USAGE_POLL_NEXT[idx]=$(( now + _WATCH_USAGE_POLL_BACKOFF[idx] ))
+}
+
+# _watch_usage_poll_tick — one heartbeat: refresh every KNOWN tank's usage
+# cache, each on its own cadence above. Best-effort and silent: no jq, no
+# tanks, or an engine with no adapter_usage just means nothing to do this
+# tick, same as any other quiet redraw miss on the board side.
+_watch_usage_poll_tick() {
+  command -v jq >/dev/null 2>&1 || return 0
+  declare -F usage_read >/dev/null || return 0
+  declare -F list_all_profiles >/dev/null || return 0
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+  local cli tank
+  while IFS=$'\t' read -r cli tank _; do
+    if [ -z "$cli" ] || [ -z "$tank" ]; then continue; fi
+    [ -f "$CLIKAE_LIB/adapters/$cli.sh" ] || continue
+    declare -F load_adapter >/dev/null && load_adapter "$cli" 2>/dev/null
+    declare -F adapter_usage >/dev/null || continue
+    _watch_usage_poll_one "$cli" "$tank" "$now"
+  done < <(list_all_profiles 2>/dev/null)
+  return 0
+}
+
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
 _watch_has_consent()  { [ -f "$(_watch_consent_file)" ]; }
 _watch_grant_consent() {
@@ -288,8 +408,21 @@ EOF
   # its answer off the NEXT TRANSCRIPT LINE instead of the keyboard, and the
   # `exec clikae handoff` would hand the tail pipe to the started engine as its
   # stdin. Keeping the tail on fd 3 leaves stdin as the terminal for all of them.
-  local line=""
-  while IFS= read -r line <&3; do
+  # #132: the tail loop already sits idle on this read between transcript
+  # lines — a timeout on the SAME read is where the usage-polling heartbeat
+  # (above) gets its cadence, no separate timer/process needed. `read -t`
+  # returns a status > 128 on a timeout specifically (bash's own contract,
+  # not a heuristic) — never on the pipe closing (that's a plain nonzero
+  # <=128, handled the same way this loop always handled EOF: fall out).
+  local line="" _poll_interval _rc
+  _poll_interval="$(_watch_usage_poll_interval)"
+  while :; do
+    IFS= read -r -t "$_poll_interval" line <&3; _rc=$?
+    if [ "$_rc" -gt 128 ]; then
+      _watch_usage_poll_tick
+      continue
+    fi
+    [ "$_rc" -eq 0 ] || break
     # BETA: relay the vendor's verbatim weekly-usage % to the board's yellow dot,
     # independent of the dry trigger below (a weekly warning is caution, not dry).
     _watch_weekly_capture "$cli" "$profile" "$line"
