@@ -480,11 +480,28 @@ def mode_resize():
                          preexec_fn=make_ctty, env=env, close_fds=True)
     os.close(slave)
 
-    def pump(seconds):
+    def pump(cap, idle=0.3):
+        """Read until `idle` seconds of silence, or `cap` seconds total.
+
+        Bounded polling, not a fixed sleep (#135). The real bug this test was
+        catching is now fixed in `_home_pick` (lib/commands/home.sh): the
+        `_lastsize` baseline used to be captured only AFTER the loop's first
+        second-long `tui_read_key` timeout, so a resize delivered before that
+        first check became the baseline itself — the "old" size was never
+        recorded, so the resize was silently lost forever, not just late.
+        `_lastsize` is now captured right after each draw, before the wait.
+        This fixed sleep was still worth replacing on its own merits: a fixed
+        2.0s before the initial frame settled and a fixed 2.5s to observe the
+        repaint were both guesses, not waits for a condition, and a loaded
+        runner could plausibly still take that long just to get the sandbox
+        and first draw going. Waiting for actual quiet keeps the test honest
+        about what it needs (a settled frame) instead of a duration.
+        """
         buf = b''
         t0 = _t.time()
-        while _t.time() - t0 < seconds:
-            r, _, _ = _sel.select([master], [], [], 0.2)
+        last = None                             # unset until first byte arrives
+        while _t.time() - t0 < cap:
+            r, _, _ = _sel.select([master], [], [], 0.05)
             if r:
                 try:
                     c = os.read(master, 8192)
@@ -493,12 +510,22 @@ def mode_resize():
                 if not c:
                     break
                 buf += c
+                last = _t.time()
+            elif last is not None and _t.time() - last >= idle:
+                # Only idle-out AFTER something has actually been read — a
+                # response can legitimately take a moment to start (e.g. the
+                # board's own size-polling wait loop only wakes once a
+                # second), so quiet before any output at all is not "done",
+                # it's "still waiting". Without this a resize would race the
+                # board's own detection delay and read as "nothing was
+                # drawn" even on a healthy board.
+                break
         return buf
 
-    _first = pump(2.0)                          # first frame, at 120 columns
+    _first = pump(6.0)                          # first frame, at 120 columns, settled
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 52, 0, 0))
     os.kill(p.pid, signal.SIGWINCH)
-    after = pump(2.5)                           # whatever it repaints, at 52
+    after = pump(6.0)                           # whatever it repaints, at 52, settled
     try:
         os.write(master, b'q')
         p.wait(timeout=8)
