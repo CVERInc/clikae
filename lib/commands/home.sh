@@ -3357,6 +3357,18 @@ _home_pick() {
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
       # Wait for a key, waking every second so a resize repaints without one.
+      #
+      # 🔴 BASELINE BEFORE THE BLOCK, NOT AFTER. `tui_read_key 3 1` blocks for
+      # up to a full second when idle, so if `_lastsize` were only captured
+      # AFTER that first timeout (as it used to be), a resize delivered while
+      # still inside that first blocking read became the baseline itself —
+      # "new" size recorded with no "old" to compare against, so the resize
+      # was never detected, not even on a LATER check, because the terminal
+      # does not change again on its own. Silent forever, not just late.
+      # Capturing it here, right after the draw and before the wait, means
+      # the window in which a resize can be lost is however long THIS printf
+      # takes, not up to a second.
+      _lastsize="$(_home_size)"
     TUI_KEY=""
     while :; do
       tui_read_key 3 1 && break
@@ -3387,6 +3399,12 @@ _home_pick() {
     # a lone ESC quits, PgUp/Home jump top, PgDn/End jump bottom (the board has
     # no viewport, so page = jump).
     # Wait for a key, waking every second so a resize repaints without one.
+    #
+    # 🔴 BASELINE BEFORE THE BLOCK, NOT AFTER — see the twin comment on the
+    # empty-filter branch above. Same bug, same fix: capture `_lastsize` right
+    # after this draw, not after the first second-long `tui_read_key` timeout,
+    # or a resize inside that first blocking wait is lost forever.
+    _lastsize="$(_home_size)"
     TUI_KEY=""
     while :; do
       tui_read_key 3 1 && break
