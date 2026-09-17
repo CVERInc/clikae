@@ -481,7 +481,13 @@ _codex_token_count_line() {
     "$(_codex_token_count_line 2026-09-10T09:00:00.000Z \
         '{"used_percent":10.0,"window_minutes":300,"resets_at":'"$(TZ=UTC _at UTC '2026-09-10 15:00:00')"'}' 'null')"
   f="$d/sessions/2026/09/10/rollout-a.jsonl"
-  touch -t 202609101200.00 "$f"
+  # The store scan is `find -mmin -10080` against the REAL clock, so a pinned calendar date
+  # rots: 2026-09-10 12:00 fell out of the 7-day window on 2026-09-17 and this test went red on
+  # main with no code change. Pin to "one hour ago" instead — still one identical stamp for both
+  # writes, which is the only thing this test needs from it.
+  local stamp
+  stamp="$(date -v-1H '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '1 hour ago' '+%Y%m%d%H%M.%S')"
+  touch -t "$stamp" "$f"
 
   local first; first="$(TZ=UTC limit_codex_status_cached "$d" "$now" "$cache")"
   [[ "$first" == "green"* ]] || false
@@ -492,7 +498,7 @@ _codex_token_count_line() {
     >> "$f"
   # Force the SAME mtime second as before the append — the old count+mtime
   # key would read this as "nothing changed".
-  touch -t 202609101200.00 "$f"
+  touch -t "$stamp" "$f"
 
   local second; second="$(TZ=UTC limit_codex_status_cached "$d" "$now" "$cache")"
   [[ "$second" == "red"* ]] || false
