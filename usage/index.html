@@ -717,6 +717,39 @@ disk. Confirm/tune the match the first time you actually get limited:</p>
 <pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code class="language-bash"><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --check</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">          # would the pattern fire on this session?</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">CLIKAE_LIMIT_PATTERN</span><span style="--shiki-light:#D73A49;--shiki-dark:#FF7B72">=</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">'…'</span><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657"> clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> watch</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">   # override the match</span></span></code></pre>
 </blockquote>
+<p>While it watches, the same loop also refreshes every tank's usage reading on a
+heartbeat (#132/#133), so the board has a fresher number than &quot;whenever
+somebody last ran <code>clikae usage</code>&quot;. It never talks to a vendor itself — it calls
+the same <code>usage_read</code> everything else does — and every tank keeps its own
+cadence: <code>CLIKAE_WATCH_USAGE_INTERVAL</code> (default: the usage cache's own TTL,
+<code>CLIKAE_USAGE_TTL</code>, floor 10s) on success, and on a failure one of three
+things (#136):</p>
+<table>
+<thead>
+<tr>
+<th>what came back</th>
+<th>what the poll does next</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>a reading</td>
+<td>back to the base interval</td>
+</tr>
+<tr>
+<td><code>rate-limited</code> (HTTP 429)</td>
+<td>waits the vendor's own <code>Retry-After</code>, clamped to the base interval and to <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code> (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below.</td>
+</tr>
+<tr>
+<td><code>expired-token</code> / <code>no-credentials</code></td>
+<td>straight to <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code> and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws <code>⏳ expired · usage --wake &lt;tank&gt;</code> the moment it lands.</td>
+</tr>
+<tr>
+<td>anything else (no connection, a timeout, a 5xx, an unreadable body)</td>
+<td>doubles, capped at <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code></td>
+</tr>
+</tbody>
+</table>
 <h2 id="ambient-turn-github-replies-into-wake-events-watch-github">Ambient: turn GitHub replies into wake events (<code>watch github</code>)</h2>
 <p>A different source under the same verb: instead of watching a tank's own
 transcript for a dry limit, <code>clikae watch github</code> polls GitHub's search API

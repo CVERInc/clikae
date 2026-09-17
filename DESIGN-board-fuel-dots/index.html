@@ -286,7 +286,18 @@ rollouts modified in the last 7 days, the same <code>-mmin -10080</code> window
 token whose credentials hold a refresh token, or that token's own recorded
 expiry had passed — the login is fine, only a session refreshes it; always
 with <code>reason:&quot;expired-token&quot;</code> and no numbers), or <code>&quot;unknown&quot;</code> (no usable
-reading; <code>reason</code> is <code>no-credentials</code>, <code>network</code> or <code>unparseable</code> when known).
+reading; <code>reason</code> is <code>no-credentials</code>, <code>network</code>, <code>rate-limited</code> or
+<code>unparseable</code> when known). A <code>rate-limited</code> reading (#136: HTTP 429, which
+used to be part of the <code>network</code> lump) may carry <code>retry_after</code>, the vendor's
+own <code>Retry-After</code> header in whole seconds, and only when that header was in
+1..86400 — <code>clikae watch</code>'s usage poll schedules that tank's next poll off it
+instead of doubling its own backoff. A VENDOR reading may carry <code>models</code>
+(#137): the per-model weekly rows the vendor sends in <code>limits[]</code> as entries
+with kind <code>weekly_scoped</code>, normalized to <code>{name, pct, resets_at}</code>. Nothing on
+the board reads them — the dot stays on the all-models number, because
+choosing the relevant per-model row would require knowing which model a tank
+runs and a tank carries no such property (<code>--model</code> is an argument to
+<code>burn</code>/<code>relay</code>). They are reported by <code>clikae usage</code> only.
 On the board an expired reading under 24h old draws the no-reading <code>·</code> with
 the note <code>⏳ expired · usage --wake &lt;tank&gt;</code> (the ⏳ lives in the note, not the
 dot: every dot is one column and the row grid is padded around that, an emoji
