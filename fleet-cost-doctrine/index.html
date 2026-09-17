@@ -68,7 +68,9 @@
 <h3 id="1-指揮艇每人一艘長命fable-51">1. 指揮艇（每人一艘，長命，Fable 5.1）</h3>
 <ul>
 <li>只持有意圖、決策、紅線、進度；<strong>不自己讀檔、grep、跑測試</strong>——那些是 300K 上下文的來源。</li>
-<li>預設 effort low 做路由與派工，綜合／紅隊時拉高。Fable 5.1 在訂閱下<strong>中途改 effort 不打掉快取</strong>（其他模型會全部重讀），所以這招只有 Fable 划算。</li>
+<li>effort 預設 low（2026-09-17 起的實驗，下週用尺驗）。座艙<strong>改不了自己的 effort</strong>——那是使用者旋鈕（<code>/effort</code>），模型端也觀測不到目前值。所以需要深思的回合不是「拉高」而是<strong>派出去</strong>：紅隊、綜合多份回報、架構裁決、要送出去的東西，開 Opus/high 或 Fable/high 的工人去想，座艙只收結論。</li>
+<li>派高 effort 的觸發綁在<strong>動作類型</strong>上（改共用管線、動錢／憑證／身分、對外發言、任何要 merge 的東西），不綁在「感覺難不難」——low 最會漏的正是看起來像小事的難題，而且答得很有自信。</li>
+<li>人要親自聽座艙判斷時自己撥 <code>/effort</code>：Fable 5.1 在訂閱下<strong>中途改 effort 不打掉快取</strong>（其他模型會全部重讀），撥了記得撥回來。</li>
 <li>任務邊界 <code>/compact</code>；不要等自動壓縮在任務中間觸發。廢掉的分支用 <code>/rewind</code>（回到已快取的前綴）不用 <code>/compact</code>。</li>
 <li>冷 session 重開用「從摘要恢復」，不要整段重送。</li>
 </ul>
@@ -143,7 +145,7 @@
 <ul>
 <li><code>/usage</code> 的 <code>Prompt cache (main)</code>：命中率、miss 次數、最近一次 miss 的原因。</li>
 <li>狀態列 <code>current_usage.cache_read_input_tokens</code> vs <code>cache_creation_input_tokens</code>：write 連續偏高＝前綴在變。</li>
-<li>每週重跑 <a href="https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-cost.py"><code>tools/tank-cost.py</code></a>、<a href="https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-agents.py"><code>tools/tank-agents.py</code></a>（讀 <code>~/.clikae/profiles/claude/*/projects/**/*.jsonl</code>），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。</li>
+<li>每週重跑 <a href="https://github.com/CVERInc/clikae/blob/b265318819be208590294961b6615acc056fed3d/scripts/tank-cost.py"><code>tools/tank-cost.py</code></a>、<a href="https://github.com/CVERInc/clikae/blob/b265318819be208590294961b6615acc056fed3d/scripts/tank-agents.py"><code>tools/tank-agents.py</code></a>（讀 <code>~/.clikae/profiles/claude/*/projects/**/*.jsonl</code>），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。</li>
 </ul>
 <h2 id="未驗證">未驗證</h2>
 <ul>

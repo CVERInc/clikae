@@ -39,7 +39,9 @@
 ### 1. 指揮艇（每人一艘，長命，Fable 5.1）
 
 - 只持有意圖、決策、紅線、進度；**不自己讀檔、grep、跑測試**——那些是 300K 上下文的來源。
-- 預設 effort low 做路由與派工，綜合／紅隊時拉高。Fable 5.1 在訂閱下**中途改 effort 不打掉快取**（其他模型會全部重讀），所以這招只有 Fable 划算。
+- effort 預設 low（2026-09-17 起的實驗，下週用尺驗）。座艙**改不了自己的 effort**——那是使用者旋鈕（`/effort`），模型端也觀測不到目前值。所以需要深思的回合不是「拉高」而是**派出去**：紅隊、綜合多份回報、架構裁決、要送出去的東西，開 Opus/high 或 Fable/high 的工人去想，座艙只收結論。
+- 派高 effort 的觸發綁在**動作類型**上（改共用管線、動錢／憑證／身分、對外發言、任何要 merge 的東西），不綁在「感覺難不難」——low 最會漏的正是看起來像小事的難題，而且答得很有自信。
+- 人要親自聽座艙判斷時自己撥 `/effort`：Fable 5.1 在訂閱下**中途改 effort 不打掉快取**（其他模型會全部重讀），撥了記得撥回來。
 - 任務邊界 `/compact`；不要等自動壓縮在任務中間觸發。廢掉的分支用 `/rewind`（回到已快取的前綴）不用 `/compact`。
 - 冷 session 重開用「從摘要恢復」，不要整段重送。
 
@@ -94,7 +96,7 @@
 
 - `/usage` 的 `Prompt cache (main)`：命中率、miss 次數、最近一次 miss 的原因。
 - 狀態列 `current_usage.cache_read_input_tokens` vs `cache_creation_input_tokens`：write 連續偏高＝前綴在變。
-- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
+- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/b265318819be208590294961b6615acc056fed3d/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/b265318819be208590294961b6615acc056fed3d/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
 
 ## 未驗證
 
