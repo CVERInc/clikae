@@ -27,6 +27,7 @@ Built with Kura, the agent-native docs framework — https://kura.build
 - [DESIGN-tmux: Clikae Tmux Orchestration](/docs/DESIGN-tmux.md)
 - [Devlog](/docs/DEVLOG.md)
 - [Expectation vs implementation — "is this a bug?"](/docs/EXPECTATIONS.md)
+- [艦隊作業流程：成本量測與派工規範](/docs/fleet-cost-doctrine.md)
 - [Gemini (agy) 工作韁繩：形狀 × 產出物 × 閘](/docs/gemini-harness.md)
 - [clikae grammar & lexicon — the single source of truth](/docs/grammar.md)
 - [HANDOFF — 回憶命中率：記憶層的真指標](/docs/HANDOFF-recall-hit-rate.md)

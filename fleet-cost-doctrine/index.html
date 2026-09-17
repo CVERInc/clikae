@@ -1,0 +1,195 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><title>艦隊作業流程：成本量測與派工規範 - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/fleet-cost-doctrine"/><meta property="og:title" content="艦隊作業流程：成本量測與派工規範"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+          @view-transition { navigation: auto; }
+          ::view-transition-group(root),
+          ::view-transition-old(root),
+          ::view-transition-new(root) { animation-duration: 120ms; }
+          @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+          }
+</style><link rel="stylesheet" href="/_june/global.1a0a84f6.css"/></head><body><script>(function(){try{var p=localStorage.getItem('kura-theme')||'system';var d=document.documentElement;d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',(p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches))?'dark':'light');}catch(e){}})();</script><header class="sticky top-0 z-20 flex items-center gap-4 h-14 px-5 bg-topbar-bg backdrop-blur-sm border-b border-border max-md:px-4 max-md:gap-2.5"><a class="flex items-center gap-1.5 font-bold text-[1.05rem]" href="/">clikae<!-- --> <span class="font-normal text-muted text-[.85rem]">Docs</span></a><form class="ml-auto max-md:ml-2 max-md:flex-1 max-md:min-w-0" action="/search" method="get"><input class="w-[280px] max-w-[40vw] px-3 py-2 text-[.9rem] border border-border rounded-lg bg-surface-2 text-fg max-md:w-full max-md:max-w-none search-box" placeholder="Search docs…  (press /)" aria-label="Search" data-search-endpoint="/search.json" data-doc-base="/" data-search-static="1" name="q"/></form><nav class="flex items-center gap-4 text-muted text-[.9rem]"></nav></header><nav data-tabbar="true" class="sticky top-14 z-[15] h-11 bg-bg border-b border-border max-md:hidden"><div class="flex items-stretch gap-6 h-full max-w-[1280px] mx-auto px-5 overflow-x-auto no-scrollbar"><a data-tab-key="Guide" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/installation">Guide</a><a data-tab-key="Design" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/VISION">Design</a><a data-tab-key="Proposals" class="flex items-center text-[.9rem] border-b-2 border-transparent text-muted hover:text-fg [&amp;[aria-current=page]]:text-fg [&amp;[aria-current=page]]:border-accent" href="/proposals/issue-22-git-identity">Proposals</a></div></nav><button class="hidden max-md:flex items-center gap-2.5 w-full px-4 py-2.5 bg-bg border-0 border-b border-border text-fg-soft text-[.9rem] text-left cursor-pointer focus-visible:outline-none focus-visible:bg-hover" data-drawer-open="true" aria-controls="docs-nav" aria-expanded="false"><span class="text-[1.05rem] leading-none" aria-hidden="true">☰</span><span class="font-semibold text-fg flex-none">Navigation</span><span class="nav-bar-context text-muted flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" data-nav-context="true"></span></button><div class="drawer-backdrop" data-drawer-close="true" aria-hidden="true"></div><div class="grid grid-cols-[248px_minmax(0,1fr)_220px] max-lg:grid-cols-[248px_minmax(0,1fr)] max-md:grid-cols-1 items-start max-w-[1280px] mx-auto has-tabs"><aside class="sidebar sticky top-[100px] h-[calc(100vh-100px)] overflow-y-auto px-4 py-6 border-r border-border" id="docs-nav"><div data-tabbar="true" class="hidden max-md:flex flex-wrap gap-1.5 mb-4 pb-4 border-b border-border"><a data-tab-key="Guide" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/installation">Guide</a><a data-tab-key="Design" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/VISION">Design</a><a data-tab-key="Proposals" class="px-3 py-1 border border-border rounded-full text-[.85rem] text-fg-soft [&amp;[aria-current=page]]:bg-accent-soft [&amp;[aria-current=page]]:text-accent [&amp;[aria-current=page]]:border-transparent" href="/proposals/issue-22-git-identity">Proposals</a></div><div data-tab="Guide"><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Guide</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/installation">Installation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/usage">Usage</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/grammar">Grammar &amp; lexicon</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/playbooks">Playbooks — wielding the fleet</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/orchestration">Orchestration</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/agy-dispatch">Driving agy headless</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/adding-an-adapter">Adding an adapter</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/adding-a-locale">Adding a language</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/memory">Memory (Soul layer)</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/claude-on-macos">Claude Code on macOS</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/troubleshooting">Troubleshooting</a></li></ul></div></div><div data-tab="Design" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Design &amp; vision</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/VISION">Vision</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/DESIGN-runtime">Runtime redesign</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/DESIGN-board-fuel-dots">Board: fuel dots</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/EXPECTATIONS">Expectation vs implementation</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/DEVLOG">Devlog</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/PLAYTEST">Playtest guide</a></li></ul></div></div><div data-tab="Proposals" hidden=""><div class="mb-5"><p class="mb-1.5 ml-2 text-sm font-semibold text-fg">Proposals</p><ul class="flex flex-col gap-px"><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/proposals/issue-22-git-identity">#22 · git identity</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/proposals/issue-24-burn-simplify">#24 · simplify burn</a></li><li><a class="flex items-center gap-1.5 leading-6 px-2 py-1.5 rounded-md text-sm text-fg-soft hover:bg-hover" href="/proposals/issue-25-agy-parallel">#25 · agy parallel</a></li></ul></div></div></aside><div data-june-outlet=""><main class="w-auto max-w-none m-0 min-w-0 px-10 pt-8 pb-20 max-md:px-4 max-md:pt-5 max-md:pb-12"><details class="hidden max-lg:block mb-5 border border-border rounded-xl overflow-hidden"><summary class="chevron flex justify-between items-center cursor-pointer px-3.5 py-2.5 text-[.85rem] font-semibold text-fg-soft">On this page</summary><div class="flex flex-col px-3.5 pt-1 pb-2.5 border-t border-border"><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E4%B8%80%E5%8F%A5%E7%B5%90%E8%AB%96">一句結論</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E9%87%8F%E5%88%B0%E7%9A%84%E6%95%B8%E5%AD%97">量到的數字</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E6%88%90%E6%9C%AC%E6%A8%A1%E5%9E%8B">成本模型</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E4%B8%89%E5%B1%A4%E6%B5%81%E7%A8%8B">三層流程</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#1-%E6%8C%87%E6%8F%AE%E8%89%87%E6%AF%8F%E4%BA%BA%E4%B8%80%E8%89%98%E9%95%B7%E5%91%BDfable-51">1. 指揮艇（每人一艘，長命，Fable 5.1）</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#2-%E5%B7%A5%E4%BA%BA%E7%9F%AD%E5%91%BD%E5%96%AE%E4%B8%80%E7%94%A2%E5%87%BA">2. 工人（短命，單一產出）</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent pl-3.5" href="#3-tankclikae-%E5%A4%9A%E5%B8%B3%E8%99%9F">3. Tank（clikae 多帳號）</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E6%B4%BE%E5%B7%A5%E7%B0%A1%E5%A0%B1%E7%AF%84%E6%9C%AC">派工簡報範本</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E9%87%8F%E5%88%B0%E7%9A%84%E7%A6%81%E5%BF%8C">量到的禁忌</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E8%A8%82%E9%96%B1-vs-api-vs-team">訂閱 vs API vs Team</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E7%9B%A3%E7%9C%8B%E6%8C%87%E6%A8%99%E8%88%87%E5%B0%BA">監看指標與尺</a><a class="py-1.5 text-muted text-[.85rem] hover:text-accent" href="#%E6%9C%AA%E9%A9%97%E8%AD%89">未驗證</a></div></details><div class="flex items-center justify-between gap-4 mb-6"><div class="prose"><h1 class="!m-0">艦隊作業流程：成本量測與派工規範</h1></div><div class="relative inline-flex items-stretch flex-none"><button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-[.85rem] border border-border border-r-0 rounded-l-lg bg-surface text-fg-soft cursor-pointer hover:bg-hover hover:text-fg" data-copy-md="/fleet-cost-doctrine.md"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>Copy Markdown</button><details class="relative inline-flex items-stretch" data-menu="true"><summary class="chevron inline-flex items-center justify-center w-[30px] border border-border rounded-r-lg bg-surface text-muted cursor-pointer hover:bg-hover hover:text-fg" aria-label="More actions"></summary><div class="absolute right-0 top-[calc(100%+.4rem)] z-30 min-w-[17rem] flex flex-col gap-px p-1.5 bg-surface border border-border rounded-xl shadow-xl"><button class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" data-copy-md="/fleet-cost-doctrine.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg><span class="flex flex-col min-w-0"><span class="font-semibold text-[.9rem] text-fg">Copy Markdown</span><span class="text-[.8rem] text-muted">Copy this page as Markdown for LLMs</span></span></button><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="/fleet-cost-doctrine.md"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M16 21H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6l4 4v12a2 2 0 0 1-2 2z"></path><path d="M9 13h6M9 17h4"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">View as Markdown<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">View this page as plain text</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://chatgpt.com/?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20%E8%89%A6%E9%9A%8A%E4%BD%9C%E6%A5%AD%E6%B5%81%E7%A8%8B%EF%BC%9A%E6%88%90%E6%9C%AC%E9%87%8F%E6%B8%AC%E8%88%87%E6%B4%BE%E5%B7%A5%E8%A6%8F%E7%AF%84" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in ChatGPT<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask ChatGPT about this page</span></span></a><a class="flex items-start gap-2.5 w-full px-2.5 py-2 rounded-lg bg-transparent border-0 text-fg-soft text-left cursor-pointer hover:bg-hover" href="https://claude.ai/new?q=Please%20read%20this%20doc%20and%20answer%20my%20questions%3A%20%E8%89%A6%E9%9A%8A%E4%BD%9C%E6%A5%AD%E6%B5%81%E7%A8%8B%EF%BC%9A%E6%88%90%E6%9C%AC%E9%87%8F%E6%B8%AC%E8%88%87%E6%B4%BE%E5%B7%A5%E8%A6%8F%E7%AF%84" target="_blank" rel="noreferrer"><svg class="flex-none mt-0.5 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg><span class="flex flex-col min-w-0"><span class="inline-flex items-center gap-1 font-semibold text-[.9rem] text-fg">Open in Claude<!-- --> <svg class="text-muted" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span><span class="text-[.8rem] text-muted">Ask Claude about this page</span></span></a></div></details></div></div><article class="prose"><p>2026-09-17 · KITT（CVER Inc.）· 量測對象：reefbox 四個 tank（blenny／goby／tuna／wrasse）近 7 天全部對話紀錄，60,234 次模型呼叫，按 API 定價換算。</p>
+<h2 id="一句結論">一句結論</h2>
+<p>訂閱不換、API 不開、Team 不買。錢不是燒在「想太多」，是燒在<strong>上下文太長 × 呼叫太多</strong>：76% 的成本是快取讀取。要省，就是讓每一層的上下文短、壽命短。省是目標，不是硬限制——下面所有數字都是目標值，不是閘門。</p>
+<h2 id="量到的數字">量到的數字</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>數字</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7 天總額（API 價）</td>
+<td>約 $6,500，換成月費約 $28K；四個 Max 20x 實付 $800</td>
+</tr>
+<tr>
+<td>成本組成</td>
+<td>快取讀取 76%／快取寫入＋新輸入 18%／輸出（含思考）6%</td>
+</tr>
+<tr>
+<td>Fable 5.1 指揮艇</td>
+<td>2,269 次、平均上下文 504K、每次 $0.21、合計 $467（7%）</td>
+</tr>
+<tr>
+<td>Opus 座艙自己幹活</td>
+<td>13,368 次、平均 208K、$1,986（最大一條）</td>
+</tr>
+<tr>
+<td>Sonnet subagent</td>
+<td>22,147 次、平均 313K、$1,834（第二大）</td>
+</tr>
+<tr>
+<td>Haiku</td>
+<td>23 次，等於沒用</td>
+</tr>
+<tr>
+<td>subagent 壽命</td>
+<td>206 支：中位數 96 步、p90 286 步；<strong>≤20 步的只有 2 支</strong>。最貴的六支全是 Sonnet，1,500～1,770 步、上下文衝到 950K</td>
+</tr>
+<tr>
+<td>主 session</td>
+<td>179 個：中位數 106 步；最大的到 960K 上下文</td>
+</tr>
+</tbody>
+</table>
+<p>單價（每百萬 token，輸入／輸出／快取讀）：Fable 5.1 $10／$50／<strong>$0.25</strong>；Opus 5 $5／$25／$0.50；Sonnet 5 $2／$10／$0.20；Haiku 4.5 $1／$5／$0.10。Fable 5.1 的快取讀取比 Opus 便宜一半，這是它適合坐指揮艇的原因。</p>
+<h2 id="成本模型">成本模型</h2>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>成本 ≈ Σ（每次呼叫的上下文 × 該模型快取讀取單價）＋ 少量輸出</span></span></code></pre>
+<p>推論：</p>
+<ul>
+<li>一個 300K 上下文的 Sonnet agent 跑 300 步，比一個 100K 的 Opus agent 跑 30 步貴十倍。「便宜模型」不等於便宜，壽命才是變數。</li>
+<li>effort 直接花費很小（輸出只佔 6%），它的代價是讓任務多跑幾輪。降 effort 排最後。</li>
+<li>換模型＝全部重讀（每個模型各自一份快取）。中途 <code>/model</code> 是一次性大額支出。</li>
+<li>訂閱方案的主對話快取存活 1 小時（API 只有 5 分鐘），這是訂閱獨有的紅利，指揮艇受益最大。subagent 不論哪種方案都是 5 分鐘。</li>
+</ul>
+<h2 id="三層流程">三層流程</h2>
+<h3 id="1-指揮艇每人一艘長命fable-51">1. 指揮艇（每人一艘，長命，Fable 5.1）</h3>
+<ul>
+<li>只持有意圖、決策、紅線、進度；<strong>不自己讀檔、grep、跑測試</strong>——那些是 300K 上下文的來源。</li>
+<li>預設 effort low 做路由與派工，綜合／紅隊時拉高。Fable 5.1 在訂閱下<strong>中途改 effort 不打掉快取</strong>（其他模型會全部重讀），所以這招只有 Fable 划算。</li>
+<li>任務邊界 <code>/compact</code>；不要等自動壓縮在任務中間觸發。廢掉的分支用 <code>/rewind</code>（回到已快取的前綴）不用 <code>/compact</code>。</li>
+<li>冷 session 重開用「從摘要恢復」，不要整段重送。</li>
+</ul>
+<h3 id="2-工人短命單一產出">2. 工人（短命，單一產出）</h3>
+<ul>
+<li>一份簡報一個產出。<strong>目標：40 步以內、150K 上下文以內</strong>；估起來會明顯超過就先拆，或改用 Workflow pipeline 串接。現在中位數 96 步是簡報寫得太大，不是模型太笨。這是目標不是閘門——工人快做完時別為了數字硬停。</li>
+<li>不等人：subagent 快取只活 5 分鐘，任何「等使用者回答」的設計都會讓下一步全額重讀。需要人裁決的點放回指揮艇。</li>
+<li>回報格式寫進簡報（例：≤15 行、只給結論與收據、不貼檔案內容），否則工人的輸出會變成指揮艇的上下文。</li>
+<li>模型與 effort <strong>一律明寫</strong>，不寫就整隊繼承指揮艇的設定（實測：38 支 agent 全 Opus+xhigh，一輪燒爆額度）。</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>任務類型</th>
+<th>模型</th>
+<th>effort</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>機械勘查、找檔、格式轉換、普查</td>
+<td>Haiku 4.5</td>
+<td>low</td>
+</tr>
+<tr>
+<td>已知範圍內的實作、修測試、寫文件</td>
+<td>Sonnet 5</td>
+<td>medium</td>
+</tr>
+<tr>
+<td>跨模組設計、綜合多份報告、紅隊審查</td>
+<td>Opus 5</td>
+<td>high</td>
+</tr>
+<tr>
+<td>需要長程判斷的單一難題</td>
+<td>Fable 5.1</td>
+<td>high／xhigh</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-tankclikae-多帳號">3. Tank（clikae 多帳號）</h3>
+<ul>
+<li>用途是隔離與並行（不同帳號、不同工作樹），不是預設的扇出手段。扇出走 Workflow ＞ 背景 Agent ＞ tank。</li>
+<li>每個 tank 的座艙同樣適用第 1 層規則：座艙自己用 Opus 幹活，就是本週最大的一條支出。</li>
+</ul>
+<h2 id="派工簡報範本">派工簡報範本</h2>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>模型：sonnet   effort：medium</span></span>
+<span class="line"><span>產出：&#x3C;一個具體的東西></span></span>
+<span class="line"><span>範圍：&#x3C;檔案／目錄清單>，不碰其他</span></span>
+<span class="line"><span>完成定義：&#x3C;可驗證的條件></span></span>
+<span class="line"><span>預期規模：約 40 步；明顯超過就回報進度與「需要拆」，不硬撐</span></span>
+<span class="line"><span>回報：≤15 行，結論＋收據（指令與輸出摘要），不貼原始檔</span></span></code></pre>
+<h2 id="量到的禁忌">量到的禁忌</h2>
+<ol>
+<li>座艙自己讀檔、grep、跑測試（Opus 主 session $1,986）。</li>
+<li>工人跑成 session（Sonnet agent 1,700 步、950K）。</li>
+<li>派工不寫模型（整隊繼承）。</li>
+<li>中途 <code>/model</code>（全額重讀）。</li>
+<li>非 Fable 中途改 effort（全額重讀）。</li>
+<li>讓工人等人回答（5 分鐘後快取消失）。</li>
+<li>冷 session 整段 <code>--resume</code>（無快取可讀，全部重算）。</li>
+<li>多支工人共用同一個建置輸出目錄或測試套件（互相洗掉對方的活）。</li>
+</ol>
+<h2 id="訂閱-vs-api-vs-team">訂閱 vs API vs Team</h2>
+<ul>
+<li>API：同樣用量換算約 $28K／月，訂閱 $800。「API 有快取所以便宜」那個說法弄反了，訂閱下 Claude Code 一樣走快取，而且主對話還多拿 1 小時 TTL。</li>
+<li>Team：額度是 Pro 的小倍數，跑這種用量半天就鎖。</li>
+<li>唯一該考慮 API 的情況：非互動的批次工作（Batch API 半價、沒有週額度），例如夜間跑全 repo 的稽核。互動座艙留在訂閱。</li>
+</ul>
+<h2 id="監看指標與尺">監看指標與尺</h2>
+<ul>
+<li><code>/usage</code> 的 <code>Prompt cache (main)</code>：命中率、miss 次數、最近一次 miss 的原因。</li>
+<li>狀態列 <code>current_usage.cache_read_input_tokens</code> vs <code>cache_creation_input_tokens</code>：write 連續偏高＝前綴在變。</li>
+<li>每週重跑 <a href="https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-cost.py"><code>tools/tank-cost.py</code></a>、<a href="https://github.com/CVERInc/clikae/blob/5124c87dc323fe6e8db4037cda7eacfc371c0f16/scripts/tank-agents.py"><code>tools/tank-agents.py</code></a>（讀 <code>~/.clikae/profiles/claude/*/projects/**/*.jsonl</code>），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。</li>
+</ul>
+<h2 id="未驗證">未驗證</h2>
+<ul>
+<li>訂閱額度怎麼計，官方沒公布（查過 help center 三篇：只寫「Opus 每回合比 Sonnet 貴數倍」「每回合重送全部歷史」）。本文用 API 價當代理。若訂閱把快取讀取算全價，「Fable 便宜」不成立，但「上下文短、工人短命」兩種算法下都對。</li>
+<li>Mac 那邊的 session 沒算進來，實際用量比上表高。</li>
+<li>40 步這個目標是從分布反推的，沒有實測「40 步夠不夠做完一個典型任務」；太緊會逼工人半途回報、指揮艇多派一輪。先當目標觀察一週再定。</li>
+</ul>
+</article><nav class="flex justify-between gap-4 mt-12 pt-6 border-t border-border"><span></span><span></span></nav><script>document.querySelectorAll('[data-copy-md]').forEach(function(b){b.addEventListener('click',async function(){try{var r=await fetch(b.getAttribute('data-copy-md'));var t=await r.text();await navigator.clipboard.writeText(t);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1500);}catch(e){alert('Copy failed: '+e);}});});document.querySelectorAll('.prose pre').forEach(function(pre){if(pre.querySelector('.copy-code'))return;var b=document.createElement('button');b.className='copy-code';b.textContent='Copy';b.addEventListener('click',async function(){var c=pre.querySelector('code');try{await navigator.clipboard.writeText(c?c.innerText:pre.innerText);var o=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=o;},1200);}catch(e){}});pre.appendChild(b);});document.querySelectorAll('.tabs').forEach(function(t){t.querySelectorAll('.tab-btn').forEach(function(b){b.addEventListener('click',function(){var i=b.getAttribute('data-tab');t.querySelectorAll('.tab-btn').forEach(function(x){x.classList.toggle('active',x.getAttribute('data-tab')===i);});t.querySelectorAll('.tab-panel').forEach(function(p){p.hidden=p.getAttribute('data-tab')!==i;});});});});(function(){var blocks=document.querySelectorAll('code.language-mermaid');if(!blocks.length)return;var items=[];blocks.forEach(function(c){var pre=c.closest('pre')||c;var h=document.createElement('div');h.className='mermaid-diagram';pre.replaceWith(h);items.push({src:c.textContent,holder:h});});var lib,id=0;function load(){return lib||(lib=import("https://esm.sh/mermaid@11").then(function(m){return m.default;}));}function theme(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'default';}function run(){load().then(function(mermaid){mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:theme()});items.forEach(function(it){mermaid.render('kura-mmd-'+(id++),it.src).then(function(r){it.holder.innerHTML=r.svg;}).catch(function(e){it.holder.innerHTML='<pre class="mermaid-error">'+String((e&&e.message)||e)+'</pre>';});});}).catch(function(){});}run();var cur=document.documentElement.getAttribute('data-theme');new MutationObserver(function(){var t=document.documentElement.getAttribute('data-theme');if(t!==cur){cur=t;run();}}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});})();</script></main><aside class="sticky top-14 max-h-[calc(100vh-56px)] overflow-y-auto px-4 py-8 max-lg:hidden"><p class="text-[.72rem] font-bold tracking-wider uppercase text-muted mb-2.5">On this page</p><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E4%B8%80%E5%8F%A5%E7%B5%90%E8%AB%96">一句結論</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E9%87%8F%E5%88%B0%E7%9A%84%E6%95%B8%E5%AD%97">量到的數字</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E6%88%90%E6%9C%AC%E6%A8%A1%E5%9E%8B">成本模型</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E4%B8%89%E5%B1%A4%E6%B5%81%E7%A8%8B">三層流程</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#1-%E6%8C%87%E6%8F%AE%E8%89%87%E6%AF%8F%E4%BA%BA%E4%B8%80%E8%89%98%E9%95%B7%E5%91%BDfable-51">1. 指揮艇（每人一艘，長命，Fable 5.1）</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#2-%E5%B7%A5%E4%BA%BA%E7%9F%AD%E5%91%BD%E5%96%AE%E4%B8%80%E7%94%A2%E5%87%BA">2. 工人（短命，單一產出）</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent pl-3 text-[.82rem]" href="#3-tankclikae-%E5%A4%9A%E5%B8%B3%E8%99%9F">3. Tank（clikae 多帳號）</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E6%B4%BE%E5%B7%A5%E7%B0%A1%E5%A0%B1%E7%AF%84%E6%9C%AC">派工簡報範本</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E9%87%8F%E5%88%B0%E7%9A%84%E7%A6%81%E5%BF%8C">量到的禁忌</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E8%A8%82%E9%96%B1-vs-api-vs-team">訂閱 vs API vs Team</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E7%9B%A3%E7%9C%8B%E6%8C%87%E6%A8%99%E8%88%87%E5%B0%BA">監看指標與尺</a><a class="block py-1 text-muted text-[.85rem] hover:text-accent" href="#%E6%9C%AA%E9%A9%97%E8%AD%89">未驗證</a></aside></div></div><footer class="border-t border-border mt-8"><div class="flex items-center justify-between flex-wrap gap-4 max-w-[1280px] mx-auto px-6 py-5 max-md:px-4"><nav class="flex items-center gap-[1.1rem] text-[.85rem]"><a class="text-muted hover:text-fg" href="/llms.txt">llms.txt</a><button type="button" class="inline-flex items-center justify-center w-[30px] h-[30px] p-0 text-[.95rem] leading-none border border-border rounded-lg bg-surface text-fg cursor-pointer hover:bg-hover" data-theme-toggle="true" aria-label="Toggle theme"></button></nav><a class="text-muted text-[.85rem] hover:text-accent" href="https://kura.build/" target="_blank" rel="noreferrer">Powered by Kura</a></div></footer><script>document.addEventListener('keydown',function(e){if(e.key==='/' && !document.documentElement.dataset.ctrlk && !/INPUT|TEXTAREA/.test((document.activeElement||{}).tagName||'')){e.preventDefault();var s=document.querySelector('.search-box');if(s)s.focus();}});(function(){var b=document.querySelector('[data-theme-toggle]');if(!b)return;var d=document.documentElement,order=['system','light','dark'],icon={system:'🖥',light:'☀',dark:'☾'};function pref(){return d.getAttribute('data-theme-pref')||'system';}function res(p){return p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light';}function set(p){d.setAttribute('data-theme-pref',p);d.setAttribute('data-theme',res(p));try{localStorage.setItem('kura-theme',p);}catch(e){}b.textContent=icon[p];b.setAttribute('title','Theme: '+p);}set(pref());b.addEventListener('click',function(){set(order[(order.indexOf(pref())+1)%order.length]);});try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){if(pref()==='system')d.setAttribute('data-theme',res('system'));});}catch(e){}})();document.addEventListener('click',function(e){var t=e.target;document.querySelectorAll('details[data-menu][open]').forEach(function(d){if(!d.contains(t))d.removeAttribute('open');});var it=t.closest&&t.closest('details[data-menu] a, details[data-menu] [data-copy-md]');if(it){var dd=it.closest('details[data-menu]');if(dd)setTimeout(function(){dd.removeAttribute('open');},0);}});document.addEventListener('keydown',function(e){if(e.key==='Escape')document.querySelectorAll('details[data-menu][open]').forEach(function(d){d.removeAttribute('open');});});(function(){var root=document.documentElement;function opener(){return document.querySelector('[data-drawer-open]');}function items(){var d=document.getElementById('docs-nav');if(!d)return[];return[].filter.call(d.querySelectorAll('a[href],button:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'),function(el){return el.offsetParent!==null;});}function set(o){var was=root.classList.contains('drawer-open');root.classList.toggle('drawer-open',o);var b=opener();if(b)b.setAttribute('aria-expanded',o?'true':'false');if(o){var f=items();if(f[0])f[0].focus();}else if(was&&b)b.focus();}document.addEventListener('click',function(e){if(e.target.closest('[data-drawer-open]')){e.preventDefault();set(!root.classList.contains('drawer-open'));return;}if(e.target.closest('[data-drawer-close]')){set(false);return;}if(e.target.closest('#docs-nav a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'){set(false);return;}if(e.key==='Tab'&&root.classList.contains('drawer-open')){var f=items();if(!f.length)return;var first=f[0],last=f[f.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}else if(f.indexOf(document.activeElement)<0){e.preventDefault();first.focus();}}});})();(function(){
+  function trim(p){return p.length>1&&p.endsWith('/')?p.slice(0,-1):p;}
+  function sync(){
+    var path=trim(location.pathname), tab=null;
+    var links=document.querySelectorAll('.sidebar a[href],[data-tabbar] a[href]');
+    for(var i=0;i<links.length;i++){var a=links[i],on=trim(a.getAttribute('href'))===path;
+      if(on){a.setAttribute('aria-current','page');var g=a.closest('[data-tab]');if(g)tab=g.getAttribute('data-tab');}
+      else a.removeAttribute('aria-current');}
+    if(tab!=null){
+      document.querySelectorAll('[data-tab]').forEach(function(g){g.hidden=g.getAttribute('data-tab')!==tab;});
+      document.querySelectorAll('[data-tabbar] a').forEach(function(a){
+        if(a.getAttribute('data-tab-key')===tab)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+    }
+    // expand the folder(s) holding the active page. Iterate EVERY aria-current sidebar link, not
+    // just the first: a folder-as-page link lives in a <details>, but the mobile tab-bar link (also
+    // in .sidebar, earlier in the DOM) has no folder ancestor — querySelector would pick that one
+    // and expand nothing. forEach opens each link's folder chain; tab links are harmless no-ops.
+    document.querySelectorAll('.sidebar a[aria-current="page"]').forEach(function(cur){
+      var d=cur.closest('details.folder');while(d){d.open=true;d=d.parentElement&&d.parentElement.closest('details.folder');}});
+    // reveal the active item inside the sidebar's OWN scroll container (long navs reset to the top
+    // on every full page load). Rect math against #docs-nav only — never scrollIntoView, which
+    // would also scroll ancestor containers (the page) and fight #anchor deep links. Runs after
+    // the folder expansion above so measurements see the final layout; no-op when already visible
+    // (soft-nav keeps its scroll) and on mobile (hidden sidebar measures all-zero rects).
+    var nav=document.getElementById('docs-nav');
+    if(nav){var cur2=nav.querySelector('a[aria-current="page"]');
+      if(cur2){var nr=nav.getBoundingClientRect(),ir=cur2.getBoundingClientRect();
+        if(ir.height>0&&(ir.top<nr.top||ir.bottom>nr.bottom))nav.scrollTop+=ir.top-nr.top-(nav.clientHeight-ir.height)/2;}}
+    // rewrite the locale-switch links to THIS page's equivalent path (swap the locale prefix)
+    var ll=document.querySelectorAll('[data-locale-home]');
+    if(ll.length){var lc=document.querySelector('[data-locale-home][data-locale-active]'),cp=lc?lc.getAttribute('data-locale-home'):'/';cp=cp==='/'?'':cp;
+      var rest=location.pathname;if(cp&&rest.indexOf(cp)===0)rest=rest.slice(cp.length)||'/';
+      ll.forEach(function(a){var h=a.getAttribute('data-locale-home'),p=h==='/'?'':h;a.setAttribute('href',rest==='/'?(p||'/'):(p+rest));});}
+    // mobile nav-context: "Active tab / Page title" (the shell can't know the page server-side)
+    var nc=document.querySelector('[data-nav-context]');
+    if(nc){var at=document.querySelector('[data-tabbar] a[aria-current="page"]'),h1=document.querySelector('main h1');
+      nc.textContent=[at&&at.textContent.trim(),h1&&h1.textContent.trim()].filter(Boolean).join(' / ');}
+  }
+  sync();
+  var outlet=document.querySelector('[data-june-outlet]');
+  if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
+})();</script><script type="module" src="/_june/client.d87e9edc.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."},"locale":{"type":"string","description":"Optional locale — scopes results to that locale's view (its translations plus untranslated defaults)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as the authored Markdown source by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."},"locale":{"type":"string","description":"Optional locale — returns that variant when it exists."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>
