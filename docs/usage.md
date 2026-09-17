@@ -579,6 +579,21 @@ you what it did.
 > CLIKAE_LIMIT_PATTERN='…' clikae watch claude   # override the match
 > ```
 
+While it watches, the same loop also refreshes every tank's usage reading on a
+heartbeat (#132/#133), so the board has a fresher number than "whenever
+somebody last ran `clikae usage`". It never talks to a vendor itself — it calls
+the same `usage_read` everything else does — and every tank keeps its own
+cadence: `CLIKAE_WATCH_USAGE_INTERVAL` (default: the usage cache's own TTL,
+`CLIKAE_USAGE_TTL`, floor 10s) on success, and on a failure one of three
+things (#136):
+
+| what came back | what the poll does next |
+| --- | --- |
+| a reading | back to the base interval |
+| `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
+| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `⏳ expired · usage --wake <tank>` the moment it lands. |
+| anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
+
 ## Ambient: turn GitHub replies into wake events (`watch github`)
 
 A different source under the same verb: instead of watching a tank's own

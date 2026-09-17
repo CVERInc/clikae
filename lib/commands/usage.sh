@@ -84,8 +84,21 @@ when it is actually known, never on a vendor/transcript reading:
                   most 60s, so the read after a session sees fresh numbers.
   no-credentials  no usable token was found, or the vendor refused one
                   with no refresh token to renew it: this one needs a login.
-  network         no connection, a timeout, a rate limit or a server error.
+  network         no connection, a timeout or a server error.
+  rate-limited    the vendor answered 429. It may carry one more field,
+                  "retry_after" — the vendor's own Retry-After header in
+                  seconds, present only when that header was a whole number
+                  of seconds between 1 and 86400. `clikae watch`'s usage
+                  poll waits exactly that long before asking again.
   unparseable     the vendor answered, but not with one usable reading.
+
+A VENDOR reading may carry a "models" array: the vendor's own per-model
+weekly rows, each {name, pct, resets_at} — the second line the REPL's
+/usage shows ("Current week (Fable) 11%") next to the all-models one. It is
+reported here and nowhere else: the board's fuel dot deliberately keeps
+using the all-models number, because picking the relevant per-model row
+would mean knowing which model a tank runs, and a tank has no such property
+(--model is an argument to burn/relay, not a setting on a tank).
 
 --wake <tank> refreshes an expired token: it runs the engine headless for
 one trivial prompt through `clikae burn` (so burn's rules apply unchanged —

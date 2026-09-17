@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae usage` reports the vendor's per-model weekly quota.** The REPL's
+  `/usage` shows two lines — "Current week (all models) 14%" and "Current week
+  (Fable) 11%" — and only the first one reached clikae. The second was in the
+  response all along: not beside the five-hour/seven-day objects, and not in
+  the surface breakdown, but as a `limits[]` entry of kind `weekly_scoped`
+  carrying the model under `scope.model.display_name`. A vendor reading now
+  carries a `models` array of `{name, pct, resets_at}`, whitelisted field by
+  field like everything else that reaches the cache (at most 8 rows, a name of
+  at most 40 characters, a percentage in 0–100). The board's fuel dot
+  deliberately still reads the all-models number: choosing the relevant
+  per-model row needs to know which model a tank runs, and a tank has no such
+  property — `--model` is an argument to `burn`/`relay`, never a setting. So
+  these numbers are reported, not acted on (#137).
+
 ### Changed
+
+- **A 429 is no longer indistinguishable from a dead token.** `adapter_usage`
+  collapsed 401/403/timeouts/5xx/429 into one `network` reason, so `clikae
+  watch`'s usage poll guessed at a backoff on the one failure the vendor tells
+  you how long to wait for. HTTP 429 now has its own reason, `rate-limited`,
+  carrying `retry_after` when the vendor's `Retry-After` header was a whole
+  number of seconds in 1–86400 (a missing, negative, zero, non-numeric,
+  HTTP-date or out-of-range header is dropped, and the caller falls back to
+  its own backoff). The poll schedules that tank's next poll at
+  `now + retry_after`, clamped to the base interval below and
+  `CLIKAE_WATCH_USAGE_MAX_BACKOFF` above; an auth failure (`expired-token` or
+  `no-credentials`) goes straight to the maximum interval and is marked
+  instead of climbing a doubling ramp toward an answer it already has; and
+  everything else doubles exactly as before. #107's two-word auth split is
+  kept rather than collapsed into one `reauth`: the two words carry different
+  remedies, which is the whole of #117 (#136).
 
 - `clikae burn codex` honours an uncommented `sandbox_mode` in the current
   tank's `config.toml` when `--permission` is omitted, including after rerouting.

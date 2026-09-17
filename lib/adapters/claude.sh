@@ -895,15 +895,34 @@ _claude_usage_unreadable() {
 #     no refresh token       -> no-credentials. Nothing here can renew it; it
 #                               needs a login, which is what that word means.
 #   curl rc 63 (body over the byte cap) -> unparseable.
-#   everything else (no connection, timeout, 429, 5xx) -> network.
+#   HTTP 429 -> rate-limited (#136, below).
+#   everything else (no connection, timeout, 5xx) -> network.
 # "Expired by its own record" wins over a transport failure on purpose: that
-# token would not have worked on a healthy network either.
+# token would not have worked on a healthy network either — and a 429 IS a
+# transport failure in that sentence's terms, so #136's new branch lands
+# BELOW the expiry check, not beside the 401/403 one. An observed 401/403
+# still wins over everything, unchanged.
+#
+# #136: 429 is pulled out of the `network` lump — it is the one failure the
+# vendor tells you how long to wait for, and `clikae watch`'s usage poll
+# (lib/commands/watch.sh) can only honour that hint if the hint survives to
+# it. NOTE WHAT THIS DELIBERATELY DOES NOT DO: the issue proposed collapsing
+# 401/403 into a single `reauth`, which would undo #107/#117 — that PR split
+# the auth case into `expired-token` (a session fixes it; the board says
+# `⏳ expired · usage --wake <tank>`) and `no-credentials` (this one really
+# does need a login), because an idle tank at 99% weekly used to read exactly
+# like a tank with no login at all. Those two words ARE the auth class, finer
+# than `reauth`; callers that want the class ask for "expired-token or
+# no-credentials" (see `_watch_usage_poll_one`) rather than losing the split.
 _claude_usage_call_failed() {
   local rc="${1:-}" code="${2:-}"
   case "$code" in
     401|403) _claude_usage_auth_failed; return 0 ;;
   esac
   if [ "${_claude_token_expired:-0}" = 1 ]; then _claude_usage_auth_failed; return 0; fi
+  case "$code" in
+    429) _claude_usage_rate_limited "${_claude_retry_after:-}"; return 0 ;;
+  esac
   if [ "$rc" = 63 ]; then _claude_usage_unreadable unparseable; return 0; fi
   _claude_usage_unreadable network
 }
@@ -912,6 +931,29 @@ _claude_usage_auth_failed() {
   then _claude_usage_unreadable expired-token
   else _claude_usage_unreadable no-credentials
   fi
+}
+# #136: reason `rate-limited`, plus `retry_after` ONLY when the vendor's own
+# `Retry-After` header was present AND is a delta-seconds integer in 1..86400.
+# Everything else about that header is dropped on the floor and the caller
+# falls back to its own backoff: the empty string (no header), a non-integer
+# (`abc`), a negative (`-5`), a zero, an HTTP-date (RFC 9110 allows one; no
+# vendor sends one here and parsing dates in bash 3.2 to honour a hint we
+# already bound is not worth the surface), and anything over 86400 — which is
+# also the digit bound, since `[ 99999999999999999999 -le 86400 ]` is an
+# arithmetic overflow in bash, not a comparison (the same shape
+# lib/core/usage.sh's `_USAGE_CACHE_PEEK_MAX_AGE_SEC` guard was given).
+# 86400 = one day: longer than any ceiling clikae has, so a value past it is
+# not a wait, it is a bug or a hostile server.
+_claude_usage_rate_limited() {
+  case "${1:-}" in
+    ''|*[!0-9]*|??????*) ;;
+    *)
+      if [ "$1" -ge 1 ] && [ "$1" -le 86400 ]; then
+        printf '{"source":"unknown","reason":"rate-limited","retry_after":%s}\n' "$1"
+        return 0
+      fi ;;
+  esac
+  printf '{"source":"unknown","reason":"rate-limited"}\n'
 }
 
 adapter_usage() (
@@ -975,8 +1017,21 @@ adapter_usage() (
   # the pre-#107 inference from the credentials' own expiry.
   local _claude_code_file="" _claude_http_code=""
   _claude_code_file="$(mktemp "${TMPDIR:-/tmp}/clikae-usage-status.XXXXXX" 2>/dev/null)" || _claude_code_file=""
-  # shellcheck disable=SC2064  # expand now: the path is fixed for this subshell
-  [ -z "$_claude_code_file" ] || trap "rm -f '$_claude_code_file'" EXIT
+  # #136: the RESPONSE headers, for one field only — `Retry-After` on a 429.
+  # Its own file, never the status file above: that file's contract is "one
+  # line, the three-digit status, nothing else" (`IFS= read -r` takes the
+  # FIRST line), and a header dump's first line is `HTTP/2 429`. Measured
+  # (curl 8.5, a real 429): `--fail` suppresses the BODY but still writes the
+  # header dump, so this costs the failure path nothing it did not already
+  # have. `-D` is the portable spelling — curl's own `%header{name}` write-out
+  # variable would be smaller but needs 7.84+, and ubuntu-22.04 ships 7.81.
+  # A failed mktemp just means no header: the 429 falls back to plain backoff,
+  # exactly as it did before this existed.
+  local _claude_hdr_file="" _claude_retry_after=""
+  _claude_hdr_file="$(mktemp "${TMPDIR:-/tmp}/clikae-usage-hdr.XXXXXX" 2>/dev/null)" || _claude_hdr_file=""
+  # shellcheck disable=SC2064  # expand now: the paths are fixed for this subshell
+  [ -z "$_claude_code_file" ] && [ -z "$_claude_hdr_file" ] ||
+    trap "rm -f '$_claude_code_file' '$_claude_hdr_file'" EXIT
   # P3-2 (codex security review, round-5): the whole body used to land in
   # this variable, and jq's own parsing/copying work, with no upper bound —
   # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
@@ -1010,6 +1065,7 @@ adapter_usage() (
     printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
       curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
         --max-filesize "$_claude_usage_max_bytes" -w '%{stderr}%{http_code}' \
+        -D "${_claude_hdr_file:-/dev/null}" \
         https://api.anthropic.com/api/oauth/usage 2>"${_claude_code_file:-/dev/null}" |
       head -c "$(( _claude_usage_max_bytes + 1 ))"
     _claude_usage_curl_rc="${PIPESTATUS[1]}"
@@ -1020,6 +1076,21 @@ adapter_usage() (
     token=""; response=""
     [ -z "$_claude_code_file" ] || IFS= read -r _claude_http_code < "$_claude_code_file" || true
     case "$_claude_http_code" in [0-9][0-9][0-9]) ;; *) _claude_http_code="" ;; esac
+    # #136: the ONE header field this reads, and only on a 429 — never parsed
+    # for any other status, so a healthy call pays nothing. `head -c` first:
+    # --max-filesize bounds the BODY, nothing bounds a header block, and this
+    # runs on whatever a faulty or hostile upstream sent. `tr -d '\r'` because
+    # HTTP line endings are CRLF and a stray CR would fail the digit test
+    # below in a way that looks like "no header". Name matched
+    # case-insensitively by hand (RFC 9110: field names are case-insensitive;
+    # BSD sed has no `I` flag), value taken from the FIRST occurrence — we
+    # never follow redirects, so there is only ever one header block.
+    if [ "$_claude_http_code" = 429 ] && [ -n "$_claude_hdr_file" ]; then
+      _claude_retry_after="$(head -c 65536 "$_claude_hdr_file" 2>/dev/null | tr -d '\r' |
+        sed -n 's/^[Rr][Ee][Tt][Rr][Yy]-[Aa][Ff][Tt][Ee][Rr][[:space:]]*:[[:space:]]*//p' |
+        head -n 1)"
+      _claude_retry_after="${_claude_retry_after%%[[:space:]]*}"
+    fi
     _claude_usage_call_failed "$_claude_usage_curl_rc" "$_claude_http_code"; return 1
   }
   response="${response%X}"
@@ -1036,11 +1107,38 @@ adapter_usage() (
   # a single object — is ever accepted; anything else (0, 2+, or a
   # non-object root) is `empty`, which `-e` turns into an honest failure
   # rather than a partial or duplicated reading.
+  # #137: the per-model weekly quota the REPL's `/usage` shows as a second line
+  # ("Current week (Fable) 11%" next to "Current week (all models) 14%") IS in
+  # this response — #133's PR body said it was not, and that was measured off
+  # the wrong part of the body. It is NOT a sibling of `five_hour`/`seven_day`
+  # (the `seven_day_opus` / `seven_day_sonnet` keys next to them were null on
+  # every tank probed, 2026-09-17) and it is NOT `seven_day_breakdown`, whose
+  # rows are SURFACES (Claude Code / Chats / Cowork / Other), not models. It is
+  # an entry in the `limits` array whose `kind` is `weekly_scoped`, carrying
+  # the model under `scope.model.display_name` — and `scope.model.id` was null
+  # there, so the display name is the only model identifier the vendor gives.
+  #
+  # Surfaced, not acted on. The board's dot deliberately keeps using the
+  # all-models number: choosing the RELEVANT per-model quota needs to know
+  # which model a tank runs, and clikae has no such fact — `--model` is a
+  # pass-through argument on `burn`/`relay`, never a property of a tank. A dot
+  # coloured by whichever per-model row happened to be first would be worse
+  # than one that is honestly all-models. So these numbers reach `clikae
+  # usage`'s output (and the cache) and stop there; see docs/usage.md.
   printf '%s' "$response" | jq -ce -s '
     if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
     select(.five_hour.utilization|type == "number") |
     select(.seven_day.utilization|type == "number") |
-    {window_pct:.five_hour.utilization,weekly_pct:.seven_day.utilization,
-     window_resets_at:.five_hour.resets_at,weekly_resets_at:.seven_day.resets_at,source:"vendor"}' 2>/dev/null ||
+    . as $r |
+    ([ (if ($r.limits|type) == "array" then $r.limits[] else empty end) |
+       select(type == "object") | select(.kind == "weekly_scoped") |
+       {name: .scope.model.display_name, pct: .percent, resets_at: .resets_at} |
+       select((.name|type) == "string" and (.name|length) > 0 and (.name|length) <= 40) |
+       select((.pct|type) == "number" and .pct >= 0 and .pct <= 100) |
+       if (.resets_at|type) == "string" then . else .resets_at = null end
+     ] | .[0:8]) as $models |
+    {window_pct:$r.five_hour.utilization,weekly_pct:$r.seven_day.utilization,
+     window_resets_at:$r.five_hour.resets_at,weekly_resets_at:$r.seven_day.resets_at,source:"vendor"} +
+    (if ($models|length) > 0 then {models:$models} else {} end)' 2>/dev/null ||
     { _claude_usage_unreadable unparseable; return 1; }
 )

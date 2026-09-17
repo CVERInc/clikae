@@ -25,12 +25,29 @@ _boot() {
 # every call when $USAGE_FAIL=1 (429-shaped: exit 22, no status on stderr —
 # same shape usage.bats' USAGE_FAIL uses, which adapter_usage's own fallback
 # resolves to reason "network").
+#
+# #136: $USAGE_HTTP makes it answer with a real HTTP status (written to
+# stderr, exit 22 — what curl 8.5 measurably does under `--fail -w
+# '%{stderr}%{http_code}'`), and $USAGE_RETRY_AFTER adds that one header to
+# the `-D` dump, CRLF-terminated, as the vendor would. Same shape as
+# usage.bats' own fixture stub; kept in both files because each one's tests
+# read a different layer.
 _usage_curl_stub() {
   export USAGE_CALLS="$TEST_HOME/calls"
   cat > "$TEST_HOME/.testbin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'call\n' >> "$USAGE_CALLS"
 config="$(cat)"
+if [ -n "${USAGE_HTTP:-}" ]; then
+  _hdr=""; _prev=""
+  for _a in "$@"; do [ "$_prev" = "-D" ] && _hdr="$_a"; _prev="$_a"; done
+  if [ -n "$_hdr" ] && [ "$_hdr" != /dev/null ]; then
+    { printf 'HTTP/2 %s\r\n' "$USAGE_HTTP"
+      [ -z "${USAGE_RETRY_AFTER:-}" ] || printf 'retry-after: %s\r\n' "$USAGE_RETRY_AFTER"
+      printf '\r\n'; } > "$_hdr"
+  fi
+  printf '%s' "$USAGE_HTTP" >&2; exit 22
+fi
 [ "${USAGE_FAIL:-0}" = 0 ] || { echo '{"error":"nope"}'; exit 22; }
 echo '{"five_hour":{"utilization":40,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":55,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
 STUB
@@ -159,4 +176,128 @@ _quiet() {
   done
   [ "$w0" = "40" ]
   [ "$k0" = "55" ]
+}
+
+# --- #136: the poll loop stops treating every failure as one thing ----------
+#
+# CLIKAE_USAGE_TTL=0 everywhere below for the same reason the backoff test
+# above gives: usage_read's own cache is keyed off REAL wall time, and these
+# tests feed a SYNTHETIC "now" to the poll layer only. Zero isolates the poll
+# layer's scheduling — what these tests are about — from that separate,
+# already-tested TTL.
+_poll136_env() {
+  export CLIKAE_USAGE_TTL=0
+  export CLIKAE_WATCH_USAGE_INTERVAL=10
+  export CLIKAE_WATCH_USAGE_MAX_BACKOFF=1800
+}
+# _poll136_creds <tank> [refresh] — overwrite a seeded tank's credentials,
+# optionally with a refresh token (which is what decides whether a 401 reads
+# `expired-token` or `no-credentials` — #107).
+_poll136_creds() {
+  jq -cn --arg rt "${2:-}" '{claudeAiOauth:({accessToken:"stub-tok"}
+    + (if $rt == "" then {} else {refreshToken:$rt} end))}' \
+    > "$CLIKAE_HOME/profiles/claude/$1/.credentials.json"
+}
+
+@test "#136: a 429 with Retry-After schedules THAT tank at now+retry_after, not a doubling" {
+  _boot; _usage_curl_stub; _seed_tank a; _poll136_env
+  export USAGE_HTTP=429 USAGE_RETRY_AFTER=45
+  _quiet _watch_usage_poll_one claude a 1000
+  _watch_usage_poll_indexv claude a
+  [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = rate-limited ] \
+    || { echo "state: ${_WATCH_USAGE_POLL_STATE[$_WUPI]}"; false; }
+  # 45, the vendor's own number — NOT base*2 (20), which is what the
+  # pre-#136 loop would have produced for this same failure.
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1045 ] \
+    || { echo "next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 1045)"; false; }
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 45 ]
+  # A second 429 does not compound it: the hint replaces the ramp, it does
+  # not ride on top of one.
+  _quiet _watch_usage_poll_one claude a 1045
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1090 ] \
+    || { echo "next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 1090)"; false; }
+  # And a success afterwards puts the tank straight back on the base cadence.
+  unset USAGE_HTTP USAGE_RETRY_AFTER
+  _quiet _watch_usage_poll_one claude a 1090
+  [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = ok ]
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 10 ]
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1100 ]
+}
+
+@test "#136: an unusable Retry-After falls back to the doubling backoff" {
+  _boot; _usage_curl_stub; _poll136_env
+  export USAGE_HTTP=429
+  # A fresh tank per case, so each one starts from the same base and the
+  # arrays never carry a previous case's ramp into the next.
+  local i=0 bad
+  for bad in '' -5 abc 999999999 'Wed, 21 Oct 2026 07:28:00 GMT'; do
+    i=$(( i + 1 ))
+    _seed_tank "t$i"
+    USAGE_RETRY_AFTER="$bad" _quiet _watch_usage_poll_one claude "t$i" 1000
+    _watch_usage_poll_indexv claude "t$i"
+    [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = rate-limited ] \
+      || { echo "[$bad] state: ${_WATCH_USAGE_POLL_STATE[$_WUPI]}"; false; }
+    # base*2 = 20, the existing backoff — never the garbage value itself.
+    [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1020 ] \
+      || { echo "[$bad] next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 1020)"; false; }
+    [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 20 ]
+  done
+}
+
+@test "#136: Retry-After is clamped to [base, max] — never faster than the cache, never past the ceiling" {
+  _boot; _usage_curl_stub; _poll136_env
+  export USAGE_HTTP=429
+  # Below the base: a poll sooner than the base would only re-read
+  # usage_read's own cached rate-limited reading and learn nothing.
+  _seed_tank low
+  USAGE_RETRY_AFTER=1 _quiet _watch_usage_poll_one claude low 1000
+  _watch_usage_poll_indexv claude low
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1010 ] \
+    || { echo "low next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 1010)"; false; }
+  # Above the ceiling: the existing CLIKAE_WATCH_USAGE_MAX_BACKOFF wins.
+  _seed_tank high
+  USAGE_RETRY_AFTER=86400 _quiet _watch_usage_poll_one claude high 1000
+  _watch_usage_poll_indexv claude high
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 2800 ] \
+    || { echo "high next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 2800)"; false; }
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 1800 ]
+}
+
+@test "#136: an auth failure goes straight to the max interval and is marked — no doubling ramp" {
+  _boot; _usage_curl_stub; _poll136_env
+  # (a) 401 with no refresh token -> no-credentials.
+  _seed_tank nologin; _poll136_creds nologin
+  export USAGE_HTTP=401
+  _quiet _watch_usage_poll_one claude nologin 1000
+  _watch_usage_poll_indexv claude nologin
+  [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = auth ] \
+    || { echo "state: ${_WATCH_USAGE_POLL_STATE[$_WUPI]}"; false; }
+  # 1800 on the FIRST failure, not base*2 = 20: waiting longer will not make
+  # a missing login appear, so there is no ramp worth climbing.
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 2800 ] \
+    || { echo "next: ${_WATCH_USAGE_POLL_NEXT[$_WUPI]} (wanted 2800)"; false; }
+  # Still max on the second: it parks there, it does not compound past it.
+  _quiet _watch_usage_poll_one claude nologin 2800
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 1800 ]
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 4600 ]
+  # (b) 403 WITH a refresh token -> expired-token. #107 keeps these two words
+  # apart (different remedies); the poll loop treats both as the auth class.
+  _seed_tank lapsed; _poll136_creds lapsed rt-stub-value
+  USAGE_HTTP=403 _quiet _watch_usage_poll_one claude lapsed 1000
+  _watch_usage_poll_indexv claude lapsed
+  [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = auth ] \
+    || { echo "403 state: ${_WATCH_USAGE_POLL_STATE[$_WUPI]}"; false; }
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 2800 ]
+}
+
+@test "#136: a 500 is still the transient class — it doubles, exactly as before" {
+  _boot; _usage_curl_stub; _seed_tank srv; _poll136_env
+  export USAGE_HTTP=500
+  _quiet _watch_usage_poll_one claude srv 1000
+  _watch_usage_poll_indexv claude srv
+  [ "${_WATCH_USAGE_POLL_STATE[$_WUPI]}" = transient ] \
+    || { echo "state: ${_WATCH_USAGE_POLL_STATE[$_WUPI]}"; false; }
+  [ "${_WATCH_USAGE_POLL_NEXT[$_WUPI]}" = 1020 ]
+  _quiet _watch_usage_poll_one claude srv 1020
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 40 ]
 }

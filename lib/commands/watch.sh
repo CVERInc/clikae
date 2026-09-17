@@ -101,22 +101,47 @@ _watch_weekly_capture() {
 # real reading (source vendor/transcript) polls again after the base interval
 # (CLIKAE_WATCH_USAGE_INTERVAL, default: the usage cache's own TTL — polling
 # faster than the cache refreshes buys nothing). A tank whose last poll came
-# back anything else (unknown/expired — no-credentials, network, 429,
-# unparseable, an expired token) DOUBLES its own interval, capped at
-# CLIKAE_WATCH_USAGE_MAX_BACKOFF (default 1800s/30min) — so a vendor outage or
-# a run of 429s does not get hammered once per loop tick forever. A success
-# resets the tank straight back to the base interval.
+# back anything else DOUBLES its own interval, capped at
+# CLIKAE_WATCH_USAGE_MAX_BACKOFF (default 1800s/30min) — so a vendor outage
+# does not get hammered once per loop tick forever. A success resets the tank
+# straight back to the base interval. #136 carved two cases out of that
+# doubling; see the next paragraph.
 #
-# What this does NOT try to do, on purpose: distinguish a 429 from any other
-# transport failure. adapter_usage (lib/adapters/claude.sh) already collapses
-# 401/403/timeout/5xx/429 into one "network" reason before usage_read ever
-# sees it (see _claude_usage_call_failed there) — teasing 429 specifically
-# back out, or reading a Retry-After header, means editing that adapter, which
-# is out of this PR's file scope (lib/commands/watch.sh + lib/commands/
-# home.sh only). Backing off on ANY repeated failure is the same defensive
-# shape a 429-specific backoff would be — it just can't yet tell a rate limit
-# apart from a network blip, and says so here rather than pretending to.
+# #136 REPLACES the paragraph that used to stand here ("what this does NOT try
+# to do, on purpose: distinguish a 429 from any other transport failure").
+# adapter_usage now says which kind of failure it was, so this loop stops
+# treating three different situations as one:
+#
+#   rate-limited   HTTP 429. The next poll for THAT tank is the vendor's own
+#                  `Retry-After`, clamped to [base, max] — not a doubling.
+#                  The LOWER clamp is not politeness, it is correctness:
+#                  usage_read has its own TTL cache (default 120s = the base
+#                  interval), so a poll scheduled sooner than the base would
+#                  re-read the cached rate-limited reading, learn nothing, and
+#                  reschedule off it forever. The upper clamp is the existing
+#                  CLIKAE_WATCH_USAGE_MAX_BACKOFF. No usable Retry-After (the
+#                  header absent, negative, zero, non-numeric, an HTTP-date,
+#                  or past 86400 — all already dropped by the adapter) falls
+#                  back to the doubling below, unchanged.
+#   auth           `expired-token` or `no-credentials`. Neither will start
+#                  working because we waited a little longer, so there is no
+#                  ramp to climb: the tank goes STRAIGHT to the max interval
+#                  and is marked, instead of walking a doubling sequence that
+#                  spends calls on a question already answered. The trade,
+#                  stated plainly: after a session refreshes an expired token,
+#                  this loop notices up to one max interval later (30 min by
+#                  default) rather than up to ~4 min. The board does not wait
+#                  for it — a cached "expired" reading is shown as
+#                  `⏳ expired · usage --wake <tank>` the moment it lands
+#                  (#107, lib/commands/home.sh), and `clikae usage` is always
+#                  a fresh read away.
+#   transient      everything else (no connection, a timeout, a 5xx, an
+#                  unparseable body). Doubles, capped — exactly as before.
+#
+# The per-tank class lands in _WATCH_USAGE_POLL_STATE, a fourth parallel array
+# (bash 3.2: no associative arrays, same shape as the three beside it).
 _WATCH_USAGE_POLL_TANK=(); _WATCH_USAGE_POLL_NEXT=(); _WATCH_USAGE_POLL_BACKOFF=()
+_WATCH_USAGE_POLL_STATE=()
 
 # _watch_usage_poll_interval -> the base seconds between polls of one tank.
 _watch_usage_poll_interval() {
@@ -160,23 +185,46 @@ _watch_usage_poll_one() {
     _WATCH_USAGE_POLL_TANK[idx]="$cli/$tank"
     _WATCH_USAGE_POLL_NEXT[idx]=0
     _WATCH_USAGE_POLL_BACKOFF[idx]="$base"
+    _WATCH_USAGE_POLL_STATE[idx]=""
   fi
   [ "$now" -ge "${_WATCH_USAGE_POLL_NEXT[idx]:-0}" ] || return 0
-  local reading source
+  local reading source reason retry facts
   reading="$(usage_read "$cli" "$tank" 2>/dev/null)"
-  source="$(printf '%s' "$reading" | jq -r '.source // empty' 2>/dev/null)"
+  # One jq fork per due poll, same as before #136 — three facts out of it, not
+  # three calls. @tsv on three strings always yields two tabs, so `read` fills
+  # all three names even when the last two are empty.
+  facts="$(printf '%s' "$reading" | jq -r '
+    [(.source // ""), (.reason // ""),
+     (if (.retry_after|type) == "number" then (.retry_after|floor|tostring) else "" end)]
+    | @tsv' 2>/dev/null)"
+  IFS=$'\t' read -r source reason retry <<< "$facts"
+  local cur="${_WATCH_USAGE_POLL_BACKOFF[idx]:-$base}" delay state
   case "$source" in
     vendor|transcript)
-      _WATCH_USAGE_POLL_BACKOFF[idx]="$base"
-      ;;
+      state=ok; cur="$base"; delay="$base" ;;
     *)
-      local cur="${_WATCH_USAGE_POLL_BACKOFF[idx]:-$base}"
-      cur=$(( cur * 2 ))
-      [ "$cur" -le "$max" ] || cur="$max"
-      _WATCH_USAGE_POLL_BACKOFF[idx]="$cur"
-      ;;
+      case "$reason" in
+        rate-limited)
+          state=rate-limited
+          case "$retry" in
+            ''|*[!0-9]*|??????*)
+              cur=$(( cur * 2 )); [ "$cur" -le "$max" ] || cur="$max"; delay="$cur" ;;
+            *)
+              delay="$retry"
+              [ "$delay" -ge "$base" ] || delay="$base"
+              [ "$delay" -le "$max" ] || delay="$max"
+              cur="$delay" ;;
+          esac ;;
+        expired-token|no-credentials)
+          state=auth; cur="$max"; delay="$max" ;;
+        *)
+          state=transient
+          cur=$(( cur * 2 )); [ "$cur" -le "$max" ] || cur="$max"; delay="$cur" ;;
+      esac ;;
   esac
-  _WATCH_USAGE_POLL_NEXT[idx]=$(( now + _WATCH_USAGE_POLL_BACKOFF[idx] ))
+  _WATCH_USAGE_POLL_BACKOFF[idx]="$cur"
+  _WATCH_USAGE_POLL_STATE[idx]="$state"
+  _WATCH_USAGE_POLL_NEXT[idx]=$(( now + delay ))
 }
 
 # _watch_usage_poll_tick — one heartbeat: refresh every KNOWN tank's usage

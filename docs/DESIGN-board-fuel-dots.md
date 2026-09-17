@@ -252,7 +252,18 @@ rollouts modified in the last 7 days, the same `-mmin -10080` window
 token whose credentials hold a refresh token, or that token's own recorded
 expiry had passed — the login is fine, only a session refreshes it; always
 with `reason:"expired-token"` and no numbers), or `"unknown"` (no usable
-reading; `reason` is `no-credentials`, `network` or `unparseable` when known).
+reading; `reason` is `no-credentials`, `network`, `rate-limited` or
+`unparseable` when known). A `rate-limited` reading (#136: HTTP 429, which
+used to be part of the `network` lump) may carry `retry_after`, the vendor's
+own `Retry-After` header in whole seconds, and only when that header was in
+1..86400 — `clikae watch`'s usage poll schedules that tank's next poll off it
+instead of doubling its own backoff. A VENDOR reading may carry `models`
+(#137): the per-model weekly rows the vendor sends in `limits[]` as entries
+with kind `weekly_scoped`, normalized to `{name, pct, resets_at}`. Nothing on
+the board reads them — the dot stays on the all-models number, because
+choosing the relevant per-model row would require knowing which model a tank
+runs and a tank carries no such property (`--model` is an argument to
+`burn`/`relay`). They are reported by `clikae usage` only.
 On the board an expired reading under 24h old draws the no-reading `·` with
 the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not the
 dot: every dot is one column and the row grid is padded around that, an emoji
