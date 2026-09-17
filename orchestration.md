@@ -57,13 +57,30 @@ An orchestrating Claude session's own classifier may refuse to launch an
 auto-mode engine until an allow rule for `clikae burn` exists in that session's
 settings. The child mode does not override the parent session's permissions.
 
-Engines without a `--permission` mapping print one degradation line to stderr
-for either value (`acceptEdits` or `auto`) and keep their existing flags —
-codex and agy have no permission-mode flag of their own; grok has its own
-`--permission-mode`, but clikae does not map `--permission` onto it, so a
-grok burn always runs with grok's fixed mode regardless of which value you
-asked for (previously `acceptEdits` was silent on grok, which read as "you
-got acceptEdits" when the engine actually ran under `bypassPermissions`).
+For Codex, `--permission` selects the sandbox:
+
+| clikae mode | Codex sandbox (`-s`) |
+| --- | --- |
+| `acceptEdits` | `workspace-write` |
+| `bypassPermissions` | `danger-full-access` |
+| `plan` / `default` | `read-only` |
+
+With no `--permission`, an uncommented `sandbox_mode = "..."` line in the
+current tank's `config.toml` wins: clikae omits `-s`. Without that declaration,
+it keeps `workspace-write`. This is evaluated again for each reroute destination.
+Codex has no mapping for `auto`; it warns and keeps `workspace-write`.
+
+**Codex sandbox vs `--add-dir`:** the first directory becomes Codex's working
+directory; extra directories are not writable roots under `workspace-write`.
+A `git worktree` cannot commit under it because its gitdir lives under the main
+repository's `.git/worktrees/`, outside the writable root. Lanes that need
+commit/push/network use `--permission bypassPermissions` or a tank profile with
+`sandbox_mode = "danger-full-access"` (and no explicit `--permission`).
+
+Engines without a mapping for the requested mode print one degradation line to
+stderr and keep their existing flags. agy has no mapping; grok has its own
+`--permission-mode`, but clikae does not map `--permission` onto it, so a grok
+burn always runs with its fixed mode.
 
 Raw commands after `--` remain verbatim; set engine permissions there. With
 `--prompt` or `--prompt-file`, extra arguments after `--` still follow the
@@ -119,14 +136,14 @@ a real paid engine; the recipe is how you stop wasting it.
 2. **Give the task the easy way — don't hand-roll the engine flags.** Use
    `--prompt-file <f>` (or `--prompt`) + `--add-dir <dir>` and clikae fills in each
    engine's headless-write dialect for you (`claude`'s `-p …
-   --permission-mode acceptEdits --add-dir`, `codex`'s `exec -C … -s
-   workspace-write`). For codex, the first `--add-dir` (default: the artifact's
+   --permission-mode acceptEdits --add-dir`, `codex`'s `exec -C …` with the sandbox
+   selection above). For codex, the first `--add-dir` (default: the artifact's
    parent) must be inside a git work tree; use `--codex-skip-git-check` to opt
    in to `--skip-git-repo-check` for a non-git directory. This is checked
    whenever the argv is composed for codex — including a dry tank's reroute
    INTO codex from another engine, not just a run started as `clikae burn
-   codex` — so it can't be skipped by naming a different engine first. Both
-   are **scoped to the roots you name**. claude's recipe
+   codex` — so it can't be skipped by naming a different engine first. Claude uses
+   the named roots; Codex uses the sandbox policy described above. Claude's recipe
    used `--dangerously-skip-permissions` until 2026-08-16, which bypasses the
    permission system entirely: measured, it wrote outside the directories it was
    given while the docs said "this directory". Hand-writing `-- -p '…'` is the #1 way to ship a job that

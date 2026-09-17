@@ -75,13 +75,43 @@ classifier; it does not bypass all permission checks or guarantee approval.</p>
 <p>An orchestrating Claude session's own classifier may refuse to launch an
 auto-mode engine until an allow rule for <code>clikae burn</code> exists in that session's
 settings. The child mode does not override the parent session's permissions.</p>
-<p>Engines without a <code>--permission</code> mapping print one degradation line to stderr
-for either value (<code>acceptEdits</code> or <code>auto</code>) and keep their existing flags —
-codex and agy have no permission-mode flag of their own; grok has its own
-<code>--permission-mode</code>, but clikae does not map <code>--permission</code> onto it, so a
-grok burn always runs with grok's fixed mode regardless of which value you
-asked for (previously <code>acceptEdits</code> was silent on grok, which read as &quot;you
-got acceptEdits&quot; when the engine actually ran under <code>bypassPermissions</code>).</p>
+<p>For Codex, <code>--permission</code> selects the sandbox:</p>
+<table>
+<thead>
+<tr>
+<th>clikae mode</th>
+<th>Codex sandbox (<code>-s</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>acceptEdits</code></td>
+<td><code>workspace-write</code></td>
+</tr>
+<tr>
+<td><code>bypassPermissions</code></td>
+<td><code>danger-full-access</code></td>
+</tr>
+<tr>
+<td><code>plan</code> / <code>default</code></td>
+<td><code>read-only</code></td>
+</tr>
+</tbody>
+</table>
+<p>With no <code>--permission</code>, an uncommented <code>sandbox_mode = &quot;...&quot;</code> line in the
+current tank's <code>config.toml</code> wins: clikae omits <code>-s</code>. Without that declaration,
+it keeps <code>workspace-write</code>. This is evaluated again for each reroute destination.
+Codex has no mapping for <code>auto</code>; it warns and keeps <code>workspace-write</code>.</p>
+<p><strong>Codex sandbox vs <code>--add-dir</code>:</strong> the first directory becomes Codex's working
+directory; extra directories are not writable roots under <code>workspace-write</code>.
+A <code>git worktree</code> cannot commit under it because its gitdir lives under the main
+repository's <code>.git/worktrees/</code>, outside the writable root. Lanes that need
+commit/push/network use <code>--permission bypassPermissions</code> or a tank profile with
+<code>sandbox_mode = &quot;danger-full-access&quot;</code> (and no explicit <code>--permission</code>).</p>
+<p>Engines without a mapping for the requested mode print one degradation line to
+stderr and keep their existing flags. agy has no mapping; grok has its own
+<code>--permission-mode</code>, but clikae does not map <code>--permission</code> onto it, so a grok
+burn always runs with its fixed mode.</p>
 <p>Raw commands after <code>--</code> remain verbatim; set engine permissions there. With
 <code>--prompt</code> or <code>--prompt-file</code>, extra arguments after <code>--</code> still follow the
 generated flags — if that trailing argv contains <code>--permission-mode</code> or
@@ -129,12 +159,13 @@ that into a failure.</p>
 <li>
 <p><strong>Give the task the easy way — don't hand-roll the engine flags.</strong> Use
 <code>--prompt-file &lt;f&gt;</code> (or <code>--prompt</code>) + <code>--add-dir &lt;dir&gt;</code> and clikae fills in each
-engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --permission-mode acceptEdits --add-dir</code>, <code>codex</code>'s <code>exec -C … -s workspace-write</code>). For codex, the first <code>--add-dir</code> (default: the artifact's
+engine's headless-write dialect for you (<code>claude</code>'s <code>-p … --permission-mode acceptEdits --add-dir</code>, <code>codex</code>'s <code>exec -C …</code> with the sandbox
+selection above). For codex, the first <code>--add-dir</code> (default: the artifact's
 parent) must be inside a git work tree; use <code>--codex-skip-git-check</code> to opt
 in to <code>--skip-git-repo-check</code> for a non-git directory. This is checked
 whenever the argv is composed for codex — including a dry tank's reroute
-INTO codex from another engine, not just a run started as <code>clikae burn codex</code> — so it can't be skipped by naming a different engine first. Both
-are <strong>scoped to the roots you name</strong>. claude's recipe
+INTO codex from another engine, not just a run started as <code>clikae burn codex</code> — so it can't be skipped by naming a different engine first. Claude uses
+the named roots; Codex uses the sandbox policy described above. Claude's recipe
 used <code>--dangerously-skip-permissions</code> until 2026-08-16, which bypasses the
 permission system entirely: measured, it wrote outside the directories it was
 given while the docs said &quot;this directory&quot;. Hand-writing <code>-- -p '…'</code> is the #1 way to ship a job that
