@@ -44,12 +44,31 @@ _seed_tank() {
     > "$CLIKAE_HOME/profiles/claude/$tank/.credentials.json"
 }
 
+# _quiet <cmd...> — bats-core installs a DEBUG trap per test (tracing.bash,
+# for its own failure-line reporting) that is inherited into every subshell,
+# including the one lib/adapters/claude.sh's adapter_usage forks around its
+# vendor curl pipeline. On bash 3.2 (the macOS runner) that trap firing
+# between the pipeline and adapter_usage's own `rc="${PIPESTATUS[1]}"`
+# clobbers PIPESTATUS — measured as "exit: : numeric argument required" from
+# claude.sh's `exit "$_claude_usage_curl_rc"`, which adapter_usage then reads
+# as a failed call even though the stub curl succeeded, so a vendor-success
+# read gets miscategorized as a failure (wrong backoff, wrong window_pct).
+# `run` avoids this (bats-core's test_functions.bash disables the same trap
+# for the duration of `run`), but forks a subshell of its own, which would
+# lose this file's global side effects (_WATCH_USAGE_POLL_*). Disabling just
+# the DEBUG trap for these direct, in-process calls is the narrow fix that
+# keeps those writes in this shell. ubuntu-latest's bash 5 never hits this.
+_quiet() {
+  trap - DEBUG
+  "$@"
+}
+
 @test "poll one: a fresh tank is polled (usage_read fires) and its backoff stays at base on success" {
   _boot
   _usage_curl_stub
   _seed_tank a
   local base; base="$(_watch_usage_poll_interval)"
-  _watch_usage_poll_one claude a 1000
+  _quiet _watch_usage_poll_one claude a 1000
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
   _watch_usage_poll_indexv claude a
   [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = "$base" ]
@@ -60,10 +79,10 @@ _seed_tank() {
   _boot
   _usage_curl_stub
   _seed_tank a
-  _watch_usage_poll_one claude a 1000
+  _quiet _watch_usage_poll_one claude a 1000
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
   # same tank, a moment later, still before its own next-poll time
-  _watch_usage_poll_one claude a 1001
+  _quiet _watch_usage_poll_one claude a 1001
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
 }
 
@@ -80,18 +99,18 @@ _seed_tank() {
   export USAGE_FAIL=1
   local base; base="$(_watch_usage_poll_interval)"
   local now=1000
-  _watch_usage_poll_one claude a "$now"
+  _quiet _watch_usage_poll_one claude a "$now"
   _watch_usage_poll_indexv claude a
   [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = "$((base * 2))" ]
   now=$(( now + base * 2 ))
-  _watch_usage_poll_one claude a "$now"
+  _quiet _watch_usage_poll_one claude a "$now"
   [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = "$((base * 4))" ]
   # not every tick re-hits the vendor: three ticks, two of them (still-idle
   # cadence check) between polls, only the two DUE calls above actually fired
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 2 ]
   # a real reading resets the backoff straight back to base
   now=$(( now + base * 4 ))
-  USAGE_FAIL=0 _watch_usage_poll_one claude a "$now"
+  USAGE_FAIL=0 _quiet _watch_usage_poll_one claude a "$now"
   [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = "$base" ]
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 3 ]
 }
@@ -101,7 +120,7 @@ _seed_tank() {
   _usage_curl_stub
   _seed_tank a
   export USAGE_FAIL=1
-  _watch_usage_poll_one claude a 1000
+  _quiet _watch_usage_poll_one claude a 1000
   run usage_read claude a
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "unknown" and .window_pct == null and .weekly_pct == null'
@@ -112,7 +131,7 @@ _seed_tank() {
   _usage_curl_stub
   _seed_tank a
   _seed_tank b
-  _watch_usage_poll_tick
+  _quiet _watch_usage_poll_tick
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 2 ]
 }
 
@@ -124,7 +143,7 @@ _seed_tank() {
   _seed_tank probe
   local i readings=()
   for i in 1 2 3 4 5; do
-    readings+=("$(usage_read claude probe)")
+    readings+=("$(_quiet usage_read claude probe)")
   done
   # the vendor stub was only ever hit ONCE (usage_read's own cache absorbs the
   # rest) — this IS the mechanism that keeps a probe from moving its subject.
