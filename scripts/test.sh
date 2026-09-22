@@ -68,7 +68,7 @@ shellcheck -S warning bin/clikae install.sh "$0"
 # the bats dialect off the extension; no -s override, and `run`/`@test` are
 # understood natively.
 # One shellcheck PROCESS PER FILE (`-n 1`), not one process for the whole tree.
-# shellcheck's memory grows with everything it was handed in one call: measured
+# The linter's memory grows with everything it was handed in one call: measured
 # 2026-09-22, the single-process form reached 3.7 GB RSS on this tree and, with
 # a second copy running in another worktree, pushed a 16 GB machine into 4 GB of
 # swap — the same path as the 2026-09-11 watchdog panic. Per-file, the peak is
