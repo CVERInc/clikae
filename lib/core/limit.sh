@@ -570,10 +570,22 @@ EOF
 
   # Dry only if nothing succeeded AFTER the newest limit (self-clearing). ISO
   # stamps sort lexicographically, so a later success sorting last cleared it.
+  #
+  # rc=2, not 1, and for the same reason codex's branch above returns it: this
+  # is POSITIVE evidence of recovery — a real turn (or the vendor's own
+  # auto-continuation) after the newest limit — whereas rc=1 also covers "this
+  # scan found nothing at all", which is what an untouched tank outside the 5h
+  # window looks like. `clikae wake` depends on the difference: it must skip the
+  # nudge on 2 and still send it on 1. Nothing else reads it — _limit_tank_dry_raw
+  # returns for claude before its rc=2 branch, and every other caller tests
+  # `rc != 0`.
   if [ -n "$maxS" ]; then
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
   fi
 
   # Dry: echo the vendor's own reset phrase (captured above from the newest limit
@@ -958,12 +970,61 @@ _limit_month_num() {
   esac
 }
 
+# LIMIT_RESET_PAST_GRACE — how far BEHIND the reference instant a parsed
+# wall-clock reset may sit and still mean "that already happened", instead of
+# being read as tomorrow's.
+#
+# 🔴 THE BUG THIS EXISTS FOR. An undated phrase names a time of day, not a date,
+# so "resets 8:20pm" read at 21:00 used to resolve to 8:20pm TOMORROW — the only
+# reading available without a rule like this one. For the board that is merely
+# ugly; for `clikae wake` it was the difference between a nudge and a 23-hour
+# sleep. A watcher that first notices a limit AFTER its stated reset (it polls
+# once a minute, and the machine may have been asleep) handed the waiter an
+# instant a day out, and the session sat there. Measured: a phrase 40 minutes
+# past resolved 1400 minutes into the future.
+#
+# 🔴 STRICTLY in the past: a tie is NOT covered. A phrase is written at the
+# instant the limit fires, so "resets 3:50am" arriving AT 3:50am cannot mean
+# "already open" — it names the next occurrence. That was already the rule and
+# it is still pinned by tests/bats/limit-reset.bats ("now EXACTLY on the stated
+# minute rolls forward"), which is what caught this grace swallowing it. The tie
+# is the dangerous input here for the ordinary reason: the observation-anchored
+# callers (_limit_tank_dry_self passes the limit's own timestamp) sit exactly on
+# it, while the grace is aimed at the now-anchored ones.
+#
+# 6h, and the number is derived rather than picked. A limit any caller here can
+# be holding is at most ~5h old by construction: limit_profile_dry only scans
+# transcripts touched in the last 300 minutes, and the vendor's own session
+# window is 5h, so a stated reset further behind the reference than that cannot
+# belong to the limit in hand — it is a genuine tomorrow phrase being read on
+# the wrong side of midnight. The extra hour is slack for clock skew and for the
+# gap between a transcript's mtime and the instant the phrase itself names.
+LIMIT_RESET_PAST_GRACE=21600
+
 # limit_reset_epoch <phrase> <now_epoch> -> 0 + echo the epoch of the reset, or
 # 1 and NOTHING when the phrase carries no reset this function understands.
 #
 # Failing loudly matters: a caller that gets a silent 0 would schedule a wake-up
 # for 1970 and fire immediately. There is no fallback guess here on purpose — an
 # unparsed phrase means "don't schedule anything", which is the safe answer.
+#
+# 🔴 A RESET THAT HAS ALREADY PASSED IS ANSWERED WITH THE PAST INSTANT, and this
+# function stays a pure parser: it reports when the vendor said the reset was,
+# never what anybody should do about it. Callers already handle a past answer —
+# wake_sit's target becomes reset+buffer, which is behind them, so it goes
+# straight to its recovered?/live?/settle/type path, and _burn_wait_for_reset
+# floors a negative remainder at zero.
+#
+# The first draft of this returned <now_epoch> instead, to keep
+# _limit_tank_dry_self's `at < now` test from downgrading the tank to "reset
+# passed · unverified". That was wrong twice over and a test caught it: for
+# claude the anchor is the LIMIT'S OWN timestamp (limit_profile_dry hands the
+# stamp back), so `at` is behind `now` whatever this returns, and the one probe
+# that seemed to show otherwise had simply run inside the same second. The
+# downgrade is also the correct reading — a reset that has passed with no
+# successful turn since is exactly "unverified". What needed fixing was the
+# WATCHER, which now acts on that verdict rather than only on "still dry"; see
+# wake_watch in lib/core/wake.sh.
 limit_reset_epoch() {
   local phrase="$1" now="$2"
   [ -n "$phrase" ] && [ -n "$now" ] || return 1
@@ -1008,6 +1069,15 @@ limit_reset_epoch() {
     cd="$(_limit_local "$codex_zone" "$now" '%Y-%m-%d')" || return 1
     candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
     if [ "$candidate" -le "$now" ]; then
+      # Recently past = already happened (see LIMIT_RESET_PAST_GRACE). Codex is
+      # anchored on the limit's OWN timestamp by _limit_tank_dry_self, so "the
+      # reference instant" here is usually the moment of the limit, not today —
+      # and answering with it keeps a days-old codex outage reading as passed
+      # rather than as something due again this evening.
+      if [ "$(( now - candidate ))" -gt 0 ] && \
+         [ "$(( now - candidate ))" -le "$LIMIT_RESET_PAST_GRACE" ]; then
+        printf '%s' "$candidate"; return 0
+      fi
       cd="$(_limit_shift_day "$codex_zone" "$cd" 1)" || return 1
       candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
     fi
@@ -1056,11 +1126,20 @@ limit_reset_epoch() {
     return 1
   fi
 
-  # Undated: the next occurrence of that wall-clock time. Adding 86400 would be
-  # wrong across a DST boundary, so we ask the calendar for tomorrow's date and
-  # resolve the wall-clock time on THAT day instead.
+  # Undated: TODAY's occurrence of that wall-clock time if it is still ahead or
+  # only just behind us, otherwise tomorrow's. Adding 86400 for "tomorrow" would
+  # be wrong across a DST boundary, so we ask the calendar for tomorrow's date
+  # and resolve the wall-clock time on THAT day instead.
   cand="$(_limit_at "$tz" "$today" "$hm")" || return 1
   if [ "$cand" -le "$now" ]; then
+    # Within the grace, this is the reset we are holding and it has passed. Only
+    # a phrase further behind than any live limit could be is tomorrow's — see
+    # LIMIT_RESET_PAST_GRACE for why the boundary is where it is.
+    if [ "$(( now - cand ))" -gt 0 ] && \
+       [ "$(( now - cand ))" -le "$LIMIT_RESET_PAST_GRACE" ]; then
+      printf '%s' "$cand"
+      return 0
+    fi
     local tmr
     tmr="$(_limit_shift_day "$tz" "$today" 1)" || return 1
     [ -n "$tmr" ] || return 1
@@ -1760,6 +1839,27 @@ function scan(s,   t) {
       maxL = t; rphrase = ""
       if (match(s, /[Rr]esets [^"]*/)) rphrase = substr(s, RSTART, RLENGTH)
     }
+    return
+  }
+  # THE VENDOR CONTINUING BY ITSELF IS A RECOVERY, and it is not an assistant
+  # turn. Claude Code now writes a user-role line of its own the moment a limit
+  # lifts mid-task — isMeta, promptSource "system", and the structural marker
+  # below — and then carries on. Nothing else in this transcript says so: the
+  # assistant turn that follows may be minutes away (a long tool call first),
+  # and until it lands the account reads DRY although it is already working.
+  # That is the reading `clikae wake` consults immediately before it types, so
+  # missing it is a second "go" typed into a conversation that already resumed.
+  # Two separate `~` tests rather than one regex containing a brace: in an awk
+  # ERE a brace opens an interval, and the awk family macOS ships disagrees with
+  # gawk about an unescaped one.
+  #
+  # Structural, like everything else here, and for the same reason the limit
+  # branch above is: someone PASTING this marker into a prompt must not clear
+  # their own tank. JSONL escapes the quotes inside a message body, so a pasted
+  # copy reads \"origin\" and matches neither test — the keys below can only
+  # appear unescaped as keys of the record itself.
+  if (s ~ /"origin"/ && s ~ /"kind": *"auto-continuation"/) {
+    t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
     return
   }
   if (s ~ /"type": *"assistant"/ && s !~ /"model": *"<synthetic>"/) {

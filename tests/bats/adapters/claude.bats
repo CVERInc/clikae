@@ -175,3 +175,80 @@ load '../../helpers'
   [ "$status" -eq 0 ]
   [ "$output" = "9a1c2222-3333-4444-8555-666677778888" ]
 }
+
+# --- subagent transcripts (`agent-<id>.jsonl`) ------------------------------
+# claude writes a subagent's transcript beside its parent's, in the same
+# project dir, every line carrying `"isSidechain":true`. The adapter owns the
+# fact that those are not conversations; everything else asks it.
+_setup_claude_adapter() {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # sessions_by_mtime
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/claude.sh"
+  WORK="$TEST_HOME/work"; mkdir -p "$WORK"; cd "$WORK" || return 1
+  PROFILE="$TEST_HOME/cprofile"
+  PROJ="$PROFILE/projects/$(_claude_project_slug "$WORK")"
+  mkdir -p "$PROJ"
+}
+
+@test "claude adapter_transcript_is_resumable: the basename is the whole rule" {
+  _setup_claude_adapter
+  run adapter_transcript_is_resumable "$PROJ/11111111-2222-3333-4444-555555555555.jsonl"
+  [ "$status" -eq 0 ]
+  run adapter_transcript_is_resumable "$PROJ/agent-99999999-2222-3333-4444-555555555555.jsonl"
+  [ "$status" -ne 0 ]
+  # A session whose id merely CONTAINS "agent" is a session. The rule is the
+  # prefix of the basename, not a substring of the path — and a project
+  # directory called ".../agent-stuff/" must not disqualify what is inside it.
+  run adapter_transcript_is_resumable "$PROJ/deadagent-2222-3333-4444-555555555555.jsonl"
+  [ "$status" -eq 0 ]
+  run adapter_transcript_is_resumable "/tmp/agent-dir/11111111-2222-3333-4444-555555555555.jsonl"
+  [ "$status" -eq 0 ]
+}
+
+@test "claude adapter_all_transcripts does not descend into a sid dir's own subagents/ files" {
+  _setup_claude_adapter
+  local sid="cccccccc-2222-3333-4444-555555555555"
+  printf '{"type":"ai-title","aiTitle":"real"}\n' > "$PROJ/$sid.jsonl"
+  # A sibling sid dir's own nested transcript (subagent/workflow data) is
+  # priced WITH its parent via clean's sibling-dir du, never enumerated as an
+  # independent top-level transcript in its own right — unbounded find used
+  # to hand this back as a second, unrelated "session".
+  mkdir -p "$PROJ/$sid/subagents"
+  printf '{"type":"user","isSidechain":true}\n' > "$PROJ/$sid/subagents/agent-1.jsonl"
+
+  run adapter_all_transcripts "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$sid.jsonl"* ]] || { echo "missing the real transcript: $output"; false; }
+  [[ "$output" != *"subagents"* ]] || { echo "nested subagent data leaked out as its own transcript: $output"; false; }
+}
+
+@test "claude adapter_recent_sids leaves subagent transcripts out of the board's list" {
+  _setup_claude_adapter
+  printf '{"type":"ai-title","aiTitle":"real"}\n' > "$PROJ/11111111-2222-3333-4444-555555555555.jsonl"
+  touch -t 202601010000 "$PROJ/11111111-2222-3333-4444-555555555555.jsonl"
+  # Newer, so a list that counted it would put it first AND — at limit 1 —
+  # would return it INSTEAD of the real session. That is why the skip happens
+  # before the cut, not after.
+  printf '{"type":"user","isSidechain":true,"message":{"role":"user","content":"brief"}}\n' \
+    > "$PROJ/agent-99999999-2222-3333-4444-555555555555.jsonl"
+  touch -t 202606250000 "$PROJ/agent-99999999-2222-3333-4444-555555555555.jsonl"
+
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"11111111-2222-3333-4444-555555555555"* ]] || { echo "got: $output"; false; }
+  [[ "$output" != *"agent-99999999"* ]] || { echo "got: $output"; false; }
+
+  run adapter_recent_sids "$PROFILE" 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"11111111-2222-3333-4444-555555555555"* ]] || { echo "cut before skip: $output"; false; }
+}
+
+@test "claude adapter_find_session still finds a subagent transcript by its full id" {
+  _setup_claude_adapter
+  printf '{"type":"user","isSidechain":true}\n' \
+    > "$PROJ/agent-99999999-2222-3333-4444-555555555555.jsonl"
+  run adapter_find_session "$PROFILE" "agent-99999999-2222-3333-4444-555555555555"
+  [ "$status" -eq 0 ] || { echo "locate was narrowed: $output"; false; }
+  [[ "$output" == *"agent-99999999-2222-3333-4444-555555555555.jsonl"* ]] || false
+}

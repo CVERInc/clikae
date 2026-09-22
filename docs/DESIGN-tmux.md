@@ -129,7 +129,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
 
   stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但**也沒有持久化**。要漫遊就得先拿到 shell 再下指令。
 
-### Rule 2b: scrollback 重播只在 macOS 驗證過（誠實範圍，**原因未解**）
+### Rule 2b: scrollback 重播只在 macOS 驗證過（誠實範圍，**ubuntu 原因未解**）
 
 - **症狀**：離開 session 時把畫面倒回終端機。這個功能在 ubuntu tmux 3.4 上**從來沒有作用過**，而測試在 macOS 上每次都綠 —— 直到 2026-08-15 才有人去看 Linux 的 CI。
 - **量到的**（2026-08-15，ubuntu tmux 3.4 / macOS tmux 3.7b）：
@@ -148,11 +148,32 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   「時序競速」             ✗ 引擎已改成等到 client attach 才退出，仍然沒跑
   「-t 目標解析差異」       ✗ 已拿掉 -t（那是另一個真 bug，已修），沒有改變結果
   ```
+- ✅ **macOS 那一半不再是「大概好的」——2026-09-22 量到了整條鏈**（tmux 3.7b／bash 3.2，隔離 socket）。
+  `scrollback.bats` 在這台機器上五次有四次紅，而它紅的理由跟重播無關。在 EXIT trap 與 `tmux_attach`
+  兩端各插一支帶時間戳的探針，取一次**失敗**的 run：
+  ```
+  attach-pre   …7806  sz=              ← 父行程還沒進 attach，檔案還沒寫
+  trap-start   …8968
+  trap-done    …9287  sz=1717          ← pane 還活著，擷取寫完了
+  attach-post  …9554  rc=0  sz=1717    ← 父行程讀到的就是這 1717 bytes
+  ```
+  也就是說 `[ -s ]` 為真、awk 跑了、**重播確實送進終端機**：那一份失敗輸出裡，marker 後面
+  跟著 `line 1` … `line 200`，而那 200 行早就捲出 24 列的 pane，除了重播沒有別的來源。
+  🔴 **紅的是「tmux 當場畫出來的那一份」，它從來不存在**：測試的引擎替身在 pane 一起來就把
+  200 行印完，而父行程還卡在 `new-session -d` 與 `tmux attach` 之間（光 `tmux_label` 就要設七個
+  per-session 選項）。沒有 client 連著的時候，tmux 把那些行收進 pane 歷史、對外一個 byte 都不送，
+  之後的 attach 只重畫最後 24 列。每一次失敗都量到 `clients-at-first-print=[]`；在第一個 echo
+  之前多呼叫一次 `tmux list-clients`（約 15ms）就足以把紅翻成綠——這也解釋了那個
+  「pass pass fail fail…」不像擲硬幣的形狀：它跟的是快取冷熱，也就是 `clikae run` 多快抵達替身。
+  修在測試（等 client **再**印），不在產品：改完同一支測試連 10 次全綠，改前的版本 5 次紅 4 次。
+- ✅ **產品路徑手工驗過一次**（丟棄式 server、tmux 3.7b）：120 回合的引擎、attach、引擎自己結束 ⇒
+  對話最上面那幾行回到終端機裡。離開 session 時重播是空的——這件事在 macOS 上**沒有發生**。
 - **規範**：
-  1. **原因未知。** 這條規則記錄的是一個開放問題，不是一個解釋。任何要補上的人，先讀上面那份「已排除」清單。
+  1. **ubuntu 那一半仍然原因未知。** 這條規則記錄的是一個開放問題，不是一個解釋。任何要補上的人，先讀上面那份「已排除」清單。macOS 的部分已經結案（上面兩條），別再把 macOS 的偶發紅燈當成同一個問題的證據。
   2. 測試在非 Darwin 平台 `skip` 並指回這裡 —— **不是刪掉**。功能在 macOS 上是好的，缺口是真的、寫下來了，而一個帶理由的 skip 是邀請修復，不是掩蓋。
   3. 這是 Rule 2「tmux 是便利層」的延伸：**功能誠實降級，不假裝跨平台**。
   4. ⚠️ 本節前一版曾宣稱原因是「pane 被硬拆」。那是在探針量出 SURVIVES 之前寫的，**是錯的**，已更正。寫進 SSOT 的推論若沒有收據，下一個人會拿它當前提。
+  5. ⚠️ 第二次同型的錯：測試檔頭連續五輪斷言「擷取沒問題，問題在重播」，依據是一份每一站都健康的 stage 紀錄。它每一站都健康，是因為**它真的健康**——那份紀錄從頭到尾沒有任何一欄在講「畫出來的那一份」。**一個只量了半條鏈的紀錄，會替另外半條背書。**
 
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
@@ -545,6 +566,25 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
      `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
      樁，並斷言它們的 tripwire 檔沒有出現。
+
+     🔴 **「這一列不准去拿」是對的，但它把「誰去拿」留成了無主的**（2026-09-22）。
+     快取檔先前只有兩個寫入者：`clikae usage` 與 burn 在 run 結束時那一次
+     （`lib/core/usage.sh` 的 "who writes this cache"）。於是一台**只有人坐在互動
+     session、從來不 burn** 的機器，沒有任何東西會去更新它。實測：快取**九天前**寫的，
+     狀態列因此永遠畫著「沒有讀數」的 `·`；同一時間另一台整天在 burn 的機器畫的是
+     活的數字。手動跑一次 `clikae usage <engine> <tank>` 花 0.7 秒，下一次重畫就是
+     `5h 25% · 7d 10%`——**讀數一直是對的，缺的是刷新的責任人**。
+     現在的責任人是**這個 session 自己的 `wake` 視窗**（`lib/core/wake.sh`）：
+     `wake_watch` 每 `WAKE_USAGE_INTERVAL`（300 秒）呼叫一次 `usage_read`，另外
+     `switch.sh` 在**剛 spawn 的** session 上射出一發背景的 `wake_usage_prime`，
+     讓第一次 attach 後幾秒鐘就有數字。三件事沒有變：**這一列還是只讀檔**、守望者
+     仍然不是 daemon（沒有狀態檔、跟著 session 一起死、不保留任何人的額度模型，見
+     `wake.sh` 檔頭的設計約束），以及 300 秒這個地板是 `CLIKAE_USAGE_TTL`（120 秒）
+     決定的——比 TTL 更密的節奏只會拿到同一個快取值。
+     刷新**不擋迴圈也不出聲**：它的上界是 adapter 自己的 `curl --connect-timeout 3
+     --max-time 8`（`lib/adapters/claude.sh`）與 `timeout_bin` 包住的 Keychain 讀取，
+     沒有在這裡發明新的上界；失敗就讓上一次的讀數留在檔案裡，由這一列自己的年齡
+     後綴去說它多舊（這正是那個後綴存在的理由）。
      固定成本只有兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
      由 `tmux_status_render` 呼叫一次、交給油量與警示兩邊共用——不只省一個 fork，
      也讓兩半不會對「現在幾點」有不同答案。
@@ -660,6 +700,24 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是
      board 的字彙（`docs/DESIGN-board-fuel-dots.md`）。
+
+     🔴 **CORRECTION (2026-09-22): the `⏳` (token-expired) mark this rule once
+     described here WAS a breach, not an exception, and has been removed.**
+     `scripts/signet-lint.sh` only scanned `U+2600–27BF` / `U+1F300–1FAFF` /
+     `U+2B00–2BFF` / `U+FE0F` — `⏳` is U+23F3, Miscellaneous Technical, the
+     same block as `⌘`/`⌥` (which ARE legitimate key names, so that block
+     cannot be banned outright) — so the mark got through the lint gate onto
+     a delivery surface it was never allowed on. The fix has two parts: the
+     status row's fuel slot now renders the plain word `expired`
+     (`tmux_status_fuelv`, `lib/core/tmux.sh`) instead of the glyph — same
+     vocabulary the board already uses (`usage_expired_board_notev`,
+     `lib/core/usage.sh`), just no longer an emoji — and the lint scan was
+     extended to the emoji-presentation code points actually in that block
+     (`U+231A–231B`, `U+23E9–23FA`, which covers `⏳`/`⌛`/`⏰`/`⏱`/`⏲`) so the
+     same gap cannot reopen with a different glyph from it. `○`/`·` remain
+     legitimate: they are outside both the old and the new scanned ranges,
+     and they are the board's own established vocabulary
+     (`docs/DESIGN-board-fuel-dots.md`), never emoji to begin with.
   7. **寬度規則＝一道固定順序的讓步階梯；警示計數與時鐘永遠不在階梯上。**
      提案指定會截斷的那一段（session 標題）在同一串討論裡被第三次修正拿掉了，之後
      round 1 與 round 2 各自宣告過一次「剩下唯一長度不固定的東西」是什麼，**兩次都漏**：
@@ -698,6 +756,17 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      順序沒有改：還欄位發生在 rung 5 **之後**，所以加寬名字永遠不可能成為油量
      （或任何更低階的東西）被拿掉的理由。
 
+     🔴 **CORRECTION (2026-09-22): this rung's special 2-cell case for `⏳`
+     is gone, along with the glyph.** §6's correction above replaced the
+     token-expired mark with the plain ASCII word `expired`, which
+     `_tmux_status_colsv`'s `${#s}` already measures correctly — no
+     substitution needed, the way `AB` never needed one. The width ladder
+     never had to change: it always sized the fuel slot as a whole segment
+     (rung 5, "never cut the alert count or the clock"), and a 7-column word
+     fits that same treatment. What is gone is only the SPECIAL-CASE code
+     (`s="${s//⏳/xx}"`) and its 2-cell measurement, both dead now that the
+     slot's expired state has no multi-column glyph left to count.
+
      🔴 **警示計數與時鐘永遠不切。** `!N` 是這一列存在的理由（「什麼是紅的」），而缺了
      小時的時鐘不是時鐘。80 欄**保證**的只有三件事：完整的警示計數、完整的時鐘、以及
      **至少 8 欄的 tank 名**；其餘照上面的順序盡力而為。舊版這裡寫的「其餘最多 59 欄」
@@ -734,3 +803,58 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
       把它撤掉了：整支艦隊的逐槽油量住在 board（`clikae home`，#72 之後是真數字），
       狀態列講的是**這一槽、這一個 session**。`tests/bats/tmux-status.bats` 有一條
       測試守著這個「沒有」，所以哪天要加回來會是有人刻意做的決定。
+
+### Rule 12: `-F` 的輸出隨 locale 變，分隔符只能用可列印的 ASCII (Format Separators Are Locale-Dependent)
+
+- **症狀**：一個把 `LC_ALL=C` 或 `LANG=C` 帶進來的 shell——沒有轉送 locale 的 ssh、
+  cron、CI、精簡容器——跑 `clikae` 看不到 Live 那一段，跑 `clikae doctor` 的 tmux
+  guard 那一節說「沒有 session 要檢查」。機器上明明有 session 在跑，而且**沒有任何一
+  行字說為什麼**。坐在 UTF-8 終端機前面的人永遠看不到這件事。
+- **收據**（2026-09-23，tmux 3.7b／macOS，拋棄式 `TMUX_TMPDIR`）：
+
+  ```
+  $ env -i PATH=/opt/homebrew/bin:/usr/bin:/bin LC_ALL=C bash -c '
+      export TMUX_TMPDIR=$(mktemp -d)
+      tmux new-session -d -s t "sleep 30"
+      tmux list-sessions -F "#{session_name}<TAB>#{session_attached}" | od -c
+      tmux kill-server'
+  0000000    t   _   0  \n            <- TAB 被換成 `_`
+
+  $ # 同一個 server、同一個格式字串，只換掉 locale：
+  $ LC_ALL=en_US.UTF-8 …                     -> t \t 0
+  ```
+
+  `\037`（或任何控制字元）一樣被換掉；`|`、`:`、空格則原樣通過，兩個 locale 都是。
+- **原因**：格式字串是**客戶端**展開的，而 tmux 會把它判定為「不可列印」的字元換成
+  `_`——判定的依據是**執行 `tmux` 那一刻的 locale**，不是 server 出生時的。所以這跟
+  Rule 7 的繼承無關：同一台 server、同一個 session，兩個人用不同的 `LANG` 問，會拿到
+  兩種不同的答案。
+- **規範**：
+
+  1. **tmux `-F` 格式字串裡的欄位分隔符必須是可列印的 ASCII。** 永遠不要用 TAB，
+     不要用 `\037`／`\036`，不要用任何控制字元。clikae 的其他地方（board 的
+     record／欄位、`list_all_profiles`）照舊用 `\037`／TAB——**那些位元組是我們自己
+     寫出來的**，沒有經過 tmux 的格式展開，不受這條規範管。分界線是「這個字串有沒有
+     被 tmux 印出來」。
+  2. **分隔符要挑一個在前面幾欄不可能出現的字元**，目前一律是 `|`。
+  3. **定長／數字的欄位排前面，自由文字排最後，而且只切前 N 個分隔符。** 人打得出來
+     的東西（tank 名字，因此 session 名字；`#{pane_start_command}` 這種整串 argv）
+     可能含有 `|`，所以不能靠「切成幾欄」來解析。`live_session_names_for` 要
+     `#{session_created}|#{session_attached}|#{session_name}`，先把兩個數字從前面
+     取走，剩下的整串（含 `|`）就是名字；`_doctor_tmux_guard` 要
+     `#{pane_pid}|#{pane_start_command}`，只切**第一個** `|`。
+  4. **函式對外的形狀不變。** `live_session_names` 仍然吐
+     `名字 <TAB> created <TAB> attached`——那個 TAB 是我們自己 `awk` 印的，所以
+     `_home_live_rows`、`_resume_live_holder`、`_doctor_guard_rows` 的
+     `IFS=$'\t' read` 一行都不用改。
+  5. **單欄的 `-F` 沒有這個問題**，所以 `live_wake_note`、`wake_sessions_for`、
+     `tmux_sess_has_engine` 那幾個 `-F '#{window_name}'` 不必動；用空格分隔而且第一
+     欄是數字或以 `$NF` 讀最後一欄的（`live_engine_alive`、`wake_engine_target`）也
+     一樣安全，空格是可列印字元。
+- **怎麼守住**：`tests/bats/live.bats` 有一條**兩臂**的測試——同一個真 session，
+  `LC_ALL=C` 與 `LC_ALL=en_US.UTF-8` 各讀一次，兩邊都要拿到那一列而且兩邊必須一字不
+  差。只測一個 locale 證明不了任何事：舊的碼在 UTF-8 下是綠的。`tests/bats/doctor.bats`
+  的兩條 guard 測試則整支跑在 `LC_ALL=C` 底下，因為那正是這個檢查存在的那一群人。
+  ⚠️ 那兩條要用 `"$CLIKAE_BIN"` 不能用 `env LC_ALL=C clikae`——`clikae` 在測試裡是
+  **shell function**，`env` 只能 exec 真的檔案，於是會安靜地跑到 PATH 上那一份裝好的
+  clikae 去。

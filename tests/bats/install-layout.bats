@@ -49,3 +49,33 @@ load '../helpers'
   run grep -E '^\s*depends_on "jq"' "$CLIKAE_TEST_ROOT/homebrew/clikae.rb"
   [ "$status" -eq 0 ]
 }
+
+# --- doctor's install-layout check (P4, 2026-09-22) ---------------------------
+# `clikae doctor` is what actually catches a packaging regression on a real
+# user's machine, before this suite exists to catch it on ours: it looks for
+# templates/permissions/claude.json next to lib/ and, when it's not there,
+# says so instead of staying quiet. These two pin that it fires on the
+# drifted layout and stays silent on the correct one — the regression this
+# guards against is a tap formula's `libexec.install` losing "templates"
+# again (seen for real: CVERInc/homebrew-clikae once installed only "bin",
+# "lib") while the in-repo formula test above keeps passing, because that
+# test only reads the FILE in THIS repo, not what actually gets installed.
+
+@test "doctor's install-layout check fails (warns) on a tree without templates/" {
+  local prefix="$BATS_TEST_TMPDIR/layout-no-templates"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  run "$prefix/bin/clikae" doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"permissions template missing"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$prefix/templates/permissions/claude.json"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor's install-layout check passes (silent) on a tree with templates/" {
+  local prefix="$BATS_TEST_TMPDIR/layout-with-templates"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/templates" "$prefix/"
+  run "$prefix/bin/clikae" doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"permissions template missing"* ]] || { echo "$output"; false; }
+}

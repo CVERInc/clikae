@@ -103,9 +103,21 @@ _press() {
 }
 
 # _phase <row> <mode> <phase> [pane] — the helper, run the way if-shell runs it.
+#
+# 🔴 PATH is env's OWN argument, never a bash prefix assignment in front of
+# `command env`. Under bash 3.2 (Apple's /bin/bash, which `#!/usr/bin/env bash`
+# resolves to on a Mac with no Homebrew bash) with bats' `set -T` and DEBUG
+# trap active, `PATH=… command env …` silently drops the prefix: the helper
+# then finds the system tmux instead of $CK_SOCKDIR/bin/tmux, every
+# show-options answer is empty, `drag_on` stays at its shipped default (off),
+# and 13 of these tests read "declined the first motion" — identically on a
+# pristine main, while CI (a modern bash ahead of /bin/bash) never sees it.
+# Measured 2026-09-22 with zero tmux involved: `/bin/bash -c 'set -T; trap
+# true DEBUG; PATH=/tmp/x:$PATH command env -u TMUX bash -c "echo \$PATH"'`
+# prints a PATH without /tmp/x. `_t` above already uses the safe shape.
 _phase() {
   local pane="${4:-$CK_PANE}"
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX \
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" \
     bash "$(_helper)" "$1" "$pane" "$2" "$3" 5
 }
 
@@ -412,19 +424,36 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
 
   # Then: the SAME command string tmux would run, expanded by tmux itself
   # against a pane that is in no mode, handed to `sh -c` the way if-shell does.
-  local quoted unquoted rc_q=0 rc_u=0 pos_q pos_u
-  quoted="$(_t display-message -p -t "$CK_PANE" \
-    "bash '$(_helper)' '12' '$CK_PANE' '#{pane_mode}' drag '5'")"
-  unquoted="$(_t display-message -p -t "$CK_PANE" \
-    "bash '$(_helper)' 12 $CK_PANE #{pane_mode} drag 5")"
+  #
+  # 🔴 RESOLVE #{pane_mode} ON ITS OWN, NEVER INSIDE THE FULL COMMAND STRING.
+  # `display-message -p`'s message is ALSO run through strftime(3) (tmux's own
+  # manual: "string will be passed through strftime(3)"), and a real pane id
+  # is a string like `%0` — indistinguishable from a strftime conversion.
+  # Measured on this machine's libc: `tmux display-message -p -t "$PANE"
+  # "…'$PANE'…"` comes back with the pane id itself eaten (`'%0'` -> `''`),
+  # so TS_PANE_ID arrives empty and the helper declines at
+  # `[ -n "$TS_PANE_ID" ] || _decline` (lib/core/touch_scroll.sh) before it
+  # ever reaches the check this test means to exercise — nothing to do with
+  # bash 3.2, bats' traps, or the .testbin stubs. The real if-shell binding
+  # never hits this: tmux expands `#{pane_id}` and `#{pane_mode}` as format
+  # tokens in one pass, so a `%` that ARRIVES via substitution is never
+  # rescanned by strftime — only a `%` already sitting in the source text is.
+  # This test manufactured that source text itself by splicing $CK_PANE in
+  # before asking tmux to expand anything, which the real binding never does.
+  # Passing `#{pane_mode}` through on its own — never alongside a pane id —
+  # keeps the round trip a pane id can't corrupt.
+  local mode_val quoted unquoted rc_q=0 rc_u=0 pos_q pos_u
+  mode_val="$(_t display-message -p -t "$CK_PANE" '#{pane_mode}')"
+  quoted="bash '$(_helper)' '12' '$CK_PANE' '$mode_val' drag '5'"
+  unquoted="bash '$(_helper)' 12 $CK_PANE $mode_val drag 5"
 
   _press 10
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX sh -c "$quoted" || rc_q=$?
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" sh -c "$quoted" || rc_q=$?
   pos_q="$(_pos)"
 
   _t send-keys -t "$CK_PANE" -X cancel 2>/dev/null || true
   _press 10
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX sh -c "$unquoted" || rc_u=$?
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" sh -c "$unquoted" || rc_u=$?
   pos_u="$(_pos)"
   _cleanup
 

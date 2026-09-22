@@ -23,7 +23,11 @@ cmd_wake() {
       # person types. Kept as a subcommand rather than a private script so the
       # waiter runs the SAME code the tests exercise.
       shift
-      wake_sit "${1:-}" "${2:-}"
+      # engine/tank are optional and arrive from wake_attach: they say which
+      # tank's trace to write and which transcript the no-double-nudge check
+      # reads. A waiter started by an older binary passes neither, and wake_sit
+      # reads them off the session name instead.
+      wake_sit "${1:-}" "${2:-}" "${3:-}" "${4:-}"
       return $?
       ;;
     on|off)
@@ -36,6 +40,21 @@ cmd_wake() {
       log_info "wake: $pref — $(wake_pref_label "$pref")"
       [ "$pref" = "unset" ] && log_dim "  You'll be asked the first time a tank runs dry."
       log_dim "  Set with: clikae wake on   |   clikae wake off"
+      # What actually HAPPENED, which until now nothing could answer: the waiter
+      # said it into a tmux window that dies with the session, so a person asking
+      # "did it fire last night?" had nothing to read. One line per tank, most
+      # recently decided first.
+      local _rows _st _lb _ev _dt
+      if _rows="$(wake_trace_summary 5)"; then
+        echo ""
+        log_dim "  Last outcome per tank ($(wake_log_dir)):"
+        while IFS=$'\037' read -r _st _lb _ev _dt; do
+          [ -n "$_lb" ] || continue
+          printf '    %-22s %-13s %s%s\n' "$_lb" "$_ev" "$_st" "${_dt:+  ·  $_dt}"
+        done <<EOF
+$_rows
+EOF
+      fi
       return 0
       ;;
   esac
@@ -86,13 +105,13 @@ cmd_wake() {
   local attached=0
   while IFS= read -r session; do
     [ -n "$session" ] || continue
-    wake_attach "$session" "$epoch" && attached=$((attached + 1))
+    wake_attach "$session" "$epoch" "$engine" "$tank" && attached=$((attached + 1))
   done <<EOF
 $sessions
 EOF
   if [ "$attached" -gt 0 ]; then
     log_done "Waiting on $engine/$tank — $reset"
-    log_dim "  It will send \"$WAKE_NUDGE\" $((WAKE_BUFFER_SECONDS))s after that, once the pane is idle."
+    log_dim "  It will send \"$WAKE_NUDGE\" $((WAKE_BUFFER_SECONDS))s after that, unless the tank came back on its own."
     log_dim "  Watch or cancel it in the session's 'wake' window."
     return 0
   fi

@@ -254,30 +254,111 @@ _antigravity_title_uncached() {
 # does not, and gets a literal "?" there. The sid is correct either way, and
 # the sid is all home.sh:571 reads.)
 #
-# 🔴 #34: this used to also filter by "$PWD == the session's recorded
-# history.jsonl workspace field" (the same trick adapter_session_cwd uses for
-# one session at a time). But workspace is a constant ($HOME) on every real
-# agy install — measured on #34/#83: 607/607 indexed conversations share one
-# distinct workspace value — so that filter could never match outside $HOME,
-# and the board's Resume rows for agy were permanently empty in any real
-# project directory. workspace is a constant on real installs, so
-# cwd-scoping would hide everything: dropped in favor of TANK-scoped rows
-# (issue #34's "Option 1") — every session in this tank, newest first,
-# relying on the CALLER's own cap ($n / the board's CLIKAE_HOME_RECENT_MAX)
-# rather than a cwd match to keep the list from flooding. Burn one-shots stay hidden through #83's sidecar, unaffected by
-# this. See docs/EXPECTATIONS.md "Engines on one board" for the trade-off in
+# 🔴 SCOPE: this directory first, the whole tank only if this directory has
+# nothing. #34 faced a real choice here and took "Option 1" — tank-wide rows,
+# no cwd filter at all — because `workspace` is a constant ($HOME) on every
+# real agy install (measured on #34/#83: 607/607 indexed conversations share
+# one distinct workspace value), so a strict cwd filter left the board's agy
+# rows permanently empty in any project directory.
+#
+# What that cost only showed up later, on a real store: the board's Continue
+# list is ONE ranked list across every engine, so an engine answering
+# tank-wide competes against engines answering $PWD-wide. Every one of the ten
+# visible rows was agy, and the single claude session that genuinely belonged
+# to the current directory ranked #13 and never appeared. A row meaning
+# something different from the row above it is exactly the defect #34 set out
+# to avoid, and being pushed off the list is worse than being one of several.
+#
+# So: ask adapter_session_cwd (#34's own preferred "Option 2"), newest-first,
+# and keep the matches. If NOTHING in this tank names this directory — the
+# constant-workspace install #34 measured, where the filter can never match —
+# fall back to the tank-wide answer rather than showing an empty section. The
+# fallback is what preserves #34; the filter is what stops agy crowding out
+# the other engines wherever the directory IS recorded.
+#
+# The walk is bounded by CLIKAE_AGY_CWD_SCAN_MAX candidates (default 50) so a
+# tank whose recent conversations all belong elsewhere — #34's "expensive
+# case" — costs a bounded number of cwd reads, not one per session on disk.
+# Burn one-shots stay hidden through #83's sidecar, unaffected by this. See
+# docs/EXPECTATIONS.md "Engines on one board" for the trade-off in
 # user-facing terms.
+: "${CLIKAE_AGY_CWD_SCAN_MAX:=50}"
+
+# _agy_scope_rows <dir> <n> <rows> -> at most <n> of <rows> ("<mt>\037<sid>",
+# newest first) whose session records $PWD as its workspace; the first <n> of
+# <rows> unchanged when none of them does. One place, so the snapshot path and
+# the disk path cannot scope differently.
+_agy_scope_rows() {
+  local dir="$1" n="$2" rows="$3" keep_sid="${4:-}" want="${PWD%/}"
+  local mt sid f rec kept=0 seen=0 out=""
+  [ -n "$rows" ] || return 0
+  while IFS=$'\037' read -r mt sid; do
+    [ -n "$sid" ] || continue
+    seen=$(( seen + 1 ))
+    [ "$seen" -gt "$CLIKAE_AGY_CWD_SCAN_MAX" ] && break
+    if [ -z "$keep_sid" ] || [ "$sid" != "$keep_sid" ]; then
+      f="$dir/antigravity-cli/brain/$sid/.system_generated/logs/transcript.jsonl"
+      rec="$(adapter_session_cwd "$f" 2>/dev/null || true)"
+      [ "${rec%/}" = "$want" ] || continue
+    fi
+    out="$out$mt"$'\037'"$sid"$'\n'
+    kept=$(( kept + 1 ))
+    [ "$kept" -ge "$n" ] && break
+  done <<ROWS
+$rows
+ROWS
+  if [ "$kept" -gt 0 ]; then printf '%s' "$out"; return 0; fi
+  # 🔴 THE FALLBACK SAYS SO, IN THE ROW. Measured on a faithful reproduction of
+  # the maintainer's store (one claude session recorded in this directory, 15
+  # newer agy sessions recorded at $HOME): the board ranks one list by mtime
+  # across every engine, so fifteen fallback rows simply outranked the single
+  # row that genuinely belonged to the directory and pushed it off the board —
+  # the exact symptom the cwd scoping was meant to end, arriving through the
+  # fallback instead.
+  #
+  # A fallback row is a courtesy — "this tank cannot tell which directory its
+  # sessions belong to, here is what it has" — so it must never outrank a row
+  # that IS this directory's. The third field is that statement, and the
+  # board's ranking reads it (home.sh's _home_recent_rows). Every other
+  # adapter emits two fields and is therefore scoped by construction; a reader
+  # that ignores the field gets exactly the old behaviour.
+  printf '%s\n' "$rows" | head -n "$n" | while IFS=$'\037' read -r mt sid; do
+    [ -n "$sid" ] || continue
+    printf '%s\037%s\037fallback\n' "$mt" "$sid"
+  done
+  return 0
+}
 adapter_recent_sids() {
   # #62: the board's bounded index answers this whole function when it is
   # warm. It is a SPEED path, never a narrower answer — an index that cannot
   # cover the caller's ask returns nothing and the disk scan below runs (see
   # board_recent's header).
+  #
+  # The snapshot's own scope is the TANK (`_BOARD_TANK_SCOPE`), so its rows
+  # arrive unscoped and go through _agy_scope_rows exactly like the disk
+  # path's — otherwise a warm board would quietly answer tank-wide while a
+  # cold one answered $PWD-wide.
+  #
+  # 🔴 THE CANDIDATE LIST IS NEVER NARROWER THAN THE CALLER'S ASK. The ask is
+  # already widened by the caller — home.sh adds this tank's burn-sid count so
+  # hidden rows cannot eat the list (#34 round-2 P2-1 / #93) — and clamping it
+  # to the cwd scan ceiling here threw that away: on a tank with 250 burns
+  # newer than 3 human sessions, the humans fell outside the 50 candidates,
+  # the cwd filter matched none of the burns, and the tank-wide FALLBACK then
+  # had only burns to fall back to, which the caller's own filter then dropped.
+  # Empty Resume block — exactly the regression #93 fixed. So the candidate
+  # list is max(ask, ceiling); the ceiling bounds only the cwd READS inside
+  # _agy_scope_rows, which is where the per-row cost actually is.
+  local _n="${2:-5}" _lim
+  case "$_n" in ''|*[!0-9]*) _n=5 ;; esac
+  _lim="$CLIKAE_AGY_CWD_SCAN_MAX"
+  [ "$_n" -gt "$_lim" ] && _lim="$_n"
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
-    local _bout; _bout="$(board_recent antigravity "$@")"
-    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+    local _bout; _bout="$(board_recent antigravity "$1" "$_lim")"
+    if [ -n "$_bout" ]; then _agy_scope_rows "$1" "$_n" "$_bout"; return 0; fi
   fi
   # $n, not $limit: at n=1 this is a MODE, not a count. See the docstring.
-  local dir="$1" n="${2:-5}" brain want sdir sid f
+  local dir="$1" n="$_n" brain want sdir sid f
   brain="$dir/antigravity-cli/brain"
   [ -d "$brain" ] || return 0
   want="${PWD%/}"
@@ -291,6 +372,7 @@ adapter_recent_sids() {
   # the single-session form burn.sh and resume.sh do call — reads the same file
   # and stays.
   local -a afiles=()
+  local _cache_sid=""
   local cache="$dir/antigravity-cli/cache/last_conversations.json"
   # Burn needs the newest transcript even before the CLI refreshes its cache.
   # #34 round-2 P3-3: this used to be `[ "${3:-}" != disk ] && [ -f "$cache" ]`
@@ -335,6 +417,11 @@ adapter_recent_sids() {
           return 0
         fi
         afiles=("$f")
+        # The cache pointer IS a cwd statement — the CLI wrote it under this
+        # very directory's key — and it is the authority, so this sid survives
+        # the cwd filter below even when history.jsonl has no entry for it (in
+        # which case adapter_session_cwd answers $HOME and would drop it).
+        _cache_sid="$sid"
       fi
       # Stale: the cache's pointer no longer has a brain dir (e.g. cleaned up
       # since the cache was written). Fall through to the disk scan below
@@ -352,18 +439,21 @@ adapter_recent_sids() {
       for _sf in "${afiles[@]}"; do [ "$_sf" = "$f" ] && { _seen=1; break; }; done
     fi
     [ "$_seen" -eq 1 ] && continue
-    # #34: tank-scoped — every session in this tank, newest first, capped by
-    # the caller's own $n. No adapter_session_cwd/$want filter here (see
-    # the docstring above): workspace is a constant on real installs, so
-    # cwd-scoping would hide everything.
+    # No cwd test in THIS loop: it is a plain "what does this tank hold" walk,
+    # free of per-file reads. The scoping happens once, below, on the ranked
+    # list — so the number of adapter_session_cwd reads is bounded by the scan
+    # ceiling rather than by how many sessions the tank has on disk.
     afiles+=("$f")
   done
   [ "${#afiles[@]}" -gt 0 ] || return 0
-  sessions_by_mtime "${afiles[@]}" | head -n "$n" | while read -r mt f; do
-    [ -f "$f" ] || continue
-    sid="${f%/.system_generated/*}"; sid="${sid##*/}"
-    [ -n "$sid" ] || continue
-    printf '%s\037%s\n' "$mt" "$sid"
-  done
+  local _rows
+  _rows="$(sessions_by_mtime "${afiles[@]}" | head -n "$_lim" \
+    | while read -r mt f; do
+        [ -f "$f" ] || continue
+        sid="${f%/.system_generated/*}"; sid="${sid##*/}"
+        [ -n "$sid" ] || continue
+        printf '%s\037%s\n' "$mt" "$sid"
+      done)"
+  _agy_scope_rows "$dir" "$n" "$_rows" "$_cache_sid"
 }
 

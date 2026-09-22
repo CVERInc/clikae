@@ -51,7 +51,7 @@ _USAGE_AUTH_FAIL_TTL_SEC=60
 # usage --wake`) refreshes the access token. A `…v` setter so the board's
 # redraw pays no subshell for it.
 usage_expired_hintv() {
-  _UEH="⏳ token expired — run a session or 'clikae usage --wake $1'"
+  _UEH="token expired — run a session or 'clikae usage --wake $1'"
 }
 # usage_expired_board_notev <tank> -> $_UEH, the same remedy cut to fit the
 # board's right gutter. A tank row spends 47 columns before its note (lead,
@@ -60,7 +60,7 @@ usage_expired_hintv() {
 # rendered board). Every existing note ("window 44% · weekly 20% · 3h ago")
 # fits that gutter; this one does for any tank name of up to 8 characters.
 usage_expired_board_notev() {
-  _UEH="⏳ expired · usage --wake $1"
+  _UEH="expired · usage --wake $1"
 }
 # usage_unknown [reason] [retry_after]
 # $2 is honoured for `rate-limited` only, and only as an integer in 1..86400
@@ -252,11 +252,28 @@ usage_read() (
 #     age, on its own 24h "unknown" cutoff (`home.sh`) instead — the two
 #     callers do not share one ruler (round-5 review P3-5).
 #
+# (e) a LIVE SESSION refreshes its own tank, from the `wake` window it
+#     already has: one `usage_read` at launch (wake_usage_prime, called from
+#     lib/commands/switch.sh for a session it just spawned) and one every
+#     WAKE_USAGE_INTERVAL from wake_watch's loop (lib/core/wake.sh). Added
+#     2026-09-22 because (a)-(d) between them left the refresh UNOWNED on a
+#     machine that never burns: measured, a nine-day-old cache and a tmux
+#     status row showing the "no reading" glyph forever, while a machine
+#     burning all day showed live numbers. It goes through this same function,
+#     so it honours CLIKAE_USAGE_TTL like every other caller and keeps nothing
+#     a `clikae usage` run would not have written.
+#
+# (f) `clikae watch`'s usage-poll heartbeat (#133) walks every tank through
+#     this same function on its own schedule. (e) and (f) overlap on purpose:
+#     (f) needs a person running `clikae watch`, (e) needs nothing but a live
+#     session — and because both go through the TTL below, a tank both of them
+#     touch costs a cache hit, not a second vendor call.
+#
 # Nothing else writes or refreshes this cache. `usage_read` above is the
-# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b) above calling
-# it the same way); a cache file with no `clikae usage`/burn run behind it
-# simply does not exist yet, and one that stops being refreshed simply ages
-# in place — (c) is how the board says so instead of staying silent.
+# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b)/(e)/(f) above
+# calling it the same way); a cache file with no `clikae usage`/burn/live-session run
+# behind it simply does not exist yet, and one that stops being refreshed simply
+# ages in place — (c) is how the board says so instead of staying silent.
 #
 # `scanned_at` vs `cached_at` (P3, round-2 review): a vendor reading's
 # `cached_at` IS the fetch time — the two never differ. A transcript

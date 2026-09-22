@@ -372,6 +372,14 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude: permissions template missing (installation incomplete)"* ]] || false
   [[ "$output" != *"invalid JSON"* ]] || false
+  # Actionable, not a dead end (P4, 2026-09-22): the exact expected path —
+  # this is a bin+lib-only prefix, the shape of the drifted Homebrew tap
+  # formula (CVERInc/homebrew-clikae, before it matched this repo's own
+  # homebrew/clikae.rb) — plus where the file ships and how to get it back,
+  # never "go edit a formula".
+  [[ "$output" == *"$prefix/templates/permissions/claude.json"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"release tarball"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"edit"*"formula"* ]] || { echo "$output"; false; }
 }
 
 # --- tmux guard shim reporting (CVERInc/clikae#97) -----------------------------
@@ -401,11 +409,64 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   # session that predates the guard, or whose spawn path drifted around
   # Rule 10. Its pane process never gets the shim.
   tmux new-session -d -s "$sess" 'sleep 60'
-  run clikae doctor
+  # 🔴 UNDER A C LOCALE, ON PURPOSE (2026-09-23). This check reads two tmux
+  # `-F` formats — `live_session_names`' session list and this file's own
+  # `list-panes` — and tmux rewrites a TAB inside a format string to `_`
+  # whenever the client's locale is C/POSIX (measured, tmux 3.7b/macOS).
+  # Both used to be TAB-separated, so for a person on `LC_ALL=C`/`LANG=C`
+  # (ssh without locale forwarding, cron, CI, a minimal container) doctor saw
+  # no sessions and printed "all clear" for a machine with an unguarded one
+  # running. That is the population this check exists for, so this is the
+  # locale to test it in; docs/DESIGN-tmux.md Rule 12 has the rule. Set for
+  # this invocation only — the render itself is not what is under test.
+  #
+  # 🔴 `"$CLIKAE_BIN"`, NOT `env … clikae`. `clikae` here is a bats SHELL
+  # FUNCTION (tests/helpers.bash), and `env` can only exec a real file — so
+  # `run env LC_ALL=C clikae doctor` quietly runs whatever clikae is on the
+  # developer's PATH (an installed 0.30.0, on the machine this was written
+  # on) instead of the tree under test. It fails, so it is not silent, but it
+  # fails for the wrong reason and the output looks like a broken fix.
+  run env LC_ALL=C LANG=C "$CLIKAE_BIN" doctor
+  local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tmux guard"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"$sess"* ]] || { echo "$output"; false; }
+  # 🔴 NAME THE VERDICT, AND SAY WHICH SILENCE IT WAS (2026-09-23). Asserting
+  # "tmux guard" and "$sess" as two independent substrings could not tell an
+  # empty session list from a session doctor looked at and cleared — both are
+  # simply no line — and an afternoon went into the first reading of a failure
+  # that could have been either. The verdict text differs per platform on
+  # purpose (see the P4 note on _doctor_pane_path and the two sibling tests
+  # below), so accept either, but it must be attached to THIS session.
+  [[ "$output" == *"not first on PATH:"*"$sess"* || "$output" == *"could not verify:"*"$sess"* ]] || {
+    echo "doctor printed no guard verdict for $sess."
+    echo "sessions this test could see: $seen"
+    echo "CLIKAE_LIB=$CLIKAE_LIB TMUX_TMPDIR=$TMUX_TMPDIR"
+    echo "$output"; false; }
+}
+
+@test "doctor checks a live session still under the PRE-0.28.3 prefix — the one that CANNOT have the guard" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # 🔴 A `ck-` session predates the 0.28.3 rename, so it predates the guard
+  # (#97) and is unprotected by construction — the single population this
+  # check exists for. `live_session_names` reads one prefix (the board's
+  # rule, pinned in sess-prefix.bats), so until _doctor_guard_rows this
+  # check could not see them at all and reported "all clear" for a machine
+  # whose only certainly-unguarded session was running right there. Doctor
+  # already knew: _doctor_legacy_prefix counts these two lines earlier.
+  local sess; sess="ck-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  # Under a C locale too — see the note on the sibling test above. A legacy
+  # session on a C-locale shell was invisible TWICE over: once for the prefix
+  # (fixed by _doctor_guard_rows) and once for the separator. `"$CLIKAE_BIN"`
+  # for the same reason spelled out above: `clikae` is a shell function.
+  run env LC_ALL=C LANG=C "$CLIKAE_BIN" doctor
+  local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not first on PATH:"*"$sess"* || "$output" == *"could not verify:"*"$sess"* ]] || {
+    echo "doctor printed no guard verdict for the legacy-prefixed $sess."
+    echo "sessions this test could see: $seen"
+    echo "$output"; false; }
 }
 
 @test "doctor stays silent when the live session's PANE PROCESS actually has the guard first on PATH" {
@@ -460,6 +521,131 @@ STUB
   PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
   [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   [ "$output" = "/REAL/env:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+# --- macOS spawn-command fallback (P4, 2026-09-22) -----------------------------
+# Measured on Darwin 27 (macOS 26): `ps eww` can return NOTHING for a live,
+# same-uid, readable process — not just fail loud. Reproduced for a plain
+# `sleep` this same shell forked directly, and for a live tmux pane's own
+# bash; both owned by the user running doctor. Not the tty-attachment limit
+# lib/core/proc.sh documents. When that happens, `_doctor_pane_path` falls
+# back to the pane's own spawn command (see the function's own comment).
+
+@test "_doctor_pane_start_command_path extracts the FIRST PATH= token, not one from inside the wrapped command" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_start_command_path 'env -u _CLIKAE_TMUX_SHIM_HOPS PATH=/SHIM/dir:/usr/bin bash -c "echo PATH=/decoy"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "/SHIM/dir:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+@test "_doctor_pane_start_command_path returns empty for a plain command with no env PATH= wrapper" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_start_command_path 'sleep 60'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "got: $output"; false; }
+}
+
+@test "_doctor_pane_path falls back to the pane's spawn command when ps returns nothing at all" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  chmod +x "$TEST_HOME/.osbin/uname"
+  # `ps` SUCCEEDS and prints nothing — the measured P4 shape, distinct from
+  # the "ps failing/locked-down host" case the existing tests already cover.
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/ps"
+  local start_command='env -u _CLIKAE_TMUX_SHIM_HOPS PATH=/SHIM/dir:/usr/bin sleep 60'
+  # Called DIRECTLY, stdout only redirected to a file — not through `run` or
+  # `$(...)`: both fork a subshell, and $__DOCTOR_PANE_PATH_METHOD set inside
+  # one would be lost the instant it exits (see the function's own comment).
+  PATH="$TEST_HOME/.osbin:$PATH" _doctor_pane_path 999999999 "$start_command" >"$TEST_HOME/pane-path.out"
+  local rc=$?
+  [ "$rc" -eq 0 ] || { echo "rc=$rc"; false; }
+  [ "$(cat "$TEST_HOME/pane-path.out")" = "/SHIM/dir:/usr/bin" ] || { echo "got: $(cat "$TEST_HOME/pane-path.out")"; false; }
+  [ "$__DOCTOR_PANE_PATH" = "/SHIM/dir:/usr/bin" ] || { echo "__DOCTOR_PANE_PATH=$__DOCTOR_PANE_PATH"; false; }
+  [ "$__DOCTOR_PANE_PATH_METHOD" = "spawn command" ] || { echo "__DOCTOR_PANE_PATH_METHOD=$__DOCTOR_PANE_PATH_METHOD"; false; }
+}
+
+@test "_doctor_pane_path still fails when BOTH ps and the spawn command have nothing to offer" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/uname" "$TEST_HOME/.osbin/ps"
+  # A plain command with no guard wrapper — the honest answer stays "could
+  # not verify", never a claim either way.
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999 'sleep 60'
+  [ "$status" -ne 0 ] || { echo "status=$status output='$output'"; false; }
+}
+
+@test "doctor verifies a guarded session via the spawn-command fallback when ps can't read process env (the real macOS defect)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux_spawn_session --session "$sess" -- 'sleep 60'
+  mkdir -p "$TEST_HOME/.psbin"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.psbin/ps"
+  chmod +x "$TEST_HOME/.psbin/ps"
+  PATH="$TEST_HOME/.psbin:$PATH" run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tmux guard"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor still says 'could not verify', not 'missing', for an unguarded session when ps can't read process env" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # 🔴 THIS SCENARIO ONLY EXISTS WHERE `ps` IS THE MECHANISM (Darwin — see the
+  # P4 note on `_doctor_pane_path`). Stubbing `ps` proves nothing on a host
+  # with a real /proc: `_doctor_pane_path` checks `[ -r "/proc/$pid/environ" ]`
+  # BEFORE it ever runs `uname`/`ps`, so on Linux this session's real, live,
+  # same-uid pane process is read straight from /proc regardless of what `ps`
+  # says. And for a BARE `tmux new-session` (this test's whole premise — no
+  # `env PATH=` wrapper), that real environment genuinely does not have the
+  # shim first, so "not first on PATH" is the TRUE, correct verdict there —
+  # not a failure to verify. Forcing "could not verify" on such a host would
+  # be asserting the wrong thing, not testing the same defect; see the sibling
+  # case right below for the /proc-side guarantee this one can't exercise.
+  [ -r "/proc/$$/environ" ] && skip "this host reads /proc directly (Linux): ps can't-read is not reachable, see the sibling test below"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  # A bare tmux new-session — no env PATH= wrapper in its start command
+  # either — so the fallback has nothing to offer, same as ps: this must
+  # stay "unknown", not become a false "not first on PATH".
+  tmux new-session -d -s "$sess" 'sleep 60'
+  mkdir -p "$TEST_HOME/.psbin"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.psbin/ps"
+  chmod +x "$TEST_HOME/.psbin/ps"
+  PATH="$TEST_HOME/.psbin:$PATH" run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not verify:$sess"* || "$output" == *"could not verify: $sess"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"not first on PATH"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor reports 'not first on PATH', not 'could not verify', for an unguarded session on a host whose /proc genuinely answers (the Linux branch's sibling of the test above)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # The inverse guard from the test above: this one is the case that only
+  # applies where `/proc/<pid>/environ` really does answer for a live,
+  # same-uid pane process (Linux). There, `_doctor_pane_path` never touches
+  # `ps` or the spawn-command fallback at all — it reads the pane's REAL
+  # environment straight from /proc, and for a bare, unguarded session that
+  # environment genuinely lacks the shim, so doctor is right to call it
+  # "not first on PATH" rather than hedge with "could not verify". No `ps`
+  # stub here on purpose: /proc answers before `ps` would ever be reached.
+  [ -r "/proc/$$/environ" ] || skip "this host has no working /proc read of its own process (macOS): see the test above for that branch"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not first on PATH:"*"$sess"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"could not verify:$sess"* && "$output" != *"could not verify: $sess"* ]] || { echo "$output"; false; }
 }
 
 @test "doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)" {
@@ -569,4 +755,81 @@ $output"
   chmod +x "$TEST_HOME/.osbin/uname" "$TEST_HOME/.osbin/ps"
   PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
   [ "$status" -ne 0 ] || { echo "Darwin branch: status=$status output='$output'"; false; }
+}
+
+# ── fleet config: hooks + MCP servers a non-solo tank is missing (#141) ──────
+# 🔴 The point of this section is that it SPEAKS. Both halves fail silently on
+# a real machine — a recreated tank simply has no Stop hook, and nothing looks
+# wrong — so the case that must hold is "doctor names the gap", and the case
+# right after it is "doctor stays quiet when there is none", because a check
+# that reports drift unconditionally is the same non-signal as one that never
+# reports it.
+
+_fleet_jq_only() { command -v jq >/dev/null 2>&1 || skip "the fleet config check needs jq"; }
+
+@test "doctor names a non-solo tank that does not run a shared hook" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  # The #141 shape: the tank stops running it (recreated, hand-edited, restored
+  # from a backup — doctor cannot tell, and does not need to).
+  local t="$CLIKAE_HOME/profiles/claude/a/settings.json"
+  jq 'del(.hooks)' "$t" > "$t.x" && mv "$t.x" "$t"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/a does not run the shared Stop hook"* ]] || false
+  [[ "$output" == *"/bin/echo snapshot"* ]] || false
+}
+
+@test "doctor says NOTHING about fleet config when every tank has everything" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"fleet config"* ]] || false
+}
+
+@test "doctor never reports a SOLO tank as missing fleet config" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae init claude b
+  clikae solo claude b
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"claude/b does not run"* ]] || false
+}
+
+@test "doctor names a non-solo tank that is missing a shared MCP server" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae init claude b
+  printf '{"oauthAccount":{"emailAddress":"a@example.com"},"mcpServers":{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
+  printf '{"oauthAccount":{"emailAddress":"b@example.com"},"mcpServers":{}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
+  clikae mcp share stripe claude a
+  # b picked it up in the backfill; take it away again, as a recreated tank would.
+  printf '{"oauthAccount":{"emailAddress":"b@example.com"},"mcpServers":{}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/b does not have the shared MCP server: stripe"* ]] || false
+}
+
+@test "doctor stays read-only while checking fleet config" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  local t="$CLIKAE_HOME/profiles/claude/a/settings.json"
+  jq 'del(.hooks)' "$t" > "$t.x" && mv "$t.x" "$t"
+  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  [ "$before" = "$after" ]
+  # …and it did not "helpfully" repair the tank it just reported on.
+  run jq -r '.hooks // "none"' "$t"
+  [ "$output" = "none" ]
 }

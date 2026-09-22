@@ -237,12 +237,23 @@ _seed_transcript() {
   # as literal paths; stat's non-zero + pipefail + set -e killed resume/cleanup
   # dead silent for every single-engine user. Caught by the 2026-07-11
   # ephemeral red-team review.
+  #
+  # The store is a REAL tank now (`clikae init`), not a bare directory that
+  # merely looks like one: the enumerator behind this list walks
+  # tanks_for_engine, the same "what is a tank" answer the board has used since
+  # #61, instead of globbing profiles/<engine>/*/. What this test is about —
+  # a store with one engine in it must not die on the engines it has nothing
+  # for — is unchanged, and it now exercises the shape a user actually has.
+  clikae init claude only >/dev/null
   mkdir -p "$CLIKAE_HOME/profiles/claude/only/projects/-x"
   printf '{"type":"summary","aiTitle":"solo"}\n' > "$CLIKAE_HOME/profiles/claude/only/projects/-x/eeee-ffff.jsonl"
   CLIKAE_NO_INTERACTIVE=1 run clikae resume
   [ "$status" -eq 0 ]
   [[ "$output" == *"solo"* ]] || false
-  run clikae resume cleanup --dry-run --older-than 0
+  # --no-archive-check: this store has no backup marker (nothing wrote one), and
+  # clean withholds every conversation until one exists. The premise under test
+  # is the enumerator surviving engines it has nothing for, not the guard.
+  run clikae resume cleanup --dry-run --older-than 0 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude/only"* ]] || false
 }
@@ -357,4 +368,144 @@ STUB
   [ -f "$argv_log" ] || { echo "agy stub was never invoked — resume: $output"; false; }
   grep -qF -- "--conversation" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
   grep -qF "$sid" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+}
+
+# --- the engine list `clikae resume` scans with ------------------------------
+# `_resume_all_sessions` used to be three hand-typed globs, and its own comment
+# said a new resumable engine's glob "goes here only". grok landed on
+# 2026-07-31 with adapter_resume_args, adapter_recent_sids, adapter_find_session
+# and adapter_session_cwd — it reached the home board, and every store-wide
+# surface (the picker, prefix resolution, `clikae clean`'s scan) stayed blind to
+# it, because nobody extended a list that had no way to say it was incomplete.
+# The enumeration goes through the adapters now, so this test is about a
+# mechanism, not about grok: an engine that CAN be resumed is enumerated.
+@test "a grok session is reachable by prefix — resume enumerates through the adapters, not a glob list" {
+  clikae init grok g
+
+  local sid="019fb7b0-9b86-7f82-98a4-0000000000aa"
+  local work="$TEST_HOME/grok-work"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/grok/g/sessions/%2Fgrok-work/$sid"
+  mkdir -p "$d"
+  cat > "$d/summary.json" <<JSON
+{
+  "info": {
+    "id": "$sid",
+    "cwd": "$work"
+  },
+  "session_summary": "GROK-PREFIX-FIXTURE",
+  "generated_title": "GROK-PREFIX-FIXTURE"
+}
+JSON
+
+  local argv_log="$TEST_HOME/grok_argv.log"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf '"'"'%%s\\n'"'"' "$@" > %s\n' "$(printf '%q' "$argv_log")"
+    printf 'exit 0\n'
+  } > "$TEST_HOME/.testbin/grok"
+  chmod +x "$TEST_HOME/.testbin/grok"
+
+  cd "$TEST_HOME" || return 1      # NOT the session's own directory
+  # Eight characters is what the tmux status line shows, and prefix resolution
+  # is the surface that reads the store-wide scan (_resume_prefix_candidates).
+  run clikae resume "${sid:0:8}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$argv_log" ] || { echo "grok stub was never invoked — resume said: $output"; false; }
+  grep -qF -- "--resume" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+  grep -qF "$sid" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+}
+
+# The same enumeration, from the other end: a MISS has to be reportable. The
+# store-wide locate used to inherit its exit status from the last tank it
+# looked in, so with a tank for the last resume-capable engine (alphabetically
+# grok) a miss killed the command under `set -e` — no "No session" line, and no
+# prefix retry either, since the retry is downstream of that return.
+@test "a miss is reported, not a silent death, when the last resume-capable engine has a tank" {
+  clikae init grok g
+  run clikae resume deadbeef
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No session"* ]] || { echo "output was: $output"; false; }
+}
+
+# --- claude's subagent transcripts are not conversations ---------------------
+# claude writes a subagent's transcript beside its parent's as
+# `agent-<id>.jsonl` (every line `"isSidechain":true`). They cannot be reopened
+# — `claude --resume agent-<id>` answers "not a UUID and does not match any
+# session title" — and on a working store they outnumber real sessions, titled
+# with whatever brief the parent dispatched ("Effort: high. Expected ~60 tool
+# steps…"). So they are out of every LIST and COUNT, and out of nothing else.
+_seed_agent_transcript() {   # <tank> <dir> <sid> ; echoes the path
+  local tank="$1" dir="$2" sid="$3" slug
+  slug="$(_slug "$dir")"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug"
+  printf '{"type":"user","isSidechain":true,"cwd":"%s","message":{"role":"user","content":"Effort: high. Expected ~60 tool steps."}}\n' "$dir" \
+    > "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug/agent-$sid.jsonl"
+  printf '%s\n' "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug/agent-$sid.jsonl"
+}
+
+@test "the resume list leaves out claude's subagent transcripts" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "11111111-2222-3333-4444-555555555555"
+  _seed_agent_transcript a "$work" "99999999-2222-3333-4444-555555555555" >/dev/null
+
+  cd "$work" || return 1
+  CLIKAE_NO_INTERACTIVE=1 run clikae resume
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"11111111-2222-3333-4444-555555555555"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"agent-99999999"* ]] || { echo "subagent listed: $output"; false; }
+  [[ "$output" != *"Expected ~60 tool steps"* ]] || { echo "subagent listed: $output"; false; }
+}
+
+@test "a full subagent id still LOCATES its tank — only the lists are narrowed" {
+  _install_claude_stub
+  clikae init claude a
+  clikae init claude b
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_agent_transcript b "$work" "99999999-2222-3333-4444-555555555555" >/dev/null
+
+  cd "$TEST_HOME" || return 1          # NOT the session's dir
+  unset CLAUDE_CONFIG_DIR
+  run clikae resume "agent-99999999-2222-3333-4444-555555555555"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The tank was found and clikae cd'd into the recorded directory before
+  # handing over — what clikae owns. (The engine's own refusal to resume a
+  # sidechain id is the engine's answer, and the reason these are not listed.)
+  grep -q "CLAUDE_CONFIG_DIR=$CLIKAE_HOME/profiles/claude/b" "$CLAUDE_STUB_LOG"
+  grep -q "PWD=$work" "$CLAUDE_STUB_LOG"
+  grep -q "ARGS=--resume agent-99999999-2222-3333-4444-555555555555" "$CLAUDE_STUB_LOG"
+}
+
+# _resume_enumerate [--resumable] -> the store scan's own output, sourced the
+# way bin/clikae sources it. Asserting the ENUMERATOR rather than `clean`'s
+# screen keeps this test about the contract that changed; what clean then does
+# with a candidate (age, size, live-session guards) is clean's own business and
+# has its own suite.
+_resume_enumerate() {
+  bash -c '
+    set -eo pipefail
+    export CLIKAE_LIB="$1" CLIKAE_HOME="$2"
+    for m in log i18n json profile_store adapter_loader; do . "$CLIKAE_LIB/core/$m.sh"; done
+    . "$CLIKAE_LIB/commands/resume.sh"
+    _resume_all_sessions ${3:+"$3"}
+  ' _ "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_HOME" "${1:-}"
+}
+
+@test "the store scan still hands clean a subagent transcript — it is disk, and that is clean's job" {
+  clikae init claude only
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript only "$work" "11111111-2222-3333-4444-555555555555"
+  _seed_agent_transcript only "$work" "99999999-2222-3333-4444-555555555555" >/dev/null
+
+  # What `clikae clean` asks for: everything on disk.
+  run _resume_enumerate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"agent-99999999"* ]] || { echo "clean would never see it: $output"; false; }
+  [[ "$output" == *"11111111-2222"* ]] || { echo "$output"; false; }
+
+  # What every LIST asks for: conversations only.
+  run _resume_enumerate --resumable
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"agent-99999999"* ]] || { echo "subagent in the list scan: $output"; false; }
+  [[ "$output" == *"11111111-2222"* ]] || { echo "$output"; false; }
 }

@@ -269,6 +269,83 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
 }
 
+# _usage_expired_cache <engine> <tank> [age_seconds] — what usage_read writes
+# when the vendor refused the token and the credentials can still renew it
+# (#107's `usage_unknown expired-token`, plus the cache stamps usage_read adds).
+_usage_expired_cache() {
+  local engine="$1" tank="$2" age="${3:-0}" now
+  now=$(( $(date +%s) - age ))
+  mkdir -p "$CLIKAE_HOME/state/usage/$engine"
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s}\n' \
+    "$now" "$now" > "$CLIKAE_HOME/state/usage/$engine/$tank.json"
+}
+
+@test "fuel: an expired token is its own state, not the no-reading dot" {
+  # #107 in one line: an idle tank at 99% weekly read exactly like a tank with
+  # no login at all. The cache knows which of the two this is, and the remedy
+  # (run a session, or `clikae usage --wake <tank>`) is something a person can
+  # act on — so the row says so with the word. No emoji on this delivery
+  # surface (2026-09-22 correction — the mark used to be `⏳`, U+23F3, which
+  # breached the standing no-emoji rule; scripts/signet-lint.sh's scan was too
+  # narrow to catch it).
+  _src
+  _usage_expired_cache claude wrasse
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"⏳"* ]] || { echo "the old glyph is back: $output"; false; }
+  [[ "$output" != *"·"* ]] || { echo "no-reading dot alongside the word: $output"; false; }
+  [[ "$output" != *"%"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: no cache is still the dot — the word is not the new default" {
+  # The control for the test above. Without it, a row that drew "expired"
+  # whenever it had no percentages would pass, and the two states would be
+  # collapsed again in the other direction.
+  _src
+  run tmux_status_render codex goby '' '' 120
+  [[ "$output" == *"·"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: an expired reading older than 24h ages out like any other" {
+  # The same ceiling a percentage gets. A remedy nobody has rechecked in nine
+  # days is not news about now; "no reading" is the honest answer by then.
+  _src
+  _usage_expired_cache claude wrasse 90000
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"·"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: the expired word is measured like any ASCII fuel string, no special case" {
+  # 2026-09-22 correction: the old `⏳` glyph needed a 2-cell special case
+  # (`${s//⏳/xx}`) because it is East Asian WIDE, unlike the row's other
+  # glyphs. The word "expired" that replaced it is plain ASCII — 7 columns,
+  # counted the same way `AB` always was, no substitution required.
+  _src
+  _tmux_status_colsv "expired"
+  [ "$_TSTAT_COLS" = "7" ] || { echo "expired counted as $_TSTAT_COLS cell(s)"; false; }
+  _tmux_status_colsv "·"
+  [ "$_TSTAT_COLS" = "1" ] || { echo "· counted as $_TSTAT_COLS cell(s)"; false; }
+}
+
+@test "width ladder: the expired word is dropped whole, the way the fuel segment always is, before the alert count or clock" {
+  # tmux_status_rowv treats whatever is IN the fuel slot as one segment (rung
+  # 5, the floor guard) — a 7-column word costs the ladder nothing new. At a
+  # width too narrow for it, it is dropped whole, exactly like a percentage
+  # reading would be, and the alert count and clock survive untouched.
+  _src
+  tmux_status_rowv 30 '' antigravity "$(_tank 42)" '' 'expired' '' 10
+  [ "$_TSTAT_ROW" = "clikae ttttt…tttt${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "$_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" != *"expired"* ]] || { echo "expired survived rung 5: $_TSTAT_ROW"; false; }
+
+  # Wide enough, it is shown plainly alongside the rest of the row.
+  tmux_status_rowv 120 '' claude "$(_tank 8)" '' 'expired' '' 10
+  [[ "$_TSTAT_ROW" == *"clikae claude $(_tank 8)${_SEP}expired${_SEP}"* ]] \
+    || { echo "$_TSTAT_ROW"; false; }
+}
+
 # ── the alert segment ───────────────────────────────────────────────────────
 
 @test "alerts: zero reds means the segment is not drawn at all" {
@@ -1047,7 +1124,11 @@ _SEP=' #[fg=colour244]│#[default] '
   _burn_status burn-1 running "$(_dead_pid)"
   _usage_cache claude wrasse 42.0 65.0
   run tmux_status_render claude wrasse 'a52bdc12-1111-2222-3333-444455556666' reefbox 120
-  run bash -c "printf '%s' \"\$1\" | perl -CSD -ne 'exit(/[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}\x{2B00}-\x{2BFF}\x{FE0F}]/ ? 1 : 0)'" _ "$output"
+  # Same ranges as scripts/signet-lint.sh, including the clock/hourglass code
+  # points (U+231A-231B, U+23E9-23FA) that ⏳ hid in until 2026-09-22 — the
+  # row rendered that glyph for a whole release while this very test stayed
+  # green, because its ruler was a narrower copy of the lint's.
+  run bash -c "printf '%s' \"\$1\" | perl -CSD -ne 'exit(/[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}\x{2B00}-\x{2BFF}\x{FE0F}\x{231A}-\x{231B}\x{23E9}-\x{23FA}]/ ? 1 : 0)'" _ "$output"
   [ "$status" -eq 0 ] || { echo "an emoji reached the row: $output"; false; }
 }
 

@@ -36,28 +36,59 @@ seed_agy_session() {
   [[ "$output" == *"ag-0001"* ]] || false
 }
 
-# --- #34: agy rows are TANK-scoped, not directory-scoped ---------------------
-# This used to be "antigravity recent_sids EXCLUDES sessions recorded in a
-# different cwd", asserting the OLD $PWD filter. That filter is exactly the
-# bug: workspace is a constant ($HOME) on every real agy install (measured on
-# #34/#83: 607/607 indexed conversations, one distinct workspace value), so it
-# could never match outside $HOME and this list was permanently empty in any
-# real project directory. See docs/EXPECTATIONS.md "Engines on one board".
-@test "antigravity recent_sids INCLUDES sessions regardless of recorded cwd (#34)" {
+# --- scope: this directory first, the tank only as a fallback ----------------
+# #34's finding stands — workspace is a constant ($HOME) on every real agy
+# install (607/607 indexed conversations, one distinct value), so a STRICT cwd
+# filter leaves this list empty in any project directory. #34 answered by
+# dropping the filter; that made agy's rows mean something different from
+# every other engine's in one shared, ranked list, and agy crowded them out.
+# The filter is back WITH a fallback: scoped when this directory has anything,
+# tank-wide when it has nothing. See docs/EXPECTATIONS.md "Engines on one
+# board".
+@test "antigravity recent_sids keeps THIS directory's sessions when it has any" {
   _setup_agy
   seed_agy_session ag-aaaa "$WORK" "here"
   seed_agy_session ag-bbbb "/somewhere/else" "elsewhere"
   run adapter_recent_sids "$PROFILE" 5
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ag-aaaa"* ]] || false
-  [[ "$output" == *"ag-bbbb"* ]] || false
+  [[ "$output" == *"ag-aaaa"* ]] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-bbbb"* ]] || { echo "not scoped: $output"; false; }
 }
 
-@test "antigravity recent_sids: newest-first, capped at limit, regardless of cwd (#34)" {
+@test "antigravity recent_sids falls back to the whole tank when this directory has none (#34)" {
+  _setup_agy
+  seed_agy_session ag-aaaa "/one/place" "there"
+  seed_agy_session ag-bbbb "/somewhere/else" "elsewhere"
+  run adapter_recent_sids "$PROFILE" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ag-aaaa"* ]] || { echo "got: $output"; false; }
+  [[ "$output" == *"ag-bbbb"* ]] || { echo "got: $output"; false; }
+}
+
+@test "antigravity recent_sids: newest-first, capped at limit, within this directory" {
+  _setup_agy
+  seed_agy_session ag-old "$WORK" "oldest"
+  touch -t 202001010000 "$BRAIN/ag-old/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-mid "$WORK" "middle"
+  touch -t 202101010000 "$BRAIN/ag-mid/.system_generated/logs/transcript.jsonl"
+  seed_agy_session ag-new "$WORK" "newest"
+  touch -t 202201010000 "$BRAIN/ag-new/.system_generated/logs/transcript.jsonl"
+
+  run adapter_recent_sids "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  local first second
+  first="$(printf '%s\n' "$output" | sed -n 1p | cut -d$'\037' -f2)"
+  second="$(printf '%s\n' "$output" | sed -n 2p | cut -d$'\037' -f2)"
+  [ "$first" = "ag-new" ] || { echo "got: $output"; false; }
+  [ "$second" = "ag-mid" ] || { echo "got: $output"; false; }
+  [[ "$output" != *"ag-old"* ]] || false
+}
+
+@test "antigravity recent_sids: the fallback is ranked and capped the same way" {
   _setup_agy
   seed_agy_session ag-old "/elsewhere" "oldest"
   touch -t 202001010000 "$BRAIN/ag-old/.system_generated/logs/transcript.jsonl"
-  seed_agy_session ag-mid "$WORK" "middle"
+  seed_agy_session ag-mid "/elsewhere" "middle"
   touch -t 202101010000 "$BRAIN/ag-mid/.system_generated/logs/transcript.jsonl"
   seed_agy_session ag-new "/somewhere/else" "newest"
   touch -t 202201010000 "$BRAIN/ag-new/.system_generated/logs/transcript.jsonl"
@@ -86,7 +117,9 @@ seed_agy_session() {
 @test "antigravity recent_sids: a present cache does not truncate a multi-row request (#34)" {
   _setup_agy
   seed_agy_session ag-one "$WORK" "one"
-  seed_agy_session ag-two "/elsewhere" "two"
+  # Both in THIS directory: what this test is about is the cache hit not
+  # short-circuiting a multi-row ask, not the cwd scope (its own tests, above).
+  seed_agy_session ag-two "$WORK" "two"
   mkdir -p "$PROFILE/antigravity-cli/cache"
   printf '{"%s":"%s"}\n' "$WORK" "ag-one" > "$PROFILE/antigravity-cli/cache/last_conversations.json"
   run adapter_recent_sids "$PROFILE" 5
@@ -477,7 +510,7 @@ assert_agy_title() {
 # kept on purpose — the docstring gives the measurement — so it gets a test
 # that says so out loud, instead of only living in prose.
 
-@test "antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, n>1 answers the TANK (#34 P3-1)" {
+@test "antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, and n>1 keeps it in a scoped ranking (#34 P3-1)" {
   _setup_agy
   seed_agy_session ag-ptr-old "$WORK" "the pointer's session, oldest on the tank"
   touch -t 202001010000 "$BRAIN/ag-ptr-old/.system_generated/logs/transcript.jsonl"
@@ -495,15 +528,21 @@ assert_agy_title() {
   local n1; n1="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr -d '\n')"
   [ "$n1" = "ag-ptr-old" ] || { echo "n=1 gave: [$n1]"; false; }
 
-  # n>1 from the same directory: tank ranking, newest first — the pointer's
-  # session is merely one row of it, in its own mtime position.
+  # n>1 from the same directory: ranked, newest first, and scoped — the
+  # tank's newest belongs to another directory, so it is not in this answer.
+  # 🔴 The pointer's session survives the cwd filter even though nothing in
+  # history.jsonl would place it here: the cache entry IS a cwd statement,
+  # written by the CLI under this very directory's key, and it is the
+  # authority. Without that rule a pointer session with no history entry
+  # would be dropped by the very filter that is supposed to find it.
   run adapter_recent_sids "$PROFILE" 5
   [ "$status" -eq 0 ]
   local n5; n5="$(printf '%s\n' "$output" | cut -d$'\037' -f2 | tr '\n' ' ')"
-  [ "$n5" = "ag-ptr-new ag-ptr-old " ] || { echo "n=5 gave: [$n5]"; false; }
+  [ "$n5" = "ag-ptr-old " ] || { echo "n=5 gave: [$n5]"; false; }
 
-  # n=1 from a directory with NO pointer falls through to the tank's newest —
-  # the documented fallback, and the reason the two answers can differ per cwd.
+  # n=1 from a directory with NO pointer and nothing of its own falls through
+  # to the tank's newest — the documented fallback, and the reason the two
+  # answers can differ per cwd.
   local nokey="$TEST_HOME/no-pointer"; mkdir -p "$nokey"; cd "$nokey" || false
   run adapter_recent_sids "$PROFILE" 1
   [ "$status" -eq 0 ]

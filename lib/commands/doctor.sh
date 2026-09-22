@@ -208,9 +208,31 @@ _doctor_legacy_prefix() {
 # actually got — which is exactly the write-and-read-back-the-same-pipe bug
 # P1-2 fixed for `show-environment`, reopened here for a platform nothing
 # local can exercise (see below). `tail -n1` takes the real one.
+#
+# 🔴 P4 (2026-09-22): `ps eww` CAN RETURN EMPTY FOR A LIVE, READABLE, SAME-UID
+# PROCESS ON RECENT macOS. Measured on Darwin 27 (macOS 26): `ps eww -p <pid>`
+# — even the DEFAULT column set, no `-o` involved — shows no environment at
+# all for a plain `sleep` this same shell just forked, and none for a live
+# tmux pane's own bash, both owned by the same user running doctor. This is
+# not the tty-attachment limit `lib/core/proc.sh` documents (that pid was
+# tty-attached); `ps e`'s same-uid environment read appears to be locked down
+# further on this OS build than it used to be. When that happens every
+# session reads as "unknown", including ones that are demonstrably guarded —
+# see `_doctor_pane_start_command_path` below for the fallback.
+#
+# 🔴 SETS $__DOCTOR_PANE_PATH / $__DOCTOR_PANE_PATH_METHOD TOO, MIRRORING THE
+# STDOUT PRINT — DO NOT READ THOSE THROUGH `x="$(_doctor_pane_path …)"`.
+# Command substitution forks a subshell; a global assigned inside one is gone
+# the instant it exits (same trap `_wg_fetch_classified`,
+# lib/commands/watch_github.sh, already documents for the same reason). The
+# path itself is fine to read off stdout either way — this is only for the
+# method, which the guard check needs alongside the path. Call it directly
+# with stdout redirected instead: `_doctor_pane_path "$pid" "$cmd" >/dev/null`.
 _doctor_pane_path() {
-  local pid="$1"
+  local pid="$1" start_command="${2:-}"
   [ -n "$pid" ] || return 1
+  __DOCTOR_PANE_PATH=""
+  __DOCTOR_PANE_PATH_METHOD=""
   # 🔴 NONZERO MEANS "COULD NOT READ", NEVER "NO GUARD" (P3-4, clikae#97
   # review round 3). The caller reports the two differently, so every way
   # this can fail to see the process returns 1 instead of printing nothing:
@@ -221,7 +243,9 @@ _doctor_pane_path() {
   if [ -r "/proc/$pid/environ" ]; then
     env_dump="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)" || return 1
     [ -n "$env_dump" ] || return 1
-    printf '%s\n' "$env_dump" | sed -n 's/^PATH=//p' | head -n1
+    __DOCTOR_PANE_PATH_METHOD="process environment"
+    __DOCTOR_PANE_PATH="$(printf '%s\n' "$env_dump" | sed -n 's/^PATH=//p' | head -n1)"
+    printf '%s\n' "$__DOCTOR_PANE_PATH"
     return 0
   fi
   case "$(uname -s 2>/dev/null)" in
@@ -231,11 +255,82 @@ _doctor_pane_path() {
     # WHOLE health check, not just this one probe.
     Darwin)
       env_dump="$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^PATH=//p' | tail -n1)" || true
-      [ -n "$env_dump" ] || return 1
-      printf '%s\n' "$env_dump"
+      if [ -n "$env_dump" ]; then
+        __DOCTOR_PANE_PATH_METHOD="process environment"
+        __DOCTOR_PANE_PATH="$env_dump"
+        printf '%s\n' "$env_dump"
+        return 0
+      fi
+      # FALLBACK (P4, see above): `ps` gave us nothing. Fall back to what IS
+      # observable — the pane's OWN start command, not tmux's `-e` session
+      # table (that's the P1-2 bug this whole probe exists to avoid; `-e`
+      # only ever proves what was asked for). `pane_start_command` is
+      # different: it is the literal argv tmux exec'd to start the pane, and
+      # `tmux_spawn_session` (lib/core/tmux.sh, Rule 10) builds that argv as
+      # `env -u … PATH=<value> <cmd>` — so a `PATH=` found here is the value
+      # that exec ACTUALLY RAN WITH, not a table write nothing confirmed.
+      # It only proves what the pane was BORN with, not its live environment
+      # now (a shell rc file could still reassign PATH after spawn) — good
+      # enough to tell "the guard was applied at spawn" from "it plainly
+      # wasn't", not to catch a later stomp. Caller notes which method
+      # answered via $__DOCTOR_PANE_PATH_METHOD.
+      if [ -n "$start_command" ]; then
+        env_dump="$(_doctor_pane_start_command_path "$start_command")"
+        if [ -n "$env_dump" ]; then
+          __DOCTOR_PANE_PATH_METHOD="spawn command"
+          __DOCTOR_PANE_PATH="$env_dump"
+          printf '%s\n' "$env_dump"
+          return 0
+        fi
+      fi
+      return 1
       ;;
     *) return 1 ;;
   esac
+}
+
+# _doctor_pane_start_command_path <start_command> -> the value of the FIRST
+# "PATH=<value>" token in a pane's start command, empty if there is none.
+#
+# FALLBACK ONLY (see the P4 note on `_doctor_pane_path` above) — used when
+# the pane's live process environment can't be read at all. `tmux_spawn_session`
+# always puts the guard's `env -u … PATH=<value>` wrapper as the FIRST tokens
+# of the command it execs (Rule 10), so the first `PATH=` token is the right
+# one here — unlike `ps eww`'s output above, where the command is echoed
+# BEFORE the real environment and `tail` has to skip past a decoy. Assumes a
+# PATH with no spaces in its entries, same assumption `lib/core/proc.sh`
+# already makes.
+_doctor_pane_start_command_path() {
+  printf '%s' "$1" | awk '{
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^PATH=/) { print substr($i, 6); exit }
+    }
+  }'
+}
+
+# _doctor_guard_rows -> every LIVE clikae session this check has to look at:
+# the current session prefix AND the pre-0.28.3 one.
+#
+# 🔴 THE LEGACY-PREFIXED SESSIONS ARE THE ONES THAT CANNOT HAVE THE GUARD,
+# and until 2026-09-23 they were the only ones this check could not see.
+# `live_session_names` reads ONE prefix on purpose — the board's job is to show
+# the names clikae uses today, and sess-prefix.bats pins that. But a `ck-`
+# session was started before the 0.28.3 rename, therefore before the guard
+# shipped (#97), therefore it is unprotected BY CONSTRUCTION — and an older
+# clikae still installed alongside this one keeps making them (see the prefix
+# note in lib/core/tmux.sh), so they are not a one-time migration leftover.
+# `_doctor_legacy_prefix`, one call above this one in cmd_doctor, already
+# counts them: doctor knew they were running, knew they were clikae's, and
+# still said nothing about their guard. A ruler that cannot reach the one
+# sample it was built for reads "all clear" forever.
+#
+# The current prefix goes through `live_session_names` itself, not through
+# `live_session_names_for` with the same argument: that function IS the
+# board's answer to "which sessions are ours", and routing around it here
+# would leave doctor with a second, private definition of the same thing.
+_doctor_guard_rows() {
+  live_session_names
+  live_session_names_for "${CLIKAE_SESS_PREFIX_LEGACY:-}"
 }
 
 # _doctor_tmux_guard -> say something ONLY when a live clikae session's PANE
@@ -260,7 +355,8 @@ _doctor_tmux_guard() {
   # narrow blind spot — not fixed here — rather than a claim this covers
   # every install on the machine.
   local shim_dir="$CLIKAE_LIB/shims"
-  local sess created attached pid pane_path missing="" unknown=""
+  local sess created attached pane_line pid start_command pane_path
+  local missing="" unknown="" missing_via_fallback=0
   while IFS=$'\t' read -r sess created attached; do
     [ -n "$sess" ] || continue
     : "$created" "$attached"
@@ -275,25 +371,58 @@ _doctor_tmux_guard() {
     # PATH" and "restart the tank" about a session nobody actually looked
     # at. Measured for all three. They go to `unknown` now, which says only
     # that the guard could not be verified.
-    pid="$(tmux list-panes -t "=$sess" -F '#{pane_pid}' 2>/dev/null | head -n1)" || true
+    #
+    # One `list-panes` call gets both the pid AND the pane's own start
+    # command — the latter feeds `_doctor_pane_path`'s macOS fallback (P4)
+    # without a second tmux round-trip.
+    #
+    # 🔴 `|`, NOT TAB. tmux rewrites a TAB inside a `-F` format to `_` when
+    # the client's locale is C/POSIX (measured, tmux 3.7b/macOS), so the
+    # split below used to find no separator at all under `LC_ALL=C` and hand
+    # `_doctor_pane_path` the whole line as a pid. Printable ASCII only —
+    # docs/DESIGN-tmux.md Rule 12.
+    #
+    # THE PID COMES FIRST and only the FIRST `|` is a separator:
+    # `#{pane_start_command}` is a whole argv (`env … PATH=… <cmd>`) and may
+    # legitimately contain pipes, while a pid is digits. `%%|*` stops at the
+    # first `|`; `#*|` drops exactly that one and keeps the rest intact.
+    pane_line="$(tmux list-panes -t "=$sess" -F '#{pane_pid}|#{pane_start_command}' 2>/dev/null | head -n1)" || true
+    if [ -z "$pane_line" ]; then
+      unknown="$unknown $sess"
+      continue
+    fi
+    pid="${pane_line%%|*}"
+    start_command="${pane_line#*|}"
     if [ -z "$pid" ]; then
       unknown="$unknown $sess"
       continue
     fi
-    if ! pane_path="$(_doctor_pane_path "$pid")"; then
+    # Direct call, stdout only suppressed (not captured via `$(...)`): a
+    # command substitution forks a subshell and would strand
+    # $__DOCTOR_PANE_PATH_METHOD inside it (see the note on
+    # `_doctor_pane_path` above). `if !` keeps this exempt from doctor's own
+    # `set -eo pipefail` the same way the rest of this loop already is.
+    if ! _doctor_pane_path "$pid" "$start_command" >/dev/null; then
       unknown="$unknown $sess"
       continue
     fi
+    pane_path="$__DOCTOR_PANE_PATH"
     case "$pane_path" in
       "$shim_dir:"*|"$shim_dir") continue ;;
-      *) missing="$missing $sess" ;;
+      *)
+        missing="$missing $sess"
+        [ "$__DOCTOR_PANE_PATH_METHOD" = "spawn command" ] && missing_via_fallback=1
+        ;;
     esac
   done <<EOF
-$(live_session_names 2>/dev/null || true)
+$(_doctor_guard_rows 2>/dev/null || true)
 EOF
   if [ -n "$missing" ]; then
     printf '  %-16s %s\n' "tmux guard" "not first on PATH:$missing"
     log_dim "                   (started before the guard, or outside tmux_spawn_session — reattach won't fix it, restart the tank to pick it up)"
+    if [ "$missing_via_fallback" -eq 1 ]; then
+      log_dim "                   (checked via the pane's spawn command — this machine's \`ps\` can't read another process's live environment)"
+    fi
   fi
   if [ -n "$unknown" ]; then
     printf '  %-16s %s\n' "tmux guard" "unknown, could not verify:$unknown"
@@ -344,6 +473,34 @@ _doctor_memory() {
     # shellcheck disable=SC2086  # a space-separated engine list, deliberately split
     _memory_denied_why '                   ' "$store" $engines
   done
+  return 0
+}
+
+# _doctor_wake -> what the waiter did the last few times a tank ran dry.
+#
+# Silent when it has never run, like _doctor_memory above — but NOT silent when
+# it ran and worked, unlike it. A memory store that reads is a non-event; a
+# waiter is a thing that types into your session at 3am while you are asleep,
+# and the only place its account of itself used to live was a tmux window that
+# died with the session. "It sent go at 03:51" is exactly as worth reading here
+# as "it gave up", and this screen is where someone comes to ask.
+_doctor_wake() {
+  declare -F wake_trace_summary >/dev/null 2>&1 || return 0
+  local rows stamp label event detail printed=0
+  rows="$(wake_trace_summary 3)" || return 0
+  while IFS=$'\037' read -r stamp label event detail; do
+    [ -n "$label" ] || continue
+    if [ "$printed" -eq 0 ]; then
+      printf '  %-16s %s\n' "wake" "$label — $event  ($stamp)"
+      printed=1
+    else
+      printf '  %-16s %s\n' "" "$label — $event  ($stamp)"
+    fi
+    [ -n "$detail" ] && printf '  %-16s %s\n' "" "  $detail"
+  done <<EOF
+$rows
+EOF
+  [ "$printed" -eq 1 ] && printf '  %-16s %s\n' "" "full trace: $(wake_log_dir)"
   return 0
 }
 
@@ -528,6 +685,78 @@ EOF
   return 0
 }
 
+# _doctor_fleet_config -> say something ONLY when a non-solo tank is missing
+# something the fleet shares: a hook (lib/core/fleet_hooks.sh) or an MCP
+# server (lib/core/fleet_mcp.sh).
+#
+# 🔴 WHY THIS IS THE REAL FIX FOR #141. Both halves of a tank's own engine
+# config are silent when they go missing. An absent MCP server reads as a
+# server that is down. An absent hook reads as nothing at all: the tank works
+# normally, only without the automation — which is how a memory-snapshot
+# `Stop` hook, lost when tanks were recreated under new names, stopped running
+# for five days and 102 commits before an unrelated symptom gave it away. The
+# merge (at init and at every launch) prevents the next one; this is where an
+# existing one is found on the day it happens, by someone who came here to ask
+# what is wrong.
+#
+# Silent when every non-solo tank has everything. Per _doctor_memory's rule: a
+# permanent "fleet config: fine" line on a screen built to tell you what to do
+# next is a line nobody can act on.
+_doctor_fleet_config() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local f e engines=""
+  # Only engines that actually share something — one `ls` of two directories,
+  # and on the common install both are absent and this whole section is free.
+  for f in "$(fleet_hooks_root)"/*.json "$(fleet_mcp_root)"/*.json; do
+    [ -f "$f" ] || continue
+    e="${f##*/}"; e="${e%.json}"
+    case " $engines " in *" $e "*) ;; *) engines="$engines $e" ;; esac
+  done
+  [ -n "$engines" ] || return 0
+  # One SUBSHELL per engine. adapter_loader.sh's unset list is what actually
+  # stops adapter_hooks_config_file leaking from claude onto the next engine
+  # in this loop (it is in that list, and a test holds it there) — this keeps
+  # the loading itself out of doctor's own process, so the sections AFTER this
+  # one see the adapter state they saw before it ran.
+  for e in $engines; do
+    ( _doctor_fleet_config_engine "$e" ) || true
+  done
+  return 0
+}
+
+# _doctor_fleet_config_engine <engine> -> the per-engine half of the above.
+# Runs in a subshell (see its loop) because it loads an adapter.
+_doctor_fleet_config_engine() {
+  local engine="$1" tank dir event command name said=0
+  load_adapter "$engine" >/dev/null 2>&1 || return 0
+  while IFS= read -r tank; do
+    [ -n "$tank" ] || continue
+    tank_is_solo "$engine" "$tank" && continue
+    dir="$(profile_dir "$engine" "$tank")"
+    while IFS=$'\t' read -r event command; do
+      [ -n "$event" ] || continue
+      printf '  %-16s %s\n' "fleet config" "$engine/$tank does not run the shared $event hook: $command"
+      said=1
+    done <<HOOKS
+$(fleet_hooks_missing "$engine" "$dir" 2>/dev/null || true)
+HOOKS
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      printf '  %-16s %s\n' "fleet config" "$engine/$tank does not have the shared MCP server: $name"
+      said=1
+    done <<SERVERS
+$(fleet_mcp_missing "$engine" "$dir" 2>/dev/null || true)
+SERVERS
+  done <<EOF
+$(tanks_for_engine "$engine" 2>/dev/null || true)
+EOF
+  if [ "$said" -eq 1 ]; then
+    log_dim "                   each is merged at that tank's next launch — or now: clikae hooks share <event> <command> / clikae mcp share <name>"
+    log_dim "                   (clikae hooks list / clikae mcp list show what every non-solo tank should have)"
+  fi
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -659,7 +888,9 @@ EOF
   _doctor_legacy_prefix
   _doctor_tmux_guard
   _doctor_memory
+  _doctor_wake
   _doctor_cockpit
+  _doctor_fleet_config
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"
@@ -678,7 +909,15 @@ EOF
 $(tanks_for_engine claude)
 EOF
   else
-    printf 'claude: permissions template missing (installation incomplete); skipping\n'
+    # #P4 (2026-09-22): name the exact path, so this is something a user can
+    # act on rather than a dead end. Root cause seen in the wild: a package
+    # that installs `bin` and `lib` but not the sibling `templates/` dir the
+    # release tarball ships (CVERInc/homebrew-clikae's formula, before it
+    # matched this repo's own homebrew/clikae.rb). Point at reinstalling from
+    # a package that installs `templates/`, never at hand-editing a formula.
+    printf 'claude: permissions template missing (installation incomplete) — expected at:\n'
+    printf '  %s\n' "$claude_template"
+    log_dim "                   (ships in the release tarball's templates/permissions/; reinstall from a clikae package that installs templates/ alongside lib/, then re-run clikae doctor)"
   fi
 
   _doctor_keychain

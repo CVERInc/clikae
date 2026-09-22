@@ -39,7 +39,7 @@ shows). clikae shows the vendor's words *verbatim* (it never computes a time), s
 `· seen HH:MM` tag states *when we observed it* — read it as a snapshot, not a live
 countdown. claude is exempt (its dry is re-read live and already absolute + timezoned).
 
-**An idle Claude tank reads `⏳ expired`, not a percentage — and it does not
+**An idle Claude tank reads `expired`, not a percentage — and it does not
 need a new login.** Claude's access token lasts a few hours and only a running
 session refreshes it, so a tank nobody has used since yesterday answers the usage
 endpoint with a 401 even though its login is fine and its quota is whatever it was.
@@ -171,6 +171,15 @@ into a JSON `mcpServers` object; grok keeps its servers in `config.toml` as a TO
 `[mcp_servers]` table. Rather than write a shape it might corrupt, clikae leaves
 grok out — use `grok mcp` inside the tank.
 
+**`clikae hooks share` is claude-only, and `--ephemeral` does not drop a shared
+hook.** Fleet hooks are merged into a tank's own `settings.json`, which only the
+claude adapter declares (`adapter_hooks_config_file`). And unlike the fleet's MCP
+servers — which an ephemeral run leaves behind by passing the engine's own
+`--strict-mcp-config` — there is no per-run flag that turns hooks off, so a cold
+reader still runs whatever the fleet shares. Keep a shared hook to things that are
+safe on every run; a hook that must not run in a cold reader belongs in one tank's
+`settings.json`, not the fleet's.
+
 **A grok session started by `burn` shows `(no preview)` on the board.** grok fills
 `generated_title` when it titles a conversation, which a one-shot headless run
 never gets to. The row is real and resumable — it just has no name yet.
@@ -181,6 +190,19 @@ model-written title and a manual rename in the *same* `generated_title` field
 your name on the board — and there is no way to show the machine title again.
 
 ## Engines on one board
+
+**claude's subagent transcripts are not listed anywhere as sessions.** A
+Claude Code subagent's log is written beside its parent session's, in the same
+project directory, as `agent-<id>.jsonl`. It is not a conversation you can
+reopen — claude itself refuses (`not a UUID and does not match any session
+title`) — and on a working store there are as many of them as there are real
+sessions, each "titled" with whatever brief its parent dispatched. So they are
+left out of the board's Continue list, the `clikae resume` picker, prefix
+resolution, and the "N sessions total" / "N more in this store" counts. Two
+deliberate exceptions: `clikae resume agent-<id>` with a **full** id still
+finds the tank and the directory (paste one and it works), and `clikae clean`
+still offers them, because they are disk like any other file and reclaiming
+disk is what that command is for.
 
 **codex and grok "Continue" rows show no recap (just an age), unlike claude.** claude
 writes AI-titles + recap lines into its transcript; codex writes neither, and grok
@@ -194,17 +216,33 @@ dir and the recorded `cwd` no longer equals `$PWD`, so the session goes invisibl
 (grok *also* names its session folder after the encoded cwd, but clikae deliberately
 reads the recorded value instead — a folder-name scheme is the vendor's to change.)
 
-**agy's board "Resume" rows are TANK-scoped, not directory-scoped, unlike every
-other engine.** claude/codex/grok match a session's recorded `cwd` against
-`$PWD`; agy doesn't, on purpose (#34) — workspace is a constant on real
-installs, so cwd-scoping would hide everything: every indexed agy conversation
-records the same `workspace` (your home directory), never the project
-directory you actually ran it from, so a `$PWD` filter here could never match
-outside `$HOME`. The Resume list for agy is every session in **every agy
-tank** — not only the active one; the board's Resume rows have never been
-per-tank for any engine — newest first, capped board-wide the same way every
-engine's list is (`CLIKAE_HOME_RECENT_MAX`, default 10), not narrowed to "this
-project". Sessions a `clikae burn` lane started stay hidden (`clikae resume
+**agy's board "Resume" rows fall back to the whole tank when this directory
+has none of its own.** Every engine's rows are scoped to `$PWD`, agy's
+included: claude slugs `$PWD`, codex/grok/agy match the session's recorded
+`cwd`/`workspace`. But on real agy installs `workspace` is a constant — every
+indexed conversation records your home directory, never the project directory
+you ran it in — so a strict `$PWD` filter would leave the agy rows empty
+everywhere but `$HOME` (#34). So when nothing in the tank names this
+directory, agy's rows are every session in **every agy tank** instead — not
+only the active one; the board's Resume rows have never been per-tank for any
+engine — newest first. The fallback is all-or-nothing on purpose: one agy
+session recorded in this directory means you get that one, not that one plus
+the whole tank, because a row meaning something different from the row above
+it is what made the list unreadable in the first place.
+
+Those fallback rows **always rank below every row that does belong to this
+directory**, however new they are. The board ranks one list across all
+engines, so without that rule a tank full of recent agy conversations simply
+filled the board and the one claude session recorded in the directory you are
+standing in fell off the bottom — the very thing the scoping is for, arriving
+through the fallback. A courtesy row never costs a real one its place. The `$PWD` check is
+bounded to the newest `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per
+tank, so a tank whose recent conversations all belong elsewhere costs a fixed
+number of reads and then takes the fallback. Either way the list is capped
+board-wide the same way every engine's is (`CLIKAE_HOME_RECENT_MAX`, default
+10), the heading names the directory it is showing, and a dim line says how
+many more sessions the store holds (`clikae resume` lists every directory).
+Sessions a `clikae burn` lane started stay hidden (`clikae resume
 --all`, or `CLIKAE_RESUME_ALL=1`, shows them), and they are filtered out
 *before* the board cuts the list to `CLIKAE_HOME_RECENT_MAX`, so a tank full of
 fresh lane one-shots pushes real sessions down the list rather than off it.

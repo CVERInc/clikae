@@ -756,6 +756,8 @@ tmux_spawn_session() {
 # or empty.
 #
 #   "5h 42% · 7d 65%"   from #72's usage CACHE, when it holds a reading
+#   "expired"           the cache says the token expired (#107) — a state with a
+#                       remedy, so it is not collapsed into "no reading"
 #   "○" / "·"           the board's own dry / no-reading glyphs, when it does not
 #
 # 🔴 THE AGE IS A SEPARATE SLOT, not glued onto $_TSTAT_FUEL (P2-1, 2026-09-14
@@ -764,7 +766,10 @@ tmux_spawn_session() {
 # only measure. Everything about when the suffix exists is still decided here.
 #
 # 🔴 THE CACHE FILE, NEVER THE VENDOR. `state/usage/<engine>/<tank>.json` (#72,
-# PR #89) is written by `clikae usage` and by `burn` at run end. This reads
+# PR #89) is written by `clikae usage`, by `burn` at run end, and — since the
+# refresh had no owner on a machine that never burns — by this session's own
+# `wake` window every WAKE_USAGE_INTERVAL (lib/core/wake.sh; the full list of
+# writers is in lib/core/usage.sh). This reads
 # whatever is on disk and is structurally incapable of fetching: a status line
 # that could make a network call would make one every five seconds, per client,
 # forever — and it runs in tmux's server, where nobody would ever see it fail.
@@ -803,7 +808,7 @@ tmux_spawn_session() {
 # wrote the moment they saw a limit, so it is the same fact, read the cheap way
 # — and `·` honestly says "no reading" rather than inventing a green dot.
 tmux_status_fuelv() {
-  local engine="$1" tank="$2" now="${3:-}" f json w k ca ca_raw age fresh suffix
+  local engine="$1" tank="$2" now="${3:-}" f json w k ca ca_raw age fresh suffix src
   _TSTAT_FUEL=""; _TSTAT_FUEL_AGE=""
   case "$now" in ''|*[!0-9]*) now="$(date +%s 2>/dev/null || echo 0)" ;; esac
 
@@ -855,6 +860,32 @@ tmux_status_fuelv() {
       _TSTAT_FUEL="5h ${w}% · 7d ${k}%"
       _TSTAT_FUEL_AGE="$suffix"
       return 0
+    fi
+    # AN EXPIRED TOKEN IS NOT "NO READING". #107's whole point: an idle tank at
+    # 99% weekly used to read exactly like a tank with no login at all. The
+    # cache says which of the two this is (`source:"expired"`, written only with
+    # `reason:"expired-token"` — see usage_unknown, lib/core/usage.sh), and the
+    # remedy is one a person can act on: run a session, or `clikae usage --wake
+    # <tank>`. So the row says so with the word (no emoji on a delivery surface
+    # — see usage_expired_board_notev) rather than the glyph that means
+    # "nobody has read this tank yet".
+    #
+    # 🔴 THE SAME FRESHNESS CEILING AS A READING, on purpose: `fresh` is already
+    # decided above, and a nine-day-old "expired" is no more current than a
+    # nine-day-old percentage. Past 24h this falls through to `·` — the honest
+    # answer is then "no reading", not a remedy for a fact nobody rechecked.
+    # (usage_read re-reads an expired entry after _USAGE_AUTH_FAIL_TTL_SEC
+    # rather than the full TTL, so a refreshed token clears this in a minute.)
+    #
+    # NO AGE SUFFIX. The suffix qualifies a NUMBER ("42% · 3h ago"); this slot
+    # carries no number, and rung 2 of the ladder exists to drop the qualifier
+    # first, not to explain a glyph.
+    if [ "$fresh" = 1 ]; then
+      burn_status_fieldv "$json" source; src="$_BSF"
+      if [ "$src" = '"expired"' ]; then
+        _TSTAT_FUEL="expired"
+        return 0
+      fi
     fi
   fi
 
@@ -1176,6 +1207,9 @@ _tmux_status_colsv() {
   # 🔴 never `~` as a replacement: bash 5.2 TILDE-EXPANDS the replacement
   # string, so `${s//…/~}` silently substitutes $HOME and inflates the count.
   s="${s//·/.}"; s="${s//○/o}"; s="${s//│/|}"; s="${s//…/.}"
+  # No delivery surface prints emoji (2026-09-22): the "token expired" state
+  # is the plain ASCII word `expired`, measured like any other fuel string —
+  # no substitution needed for it.
   _TSTAT_COLS="${#s}"
 }
 

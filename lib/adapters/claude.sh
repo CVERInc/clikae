@@ -82,6 +82,23 @@ adapter_mcp_config_file() {
   printf '%s/.claude.json\n' "$profile_dir"
 }
 
+# Optional hook: path to this tank's config file that holds `hooks` (used by
+# `clikae hooks` / fleet_hooks_prelaunch, lib/core/fleet_hooks.sh, to fan the
+# fleet-wide hook list into every non-solo tank). Claude Code keeps hooks in
+# settings.json, beside the permissions clikae's own template writes — so
+# unlike .claude.json this file exists from the moment a tank does, and a
+# brand-new tank gets its hooks without waiting for a first launch.
+#
+# 🔴 The writer is _settings_snapshot/_settings_write_file (lib/commands/
+# settings.sh), which derives the path from the tank directory: an engine
+# whose hooks live under a DIFFERENT name must not implement this hook until
+# it has a writer of its own. fleet_hooks_prelaunch refuses the mismatch
+# rather than editing a file it was never told about.
+adapter_hooks_config_file() {
+  local profile_dir="$1"
+  printf '%s/settings.json\n' "$profile_dir"
+}
+
 # Print KEY=VALUE pairs (one per line) to export when activating this profile.
 adapter_export_env() {
   local profile_dir="$1"
@@ -528,15 +545,24 @@ adapter_session_meta() {
 # [limit] (default 10). Powers relay's "pick another session" chooser. Returns
 # non-zero when there are none.
 adapter_list_sessions() {
-  local dir="$1" limit="${2:-10}" proj f any=0
+  local dir="$1" limit="${2:-10}" proj f any=0 emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 1
+  # Same question as the board's list — "which conversation do you want?" — so
+  # the same answer about subagent transcripts (adapter_transcript_is_resumable).
+  # The limit is enforced HERE, inside the loop, not by piping a filtered
+  # stream into `head -n "$limit"` afterward: once `head` has its fill and
+  # exits, the next write on the other end of that pipe gets SIGPIPE, and a
+  # bash builtin (this loop's `printf`, one call down in _claude_meta_for_file)
+  # reports that as a literal "printf: write error: Broken pipe" line on
+  # stderr instead of dying silently the way an external command would — see
+  # tests/bats/adapters/session-meta.bats "list_sessions honours a limit".
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    _claude_meta_for_file "$f" && any=1
-  done <<EOF
-$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
-EOF
+    [ "$emitted" -lt "$limit" ] || break
+    adapter_transcript_is_resumable "$f" || continue
+    _claude_meta_for_file "$f" && { any=1; emitted=$((emitted + 1)); }
+  done < <(ls -t "$proj"/*.jsonl 2>/dev/null)
   [ "$any" -eq 1 ] || return 1
 }
 
@@ -691,7 +717,7 @@ adapter_recent_sids() {
     local _bout; _bout="$(board_recent claude "$@")"
     if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
-  local dir="$1" limit="${2:-5}" proj mt f
+  local dir="$1" limit="${2:-5}" proj mt f emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 0
   # This-dir scope = $PWD's project glob; one sessions_by_mtime (shared kernel)
@@ -699,10 +725,23 @@ adapter_recent_sids() {
   # transcript by session id).
   # NB: plain `read -r mt f` (NOT `IFS= read`) so the "<mtime> <path>" line splits
   # into two fields; IFS= would shove the whole line into mt and leave f empty.
-  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt f; do
+  # Subagent transcripts are skipped BEFORE the cut, not after, or a directory
+  # whose newest N files are all `agent-*` hands the board an empty list while
+  # real sessions sit just below the cut. The board's warm path (board_recent,
+  # above) already excludes them — this is the cold path learning the same
+  # rule. See adapter_transcript_is_resumable for why it is the basename.
+  # The limit is enforced HERE, inside the loop, not by a trailing
+  # `| head -n "$limit"`: once `head` has its fill and exits, the next `printf`
+  # in this loop writes into a closed pipe and (being a bash builtin) reports
+  # the EPIPE as a literal "Broken pipe" line on stderr instead of dying
+  # silently — see adapter_list_sessions above, same failure shape.
+  sessions_by_mtime "$proj"/*.jsonl | while read -r mt f; do
     [ -n "$f" ] || continue
+    [ "$emitted" -lt "$limit" ] || break
+    adapter_transcript_is_resumable "$f" || continue
     f="${f##*/}"
     printf '%s\037%s\n' "$mt" "${f%.jsonl}"
+    emitted=$((emitted + 1))
   done
 }
 
@@ -732,6 +771,64 @@ adapter_find_session() {
     [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
   done
   return 1
+}
+
+# Optional hook: is this transcript a conversation a PERSON can reopen?
+#
+# 🔴 claude writes a subagent's transcript beside its parent session's, in the
+# same project directory, as `agent-<id>.jsonl` (every line carries
+# `"isSidechain":true`). Those are not sessions anyone resumes — verified by
+# doing, not assumed: `claude --resume agent-<id>` answers "Provided value
+# 'agent-…' is not a UUID and does not match any session title". They also
+# outnumber real sessions badly on a working store, and their "title" is
+# whatever brief the parent dispatched with ("Effort: high. Expected ~60 tool
+# steps…"), so a list of them is noise that buries the one conversation you
+# were looking for.
+#
+# The rule is the BASENAME, not a content read: lib/core/board_state.sh has
+# skipped `agent-*` by basename since round 5 (its sid/scope resolution), so
+# the board's warm path already agrees with this — what this hook does is give
+# the COLD paths and the store-wide lists the same answer, from the adapter
+# that owns the layout fact rather than from four `case` statements.
+#
+# 🔴 WHAT THIS MUST NOT NARROW: finding a session BY ID. adapter_find_session
+# is deliberately not gated on this — paste a full `agent-<id>` and clikae
+# still locates the tank and cd's there. Only the LISTS and the COUNTS use it.
+# `clikae clean` does not use it either, on purpose: a subagent transcript is
+# pure disk, exactly what a disk tool should still be able to reclaim.
+adapter_transcript_is_resumable() {
+  case "${1##*/}" in agent-*) return 1 ;; esac
+  return 0
+}
+
+# Optional hook: EVERY transcript path under this profile dir — no cwd filter,
+# no limit, no per-file reads (see codex.sh's and antigravity.sh's twins).
+# This is what `clikae resume` enumerates the store with: its list is
+# deliberately store-wide and directory-free, so it asks each adapter for
+# everything it holds rather than keeping a glob per engine of its own (the
+# list grok was never added to).
+#
+# For burn's before/after attribution this stays a no-op in practice on the
+# claude path: claude is TOLD its session id (--session-id) before it runs, so
+# burn records that proven id and never reaches the snapshot diff — the diff is
+# only consulted when no transcript for the launched sid ever appeared.
+#
+# 🔴 -maxdepth 2, matching the pre-adapter glob this replaced
+# (`projects/*/*.jsonl`: project-dir, then the transcript). A session's sibling
+# `<sid>/` directory holds subagent/workflow transcripts of its own
+# (`<sid>/subagents/*.jsonl` — see _clean_add_candidate's header in
+# clean.sh), one level deeper; without the bound, `find` recurses into it and
+# hands back that nested file as a SECOND, independent top-level transcript.
+# `clean`'s batched `du -sk` then prices the sid dir AND that same file
+# together in one invocation — harmless on BSD du (each argument's total is
+# computed independently), but GNU du de-duplicates by inode ACROSS the whole
+# argument list, so the directory total comes back 0 once its one file was
+# already counted under its own argument. That silently dropped the sibling
+# dir's bytes from the transcript's price on Linux only (CI: clean.bats
+# "clean prices a claude transcript together with its sibling sid dir"),
+# reproduced locally with GNU coreutils' `gdu`.
+adapter_all_transcripts() {
+  find "$1/projects" -maxdepth 2 -type f -name '*.jsonl' 2>/dev/null
 }
 
 # Optional hook: the working directory a transcript was recorded in. Claude Code
@@ -909,7 +1006,7 @@ _claude_usage_unreadable() {
 # it. NOTE WHAT THIS DELIBERATELY DOES NOT DO: the issue proposed collapsing
 # 401/403 into a single `reauth`, which would undo #107/#117 — that PR split
 # the auth case into `expired-token` (a session fixes it; the board says
-# `⏳ expired · usage --wake <tank>`) and `no-credentials` (this one really
+# `expired · usage --wake <tank>`) and `no-credentials` (this one really
 # does need a login), because an idle tank at 99% weekly used to read exactly
 # like a tank with no login at all. Those two words ARE the auth class, finer
 # than `reauth`; callers that want the class ask for "expired-token or

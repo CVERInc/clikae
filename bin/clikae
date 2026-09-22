@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.30.0"
+CLIKAE_VERSION="0.31.0"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
@@ -52,6 +52,8 @@ source "$CLIKAE_LIB/core/tmux.sh"
 source "$CLIKAE_LIB/core/soul.sh"
 # shellcheck source=../lib/core/fleet_mcp.sh
 source "$CLIKAE_LIB/core/fleet_mcp.sh"
+# shellcheck source=../lib/core/fleet_hooks.sh
+source "$CLIKAE_LIB/core/fleet_hooks.sh"
 # shellcheck source=../lib/core/shell_rc.sh
 source "$CLIKAE_LIB/core/shell_rc.sh"
 # shellcheck source=../lib/core/tui.sh
@@ -139,7 +141,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|settings|doctor|demo|init|app|tanks|list|ls|usage|status|remove|rm|run|burn|wait|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|cockpit|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|settings|doctor|demo|init|app|tanks|list|ls|usage|status|remove|rm|run|burn|wait|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|hooks|solo|info|adapters|lang|cockpit|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }

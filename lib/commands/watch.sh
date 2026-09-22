@@ -132,7 +132,7 @@ _watch_weekly_capture() {
 #                  this loop notices up to one max interval later (30 min by
 #                  default) rather than up to ~4 min. The board does not wait
 #                  for it — a cached "expired" reading is shown as
-#                  `⏳ expired · usage --wake <tank>` the moment it lands
+#                  `expired · usage --wake <tank>` the moment it lands
 #                  (#107, lib/commands/home.sh), and `clikae usage` is always
 #                  a fresh read away.
 #   transient      everything else (no connection, a timeout, a 5xx, an

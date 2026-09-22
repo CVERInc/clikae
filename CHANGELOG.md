@@ -7,7 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-09-22
+
 ### Added
+
+- **`clikae clean` gained a fourth guard: a session is never offered unless a
+  backup has confirmed it is archived.** The live-session guard (v0.14.1)
+  closed one way clean could destroy something unrecoverable; this closes
+  another, from outside clikae entirely — a backup job that mirrors deletions
+  turns a Trash move into a real loss, and a machine with no backup at all
+  makes every Trash move permanent the moment it's emptied. clean now looks
+  for one line, a Unix epoch, in `$CLIKAE_HOME/state/transcripts-archived-at`,
+  which a backup job is expected to write on every SUCCESSFUL run — meaning
+  "everything written before this instant is archived elsewhere". A session
+  modified after that instant is withheld, in every section, under every
+  flag, and the list says how many and why. With the marker missing,
+  unreadable, not a plain number, or dated in the future (all "not archived"),
+  clean offers nothing for session data by default and says so; the
+  non-conversation GC sweeps (scrollback, burn sidecars, tank/prelaunch locks)
+  are unaffected either way. `--no-archive-check` opts back in, for a machine
+  with no backup job by choice.
+
+- **`clikae hooks <share|unshare|list>` — fleet-wide hook sharing, and
+  `clikae doctor` now checks both halves of a tank's own engine config
+  (#141).** A tank's hooks live in its own `settings.json`, so recreating or
+  renaming tanks silently left them behind: on one machine a memory-snapshot
+  `Stop` hook was simply absent on the recreated tanks, and the shared memory
+  it wrote stopped moving for five days and 102 commits before an unrelated
+  symptom gave it away. An MCP server that vanishes at least looks like a
+  server that is down; a hook that vanishes looks like nothing at all.
+  `clikae hooks share <event> <command>` keeps one canonical per-engine list
+  under `$CLIKAE_HOME/fleet-hooks/<engine>.json` and merges it into every
+  non-solo tank — at `clikae init` (settings.json is clikae's own file, so a
+  brand-new tank is covered before its first run, unlike the MCP list, which
+  waits for the engine to write `.claude.json`) and at every launch, the same
+  four paths `fleet_mcp_prelaunch` is wired into. The merge is additive-only
+  and keyed on the command string: a command a tank already runs for that
+  event is never appended twice, nothing the tank has is ever removed or
+  rewritten, and a tank whose settings are already correct is not rewritten at
+  all (no inode churn under a live session). `clikae doctor` grew a `fleet
+  config` section that names every non-solo tank missing a shared hook or a
+  shared MCP server — day one instead of day five — and stays silent when
+  there is nothing to act on. `clikae rename` already carried both, because
+  they live inside the directory it moves; it now says so in its output, and a
+  test holds that true rather than code re-implementing it.
 
 - **`clikae usage` reports the vendor's per-model weekly quota.** The REPL's
   `/usage` shows two lines — "Current week (all models) 14%" and "Current week
@@ -22,6 +65,205 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-model row needs to know which model a tank runs, and a tank has no such
   property — `--model` is an argument to `burn`/`relay`, never a setting. So
   these numbers are reported, not acted on (#137).
+
+- **A durable trace of what the waiter did.** Every outcome — attached, each
+  attempt, `typed`, `skipped: vendor auto-continued`, `gave up`, `session gone`
+  — is appended to `$CLIKAE_HOME/state/wake/<engine>-<tank>.log`, and the last
+  one per tank is printed by bare `clikae wake` and by `clikae doctor`. Until
+  now the waiter's only account of itself was text in a tmux window that dies
+  with the session, which is why 23 of those 24 outcomes could not be named by
+  anybody. The file records EVENTS, never state: a history cannot go stale, so
+  this does not reintroduce the model of who-is-dry that this feature was
+  deliberately designed without. Capped (oldest rows dropped, newest kept) so a
+  tank that runs dry daily costs a few KB a year, and deleting the directory
+  loses nothing but the history.
+
+### Fixed
+
+- **The board's Live section and `clikae doctor`'s tmux-guard check work from a
+  shell whose locale is `C`, instead of reporting an empty machine.** tmux
+  expands a `-F` format string on the CLIENT, and under a C/POSIX locale it
+  rewrites any character it considers unprintable — including a TAB, and
+  including `\037` — to `_`. Measured on tmux 3.7b: `LC_ALL=C tmux
+  list-sessions -F '#{session_name}<TAB>#{session_attached}'` prints `t _ 0`,
+  while the same command under a UTF-8 locale prints the TAB. Both places that
+  asked tmux for more than one field asked for them TAB-separated, so for
+  anyone arriving with `LC_ALL=C` or `LANG=C` — ssh without locale forwarding,
+  cron, CI, a minimal container — `live_session_names` matched no rows at all
+  and everything downstream behaved as though no session existed: no Live
+  section on the board, and a guard check that said nothing about a live,
+  unguarded session running right there. Silent, and invisible to anyone
+  sitting at a UTF-8 terminal. Both formats now use a printable `|`, with the
+  numeric fields FIRST and only the leading separators consumed, so a `|` in a
+  tank name or in a pane's start command can no longer shift a field. The rows
+  these functions hand back are unchanged (still TAB-separated — that TAB is
+  clikae's own, not tmux's), so no caller moved. `docs/DESIGN-tmux.md` Rule 12
+  states the rule: a separator inside a tmux `-F` format must be printable
+  ASCII, never a TAB or a control character. Held by a two-armed test — the
+  same real session read under `LC_ALL=C` and under `en_US.UTF-8`, which must
+  agree — because a single-locale test is green on the broken code (#142).
+- **`clikae doctor` verifies the tmux guard on macOS instead of answering
+  "unknown, could not verify" for a live session the same user owns.** On
+  current macOS, `ps eww` returns an empty environment even for a readable,
+  tty-attached process of the same user — measured on the shell's own pid —
+  so the pane-PATH probe never had anything to read. The probe now falls back
+  to the pane's spawn command as tmux recorded it (`#{pane_start_command}`,
+  the literal `env … PATH=… <cmd>` argv `tmux_spawn_session` execs) and says
+  which method verified the guard. The "permissions template missing" line
+  now names the exact expected path and what ships it, and
+  `install-layout.bats` fails on a tree installed without `templates/` — the
+  packaging gap that every Homebrew install of 0.30.0 had (#142).
+- **`scripts/test.sh` runs one shellcheck process per file.** The whole-tree
+  form reached 3.7 GB of resident memory on this tree and, with a second copy
+  running in another worktree, pushed a 16 GB machine into 4 GB of swap. The
+  findings are identical; the peak is now the largest single file (#142).
+- **The tmux status row's fuel reading is refreshed by the session it belongs
+  to, so it stops being a number from last week.** The row reads the usage
+  cache and can never fetch — that rule is right and unchanged (a status line
+  that could call a vendor would call one every five seconds, per attached
+  client, from inside tmux's server, where nobody would see it fail). What had
+  no owner was WRITING that cache: `clikae usage` and `burn` at run end were
+  its only two writers, so on a machine where a person only sits in
+  interactive sessions, nothing ever refreshed it. Measured: a nine-day-old
+  cache and the "no reading" glyph on the row forever, while a machine burning
+  all day showed live numbers — and one `clikae usage <engine> <tank>` took
+  0.7s and put percentages back on the row at the next redraw. A live session
+  now refreshes its own tank from the `wake` window it already has: one
+  reading in the background at launch, then one every `WAKE_USAGE_INTERVAL`
+  (300s — below `CLIKAE_USAGE_TTL` a refresh would only re-read the cache).
+  It keeps that window's constraints — no daemon, no state file, nothing that
+  outlives the session, no model of anyone's quota — and it is bounded by the
+  adapter's own fetch timeout rather than a new one; a refresh that fails is
+  silent, and the last reading stays on the row with its age next to it.
+- **The (engine/tank, `$PWD`) prelaunch lock `clikae burn` takes around
+  `soul_prelaunch`/`fleet_mcp_prelaunch` (#0.28.9's fix) is a file nothing ever
+  removed.** By design it is never unlinked right after release — deleting a
+  lock file a concurrent burn may already have open is the classic lock-file
+  race — so every distinct (tank, cwd) left one behind in `~/.clikae/state`
+  forever, mixed in with real state files (195 of them on one machine,
+  measured, the oldest from 2026-09-06). `clikae clean` had no notion of them
+  at all.
+
+  The lock now lives under `state/locks/` instead of `state/` directly, and a
+  new GC (`_burn_prelaunch_lock_gc`) reclaims it on age, never on a recorded
+  holder: `exec 7>` truncates the file on every acquisition, which bumps its
+  mtime, so a held lock is always younger than any real threshold — only a
+  file untouched for over a day is provably abandoned. The sweep runs
+  opportunistically once per `clikae burn` invocation and from `clikae clean`
+  (which reports the count the same way it reports every other reclaimable
+  class), and cleans the old `state/`-top-level location too, so an existing
+  machine tidies up on its next `burn` or `clean`.
+- **The home board's Continue list and `clikae resume` no longer disagree
+  about which engines and which directories they cover.** They answered what
+  looked like the same question and gave different answers, and neither said
+  why. Three things were wrong at once:
+  - `clikae resume` enumerated the store with **three hand-written globs**
+    whose own comment said a new resumable engine's glob "goes here only".
+    grok shipped with every resume hook implemented, reached the home board,
+    and stayed invisible to the picker, to prefix resolution (`clikae resume
+    a52bdc12`) and to `clikae clean`'s scan. The enumeration now goes through
+    the adapters under the same capability gate the board uses, so an engine
+    that can be resumed is listed by construction. claude and grok gained
+    `adapter_all_transcripts` (the hook codex and antigravity already
+    defined); tanks come from the same "what is a tank" answer the board has
+    used since #61, so a bare directory under `profiles/<engine>/` that was
+    never a tank no longer contributes rows.
+  - **A miss could kill `clikae resume` silently.** The store-wide locate
+    returned the status of the last tank it looked in, so when the last
+    resume-capable engine was one you had a tank for (alphabetically grok),
+    a session id that matched nothing exited non-zero with **no output at
+    all** — no "No session" line, and no prefix retry either.
+  - **The board's Continue list mixed two scopes in one ranked list.**
+    claude, codex and grok answered for `$PWD` while agy answered tank-wide
+    (#34), so on a real store all ten visible rows were agy and the one
+    claude session belonging to the current directory ranked #13 and never
+    appeared. agy is scoped to `$PWD` now too, falling back to tank-wide only
+    when this directory has nothing — which is what #34 actually needed,
+    since `workspace` is a constant on real agy installs. The cwd check is
+    bounded by `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per tank.
+- **The board's "N sessions total" footer counted no grok sessions.** Its
+  glob list had the same hole `clikae resume`'s did.
+- **A Continue row that belongs to the directory you are in can no longer be
+  pushed off the board by agy's fallback rows.** The board ranks one list
+  across every engine on mtime, and agy's tank-wide fallback (the rows it
+  offers when nothing in the tank names this directory) competed on equal
+  terms: measured on a reproduction of a real store, fifteen newer agy rows
+  filled the board and the single claude session actually recorded in that
+  directory came 16th — invisible. A fallback row now says so in the row, and
+  ranks below every scoped row whatever its age. The courtesy rows are still
+  there; they just fill what is left.
+- **Claude Code's subagent transcripts are no longer offered as sessions.**
+  claude writes a subagent's log beside its parent session's as
+  `agent-<id>.jsonl` (every line `"isSidechain":true`). Nobody reopens one —
+  `claude --resume agent-<id>` answers "not a UUID and does not match any
+  session title" — and on a working store they outnumber real sessions, each
+  titled with whatever brief its parent dispatched ("Effort: high. Expected
+  ~60 tool steps…"). They filled the `clikae resume` picker, rode the board's
+  cold path, resolved as prefixes, and were counted in both "N sessions total"
+  and "N more in this store". Now the claude adapter states the rule once
+  (`adapter_transcript_is_resumable`, basename `agent-*`, the same rule the
+  board's snapshot has used since #62) and every list and count asks it.
+  Deliberately NOT narrowed: `clikae resume agent-<id>` still finds the tank
+  and cd's there, and `clikae clean` still sees every one of these files —
+  they are often the largest bytes on a store, and reclaiming bytes is that
+  command's whole job.
+
+- **`clikae wake` now actually types the nudge when a limit lifts, and leaves a
+  record either way.** Measured over 21 days of one tank's transcripts: 24
+  usage-limit events, and the waiter's `go` reached a pane once. The gate that
+  stopped it was the idle check — the waiter refused to type until the pane
+  stopped changing between two captures, on the reasoning that a moving screen
+  could be a tool call in flight. On a tank that still reads dry it cannot be:
+  the API is refusing turns. What a limited engine leaves on screen is a banner
+  with a live countdown in it, and a countdown re-renders every second forever.
+  Verified against the mechanism rather than inferred: a pane whose only change
+  is one ticking line fails the identical-captures check on every pair, while
+  the same banner text held still passes it. So the waiter spent its three
+  attempts and gave up within five minutes of every reset. After the reset
+  instant the requirement is now only that the session exists, that the pane is
+  not dead, and that the tank is still dry; the idle check is a short settle
+  delay, and a nudge sent over a moving screen says so in the trace. The
+  existence half of the old check was split out (`wake_pane_live`) rather than
+  loosened — a dead pane is still refused and still retried.
+- **The waiter no longer risks a second `go` after the engine resumed itself.**
+  Claude Code now writes its own user-role line when a usage limit lifts
+  mid-task — carrying `isMeta`, `promptSource: "system"` and the structural
+  marker `"origin":{"kind":"auto-continuation"}` — and carries on, typically
+  within a minute. Nothing read that line, so the tank kept reading DRY for as
+  long as the assistant turn that followed took to land. It is now a recovery
+  marker in the claude transcript scan, exactly like a successful turn, and the
+  waiter re-reads the tank immediately before typing: positive evidence of
+  recovery means it sends nothing and logs `skipped`. Matched structurally, so
+  a transcript merely quoting the marker (where JSONL escapes its quotes) does
+  not clear anyone's tank. Relatedly, `limit_profile_dry`'s claude branch now
+  returns `2` on positive recovery evidence, symmetric with the codex branch
+  that already did — the difference from `1` ("this scan found nothing", which
+  is also what an untouched tank outside the 5h window looks like) is what lets
+  the waiter skip without also going silent on the case it exists for.
+- **A reset that has already passed no longer resolves to tomorrow, and the
+  watcher acts on it.** An undated phrase names a time of day, not a date, so
+  `resets 8:20pm` read at 21:00 resolved to 8:20pm the NEXT day — measured, a
+  phrase 40 minutes past came back 1400 minutes in the future. The waiter was
+  then handed an instant nearly a day out and the session sat there, which is
+  the same outcome as the idle-gate bug above reached by a different route: the
+  watcher polls once a minute and the machine may have been asleep, so meeting
+  a limit after its stated reset is ordinary. A wall-clock reset behind the
+  reference instant by less than `LIMIT_RESET_PAST_GRACE` (6h) is now read as
+  having already happened and returned as the past instant it is. The bound is
+  derived rather than chosen: a limit any caller can be holding is at most ~5h
+  old by construction (the transcript scan window is 300 minutes and the
+  vendor's own session window is 5h), so anything further back is a genuine
+  next-day phrase read on the wrong side of midnight, and firing on it at once
+  would be worse than the bug. A tie is deliberately excluded — a phrase is
+  written at the instant the limit fires, so `resets 3:50am` arriving AT 3:50am
+  still means the next occurrence.
+  Second half of the same fix: once the stated reset is behind us with no
+  successful turn since, `limit_tank_dry` correctly reports the tank NOT DRY
+  (`reset passed · unverified` — the fuel is probably back) while the session it
+  was limited in is still parked waiting for somebody to type. The watcher
+  used to key on dryness alone and would therefore have watched straight past
+  it; it now treats that verdict as a hand-over too, with the instant being now.
+  The waiter's own auto-continuation check still runs in front of the nudge.
 
 ### Changed
 
@@ -48,6 +290,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `danger-full-access`, and `plan`/`default` to `read-only`. Help and orchestration
   docs explain why worktree commit/push/network lanes need the broader sandbox
   (#129).
+- **An expired access token now shows as the word `expired` on the status row
+  instead of the no-reading dot.** The cache distinguishes three states (a
+  reading, a token that expired, nothing read yet) and the row collapsed the
+  last two — the same collapse #107 removed from the board, where an idle
+  tank at 99% weekly read exactly like a tank with no login at all. It is the
+  one of the three with a remedy (start a session on that tank, or `clikae
+  usage --wake <tank>`), so it gets its own word for it — no emoji on any
+  delivery surface, so it is measured like any other ASCII fuel string, not
+  counted specially. It ages out on the same 24h ceiling as a percentage.
+- **The Continue section says what it is showing.** The heading names the
+  directory (`Resume — in ~/project`), and when the store holds sessions the
+  list is not showing, one dim line says how many and that `clikae resume`
+  covers every directory. Both notes travel in the board's own items stream
+  rather than on disk, like the truncation note before them, so a killed
+  board leaves nothing behind. Nine locales updated
+  (`T_CONTINUE_IN`, `T_RESUME_ELSEWHERE`).
 
 ## [0.30.0] — 2026-09-17
 

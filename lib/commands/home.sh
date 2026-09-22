@@ -247,52 +247,146 @@ _burn_tank_hidden() {
 _HOME_TRUNC_KIND="resume-truncated"
 _HOME_RESUME_TRUNC=0
 
+# The second signal riding the same channel: how many sessions the STORE holds
+# that this list does not show. The Continue list is scoped to $PWD (every
+# adapter answers for this directory) while `clikae resume` is scoped to the
+# whole store, and nothing on the board said so — a board showing ten rows
+# read as "these are your sessions", which is how a directory's own claude
+# session could rank #13 behind another engine's rows and be invisible with no
+# hint that anything was missing.
+_HOME_ELSEWHERE_KIND="resume-elsewhere"
+_HOME_RESUME_ELSEWHERE=0
+# Store-wide burn-sid count for this render, so the elsewhere figure counts
+# what the user could actually resume rather than lane one-shots the list is
+# deliberately hiding. Set by _home_recent_rows while it holds the sidecar.
+_HOME_BURN_TOTAL=0
+
 # _home_items_load -> sets the caller's $items from _home_items, and
-# $_HOME_RESUME_TRUNC from the truncation row in it (0 when there is none). The
-# row is removed from $items: the pickers index rows by line
-# (_home_row_kind_at), so a row nobody can select must not occupy a line.
-# Anchored to a line START — a tank or a title containing the kind's text
+# $_HOME_RESUME_TRUNC / $_HOME_RESUME_ELSEWHERE from the signal rows in it (0
+# each when there is none). The rows are removed from $items: the pickers index
+# rows by line (_home_row_kind_at), so a row nobody can select must not occupy
+# a line. Anchored to a line START — a tank or a title containing a kind's text
 # mid-row must never be read as the signal.
-_home_items_load() {
-  local _raw _pat _rest
-  _HOME_RESUME_TRUNC=0
-  _raw=$'\n'"$(_home_items)"
-  _pat=$'\n'"$_HOME_TRUNC_KIND"$'\037'
+#
+# _home_items_lift <kind> <outvar> — pulls ONE such signal row out of the
+# caller's $_raw (dynamic scope, deliberately: there is exactly one caller and
+# it owns the text) and stores its count in <outvar>, 0 when absent. Two kinds
+# ride this channel now, and a second hand-rolled copy of the extraction is
+# how they would drift.
+_home_items_lift() {
+  local _kind="$1" _var="$2" _pat _rest _val=0
+  _pat=$'\n'"$_kind"$'\037'
   case "$_raw" in
     *"$_pat"*)
       _rest="${_raw#*"$_pat"}"
-      _HOME_RESUME_TRUNC="${_rest%%$'\n'*}"
-      case "$_HOME_RESUME_TRUNC" in ''|*[!0-9]*) _HOME_RESUME_TRUNC=0 ;; esac
+      _val="${_rest%%$'\n'*}"
+      case "$_val" in ''|*[!0-9]*) _val=0 ;; esac
       case "$_rest" in
         *$'\n'*) _raw="${_raw%%"$_pat"*}"$'\n'"${_rest#*$'\n'}" ;;
         *)       _raw="${_raw%%"$_pat"*}" ;;
       esac
       ;;
   esac
+  printf -v "$_var" '%s' "$_val"
+  return 0
+}
+
+_home_items_load() {
+  local _raw
+  _HOME_RESUME_TRUNC=0
+  _HOME_RESUME_ELSEWHERE=0
+  _raw=$'\n'"$(_home_items)"
+  _home_items_lift "$_HOME_TRUNC_KIND"     _HOME_RESUME_TRUNC
+  _home_items_lift "$_HOME_ELSEWHERE_KIND" _HOME_RESUME_ELSEWHERE
   items="${_raw#$'\n'}"
   return 0
 }
 
-# _home_trunc_note <printed_resume> -> the one visible line the round-2 review
-# asked for: when the Continue list could not be filled within the ceiling, SAY
-# it. Prints the section header itself when no Resume row was drawn at all —
-# that (a tank whose burn sidecar outgrew the ceiling and buried every human
-# session) is precisely the case a silent board got wrong.
-_home_trunc_note() {
-  local _th="${_HOME_RESUME_TRUNC:-0}"
-  case "$_th" in ''|*[!0-9]*) _th=0 ;; esac
-  [ "$_th" -gt 0 ] || return 0
-  if [ "${1:-0}" -ne 1 ]; then
-    printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
-  fi
+# _home_continue_heading -> the Continue section's heading TEXT, which names
+# the scope it is showing: "Resume — in ~/some/project".
+#
+# 🔴 The list has always been this directory's; the heading said "Resume" and
+# left the reader to assume it meant "your sessions". It does not, and
+# `clikae resume` — the store-wide list — is a different answer to what looks
+# like the same question. A section that states its own scope is the cheapest
+# version of that fix, and it is the one that stays true when a future engine
+# is added. The directory is $HOME-abbreviated and middle-ellipsised (the tail
+# — the leaf directory you are actually in — is what survives).
+_home_continue_heading() {
+  local _d="$PWD" _fixed _b
+  case "$_d" in
+    "$HOME") _d="~" ;;
+    "$HOME"/*) _d="~${_d#"$HOME"}" ;;
+  esac
+  # Budget = the row minus its own lead ("  ▸ ") minus everything the localized
+  # string contributes itself. Asking the string, not hard-coding a width, is
+  # what keeps this honest in the locales whose word for "Resume" is longer.
   # shellcheck disable=SC2059  # the format IS the localized string
-  _home_wrap_prefixed "$(printf "$T_RESUME_TRUNCATED" "$_th")" \
-    "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  _fixed="$(printf "$T_CONTINUE_IN" "")"
+  _b=$(( $(_home_cols) - 4 - $(_dwidth "$_fixed") ))
+  [ "$_b" -ge 12 ] || _b=12
+  # shellcheck disable=SC2059  # the format IS the localized string
+  printf "$T_CONTINUE_IN" "$(_home_trunc_mid "$_d" "$_b")"
+}
+
+# _home_continue_notes <printed_resume> [extra] -> the dim lines under the
+# Continue list, and the section header itself when no Resume row was drawn at
+# all (a tank whose burn sidecar outgrew the ceiling and buried every human
+# session; or a directory with nothing of its own while the store is full).
+# Both of those are cases a silent board got wrong, and the header is printed
+# ONCE here however many notes follow.
+#
+#   1. truncated  — the list could not be filled within the scan ceiling.
+#   2. elsewhere  — the store holds sessions this scoped list is not showing,
+#                   and `clikae resume` is where they all are.
+_home_continue_notes() {
+  local _th="${_HOME_RESUME_TRUNC:-0}" _el="${_HOME_RESUME_ELSEWHERE:-0}"
+  case "$_th" in ''|*[!0-9]*) _th=0 ;; esac
+  case "$_el" in ''|*[!0-9]*) _el=0 ;; esac
+  { [ "$_th" -gt 0 ] || [ "$_el" -gt 0 ]; } || return 0
+  if [ "${1:-0}" -ne 1 ]; then
+    printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
+  fi
+  if [ "$_th" -gt 0 ]; then
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _home_wrap_prefixed "$(printf "$T_RESUME_TRUNCATED" "$_th")" \
+      "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  fi
+  if [ "$_el" -gt 0 ]; then
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _home_wrap_prefixed "$(printf "$T_RESUME_ELSEWHERE" "$_el")" \
+      "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  fi
+  return 0
+}
+
+# _home_elsewhere_row <rows-shown> -> the `resume-elsewhere␟<n>` signal row,
+# when the store holds sessions this scoped list is not showing.
+#
+# n = every session file in the store, minus the ones hidden as burn runs,
+# minus the ones on screen. What it is exactly: "how many more sessions
+# `clikae resume` can offer you than this list does" — which is what the note
+# says and what the user acts on. Two known imprecisions, both small and both
+# in the store total rather than here: a session relayed into a second tank
+# exists as two files, and a sidecar sid whose transcript is already gone
+# still subtracts. Neither can make the note claim MORE than the store holds
+# by more than a rounding of the same kind the footer's "N sessions total"
+# already carries, and n<=0 prints nothing at all.
+_home_elsewhere_row() {
+  local _shown="${1:-0}" _total _burn _n
+  case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
+  _total="$(_home_total_sessions 2>/dev/null || printf '0')"
+  case "$_total" in ''|*[!0-9]*) return 0 ;; esac
+  _burn="${_HOME_BURN_TOTAL:-0}"
+  case "$_burn" in ''|*[!0-9]*) _burn=0 ;; esac
+  _n=$(( _total - _burn - _shown ))
+  [ "$_n" -gt 0 ] || return 0
+  printf '%s\037%s\n' "$_HOME_ELSEWHERE_KIND" "$_n"
   return 0
 }
 
 _home_recent_rows() {
-  local name proot tdir tank rows sid mt acc="" _proots
+  local name proot tdir tank rows sid mt acc="" _proots _rowmark _rank
   local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
   local _clamped=0 _got=0 _kept=0 _trunc=0
   # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
@@ -316,6 +410,14 @@ _home_recent_rows() {
   # once, instead of three adapters each re-learning it.
   if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
     _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
+  fi
+  # How many sessions the whole store hides as burn runs — read here, while the
+  # file is still around (the filter below removes it), so the "N more in this
+  # store" note counts sessions a human could actually resume.
+  _HOME_BURN_TOTAL=0
+  if [ -n "$_burn_sids_f" ]; then
+    _HOME_BURN_TOTAL="$(LC_ALL=C grep -c . "$_burn_sids_f" 2>/dev/null || true)"
+    case "$_HOME_BURN_TOTAL" in ''|*[!0-9]*) _HOME_BURN_TOTAL=0 ;; esac
   fi
   # No sidecar (or CLIKAE_RESUME_ALL=1) => nothing to filter => the ask stays
   # exactly CLIKAE_HOME_RECENT_MAX. The common path is byte-for-byte unchanged.
@@ -387,9 +489,17 @@ _home_recent_rows() {
           if [ "$_kept" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _trunc=$((_trunc + _hidden)); fi
         fi
       fi
-      while IFS=$'\037' read -r mt sid; do
+      # A third field on a row is the adapter saying "this one is not from
+      # $PWD, I am only offering it because I had nothing that was" (see
+      # antigravity.sh's _agy_scope_rows). It becomes the FIRST sort key, so a
+      # row that genuinely belongs to this directory can never be pushed off
+      # the board by a courtesy row — measured: 15 fallback rows buried the one
+      # claude session that was actually recorded here. Adapters that emit two
+      # fields are scoped by construction and always rank 0.
+      while IFS=$'\037' read -r mt sid _rowmark; do
         [ -n "$sid" ] || continue
-        acc="$acc$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
+        _rank=0; [ -n "$_rowmark" ] && _rank=1
+        acc="$acc$_rank"$'\037'"$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
       done <<INNER
 $rows
 INNER
@@ -415,6 +525,11 @@ EOF
     # the shell is a failing test as the LAST command of a function — the
     # function then returns 1 and its CALL is what errexit sees. The `return
     # 0` two lines down is what rules that out here, not the `if`.
+    #
+    # This is the case the scope note matters MOST in: no Continue list at all
+    # in this directory, while the store is full of sessions `clikae resume`
+    # would list. Nothing shown here, so the whole store is "not on this list".
+    _home_elsewhere_row 0
     return 0
   fi
   # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
@@ -432,15 +547,29 @@ EOF
   if [ -n "$_burn_sids_f" ]; then
     acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
       BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
-      !($4 in skip)
+      !($5 in skip)
     ')"
     rm -f "$_burn_sids_f"
-    [ -n "$acc" ] || return 0
+    if [ -z "$acc" ]; then _home_elsewhere_row 0; return 0; fi
   fi
   # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
   # title + recap (the only content greps — bounded to the few rows actually shown).
-  printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
-    | while IFS=$'\037' read -r mt engine tank sid; do
+  #
+  # Ranked into a variable rather than straight down the pipe, because the
+  # scope note needs to know how many rows this list ACTUALLY shows, and the
+  # `| while` below is a subshell nothing can come back out of (#113's lesson,
+  # one layer down).
+  local _top _shown
+  # Sort key one: scope (0 = this directory, 1 = a fallback row an adapter
+  # could not place), ascending. Key two: mtime, descending. So the list is
+  # "everything that is really here, newest first, then whatever filler is
+  # left" — never "filler, because filler happened to be newer".
+  _top="$(printf '%s' "$acc" | sort -t$'\037' -k1,1n -k2,2rn | head -n "$CLIKAE_HOME_RECENT_MAX")"
+  _shown="$(printf '%s\n' "$_top" | LC_ALL=C grep -c . 2>/dev/null || true)"
+  case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
+  _home_elsewhere_row "$_shown"
+  printf '%s\n' "$_top" \
+    | while IFS=$'\037' read -r _rank mt engine tank sid; do
         [ -n "$sid" ] || continue
         local dir title recap age now _d aflag _act
         dir="$(profile_dir "$engine" "$tank")"
@@ -1146,6 +1275,18 @@ _home_is_dry() {
 # (which still drives the launch target — the on-row `← here` text label it used
 # to also drive was dropped 2026-06-30, commit 9d55047: noise with many shells open).
 
+# The two windows are judged SEPARATELY, not by a single peak = max(window,weekly)
+# (2026-09-22 decision) — they cost differently. A full 5h window means "wait up
+# to two hours"; a full week means the tank is gone for days. Collapsing them into
+# one number let a nearly-spent window hide behind a fine weekly number and vice
+# versa.
+_FUEL_RED_WINDOW_PCT=100   # the 5h window is fully spent — cannot burn at all
+_FUEL_RED_WEEKLY_PCT=100   # the week is fully spent — cannot burn at all
+_FUEL_YELLOW_WEEKLY_PCT=85 # one step before the fleet's own "stop burning a
+                            # shared tank at 90%" rule — dispatch should already
+                            # be moving to another tank by here
+_FUEL_YELLOW_WINDOW_PCT=90 # a burn dispatched now will probably die mid-run
+
 # _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
 # usage phrase, cached (first line) by watch/auto when it streams past. Read-only
 # here; we never compute a %. Absent/empty cache = no yellow reading.
@@ -1331,9 +1472,12 @@ _home_fuel_dotv_compute() {
   if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
-  local usage_fields up uw peak cached_at age ttl
+  local usage_fields up uw cached_at age ttl
   if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
-    IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
+    # 4th field (peak = max(window,weekly)) is the OLD single-axis reading;
+    # the dot no longer uses it — window and weekly are judged separately
+    # below — so it is read and discarded, not carried into an unused local.
+    IFS=$'\t' read -r up uw _ cached_at <<< "$usage_fields"
     # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
     # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
     # (lib/core/usage.sh) now shares — it used to REJECT that same reading
@@ -1356,10 +1500,18 @@ _home_fuel_dotv_compute() {
       # as the other two call sites; errexit exempts every command in an
       # `&&` list but the last, so a missing function is a no-op, not a death.
       declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
-      peak="${peak%%.*}"
-      if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
-      elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
-      else _FDOT="${__C_GREEN}●$__C_RESET"; fi
+      # Judged separately, not by peak = max(window,weekly) — see the
+      # constants' own header just above _home_weekly_pathv. A full window
+      # costs a couple of hours; a full week costs days, so weekly's own
+      # yellow line sits below window's.
+      up="${up%%.*}"; uw="${uw%%.*}"
+      if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
+        _FDOT="${__C_RED}○$__C_RESET"
+      elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ]; then
+        _FDOT="${__C_YELLOW}◐$__C_RESET"
+      else
+        _FDOT="${__C_GREEN}●$__C_RESET"
+      fi
       return 0
     fi
     # 24h or older: too stale to trust — fall through as if unread, below.
@@ -1371,10 +1523,12 @@ _home_fuel_dotv_compute() {
   # said out loud instead of falling through to a green "ready" — an idle tank
   # at 99% weekly used to look exactly like a fresh one. The dot is the
   # honest "no reading" `·` (there are no numbers), and the note carries the
-  # ⏳ and the remedy, cut to fit the gutter (usage_expired_board_notev; the
-  # full sentence is `clikae usage`'s). Not ⏳ as the dot: every dot is one column wide and the
-  # row grid is padded around that; an emoji is two. Fork-free: one `read` of
-  # a one-line file, the same technique lib/core/tmux.sh's status row uses.
+  # word "expired" and the remedy, cut to fit the gutter
+  # (usage_expired_board_notev; the full sentence is `clikae usage`'s). No
+  # emoji anywhere on this row (no delivery surface prints one) — the note is
+  # a word, not a glyph, so it costs no special width handling. Fork-free:
+  # one `read` of a one-line file, the same technique lib/core/tmux.sh's
+  # status row uses.
   local _ucache="$CLIKAE_HOME/state/usage/$cli/$profile.json" _uline="" _uca
   if [ -f "$_ucache" ]; then
     IFS= read -r _uline < "$_ucache" || true
@@ -2091,7 +2245,7 @@ EOF
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"; fi
         _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
@@ -2166,7 +2320,7 @@ EOF
 
   # "N sessions hidden as burn runs; list truncated" — printed here, directly
   # under the Continue list (resume rows are the last thing _home_items emits).
-  _home_trunc_note "$printed_resume"
+  _home_continue_notes "$printed_resume"
 
   if [ -n "$also" ]; then
     printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
@@ -2883,12 +3037,34 @@ _home_pick_draw_windowed() {
 # Swallow the failure INSIDE the subshell, where it belongs, and pin the result
 # to digits. NB a test for this must `set -o pipefail` itself or it passes
 # vacuously — the bug does not exist without it.
+#
+# 🔴 The `grep -v` stage needs its OWN `|| true` for the same reason, and it is
+# a different reason from the one above: grep exits 1 when it prints NOTHING,
+# which here means "an empty store", or "a store holding only subagent
+# transcripts" — the two cases where a board must still render. Without the
+# guard the count is the one thing on the board that kills it.
 _home_total_sessions_scan() {
   local chome="${CLIKAE_HOME:-$HOME/.clikae}" n
+  # grok's glob was missing here for the same reason it was missing from
+  # `clikae resume`'s enumerator: a hand-written per-engine list is a thing
+  # someone has to remember. This one stays a glob (it is a count, on the
+  # board's hot path, with no adapter to load), so it is pinned by a test
+  # instead — tests/bats/home.bats' grok-counting case.
+  # 🔴 claude's `agent-*.jsonl` subagent transcripts are NOT sessions and are
+  # dropped here too. They outnumber real sessions on a working store, so
+  # counting them made both numbers this feeds — the footer's "N sessions
+  # total" and the Continue list's "N more in this store" — describe a store
+  # the user does not have, and offered to go and find things that cannot be
+  # resumed. The rule is the adapter's (adapter_transcript_is_resumable); it is
+  # spelled inline because this is a count on the board's hot path with no
+  # adapter loaded, and pinned by a test so the two cannot drift apart.
   n="$( { ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
                 "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                "$chome"/profiles/grok/*/sessions/*/*/summary.json \
                 "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl \
-           2>/dev/null || true; } | wc -l | tr -d ' ' )"
+           2>/dev/null || true; } \
+         | { LC_ALL=C grep -av '/agent-[^/]*\.jsonl$' || true; } \
+         | wc -l | tr -d ' ' )"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
@@ -3086,7 +3262,7 @@ LIVEACT
         if [ "$printed_resume" -eq 0 ]; then
           printed_resume=1
           if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
         fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
@@ -3197,7 +3373,7 @@ EOF
   fi
   # "N sessions hidden as burn runs; list truncated" (#34 round-2 P2-1), with
   # extra=2 for the outer indenter this block is piped through.
-  _home_trunc_note "$printed_resume" 2
+  _home_continue_notes "$printed_resume" 2
   if [ "$printed_resume" -eq 1 ]; then
     # The footer is a full localized sentence (54 columns in en-US, longer in
     # de/fr/pt) and was printed with no width budget at all — so on a narrow

@@ -4,27 +4,40 @@ load '../helpers'
 
 bats_require_minimum_version 1.5.0
 
-# 🔴 STILL FLAKY, AND HERE IS WHAT THE FIFTH INVESTIGATION ADDED (2026-08-22).
-# Measured pass rates on one machine in one evening: 8/8, 5/5, 4/5, and once
-# 2/10 — and the 2/10 run went `pass pass fail fail fail fail fail fail fail
-# fail`, which is not the shape of a coin. Something degrades and stays degraded;
-# it was not leaked tmux servers or leftover test dirs (checked, none) and it
-# could not be reproduced afterwards.
+# 🔴 SOLVED 2026-09-22 (sixth investigation) — AND IT WAS NEVER THE REPLAY.
+# Five rounds of this comment said it was, on the strength of a stage trace that
+# looked healthy at every stage. It looked healthy because it WAS healthy.
+# Probes inside the EXIT trap and inside tmux_attach, on a run that FAILED:
 #
-# The stage trace in the failures is IDENTICAL every time, and every stage looks
-# healthy:
+#   attach-pre   ...7806  sz=             <- nothing written yet
+#   trap-start   ...8968
+#   trap-done    ...9287  sz=1717         <- capture written, pane still alive
+#   attach-post  ...9554  rc=0 sz=1717    <- non-empty when the parent reads it
 #
-#   engine-started tmux=yes | rendered=yes | client=yes
-#   capture-bytes=1717      <- the capture worked, the file was written
-#   exiting
+# So `[ -s ]` was true, awk ran, and the replay DID reach the terminal. In the
+# failing output the marker sits at line 49 followed by `line 1` … `line 200` —
+# 200 lines that had long scrolled off a 24-row pane, so they can have come from
+# nowhere but the replay. The count was 1 because the OTHER occurrence, the one
+# tmux draws live, never existed.
 #
-# So the capture is not the problem: the REPLAY is. tmux_attach replays only when
-# `tmux attach` returns 0 and the scrollback file is non-empty, and `tmux attach`
-# was measured returning 0 when a session ends normally (both with and without
-# other sessions on the server). Whoever picks this up next: start at the replay,
-# not at the capture, and do not trust a pass rate measured at a different hour
-# than the one you are comparing it to — an earlier round of this investigation
-# "found" a regression that way and it did not exist.
+# That is the race, and it is THIS FILE'S, not the product's. The stub printed
+# its 200 lines the instant the pane started, while the parent was still between
+# `new-session -d` and `tmux attach` (tmux_label alone sets seven per-session
+# options in between). With no client attached, tmux keeps those lines in the
+# pane history and sends nothing outward; the attach that follows redraws the
+# last 24 rows only. Measured on every failure: `clients-at-first-print=[]`.
+# Adding one `tmux list-clients` call before the first echo — some 15ms — was by
+# itself enough to turn failures into passes, which is also why the pass rate
+# "degrades and stays degraded" rather than flipping like a coin: it tracks how
+# warm the caches are, i.e. how fast `clikae run` reaches the stub.
+#
+# The fix is the lesson this file already learned twice one layer out: wait for
+# the client instead of hoping — and wait for it BEFORE printing the thing whose
+# live drawing you are about to assert on.
+#
+# The product was never broken here. Hand-run on a throwaway server (tmux 3.7b):
+# 120 engine turns, attach, engine exits -> the top of the conversation comes
+# back in the terminal. DESIGN-tmux.md Rule 2b now records that.
 
 # _pty_run lives in tests/helpers.bash: session-usable.bats needs the same
 # thing, and a second copy of a pty runner is a second thing to keep in step.
@@ -46,6 +59,24 @@ bats_require_minimum_version 1.5.0
 # from the count alone (2026-08-15) before the stages were written down.
 _stage() { printf '%s\n' "$1" >> "${HOME:?}/scrollback-stages.log"; }
 _stage "engine-started pwd=$PWD tmux=${TMUX:+yes}"
+# 🔴 PRINT NOTHING UNTIL SOMEONE IS WATCHING. This test asserts the marker
+# appears TWICE: once drawn live by tmux, once replayed by awk after the attach
+# returns. The drawn one only exists if a client is attached while the pane is
+# writing — tmux does not send scrolled-off history to a client that arrives
+# late, it redraws the last screenful. The parent spends real time between
+# `new-session -d` and `tmux attach` (tmux_label's per-session options, the
+# session-id stamp), and on a warm machine `clikae run` reaches this stub first,
+# so all 200 lines landed in the history with nobody connected and the count
+# could never be more than 1. That was the whole flake — see the header.
+#
+# Same shape as the `_rendered` wait below and for the same reason: wait for the
+# state you need, do not guess at how long it takes.
+_client=no
+for _ in $(seq 1 200); do
+  [ -n "$(tmux list-clients 2>/dev/null)" ] && { _client=yes; break; }
+  sleep 0.05
+done
+_stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
 echo "SCROLLBACK_MARKER_START"
 for i in {1..200}; do echo "line $i"; done
 # Wait for tmux to have actually rendered the last line instead of guessing at
@@ -69,14 +100,8 @@ _stage "rendered=$_rendered"
 # Every test now creates a server of its own instead of reusing one, and that
 # startup landed between create and attach. macOS absorbed it; ubuntu did not,
 # and CI went red for eight pushes on this one test while every other job stayed
-# green. Wait for the client instead of hoping — the same lesson as the loop
-# above, one layer out.
-_client=no
-for _ in $(seq 1 200); do
-  [ -n "$(tmux list-clients 2>/dev/null)" ] && { _client=yes; break; }
-  sleep 0.05
-done
-_stage "client=$_client sessions=$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ',')"
+# green. The wait that fixed it is now ABOVE the first echo rather than here —
+# waiting after the output is what left the drawn marker unobservable (header).
 _stage "capture-bytes=$(tmux capture-pane -p -S - 2>/dev/null | wc -c) capture-t-bytes=$(tmux capture-pane -p -S - -t \"clikae-claude-scrolltest\" 2>/dev/null | wc -c)"
 _stage "parent=$(ps -o comm= -p $PPID 2>/dev/null | tr -d ' ')"
 # Outlive the engine. If the pane's shell gets to run the capture that follows

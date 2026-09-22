@@ -109,10 +109,21 @@ _source_clean() {
     echo "$out"; echo "-- the tank-lock GC (the PR's own documented recovery path) did not run/report while the ephemeral lock was held"; false; }
 }
 
+# Make sure tank $2 of engine $1 is a REAL tank before seeding it. The store
+# scan behind `clean` walks tanks_for_engine — the same "what is a tank" answer
+# the board has used since #61 — instead of globbing profiles/<engine>/*/, so a
+# bare directory that merely holds transcripts is not a candidate. Idempotent:
+# the marker is what `clikae init` leaves behind, and re-running it is not.
+_seed_tank() {
+  [ -f "$CLIKAE_HOME/profiles/$1/$2/.clikae-tank" ] || clikae init "$1" "$2" >/dev/null
+  return 0
+}
+
 # Seed a claude transcript for tank $1 with $3 conversation lines under a fixed
 # project dir; echoes the transcript path.
 _seed_lines() {
   local profile="$1" sid="$2" n="$3" i
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   for ((i=1; i<=n; i++)); do
@@ -126,6 +137,7 @@ _seed_lines() {
 # Latin. Raw UTF-8, exactly as a real transcript stores it.
 _seed_titled() {
   local profile="$1" sid="$2" title="$3" n="$4" i
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   { printf '{"type":"ai-title","aiTitle":"%s","sessionId":"%s"}\n' "$title" "$sid"
@@ -140,6 +152,7 @@ _seed_titled() {
 # pads it to ~$4 MB — the "big but recent" fixture (the built-in floor is 20 MB).
 _seed_big() {
   local profile="$1" sid="$2" title="$3" mb="$4"
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   { printf '{"type":"user","cwd":"/tmp/w","message":{"role":"user","content":"%s"}}\n' "$title"
@@ -215,15 +228,16 @@ _seed_big() {
 @test "resume cleanup is a hidden alias: byte-identical output with clikae clean" {
   local sid="10101010-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
 
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   local canon="$output"
   [[ "$canon" == *"stale copy (kept: a)"* ]] || false   # fixture produced rows
-  run clikae resume cleanup --dry-run
+  run clikae resume cleanup --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [ "$output" = "$canon" ]
 }
@@ -233,11 +247,12 @@ _seed_big() {
 @test "a stale copy lands in 'Redundant (safe)', pre-checked" {
   local sid="12121212-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
 
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Redundant (safe)"* ]] || false
   [[ "$output" == *"[x] claude/b"* ]] || false
@@ -252,12 +267,12 @@ _seed_big() {
   _seed_lines a "$sid" 5 >/dev/null
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
 
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Untouched for 30+ days"* ]] || false
   [[ "$output" == *"[x] claude/a"* ]] || false
   # The section heading follows --older-than.
-  run clikae clean --dry-run --older-than 7
+  run clikae clean --dry-run --older-than 7 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Untouched for 7+ days"* ]] || false
 }
@@ -268,7 +283,7 @@ _seed_big() {
   _seed_big a "34343434-2222-3333-4444-555555555555" "huge recent session" 21
   _seed_lines a "45454545-2222-3333-4444-555555555555" 3 >/dev/null   # small + recent
 
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Big but recent — your call"* ]] || false
   [[ "$output" == *"[ ] claude/a"* ]] || false
@@ -280,13 +295,14 @@ _seed_big() {
 @test "a diverged copy lands in 'Big but recent' unchecked, labeled has-unique-content" {
   local sid="56565656-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 80 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 60 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
   printf '{"type":"user","message":{"role":"user","content":"UNIQUE tail"}}\n' \
     >> "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
 
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Big but recent — your call"* ]] || false
   [[ "$output" == *"diverged — has unique content"* ]] || false
@@ -300,6 +316,7 @@ _seed_big() {
 @test "clean dedupes copies of one session and keeps the LARGEST, not the newest" {
   local sid="66666666-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -307,7 +324,7 @@ _seed_big() {
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
   touch -t 202606250000 "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
 
-  run clikae clean --dry-run --older-than 9999
+  run clikae clean --dry-run --older-than 9999 --no-archive-check
   [ "$status" -eq 0 ]
   # Neither copy passes the 9999d age filter or the big-file floor, yet the
   # redundant copy is offered anyway: the Redundant section bypasses both.
@@ -322,7 +339,7 @@ _seed_big() {
   local old_dir="$CLIKAE_HOME/profiles/claude/a/projects/-old-name"
   mkdir -p "$old_dir"
   head -n 40 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" > "$old_dir/$sid.jsonl"
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"stale copy (kept: a)"* ]] || false
 }
@@ -330,6 +347,7 @@ _seed_big() {
 @test "clean skips a dedupe group whose sid has a live process" {
   local sid="99999999-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 100 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 50 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -351,7 +369,7 @@ PSSTUB
 @test "clean offers an orphaned claude sid dir (transcript already gone)" {
   mkdir -p "$CLIKAE_HOME/profiles/claude/a/projects/-w/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/subagents"
   echo x > "$CLIKAE_HOME/profiles/claude/a/projects/-w/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/subagents/t.jsonl"
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"orphaned subagent data"* ]] || false
   [[ "$output" == *"Redundant (safe)"* ]] || false
@@ -374,7 +392,7 @@ PSSTUB
   dd if=/dev/zero of="$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid/subagents/big.jsonl" \
     bs=1024 count=3072 2>/dev/null
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   # A ~200 B transcript alone would price in KB; the bundled sid dir puts it in MB.
   [[ "$output" == *"3.0 MB"* ]] || false
@@ -390,7 +408,7 @@ PSSTUB
     dd if=/dev/zero bs=1024 count=2048 2>/dev/null | LC_ALL=C tr '\0' 'a'; echo
   } > "$CLIKAE_HOME/profiles/claude/a/projects/-w/$big.jsonl"
 
-  run clikae clean --dry-run --min-size 1
+  run clikae clean --dry-run --min-size 1 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"big session"* ]] || false
   [[ "$output" != *"conversation line"* ]] || false
@@ -401,17 +419,18 @@ PSSTUB
 
 @test "clean --min-size with --older-than requires BOTH (a recent big file is excluded)" {
   local big="ffffffff-2222-3333-4444-555555555555"
+  _seed_tank claude a
   mkdir -p "$CLIKAE_HOME/profiles/claude/a/projects/-w"
   { printf '{"type":"user","cwd":"/tmp/w","message":{"role":"user","content":"big recent"}}\n'
     dd if=/dev/zero bs=1024 count=2048 2>/dev/null | LC_ALL=C tr '\0' 'a'; echo
   } > "$CLIKAE_HOME/profiles/claude/a/projects/-w/$big.jsonl"
 
-  run clikae clean --dry-run --min-size 1 --older-than 30
+  run clikae clean --dry-run --min-size 1 --older-than 30 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"No sessions older than 30 days and at least 1 MB found"* ]] || false
 
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$big.jsonl"
-  run clikae clean --dry-run --min-size 1 --older-than 30
+  run clikae clean --dry-run --min-size 1 --older-than 30 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"big recent"* ]] || false
 }
@@ -428,7 +447,7 @@ PSSTUB
   local sid="a1a1a1a1-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 5 >/dev/null
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
-  run clikae clean
+  run clikae clean --no-archive-check
   [ "$status" -ne 0 ]
   [[ "$output" == *"Refusing to move anything to the Trash without an interactive confirmation"* ]] || false
   [ -f "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" ]
@@ -578,6 +597,144 @@ PSSTUB
   [ "$status" -ne 0 ]
 }
 
+# --- the archive-marker guard (fourth guard: "is it backed up yet") --------------
+# The maintainer's own backup jobs write ONE marker, on every SUCCESSFUL run:
+# $CLIKAE_HOME/state/transcripts-archived-at, one line, a Unix epoch meaning
+# "everything written before this instant is archived elsewhere". A session
+# modified after that instant must never be a candidate, in ANY section, with
+# ANY flag; with no valid marker, clean must offer NOTHING for session data
+# (stale/orphan/regular/big/diverged) and say so — the non-conversation GC
+# (scrollback, burn sidecars, tank locks, prelaunch locks, …) is unaffected.
+
+_seed_archive_marker() {
+  mkdir -p "$CLIKAE_HOME/state"
+  printf '%s\n' "$1" > "$CLIKAE_HOME/state/transcripts-archived-at"
+}
+
+# One aged transcript every archive-guard test seeds identically, so the ONLY
+# variable across these tests is the marker itself.
+_seed_archive_candidate() {
+  local sid="$1"
+  _seed_lines a "$sid" 5 >/dev/null
+  touch -t "$(date -v-40d '+%Y%m%d%H%M' 2>/dev/null || date -d '40 days ago' '+%Y%m%d%H%M')" \
+    "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
+}
+
+@test "archive guard: a session written AFTER the marker is withheld and counted" {
+  _seed_archive_candidate "f0000001-2222-3333-4444-555555555555"
+  # The marker (~50 days ago) predates the session's mtime (~40 days ago).
+  _seed_archive_marker "$(( $(date +%s) - 50 * 86400 ))"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"conversation line"* ]] || false   # never offered, in ANY section
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"1 session(s) not offered: written after the last archive run"* ]] || {
+    echo "$output"; false; }
+}
+
+@test "archive guard: a session written BEFORE the marker (marker newer) is offered normally" {
+  _seed_archive_candidate "f0000002-2222-3333-4444-555555555555"
+  # The marker is NEWER than the session — everything up to "now" is archived.
+  _seed_archive_marker "$(date +%s)"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"[x] claude/a"* ]] || false
+  [[ "$output" != *"not offered"* ]] || false
+}
+
+@test "archive guard: no marker at all offers nothing for session data, and says so" {
+  _seed_archive_candidate "f0000003-2222-3333-4444-555555555555"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" != *"conversation line"* ]] || false
+  [[ "$output" == *"No archive marker found"* ]] || false
+  [[ "$output" == *"no marker file yet"* ]] || { echo "$output"; false; }
+}
+
+@test "archive guard: --no-archive-check overrides — offered even with no marker present" {
+  _seed_archive_candidate "f0000004-2222-3333-4444-555555555555"
+  run clikae clean --dry-run --no-archive-check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"[x] claude/a"* ]] || false
+  [[ "$output" != *"No archive marker found"* ]] || false
+  [[ "$output" != *"not offered"* ]] || false
+}
+
+@test "archive guard: a garbled (non-numeric) marker is treated as absent" {
+  _seed_archive_candidate "f0000005-2222-3333-4444-555555555555"
+  _seed_archive_marker "not-a-timestamp"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"No archive marker found"* ]] || false
+  [[ "$output" == *"marker isn't a valid timestamp"* ]] || { echo "$output"; false; }
+}
+
+@test "archive guard: an unreadable marker file is treated as absent" {
+  if [ "$(id -u)" = "0" ]; then skip "root reads a mode-000 file"; fi
+  _seed_archive_candidate "f0000009-2222-3333-4444-555555555555"
+  _seed_archive_marker "$(date +%s)"
+  chmod 000 "$CLIKAE_HOME/state/transcripts-archived-at"
+  run clikae clean --dry-run
+  chmod 644 "$CLIKAE_HOME/state/transcripts-archived-at"   # so teardown's rm -rf can reach it
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"No archive marker found"* ]] || false
+  [[ "$output" == *"marker file can't be read"* ]] || { echo "$output"; false; }
+}
+
+@test "archive guard: a marker claiming to be in the future is treated as absent" {
+  _seed_archive_candidate "f0000006-2222-3333-4444-555555555555"
+  _seed_archive_marker "$(( $(date +%s) + 3600 ))"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Untouched for 30+ days"* ]] || false
+  [[ "$output" == *"No archive marker found"* ]] || false
+  [[ "$output" == *"marker's timestamp is in the future"* ]] || { echo "$output"; false; }
+}
+
+@test "archive guard: --dry-run reports the same withheld count a real run would" {
+  # A withheld session ALONGSIDE an offered one, so this proves the note prints
+  # in --dry-run's actual list-rendering path, not only its early "nothing to
+  # clean" short-circuit (which a single-candidate fixture can't distinguish).
+  local offered="f0000007-2222-3333-4444-555555555555"
+  local withheld="f0000008-2222-3333-4444-555555555555"
+  _seed_lines a "$offered" 5 >/dev/null
+  _seed_lines a "$withheld" 5 >/dev/null
+  # offered: written 40 days ago, well before the marker.
+  touch -t "$(date -v-40d '+%Y%m%d%H%M' 2>/dev/null || date -d '40 days ago' '+%Y%m%d%H%M')" \
+    "$CLIKAE_HOME/profiles/claude/a/projects/-w/$offered.jsonl"
+  # withheld: written 5 days ago — AFTER the marker (~20 days ago), same as a
+  # live write since the last successful archive run.
+  touch -t "$(date -v-5d '+%Y%m%d%H%M' 2>/dev/null || date -d '5 days ago' '+%Y%m%d%H%M')" \
+    "$CLIKAE_HOME/profiles/claude/a/projects/-w/$withheld.jsonl"
+  _seed_archive_marker "$(( $(date +%s) - 20 * 86400 ))"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[x] claude/a"* ]] || { echo "$output"; false; }   # the offered one still lists
+  [[ "$output" == *"1 session(s) not offered"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"Dry-run mode: no files were moved."* ]] || { echo "$output"; false; }
+}
+
+@test "archive guard: GC classes (not conversations) still run with no marker present" {
+  # No $CLIKAE_HOME/state/transcripts-archived-at anywhere — "offer nothing
+  # for session data" must not also silence the non-conversation GC sweeps
+  # (tank locks here; scrollback/burn-sidecar/prelaunch-lock GCs share the
+  # same cmd_clean call sequence and are covered by their own tests above).
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local dead=999979
+  kill -0 "$dead" 2>/dev/null && skip "pid $dead is somehow alive here"
+  ln -s "$dead:1700000000" "$sdir/tank-busy-codex_T88.lock"
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No archive marker found"* ]] || false
+  [[ "$output" == *"Would remove dead-holder tank lock tank-busy-codex_T88.lock"* ]] || {
+    echo "$output"; false; }
+}
+
 # --- _clean_to_trash (unit): move, NEVER destroy — collision-safe, honest skip ---
 # HOME == TEST_HOME (helpers.bash), so $HOME/.Trash is a throwaway fixture path;
 # never the real ~/.Trash.
@@ -673,7 +830,7 @@ PSSTUB
   local sid="e0e0e0e0-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 5 >/dev/null
   touch -t 202601010000 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl"
-  run clikae clean --dry-run
+  run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"Estimated space to move to the Trash"* ]] || false
   [[ "$output" != *"Estimated space to free"* ]] || false
@@ -757,7 +914,8 @@ PSSTUB
     # a stale cross-tank copy -> a "Redundant (safe)" row, i.e. the row that
     # carries the LONG localized label right next to the CJK title. That
     # combination is what measured 120-124 cols on the maintainer's real store.
-    mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
+    _seed_tank claude b
+  mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
     head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
       > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
   done
@@ -766,7 +924,7 @@ PSSTUB
     # Not a tty here, so the render takes its documented 80-col fallback — the
     # floor these tests are specified against. (The 60-col + live-tty behaviour
     # is covered by the PTY audit, which drives a real pty at both widths.)
-    CLIKAE_LANG="$loc" run clikae clean --dry-run
+    CLIKAE_LANG="$loc" run clikae clean --dry-run --no-archive-check
     [ "$status" -eq 0 ]
     printf '%s\n' "$output" | python3 -c '
 import sys, unicodedata
@@ -788,12 +946,13 @@ sys.exit(1 if bad else 0)
 @test "the localized stale-copy LABEL is never truncated, even in the longest language (fr)" {
   local sid="45454545-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
   # fr-FR's label is the longest of the nine — it must appear IN FULL (it carries
   # the safety semantics: which copy is being kept). The title is what yields.
-  CLIKAE_LANG=fr-FR run clikae clean --dry-run
+  CLIKAE_LANG=fr-FR run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"copie obsolète (celle de a est gardée)"* ]] || false
   [[ "$output" != *"copie obsolète (celle de a est gard…"* ]] || false   # not cut
@@ -922,6 +1081,99 @@ sys.exit(1 if bad else 0)
   run _clean_session_id_gc 1
   [[ "$output" == *"Would remove orphaned"* ]] || { echo "$output"; false; }
   [ -f "$sdir/clikae-claude-nosuch2-$$.session_id" ] || { echo "a dry run deleted it"; false; }
+}
+
+# --- prelaunch-lock GC (2026-09-22) -------------------------------------------
+#
+# `clikae burn` never unlinks its per (engine/tank, $PWD) prelaunch lock right
+# after releasing it (lib/commands/burn.sh — deleting a lock file a concurrent
+# burn may already have open is the classic lock-file race), so every distinct
+# (tank, cwd) leaves one behind forever, under `state/locks/`. This GC
+# (_burn_prelaunch_lock_gc, defined in burn.sh, called from both `clikae burn`
+# itself and `clikae clean`) is the only thing that ever reclaims them — by
+# mtime, never a recorded holder: `exec 7>` truncates the file (and so bumps
+# its mtime) on every acquisition, so a held lock is always younger than any
+# real threshold.
+_prelaunch_lock_age() {
+  date -v-2d '+%Y%m%d%H%M' 2>/dev/null || date -d '2 days ago' '+%Y%m%d%H%M'
+}
+
+@test "GC (prelaunch lock) keeps a fresh lock in the current locks/ dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12345.lock"
+  : > "$f"   # fresh mtime -- as if just released
+  _burn_prelaunch_lock_gc 0
+  [ -f "$f" ] || { echo "a fresh (just-released) prelaunch lock was deleted"; false; }
+}
+
+@test "GC (prelaunch lock) removes a lock older than 1 day from the current locks/ dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12346.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  _burn_prelaunch_lock_gc 0
+  [ ! -f "$f" ] || { echo "an aged prelaunch lock survived the sweep"; false; }
+}
+
+@test "GC (prelaunch lock) never touches a non-prelaunch-lock file in the same dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local age; age="$(_prelaunch_lock_age)"
+  # Same suffix, wrong infix -- not a prelaunch lock.
+  local other="$sdir/${CLIKAE_SESS_PREFIX}other-12347.lock"
+  : > "$other"; touch -t "$age" "$other"
+  # Right infix, wrong suffix -- not a prelaunch lock either.
+  local wrongsuffix="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12348.lock.bak"
+  : > "$wrongsuffix"; touch -t "$age" "$wrongsuffix"
+  # Unrelated file entirely.
+  local unrelated="$sdir/random.txt"
+  : > "$unrelated"; touch -t "$age" "$unrelated"
+  _burn_prelaunch_lock_gc 0
+  [ -f "$other" ] || { echo "deleted a non-prelaunch lock (wrong infix)"; false; }
+  [ -f "$wrongsuffix" ] || { echo "deleted a non-.lock file (wrong suffix)"; false; }
+  [ -f "$unrelated" ] || { echo "deleted an unrelated file"; false; }
+}
+
+@test "GC (prelaunch lock) migrates/cleans the OLD pre-migration location too" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12349.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  _burn_prelaunch_lock_gc 0
+  [ ! -f "$f" ] || { echo "an aged OLD-location prelaunch lock survived the sweep"; false; }
+}
+
+@test "GC (prelaunch lock) --dry-run names the count and deletes nothing" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12350.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  run _burn_prelaunch_lock_gc 1
+  [[ "$output" == *"Would remove 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
+  [ -f "$f" ] || { echo "a dry run deleted it"; false; }
+}
+
+@test "clikae clean --dry-run and a real run both report the stale-prelaunch-lock count" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"    # for CLIKAE_SESS_PREFIX, same as burn.sh
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12351.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$f" ]   # --dry-run: not yet
+  [[ "$output" == *"Would remove 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
+
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -f "$f" ]
+  [[ "$output" == *"removed 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
 }
 
 # --- dead-holder tank locks (R4-P3-2, R3-P3-3 before it) ----------------------
