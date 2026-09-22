@@ -35,6 +35,14 @@ brew style  CVERInc/clikae/clikae
 brew install --build-from-source CVERInc/clikae/clikae
 brew test CVERInc/clikae/clikae
 clikae version   # must match the tag you just published
+
+# 4. Verify templates/ actually shipped — NOT just bin/ and lib/. A tap
+#    formula that drops "templates" from `libexec.install` (seen for real:
+#    the tap once installed only "bin", "lib") builds and passes `brew test`
+#    clean, and the only symptom is every user's `clikae doctor` printing
+#    "permissions template missing (installation incomplete)" — this line
+#    catches it here instead.
+ls "$(brew --prefix clikae)/libexec/templates/permissions/claude.json"
 ```
 
 ## Cutting the NEXT release (e.g. v0.6.1)
