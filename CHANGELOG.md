@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae clean` gained a fourth guard: a session is never offered unless a
+  backup has confirmed it is archived.** The live-session guard (v0.14.1)
+  closed one way clean could destroy something unrecoverable; this closes
+  another, from outside clikae entirely — a backup job that mirrors deletions
+  turns a Trash move into a real loss, and a machine with no backup at all
+  makes every Trash move permanent the moment it's emptied. clean now looks
+  for one line, a Unix epoch, in `$CLIKAE_HOME/state/transcripts-archived-at`,
+  which a backup job is expected to write on every SUCCESSFUL run — meaning
+  "everything written before this instant is archived elsewhere". A session
+  modified after that instant is withheld, in every section, under every
+  flag, and the list says how many and why. With the marker missing,
+  unreadable, not a plain number, or dated in the future (all "not archived"),
+  clean offers nothing for session data by default and says so; the
+  non-conversation GC sweeps (scrollback, burn sidecars, tank/prelaunch locks)
+  are unaffected either way. `--no-archive-check` opts back in, for a machine
+  with no backup job by choice.
+
 - **`clikae hooks <share|unshare|list>` — fleet-wide hook sharing, and
   `clikae doctor` now checks both halves of a tank's own engine config
   (#141).** A tank's hooks live in its own `settings.json`, so recreating or

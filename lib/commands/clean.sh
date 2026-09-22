@@ -110,7 +110,25 @@ Options:
                             size is the only filter (no age cutoff); combine with
                             --older-than to require both. Stale copies and orphans
                             ignore both filters.
+  --no-archive-check        Offer session data even though no backup has
+                            confirmed it is archived (see below). Only for a
+                            machine with no backup job by choice — everywhere
+                            else, get the backup running and let the marker
+                            appear instead of overriding this.
   -h, --help                Show this help message.
+
+The archive marker: a session's own transcript is the only copy, so by
+default clean will never offer session data (stale copies, orphaned subagent
+data, old/big sessions — everything EXCEPT the non-conversation GC below)
+unless a backup job has confirmed it archived it first. It looks for one line,
+a Unix epoch, in $CLIKAE_HOME/state/transcripts-archived-at — your backup job
+writes this on every SUCCESSFUL run, meaning "everything written before this
+instant is safely archived elsewhere". A session modified after that instant
+is never offered, in any section, with any flag; the list says how many were
+withheld and why. With no marker at all (or one that can't be read, isn't a
+plain number, or claims to be in the future — all treated the same: not
+archived), clean says so and offers nothing for session data until either the
+marker appears or you pass --no-archive-check.
 
 Examples:
   clikae clean
@@ -118,6 +136,7 @@ Examples:
   clikae clean --min-size 5
   clikae clean --min-size 5 --older-than 30
   clikae clean --dry-run
+  clikae clean --no-archive-check
 
 (`clikae resume cleanup`, where this flow first shipped, still works as a hidden
 back-compat alias and forwards here.)
@@ -351,6 +370,73 @@ _clean_session_is_live() {
   return 1
 }
 
+# ── The archive-marker guard ────────────────────────────────────────────────
+# A session transcript is the only copy — clean moves it to the Trash, never
+# `rm`s it, but the Trash is still local disk. Two of the maintainer's own
+# backup jobs made that promise cheap to break: one machine's backup MIRRORED
+# deletions (so a Trash move propagated straight through to the backup), the
+# other had no backup at all — and "clean says it's safe" stopped meaning
+# anything a person could act on ("I can no longer tell when it is safe to run
+# clikae clean"). Both jobs are being fixed to write ONE marker, on every
+# SUCCESSFUL run, meaning "everything written before this instant is archived
+# elsewhere": $CLIKAE_HOME/state/transcripts-archived-at, one line, a Unix
+# epoch (UTC seconds).
+#
+# _clean_read_archive_marker <now> — read that marker into ARCHIVE_MARKER_EPOCH,
+# or leave it empty and set ARCHIVE_MARKER_REASON to say why: "missing" (no
+# file), "unreadable" (exists but can't be read), "non-numeric" (garbled
+# content — not a plain integer), or "future" (claims to be ahead of <now>, a
+# clock-skewed or hand-edited marker that would otherwise un-withhold
+# everything). All four are treated identically downstream — this function is
+# the ONE place that decides "valid or not", so nothing else carries its own
+# opinion about what a marker looks like.
+ARCHIVE_MARKER_EPOCH=""
+ARCHIVE_MARKER_REASON=""
+_clean_read_archive_marker() {
+  local now="$1" path="${CLIKAE_HOME:-$HOME/.clikae}/state/transcripts-archived-at" raw
+  ARCHIVE_MARKER_EPOCH=""
+  if [ ! -e "$path" ]; then
+    ARCHIVE_MARKER_REASON="missing"; return 1
+  fi
+  if [ ! -r "$path" ]; then
+    ARCHIVE_MARKER_REASON="unreadable"; return 1
+  fi
+  raw="$(head -n 1 "$path" 2>/dev/null)" || { ARCHIVE_MARKER_REASON="unreadable"; return 1; }
+  # Trim surrounding whitespace/CR: a marker written by a plain `echo` or hand
+  # edited in an editor that appends a trailing newline/space is still legit.
+  raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  case "$raw" in
+    ''|*[!0-9]*) ARCHIVE_MARKER_REASON="non-numeric"; return 1 ;;
+  esac
+  if [ "$raw" -gt "$now" ]; then
+    ARCHIVE_MARKER_REASON="future"; return 1
+  fi
+  ARCHIVE_MARKER_EPOCH="$raw"
+  ARCHIVE_MARKER_REASON=""
+  return 0
+}
+
+# _clean_archive_withholds <mt> — should the candidate whose transcript (or,
+# for an orphaned sid dir, the directory itself) has mtime <mt> be withheld
+# from EVERY class, the same way a live session is? Reads archive_check_on
+# and ARCHIVE_MARKER_EPOCH, both dynamically scoped from cmd_clean (bash 3.2:
+# no namerefs, same convention _clean_session_is_live's callers already use
+# for live_procs). This is the ONE predicate every session-producing site
+# calls — dedupe's stale/diverged copies, the main scan loop's regular/big
+# rows, and the orphaned-sid-dir sweep — so a session too fresh to be backed
+# up can never slip through as a candidate under a class this guard forgot to
+# cover, the same shape as the 2026-07-11 live-session incident that shaped
+# _clean_session_is_live above. No valid marker at all means "can't prove
+# anything is archived", so it withholds EVERY session-class candidate,
+# regardless of <mt> — that is what makes the "no marker → offer nothing"
+# behaviour fall out of one rule instead of a second, separate branch.
+_clean_archive_withholds() {
+  local mt="$1"
+  [ "$archive_check_on" -eq 1 ] || return 1        # --no-archive-check: never withhold
+  [ -n "$ARCHIVE_MARKER_EPOCH" ] || return 0        # no valid marker: withhold everything
+  [ "$mt" -gt "$ARCHIVE_MARKER_EPOCH" ]             # withheld iff modified after the marker
+}
+
 # ── The Trash move ──────────────────────────────────────────────────────────
 
 # _clean_to_trash <path> — move <path> into $HOME/.Trash instead of destroying
@@ -546,12 +632,20 @@ _clean_dedupe_flush() {
   stale_lbl="$(printf "$T_CLEAN_LBL_STALE" "$kept_tank")"
   for ((i=0; i<${#g_f[@]}; i++)); do
     if [ "$i" -eq "$kept" ]; then continue; fi
+    # Claimed either way: a copy the archive guard withholds must never fall
+    # through to the main scan loop below and get re-offered there under
+    # "regular"/"big" instead (same file, wrong section) — same reasoning as
+    # the unconditional claim that already covered the stale/diverged split.
+    dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
+    if _clean_archive_withholds "${g_mt[i]}"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     if _clean_stale_copy_check "${g_f[kept]}" "${g_f[i]}"; then
       _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" stale "$stale_lbl"
     else
       _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" diverged "$T_CLEAN_LBL_DIVERGED"
     fi
-    dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
   done
   return 0
 }
@@ -572,6 +666,10 @@ _clean_scan_orphans() {
     esac
     [ -f "$d.jsonl" ] && continue
     mt="$(stat -c '%Y' "$d" 2>/dev/null || stat -f '%m' "$d" 2>/dev/null || echo 0)"
+    if _clean_archive_withholds "$mt"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     _resume_session_fields "$d"    # engine/tank from the path; sid = the dir name
     sz_paths+=("$d"); cand_nsz+=(1)
     candidates+=("$d")
@@ -1497,6 +1595,7 @@ cmd_clean() {
   local dry_run=0
   local older_than=30 older_given=0
   local min_size_mb=""
+  local archive_check_on=1
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _clean_help; return 0 ;;
@@ -1515,6 +1614,7 @@ cmd_clean() {
         min_size_mb="$2"
         shift 2
         ;;
+      --no-archive-check) archive_check_on=0; shift ;;
       *)
         # shellcheck disable=SC2059
         log_fail "$(printf "$T_CLEAN_ERR_UNKNOWN_ARG" "$1")"
@@ -1565,6 +1665,15 @@ cmd_clean() {
   local now; now="$(date +%s)"
   local limit_secs=$((older_than * 86400))
   local cutoff=$((now - limit_secs))
+
+  # Read the archive marker once, before any candidate is considered — every
+  # session-producing site below (dedupe, the main scan loop, orphan sweep)
+  # calls _clean_archive_withholds, which reads archive_check_on/
+  # ARCHIVE_MARKER_EPOCH set here. Unaffected by --no-archive-check: read it
+  # regardless (a withheld count needs the marker even when overridden would
+  # be wrong; here we simply never rely on it when the override is on).
+  _clean_read_archive_marker "$now" || true
+  local archive_withheld_n=0
 
   local -a candidates=()
   local -a cand_engine=()
@@ -1645,6 +1754,13 @@ EOF2
     # silently — an unchecked row under "Big but recent" is still one keypress
     # from deletion, which is exactly the 2026-07-11 incident this closes.
     _clean_session_is_live "$f" "$live_procs" && continue
+    # Same archive-marker guard as the dedupe/orphan paths: a session written
+    # after the last confirmed-archived instant is never a candidate, in any
+    # section — see _clean_archive_withholds.
+    if _clean_archive_withholds "$mt"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     if [ "$apply_age" -eq 1 ] && [ "$mt" -gt "$cutoff" ]; then
       _clean_add_candidate "$f" "$mt" big ""
     else
@@ -1702,6 +1818,34 @@ EOF
   done <<EOF
 $ordered
 EOF
+
+  # ── Archive-marker note ───────────────────────────────────────────────────
+  # Printed once, before either the "nothing to clean" short-circuit or the
+  # list itself, in BOTH --dry-run and a real run: the guard above dropped
+  # candidates silently and class-agnostically (see _clean_archive_withholds),
+  # so this is the one place that says why the count is smaller than the
+  # store on disk — never letting "clean" quietly mean less than it used to.
+  if [ "$archive_check_on" -eq 1 ]; then
+    if [ -n "$ARCHIVE_MARKER_EPOCH" ]; then
+      if [ "$archive_withheld_n" -gt 0 ]; then
+        # shellcheck disable=SC2059
+        _clean_prose "$__C_DIM" "$(printf "$T_CLEAN_ARCHIVE_WITHHELD" \
+          "$archive_withheld_n" "$(_human_age "$ARCHIVE_MARKER_EPOCH" "$now")")"
+        echo
+      fi
+    else
+      local archive_reason_str
+      case "$ARCHIVE_MARKER_REASON" in
+        unreadable)  archive_reason_str="$T_CLEAN_ARCHIVE_REASON_UNREADABLE" ;;
+        non-numeric) archive_reason_str="$T_CLEAN_ARCHIVE_REASON_NONNUMERIC" ;;
+        future)      archive_reason_str="$T_CLEAN_ARCHIVE_REASON_FUTURE" ;;
+        *)           archive_reason_str="$T_CLEAN_ARCHIVE_REASON_MISSING" ;;
+      esac
+      # shellcheck disable=SC2059
+      _clean_prose "$__C_DIM" "$(printf "$T_CLEAN_ARCHIVE_ABSENT" "$archive_reason_str")"
+      echo
+    fi
+  fi
 
   if [ "${#ord[@]}" -eq 0 ]; then
     if [ -n "$min_size_mb" ] && [ "$apply_age" -eq 0 ]; then
