@@ -262,10 +262,10 @@ _HOME_RESUME_ELSEWHERE=0
 _HOME_BURN_TOTAL=0
 
 # _home_items_load -> sets the caller's $items from _home_items, and
-# $_HOME_RESUME_TRUNC from the truncation row in it (0 when there is none). The
-# row is removed from $items: the pickers index rows by line
-# (_home_row_kind_at), so a row nobody can select must not occupy a line.
-# Anchored to a line START — a tank or a title containing the kind's text
+# $_HOME_RESUME_TRUNC / $_HOME_RESUME_ELSEWHERE from the signal rows in it (0
+# each when there is none). The rows are removed from $items: the pickers index
+# rows by line (_home_row_kind_at), so a row nobody can select must not occupy
+# a line. Anchored to a line START — a tank or a title containing a kind's text
 # mid-row must never be read as the signal.
 #
 # _home_items_lift <kind> <outvar> — pulls ONE such signal row out of the
