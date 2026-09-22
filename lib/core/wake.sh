@@ -410,7 +410,7 @@ wake_sit() {
     now="$(date +%s)"
     if [ "$now" -lt "$target" ]; then
       left=$(( target - now ))
-      printf '\r\033[K⏳ %s — resuming in %s (sends: %s)' \
+      printf '\r\033[Kwaiting: %s — resuming in %s (sends: %s)' \
         "$session" "$(wake_human_left "$left")" "$WAKE_NUDGE"
       # Also put it in the window NAME, so the status bar carries the countdown
       # without anyone switching to this window. An automatic action nobody can
