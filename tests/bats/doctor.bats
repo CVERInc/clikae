@@ -570,3 +570,80 @@ $output"
   PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
   [ "$status" -ne 0 ] || { echo "Darwin branch: status=$status output='$output'"; false; }
 }
+
+# ── fleet config: hooks + MCP servers a non-solo tank is missing (#141) ──────
+# 🔴 The point of this section is that it SPEAKS. Both halves fail silently on
+# a real machine — a recreated tank simply has no Stop hook, and nothing looks
+# wrong — so the case that must hold is "doctor names the gap", and the case
+# right after it is "doctor stays quiet when there is none", because a check
+# that reports drift unconditionally is the same non-signal as one that never
+# reports it.
+
+_fleet_jq_only() { command -v jq >/dev/null 2>&1 || skip "the fleet config check needs jq"; }
+
+@test "doctor names a non-solo tank that does not run a shared hook" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  # The #141 shape: the tank stops running it (recreated, hand-edited, restored
+  # from a backup — doctor cannot tell, and does not need to).
+  local t="$CLIKAE_HOME/profiles/claude/a/settings.json"
+  jq 'del(.hooks)' "$t" > "$t.x" && mv "$t.x" "$t"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/a does not run the shared Stop hook"* ]] || false
+  [[ "$output" == *"/bin/echo snapshot"* ]] || false
+}
+
+@test "doctor says NOTHING about fleet config when every tank has everything" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"fleet config"* ]] || false
+}
+
+@test "doctor never reports a SOLO tank as missing fleet config" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae init claude b
+  clikae solo claude b
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"claude/b does not run"* ]] || false
+}
+
+@test "doctor names a non-solo tank that is missing a shared MCP server" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae init claude b
+  printf '{"oauthAccount":{"emailAddress":"a@example.com"},"mcpServers":{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
+  printf '{"oauthAccount":{"emailAddress":"b@example.com"},"mcpServers":{}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
+  clikae mcp share stripe claude a
+  # b picked it up in the backfill; take it away again, as a recreated tank would.
+  printf '{"oauthAccount":{"emailAddress":"b@example.com"},"mcpServers":{}}\n' \
+    > "$CLIKAE_HOME/profiles/claude/b/.claude.json"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude/b does not have the shared MCP server: stripe"* ]] || false
+}
+
+@test "doctor stays read-only while checking fleet config" {
+  _fleet_jq_only
+  clikae init claude a
+  clikae hooks share Stop "/bin/echo snapshot" claude
+  local t="$CLIKAE_HOME/profiles/claude/a/settings.json"
+  jq 'del(.hooks)' "$t" > "$t.x" && mv "$t.x" "$t"
+  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  [ "$before" = "$after" ]
+  # …and it did not "helpfully" repair the tank it just reported on.
+  run jq -r '.hooks // "none"' "$t"
+  [ "$output" = "none" ]
+}
