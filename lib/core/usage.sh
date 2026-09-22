@@ -51,7 +51,7 @@ _USAGE_AUTH_FAIL_TTL_SEC=60
 # usage --wake`) refreshes the access token. A `…v` setter so the board's
 # redraw pays no subshell for it.
 usage_expired_hintv() {
-  _UEH="⏳ token expired — run a session or 'clikae usage --wake $1'"
+  _UEH="token expired — run a session or 'clikae usage --wake $1'"
 }
 # usage_expired_board_notev <tank> -> $_UEH, the same remedy cut to fit the
 # board's right gutter. A tank row spends 47 columns before its note (lead,
@@ -60,7 +60,7 @@ usage_expired_hintv() {
 # rendered board). Every existing note ("window 44% · weekly 20% · 3h ago")
 # fits that gutter; this one does for any tank name of up to 8 characters.
 usage_expired_board_notev() {
-  _UEH="⏳ expired · usage --wake $1"
+  _UEH="expired · usage --wake $1"
 }
 # usage_unknown [reason] [retry_after]
 # $2 is honoured for `rate-limited` only, and only as an integer in 1..86400

@@ -1330,6 +1330,61 @@ _seed_burn_flood_agy() {
   [[ "$output" == *"window 40%"* ]] || false
 }
 
+@test "_home_fuel_dot: window and weekly are judged on SEPARATE thresholds, not peak = max(window,weekly) (2026-09-22 decision)" {
+  # A full 5h window costs "wait up to two hours"; a full week costs days —
+  # so they no longer share one peak number. window's yellow line (90) sits
+  # above weekly's (85, one step before the fleet's own "stop burning a
+  # shared tank at 90%" rule); both axes go red at 100 (fully spent).
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local now
+  now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  _fdot_seed() {
+    printf '{"window_pct":%s,"weekly_pct":%s,"window_resets_at":"2099-01-01T00:00:00.000000+00:00","weekly_resets_at":"2099-01-07T00:00:00.000000+00:00","source":"vendor","cached_at":%d,"scanned_at":%d}' \
+      "$1" "$2" "$((now - 30))" "$((now - 30))" > "$CLIKAE_HOME/state/usage/claude/$3.json"
+  }
+
+  # window nearly spent (95), weekly barely touched (10) -> yellow on window alone.
+  _fdot_seed 95 10 windowhot
+  run _home_fuel_dot "" claude windowhot
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" != *"○"* ]] || false
+
+  # weekly nearly spent (95), window barely touched (10) -> yellow on weekly alone.
+  _fdot_seed 10 95 weeklyhot
+  run _home_fuel_dot "" claude weeklyhot
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" != *"○"* ]] || false
+
+  # window fully spent -> red, regardless of weekly's low number.
+  _fdot_seed 100 5 windowdone
+  run _home_fuel_dot "" claude windowdone
+  [[ "$output" == *"○"* ]] || false
+
+  # weekly fully spent -> red, regardless of window's low number.
+  _fdot_seed 5 100 weeklydone
+  run _home_fuel_dot "" claude weeklydone
+  [[ "$output" == *"○"* ]] || false
+
+  # both under their own yellow line -> green.
+  _fdot_seed 89 84 bothok
+  run _home_fuel_dot "" claude bothok
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"window 89%"* ]] || false
+  [[ "$output" == *"weekly 84%"* ]] || false
+
+  # the transcript-dry path (unrelated to the vendor-percentage thresholds
+  # above) is still red — unchanged by this split.
+  run _home_fuel_dot "$(printf 'claude\037transcriptdry\037Resets in 1h')" claude transcriptdry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 1h"* ]] || false
+}
+
 @test "limit_weekly_marker (BETA): captures the vendor weekly phrase, ignores noise" {
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   run limit_weekly_marker "You've used 85% of your weekly limit, resets Monday"

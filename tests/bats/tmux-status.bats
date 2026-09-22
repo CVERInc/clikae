@@ -284,23 +284,27 @@ _usage_expired_cache() {
   # #107 in one line: an idle tank at 99% weekly read exactly like a tank with
   # no login at all. The cache knows which of the two this is, and the remedy
   # (run a session, or `clikae usage --wake <tank>`) is something a person can
-  # act on — so the row says so with the board's own mark for it.
+  # act on — so the row says so with the word. No emoji on this delivery
+  # surface (2026-09-22 correction — the mark used to be `⏳`, U+23F3, which
+  # breached the standing no-emoji rule; scripts/signet-lint.sh's scan was too
+  # narrow to catch it).
   _src
   _usage_expired_cache claude wrasse
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"⏳"* ]] || { echo "$output"; false; }
-  [[ "$output" != *"·"* ]] || { echo "no-reading dot alongside the hourglass: $output"; false; }
+  [[ "$output" == *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"⏳"* ]] || { echo "the old glyph is back: $output"; false; }
+  [[ "$output" != *"·"* ]] || { echo "no-reading dot alongside the word: $output"; false; }
   [[ "$output" != *"%"* ]] || { echo "$output"; false; }
 }
 
-@test "fuel: no cache is still the dot — the hourglass is not the new default" {
-  # The control for the test above. Without it, a row that drew ⏳ whenever it
-  # had no percentages would pass, and the two states would be collapsed again
-  # in the other direction.
+@test "fuel: no cache is still the dot — the word is not the new default" {
+  # The control for the test above. Without it, a row that drew "expired"
+  # whenever it had no percentages would pass, and the two states would be
+  # collapsed again in the other direction.
   _src
   run tmux_status_render codex goby '' '' 120
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
-  [[ "$output" != *"⏳"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
 }
 
 @test "fuel: an expired reading older than 24h ages out like any other" {
@@ -309,21 +313,37 @@ _usage_expired_cache() {
   _src
   _usage_expired_cache claude wrasse 90000
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" != *"⏳"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
 }
 
-@test "fuel: the hourglass is counted as the TWO cells tmux lays it out in" {
-  # Measured, not looked up (tmux 3.7b, throwaway socket, the glyph sent into a
-  # pane and `#{cursor_x}` read back): `·` 1, `○` 1, `⏳` 2. The four glyphs the
-  # row already carried are East Asian AMBIGUOUS and lay out at 1; U+23F3 is
-  # WIDE. Counting it as one would hand the ladder a column the row does not
-  # have, on the rung where the alert count and the clock are untouchable.
+@test "fuel: the expired word is measured like any ASCII fuel string, no special case" {
+  # 2026-09-22 correction: the old `⏳` glyph needed a 2-cell special case
+  # (`${s//⏳/xx}`) because it is East Asian WIDE, unlike the row's other
+  # glyphs. The word "expired" that replaced it is plain ASCII — 7 columns,
+  # counted the same way `AB` always was, no substitution required.
   _src
-  _tmux_status_colsv "⏳"
-  [ "$_TSTAT_COLS" = "2" ] || { echo "⏳ counted as $_TSTAT_COLS cell(s)"; false; }
+  _tmux_status_colsv "expired"
+  [ "$_TSTAT_COLS" = "7" ] || { echo "expired counted as $_TSTAT_COLS cell(s)"; false; }
   _tmux_status_colsv "·"
   [ "$_TSTAT_COLS" = "1" ] || { echo "· counted as $_TSTAT_COLS cell(s)"; false; }
+}
+
+@test "width ladder: the expired word is dropped whole, the way the fuel segment always is, before the alert count or clock" {
+  # tmux_status_rowv treats whatever is IN the fuel slot as one segment (rung
+  # 5, the floor guard) — a 7-column word costs the ladder nothing new. At a
+  # width too narrow for it, it is dropped whole, exactly like a percentage
+  # reading would be, and the alert count and clock survive untouched.
+  _src
+  tmux_status_rowv 30 '' antigravity "$(_tank 42)" '' 'expired' '' 10
+  [ "$_TSTAT_ROW" = "clikae ttttt…tttt${_SEP}#[fg=red]!10#[default] " ] \
+    || { echo "$_TSTAT_ROW"; false; }
+  [[ "$_TSTAT_ROW" != *"expired"* ]] || { echo "expired survived rung 5: $_TSTAT_ROW"; false; }
+
+  # Wide enough, it is shown plainly alongside the rest of the row.
+  tmux_status_rowv 120 '' claude "$(_tank 8)" '' 'expired' '' 10
+  [[ "$_TSTAT_ROW" == *"clikae claude $(_tank 8)${_SEP}expired${_SEP}"* ]] \
+    || { echo "$_TSTAT_ROW"; false; }
 }
 
 # ── the alert segment ───────────────────────────────────────────────────────

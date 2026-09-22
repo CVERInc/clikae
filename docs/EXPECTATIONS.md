@@ -39,7 +39,7 @@ shows). clikae shows the vendor's words *verbatim* (it never computes a time), s
 `· seen HH:MM` tag states *when we observed it* — read it as a snapshot, not a live
 countdown. claude is exempt (its dry is re-read live and already absolute + timezoned).
 
-**An idle Claude tank reads `⏳ expired`, not a percentage — and it does not
+**An idle Claude tank reads `expired`, not a percentage — and it does not
 need a new login.** Claude's access token lasts a few hours and only a running
 session refreshes it, so a tank nobody has used since yesterday answers the usage
 endpoint with a 401 even though its login is fine and its quota is whatever it was.

@@ -8,6 +8,7 @@
 # leaves nothing behind.
 #
 # Usage:  scripts/signet-lint.sh [--offline <path-to-lint.sh>]
+#         scripts/signet-lint.sh --self-test
 #
 # THE REF IS PINNED. Fetching a neighbour's HEAD would let their commit turn this
 # repo's CI red — a gate whose colour somebody else sets. Bumping SIGNET_REF is
@@ -17,6 +18,26 @@ set -uo pipefail
 
 SIGNET_REF="${SIGNET_REF:-18d380bfcb6d3e5bc89e302f7f9ecf7adffc8c7a}"
 LINT=""
+
+# --self-test proves the LOCAL clock-glyph scan below still fires — no
+# network, no upstream linter, nothing else this script does. See that
+# scan's own header for why it exists at all (2026-09-22: `⏳` breached the
+# standing no-emoji rule and neither this wrapper's own ranges nor the
+# fetched linter's ever covered the block it lives in).
+if [ "${1:-}" = --self-test ]; then
+  probe="$(mktemp "${TMPDIR:-/tmp}/signet-lint-selftest.XXXXXX")"
+  trap 'rm -f "$probe"' EXIT
+  printf '#!/usr/bin/env bash\n# ⏳ token expired\n' > "$probe"
+  # -0777 slurps the whole file as one string before matching — this probe is
+  # two lines and the bare glyph is on line 2, so a per-line -ne would exit
+  # on line 1's non-match before ever reaching it.
+  if perl -CSD -0777 -ne 'exit(/[\x{231A}-\x{231B}\x{23E9}-\x{23FA}]/ ? 0 : 1)' "$probe"; then
+    echo "signet-lint --self-test: a file containing ⏳ is caught (clock-glyph scan)"
+    exit 0
+  fi
+  echo "signet-lint --self-test: ⏳ slipped past the clock-glyph scan — not trusting this ruler" >&2
+  exit 1
+fi
 
 case "${1:-}" in
   --offline) LINT="${2:-}" ;;
@@ -43,6 +64,32 @@ files=(bin/clikae)
 while IFS= read -r f; do files+=("$f"); done < <(find lib -name '*.sh' | sort)
 
 raw="$(bash "$LINT" "${files[@]}" 2>&1)"
+
+# ---- the gap the fetched linter's own ranges leave (2026-09-22) -------------
+#
+# `⏳` (U+23F3) reached the tmux status row and stayed there — the standing
+# no-emoji rule breached, silently, because the ranges signet's own scan (and
+# this wrapper's cursor-exception check just below) cover — U+2600–27BF,
+# U+1F300–1FAFF, U+2B00–2BFF, U+FE0F — never touched Miscellaneous Technical
+# (U+2300–23FF) at all. That block also holds `⌘` (U+2318) and `⌥` (U+2325),
+# which ARE legitimate key names clikae prints on purpose, so the fix is not
+# "ban the block" — it is naming the SUBSET that is actually
+# emoji-presentation: U+231A–231B (⌚⌛) and U+23E9–23FA (⏩⏪⏫⏬⏭⏮⏯⏰⏱⏲⏳⏴⏵⏶⏷⏸⏹⏺),
+# which excludes both key names by a wide margin. This is scanned locally,
+# over the same file list, rather than widening $SIGNET_REF: the fetched
+# linter is a neighbour's ref, pinned on purpose (see this file's own header),
+# and clikae cannot silently widen what someone else's commit scans for.
+clockraw=""
+for f in "${files[@]}"; do
+  [ -f "$f" ] || continue
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    clockraw="${clockraw}${hit}
+"
+  done < <(perl -CSD -ne 'print "$ARGV:$.: [emoji-clock] $_" if /[\x{231A}-\x{231B}\x{23E9}-\x{23FA}]/' "$f" 2>/dev/null)
+done
+raw="${raw}
+${clockraw}"
 
 # ---- the one accepted exception, named rather than hidden -------------------
 #

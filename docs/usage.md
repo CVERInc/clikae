@@ -81,7 +81,7 @@ readings — closing the session ends it. What you see when there is no number:
 | `· 3h ago` | the reading is over an hour old — the row says so rather than presenting it as now |
 | `·` | no reading (this tank has never been read, or the last one is over 24h old) |
 | `○` | this tank is out of fuel right now |
-| `⏳` | the access token expired — start a session on that tank, or run `clikae usage --wake <tank>` |
+| `expired` | the access token expired — start a session on that tank, or run `clikae usage --wake <tank>` |
 
 Reading it costs nothing: the row never calls a vendor, it only draws what is
 already on disk. `clikae usage <engine> <tank>` fills the same reading by hand.
@@ -609,7 +609,7 @@ things (#136):
 | --- | --- |
 | a reading | back to the base interval |
 | `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
-| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `⏳ expired · usage --wake <tank>` the moment it lands. |
+| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired · usage --wake <tank>` the moment it lands. |
 | anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
 
 ## Ambient: turn GitHub replies into wake events (`watch github`)
