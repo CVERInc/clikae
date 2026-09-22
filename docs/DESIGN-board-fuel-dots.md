@@ -482,9 +482,19 @@ verbatim reset string included, before the vendor cache is even consulted
 (round-3 review, P2-1: the reverse ordering let any <24h cached reading
 paper over a dry tank). The vendor reading only colours a tank that has
 already cleared both checks: for a current (<24h) reading on such a tank,
-the higher used percentage determines the dot — 90% or more red, 60% or
-more yellow, otherwise green — and the note shows both window and weekly
-percentages. Missing readings, and readings 24h or older, are treated as
+window and weekly are judged **separately** (2026-09-22 decision), not by
+`peak = max(window_pct, weekly_pct)` — they cost differently: a full 5h
+window means "wait up to two hours", a full week means the tank is gone for
+days.
+
+| dot | condition |
+|---|---|
+| 🔴 red `○` | transcript-dry (unchanged, above), OR window ≥ 100, OR weekly ≥ 100 |
+| 🟡 yellow `◐` | weekly ≥ 85 (dispatch should already be moving to another tank — one step before the fleet's own "stop burning a shared tank at 90%" rule), OR window ≥ 90 (a burn dispatched now will probably die mid-run) |
+| 🟢 green `●` | otherwise |
+
+The note keeps carrying both percentages verbatim, unchanged ("window N% ·
+weekly N%"). Missing readings, and readings 24h or older, are treated as
 unknown and fall through to the existing weekly-caution / codex-status /
 ready chain below.
 

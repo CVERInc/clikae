@@ -1263,6 +1263,18 @@ _home_is_dry() {
 # (which still drives the launch target — the on-row `← here` text label it used
 # to also drive was dropped 2026-06-30, commit 9d55047: noise with many shells open).
 
+# The two windows are judged SEPARATELY, not by a single peak = max(window,weekly)
+# (2026-09-22 decision) — they cost differently. A full 5h window means "wait up
+# to two hours"; a full week means the tank is gone for days. Collapsing them into
+# one number let a nearly-spent window hide behind a fine weekly number and vice
+# versa.
+_FUEL_RED_WINDOW_PCT=100   # the 5h window is fully spent — cannot burn at all
+_FUEL_RED_WEEKLY_PCT=100   # the week is fully spent — cannot burn at all
+_FUEL_YELLOW_WEEKLY_PCT=85 # one step before the fleet's own "stop burning a
+                            # shared tank at 90%" rule — dispatch should already
+                            # be moving to another tank by here
+_FUEL_YELLOW_WINDOW_PCT=90 # a burn dispatched now will probably die mid-run
+
 # _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
 # usage phrase, cached (first line) by watch/auto when it streams past. Read-only
 # here; we never compute a %. Absent/empty cache = no yellow reading.
@@ -1448,9 +1460,12 @@ _home_fuel_dotv_compute() {
   if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
-  local usage_fields up uw peak cached_at age ttl
+  local usage_fields up uw cached_at age ttl
   if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
-    IFS=$'\t' read -r up uw peak cached_at <<< "$usage_fields"
+    # 4th field (peak = max(window,weekly)) is the OLD single-axis reading;
+    # the dot no longer uses it — window and weekly are judged separately
+    # below — so it is read and discarded, not carried into an unused local.
+    IFS=$'\t' read -r up uw _ cached_at <<< "$usage_fields"
     # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
     # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
     # (lib/core/usage.sh) now shares — it used to REJECT that same reading
@@ -1473,10 +1488,18 @@ _home_fuel_dotv_compute() {
       # as the other two call sites; errexit exempts every command in an
       # `&&` list but the last, so a missing function is a no-op, not a death.
       declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
-      peak="${peak%%.*}"
-      if [ "$peak" -ge 90 ]; then _FDOT="${__C_RED}○$__C_RESET"
-      elif [ "$peak" -ge 60 ]; then _FDOT="${__C_YELLOW}◐$__C_RESET"
-      else _FDOT="${__C_GREEN}●$__C_RESET"; fi
+      # Judged separately, not by peak = max(window,weekly) — see the
+      # constants' own header just above _home_weekly_pathv. A full window
+      # costs a couple of hours; a full week costs days, so weekly's own
+      # yellow line sits below window's.
+      up="${up%%.*}"; uw="${uw%%.*}"
+      if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
+        _FDOT="${__C_RED}○$__C_RESET"
+      elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ]; then
+        _FDOT="${__C_YELLOW}◐$__C_RESET"
+      else
+        _FDOT="${__C_GREEN}●$__C_RESET"
+      fi
       return 0
     fi
     # 24h or older: too stale to trust — fall through as if unread, below.
