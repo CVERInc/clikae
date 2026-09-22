@@ -308,7 +308,24 @@ _agy_scope_rows() {
 $rows
 ROWS
   if [ "$kept" -gt 0 ]; then printf '%s' "$out"; return 0; fi
-  printf '%s\n' "$rows" | head -n "$n"
+  # 🔴 THE FALLBACK SAYS SO, IN THE ROW. Measured on a faithful reproduction of
+  # the maintainer's store (one claude session recorded in this directory, 15
+  # newer agy sessions recorded at $HOME): the board ranks one list by mtime
+  # across every engine, so fifteen fallback rows simply outranked the single
+  # row that genuinely belonged to the directory and pushed it off the board —
+  # the exact symptom the cwd scoping was meant to end, arriving through the
+  # fallback instead.
+  #
+  # A fallback row is a courtesy — "this tank cannot tell which directory its
+  # sessions belong to, here is what it has" — so it must never outrank a row
+  # that IS this directory's. The third field is that statement, and the
+  # board's ranking reads it (home.sh's _home_recent_rows). Every other
+  # adapter emits two fields and is therefore scoped by construction; a reader
+  # that ignores the field gets exactly the old behaviour.
+  printf '%s\n' "$rows" | head -n "$n" | while IFS=$'\037' read -r mt sid; do
+    [ -n "$sid" ] || continue
+    printf '%s\037%s\037fallback\n' "$mt" "$sid"
+  done
   return 0
 }
 adapter_recent_sids() {

@@ -142,6 +142,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bounded by `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per tank.
 - **The board's "N sessions total" footer counted no grok sessions.** Its
   glob list had the same hole `clikae resume`'s did.
+- **A Continue row that belongs to the directory you are in can no longer be
+  pushed off the board by agy's fallback rows.** The board ranks one list
+  across every engine on mtime, and agy's tank-wide fallback (the rows it
+  offers when nothing in the tank names this directory) competed on equal
+  terms: measured on a reproduction of a real store, fifteen newer agy rows
+  filled the board and the single claude session actually recorded in that
+  directory came 16th — invisible. A fallback row now says so in the row, and
+  ranks below every scoped row whatever its age. The courtesy rows are still
+  there; they just fill what is left.
+- **Claude Code's subagent transcripts are no longer offered as sessions.**
+  claude writes a subagent's log beside its parent session's as
+  `agent-<id>.jsonl` (every line `"isSidechain":true`). Nobody reopens one —
+  `claude --resume agent-<id>` answers "not a UUID and does not match any
+  session title" — and on a working store they outnumber real sessions, each
+  titled with whatever brief its parent dispatched ("Effort: high. Expected
+  ~60 tool steps…"). They filled the `clikae resume` picker, rode the board's
+  cold path, resolved as prefixes, and were counted in both "N sessions total"
+  and "N more in this store". Now the claude adapter states the rule once
+  (`adapter_transcript_is_resumable`, basename `agent-*`, the same rule the
+  board's snapshot has used since #62) and every list and count asks it.
+  Deliberately NOT narrowed: `clikae resume agent-<id>` still finds the tank
+  and cd's there, and `clikae clean` still sees every one of these files —
+  they are often the largest bytes on a store, and reclaiming bytes is that
+  command's whole job.
 
 - **`clikae wake` now actually types the nudge when a limit lifts, and leaves a
   record either way.** Measured over 21 days of one tank's transcripts: 24

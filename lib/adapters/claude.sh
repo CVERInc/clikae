@@ -548,11 +548,15 @@ adapter_list_sessions() {
   local dir="$1" limit="${2:-10}" proj f any=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 1
+  # Same question as the board's list — "which conversation do you want?" — so
+  # the same answer about subagent transcripts (adapter_transcript_is_resumable).
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     _claude_meta_for_file "$f" && any=1
   done <<EOF
-$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
+$(ls -t "$proj"/*.jsonl 2>/dev/null | while IFS= read -r _lsf; do
+    adapter_transcript_is_resumable "$_lsf" && printf '%s\n' "$_lsf"
+  done | head -n "$limit")
 EOF
   [ "$any" -eq 1 ] || return 1
 }
@@ -716,11 +720,17 @@ adapter_recent_sids() {
   # transcript by session id).
   # NB: plain `read -r mt f` (NOT `IFS= read`) so the "<mtime> <path>" line splits
   # into two fields; IFS= would shove the whole line into mt and leave f empty.
-  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt f; do
+  # Subagent transcripts are skipped BEFORE the cut, not after, or a directory
+  # whose newest N files are all `agent-*` hands the board an empty list while
+  # real sessions sit just below the cut. The board's warm path (board_recent,
+  # above) already excludes them — this is the cold path learning the same
+  # rule. See adapter_transcript_is_resumable for why it is the basename.
+  sessions_by_mtime "$proj"/*.jsonl | while read -r mt f; do
     [ -n "$f" ] || continue
+    adapter_transcript_is_resumable "$f" || continue
     f="${f##*/}"
     printf '%s\037%s\n' "$mt" "${f%.jsonl}"
-  done
+  done | head -n "$limit"
 }
 
 # --- resume a SPECIFIC past session by id (powers `clikae resume`) ----------
@@ -749,6 +759,34 @@ adapter_find_session() {
     [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
   done
   return 1
+}
+
+# Optional hook: is this transcript a conversation a PERSON can reopen?
+#
+# 🔴 claude writes a subagent's transcript beside its parent session's, in the
+# same project directory, as `agent-<id>.jsonl` (every line carries
+# `"isSidechain":true`). Those are not sessions anyone resumes — verified by
+# doing, not assumed: `claude --resume agent-<id>` answers "Provided value
+# 'agent-…' is not a UUID and does not match any session title". They also
+# outnumber real sessions badly on a working store, and their "title" is
+# whatever brief the parent dispatched with ("Effort: high. Expected ~60 tool
+# steps…"), so a list of them is noise that buries the one conversation you
+# were looking for.
+#
+# The rule is the BASENAME, not a content read: lib/core/board_state.sh has
+# skipped `agent-*` by basename since round 5 (its sid/scope resolution), so
+# the board's warm path already agrees with this — what this hook does is give
+# the COLD paths and the store-wide lists the same answer, from the adapter
+# that owns the layout fact rather than from four `case` statements.
+#
+# 🔴 WHAT THIS MUST NOT NARROW: finding a session BY ID. adapter_find_session
+# is deliberately not gated on this — paste a full `agent-<id>` and clikae
+# still locates the tank and cd's there. Only the LISTS and the COUNTS use it.
+# `clikae clean` does not use it either, on purpose: a subagent transcript is
+# pure disk, exactly what a disk tool should still be able to reclaim.
+adapter_transcript_is_resumable() {
+  case "${1##*/}" in agent-*) return 1 ;; esac
+  return 0
 }
 
 # Optional hook: EVERY transcript path under this profile dir — no cwd filter,

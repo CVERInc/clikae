@@ -191,6 +191,19 @@ your name on the board — and there is no way to show the machine title again.
 
 ## Engines on one board
 
+**claude's subagent transcripts are not listed anywhere as sessions.** A
+Claude Code subagent's log is written beside its parent session's, in the same
+project directory, as `agent-<id>.jsonl`. It is not a conversation you can
+reopen — claude itself refuses (`not a UUID and does not match any session
+title`) — and on a working store there are as many of them as there are real
+sessions, each "titled" with whatever brief its parent dispatched. So they are
+left out of the board's Continue list, the `clikae resume` picker, prefix
+resolution, and the "N sessions total" / "N more in this store" counts. Two
+deliberate exceptions: `clikae resume agent-<id>` with a **full** id still
+finds the tank and the directory (paste one and it works), and `clikae clean`
+still offers them, because they are disk like any other file and reclaiming
+disk is what that command is for.
+
 **codex and grok "Continue" rows show no recap (just an age), unlike claude.** claude
 writes AI-titles + recap lines into its transcript; codex writes neither, and grok
 writes a title but no recap — so those rows gracefully degrade to title + "N ago".
@@ -215,7 +228,14 @@ only the active one; the board's Resume rows have never been per-tank for any
 engine — newest first. The fallback is all-or-nothing on purpose: one agy
 session recorded in this directory means you get that one, not that one plus
 the whole tank, because a row meaning something different from the row above
-it is what made the list unreadable in the first place. The `$PWD` check is
+it is what made the list unreadable in the first place.
+
+Those fallback rows **always rank below every row that does belong to this
+directory**, however new they are. The board ranks one list across all
+engines, so without that rule a tank full of recent agy conversations simply
+filled the board and the one claude session recorded in the directory you are
+standing in fell off the bottom — the very thing the scoping is for, arriving
+through the fallback. A courtesy row never costs a real one its place. The `$PWD` check is
 bounded to the newest `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per
 tank, so a tank whose recent conversations all belong elsewhere costs a fixed
 number of reads and then takes the fallback. Either way the list is capped

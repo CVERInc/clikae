@@ -448,6 +448,30 @@ _board_transcript_paths() {
   _board_transcript_find "$1" "$2"
 }
 
+# _board_count_sessions <stat-row-file>... -> how many of those rows are
+# SESSIONS, i.e. every row except claude's `agent-*.jsonl` subagent
+# transcripts. The only reader of `count` is board_total, which is the board's
+# "N sessions total" footer and the Continue list's "N more in this store"
+# note — two sentences about conversations, so a subagent transcript in that
+# number is simply a wrong number (on a working store it is most of it).
+#
+# The rows themselves keep every file: the manifest, the staleness fingerprint
+# and the bounded reading scan all need `agent-*` (a rate limit lands in one
+# with no matching write to its parent — round-5 fix review P2-2). Only the
+# COUNT drops them. Same basename rule, and the same spelling, as this file's
+# sid/scope resolution already uses, and as lib/adapters/claude.sh's
+# adapter_transcript_is_resumable states for everyone else.
+#
+# A stat row ends in its path, so the anchor works on the whole line. `|| true`
+# because `grep -c` exits 1 when the answer is zero, which under this file's
+# `pipefail` would otherwise take the whole refresh down.
+_board_count_sessions() {
+  local n
+  n="$( { cat "$@" 2>/dev/null || true; } | { LC_ALL=C grep -acv '/agent-[^/]*\.jsonl$' || true; } )"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
 # _board_stat_rows <engine> <dir> -> sorted "<mtime_ns>\037<size>\037<path>"
 # lines for every transcript this tank has, right now — ONE `find … -exec
 # stat … {} +` (round-6 fix review P1-1/P2-1). `-exec … {} +` batches its own
@@ -1344,7 +1368,7 @@ board_state_refresh() (
     # through: depth 0, no `parent`.
     printf '0\n' > "$gen/depth"
     local cnt_l ss_f="$gen/.tmp/sidscope" rec_f="$gen/.tmp/reccand" pend_f="$gen/.tmp/pendcand"
-    cnt_l="$(wc -l < "$rows_f")"
+    cnt_l="$(_board_count_sessions "$rows_f")"
     count="${cnt_l//[^0-9]/}"
     [ -n "$count" ] || count=0
     printf '%s\n' "$count" > "$gen/count"
@@ -1521,8 +1545,8 @@ board_state_refresh() (
     ' "$manf" "$rows_f"
 
     count=0
-    [ -f "$unchanged_f" ] && count=$((count + $(wc -l < "$unchanged_f")))
-    [ -f "$changed_f" ] && count=$((count + $(wc -l < "$changed_f")))
+    [ -f "$unchanged_f" ] && count=$((count + $(_board_count_sessions "$unchanged_f")))
+    [ -f "$changed_f" ] && count=$((count + $(_board_count_sessions "$changed_f")))
     printf '%s\n' "$count" > "$gen/count"
 
     # Round-7 fix review P1-1/P2-1 — carry-forward is now a LINK IN A CHAIN,
