@@ -556,10 +556,11 @@ _doctor_fleet_config() {
     case " $engines " in *" $e "*) ;; *) engines="$engines $e" ;; esac
   done
   [ -n "$engines" ] || return 0
-  # One SUBSHELL per engine: load_adapter defines adapter_* functions and does
-  # not unset the previous engine's, so a second engine in this loop would
-  # inherit claude's adapter_hooks_config_file and be asked about a file it
-  # has never heard of.
+  # One SUBSHELL per engine. adapter_loader.sh's unset list is what actually
+  # stops adapter_hooks_config_file leaking from claude onto the next engine
+  # in this loop (it is in that list, and a test holds it there) — this keeps
+  # the loading itself out of doctor's own process, so the sections AFTER this
+  # one see the adapter state they saw before it ran.
   for e in $engines; do
     ( _doctor_fleet_config_engine "$e" ) || true
   done

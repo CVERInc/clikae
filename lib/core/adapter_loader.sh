@@ -202,7 +202,7 @@ load_adapter() {
            adapter_sid_from_args adapter_new_session_args \
            adapter_sid_canonical adapter_all_transcripts \
            adapter_cwd_from_args adapter_ephemeral_flags \
-           adapter_mcp_config_file adapter_tank_fingerprint \
+           adapter_mcp_config_file adapter_hooks_config_file adapter_tank_fingerprint \
            2>/dev/null || true
 
   # shellcheck source=/dev/null
