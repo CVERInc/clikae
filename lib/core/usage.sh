@@ -263,9 +263,15 @@ usage_read() (
 #     so it honours CLIKAE_USAGE_TTL like every other caller and keeps nothing
 #     a `clikae usage` run would not have written.
 #
+# (f) `clikae watch`'s usage-poll heartbeat (#133) walks every tank through
+#     this same function on its own schedule. (e) and (f) overlap on purpose:
+#     (f) needs a person running `clikae watch`, (e) needs nothing but a live
+#     session — and because both go through the TTL below, a tank both of them
+#     touch costs a cache hit, not a second vendor call.
+#
 # Nothing else writes or refreshes this cache. `usage_read` above is the
-# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b)/(e) above calling
-# it the same way); a cache file with no `clikae usage`/burn/live-session run
+# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b)/(e)/(f) above
+# calling it the same way); a cache file with no `clikae usage`/burn/live-session run
 # behind it simply does not exist yet, and one that stops being refreshed simply
 # ages in place — (c) is how the board says so instead of staying silent.
 #
