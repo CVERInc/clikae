@@ -47,6 +47,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property — `--model` is an argument to `burn`/`relay`, never a setting. So
   these numbers are reported, not acted on (#137).
 
+### Fixed
+
+- **`clikae doctor` verifies the tmux guard on macOS instead of answering
+  "unknown, could not verify" for a live session the same user owns.** On
+  current macOS, `ps eww` returns an empty environment even for a readable,
+  tty-attached process of the same user — measured on the shell's own pid —
+  so the pane-PATH probe never had anything to read. The probe now falls back
+  to the pane's spawn command as tmux recorded it (`#{pane_start_command}`,
+  the literal `env … PATH=… <cmd>` argv `tmux_spawn_session` execs) and says
+  which method verified the guard. The "permissions template missing" line
+  now names the exact expected path and what ships it, and
+  `install-layout.bats` fails on a tree installed without `templates/` — the
+  packaging gap that every Homebrew install of 0.30.0 had (#142).
+- **`scripts/test.sh` runs one shellcheck process per file.** The whole-tree
+  form reached 3.7 GB of resident memory on this tree and, with a second copy
+  running in another worktree, pushed a 16 GB machine into 4 GB of swap. The
+  findings are identical; the peak is now the largest single file (#142).
+
 ### Changed
 
 - **A 429 is no longer indistinguishable from a dead token.** `adapter_usage`
