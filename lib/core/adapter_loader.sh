@@ -201,6 +201,7 @@ load_adapter() {
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \
            adapter_sid_from_args adapter_new_session_args \
            adapter_sid_canonical adapter_all_transcripts \
+           adapter_transcript_is_resumable \
            adapter_cwd_from_args adapter_ephemeral_flags \
            adapter_mcp_config_file adapter_tank_fingerprint \
            2>/dev/null || true

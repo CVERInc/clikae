@@ -1550,6 +1550,11 @@ cmd_clean() {
   # precisely what remains after every transcript is gone, so the orphan sweep
   # below must still run over a transcript-less store.
   local files
+  # 🔴 No `--resumable` here, deliberately. That flag hides claude's
+  # `agent-*.jsonl` subagent transcripts from the LISTS of conversations (the
+  # picker, prefix resolution, the board) because nobody reopens one. They are
+  # still bytes on the disk — often the biggest bytes on a working store — and
+  # reclaiming bytes is this command's entire job, so clean sees everything.
   files="$(_resume_all_sessions)"
 
   local now; now="$(date +%s)"

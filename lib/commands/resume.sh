@@ -133,6 +133,20 @@ _resume_session_fields() {
 # in home.sh: a stray non-tank directory holding something transcript-shaped is
 # not a session store, and nothing else in clikae would call it a tank.
 _resume_all_sessions() {
+  # --resumable: keep only what a person could actually reopen, by asking the
+  # owning adapter (adapter_transcript_is_resumable). It is applied HERE, in
+  # the per-engine loop, because this is the one place each adapter is already
+  # loaded — a filter bolted onto the sorted output would have to re-load an
+  # adapter per row, and the rows interleave engines.
+  #
+  # 🔴 The DEFAULT is everything, and `clikae clean` keeps it that way. What
+  # the flag hides is claude's `agent-*.jsonl` subagent transcripts: noise in
+  # a list of conversations, but pure disk to a disk tool, and telling clean
+  # they do not exist would quietly make the largest files on a working store
+  # unreclaimable. Finding a session by id is not gated on it either (see
+  # _resume_locate).
+  local _ras_only_resumable=0
+  [ "${1:-}" = "--resumable" ] && _ras_only_resumable=1
   local name tank tdir f
   local -a _ras_files=()
   while IFS= read -r name; do
@@ -148,7 +162,12 @@ _resume_all_sessions() {
       [ -n "$tank" ] || continue
       tdir="$(profile_dir "$name" "$tank")"
       while IFS= read -r f; do
-        [ -n "$f" ] && _ras_files+=("$f")
+        [ -n "$f" ] || continue
+        if [ "$_ras_only_resumable" -eq 1 ] \
+           && declare -F adapter_transcript_is_resumable >/dev/null 2>&1; then
+          adapter_transcript_is_resumable "$f" || continue
+        fi
+        _ras_files+=("$f")
       done <<FILES
 $(adapter_all_transcripts "${tdir%/}" 2>/dev/null || true)
 FILES
@@ -229,7 +248,7 @@ _resume_prefix_candidates() {
     seen="$seen|$_rs_sid|"
     printf '%s\t%s\t%s\n' "$_rs_sid" "$_rs_engine" "$_rs_tank"
   done <<EOF
-$(_resume_all_sessions)
+$(_resume_all_sessions --resumable)
 EOF
   return 0
 }
@@ -858,7 +877,7 @@ _resume_picker() {
     # 1. Scan + sort ALL tanks' sessions by recency in ~2 processes (sessions_by_mtime,
     #    the shared kernel; ~30ms for 500+ files). all-dirs scope = bare project globs.
     local files
-    files="$(_resume_all_sessions)"
+    files="$(_resume_all_sessions --resumable)"
 
     if [ -z "$files" ]; then
       # Having no sessions yet is a STATE, not a failure — it is where every new
