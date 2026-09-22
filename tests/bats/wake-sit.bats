@@ -18,6 +18,8 @@ _src_wake() {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
@@ -92,18 +94,174 @@ teardown() {
   [ "$(cat "$out")" = "go" ]   # the nudge reached the engine's read, not the wake pane
 }
 
-@test "sit: a busy pane is retried and then given up on, without typing" {
+@test "sit: a pane that never stops painting is nudged anyway while the tank is dry" {
+  # THIS TEST USED TO ASSERT THE OPPOSITE, and the old rule is why the feature
+  # fired once in 24 real limits.
+  #
+  # "The screen is still moving" used to veto the nudge, on the reasoning that
+  # movement could be a tool call in flight. It cannot be, here: the waiter only
+  # types after the reset instant AND only while the tank still reads dry, and a
+  # dry tank has no turn running — the API is refusing them. What a limited
+  # engine actually leaves on screen is a banner with a live countdown in it,
+  # and a countdown re-renders every second, forever. Measured against the
+  # mechanism rather than assumed: a pane whose only change is one ticking line
+  # fails wake_pane_idle on every capture pair (that is still pinned by
+  # wake.bats' "a session still painting the screen is NOT idle"), while the
+  # same banner text held still passes it. So the waiter spent its three
+  # attempts and gave up inside five minutes of every reset.
+  #
+  # The gate that remains is wake_pane_live — a session, and a pane that is not
+  # a corpse. Idle is a settle delay and a note in the trace now, not a veto.
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
-  # A pane that never stops painting is never idle. It also consumes stdin, so
-  # if the waiter typed anyway there would be no trace — hence the assertion is
-  # on the waiter's own verdict, and on it terminating rather than looping.
-  tmux new-session -d -s "$(_sess)" 'while :; do date +%s.%N; sleep 0.1; done'
+  local out="$BATS_TEST_TMPDIR/typed"
+  # Still dry at the moment of typing: no recovery evidence anywhere.
+  wake_tank_recovered() { return 1; }
+  # A pane that paints forever AND can still receive the nudge — the old version
+  # of this test used a painter that ate stdin, which made "did it type?"
+  # unanswerable and left the verdict as the only thing to assert.
+  tmux new-session -d -s "$(_sess)" \
+    "while :; do date +%s.%N; sleep 0.1; done & read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
-  run wake_sit "$(_sess)" "$(date +%s)"
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$(_tankname)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"sent \"go\""* ]] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "sit: a dead pane is still given up on — the existence gate was not waived with the idle one" {
+  # The control for the test above. Splitting wake_pane_idle into "is there a
+  # target" and "has it stopped moving" is only safe if the first half still
+  # refuses: a nudge into a corpse goes nowhere and reports success.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  tmux new-session -d -s "$(_sess)" 'sleep 60'
+  tmux set-option -w -t "$(_sess)" remain-on-exit on
+  tmux respawn-pane -k -t "$(_sess)" 'true'
+  sleep 1
+  [ "$(tmux display-message -p -t "$(_sess)" '#{pane_dead}')" = "1" ]
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$(_tankname)"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"gave up"* ]] || false
+  [[ "$output" == *"gave up"* ]] || { echo "$output"; false; }
   [[ "$output" == *"Nothing was sent"* ]] || false
+}
+
+@test "sit: a tank the vendor already continued is SKIPPED, not nudged a second time" {
+  # The one way this feature can do harm. Claude Code writes its own
+  # "usage limit has reset, continue" line within a minute of some resets and
+  # then carries on; typing "go" on top of that is a second instruction landing
+  # in a conversation that is already working. Real transcript shape, and read
+  # through the real limit scanner rather than a stub — the skip is only worth
+  # anything if the thing it reads is the thing production reads.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  local proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  mkdir -p "$proj"
+  {
+    printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}'
+    printf '%s\n' '{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
+  } > "$proj/s.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
+  sleep 1
+  [ ! -f "$out" ] || { echo "a second nudge was typed: $(cat "$out")"; false; }
+  grep -q "skipped" "$CLIKAE_HOME/state/wake/claude-$tank.log"
+}
+
+@test "sit: a tank with a limit and NO recovery evidence is still nudged (the skip's control)" {
+  # Without this, a waiter that skipped unconditionally would pass the test
+  # above — and never type again.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)b"
+  local proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  mkdir -p "$proj"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}' > "$proj/s.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "trace: every outcome outlives the window it was printed in, and clikae wake reads the last one" {
+  # The window text was the ONLY account this feature ever gave of itself, and
+  # it dies with the session. 24 limit events, one observed nudge, and nobody
+  # could name the other 23 outcomes.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  wake_tank_recovered() { return 1; }
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  wake_sit "$(_sess)" "$(date +%s)" claude "$tank" >/dev/null
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  [ -f "$log" ] || { echo "no trace at $log"; false; }
+  grep -q $'\tattached\t' "$log" || { cat "$log"; false; }
+  grep -q $'\ttyped\t' "$log" || { cat "$log"; false; }
+  # …and the thing a person actually runs surfaces it.
+  run "$CLIKAE_BIN" wake
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude-$tank"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"typed"* ]] || { echo "$output"; false; }
+}
+
+@test "trace: a waiter whose session is killed records WHY, where the window cannot" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  tmux new-session -d -s "$(_sess)" 'sleep 30'
+  wake_sit "$(_sess)" "$(( $(date +%s) + 3 ))" claude "$tank" >/dev/null &
+  local sitter=$!
+  sleep 1
+  tmux kill-session -t "$(_sess)"
+  wait "$sitter" || true                 # see the note below: never `run wait`
+  grep -q $'\tsession-gone\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log" 2>/dev/null; false; }
+}
+
+@test "trace: the log is capped rather than kept forever" {
+  _src_wake
+  # shellcheck disable=SC2034  # read by wake_trace, sourced above
+  WAKE_LOG_MAX=5
+  local i
+  for ((i = 0; i < 40; i++)); do
+    wake_trace claude capped "sess-$i" "attempt" "row $i"
+  done
+  local n; n="$(wc -l < "$CLIKAE_HOME/state/wake/claude-capped.log" | tr -d '[:space:]')"
+  [ "$n" -le 10 ] || { echo "grew to $n lines"; false; }
+  # Capped from the OLD end: the newest row must survive the rotation.
+  grep -q "row 39" "$CLIKAE_HOME/state/wake/claude-capped.log"
+}
+
+@test "ident: a waiter given only a session name still finds its tank" {
+  # wake_attach spells the tank out now, but a waiter left behind by an older
+  # binary passes only the session — and without an identity it would write its
+  # trace to a stray file and skip the no-double-nudge check entirely.
+  _src_wake
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  run wake_ident "${CLIKAE_SESS_PREFIX}claude-my-tank-12345"
+  [ "$output" = "$(printf 'claude\037my-tank')" ] || { echo "[$output]"; false; }
+  run wake_ident "${CLIKAE_SESS_PREFIX}codex-work"
+  [ "$output" = "$(printf 'codex\037work')" ] || { echo "[$output]"; false; }
+  # An explicit pair always wins over the parse.
+  run wake_ident "${CLIKAE_SESS_PREFIX}claude-x" agy other
+  [ "$output" = "$(printf 'agy\037other')" ] || { echo "[$output]"; false; }
+  # And a name that is not ours is answered with two EMPTY fields — the
+  # separator and nothing else — rather than a guess at somebody's tank.
+  run wake_ident "some-other-session"
+  [ "$output" = "$(printf '\037')" ] || { echo "[$(printf '%s' "$output" | od -c | head -1)]"; false; }
 }
 
 @test "sit: a session that disappears mid-wait ends the waiter, not the machine" {

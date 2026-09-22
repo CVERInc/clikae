@@ -347,6 +347,34 @@ _doctor_memory() {
   return 0
 }
 
+# _doctor_wake -> what the waiter did the last few times a tank ran dry.
+#
+# Silent when it has never run, like _doctor_memory above — but NOT silent when
+# it ran and worked, unlike it. A memory store that reads is a non-event; a
+# waiter is a thing that types into your session at 3am while you are asleep,
+# and the only place its account of itself used to live was a tmux window that
+# died with the session. "It sent go at 03:51" is exactly as worth reading here
+# as "it gave up", and this screen is where someone comes to ask.
+_doctor_wake() {
+  declare -F wake_trace_summary >/dev/null 2>&1 || return 0
+  local rows stamp label event detail printed=0
+  rows="$(wake_trace_summary 3)" || return 0
+  while IFS=$'\037' read -r stamp label event detail; do
+    [ -n "$label" ] || continue
+    if [ "$printed" -eq 0 ]; then
+      printf '  %-16s %s\n' "wake" "$label — $event  ($stamp)"
+      printed=1
+    else
+      printf '  %-16s %s\n' "" "$label — $event  ($stamp)"
+    fi
+    [ -n "$detail" ] && printf '  %-16s %s\n' "" "  $detail"
+  done <<EOF
+$rows
+EOF
+  [ "$printed" -eq 1 ] && printf '  %-16s %s\n' "" "full trace: $(wake_log_dir)"
+  return 0
+}
+
 # _doctor_stray_dirs [pairs] -> name directories sitting where a tank would be —
 # directly inside a recognised engine's profiles dir — that list_all_profiles
 # does NOT (and, on the fingerprint it can see right now, would not adopt
@@ -659,6 +687,7 @@ EOF
   _doctor_legacy_prefix
   _doctor_tmux_guard
   _doctor_memory
+  _doctor_wake
   _doctor_cockpit
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"

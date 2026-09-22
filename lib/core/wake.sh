@@ -40,6 +40,139 @@ WAKE_BUFFER_SECONDS=60
 WAKE_RETRY_MAX=3
 WAKE_RETRY_BACKOFF=120
 
+# --- the trace ----------------------------------------------------------------
+#
+# 🔴 WHY A FILE, IN A FEATURE WHOSE WHOLE DESIGN IS "NO STATE FILE". The waiter
+# lives in a tmux window and dies with the session, which is right — and it took
+# everything it ever said with it. Measured over 21 days of one tank's
+# transcripts: 24 limit events, and the nudge appeared once. Nobody could name a
+# single one of the other 23 outcomes, because the only record was text on a
+# screen in a window nobody had open at 3:50am.
+#
+# So this writes down what HAPPENED, never what is TRUE NOW. That distinction is
+# the whole reason the no-state-file rule exists: a record of who is dry would be
+# a model of someone's quota that goes stale and then lies. A line saying "at
+# 03:51 this waiter typed go" is an event; it cannot rot, and deleting the whole
+# directory costs nothing but the history.
+WAKE_LOG_MAX=200
+
+wake_log_dir() { printf '%s' "$CLIKAE_HOME/state/wake"; }
+
+# wake_stamp <epoch> -> that instant in UTC ISO-8601. BSD spells it `-r`, GNU
+# spells it `-d @…`, and neither accepts the other's flag; the bare epoch is the
+# honest answer on anything that accepts neither.
+wake_stamp() {
+  date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null ||
+    date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null ||
+    printf 'epoch %s' "$1"
+}
+
+# wake_log_file <engine> <tank> <session> -> the per-tank log path. One file per
+# TANK, not per session: a usage limit hits the account, so every session on that
+# tank has the same outage, and reading them interleaved in one place is what
+# makes "what happened at the last reset" a single question.
+wake_log_file() {
+  local engine="$1" tank="$2" session="$3" name
+  if [ -n "$engine" ] && [ -n "$tank" ]; then name="$engine-$tank"; else name="session-$session"; fi
+  printf '%s/%s.log' "$(wake_log_dir)" "${name//[^A-Za-z0-9._-]/_}"
+}
+
+# wake_trace <engine> <tank> <session> <event> [detail] -> append one line.
+#
+# Never fails the caller: a waiter that aborted because its log was unwritable
+# would have traded the outcome for the record of it. Tab-separated so the
+# summary below can read it back without a parser, and capped at 2×WAKE_LOG_MAX
+# lines so a tank that goes dry every day for a year still costs a few KB.
+wake_trace() {
+  local engine="$1" tank="$2" session="$3" event="$4" detail="${5:-}" f n
+  [ -n "${CLIKAE_HOME:-}" ] || return 0
+  f="$(wake_log_file "$engine" "$tank" "$session")"
+  mkdir -p "$(wake_log_dir)" 2>/dev/null || return 0
+  printf '%s\t%s\t%s\t%s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$session" "$event" "$detail" >> "$f" 2>/dev/null || return 0
+  n="$(wc -l < "$f" 2>/dev/null | tr -d '[:space:]')" || return 0
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$n" -gt $(( WAKE_LOG_MAX * 2 )) ]; then
+    tail -n "$WAKE_LOG_MAX" "$f" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null
+  fi
+  return 0
+}
+
+# wake_trace_summary [max] -> the LAST outcome of each tank's log, newest first,
+# as "<tank-label>\037<stamp>\037<event>\037<detail>". Returns 1 when there is
+# nothing recorded, so a caller can stay silent rather than print a header over
+# an empty list.
+wake_trace_summary() {
+  local max="${1:-5}" dir f label line stamp sess event detail rows=""
+  dir="$(wake_log_dir)"
+  [ -d "$dir" ] || return 1
+  for f in "$dir"/*.log; do
+    [ -f "$f" ] || continue
+    line="$(tail -n 1 "$f" 2>/dev/null)"
+    [ -n "$line" ] || continue
+    IFS=$'\t' read -r stamp sess event detail <<EOF
+$line
+EOF
+    : "$sess"
+    label="${f##*/}"; label="${label%.log}"
+    rows="$rows$stamp"$'\037'"$label"$'\037'"$event"$'\037'"$detail"$'\n'
+  done
+  [ -n "$rows" ] || return 1
+  # Sorted by the stamp that leads each row, not by file mtime: the stamp is what
+  # the reader is being shown, and a log touched by a rotation is not news.
+  printf '%s' "$rows" | sort -r | head -n "$max"
+}
+
+# wake_ident <session> [engine] [tank] -> "<engine>\037<tank>".
+#
+# The waiter is handed its tank explicitly by everything that starts it today.
+# The fallback reads the SESSION NAME, because that name is built from exactly
+# these two fields (`<prefix><engine>-<tank>` plus an optional all-digit argv
+# digest) — so a waiter left behind by an older binary, whose `--sit` call
+# carries only the session, still lands in the right log and still gets its
+# no-double-nudge check. Unknown is answered with two empty fields rather than a
+# guess; the caller degrades, it does not invent a tank.
+wake_ident() {
+  local session="$1" engine="${2:-}" tank="${3:-}" rest
+  if [ -n "$engine" ] && [ -n "$tank" ]; then
+    printf '%s\037%s' "$engine" "$tank"; return 0
+  fi
+  local prefix="${CLIKAE_SESS_PREFIX:-clikae-}"
+  case "$session" in
+    "$prefix"?*) rest="${session#"$prefix"}" ;;
+    *) printf '\037'; return 0 ;;
+  esac
+  # A trailing ALL-DIGIT field is the argv digest, not part of the tank name —
+  # the same rule, and the same residual ambiguity for a tank literally called
+  # `x-2`, that wake_sessions_for's `(-[0-9]+)?$` already lives with.
+  case "$rest" in
+    *-*) case "${rest##*-}" in ''|*[!0-9]*) : ;; *) rest="${rest%-*}" ;; esac ;;
+  esac
+  case "$rest" in
+    ?*-?*) printf '%s\037%s' "${rest%%-*}" "${rest#*-}" ;;
+    *) printf '\037' ;;
+  esac
+}
+
+# wake_tank_recovered <engine> <tank> -> 0 when the transcript carries POSITIVE
+# evidence that this account already came back: a successful turn, or the
+# vendor's own `auto-continuation` line, newer than the newest limit.
+#
+# 🔴 Only rc=2 counts. limit_profile_dry's rc=1 means "found nothing", which is
+# also what a tank whose transcripts fell out of the 5h window looks like — and
+# that is precisely the case the nudge exists for. Treating "no evidence" as
+# "recovered" would turn this guard into the silence it was added to remove.
+wake_tank_recovered() {
+  local engine="$1" tank="$2" dir rc=0
+  [ -n "$engine" ] && [ -n "$tank" ] || return 1
+  declare -F limit_profile_dry >/dev/null 2>&1 || return 1
+  declare -F profile_dir >/dev/null 2>&1 || return 1
+  dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 1
+  [ -n "$dir" ] && [ -d "$dir" ] || return 1
+  limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ]
+}
+
 # wake_pane_idle <session> [settle_seconds] -> 0 when it is safe to type into it.
 #
 # Typing blind is the failure this prevents. When a human does this at 3:50am
@@ -60,8 +193,21 @@ WAKE_RETRY_BACKOFF=120
 # (3) is the real content of "idle": an engine rendering output, a spinner, or a
 # streaming reply changes the pane between captures. A quiescent screen is not a
 # PROOF that the prompt is waiting — a genuinely hung process also sits still —
-# but it is the strongest claim available without guessing at anyone's UI, and it
-# is conservative in the right direction: when in doubt we do not type.
+# but it is the strongest claim available without guessing at anyone's UI.
+#
+# 🔴 AND (3) IS NO LONGER A VETO AFTER THE RESET INSTANT. It was, and the cost
+# was measured: over 21 days of one tank's transcripts, 24 limit events and ONE
+# nudge. "Conservative in the right direction" only holds while a moving screen
+# can mean a turn is running — and on a tank that is still dry, no turn can be
+# running, because the API is refusing them. What a limited engine actually puts
+# on screen is a banner with a live countdown in it, and a countdown re-renders
+# every second forever. Verified against the mechanism rather than assumed: a
+# pane whose ONLY change is one ticking line fails this check on every capture
+# pair, while the SAME banner text held still passes it — so the waiter spent
+# its three attempts, gave up inside five minutes of the reset, and said so into
+# a window that dies with the session. wake_sit keeps calling this, for the
+# settle delay and for the chance of a clean answer, but it acts on the tank's
+# dryness instead (see wake_sit).
 
 # 🔴 SESSION-OR-TARGET, RESOLVED ONCE. Both public functions below take either a
 # bare session (`ck-claude-x`) or one with a window (`ck-claude-x:2`, which is
@@ -78,15 +224,31 @@ _wake_targetsv() {
   esac
 }
 
-wake_pane_idle() {
-  local session="$1" settle="${2:-2}" a b dead
+
+# wake_pane_live <session-or-target> -> 0 when there is still something to type
+# INTO: the session exists and the pane is not a corpse. Questions (1) and (2)
+# above, split out from (3).
+#
+# 🔴 The split is the point, not tidiness. Those two are about the TARGET
+# EXISTING and can never be waived; (3) is about the target being BUSY, and
+# after a reset on a dry tank "busy" cannot mean what it means the rest of the
+# time (see wake_sit). Folded into one boolean they were waived or enforced
+# together, and the only way to stop vetoing on a moving screen was to stop
+# checking for a dead pane too.
+wake_pane_live() {
+  local session="$1" dead
   [ -n "$session" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
   local _WT_SESS _WT_PANE; _wake_targetsv "$session"
   tmux has-session -t "$_WT_SESS" 2>/dev/null || return 1
-
   dead="$(tmux display-message -p -t "$_WT_PANE" '#{pane_dead}' 2>/dev/null || printf '1')"
-  [ "$dead" = "0" ] || return 1
+  [ "$dead" = "0" ]
+}
+
+wake_pane_idle() {
+  local session="$1" settle="${2:-2}" a b
+  wake_pane_live "$session" || return 1
+  local _WT_SESS _WT_PANE; _wake_targetsv "$session"
 
   a="$(tmux capture-pane -p -t "$_WT_PANE" 2>/dev/null)" || return 1
   sleep "$settle"
@@ -193,25 +355,53 @@ wake_enabled() {
 
 # --- the waiter --------------------------------------------------------------
 
-# wake_sit <session> <reset_epoch> -> 0 if the nudge was delivered, 1 if it gave
-# up. This is the body that runs inside the tmux window; it blocks for hours.
+# wake_sit <session> <reset_epoch> [engine] [tank] -> 0 if the nudge was
+# delivered (or deliberately skipped), 1 if it gave up. This is the body that
+# runs inside the tmux window; it blocks for hours.
 #
 # It reads the real clock on purpose — it IS the sleeper. What makes it testable
 # anyway is that the instant it waits for is an argument: a test passes a target
 # two seconds out and watches the whole path run for real, rather than mocking
 # the one thing that could be wrong.
+#
+# 🔴 THE ORDER OF THE THREE QUESTIONS IT ASKS AT THE RESET, and why it is this
+# order:
+#
+#   1. Did the vendor already continue this conversation by itself?  -> skip.
+#      Claude Code now writes its own "usage limit has reset, continue" line
+#      within a minute of some resets. Typing into that is a second "go" landing
+#      in a conversation that is already working, which is the one way this
+#      feature can do harm. So it is asked FIRST, and asked again HERE rather
+#      than trusted from when the waiter was attached hours ago.
+#   2. Is there still something to type into?  (session, pane not dead) -> else
+#      retry, then give up.
+#   3. Has the screen stopped moving? -> a SETTLE, not a veto. On a tank that is
+#      still dry no turn can be running, so a moving screen is a countdown
+#      re-rendering, not work in flight. Vetoing on it is what made this feature
+#      fire once in 24 limits.
+#
+# Every one of those outcomes is written to the tank's trace (wake_trace), because
+# the previous version's whole account of itself was text in a window that dies
+# with the session.
 wake_sit() {
-  local session="$1" reset="$2"
+  local session="$1" reset="$2" engine="${3:-}" tank="${4:-}"
   [ -n "$session" ] && [ -n "$reset" ] || return 1
+  local _id; _id="$(wake_ident "$session" "$engine" "$tank")"
+  engine="${_id%%$'\037'*}"; tank="${_id#*$'\037'}"
   local target=$(( reset + WAKE_BUFFER_SECONDS ))
   local attempt=0 now left
+  wake_trace "$engine" "$tank" "$session" "attached" \
+    "reset $(wake_stamp "$reset") +${WAKE_BUFFER_SECONDS}s"
 
   while :; do
     # Two different endings, and they are not the same event.
     #
     # The session vanishing under us is abnormal — something killed it — and the
     # caller has always been told so with a non-zero exit. Keep that.
-    tmux has-session -t "=$session" 2>/dev/null || return 1
+    if ! tmux has-session -t "=$session" 2>/dev/null; then
+      wake_trace "$engine" "$tank" "$session" "session-gone" "nothing left to type into"
+      return 1
+    fi
     # Being the LAST window is normal: the engine finished. We are the reason the
     # session is still alive, so staying means counting down in front of someone
     # who cannot leave — the failure being fixed. Leave cleanly.
@@ -234,27 +424,57 @@ wake_sit() {
       continue
     fi
 
+    # (1) The vendor may have continued by itself while we counted down. Asked
+    # here, at the last possible moment, because the answer only becomes true in
+    # the minute we are about to act in.
+    if wake_tank_recovered "$engine" "$tank"; then
+      printf '\r\033[K'
+      wake_trace "$engine" "$tank" "$session" "skipped" "vendor auto-continued; nothing typed"
+      log_done "$(printf '%s — %s/%s resumed on its own; nothing sent.' "$session" "$engine" "$tank")"
+      return 0
+    fi
+
     # Target the ENGINE window, not whatever window is focused — the waiter's own
     # `wake` window may be the active one (the user was told to watch it here).
     local _etgt; _etgt="$(wake_engine_target "$session")"
-    if wake_pane_idle "$_etgt" 2; then
+    # (2) Something to type into. Not waivable, and the only thing the retries
+    # below are still for.
+    if wake_pane_live "$_etgt"; then
+      # (3) Settle — and only a settle. wake_pane_idle sleeps for the settle
+      # window either way; its VERDICT is now a note in the trace rather than a
+      # gate, because a dry tank cannot be mid-turn (see its header).
+      local _bypassed=0
+      wake_pane_idle "$_etgt" 2 || _bypassed=1
       if wake_send "$_etgt"; then
         # The countdown line is overwritten in place, so clear it first and then
         # let the badge speak: sending the nudge changed something, which is the
         # question `[ DONE ]` answers.
         printf '\r\033[K'
-        log_done "$(printf '%s — sent "%s" at %s' "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')")"
+        if [ "$_bypassed" = 1 ]; then
+          wake_trace "$engine" "$tank" "$session" "typed" \
+            "\"$WAKE_NUDGE\" — screen still moving, idle check bypassed (tank still dry)"
+          log_done "$(printf '%s — sent "%s" at %s' "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')")"
+          log_dim "  The screen was still moving (a limit banner counts down); the tank was still dry, so it was sent anyway."
+        else
+          wake_trace "$engine" "$tank" "$session" "typed" "\"$WAKE_NUDGE\" — pane idle"
+          log_done "$(printf '%s — sent "%s" at %s' "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')")"
+        fi
         return 0
       fi
     fi
 
     attempt=$(( attempt + 1 ))
+    wake_trace "$engine" "$tank" "$session" "attempt" \
+      "$attempt/$WAKE_RETRY_MAX — no live pane to type into"
     if [ "$attempt" -ge "$WAKE_RETRY_MAX" ]; then
       # Stop visibly. A waiter that quietly disappears leaves someone believing
-      # their work resumed; the window stays with the reason written in it.
+      # their work resumed; the window stays with the reason written in it — and
+      # now the trace keeps it after the window is gone.
       printf '\r\033[K'
+      wake_trace "$engine" "$tank" "$session" "gave-up" \
+        "no live pane after $attempt attempt(s); nothing sent"
       log_warn "$(printf '%s — gave up after %s attempt(s).' "$session" "$attempt")"
-      printf '   The pane was not ready to type into (busy, or the engine exited).\n'
+      printf '   The pane was not there to type into (the engine exited, or it died).\n'
       printf '   Nothing was sent. Attach and continue by hand.\n'
       return 1
     fi
@@ -279,7 +499,7 @@ wake_human_left() {
 # way to outlive the thing it is waiting for. Killing the session kills it, which
 # is the correct behaviour — if the session is gone there is nothing to resume.
 wake_attach() {
-  local session="$1" reset="$2" bin="${CLIKAE_BIN:-clikae}"
+  local session="$1" reset="$2" engine="${3:-}" tank="${4:-}" bin="${CLIKAE_BIN:-clikae}"
   [ -n "$session" ] && [ -n "$reset" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
   tmux has-session -t "=$session" 2>/dev/null || return 1
@@ -294,8 +514,12 @@ wake_attach() {
      | grep -qE '^wake( |$)'; then
     return 0
   fi
+  # The tank travels with the waiter so the trace lands in the right log and the
+  # no-double-nudge re-check has something to ask about. Both are optional in
+  # wake_sit (it falls back to reading the session name), so a waiter started by
+  # an older binary still works — it just spells its own identity out loud here.
   tmux new-window -d -t "=$session:" -n wake \
-    "'$bin' wake --sit '$session' '$reset'" 2>/dev/null || return 1
+    "'$bin' wake --sit '$session' '$reset' '$engine' '$tank'" 2>/dev/null || return 1
   return 0
 }
 
@@ -369,7 +593,7 @@ wake_offer() {
   local session attached=0
   while IFS= read -r session; do
     [ -n "$session" ] || continue
-    wake_attach "$session" "$epoch" && attached=$((attached + 1))
+    wake_attach "$session" "$epoch" "$cli" "$profile" && attached=$((attached + 1))
   done <<EOF
 $sessions
 EOF
@@ -463,7 +687,7 @@ wake_watch() {
           printf '\r\033[K'
           log_info "$engine/$tank — $reset"
           # Hand over in place. wake_sit renames this same window as it counts.
-          wake_sit "$session" "$epoch"
+          wake_sit "$session" "$epoch" "$engine" "$tank"
           return $?
         fi
         # A phrase with no time in it: say so once and keep watching, rather than

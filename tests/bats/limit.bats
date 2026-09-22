@@ -468,13 +468,14 @@ _AUTOCONT_LINE='{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role"
   _seed_claude_limit_then "$dir" "$_AUTOCONT_LINE"
   # "<newest limit>\037<newest success>\037<reset phrase>" — assert the SECOND
   # field, which is the only one this change can move.
-  local out; out="$(_limit_claude_readings "$dir/projects/p/s.jsonl")"
+  run _limit_claude_readings "$dir/projects/p/s.jsonl"
+  [ "$status" -eq 0 ]
   local maxL maxS
   IFS=$'\037' read -r maxL maxS _ <<EOF
-$out
+$output
 EOF
   [ "$maxL" = "2026-09-16T13:37:00.000Z" ]
-  [ "$maxS" = "2026-09-16T15:00:30.000Z" ] || { echo "maxS=[$maxS] out=[$out]"; false; }
+  [ "$maxS" = "2026-09-16T15:00:30.000Z" ] || { echo "maxS=[$maxS] reading=[$output]"; false; }
 }
 
 @test "claude limit: an auto-continuation after the limit reads RECOVERED (rc 2), not merely not-dry" {
