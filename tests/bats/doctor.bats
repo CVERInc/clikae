@@ -372,6 +372,14 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude: permissions template missing (installation incomplete)"* ]] || false
   [[ "$output" != *"invalid JSON"* ]] || false
+  # Actionable, not a dead end (P4, 2026-09-22): the exact expected path —
+  # this is a bin+lib-only prefix, the shape of the drifted Homebrew tap
+  # formula (CVERInc/homebrew-clikae, before it matched this repo's own
+  # homebrew/clikae.rb) — plus where the file ships and how to get it back,
+  # never "go edit a formula".
+  [[ "$output" == *"$prefix/templates/permissions/claude.json"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"release tarball"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"edit"*"formula"* ]] || { echo "$output"; false; }
 }
 
 # --- tmux guard shim reporting (CVERInc/clikae#97) -----------------------------
@@ -460,6 +468,99 @@ STUB
   PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999
   [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   [ "$output" = "/REAL/env:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+# --- macOS spawn-command fallback (P4, 2026-09-22) -----------------------------
+# Measured on Darwin 27 (macOS 26): `ps eww` can return NOTHING for a live,
+# same-uid, readable process — not just fail loud. Reproduced for a plain
+# `sleep` this same shell forked directly, and for a live tmux pane's own
+# bash; both owned by the user running doctor. Not the tty-attachment limit
+# lib/core/proc.sh documents. When that happens, `_doctor_pane_path` falls
+# back to the pane's own spawn command (see the function's own comment).
+
+@test "_doctor_pane_start_command_path extracts the FIRST PATH= token, not one from inside the wrapped command" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_start_command_path 'env -u _CLIKAE_TMUX_SHIM_HOPS PATH=/SHIM/dir:/usr/bin bash -c "echo PATH=/decoy"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "/SHIM/dir:/usr/bin" ] || { echo "got: $output"; false; }
+}
+
+@test "_doctor_pane_start_command_path returns empty for a plain command with no env PATH= wrapper" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  run _doctor_pane_start_command_path 'sleep 60'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "got: $output"; false; }
+}
+
+@test "_doctor_pane_path falls back to the pane's spawn command when ps returns nothing at all" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  chmod +x "$TEST_HOME/.osbin/uname"
+  # `ps` SUCCEEDS and prints nothing — the measured P4 shape, distinct from
+  # the "ps failing/locked-down host" case the existing tests already cover.
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/ps"
+  local start_command='env -u _CLIKAE_TMUX_SHIM_HOPS PATH=/SHIM/dir:/usr/bin sleep 60'
+  # Called DIRECTLY, stdout only redirected to a file — not through `run` or
+  # `$(...)`: both fork a subshell, and $__DOCTOR_PANE_PATH_METHOD set inside
+  # one would be lost the instant it exits (see the function's own comment).
+  PATH="$TEST_HOME/.osbin:$PATH" _doctor_pane_path 999999999 "$start_command" >"$TEST_HOME/pane-path.out"
+  local rc=$?
+  [ "$rc" -eq 0 ] || { echo "rc=$rc"; false; }
+  [ "$(cat "$TEST_HOME/pane-path.out")" = "/SHIM/dir:/usr/bin" ] || { echo "got: $(cat "$TEST_HOME/pane-path.out")"; false; }
+  [ "$__DOCTOR_PANE_PATH" = "/SHIM/dir:/usr/bin" ] || { echo "__DOCTOR_PANE_PATH=$__DOCTOR_PANE_PATH"; false; }
+  [ "$__DOCTOR_PANE_PATH_METHOD" = "spawn command" ] || { echo "__DOCTOR_PANE_PATH_METHOD=$__DOCTOR_PANE_PATH_METHOD"; false; }
+}
+
+@test "_doctor_pane_path still fails when BOTH ps and the spawn command have nothing to offer" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/doctor.sh"
+  mkdir -p "$TEST_HOME/.osbin"
+  printf '#!/bin/sh\necho Darwin\n' > "$TEST_HOME/.osbin/uname"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.osbin/ps"
+  chmod +x "$TEST_HOME/.osbin/uname" "$TEST_HOME/.osbin/ps"
+  # A plain command with no guard wrapper — the honest answer stays "could
+  # not verify", never a claim either way.
+  PATH="$TEST_HOME/.osbin:$PATH" run _doctor_pane_path 999999999 'sleep 60'
+  [ "$status" -ne 0 ] || { echo "status=$status output='$output'"; false; }
+}
+
+@test "doctor verifies a guarded session via the spawn-command fallback when ps can't read process env (the real macOS defect)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux_spawn_session --session "$sess" -- 'sleep 60'
+  mkdir -p "$TEST_HOME/.psbin"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.psbin/ps"
+  chmod +x "$TEST_HOME/.psbin/ps"
+  PATH="$TEST_HOME/.psbin:$PATH" run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"tmux guard"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor still says 'could not verify', not 'missing', for an unguarded session when ps can't read process env" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  # A bare tmux new-session — no env PATH= wrapper in its start command
+  # either — so the fallback has nothing to offer, same as ps: this must
+  # stay "unknown", not become a false "not first on PATH".
+  tmux new-session -d -s "$sess" 'sleep 60'
+  mkdir -p "$TEST_HOME/.psbin"
+  printf '#!/bin/sh\nexit 0\n' > "$TEST_HOME/.psbin/ps"
+  chmod +x "$TEST_HOME/.psbin/ps"
+  PATH="$TEST_HOME/.psbin:$PATH" run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could not verify:$sess"* || "$output" == *"could not verify: $sess"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"not first on PATH"* ]] || { echo "$output"; false; }
 }
 
 @test "doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)" {
