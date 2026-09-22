@@ -269,6 +269,63 @@ _dead_pid() { printf '2147483647'; }
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
 }
 
+# _usage_expired_cache <engine> <tank> [age_seconds] — what usage_read writes
+# when the vendor refused the token and the credentials can still renew it
+# (#107's `usage_unknown expired-token`, plus the cache stamps usage_read adds).
+_usage_expired_cache() {
+  local engine="$1" tank="$2" age="${3:-0}" now
+  now=$(( $(date +%s) - age ))
+  mkdir -p "$CLIKAE_HOME/state/usage/$engine"
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s}\n' \
+    "$now" "$now" > "$CLIKAE_HOME/state/usage/$engine/$tank.json"
+}
+
+@test "fuel: an expired token is its own state, not the no-reading dot" {
+  # #107 in one line: an idle tank at 99% weekly read exactly like a tank with
+  # no login at all. The cache knows which of the two this is, and the remedy
+  # (run a session, or `clikae usage --wake <tank>`) is something a person can
+  # act on — so the row says so with the board's own mark for it.
+  _src
+  _usage_expired_cache claude wrasse
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" == *"⏳"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"·"* ]] || { echo "no-reading dot alongside the hourglass: $output"; false; }
+  [[ "$output" != *"%"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: no cache is still the dot — the hourglass is not the new default" {
+  # The control for the test above. Without it, a row that drew ⏳ whenever it
+  # had no percentages would pass, and the two states would be collapsed again
+  # in the other direction.
+  _src
+  run tmux_status_render codex goby '' '' 120
+  [[ "$output" == *"·"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"⏳"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: an expired reading older than 24h ages out like any other" {
+  # The same ceiling a percentage gets. A remedy nobody has rechecked in nine
+  # days is not news about now; "no reading" is the honest answer by then.
+  _src
+  _usage_expired_cache claude wrasse 90000
+  run tmux_status_render claude wrasse '' '' 120
+  [[ "$output" != *"⏳"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"·"* ]] || { echo "$output"; false; }
+}
+
+@test "fuel: the hourglass is counted as the TWO cells tmux lays it out in" {
+  # Measured, not looked up (tmux 3.7b, throwaway socket, the glyph sent into a
+  # pane and `#{cursor_x}` read back): `·` 1, `○` 1, `⏳` 2. The four glyphs the
+  # row already carried are East Asian AMBIGUOUS and lay out at 1; U+23F3 is
+  # WIDE. Counting it as one would hand the ladder a column the row does not
+  # have, on the rung where the alert count and the clock are untouchable.
+  _src
+  _tmux_status_colsv "⏳"
+  [ "$_TSTAT_COLS" = "2" ] || { echo "⏳ counted as $_TSTAT_COLS cell(s)"; false; }
+  _tmux_status_colsv "·"
+  [ "$_TSTAT_COLS" = "1" ] || { echo "· counted as $_TSTAT_COLS cell(s)"; false; }
+}
+
 # ── the alert segment ───────────────────────────────────────────────────────
 
 @test "alerts: zero reds means the segment is not drawn at all" {
