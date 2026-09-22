@@ -103,9 +103,21 @@ _press() {
 }
 
 # _phase <row> <mode> <phase> [pane] — the helper, run the way if-shell runs it.
+#
+# 🔴 PATH is env's OWN argument, never a bash prefix assignment in front of
+# `command env`. Under bash 3.2 (Apple's /bin/bash, which `#!/usr/bin/env bash`
+# resolves to on a Mac with no Homebrew bash) with bats' `set -T` and DEBUG
+# trap active, `PATH=… command env …` silently drops the prefix: the helper
+# then finds the system tmux instead of $CK_SOCKDIR/bin/tmux, every
+# show-options answer is empty, `drag_on` stays at its shipped default (off),
+# and 13 of these tests read "declined the first motion" — identically on a
+# pristine main, while CI (a modern bash ahead of /bin/bash) never sees it.
+# Measured 2026-09-22 with zero tmux involved: `/bin/bash -c 'set -T; trap
+# true DEBUG; PATH=/tmp/x:$PATH command env -u TMUX bash -c "echo \$PATH"'`
+# prints a PATH without /tmp/x. `_t` above already uses the safe shape.
 _phase() {
   local pane="${4:-$CK_PANE}"
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX \
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" \
     bash "$(_helper)" "$1" "$pane" "$2" "$3" 5
 }
 
@@ -419,12 +431,12 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
     "bash '$(_helper)' 12 $CK_PANE #{pane_mode} drag 5")"
 
   _press 10
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX sh -c "$quoted" || rc_q=$?
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" sh -c "$quoted" || rc_q=$?
   pos_q="$(_pos)"
 
   _t send-keys -t "$CK_PANE" -X cancel 2>/dev/null || true
   _press 10
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX sh -c "$unquoted" || rc_u=$?
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" sh -c "$unquoted" || rc_u=$?
   pos_u="$(_pos)"
   _cleanup
 

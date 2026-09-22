@@ -67,7 +67,7 @@ _cleanup() {
 _touch() {
   _t set-option -p -t "$CK_PANE" @clikae_touch_y "$1"
   _t set-option -p -t "$CK_PANE" @clikae_touch_h "$CK_H"
-  PATH="$CK_SOCKDIR/bin:$CK_PATH" command env -u TMUX \
+  command env -u TMUX PATH="$CK_SOCKDIR/bin:$CK_PATH" \
     bash "$CLIKAE_TEST_ROOT/lib/core/touch_scroll.sh" "$2" "$CK_PANE" "$3"
 }
 
