@@ -67,8 +67,15 @@ shellcheck -S warning bin/clikae install.sh "$0"
 # the two match by construction rather than by remembering). shellcheck reads
 # the bats dialect off the extension; no -s override, and `run`/`@test` are
 # understood natively.
+# One shellcheck PROCESS PER FILE (`-n 1`), not one process for the whole tree.
+# shellcheck's memory grows with everything it was handed in one call: measured
+# 2026-09-22, the single-process form reached 3.7 GB RSS on this tree and, with
+# a second copy running in another worktree, pushed a 16 GB machine into 4 GB of
+# swap — the same path as the 2026-09-11 watchdog panic. Per-file, the peak is
+# the largest single file; the findings are identical, since shellcheck does
+# not analyse across files that are not `source`d with a directive.
 find lib tests scripts \( -name '*.sh' -o -name '*.bats' \) -print0 \
-  | xargs -0 shellcheck -S warning
+  | xargs -0 -n 1 shellcheck -S warning
 
 echo "→ doc names (every function a doc names must exist)"
 bash "$(dirname "$0")/doc-names-exist.sh"
