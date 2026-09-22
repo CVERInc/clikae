@@ -1124,7 +1124,11 @@ _SEP=' #[fg=colour244]│#[default] '
   _burn_status burn-1 running "$(_dead_pid)"
   _usage_cache claude wrasse 42.0 65.0
   run tmux_status_render claude wrasse 'a52bdc12-1111-2222-3333-444455556666' reefbox 120
-  run bash -c "printf '%s' \"\$1\" | perl -CSD -ne 'exit(/[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}\x{2B00}-\x{2BFF}\x{FE0F}]/ ? 1 : 0)'" _ "$output"
+  # Same ranges as scripts/signet-lint.sh, including the clock/hourglass code
+  # points (U+231A-231B, U+23E9-23FA) that ⏳ hid in until 2026-09-22 — the
+  # row rendered that glyph for a whole release while this very test stayed
+  # green, because its ruler was a narrower copy of the lint's.
+  run bash -c "printf '%s' \"\$1\" | perl -CSD -ne 'exit(/[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}\x{2B00}-\x{2BFF}\x{FE0F}\x{231A}-\x{231B}\x{23E9}-\x{23FA}]/ ? 1 : 0)'" _ "$output"
   [ "$status" -eq 0 ] || { echo "an emoji reached the row: $output"; false; }
 }
 
