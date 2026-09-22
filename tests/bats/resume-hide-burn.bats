@@ -82,6 +82,11 @@ teardown() {
 
 _human_claude() {
   local slug
+  # A REAL tank, not just a directory shaped like one: the store scan behind
+  # `clikae resume` walks tanks_for_engine now (the board's own "what is a
+  # tank" answer since #61) rather than globbing profiles/<engine>/*/.
+  # Guarded because most tests here init claude/T1 themselves first.
+  [ -f "$CLIKAE_HOME/profiles/claude/T1/.clikae-tank" ] || clikae init claude T1 >/dev/null
   slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$CLIKAE_HOME/profiles/claude/T1/projects/$slug"
   printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"Human conversation"}}\n' "$PWD" > "$CLIKAE_HOME/profiles/claude/T1/projects/$slug/$HUMAN_SID.jsonl"

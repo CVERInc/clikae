@@ -370,17 +370,22 @@ _agy_log() { # <line>
   [[ "$output" != *"Continue"* ]] || false
 }
 
-# --- #34: agy's Resume rows are TANK-scoped, not directory-scoped ------------
-# On every real agy install, history.jsonl's "workspace" field is a constant
-# ($HOME), not the directory a session actually ran in — measured on #34/#83:
-# 607/607 indexed conversations, one distinct workspace value. Filtering these
-# rows by "$PWD == recorded workspace" could therefore never match outside
-# $HOME, and this list was permanently empty in any real project directory.
+# --- agy's Resume rows: this directory first, the tank only as a fallback ----
+# #34's finding stands: on every real agy install history.jsonl's "workspace"
+# is a constant ($HOME), not the directory a session ran in (607/607 indexed
+# conversations, one distinct value), so a STRICT cwd filter leaves the agy
+# rows permanently empty in any project directory. #34 answered that by
+# dropping the filter entirely — and then agy, answering tank-wide, competed
+# in one ranked list against engines answering $PWD-wide and crowded them off
+# it (measured on a real store: all ten rows agy, the one claude session
+# belonging to the directory ranked #13).
+# So: scope to $PWD when this directory has anything, fall back to tank-wide
+# when it has nothing. This test is the first half; the one after it is the
+# fallback, which is what preserves #34.
 # Fixture mirrors the verify report: one session recorded IN this dir, one
 # recorded at $HOME (the realistic case), one with no history.jsonl entry at
-# all (adapter_session_cwd's fallback, also $HOME) — from a non-$HOME cwd, all
-# three must show up, newest first.
-@test "agy board Resume rows show sessions regardless of recorded workspace, newest first (#34)" {
+# all (adapter_session_cwd's fallback, also $HOME).
+@test "agy board Resume rows are scoped to this directory when it has any" {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | clikae init agy default >/dev/null 2>&1
   local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
@@ -411,11 +416,46 @@ _agy_log() { # <line>
   cd "$work"
   run clikae
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The one session this directory owns — even though it is the OLDEST of the
+  # three, so this cannot pass by accident of mtime ranking.
   [[ "$output" == *"CWD-MATCH session content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"HOME-WORKSPACE session content"* ]] || { echo "not scoped: $output"; false; }
+  [[ "$output" != *"NO-HISTORY session content"* ]] || { echo "not scoped: $output"; false; }
+  # …and the two it is not showing are accounted for, not silently dropped.
+  [[ "$output" == *"2 more in this store"* ]] || { echo "$output"; false; }
+}
+
+# The half that preserves #34: on the constant-workspace install #34 measured,
+# NOTHING in the tank names this directory, and an empty Resume section is
+# worse than a tank-wide one. Same fixture, minus the one session recorded here.
+@test "agy board Resume rows fall back to tank-wide only when this directory has none (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+
+  local sid_homews="bbbbbbbb-0000-4000-8000-000000000002"   # workspace == $HOME
+  local sid_nohist="cccccccc-0000-4000-8000-000000000003"   # no history entry
+
+  mkdir -p "$base/brain/$sid_homews/.system_generated/logs"
+  printf '{"content":"HOME-WORKSPACE session content"}\n' > "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_nohist/.system_generated/logs"
+  printf '{"content":"NO-HISTORY session content"}\n' > "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_homews" "$HOME" \
+    > "$base/brain/history.jsonl"
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"HOME-WORKSPACE session content"* ]] || { echo "$output"; false; }
   [[ "$output" == *"NO-HISTORY session content"* ]] || { echo "$output"; false; }
-  # newest mtime first: NO-HISTORY, then HOME-WORKSPACE, then CWD-MATCH.
-  [[ "$output" == *"NO-HISTORY session content"*"HOME-WORKSPACE session content"*"CWD-MATCH session content"* ]] \
+  # newest mtime first: NO-HISTORY, then HOME-WORKSPACE.
+  [[ "$output" == *"NO-HISTORY session content"*"HOME-WORKSPACE session content"* ]] \
     || { echo "wrong order: $output"; false; }
 }
 
@@ -467,6 +507,98 @@ _agy_log() { # <line>
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"SESSION-OF-t1 content"* ]] || { echo "$output"; false; }
   [[ "$output" == *"SESSION-OF-t2 content"* ]] || { echo "$output"; false; }
+}
+
+# --- the Continue list's scope, said out loud -------------------------------
+# The list is this DIRECTORY's recent sessions; `clikae resume` is the whole
+# store. Nothing on the board said so, and the two lists disagreeing looked
+# like a bug in one of them. Two things make it honest: every engine answers
+# for the same scope, and the section says which scope that is.
+_home_seed_claude() {   # <tank> <dir> <sid-prefix> <title>
+  local tank="$1" dir="$2" pfx="$3" title="$4" slug
+  slug="$(printf '%s' "$dir" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug"
+  printf '{"type":"ai-title","aiTitle":"%s"}\n' "$title" \
+    > "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug/$pfx-0000-4000-8000-000000000001.jsonl"
+}
+
+_home_seed_agy() {      # <tank> <dir> <sid> <title>
+  local tank="$1" dir="$2" sid="$3" title="$4"
+  local base="$CLIKAE_HOME/profiles/antigravity/$tank/antigravity-cli"
+  mkdir -p "$base/brain/$sid/.system_generated/logs"
+  printf '{"content":"%s"}\n' "$title" > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$dir" >> "$base/brain/history.jsonl"
+}
+
+@test "the Continue list shows only THIS directory's sessions, for every engine at once" {
+  clikae init claude a
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+
+  _home_seed_claude a "$A" aaaaaaaa CLAUDE-IN-A
+  _home_seed_claude a "$B" bbbbbbbb CLAUDE-IN-B
+  _home_seed_agy default "$A" "cccccccc-0000-4000-8000-000000000003" AGY-IN-A
+  _home_seed_agy default "$B" "dddddddd-0000-4000-8000-000000000004" AGY-IN-B
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"CLAUDE-IN-A"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"AGY-IN-A"* ]]    || { echo "$output"; false; }
+  [[ "$output" != *"CLAUDE-IN-B"* ]] || { echo "dir B leaked: $output"; false; }
+  [[ "$output" != *"AGY-IN-B"* ]]    || { echo "dir B leaked: $output"; false; }
+  # The heading names the scope it is showing, so the list cannot be read as
+  # "all your sessions".
+  [[ "$output" == *"Resume — in"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"dir-a"* ]]       || { echo "$output"; false; }
+}
+
+@test "the Continue list says how many more sessions the store holds, with the right count" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+  _home_seed_claude a "$A" aaaaaaaa HERE-ONE
+  local slugB; slugB="$(printf '%s' "$B" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/a/projects/$slugB"
+  local i
+  for i in 1 2 3; do
+    printf '{"type":"ai-title","aiTitle":"THERE-%s"}\n' "$i" \
+      > "$CLIKAE_HOME/profiles/claude/a/projects/$slugB/eeeeeee$i-0000-4000-8000-000000000001.jsonl"
+  done
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HERE-ONE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"3 more in this store"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae resume"* ]] || { echo "$output"; false; }
+}
+
+@test "the Continue list says nothing about elsewhere when it is showing everything" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a"; mkdir -p "$A"
+  _home_seed_claude a "$A" aaaaaaaa ONLY-ONE
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"ONLY-ONE"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"more in this store"* ]] || { echo "spurious note: $output"; false; }
+}
+
+@test "a directory with nothing of its own still learns the store is not empty" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+  _home_seed_claude a "$B" bbbbbbbb ELSEWHERE-ONLY
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"ELSEWHERE-ONLY"* ]] || { echo "leaked: $output"; false; }
+  # No rows at all, so the note prints its own section header — the case a
+  # silent board got most wrong.
+  [[ "$output" == *"Resume — in"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1 more in this store"* ]] || { echo "$output"; false; }
 }
 
 @test "the continue list shows multiple recent sessions, newest first" {
@@ -748,6 +880,30 @@ _seed_burn_flood_agy() {
   [ "$status" -eq 0 ] || false
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || false
   [ "$output" = "2" ] || false
+}
+
+# The store total is a glob list too, and it had the same hole `clikae resume`
+# had: no grok. It stays a glob (a count on the board's hot path, with no
+# adapter to load), so the engine list is pinned here instead of by
+# construction — the footer under-counted every grok session, and the scope
+# note that subtracts from this total would have too.
+@test "_home_total_sessions counts grok sessions as well as claude's" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  clikae init grok gk
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"
+  local g="$CLIKAE_HOME/profiles/grok/gk/sessions/%2Fw/019fb7b0-9b86-7f82-98a4-0000000000aa"
+  mkdir -p "$g"; : > "$g/summary.json"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "2" ] || { echo "counted '$output', expected 2"; false; }
 }
 
 @test "the burn order is the FLEET: a solo tank holds no position in it" {

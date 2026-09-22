@@ -751,6 +751,21 @@ adapter_find_session() {
   return 1
 }
 
+# Optional hook: EVERY transcript path under this profile dir — no cwd filter,
+# no limit, no per-file reads (see codex.sh's and antigravity.sh's twins).
+# This is what `clikae resume` enumerates the store with: its list is
+# deliberately store-wide and directory-free, so it asks each adapter for
+# everything it holds rather than keeping a glob per engine of its own (the
+# list grok was never added to).
+#
+# For burn's before/after attribution this stays a no-op in practice on the
+# claude path: claude is TOLD its session id (--session-id) before it runs, so
+# burn records that proven id and never reaches the snapshot diff — the diff is
+# only consulted when no transcript for the launched sid ever appeared.
+adapter_all_transcripts() {
+  find "$1/projects" -type f -name '*.jsonl' 2>/dev/null
+}
+
 # Optional hook: the working directory a transcript was recorded in. Claude Code
 # stamps every line with {"cwd":"…"}; `clikae resume` cd's there before resuming
 # so the engine resolves the session in its own project (the slug = that cwd).

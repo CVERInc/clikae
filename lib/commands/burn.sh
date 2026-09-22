@@ -4222,9 +4222,12 @@ _NS_EOF
     # already has, so codex's post-run attribution (below) can tell "the file
     # THIS run created" from "the file a human's concurrent session created" —
     # see antigravity's twin a few hundred lines up for the full rationale.
-    # Only codex defines adapter_all_transcripts (claude doesn't need this: it
-    # already knows $launch_sid before the engine ever runs), so this is a
-    # no-op — no snapshot taken, nothing to diff — on the claude path.
+    # Every session adapter defines adapter_all_transcripts now (claude's and
+    # grok's were added so `clikae resume` could enumerate the store through
+    # the adapters instead of a hand-written glob list). The claude path still
+    # never USES the diff: claude is told $launch_sid before the engine runs,
+    # so the proven-sid branch below answers first and the diff is reached only
+    # when no transcript for that sid ever appeared.
     local -a _snap_pre=()
     if declare -F adapter_all_transcripts >/dev/null 2>&1; then
       while IFS= read -r _snap_line; do

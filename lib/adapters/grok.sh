@@ -217,11 +217,12 @@ adapter_sid_from_args() {
 }
 
 # Optional hook: the cwd grok's OWN argv carries — see codex.sh's twin for why
-# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). Moot
-# in practice — grok defines no adapter_all_transcripts, so it never reaches
-# burn.sh's multi-candidate tie-break that reads this value (R3 review,
-# P3-6) — but defined for the same reason claude.sh's twin is: grok has no
-# cwd-override flag, so the honest answer is "no", not an absent function.
+# `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1). It used
+# to be moot ("grok defines no adapter_all_transcripts, so it never reaches
+# burn.sh's multi-candidate tie-break that reads this value", R3 review P3-6)
+# — no longer true as of the adapter_all_transcripts hook above, so the
+# tie-break can now ask. The answer is unchanged and still the honest one:
+# grok has no cwd-override flag, so "no", not an absent function.
 adapter_cwd_from_args() {
   return 1
 }
@@ -425,6 +426,17 @@ adapter_session_title() {
 
 adapter_find_session() {
   _grok_find_summary "$1" "$2"
+}
+
+# Optional hook: EVERY session path under this profile dir — no cwd filter, no
+# limit, no per-file reads (see codex.sh's and antigravity.sh's twins). The
+# summary.json IS the session for every path-level reader here: it is what
+# adapter_find_session returns, what adapter_title_for_file parses, and its
+# parent directory is the session id. `clikae resume` enumerates the whole
+# store through this hook, which is how grok reaches the picker, the prefix
+# completion and `clikae clean` at all.
+adapter_all_transcripts() {
+  find "$(_grok_sessions_dir "$1")" -maxdepth 3 -type f -name 'summary.json' 2>/dev/null
 }
 
 adapter_session_cwd() {

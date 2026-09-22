@@ -97,20 +97,71 @@ _resume_session_fields() {
     # clean.sh's dedupe scan — never pays for an adapter (re)source).
     _rs_sid="${filename%.jsonl}"
     if [ "${#_rs_sid}" -gt 36 ]; then _rs_sid="${_rs_sid:$(( ${#_rs_sid} - 36 ))}"; fi
+  elif [ "$_rs_engine" = "grok" ]; then
+    # grok stores `sessions/<group>/<sid>/summary.json`, so the id is the
+    # DIRECTORY name — the same fact _grok_find_summary uses to go the other
+    # way (sid -> file). Without this branch the generic `${filename%.jsonl}`
+    # tail below would hand every grok session the id "summary.json".
+    _rs_sid="${f%/summary.json}"; _rs_sid="${_rs_sid##*/}"
   else # claude
     _rs_sid="${filename%.jsonl}"
   fi
 }
 
 # _resume_all_sessions — "<mtime> <path>" for EVERY tank's sessions, newest
-# first. The ONE home of the three-engine glob list (it appeared verbatim in
-# both the picker and `clikae clean`); a new resumable engine's glob goes here
-# only.
+# first, across every directory. That store-wide, cwd-free scope IS the
+# command: `clikae resume` reaches BACKWARD to a session wherever it lives,
+# unlike the home board's Continue list (this directory's recent sessions).
+#
+# 🔴 THE ENGINE LIST IS NOT WRITTEN DOWN HERE. It used to be three hand-typed
+# globs, and its own comment said "a new resumable engine's glob goes here
+# only" — which is exactly what did not happen: grok landed with
+# adapter_resume_args, adapter_recent_sids and adapter_find_session all
+# implemented, appeared on the home board, and was invisible to `clikae
+# resume` (its picker, its prefix completion and `clikae clean`'s scan) for
+# as long as those globs were a list someone had to remember to extend.
+#
+# So the enumeration goes through the ADAPTERS, under the same capability gate
+# the board's own Continue list uses (_home_recent_rows: load cleanly, then
+# declare the hooks) — an engine that can be listed here is one that can hand
+# over its transcripts and be resumed, and it qualifies by construction rather
+# than by being remembered. adapter_all_transcripts is the store-wide
+# enumerator (no cwd filter, no limit); adapter_recent_sids is deliberately
+# NOT used here — it is the $PWD-scoped one.
+#
+# Tanks come from tanks_for_engine, not a `*/` glob, for the reason #61 gives
+# in home.sh: a stray non-tank directory holding something transcript-shaped is
+# not a session store, and nothing else in clikae would call it a tank.
 _resume_all_sessions() {
-  sessions_by_mtime \
-    "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl
+  local name tank tdir f
+  local -a _ras_files=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # The gate runs in a subshell because load_adapter exit()s on a broken
+    # adapter; only the parent load below (of an adapter already proven to
+    # source cleanly) is safe to do in this shell. Same order as home.sh's.
+    ( load_adapter "$name" >/dev/null 2>&1 \
+        && declare -F adapter_resume_args     >/dev/null 2>&1 \
+        && declare -F adapter_all_transcripts >/dev/null 2>&1 ) || continue
+    load_adapter "$name" >/dev/null 2>&1
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      tdir="$(profile_dir "$name" "$tank")"
+      while IFS= read -r f; do
+        [ -n "$f" ] && _ras_files+=("$f")
+      done <<FILES
+$(adapter_all_transcripts "${tdir%/}" 2>/dev/null || true)
+FILES
+    done <<TANKS
+$(tanks_for_engine "$name")
+TANKS
+  done <<EOF
+$(list_adapters)
+EOF
+  # `stat` with no operands reads stdin on some platforms and errors on others;
+  # either way an empty store must print nothing, not hang.
+  [ "${#_ras_files[@]}" -gt 0 ] || return 0
+  sessions_by_mtime "${_ras_files[@]}"
 }
 
 # _resume_engines -> the engines whose adapter can resume by id AND look a session
@@ -204,6 +255,18 @@ EOF
   done <<EOF
 $(_resume_engines)
 EOF
+  # 🔴 A MISS IS NOT A FAILURE. Without this, the function's status is the last
+  # thing its body ran — the per-tank subshell, whose own last command is
+  # `[ -n "$p" ] && printf …`, i.e. 1 on the common "this tank does not have
+  # it" case. `matches="$(_resume_locate "$sid")"` then inherits that 1 under
+  # `set -e` and the whole command dies with NO output at all: not the "No
+  # session '<id>' in any tank" line, not the prefix retry, nothing.
+  # It only bites when the LAST resume-capable engine is one you have a tank
+  # for — alphabetically that is grok — which is why it lay here unseen: a
+  # store with a grok tank could not be told "no such session", and a grok
+  # session could not be resumed BY PREFIX, because the retry is downstream of
+  # this return.
+  return 0
 }
 
 # _resume_exec <engine> <tank> <dir> <sid> [-- passthru...] — cd into the session's
@@ -504,21 +567,20 @@ _lazy_parse_cwd() {
   [ -n "${cached_cwd[idx]}" ] && return 0
 
   _resume_split "${sessions[idx]}"
-  local engine="$_rs_engine" sid="$_rs_sid" f="$_rs_f"
+  local engine="$_rs_engine" f="$_rs_f"
 
   load_adapter "$engine" >/dev/null 2>&1 || true
 
+  # ONE extractor per engine, owned by the adapter — every engine's
+  # adapter_session_cwd takes a transcript PATH and every one of them is
+  # defined, so there is nothing for an engine list here to be right about.
+  # This used to name claude/codex/antigravity by hand and re-implement two of
+  # them inline (codex's meta field, antigravity's history.jsonl grep,
+  # $HOME fallback and all), so grok — which has had adapter_session_cwd since
+  # it landed — showed "?" for a directory the adapter could state exactly.
   local scwd=""
-  if [ "$engine" = "claude" ]; then
+  if declare -F adapter_session_cwd >/dev/null 2>&1; then
     scwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
-  elif [ "$engine" = "codex" ]; then
-    scwd="$(_codex_meta_field "$f" cwd)"
-  elif [ "$engine" = "antigravity" ]; then
-    local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
-    scwd="$(grep -F "$sid" "$bdir/history.jsonl" 2>/dev/null \
-      | grep -oE '"workspace"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
-      | sed -E 's/^"workspace"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-    [ -n "$scwd" ] || scwd="$HOME"
   fi
   [ -n "$scwd" ] || scwd="?"
   cached_cwd[idx]="$scwd"
