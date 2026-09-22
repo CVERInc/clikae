@@ -533,6 +533,9 @@ cmd_switch() {
   # per-tank opt-in (lib/core/fleet_mcp.sh; no-op for solo tanks, an empty
   # store, or engines without an adapter_mcp_config_file hook).
   fleet_mcp_prelaunch "$engine" "$tank" "$d"
+  # Fleet hooks: the same default-on rule, for the other half of a tank's own
+  # engine config (lib/core/fleet_hooks.sh, #141).
+  fleet_hooks_prelaunch "$engine" "$tank" "$d"
 
   # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
   # dry limit, carry onward per `clikae auto`. claude and codex only: both

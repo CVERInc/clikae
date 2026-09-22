@@ -42,6 +42,7 @@ EOF
 
   soul_prelaunch "$cli" "$profile" "$d"   # member tank → fan this dir into its Soul
   fleet_mcp_prelaunch "$cli" "$profile" "$d"   # non-solo tank → fan in the shared MCP list
+  fleet_hooks_prelaunch "$cli" "$profile" "$d" # …and the shared hooks (#141)
   # 2026-09-12 round-1 fix review, P2-1/P2-2: this used to wrap adapter_run in
   # a subshell so a board_state_refresh could run AFTER the engine exited —
   # which meant clikae stayed a resident parent for the whole session (no more

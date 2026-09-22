@@ -189,6 +189,16 @@ EOF
     fi
   fi
 
+  # #141: a new tank gets the fleet's shared hooks NOW, not at its first
+  # launch. This is the whole point of the feature — the reported incident is
+  # tanks recreated under new names that silently had no Stop hook, and a tank
+  # you created five minutes ago is exactly the one you will not think to
+  # check. Unlike the MCP list (which has to wait for the engine to write
+  # .claude.json), settings.json is clikae's own file and already exists here.
+  # No-op for an engine with no hooks layout, a solo tank, an empty store, or
+  # a machine without jq (lib/core/fleet_hooks.sh).
+  fleet_hooks_prelaunch "$cli" "$profile" "$d"
+
   # A new tank joins the machine's default Soul group, if one was ever set.
   # The board shows FLEET vs SOLO and nothing else, so a tank that quietly has no
   # brain is indistinguishable from one that does — which is how a person ends up

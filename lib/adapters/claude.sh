@@ -82,6 +82,23 @@ adapter_mcp_config_file() {
   printf '%s/.claude.json\n' "$profile_dir"
 }
 
+# Optional hook: path to this tank's config file that holds `hooks` (used by
+# `clikae hooks` / fleet_hooks_prelaunch, lib/core/fleet_hooks.sh, to fan the
+# fleet-wide hook list into every non-solo tank). Claude Code keeps hooks in
+# settings.json, beside the permissions clikae's own template writes — so
+# unlike .claude.json this file exists from the moment a tank does, and a
+# brand-new tank gets its hooks without waiting for a first launch.
+#
+# 🔴 The writer is _settings_snapshot/_settings_write_file (lib/commands/
+# settings.sh), which derives the path from the tank directory: an engine
+# whose hooks live under a DIFFERENT name must not implement this hook until
+# it has a writer of its own. fleet_hooks_prelaunch refuses the mismatch
+# rather than editing a file it was never told about.
+adapter_hooks_config_file() {
+  local profile_dir="$1"
+  printf '%s/settings.json\n' "$profile_dir"
+}
+
 # Print KEY=VALUE pairs (one per line) to export when activating this profile.
 adapter_export_env() {
   local profile_dir="$1"

@@ -253,6 +253,7 @@ EOF
   to_dir="$(ensure_profile --require "$cli" "$to")"
   soul_prelaunch "$cli" "$to" "$to_dir"   # member tank → fan this dir into its Soul
   fleet_mcp_prelaunch "$cli" "$to" "$to_dir"   # non-solo tank → fan in the shared MCP list
+  fleet_hooks_prelaunch "$cli" "$to" "$to_dir" # …and the shared hooks (#141)
 
   # --fresh means: switch tanks but start a NEW conversation — don't carry the old
   # session. The deliberate "different account, clean slate" path, kept distinct
