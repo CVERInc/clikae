@@ -410,10 +410,42 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   # Rule 10. Its pane process never gets the shim.
   tmux new-session -d -s "$sess" 'sleep 60'
   run clikae doctor
+  local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tmux guard"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"$sess"* ]] || { echo "$output"; false; }
+  # 🔴 NAME THE VERDICT, AND SAY WHICH SILENCE IT WAS (2026-09-23). Asserting
+  # "tmux guard" and "$sess" as two independent substrings could not tell an
+  # empty session list from a session doctor looked at and cleared — both are
+  # simply no line — and an afternoon went into the first reading of a failure
+  # that could have been either. The verdict text differs per platform on
+  # purpose (see the P4 note on _doctor_pane_path and the two sibling tests
+  # below), so accept either, but it must be attached to THIS session.
+  [[ "$output" == *"not first on PATH:"*"$sess"* || "$output" == *"could not verify:"*"$sess"* ]] || {
+    echo "doctor printed no guard verdict for $sess."
+    echo "sessions this test could see: $seen"
+    echo "CLIKAE_LIB=$CLIKAE_LIB TMUX_TMPDIR=$TMUX_TMPDIR"
+    echo "$output"; false; }
+}
+
+@test "doctor checks a live session still under the PRE-0.28.3 prefix — the one that CANNOT have the guard" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # 🔴 A `ck-` session predates the 0.28.3 rename, so it predates the guard
+  # (#97) and is unprotected by construction — the single population this
+  # check exists for. `live_session_names` reads one prefix (the board's
+  # rule, pinned in sess-prefix.bats), so until _doctor_guard_rows this
+  # check could not see them at all and reported "all clear" for a machine
+  # whose only certainly-unguarded session was running right there. Doctor
+  # already knew: _doctor_legacy_prefix counts these two lines earlier.
+  local sess; sess="ck-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  run clikae doctor
+  local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not first on PATH:"*"$sess"* || "$output" == *"could not verify:"*"$sess"* ]] || {
+    echo "doctor printed no guard verdict for the legacy-prefixed $sess."
+    echo "sessions this test could see: $seen"
+    echo "$output"; false; }
 }
 
 @test "doctor stays silent when the live session's PANE PROCESS actually has the guard first on PATH" {

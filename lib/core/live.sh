@@ -19,13 +19,27 @@
 # suffix (a digest of the argv, so a resumed conversation is its own session).
 # Anything else in the user's tmux is theirs and is left alone.
 live_session_names() {
+  live_session_names_for "${CLIKAE_SESS_PREFIX:-}"
+}
+
+# live_session_names_for <prefix> -> the same rows, for ONE prefix.
+#
+# Split out of live_session_names (2026-09-23) so that the one caller which
+# must read BOTH prefixes — doctor's tmux-guard check, which is looking for
+# sessions that predate the guard — can do it without a second copy of this
+# format string and this grep. The BOARD still reads one prefix and only one:
+# carrying two names forever is what the 0.28.3 rename existed to end
+# (tests/bats/sess-prefix.bats pins that), and that is a different question
+# from "which live sessions are ours to inspect".
+live_session_names_for() {
+  local prefix="$1"
   command -v tmux >/dev/null 2>&1 || return 0
   # 🔴 An unset prefix here is WORSE than a no-op: `^(|)` matches every line, so
   # the board would claim every tmux session on the machine — including the ones
   # the human made by hand, which the prefix exists to leave alone. Refuse.
-  [ -n "${CLIKAE_SESS_PREFIX:-}" ] || return 0
+  [ -n "$prefix" ] || return 0
   tmux list-sessions -F '#{session_name}	#{session_created}	#{session_attached}' 2>/dev/null \
-    | grep -E "^${CLIKAE_SESS_PREFIX}[^	]+	" \
+    | grep -E "^${prefix}[^	]+	" \
     | sort -t'	' -k2,2 -rn || true
 }
 

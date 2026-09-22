@@ -308,6 +308,31 @@ _doctor_pane_start_command_path() {
   }'
 }
 
+# _doctor_guard_rows -> every LIVE clikae session this check has to look at:
+# the current session prefix AND the pre-0.28.3 one.
+#
+# 🔴 THE LEGACY-PREFIXED SESSIONS ARE THE ONES THAT CANNOT HAVE THE GUARD,
+# and until 2026-09-23 they were the only ones this check could not see.
+# `live_session_names` reads ONE prefix on purpose — the board's job is to show
+# the names clikae uses today, and sess-prefix.bats pins that. But a `ck-`
+# session was started before the 0.28.3 rename, therefore before the guard
+# shipped (#97), therefore it is unprotected BY CONSTRUCTION — and an older
+# clikae still installed alongside this one keeps making them (see the prefix
+# note in lib/core/tmux.sh), so they are not a one-time migration leftover.
+# `_doctor_legacy_prefix`, one call above this one in cmd_doctor, already
+# counts them: doctor knew they were running, knew they were clikae's, and
+# still said nothing about their guard. A ruler that cannot reach the one
+# sample it was built for reads "all clear" forever.
+#
+# The current prefix goes through `live_session_names` itself, not through
+# `live_session_names_for` with the same argument: that function IS the
+# board's answer to "which sessions are ours", and routing around it here
+# would leave doctor with a second, private definition of the same thing.
+_doctor_guard_rows() {
+  live_session_names
+  live_session_names_for "${CLIKAE_SESS_PREFIX_LEGACY:-}"
+}
+
 # _doctor_tmux_guard -> say something ONLY when a live clikae session's PANE
 # PROCESS does not have the tmux guard shim first on its real PATH
 # (CVERInc/clikae#97, lib/shims/tmux — refuses a bare kill-server/kill-session
@@ -379,7 +404,7 @@ _doctor_tmux_guard() {
         ;;
     esac
   done <<EOF
-$(live_session_names 2>/dev/null || true)
+$(_doctor_guard_rows 2>/dev/null || true)
 EOF
   if [ -n "$missing" ]; then
     printf '  %-16s %s\n' "tmux guard" "not first on PATH:$missing"
