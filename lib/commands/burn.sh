@@ -870,6 +870,54 @@ _burn_sweep_old_logs() {
   fi
 }
 
+# _burn_prelaunch_lock_gc <dry_run> -> reclaim abandoned prelaunch-lock files
+# — the per (engine/tank, $PWD) blocking lock the loop above takes around
+# soul_prelaunch/fleet_mcp_prelaunch (see its own 🔴 2026-09-06 comment).
+#
+# 🔴 NEVER unlink a prelaunch lock right after releasing it — the loop above
+# doesn't, on purpose. Deleting a lock file a concurrent burn may already have
+# open is the classic lock-file race: a THIRD burn then creates a fresh inode
+# at the same path, and two burns end up holding "the same" lock on two
+# different files. So the file is left behind on every release, forever,
+# unless something else reclaims it — this is that something else, and it
+# only ever acts on a file, never on an fd another process might be blocked
+# on.
+#
+# 🔴 mtime, never a recorded holder: unlike the tank-busy locks GC'd above,
+# this lock file carries no pid/identity to check liveness against — it is
+# opened with `exec 7>"$_prelock"`, which TRUNCATES the file on every
+# acquisition, and a truncate is a write that bumps mtime. A held (or very
+# recently held) lock is therefore always YOUNGER than any reasonable
+# threshold; only a file nobody has touched in over a day is provably
+# abandoned — never a live one, no matter how long that burn's engine run
+# itself takes (the lock is released long before the run starts).
+#
+# Sweeps BOTH locations: the current `state/locks/` and the pre-migration
+# `state/` top level directly — a one-time tidy-up for a machine that
+# accumulated lock files there before this GC (and the `locks/` subdir)
+# existed. `-mtime +0` is the same cross-platform idiom `_burn_sweep_old_logs`
+# uses just above (identical on BSD/macOS and GNU find: "more than 1*24h
+# old"), one bounded `-maxdepth 1` find per location, never recursive.
+_burn_prelaunch_lock_gc() {
+  local dry_run="${1:-0}" n=0 f d
+  local -a dirs=("$HOME/.clikae/state/locks" "$HOME/.clikae/state")
+  for d in "${dirs[@]}"; do
+    [ -d "$d" ] || continue
+    while IFS= read -r -d '' f; do
+      n=$((n + 1))
+      [ "$dry_run" -eq 1 ] || rm -f "$f" 2>/dev/null || true
+    done < <(find "$d" -maxdepth 1 -type f -name "${CLIKAE_SESS_PREFIX}prelaunch-*.lock" -mtime +0 -print0 2>/dev/null)
+  done
+  if [ "$n" -gt 0 ]; then
+    if [ "$dry_run" -eq 1 ]; then
+      log_info "GC: [Dry Run] Would remove $n stale prelaunch lock(s) (older than 1 day)."
+    else
+      log_info "GC: removed $n stale prelaunch lock(s) (older than 1 day)."
+    fi
+  fi
+  return 0
+}
+
 # Capture evidence beside the engine, before publishing completion. Consumers
 # may move/delete the artifact as soon as they see DONE; the parent must never
 # re-stat it to reconstruct an earlier outcome. Publish the pair atomically.
@@ -3921,6 +3969,19 @@ cmd_burn() {
   # own comment above `_burn_status_write`).
   _burn_install_exit_trap
 
+  # Prelaunch-lock housekeeping (state/locks/, see _burn_prelaunch_lock_gc's
+  # own header): the directory it lives in, and the sweep that reclaims what
+  # accumulates there, are set up ONCE here — deliberately BEFORE `t0`/
+  # `art_pre` below start the window `elapsed_s` is measured against. This is
+  # disk hygiene unrelated to any one burn, engine-agnostic (it runs ahead of
+  # the `agy` early-return too), and cheap either way; it just has no business
+  # inflating "how long did this burn take" any more than argument parsing
+  # does.
+  local _prelock_dir="$HOME/.clikae/state/locks"
+  mkdir -p "$_prelock_dir" 2>/dev/null || true
+  chmod 0700 "$_prelock_dir" 2>/dev/null || true
+  _burn_prelaunch_lock_gc 0
+
   case "$cli" in
     agy|antigravity)
       if ! _agy_enabled; then
@@ -4038,9 +4099,15 @@ cmd_burn() {
     # never across the engine run itself: unlike --ephemeral's "one run per
     # slot" hard limit, a second burn here should queue behind the first's
     # symlink/.claude.json settling, not be refused outright.
-    local _prelock_dir="$HOME/.clikae/state"
-    mkdir -p "$_prelock_dir" 2>/dev/null || true
-    chmod 0700 "$_prelock_dir" 2>/dev/null || true
+    # Lives under its own `locks/` subdir, not `state/` directly — this file
+    # is never unlinked after release (see the 🔴 2026-09-06 note above —
+    # deleting it out from under a concurrent burn that may already have it
+    # open is the classic lock-file race), so every distinct (tank, $PWD)
+    # leaves one behind forever. Keeping them out of `state/` proper stops
+    # them from mixing with the real state files that directory otherwise
+    # holds. `_prelock_dir` itself (and the GC that reclaims what lands in
+    # it, _burn_prelaunch_lock_gc) is set up once, OUTSIDE this loop and
+    # outside the elapsed_s timing window — see there for why.
     local _prelock
     _prelock="$_prelock_dir/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "$cli/$cur:$PWD" | cksum | cut -d' ' -f1).lock"
     local _prelocked=0

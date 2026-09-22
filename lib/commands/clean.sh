@@ -1537,6 +1537,11 @@ cmd_clean() {
   # --dry-run too now (P3-2, 2026-09-14 fix-round-4 review) — it just
   # previews instead of deleting, same as every other GC above.
   _burn_sweep_old_logs "$dry_run"
+  # Same GC `clikae burn` itself runs opportunistically at the start of its
+  # prelaunch block (lib/commands/burn.sh, _burn_prelaunch_lock_gc) — a
+  # `clean` run gets the identical mtime-based sweep, on both the current
+  # `state/locks/` location and the pre-migration `state/` top level.
+  _burn_prelaunch_lock_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by
