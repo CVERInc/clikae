@@ -139,9 +139,24 @@ implementation to read.</p>
 <td>claude, codex, grok, antigravity</td>
 </tr>
 <tr>
-<td><code>adapter_list_sessions</code> / <code>adapter_recent_sids</code></td>
-<td>Feed the cross-tank picker and <code>clean</code>'s candidate scan.</td>
+<td><code>adapter_recent_sids &lt;dir&gt; &lt;n&gt;</code></td>
+<td>The board's <strong>Continue</strong> list: this tank's recent sessions <strong>in <code>$PWD</code></strong>, newest first. Scope it to the current directory like every other engine does, or your rows compete with theirs on a different meaning and push them off a shared list.</td>
+<td>claude, codex, grok, antigravity</td>
+</tr>
+<tr>
+<td><code>adapter_all_transcripts &lt;dir&gt;</code></td>
+<td>The <strong>store-wide</strong> enumerator: every session path under a tank, no cwd filter, no limit. <code>clikae resume</code>'s picker, its prefix resolution and <code>clean</code>'s candidate scan are built from it — define it and your engine appears in all three by construction (there is no engine list anywhere to add yourself to). Also what <code>burn</code>'s before/after attribution diffs.</td>
+<td>claude, codex, grok, antigravity</td>
+</tr>
+<tr>
+<td><code>adapter_list_sessions</code></td>
+<td>An engine-specific session listing, where the two hooks above are not enough.</td>
 <td>claude, codex, grok</td>
+</tr>
+<tr>
+<td><code>adapter_transcript_is_resumable &lt;path&gt;</code></td>
+<td>Say NO to a transcript your engine writes that is not a conversation anyone reopens — claude's <code>agent-&lt;id&gt;.jsonl</code> subagent (sidechain) logs are the shipped case. Undefined means everything counts, which is the right answer for most engines. It narrows only the LISTS and the COUNTS (picker, prefix resolution, board, totals); finding a session by id and <code>clikae clean</code>'s disk scan deliberately ignore it, because an unlistable file is still bytes.</td>
+<td>claude</td>
 </tr>
 <tr>
 <td><strong>Headless + fleet</strong></td>
@@ -171,6 +186,11 @@ implementation to read.</p>
 <tr>
 <td><code>adapter_mcp_config_file</code></td>
 <td><code>clikae mcp share</code> can fan a server into this engine's tanks.</td>
+<td>claude</td>
+</tr>
+<tr>
+<td><code>adapter_hooks_config_file</code></td>
+<td><code>clikae hooks share</code> can fan a hook into this engine's tanks. Defining it is a promise that the file is <code>&lt;tank dir&gt;/settings.json</code>: the writer is <code>_settings_write_file</code> (<code>lib/commands/settings.sh</code>), which derives that path from the tank directory, and <code>fleet_hooks_prelaunch</code> refuses to write when the adapter names anything else. An engine whose hooks live elsewhere needs a writer of its own first.</td>
 <td>claude</td>
 </tr>
 </tbody>

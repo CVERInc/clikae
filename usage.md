@@ -55,7 +55,7 @@ plain, conventional verbs.
 | `<engine> <tank> --ephemeral` | Switch and run with **ephemeral memory** — this session's long-term memory is a throwaway, discarded on exit; the tank's real memory is left untouched. Login + transcripts are normal. claude only (clikae must know the memory layout). See below. |
 | `<engine>` | One tank → use it; several → list them; none → offer to create. |
 | `to <target> [tank] [-- args]` | Carry **this shell's current session** onto another tank. Same engine → a real resume; a different engine → a written brief (cold start). clikae announces which. Source is auto-detected (env var, else this directory's most recent session). Forwards relay's `-y`/`--fresh`/`--session`. (`relay`/`handoff`/`continue` are hidden aliases.) |
-| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks (claude/codex/antigravity), newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. Headless `burn` sessions are hidden by default (they're one-shot lane tasks, not conversations you'd want to reopen); `--all`, or `a` inside the picker, shows them too, labeled `[burn]`. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
+| `resume [session-id] [-- args]` | Reopen a **specific past session** by id, in whichever tank owns it — clikae scans every tank, finds the owner, cd's to the directory the session was recorded in, and resumes it there (fixes the bare `<engine> --resume <id>` "No conversation found" when the session lives in a tank, not the engine's default home). With **no id** it opens an interactive picker across **all** tanks and **every directory**, newest first — filter with `/`, move with arrows/`j`/`k`, page with PgUp/PgDn — so you pick by title, no UUID. Headless `burn` sessions are hidden by default (they're one-shot lane tasks, not conversations you'd want to reopen); `--all`, or `a` inside the picker, shows them too, labeled `[burn]`. `[R]` on the board opens the same picker; `c` inside the picker opens `clikae clean` and returns. Which engines take part is not a list clikae keeps: every engine whose adapter can resume a session by id is enumerated, so `resume` and the board's Continue list always cover the same engines. Note the scopes differ on purpose — the board's Continue list is **this directory**, `resume` is **everywhere**. This reaches *backward* to a named session; `to` carries your *current* session *forward*. |
 | `eval "$(clikae env <engine> <tank>)"` | Put the **current shell** on a tank (export its config env var), so the engine's own command and `clikae status`/`to` see it. The explicit alternative to the one-shot bare switch. |
 
 **Your session outlives the terminal.** A bare switch runs the engine inside a
@@ -67,6 +67,24 @@ start on the desktop, pick it up from a tablet over ssh.
 
 Two clients can stay attached at once; clikae does not kick anyone off. If you
 want the other one gone, `tmux attach -d` does that.
+
+**The bottom row is the command back, the fuel, and what is red** — e.g.
+`clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2`. The fuel is this tank's
+vendor usage (how much of the 5-hour and 7-day window is spent), and the
+session keeps it current itself: it takes one reading a few seconds after you
+start, and one every five minutes after that, for as long as the session is
+open. Nothing runs when the session is gone, and nothing is remembered between
+readings — closing the session ends it. What you see when there is no number:
+
+| on the row | what it means |
+|---|---|
+| `· 3h ago` | the reading is over an hour old — the row says so rather than presenting it as now |
+| `·` | no reading (this tank has never been read, or the last one is over 24h old) |
+| `○` | this tank is out of fuel right now |
+| `expired` | the access token expired — start a session on that tank, or run `clikae usage --wake <tank>` |
+
+Reading it costs nothing: the row never calls a vendor, it only draws what is
+already on disk. `clikae usage <engine> <tank>` fills the same reading by hand.
 
 It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
 or a `TERM` tmux cannot draw on, clikae runs the engine directly instead — same
@@ -249,7 +267,7 @@ way.
 | `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
 | `auto [ask\|safe\|full]` | **(BETA, claude-launched sessions only)** How much clikae carries on its own when a session **you launched through `clikae`** hits the limit — it has no effect on alias/`.app`/other-engine launches. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` keeps going (same-engine = resume, cross-engine = a cold brief). The board's `A` key cycles it. |
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
-| `wake [on\|off]` · `wake <engine> <tank>` | Stay where you are and let the tank pick itself back up: when the limit lifts, clikae types `go` into that tank's own session and the conversation continues. Asked once, then remembered. |
+| `wake [on\|off]` · `wake <engine> <tank>` | Stay where you are and let the tank pick itself back up: when the limit lifts, clikae types `go` into that tank's own session and the conversation continues — unless the engine already continued by itself, which it now sometimes does. Asked once, then remembered. Bare `clikae wake` also prints what the waiter did the last few times a tank ran dry. |
 | `burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of `to`/`watch`. See "Headless tasks" below. |
 
 > **Supervised launch (BETA · claude · feedback welcome).** When you start claude
@@ -399,7 +417,7 @@ rest of the sweep from being cleaned up.
 
 | Command | What it does |
 |---|---|
-| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, `[`/`]` reorder (the board IS the burn order), ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `R` open the full cross-tank resume picker, `x` incognito, `n` new, `a` rename the tank, `d` delete, `s` toggle solo (in/out of the fleet), `m` the memory (Soul) dial, `c` clean up disk space (opens `clikae clean`, returns to the board), `/` filter, `A` cycle autonomy (ask/safe/full · BETA), `l` pick language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
+| *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, a **Continue** list of recent sessions **in the directory you are standing in** (the heading says which one; when the store holds more than the list shows, a dim line says how many and points at `clikae resume`, which covers every directory), an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, `[`/`]` reorder (the board IS the burn order), ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `R` open the full cross-tank resume picker, `x` incognito, `n` new, `a` rename the tank, `d` delete, `s` toggle solo (in/out of the fleet), `m` the memory (Soul) dial, `c` clean up disk space (opens `clikae clean`, returns to the board), `/` filter, `A` cycle autonomy (ask/safe/full · BETA), `l` pick language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
 | `lang [<locale>]` | Show or set the interface language (dashboard + prompts) — nine of them: `en-US`, `ja-JP`, `zh-TW`, `zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR`, `pt-BR`. Bare `clikae lang` lists them. Persists to `$CLIKAE_HOME/lang`; the board's `l` key opens a language picker. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LC_ALL` > `$LANG` > en-US. Adding a tenth is a self-contained PR — see [Adding a language](/adding-a-locale.md). |
 | `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output `{cli, profile, account, path}` for scripts and the GUI. 🔴 **Do not build a path out of `cli` + `profile`** — `cli` is the name you *invoke* (`agy`) while the store directory keeps the engine's own name (`antigravity`), so the two differ for Antigravity. `path` is authoritative for where the tank lives; use it. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
@@ -412,7 +430,7 @@ rest of the sweep from being cleaned up.
 
 | Command | What it does |
 |---|---|
-| `clean [--dry-run] [--older-than <days>] [--min-size <MB>]` | Move old session transcripts/databases to the **Trash** to free disk space (never touches tank configs, memory, or settings, and never `rm`s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type `clikae clean`, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. **Redundant (safe)** — pre-checked: *stale copies* (`to`/relay and a cross-tank resume *copy* the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and *orphaned subagent data* (claude's leftover `<sid>/` sibling dirs; moving a transcript to the Trash takes its sibling dir with it). **Untouched for 30+ days** — pre-checked: sessions older than `--older-than` (default 30). **Big but recent — your call** — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled `diverged — has unique content`. A session any process still has open is never offered, in **any** section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). `--min-size` filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big *recent* sessions); combined with `--older-than` a candidate must satisfy both. `--dry-run` prints the same sectioned list with each row's `[x]`/`[ ]` state, without moving anything; a non-TTY run refuses to move anything. If `~/.Trash` isn't usable, clikae says so **before the confirm** and touches nothing — it never deletes as a fallback, because you asked it to move something, not to destroy it. If an individual item can't be moved mid-run it is left exactly where it is and named, and the summary counts only what actually moved. The board's `c` key and the resume picker's `c` key open the same screen and return. (`clikae resume cleanup`, where this flow first shipped, is a hidden alias that forwards here.) |
+| `clean [--dry-run] [--older-than <days>] [--min-size <MB>] [--no-archive-check]` | Move old session transcripts/databases to the **Trash** to free disk space (never touches tank configs, memory, or settings, and never `rm`s a session outright — emptying the Trash is what actually reclaims the space). The zero-knowledge path is the whole design: type `clikae clean`, look at ONE checkbox list in three sections (biggest first within each), press Enter, confirm in red. **Redundant (safe)** — pre-checked: *stale copies* (`to`/relay and a cross-tank resume *copy* the session and never clean the source; copies are grouped per session across all tanks, the largest is kept, and a copy is pre-checked only when it's provably contained in the kept one) and *orphaned subagent data* (claude's leftover `<sid>/` sibling dirs; moving a transcript to the Trash takes its sibling dir with it). **Untouched for 30+ days** — pre-checked: sessions older than `--older-than` (default 30). **Big but recent — your call** — unchecked: sessions of 20 MB or more that the first two sections didn't claim (the space hogs, visible with no flags), plus copies with unique content, labeled `diverged — has unique content`. A session any process still has open is never offered, in **any** section — the guard that closed a real data-loss incident where a live session slipped through unchecked (v0.14.1 — see CHANGELOG.md). A fourth guard, the same shape: a session written **after your last confirmed backup** is also never offered, in any section. clikae reads one line — a Unix epoch — from `$CLIKAE_HOME/state/transcripts-archived-at`; a backup job is expected to write it on every SUCCESSFUL run, meaning "everything written before this instant is archived elsewhere". A session modified after that instant is withheld, and the list says how many and why (`N session(s) not offered: written after the last archive run (2h ago)`). With **no marker at all** (missing, unreadable, not a plain number, or dated in the future — all treated as "not archived"), clean says so and offers **nothing** for session data by default; `--no-archive-check` overrides this, for a machine with no backup job by choice. The GC sweeps below (scrollback, burn sidecars, tank locks, prelaunch locks — none of them a conversation) are unaffected either way. `--min-size` filters the candidate pool by size — given alone it drops the age cutoff (space usually lives in big *recent* sessions); combined with `--older-than` a candidate must satisfy both. `--dry-run` prints the same sectioned list with each row's `[x]`/`[ ]` state (and the same archive-guard note), without moving anything; a non-TTY run refuses to move anything. If `~/.Trash` isn't usable, clikae says so **before the confirm** and touches nothing — it never deletes as a fallback, because you asked it to move something, not to destroy it. If an individual item can't be moved mid-run it is left exactly where it is and named, and the summary counts only what actually moved. The board's `c` key and the resume picker's `c` key open the same screen and return. (`clikae resume cleanup`, where this flow first shipped, is a hidden alias that forwards here.) |
 
 ### Antigravity (agy) — same verbs, one power mode
 
@@ -591,7 +609,7 @@ things (#136):
 | --- | --- |
 | a reading | back to the base interval |
 | `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
-| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `⏳ expired · usage --wake <tank>` the moment it lands. |
+| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired · usage --wake <tank>` the moment it lands. |
 | anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
 
 ## Ambient: turn GitHub replies into wake events (`watch github`)
@@ -996,9 +1014,55 @@ already written files or made a commit, none of that happens twice.
 **What it will not do.** No tmux, no live session, or no time in the vendor's
 sentence, and it schedules nothing — a waiter with a guessed time is worse than
 no waiter, because it fires at the wrong moment into something live. Before
-typing it checks that the session exists, that something is alive in it, and that
-the screen has stopped moving; a busy or dead pane is retried three times and
-then given up on, visibly, without sending anything.
+typing it checks that the session still exists and that the pane is not a
+corpse; if either fails it retries three times and then gives up, visibly,
+without sending anything.
+
+**It will also not type twice.** The engine may continue by itself now: when a
+limit lifts in the middle of a task, Claude Code writes its own "your usage
+limit has reset, continue" line and carries on, usually within a minute. A
+second `go` on top of that is an instruction landing in a conversation that is
+already working — so immediately before typing, the waiter re-reads the tank,
+and if anything has happened on it since the limit (a real turn, or that
+line) it sends nothing and records why. The case this feature exists for is the
+other one: a limit hit at the moment you pressed enter, where the engine does
+*not* resume itself and the session sits there until somebody types.
+
+**A reset that has already gone by still counts.** The watcher checks once a
+minute, and your machine may have been asleep — so it often meets a limit whose
+stated reset is already behind it. The vendor's sentence names a time of day,
+not a date, so "resets 8:20pm" read at 21:00 used to mean 8:20pm *tomorrow*,
+and the waiter would have sat there for nearly a day. A stated reset less than
+six hours behind now means it has happened, and the waiter goes straight to
+deciding whether to type. Further back than that is treated as a genuine
+next-day time, because no limit clikae can still be holding is that old.
+
+**A moving screen is no longer a reason not to type.** It used to be: the
+waiter waited for the pane to stop changing between two captures, on the
+reasoning that movement could mean a tool call in flight. On a tank that is
+still out of fuel it cannot mean that — the API is refusing turns — and what a
+limited engine leaves on screen is a banner with a live countdown in it, which
+re-renders every second, forever. That check therefore never passed, the waiter
+gave up within five minutes of every reset, and it said so into a window nobody
+had open. It is a short settle delay now, and when the screen is still moving
+the nudge goes anyway and the trace says the check was bypassed.
+
+**You can find out what it did.** Every outcome is appended to a small,
+capped log per tank under `$CLIKAE_HOME/state/wake/`, and the last one per tank
+is printed by bare `clikae wake` and by `clikae doctor`:
+
+```
+wake: on — resume automatically when the limit lifts
+
+  Last outcome per tank (…/state/wake):
+    claude-work            typed         2026-09-17T03:51:02Z  ·  "go" — pane idle
+    claude-reserve         skipped       2026-09-16T15:01:30Z  ·  vendor auto-continued; nothing typed
+```
+
+It records what HAPPENED, never what is true now — that distinction is why it
+does not violate the no-state-file rule below. A history cannot go stale; a
+record of which tank is dry would, and would then lie. Delete the directory and
+you lose nothing but the history.
 
 **Why 60 seconds after the stated time.** Measured, not padded: across 116 real
 outages where nothing succeeded during the window, the earliest success after the
@@ -1006,9 +1070,10 @@ vendor's stated reset was **30 seconds** — six separate times. The time in tha
 sentence is accurate to the second, so 60s is that margin doubled rather than a
 hedge against rounding nobody checked.
 
-There is no daemon and no state file. The waiter lives inside the session it is
-waiting for and dies with it, which is correct: if the session is gone, there is
-nothing to resume.
+There is no daemon, and nothing anywhere remembers whose fuel is where. The
+waiter lives inside the session it is waiting for and dies with it, which is
+correct: if the session is gone, there is nothing to resume. The only thing it
+leaves behind is the log of what it did, above.
 
 ## Headless tasks across tanks — `clikae burn`
 

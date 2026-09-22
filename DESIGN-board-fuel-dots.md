@@ -264,11 +264,15 @@ choosing the relevant per-model row would require knowing which model a tank
 runs and a tank carries no such property (`--model` is an argument to
 `burn`/`relay`). They are reported by `clikae usage` only.
 On the board an expired reading under 24h old draws the no-reading `·` with
-the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not the
-dot: every dot is one column and the row grid is padded around that, an emoji
-is two; and the note is the short form because a tank row leaves 33 columns
-for it on an 80-column terminal — `clikae usage` prints the full sentence,
-`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The optional
+the note `expired · usage --wake <tank>` (the word lives in the note, not the
+dot — no emoji on any delivery surface, so the note carries a word and costs
+no special width handling; and the note is the short form because a tank row
+leaves 33 columns for it on an 80-column terminal — `clikae usage` prints the
+full sentence, `token expired — run a session or 'clikae usage --wake
+<tank>'`). The tmux status row, which has a fuel SLOT rather than a padded
+grid, draws the word `expired` in that slot instead of the dot, on the same
+24h ceiling, measured like any other ASCII fuel string
+(`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
 same rollout transcript evidence `limit_codex_status` does, so its source is
@@ -390,6 +394,25 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   sit unverified forever behind cap-many fresher-but-not-necessarily-better
   candidates; and the loop stops the moment a refresh confirms a verified 0%
   (an unbeatable floor) rather than always spending every call in the cap.
+- **(e)** a LIVE SESSION refreshes its own tank, from the `wake` window it
+  already has (2026-09-22). (a)–(d) between them left the refresh UNOWNED on
+  a machine where nobody burns: measured, a nine-day-old cache and a tmux
+  status row showing the no-reading `·` the whole time, while a machine
+  burning all day showed live numbers — one `clikae usage <engine> <tank>`
+  took 0.7s and the row read `5h 25% · 7d 10%` on the next redraw. So the
+  session that is spending the quota is the one that keeps the reading
+  current: one `usage_read` at launch, backgrounded, for a session clikae
+  just spawned (`wake_usage_prime`, called from `lib/commands/switch.sh`),
+  and one every `WAKE_USAGE_INTERVAL` (300s) from the watcher's own loop
+  (`wake_watch`, `lib/core/wake.sh`). Same writer, same terms —
+  `CLIKAE_USAGE_TTL` still applies, so a cadence shorter than the TTL would
+  only re-read the cache — and it keeps that file's constraint: no daemon,
+  no state file, nothing that outlives the session, and no model of anyone's
+  quota. The tmux row itself still NEVER fetches (`tmux_status_fuelv`;
+  `docs/DESIGN-tmux.md` Rule 11 §3 carries the same receipt), and a refresh
+  that fails is silent: the last reading stays on disk and the row's own age
+  suffix says how old it is. A tank nobody has a session on is unaffected —
+  it ages on the board exactly as (c) describes.
 
 **Three different clocks answer three different questions here — reconciled,
 not unified, because unifying them would make one of the three lie (round-5
@@ -459,9 +482,19 @@ verbatim reset string included, before the vendor cache is even consulted
 (round-3 review, P2-1: the reverse ordering let any <24h cached reading
 paper over a dry tank). The vendor reading only colours a tank that has
 already cleared both checks: for a current (<24h) reading on such a tank,
-the higher used percentage determines the dot — 90% or more red, 60% or
-more yellow, otherwise green — and the note shows both window and weekly
-percentages. Missing readings, and readings 24h or older, are treated as
+window and weekly are judged **separately** (2026-09-22 decision), not by
+`peak = max(window_pct, weekly_pct)` — they cost differently: a full 5h
+window means "wait up to two hours", a full week means the tank is gone for
+days.
+
+| dot | condition |
+|---|---|
+| 🔴 red `○` | transcript-dry (unchanged, above), OR window ≥ 100, OR weekly ≥ 100 |
+| 🟡 yellow `◐` | weekly ≥ 85 (dispatch should already be moving to another tank — one step before the fleet's own "stop burning a shared tank at 90%" rule), OR window ≥ 90 (a burn dispatched now will probably die mid-run) |
+| 🟢 green `●` | otherwise |
+
+The note keeps carrying both percentages verbatim, unchanged ("window N% ·
+weekly N%"). Missing readings, and readings 24h or older, are treated as
 unknown and fall through to the existing weekly-caution / codex-status /
 ready chain below.
 
