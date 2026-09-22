@@ -721,7 +721,7 @@ EOF
 # same whether alone or clustered, so `kill-session -at cur` plainly names
 # `cur` but was refused anyway, with a message claiming no target was named.
 
-@test "shim: t clustered with kill-session's other short options still counts as a named target (P3-新2)" {
+@test "shim: t clustered with kill-session's other short options still counts as a named target (P3-new-2)" {
   _tg_recorder
   local bash_bin; bash_bin="$(command -v bash)"
   local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
