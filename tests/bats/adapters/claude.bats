@@ -206,6 +206,23 @@ _setup_claude_adapter() {
   [ "$status" -eq 0 ]
 }
 
+@test "claude adapter_all_transcripts does not descend into a sid dir's own subagents/ files" {
+  _setup_claude_adapter
+  local sid="cccccccc-2222-3333-4444-555555555555"
+  printf '{"type":"ai-title","aiTitle":"real"}\n' > "$PROJ/$sid.jsonl"
+  # A sibling sid dir's own nested transcript (subagent/workflow data) is
+  # priced WITH its parent via clean's sibling-dir du, never enumerated as an
+  # independent top-level transcript in its own right — unbounded find used
+  # to hand this back as a second, unrelated "session".
+  mkdir -p "$PROJ/$sid/subagents"
+  printf '{"type":"user","isSidechain":true}\n' > "$PROJ/$sid/subagents/agent-1.jsonl"
+
+  run adapter_all_transcripts "$PROFILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$sid.jsonl"* ]] || { echo "missing the real transcript: $output"; false; }
+  [[ "$output" != *"subagents"* ]] || { echo "nested subagent data leaked out as its own transcript: $output"; false; }
+}
+
 @test "claude adapter_recent_sids leaves subagent transcripts out of the board's list" {
   _setup_claude_adapter
   printf '{"type":"ai-title","aiTitle":"real"}\n' > "$PROJ/11111111-2222-3333-4444-555555555555.jsonl"
