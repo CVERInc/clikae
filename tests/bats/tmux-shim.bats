@@ -466,7 +466,7 @@ EOF
   tmux -S "$sock" kill-server 2>/dev/null || true
 }
 
-@test 'shim: a `\;` command list checks EVERY segment, not just the first' {
+@test 'shim: a backslash-semicolon command list checks EVERY segment, not just the first' {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   local sock="$TEST_HOME/bypass-list.sock"
   tmux -S "$sock" new-session -d -s bypasslist 'sleep 60'
@@ -482,7 +482,7 @@ EOF
 # under the old check, which scanned -S/-L/-t/-a once over the whole argv
 # before the verb loop ran at all.
 
-@test 'shim: a `;` glued onto the previous word (ls\; kill-server, no space) still ends the segment' {
+@test 'shim: a semicolon glued onto the previous word (ls\; kill-server, no space) still ends the segment' {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   local sock="$TEST_HOME/bypass-glued.sock"
   tmux -S "$sock" new-session -d -s bypassglued 'sleep 60'
@@ -669,7 +669,7 @@ EOF
 # never checked: `tmux -X val kill-server` reached a real disposable server,
 # rc 0. No real tmux needed: the refusal decision never resolves one.
 
-@test "shim: an unrecognised global option before the verb fails closed on kill-server/kill-session, and only on those (P3-新1)" {
+@test "shim: an unrecognised global option before the verb fails closed on kill-server/kill-session, and only on those (P3-new-1)" {
   _tg_recorder
   local bash_bin; bash_bin="$(command -v bash)"
   local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
@@ -704,7 +704,7 @@ EOF
   [ -z "$bad" ] || { echo "$bad"; false; }
 }
 
-@test "shim: an unrecognised global option before the verb names itself in the refusal message (P3-新1)" {
+@test "shim: an unrecognised global option before the verb names itself in the refusal message (P3-new-1)" {
   local sock="$TEST_HOME/unknown-opt-msg.sock"
   run env TMUX="$sock,1,0" bash "$(SHIM)" -X val kill-server
   [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
