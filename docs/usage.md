@@ -267,7 +267,7 @@ way.
 | `to [target] [tank]` | Carry this shell's session onward when a tank runs dry. **Bare `clikae to`** falls through to the next tank in your burn order (same engine → a real resume; a different engine → a cold-start brief). Your tanks are the reserve — nothing to configure. |
 | `auto [ask\|safe\|full]` | **(BETA, claude-launched sessions only)** How much clikae carries on its own when a session **you launched through `clikae`** hits the limit — it has no effect on alias/`.app`/other-engine launches. `ask` (default) prompts; `safe` auto-resumes same-engine + asks to cross; `full` keeps going (same-engine = resume, cross-engine = a cold brief). The board's `A` key cycles it. |
 | `watch <engine> [<tank>] [--auto] [--to <target>]` | Watch a session and fall through to the next tank in the burn order when it runs dry (cross-engine via `--to`). |
-| `wake [on\|off]` · `wake <engine> <tank>` | Stay where you are and let the tank pick itself back up: when the limit lifts, clikae types `go` into that tank's own session and the conversation continues. Asked once, then remembered. |
+| `wake [on\|off]` · `wake <engine> <tank>` | Stay where you are and let the tank pick itself back up: when the limit lifts, clikae types `go` into that tank's own session and the conversation continues — unless the engine already continued by itself, which it now sometimes does. Asked once, then remembered. Bare `clikae wake` also prints what the waiter did the last few times a tank ran dry. |
 | `burn <engine> <tank> --artifact <path> -- <cmd…>` | Run a **headless** task on a tank; verify it by the artifact (not the exit code); on a dry tank, re-fire the same task on the next reserve tank. The headless sibling of `to`/`watch`. See "Headless tasks" below. |
 
 > **Supervised launch (BETA · claude · feedback welcome).** When you start claude
@@ -1014,9 +1014,55 @@ already written files or made a commit, none of that happens twice.
 **What it will not do.** No tmux, no live session, or no time in the vendor's
 sentence, and it schedules nothing — a waiter with a guessed time is worse than
 no waiter, because it fires at the wrong moment into something live. Before
-typing it checks that the session exists, that something is alive in it, and that
-the screen has stopped moving; a busy or dead pane is retried three times and
-then given up on, visibly, without sending anything.
+typing it checks that the session still exists and that the pane is not a
+corpse; if either fails it retries three times and then gives up, visibly,
+without sending anything.
+
+**It will also not type twice.** The engine may continue by itself now: when a
+limit lifts in the middle of a task, Claude Code writes its own "your usage
+limit has reset, continue" line and carries on, usually within a minute. A
+second `go` on top of that is an instruction landing in a conversation that is
+already working — so immediately before typing, the waiter re-reads the tank,
+and if anything has happened on it since the limit (a real turn, or that
+line) it sends nothing and records why. The case this feature exists for is the
+other one: a limit hit at the moment you pressed enter, where the engine does
+*not* resume itself and the session sits there until somebody types.
+
+**A reset that has already gone by still counts.** The watcher checks once a
+minute, and your machine may have been asleep — so it often meets a limit whose
+stated reset is already behind it. The vendor's sentence names a time of day,
+not a date, so "resets 8:20pm" read at 21:00 used to mean 8:20pm *tomorrow*,
+and the waiter would have sat there for nearly a day. A stated reset less than
+six hours behind now means it has happened, and the waiter goes straight to
+deciding whether to type. Further back than that is treated as a genuine
+next-day time, because no limit clikae can still be holding is that old.
+
+**A moving screen is no longer a reason not to type.** It used to be: the
+waiter waited for the pane to stop changing between two captures, on the
+reasoning that movement could mean a tool call in flight. On a tank that is
+still out of fuel it cannot mean that — the API is refusing turns — and what a
+limited engine leaves on screen is a banner with a live countdown in it, which
+re-renders every second, forever. That check therefore never passed, the waiter
+gave up within five minutes of every reset, and it said so into a window nobody
+had open. It is a short settle delay now, and when the screen is still moving
+the nudge goes anyway and the trace says the check was bypassed.
+
+**You can find out what it did.** Every outcome is appended to a small,
+capped log per tank under `$CLIKAE_HOME/state/wake/`, and the last one per tank
+is printed by bare `clikae wake` and by `clikae doctor`:
+
+```
+wake: on — resume automatically when the limit lifts
+
+  Last outcome per tank (…/state/wake):
+    claude-work            typed         2026-09-17T03:51:02Z  ·  "go" — pane idle
+    claude-reserve         skipped       2026-09-16T15:01:30Z  ·  vendor auto-continued; nothing typed
+```
+
+It records what HAPPENED, never what is true now — that distinction is why it
+does not violate the no-state-file rule below. A history cannot go stale; a
+record of which tank is dry would, and would then lie. Delete the directory and
+you lose nothing but the history.
 
 **Why 60 seconds after the stated time.** Measured, not padded: across 116 real
 outages where nothing succeeded during the window, the earliest success after the
@@ -1024,9 +1070,10 @@ vendor's stated reset was **30 seconds** — six separate times. The time in tha
 sentence is accurate to the second, so 60s is that margin doubled rather than a
 hedge against rounding nobody checked.
 
-There is no daemon and no state file. The waiter lives inside the session it is
-waiting for and dies with it, which is correct: if the session is gone, there is
-nothing to resume.
+There is no daemon, and nothing anywhere remembers whose fuel is where. The
+waiter lives inside the session it is waiting for and dies with it, which is
+correct: if the session is gone, there is nothing to resume. The only thing it
+leaves behind is the log of what it did, above.
 
 ## Headless tasks across tanks — `clikae burn`
 

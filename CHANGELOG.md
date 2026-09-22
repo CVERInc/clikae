@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property — `--model` is an argument to `burn`/`relay`, never a setting. So
   these numbers are reported, not acted on (#137).
 
+- **A durable trace of what the waiter did.** Every outcome — attached, each
+  attempt, `typed`, `skipped: vendor auto-continued`, `gave up`, `session gone`
+  — is appended to `$CLIKAE_HOME/state/wake/<engine>-<tank>.log`, and the last
+  one per tank is printed by bare `clikae wake` and by `clikae doctor`. Until
+  now the waiter's only account of itself was text in a tmux window that dies
+  with the session, which is why 23 of those 24 outcomes could not be named by
+  anybody. The file records EVENTS, never state: a history cannot go stale, so
+  this does not reintroduce the model of who-is-dry that this feature was
+  deliberately designed without. Capped (oldest rows dropped, newest kept) so a
+  tank that runs dry daily costs a few KB a year, and deleting the directory
+  loses nothing but the history.
+
 ### Fixed
 
 - **`clikae doctor` verifies the tmux guard on macOS instead of answering
@@ -130,6 +142,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bounded by `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per tank.
 - **The board's "N sessions total" footer counted no grok sessions.** Its
   glob list had the same hole `clikae resume`'s did.
+
+- **`clikae wake` now actually types the nudge when a limit lifts, and leaves a
+  record either way.** Measured over 21 days of one tank's transcripts: 24
+  usage-limit events, and the waiter's `go` reached a pane once. The gate that
+  stopped it was the idle check — the waiter refused to type until the pane
+  stopped changing between two captures, on the reasoning that a moving screen
+  could be a tool call in flight. On a tank that still reads dry it cannot be:
+  the API is refusing turns. What a limited engine leaves on screen is a banner
+  with a live countdown in it, and a countdown re-renders every second forever.
+  Verified against the mechanism rather than inferred: a pane whose only change
+  is one ticking line fails the identical-captures check on every pair, while
+  the same banner text held still passes it. So the waiter spent its three
+  attempts and gave up within five minutes of every reset. After the reset
+  instant the requirement is now only that the session exists, that the pane is
+  not dead, and that the tank is still dry; the idle check is a short settle
+  delay, and a nudge sent over a moving screen says so in the trace. The
+  existence half of the old check was split out (`wake_pane_live`) rather than
+  loosened — a dead pane is still refused and still retried.
+- **The waiter no longer risks a second `go` after the engine resumed itself.**
+  Claude Code now writes its own user-role line when a usage limit lifts
+  mid-task — carrying `isMeta`, `promptSource: "system"` and the structural
+  marker `"origin":{"kind":"auto-continuation"}` — and carries on, typically
+  within a minute. Nothing read that line, so the tank kept reading DRY for as
+  long as the assistant turn that followed took to land. It is now a recovery
+  marker in the claude transcript scan, exactly like a successful turn, and the
+  waiter re-reads the tank immediately before typing: positive evidence of
+  recovery means it sends nothing and logs `skipped`. Matched structurally, so
+  a transcript merely quoting the marker (where JSONL escapes its quotes) does
+  not clear anyone's tank. Relatedly, `limit_profile_dry`'s claude branch now
+  returns `2` on positive recovery evidence, symmetric with the codex branch
+  that already did — the difference from `1` ("this scan found nothing", which
+  is also what an untouched tank outside the 5h window looks like) is what lets
+  the waiter skip without also going silent on the case it exists for.
+- **A reset that has already passed no longer resolves to tomorrow, and the
+  watcher acts on it.** An undated phrase names a time of day, not a date, so
+  `resets 8:20pm` read at 21:00 resolved to 8:20pm the NEXT day — measured, a
+  phrase 40 minutes past came back 1400 minutes in the future. The waiter was
+  then handed an instant nearly a day out and the session sat there, which is
+  the same outcome as the idle-gate bug above reached by a different route: the
+  watcher polls once a minute and the machine may have been asleep, so meeting
+  a limit after its stated reset is ordinary. A wall-clock reset behind the
+  reference instant by less than `LIMIT_RESET_PAST_GRACE` (6h) is now read as
+  having already happened and returned as the past instant it is. The bound is
+  derived rather than chosen: a limit any caller can be holding is at most ~5h
+  old by construction (the transcript scan window is 300 minutes and the
+  vendor's own session window is 5h), so anything further back is a genuine
+  next-day phrase read on the wrong side of midnight, and firing on it at once
+  would be worse than the bug. A tie is deliberately excluded — a phrase is
+  written at the instant the limit fires, so `resets 3:50am` arriving AT 3:50am
+  still means the next occurrence.
+  Second half of the same fix: once the stated reset is behind us with no
+  successful turn since, `limit_tank_dry` correctly reports the tank NOT DRY
+  (`reset passed · unverified` — the fuel is probably back) while the session it
+  was limited in is still parked waiting for somebody to type. The watcher
+  used to key on dryness alone and would therefore have watched straight past
+  it; it now treats that verdict as a hand-over too, with the instant being now.
+  The waiter's own auto-continuation check still runs in front of the nudge.
 
 ### Changed
 
