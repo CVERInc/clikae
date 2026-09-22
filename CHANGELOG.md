@@ -49,6 +49,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docs explain why worktree commit/push/network lanes need the broader sandbox
   (#129).
 
+### Fixed
+
+- **The (engine/tank, `$PWD`) prelaunch lock `clikae burn` takes around
+  `soul_prelaunch`/`fleet_mcp_prelaunch` (#0.28.9's fix) is a file nothing ever
+  removed.** By design it is never unlinked right after release — deleting a
+  lock file a concurrent burn may already have open is the classic lock-file
+  race — so every distinct (tank, cwd) left one behind in `~/.clikae/state`
+  forever, mixed in with real state files (195 of them on one machine,
+  measured, the oldest from 2026-09-06). `clikae clean` had no notion of them
+  at all.
+
+  The lock now lives under `state/locks/` instead of `state/` directly, and a
+  new GC (`_burn_prelaunch_lock_gc`) reclaims it on age, never on a recorded
+  holder: `exec 7>` truncates the file on every acquisition, which bumps its
+  mtime, so a held lock is always younger than any real threshold — only a
+  file untouched for over a day is provably abandoned. The sweep runs
+  opportunistically once per `clikae burn` invocation and from `clikae clean`
+  (which reports the count the same way it reports every other reclaimable
+  class), and cleans the old `state/`-top-level location too, so an existing
+  machine tidies up on its next `burn` or `clean`.
+
 ## [0.30.0] — 2026-09-17
 
 ### Changed
