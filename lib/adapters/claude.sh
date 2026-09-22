@@ -800,8 +800,23 @@ adapter_transcript_is_resumable() {
 # claude path: claude is TOLD its session id (--session-id) before it runs, so
 # burn records that proven id and never reaches the snapshot diff — the diff is
 # only consulted when no transcript for the launched sid ever appeared.
+#
+# 🔴 -maxdepth 2, matching the pre-adapter glob this replaced
+# (`projects/*/*.jsonl`: project-dir, then the transcript). A session's sibling
+# `<sid>/` directory holds subagent/workflow transcripts of its own
+# (`<sid>/subagents/*.jsonl` — see _clean_add_candidate's header in
+# clean.sh), one level deeper; without the bound, `find` recurses into it and
+# hands back that nested file as a SECOND, independent top-level transcript.
+# `clean`'s batched `du -sk` then prices the sid dir AND that same file
+# together in one invocation — harmless on BSD du (each argument's total is
+# computed independently), but GNU du de-duplicates by inode ACROSS the whole
+# argument list, so the directory total comes back 0 once its one file was
+# already counted under its own argument. That silently dropped the sibling
+# dir's bytes from the transcript's price on Linux only (CI: clean.bats
+# "clean prices a claude transcript together with its sibling sid dir"),
+# reproduced locally with GNU coreutils' `gdu`.
 adapter_all_transcripts() {
-  find "$1/projects" -type f -name '*.jsonl' 2>/dev/null
+  find "$1/projects" -maxdepth 2 -type f -name '*.jsonl' 2>/dev/null
 }
 
 # Optional hook: the working directory a transcript was recorded in. Claude Code
