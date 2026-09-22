@@ -548,6 +548,18 @@ STUB
 
 @test "doctor still says 'could not verify', not 'missing', for an unguarded session when ps can't read process env" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # 🔴 THIS SCENARIO ONLY EXISTS WHERE `ps` IS THE MECHANISM (Darwin — see the
+  # P4 note on `_doctor_pane_path`). Stubbing `ps` proves nothing on a host
+  # with a real /proc: `_doctor_pane_path` checks `[ -r "/proc/$pid/environ" ]`
+  # BEFORE it ever runs `uname`/`ps`, so on Linux this session's real, live,
+  # same-uid pane process is read straight from /proc regardless of what `ps`
+  # says. And for a BARE `tmux new-session` (this test's whole premise — no
+  # `env PATH=` wrapper), that real environment genuinely does not have the
+  # shim first, so "not first on PATH" is the TRUE, correct verdict there —
+  # not a failure to verify. Forcing "could not verify" on such a host would
+  # be asserting the wrong thing, not testing the same defect; see the sibling
+  # case right below for the /proc-side guarantee this one can't exercise.
+  [ -r "/proc/$$/environ" ] && skip "this host reads /proc directly (Linux): ps can't-read is not reachable, see the sibling test below"
   local sess; sess="clikae-codex-$(_tg_tank)"
   # A bare tmux new-session — no env PATH= wrapper in its start command
   # either — so the fallback has nothing to offer, same as ps: this must
@@ -561,6 +573,26 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" == *"could not verify:$sess"* || "$output" == *"could not verify: $sess"* ]] || { echo "$output"; false; }
   [[ "$output" != *"not first on PATH"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor reports 'not first on PATH', not 'could not verify', for an unguarded session on a host whose /proc genuinely answers (the Linux branch's sibling of the test above)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # The inverse guard from the test above: this one is the case that only
+  # applies where `/proc/<pid>/environ` really does answer for a live,
+  # same-uid pane process (Linux). There, `_doctor_pane_path` never touches
+  # `ps` or the spawn-command fallback at all — it reads the pane's REAL
+  # environment straight from /proc, and for a bare, unguarded session that
+  # environment genuinely lacks the shim, so doctor is right to call it
+  # "not first on PATH" rather than hedge with "could not verify". No `ps`
+  # stub here on purpose: /proc answers before `ps` would ever be reached.
+  [ -r "/proc/$$/environ" ] || skip "this host has no working /proc read of its own process (macOS): see the test above for that branch"
+  local sess; sess="clikae-codex-$(_tg_tank)"
+  tmux new-session -d -s "$sess" 'sleep 60'
+  run clikae doctor
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not first on PATH:"*"$sess"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"could not verify:$sess"* && "$output" != *"could not verify: $sess"* ]] || { echo "$output"; false; }
 }
 
 @test "doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)" {
