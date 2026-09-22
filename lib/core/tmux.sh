@@ -756,7 +756,7 @@ tmux_spawn_session() {
 # or empty.
 #
 #   "5h 42% · 7d 65%"   from #72's usage CACHE, when it holds a reading
-#   "⏳"                 the cache says the token expired (#107) — a state with a
+#   "expired"           the cache says the token expired (#107) — a state with a
 #                       remedy, so it is not collapsed into "no reading"
 #   "○" / "·"           the board's own dry / no-reading glyphs, when it does not
 #
@@ -866,8 +866,8 @@ tmux_status_fuelv() {
     # cache says which of the two this is (`source:"expired"`, written only with
     # `reason:"expired-token"` — see usage_unknown, lib/core/usage.sh), and the
     # remedy is one a person can act on: run a session, or `clikae usage --wake
-    # <tank>`. So the row says so with the board's own mark for this state
-    # (usage_expired_board_notev's `⏳`) rather than the glyph that means
+    # <tank>`. So the row says so with the word (no emoji on a delivery surface
+    # — see usage_expired_board_notev) rather than the glyph that means
     # "nobody has read this tank yet".
     #
     # 🔴 THE SAME FRESHNESS CEILING AS A READING, on purpose: `fresh` is already
@@ -883,7 +883,7 @@ tmux_status_fuelv() {
     if [ "$fresh" = 1 ]; then
       burn_status_fieldv "$json" source; src="$_BSF"
       if [ "$src" = '"expired"' ]; then
-        _TSTAT_FUEL="⏳"
+        _TSTAT_FUEL="expired"
         return 0
       fi
     fi
@@ -1207,14 +1207,9 @@ _tmux_status_colsv() {
   # 🔴 never `~` as a replacement: bash 5.2 TILDE-EXPANDS the replacement
   # string, so `${s//…/~}` silently substitutes $HOME and inflates the count.
   s="${s//·/.}"; s="${s//○/o}"; s="${s//│/|}"; s="${s//…/.}"
-  # 🔴 `⏳` IS TWO CELLS, AND THAT IS WHY IT GETS TWO BYTES. The four glyphs
-  # above are East Asian AMBIGUOUS (tmux lays them out at 1); U+23F3 is WIDE,
-  # so tmux lays it out at 2 whatever the locale says. Measured rather than
-  # looked up — tmux 3.7b, throwaway socket, the glyph typed into a pane and
-  # `#{cursor_x}` read back: `·` 1, `○` 1, `⏳` 2, `AB` 2. Counting it as one
-  # cell would make the ladder hand out a column the row does not have, on the
-  # rung where the alert count and the clock are supposed to be untouchable.
-  s="${s//⏳/xx}"
+  # No delivery surface prints emoji (2026-09-22): the "token expired" state
+  # is the plain ASCII word `expired`, measured like any other fuel string —
+  # no substitution needed for it.
   _TSTAT_COLS="${#s}"
 }
 

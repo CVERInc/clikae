@@ -1621,11 +1621,13 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
   # its stdout keeps the "<engine>/<tank> <reading>" line shape.
-  [[ "$stderr" != *"⏳"* ]] || false
+  [[ "$stderr" != *"token expired"* ]] || false
   USAGE_HTTP=401 run --separate-stderr clikae usage claude work
   [ "$status" -eq 0 ]
   [[ "$output" == 'claude/work {'*'"source":"expired"'* ]] || { echo "stdout: $output"; false; }
-  [[ "$stderr" == *"⏳ token expired — run a session or 'clikae usage --wake work'"* ]] || { echo "stderr: $stderr"; false; }
+  # No emoji on this delivery surface — the hint is words only.
+  [[ "$stderr" == *"token expired — run a session or 'clikae usage --wake work'"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" != *"⏳"* ]] || { echo "the old glyph is back: $stderr"; false; }
 }
 
 @test "#107: the board says an expired tank is expired, with the remedy, instead of a green ready dot" {
@@ -1648,25 +1650,27 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
   [ "$_FDOT" = 'D·' ] || { echo "dot: $_FDOT"; false; }
-  [ "$_FNOTE" = "⏳ expired · usage --wake work" ] || { echo "note: $_FNOTE"; false; }
+  # No emoji on this delivery surface (2026-09-22 correction — the note used
+  # to lead with `⏳`, which breached the standing no-emoji rule).
+  [ "$_FNOTE" = "expired · usage --wake work" ] || { echo "note: $_FNOTE"; false; }
   # It fits the tank row's gutter on an 80-column terminal: 47 columns of
-  # row before the note, the ⏳ counts two.
-  local n="${_FNOTE#⏳}"
-  [ $(( 47 + 2 + ${#n} )) -le 80 ] || { echo "note too wide: $_FNOTE"; false; }
+  # row before the note, and the note is plain ASCII now — measured like any
+  # other fuel string, no per-glyph width exception.
+  [ $(( 47 + ${#_FNOTE} )) -le 80 ] || { echo "note too wide: $_FNOTE"; false; }
 
   # Past 24h it is too old to say anything about: falls through, no hint.
   jq -cn --argjson at "$(( now - 90000 ))" \
     '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"expired",reason:"expired-token",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [[ "$_FNOTE" != *"⏳"* ]] || { echo "24h-old note: $_FNOTE"; false; }
+  [[ "$_FNOTE" != *"expired"* ]] || { echo "24h-old note: $_FNOTE"; false; }
 
   # An unknown reading is not dressed up as expired.
   jq -cn --argjson at "$(( now - 300 ))" \
     '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"unknown",reason:"network",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [[ "$_FNOTE" != *"⏳"* ]] || { echo "unknown note: $_FNOTE"; false; }
+  [[ "$_FNOTE" != *"expired"* ]] || { echo "unknown note: $_FNOTE"; false; }
 }
 
 # _usage107_wake_stubs — a claude that "refreshes the token" (touches

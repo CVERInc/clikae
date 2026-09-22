@@ -1511,10 +1511,12 @@ _home_fuel_dotv_compute() {
   # said out loud instead of falling through to a green "ready" — an idle tank
   # at 99% weekly used to look exactly like a fresh one. The dot is the
   # honest "no reading" `·` (there are no numbers), and the note carries the
-  # ⏳ and the remedy, cut to fit the gutter (usage_expired_board_notev; the
-  # full sentence is `clikae usage`'s). Not ⏳ as the dot: every dot is one column wide and the
-  # row grid is padded around that; an emoji is two. Fork-free: one `read` of
-  # a one-line file, the same technique lib/core/tmux.sh's status row uses.
+  # word "expired" and the remedy, cut to fit the gutter
+  # (usage_expired_board_notev; the full sentence is `clikae usage`'s). No
+  # emoji anywhere on this row (no delivery surface prints one) — the note is
+  # a word, not a glyph, so it costs no special width handling. Fork-free:
+  # one `read` of a one-line file, the same technique lib/core/tmux.sh's
+  # status row uses.
   local _ucache="$CLIKAE_HOME/state/usage/$cli/$profile.json" _uline="" _uca
   if [ -f "$_ucache" ]; then
     IFS= read -r _uline < "$_ucache" || true
