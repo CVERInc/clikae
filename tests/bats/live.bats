@@ -740,3 +740,72 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   [[ "$block" == *"\"$(_tank)\""* ]] || { echo "did not fall back to the tank's own name:"; echo "$output"; false; }
   [[ "$block" != *'""'* ]] || { echo "title rendered as a literal empty string:"; echo "$output"; false; }
 }
+
+# --- the locale the person's shell happens to have (2026-09-23) ----------------
+# tmux's `-F` output is LOCALE-DEPENDENT, which nothing here knew. Under a
+# C/POSIX locale tmux rewrites a TAB inside a format string to `_` (measured,
+# tmux 3.7b/macOS: `LC_ALL=C tmux list-sessions -F '#{session_name}<TAB>…'`
+# prints `t _ 0`); under a UTF-8 locale the same TAB comes through. So
+# `live_session_names`, which used to ask for three TAB-separated fields and
+# `grep` for a tab, returned NOTHING AT ALL for anyone whose shell had
+# `LC_ALL=C` or `LANG=C` — ssh with no locale forwarding, cron, CI, a minimal
+# container — and every consumer (the board's Live section, `clikae doctor`'s
+# tmux-guard check, wake) then behaved as though the machine had no sessions,
+# silently. Nobody at a UTF-8 terminal could ever see it.
+#
+# 🔴 BOTH ARMS, ALWAYS. A single-locale test proves nothing here: the old code
+# is green under UTF-8 and the fix must not trade one locale for the other.
+# The rows are read through the function itself, in a child shell with the
+# locale set, because that is where the format string is evaluated.
+
+# _rows_under <locale> -> live_session_names as that locale would see it.
+_rows_under() {
+  env LC_ALL="$1" LANG="$1" bash -c '
+    . "$1/lib/core/log.sh"
+    . "$1/lib/core/tmux.sh"
+    . "$1/lib/core/live.sh"
+    live_session_names
+  ' _ "$CLIKAE_TEST_ROOT"
+}
+
+@test "live: live_session_names reads its rows under a C locale AND under a UTF-8 one" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  locale -a 2>/dev/null | grep -qx 'en_US.UTF-8' || skip "no en_US.UTF-8 on this machine"
+  tmux new-session -d -s "$(_sess)" 'sleep 30'
+
+  local c utf8
+  c="$(_rows_under C)"
+  utf8="$(_rows_under en_US.UTF-8)"
+
+  # The row is there at all…
+  [[ "$c" == *"$(_sess)"* ]] || { echo "LC_ALL=C saw no row. got: $(printf '%q' "$c")"; false; }
+  [[ "$utf8" == *"$(_sess)"* ]] || { echo "LC_ALL=en_US.UTF-8 saw no row. got: $(printf '%q' "$utf8")"; false; }
+
+  # …and it is the SHAPE the callers destructure: name <TAB> created <TAB>
+  # attached, with `created` a real epoch. `grep -c .` over three fields is
+  # not enough — a row of `clikae-codex-t _ 172… _ 0` contains the name too.
+  local name created attached
+  IFS=$'\t' read -r name created attached <<<"$(printf '%s\n' "$c" | head -n1)"
+  [ "$name" = "$(_sess)" ] || { echo "field 1 was '$name'"; false; }
+  [[ "$created" =~ ^[0-9]+$ ]] || { echo "field 2 was not an epoch: '$created'"; false; }
+  [ "$attached" = "0" ] || { echo "field 3 was '$attached'"; false; }
+
+  # The two locales must agree, or the board shows different machines to the
+  # same person depending on how they logged in.
+  [ "$c" = "$utf8" ] || { echo "C and UTF-8 disagree:"; printf '%q\n%q\n' "$c" "$utf8"; false; }
+}
+
+@test "live: a session name containing the field separator is still read whole" {
+  # The separator is now a printable `|`, which a person CAN type into a tank
+  # name. That is why the two numeric fields are emitted FIRST and the name
+  # last: `#{session_created}` and `#{session_attached}` are digits, so the
+  # parse takes them off the front and whatever remains — pipes and all — is
+  # the name. Read the other way round, this row would lose its tail.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  local sess; sess="clikae-codex-$(_tank)|x"
+  tmux new-session -d -s "$sess" 'sleep 30'
+  local rows; rows="$(_rows_under C)"
+  tmux kill-session -t "=$sess" 2>/dev/null || true
+  local name; IFS=$'\t' read -r name _ _ <<<"$(printf '%s\n' "$rows" | head -n1)"
+  [ "$name" = "$sess" ] || { echo "name came back as '$name', wanted '$sess'"; false; }
+}

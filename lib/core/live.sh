@@ -38,8 +38,45 @@ live_session_names_for() {
   # the board would claim every tmux session on the machine — including the ones
   # the human made by hand, which the prefix exists to leave alone. Refuse.
   [ -n "$prefix" ] || return 0
-  tmux list-sessions -F '#{session_name}	#{session_created}	#{session_attached}' 2>/dev/null \
-    | grep -E "^${prefix}[^	]+	" \
+  # 🔴 THE SEPARATOR INSIDE A tmux `-F` FORMAT MUST BE PRINTABLE ASCII.
+  # tmux renders a TAB in a format string as `_`, and control characters
+  # likewise, whenever the tmux CLIENT's locale is C/POSIX — measured on
+  # tmux 3.7b/macOS: `LC_ALL=C tmux list-sessions -F '#{session_name}<TAB>…'`
+  # prints `t _ 0`. Under a UTF-8 locale the same format is fine, which is
+  # why this survived: nobody sitting at a terminal ever saw it. Anyone whose
+  # shell has `LC_ALL=C` or `LANG=C` — ssh without locale forwarding, cron,
+  # CI, a minimal container — got NO rows at all out of this grep, and so a
+  # board with no Live section and a `clikae doctor` that saw no session to
+  # check, with no message saying why. `|` passes through every locale
+  # unchanged. See docs/DESIGN-tmux.md Rule 12.
+  #
+  # THE TWO NUMBERS COME FIRST so the free-text field is free to contain the
+  # separator. A session name is partly human-typed (the tank), while
+  # `#{session_created}` and `#{session_attached}` are digits: read the two
+  # numbers off the FRONT and everything after the second `|` is the name,
+  # pipes and all. A `|` in a tank name can therefore never shift a field.
+  #
+  # The rows this function HANDS BACK are still tab-separated
+  # (name <TAB> created <TAB> attached) — that tab is ours, written by awk,
+  # and every caller's `IFS=$'\t' read` is unchanged.
+  tmux list-sessions -F '#{session_created}|#{session_attached}|#{session_name}' 2>/dev/null \
+    | LC_ALL=C awk -v p="$prefix" '
+        {
+          i = index($0, "|"); if (i == 0) next
+          created = substr($0, 1, i - 1)
+          rest = substr($0, i + 1)
+          j = index(rest, "|"); if (j == 0) next
+          attached = substr(rest, 1, j - 1)
+          name = substr(rest, j + 1)
+          # The prefix test is LITERAL here, where the old grep -E read it as
+          # a regex. Same answer for every prefix clikae uses, and it can no
+          # longer be widened by a metacharacter. `>`, not `>=`: the old
+          # `^<prefix>[^\t]+\t` required at least one character after the
+          # prefix, so a session named exactly the prefix is still not ours.
+          if (length(name) <= length(p)) next
+          if (substr(name, 1, length(p)) != p) next
+          print name "\t" created "\t" attached
+        }' \
     | sort -t'	' -k2,2 -rn || true
 }
 

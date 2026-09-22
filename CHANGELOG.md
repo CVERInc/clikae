@@ -80,6 +80,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The board's Live section and `clikae doctor`'s tmux-guard check work from a
+  shell whose locale is `C`, instead of reporting an empty machine.** tmux
+  expands a `-F` format string on the CLIENT, and under a C/POSIX locale it
+  rewrites any character it considers unprintable — including a TAB, and
+  including `\037` — to `_`. Measured on tmux 3.7b: `LC_ALL=C tmux
+  list-sessions -F '#{session_name}<TAB>#{session_attached}'` prints `t _ 0`,
+  while the same command under a UTF-8 locale prints the TAB. Both places that
+  asked tmux for more than one field asked for them TAB-separated, so for
+  anyone arriving with `LC_ALL=C` or `LANG=C` — ssh without locale forwarding,
+  cron, CI, a minimal container — `live_session_names` matched no rows at all
+  and everything downstream behaved as though no session existed: no Live
+  section on the board, and a guard check that said nothing about a live,
+  unguarded session running right there. Silent, and invisible to anyone
+  sitting at a UTF-8 terminal. Both formats now use a printable `|`, with the
+  numeric fields FIRST and only the leading separators consumed, so a `|` in a
+  tank name or in a pane's start command can no longer shift a field. The rows
+  these functions hand back are unchanged (still TAB-separated — that TAB is
+  clikae's own, not tmux's), so no caller moved. `docs/DESIGN-tmux.md` Rule 12
+  states the rule: a separator inside a tmux `-F` format must be printable
+  ASCII, never a TAB or a control character. Held by a two-armed test — the
+  same real session read under `LC_ALL=C` and under `en_US.UTF-8`, which must
+  agree — because a single-locale test is green on the broken code (#142).
 - **`clikae doctor` verifies the tmux guard on macOS instead of answering
   "unknown, could not verify" for a live session the same user owns.** On
   current macOS, `ps eww` returns an empty environment even for a readable,

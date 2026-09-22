@@ -803,3 +803,58 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
       把它撤掉了：整支艦隊的逐槽油量住在 board（`clikae home`，#72 之後是真數字），
       狀態列講的是**這一槽、這一個 session**。`tests/bats/tmux-status.bats` 有一條
       測試守著這個「沒有」，所以哪天要加回來會是有人刻意做的決定。
+
+### Rule 12: `-F` 的輸出隨 locale 變，分隔符只能用可列印的 ASCII (Format Separators Are Locale-Dependent)
+
+- **症狀**：一個把 `LC_ALL=C` 或 `LANG=C` 帶進來的 shell——沒有轉送 locale 的 ssh、
+  cron、CI、精簡容器——跑 `clikae` 看不到 Live 那一段，跑 `clikae doctor` 的 tmux
+  guard 那一節說「沒有 session 要檢查」。機器上明明有 session 在跑，而且**沒有任何一
+  行字說為什麼**。坐在 UTF-8 終端機前面的人永遠看不到這件事。
+- **收據**（2026-09-23，tmux 3.7b／macOS，拋棄式 `TMUX_TMPDIR`）：
+
+  ```
+  $ env -i PATH=/opt/homebrew/bin:/usr/bin:/bin LC_ALL=C bash -c '
+      export TMUX_TMPDIR=$(mktemp -d)
+      tmux new-session -d -s t "sleep 30"
+      tmux list-sessions -F "#{session_name}<TAB>#{session_attached}" | od -c
+      tmux kill-server'
+  0000000    t   _   0  \n            <- TAB 被換成 `_`
+
+  $ # 同一個 server、同一個格式字串，只換掉 locale：
+  $ LC_ALL=en_US.UTF-8 …                     -> t \t 0
+  ```
+
+  `\037`（或任何控制字元）一樣被換掉；`|`、`:`、空格則原樣通過，兩個 locale 都是。
+- **原因**：格式字串是**客戶端**展開的，而 tmux 會把它判定為「不可列印」的字元換成
+  `_`——判定的依據是**執行 `tmux` 那一刻的 locale**，不是 server 出生時的。所以這跟
+  Rule 7 的繼承無關：同一台 server、同一個 session，兩個人用不同的 `LANG` 問，會拿到
+  兩種不同的答案。
+- **規範**：
+
+  1. **tmux `-F` 格式字串裡的欄位分隔符必須是可列印的 ASCII。** 永遠不要用 TAB，
+     不要用 `\037`／`\036`，不要用任何控制字元。clikae 的其他地方（board 的
+     record／欄位、`list_all_profiles`）照舊用 `\037`／TAB——**那些位元組是我們自己
+     寫出來的**，沒有經過 tmux 的格式展開，不受這條規範管。分界線是「這個字串有沒有
+     被 tmux 印出來」。
+  2. **分隔符要挑一個在前面幾欄不可能出現的字元**，目前一律是 `|`。
+  3. **定長／數字的欄位排前面，自由文字排最後，而且只切前 N 個分隔符。** 人打得出來
+     的東西（tank 名字，因此 session 名字；`#{pane_start_command}` 這種整串 argv）
+     可能含有 `|`，所以不能靠「切成幾欄」來解析。`live_session_names_for` 要
+     `#{session_created}|#{session_attached}|#{session_name}`，先把兩個數字從前面
+     取走，剩下的整串（含 `|`）就是名字；`_doctor_tmux_guard` 要
+     `#{pane_pid}|#{pane_start_command}`，只切**第一個** `|`。
+  4. **函式對外的形狀不變。** `live_session_names` 仍然吐
+     `名字 <TAB> created <TAB> attached`——那個 TAB 是我們自己 `awk` 印的，所以
+     `_home_live_rows`、`_resume_live_holder`、`_doctor_guard_rows` 的
+     `IFS=$'\t' read` 一行都不用改。
+  5. **單欄的 `-F` 沒有這個問題**，所以 `live_wake_note`、`wake_sessions_for`、
+     `tmux_sess_has_engine` 那幾個 `-F '#{window_name}'` 不必動；用空格分隔而且第一
+     欄是數字或以 `$NF` 讀最後一欄的（`live_engine_alive`、`wake_engine_target`）也
+     一樣安全，空格是可列印字元。
+- **怎麼守住**：`tests/bats/live.bats` 有一條**兩臂**的測試——同一個真 session，
+  `LC_ALL=C` 與 `LC_ALL=en_US.UTF-8` 各讀一次，兩邊都要拿到那一列而且兩邊必須一字不
+  差。只測一個 locale 證明不了任何事：舊的碼在 UTF-8 下是綠的。`tests/bats/doctor.bats`
+  的兩條 guard 測試則整支跑在 `LC_ALL=C` 底下，因為那正是這個檢查存在的那一群人。
+  ⚠️ 那兩條要用 `"$CLIKAE_BIN"` 不能用 `env LC_ALL=C clikae`——`clikae` 在測試裡是
+  **shell function**，`env` 只能 exec 真的檔案，於是會安靜地跑到 PATH 上那一份裝好的
+  clikae 去。

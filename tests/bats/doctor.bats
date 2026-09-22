@@ -409,7 +409,24 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   # session that predates the guard, or whose spawn path drifted around
   # Rule 10. Its pane process never gets the shim.
   tmux new-session -d -s "$sess" 'sleep 60'
-  run clikae doctor
+  # 🔴 UNDER A C LOCALE, ON PURPOSE (2026-09-23). This check reads two tmux
+  # `-F` formats — `live_session_names`' session list and this file's own
+  # `list-panes` — and tmux rewrites a TAB inside a format string to `_`
+  # whenever the client's locale is C/POSIX (measured, tmux 3.7b/macOS).
+  # Both used to be TAB-separated, so for a person on `LC_ALL=C`/`LANG=C`
+  # (ssh without locale forwarding, cron, CI, a minimal container) doctor saw
+  # no sessions and printed "all clear" for a machine with an unguarded one
+  # running. That is the population this check exists for, so this is the
+  # locale to test it in; docs/DESIGN-tmux.md Rule 12 has the rule. Set for
+  # this invocation only — the render itself is not what is under test.
+  #
+  # 🔴 `"$CLIKAE_BIN"`, NOT `env … clikae`. `clikae` here is a bats SHELL
+  # FUNCTION (tests/helpers.bash), and `env` can only exec a real file — so
+  # `run env LC_ALL=C clikae doctor` quietly runs whatever clikae is on the
+  # developer's PATH (an installed 0.30.0, on the machine this was written
+  # on) instead of the tree under test. It fails, so it is not silent, but it
+  # fails for the wrong reason and the output looks like a broken fix.
+  run env LC_ALL=C LANG=C "$CLIKAE_BIN" doctor
   local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]
@@ -438,7 +455,11 @@ _tg_tank() { printf 'tg%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
   # already knew: _doctor_legacy_prefix counts these two lines earlier.
   local sess; sess="ck-codex-$(_tg_tank)"
   tmux new-session -d -s "$sess" 'sleep 60'
-  run clikae doctor
+  # Under a C locale too — see the note on the sibling test above. A legacy
+  # session on a C-locale shell was invisible TWICE over: once for the prefix
+  # (fixed by _doctor_guard_rows) and once for the separator. `"$CLIKAE_BIN"`
+  # for the same reason spelled out above: `clikae` is a shell function.
+  run env LC_ALL=C LANG=C "$CLIKAE_BIN" doctor
   local seen; seen="$(tmux list-sessions -F '#{session_name}' 2>&1 | tr '\n' ' ')"
   tmux kill-session -t "=$sess" 2>/dev/null || true
   [ "$status" -eq 0 ]

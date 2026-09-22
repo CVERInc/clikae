@@ -373,15 +373,26 @@ _doctor_tmux_guard() {
     # that the guard could not be verified.
     #
     # One `list-panes` call gets both the pid AND the pane's own start
-    # command (tab-separated) — the latter feeds `_doctor_pane_path`'s
-    # macOS fallback (P4) without a second tmux round-trip.
-    pane_line="$(tmux list-panes -t "=$sess" -F '#{pane_pid}'$'\t''#{pane_start_command}' 2>/dev/null | head -n1)" || true
+    # command — the latter feeds `_doctor_pane_path`'s macOS fallback (P4)
+    # without a second tmux round-trip.
+    #
+    # 🔴 `|`, NOT TAB. tmux rewrites a TAB inside a `-F` format to `_` when
+    # the client's locale is C/POSIX (measured, tmux 3.7b/macOS), so the
+    # split below used to find no separator at all under `LC_ALL=C` and hand
+    # `_doctor_pane_path` the whole line as a pid. Printable ASCII only —
+    # docs/DESIGN-tmux.md Rule 12.
+    #
+    # THE PID COMES FIRST and only the FIRST `|` is a separator:
+    # `#{pane_start_command}` is a whole argv (`env … PATH=… <cmd>`) and may
+    # legitimately contain pipes, while a pid is digits. `%%|*` stops at the
+    # first `|`; `#*|` drops exactly that one and keeps the rest intact.
+    pane_line="$(tmux list-panes -t "=$sess" -F '#{pane_pid}|#{pane_start_command}' 2>/dev/null | head -n1)" || true
     if [ -z "$pane_line" ]; then
       unknown="$unknown $sess"
       continue
     fi
-    pid="${pane_line%%$'\t'*}"
-    start_command="${pane_line#*$'\t'}"
+    pid="${pane_line%%|*}"
+    start_command="${pane_line#*|}"
     if [ -z "$pid" ]; then
       unknown="$unknown $sess"
       continue
