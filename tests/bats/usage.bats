@@ -550,10 +550,14 @@ STUB
   # block this test actually means to exercise is reachable at all.
   _home_is_dryv() { _DRY_RESET=''; return 1; }
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
-  local pct expected
-  for pct in 59 60 90; do
-    case "$pct" in 59) expected=G● ;; 60) expected=Y◐ ;; 90) expected=R○ ;; esac
-    jq -cn --argjson pct "$pct" --argjson now "$(date +%s)" '{window_pct:$pct,weekly_pct:0,source:"vendor",cached_at:$now}' > "$CLIKAE_HOME/state/usage/claude/work.json"
+  # 2026-09-22 thresholds (#142): the two axes are judged separately — red
+  # only when the tank cannot burn (either axis at 100), yellow at weekly ≥85
+  # or window ≥90, green otherwise. A 60% window used to be yellow and a 90%
+  # window red; both were false alarms on a tank that could still burn.
+  local pair pct wk expected
+  for pair in 59:0:G● 89:84:G● 90:0:Y◐ 0:85:Y◐ 100:0:R○ 0:100:R○; do
+    pct="${pair%%:*}"; expected="${pair##*:}"; wk="${pair#*:}"; wk="${wk%%:*}"
+    jq -cn --argjson pct "$pct" --argjson wk "$wk" --argjson now "$(date +%s)" '{window_pct:$pct,weekly_pct:$wk,source:"vendor",cached_at:$now}' > "$CLIKAE_HOME/state/usage/claude/work.json"
     # P2-1 (round-1 review): _home_fuel_dotv now memoizes per (dry,cli,tank)
     # WITHIN one redraw (reset only by _home_fuel_memo_reset, called once at
     # the top of each real redraw) — correct in production, where nothing
@@ -605,7 +609,9 @@ STUB
     '{window_pct:$pct,weekly_pct:20,source:"vendor",cached_at:$cached_at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [ "$_FDOT" = Y◐ ]
+  # Green under the 2026-09-22 thresholds (window 65 < 90, weekly 20 < 85);
+  # this case is about the reading being SHOWN with its age, not its colour.
+  [ "$_FDOT" = G● ]
   [ "$_FNOTE" = 'window 65% · weekly 20% · 3h ago' ]
 
   # 25h old — past the 24h line: too stale to show as a number at all, falls

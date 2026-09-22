@@ -250,7 +250,10 @@ _seed_transcript() {
   CLIKAE_NO_INTERACTIVE=1 run clikae resume
   [ "$status" -eq 0 ]
   [[ "$output" == *"solo"* ]] || false
-  run clikae resume cleanup --dry-run --older-than 0
+  # --no-archive-check: this store has no backup marker (nothing wrote one), and
+  # clean withholds every conversation until one exists. The premise under test
+  # is the enumerator surviving engines it has nothing for, not the guard.
+  run clikae resume cleanup --dry-run --older-than 0 --no-archive-check
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude/only"* ]] || false
 }
