@@ -545,19 +545,24 @@ adapter_session_meta() {
 # [limit] (default 10). Powers relay's "pick another session" chooser. Returns
 # non-zero when there are none.
 adapter_list_sessions() {
-  local dir="$1" limit="${2:-10}" proj f any=0
+  local dir="$1" limit="${2:-10}" proj f any=0 emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 1
   # Same question as the board's list — "which conversation do you want?" — so
   # the same answer about subagent transcripts (adapter_transcript_is_resumable).
+  # The limit is enforced HERE, inside the loop, not by piping a filtered
+  # stream into `head -n "$limit"` afterward: once `head` has its fill and
+  # exits, the next write on the other end of that pipe gets SIGPIPE, and a
+  # bash builtin (this loop's `printf`, one call down in _claude_meta_for_file)
+  # reports that as a literal "printf: write error: Broken pipe" line on
+  # stderr instead of dying silently the way an external command would — see
+  # tests/bats/adapters/session-meta.bats "list_sessions honours a limit".
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    _claude_meta_for_file "$f" && any=1
-  done <<EOF
-$(ls -t "$proj"/*.jsonl 2>/dev/null | while IFS= read -r _lsf; do
-    adapter_transcript_is_resumable "$_lsf" && printf '%s\n' "$_lsf"
-  done | head -n "$limit")
-EOF
+    [ "$emitted" -lt "$limit" ] || break
+    adapter_transcript_is_resumable "$f" || continue
+    _claude_meta_for_file "$f" && { any=1; emitted=$((emitted + 1)); }
+  done < <(ls -t "$proj"/*.jsonl 2>/dev/null)
   [ "$any" -eq 1 ] || return 1
 }
 
@@ -712,7 +717,7 @@ adapter_recent_sids() {
     local _bout; _bout="$(board_recent claude "$@")"
     if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
   fi
-  local dir="$1" limit="${2:-5}" proj mt f
+  local dir="$1" limit="${2:-5}" proj mt f emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 0
   # This-dir scope = $PWD's project glob; one sessions_by_mtime (shared kernel)
@@ -725,12 +730,19 @@ adapter_recent_sids() {
   # real sessions sit just below the cut. The board's warm path (board_recent,
   # above) already excludes them — this is the cold path learning the same
   # rule. See adapter_transcript_is_resumable for why it is the basename.
+  # The limit is enforced HERE, inside the loop, not by a trailing
+  # `| head -n "$limit"`: once `head` has its fill and exits, the next `printf`
+  # in this loop writes into a closed pipe and (being a bash builtin) reports
+  # the EPIPE as a literal "Broken pipe" line on stderr instead of dying
+  # silently — see adapter_list_sessions above, same failure shape.
   sessions_by_mtime "$proj"/*.jsonl | while read -r mt f; do
     [ -n "$f" ] || continue
+    [ "$emitted" -lt "$limit" ] || break
     adapter_transcript_is_resumable "$f" || continue
     f="${f##*/}"
     printf '%s\037%s\n' "$mt" "${f%.jsonl}"
-  done | head -n "$limit"
+    emitted=$((emitted + 1))
+  done
 }
 
 # --- resume a SPECIFIC past session by id (powers `clikae resume`) ----------
