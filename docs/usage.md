@@ -68,6 +68,24 @@ start on the desktop, pick it up from a tablet over ssh.
 Two clients can stay attached at once; clikae does not kick anyone off. If you
 want the other one gone, `tmux attach -d` does that.
 
+**The bottom row is the command back, the fuel, and what is red** — e.g.
+`clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2`. The fuel is this tank's
+vendor usage (how much of the 5-hour and 7-day window is spent), and the
+session keeps it current itself: it takes one reading a few seconds after you
+start, and one every five minutes after that, for as long as the session is
+open. Nothing runs when the session is gone, and nothing is remembered between
+readings — closing the session ends it. What you see when there is no number:
+
+| on the row | what it means |
+|---|---|
+| `· 3h ago` | the reading is over an hour old — the row says so rather than presenting it as now |
+| `·` | no reading (this tank has never been read, or the last one is over 24h old) |
+| `○` | this tank is out of fuel right now |
+| `⏳` | the access token expired — start a session on that tank, or run `clikae usage --wake <tank>` |
+
+Reading it costs nothing: the row never calls a vendor, it only draws what is
+already on disk. `clikae usage <engine> <tank>` fills the same reading by hand.
+
 It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
 or a `TERM` tmux cannot draw on, clikae runs the engine directly instead — same
 command, same result, just no persistence. `clikae burn` behaves the same way.

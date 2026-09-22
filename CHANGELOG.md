@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The tmux status row's fuel reading is refreshed by the session it belongs
+  to, so it stops being a number from last week.** The row reads the usage
+  cache and can never fetch — that rule is right and unchanged (a status line
+  that could call a vendor would call one every five seconds, per attached
+  client, from inside tmux's server, where nobody would see it fail). What had
+  no owner was WRITING that cache: `clikae usage` and `burn` at run end were
+  its only two writers, so on a machine where a person only sits in
+  interactive sessions, nothing ever refreshed it. Measured: a nine-day-old
+  cache and the "no reading" glyph on the row forever, while a machine burning
+  all day showed live numbers — and one `clikae usage <engine> <tank>` took
+  0.7s and put percentages back on the row at the next redraw. A live session
+  now refreshes its own tank from the `wake` window it already has: one
+  reading in the background at launch, then one every `WAKE_USAGE_INTERVAL`
+  (300s — below `CLIKAE_USAGE_TTL` a refresh would only re-read the cache).
+  It keeps that window's constraints — no daemon, no state file, nothing that
+  outlives the session, no model of anyone's quota — and it is bounded by the
+  adapter's own fetch timeout rather than a new one; a refresh that fails is
+  silent, and the last reading stays on the row with its age next to it.
+
+### Changed
+
+- **An expired access token now shows as `⏳` on the status row instead of the
+  no-reading dot.** The cache distinguishes three states (a reading, a token
+  that expired, nothing read yet) and the row collapsed the last two — the
+  same collapse #107 removed from the board, where an idle tank at 99% weekly
+  read exactly like a tank with no login at all. It is the one of the three
+  with a remedy (start a session on that tank, or `clikae usage --wake
+  <tank>`), so it gets the board's own mark for it. It ages out on the same
+  24h ceiling as a percentage. The glyph is counted as the two columns tmux
+  lays it out in — measured on tmux 3.7b, where the row's other glyphs are
+  one — so the width ladder's promise that the alert count and the clock are
+  never cut is unaffected.
+
 ## [0.30.0] — 2026-09-17
 
 ### Changed
