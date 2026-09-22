@@ -680,13 +680,23 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是
      board 的字彙（`docs/DESIGN-board-fuel-dots.md`）。
 
-     🔴 **2026-09-22 新增的 `⏳`（token 過期）走的是同一條判準，不是例外。**
-     它同樣**不在**被掃的區段裡（linter 掃 `U+2600–27BF`／`U+1F300–1FAFF`／
-     `U+2B00–2BFF`／`U+FE0F`，而 `⏳` 是 U+23F3），而且同樣**本來就是這件事在別處
-     的字彙**——`usage_expired_board_notev`（`lib/core/usage.sh`）印給 board 看的
-     就是這個字。理由與 `○`／`·` 同一條：快取講得出三種狀態（有讀數／token 過期／
-     沒有讀數），而狀態列先前只講得出兩種，把「有解法的那一種」併進了「沒有讀數」——
-     那正是 #107 在 board 上修掉的同一個併法。它唯一多出來的成本是寬度，見 §7。
+     🔴 **CORRECTION (2026-09-22): the `⏳` (token-expired) mark this rule once
+     described here WAS a breach, not an exception, and has been removed.**
+     `scripts/signet-lint.sh` only scanned `U+2600–27BF` / `U+1F300–1FAFF` /
+     `U+2B00–2BFF` / `U+FE0F` — `⏳` is U+23F3, Miscellaneous Technical, the
+     same block as `⌘`/`⌥` (which ARE legitimate key names, so that block
+     cannot be banned outright) — so the mark got through the lint gate onto
+     a delivery surface it was never allowed on. The fix has two parts: the
+     status row's fuel slot now renders the plain word `expired`
+     (`tmux_status_fuelv`, `lib/core/tmux.sh`) instead of the glyph — same
+     vocabulary the board already uses (`usage_expired_board_notev`,
+     `lib/core/usage.sh`), just no longer an emoji — and the lint scan was
+     extended to the emoji-presentation code points actually in that block
+     (`U+231A–231B`, `U+23E9–23FA`, which covers `⏳`/`⌛`/`⏰`/`⏱`/`⏲`) so the
+     same gap cannot reopen with a different glyph from it. `○`/`·` remain
+     legitimate: they are outside both the old and the new scanned ranges,
+     and they are the board's own established vocabulary
+     (`docs/DESIGN-board-fuel-dots.md`), never emoji to begin with.
   7. **寬度規則＝一道固定順序的讓步階梯；警示計數與時鐘永遠不在階梯上。**
      提案指定會截斷的那一段（session 標題）在同一串討論裡被第三次修正拿掉了，之後
      round 1 與 round 2 各自宣告過一次「剩下唯一長度不固定的東西」是什麼，**兩次都漏**：
@@ -725,14 +735,16 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      順序沒有改：還欄位發生在 rung 5 **之後**，所以加寬名字永遠不可能成為油量
      （或任何更低階的東西）被拿掉的理由。
 
-     🔴 **`⏳` 佔兩格，而數格子的那個函式必須知道**（2026-09-22）。
-     `_tmux_status_colsv` 的作法是「每個多位元組字形換成一個 ASCII 位元組再數」，
-     而那個作法只在**每個字形都是一格**時等於欄數。`…`／`·`／`│`／`○` 四個都是
-     East Asian **ambiguous**（tmux 排成 1），`⏳`（U+23F3）是 **wide**，tmux 排成 2。
-     量的，不是查表的（tmux 3.7b、`mktemp -d` 下的專用 socket、把字形送進 pane 再讀
-     `#{cursor_x}`）：`·` 1、`○` 1、`⏳` **2**、`AB` 2。所以它換成**兩個**位元組。
-     當成一格的話，階梯會發出一欄這一列沒有的空間，而且是在「警示計數與時鐘永遠
-     不切」那一階上發——`tests/bats/tmux-status.bats` 直接釘住這個 2。
+     🔴 **CORRECTION (2026-09-22): this rung's special 2-cell case for `⏳`
+     is gone, along with the glyph.** §6's correction above replaced the
+     token-expired mark with the plain ASCII word `expired`, which
+     `_tmux_status_colsv`'s `${#s}` already measures correctly — no
+     substitution needed, the way `AB` never needed one. The width ladder
+     never had to change: it always sized the fuel slot as a whole segment
+     (rung 5, "never cut the alert count or the clock"), and a 7-column word
+     fits that same treatment. What is gone is only the SPECIAL-CASE code
+     (`s="${s//⏳/xx}"`) and its 2-cell measurement, both dead now that the
+     slot's expired state has no multi-column glyph left to count.
 
      🔴 **警示計數與時鐘永遠不切。** `!N` 是這一列存在的理由（「什麼是紅的」），而缺了
      小時的時鐘不是時鐘。80 欄**保證**的只有三件事：完整的警示計數、完整的時鐘、以及

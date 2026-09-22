@@ -265,14 +265,15 @@ choosing the relevant per-model row would require knowing which model a tank
 runs and a tank carries no such property (`--model` is an argument to
 `burn`/`relay`). They are reported by `clikae usage` only.
 On the board an expired reading under 24h old draws the no-reading `·` with
-the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not the
-dot: every dot is one column and the row grid is padded around that, an emoji
-is two; and the note is the short form because a tank row leaves 33 columns
-for it on an 80-column terminal — `clikae usage` prints the full sentence,
-`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The tmux
-status row, which has a fuel SLOT rather than a padded grid, draws the ⏳ in
-that slot instead of the dot, on the same 24h ceiling and counted as the two
-columns tmux lays it out in (`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
+the note `expired · usage --wake <tank>` (the word lives in the note, not the
+dot — no emoji on any delivery surface, so the note carries a word and costs
+no special width handling; and the note is the short form because a tank row
+leaves 33 columns for it on an 80-column terminal — `clikae usage` prints the
+full sentence, `token expired — run a session or 'clikae usage --wake
+<tank>'`). The tmux status row, which has a fuel SLOT rather than a padded
+grid, draws the word `expired` in that slot instead of the dot, on the same
+24h ceiling, measured like any other ASCII fuel string
+(`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
 same rollout transcript evidence `limit_codex_status` does, so its source is

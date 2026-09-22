@@ -156,17 +156,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `danger-full-access`, and `plan`/`default` to `read-only`. Help and orchestration
   docs explain why worktree commit/push/network lanes need the broader sandbox
   (#129).
-- **An expired access token now shows as `⏳` on the status row instead of the
-  no-reading dot.** The cache distinguishes three states (a reading, a token
-  that expired, nothing read yet) and the row collapsed the last two — the
-  same collapse #107 removed from the board, where an idle tank at 99% weekly
-  read exactly like a tank with no login at all. It is the one of the three
-  with a remedy (start a session on that tank, or `clikae usage --wake
-  <tank>`), so it gets the board's own mark for it. It ages out on the same
-  24h ceiling as a percentage. The glyph is counted as the two columns tmux
-  lays it out in — measured on tmux 3.7b, where the row's other glyphs are
-  one — so the width ladder's promise that the alert count and the clock are
-  never cut is unaffected.
+- **An expired access token now shows as the word `expired` on the status row
+  instead of the no-reading dot.** The cache distinguishes three states (a
+  reading, a token that expired, nothing read yet) and the row collapsed the
+  last two — the same collapse #107 removed from the board, where an idle
+  tank at 99% weekly read exactly like a tank with no login at all. It is the
+  one of the three with a remedy (start a session on that tank, or `clikae
+  usage --wake <tank>`), so it gets its own word for it — no emoji on any
+  delivery surface, so it is measured like any other ASCII fuel string, not
+  counted specially. It ages out on the same 24h ceiling as a percentage.
 - **The Continue section says what it is showing.** The heading names the
   directory (`Resume — in ~/project`), and when the store holds sessions the
   list is not showing, one dim line says how many and that `clikae resume`
