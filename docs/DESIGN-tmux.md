@@ -129,7 +129,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
 
   stdout 是管線，守衛正確地降級成直接跑——沒有壞掉，但**也沒有持久化**。要漫遊就得先拿到 shell 再下指令。
 
-### Rule 2b: scrollback 重播只在 macOS 驗證過（誠實範圍，**原因未解**）
+### Rule 2b: scrollback 重播只在 macOS 驗證過（誠實範圍，**ubuntu 原因未解**）
 
 - **症狀**：離開 session 時把畫面倒回終端機。這個功能在 ubuntu tmux 3.4 上**從來沒有作用過**，而測試在 macOS 上每次都綠 —— 直到 2026-08-15 才有人去看 Linux 的 CI。
 - **量到的**（2026-08-15，ubuntu tmux 3.4 / macOS tmux 3.7b）：
@@ -148,11 +148,32 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   「時序競速」             ✗ 引擎已改成等到 client attach 才退出，仍然沒跑
   「-t 目標解析差異」       ✗ 已拿掉 -t（那是另一個真 bug，已修），沒有改變結果
   ```
+- ✅ **macOS 那一半不再是「大概好的」——2026-09-22 量到了整條鏈**（tmux 3.7b／bash 3.2，隔離 socket）。
+  `scrollback.bats` 在這台機器上五次有四次紅，而它紅的理由跟重播無關。在 EXIT trap 與 `tmux_attach`
+  兩端各插一支帶時間戳的探針，取一次**失敗**的 run：
+  ```
+  attach-pre   …7806  sz=              ← 父行程還沒進 attach，檔案還沒寫
+  trap-start   …8968
+  trap-done    …9287  sz=1717          ← pane 還活著，擷取寫完了
+  attach-post  …9554  rc=0  sz=1717    ← 父行程讀到的就是這 1717 bytes
+  ```
+  也就是說 `[ -s ]` 為真、awk 跑了、**重播確實送進終端機**：那一份失敗輸出裡，marker 後面
+  跟著 `line 1` … `line 200`，而那 200 行早就捲出 24 列的 pane，除了重播沒有別的來源。
+  🔴 **紅的是「tmux 當場畫出來的那一份」，它從來不存在**：測試的引擎替身在 pane 一起來就把
+  200 行印完，而父行程還卡在 `new-session -d` 與 `tmux attach` 之間（光 `tmux_label` 就要設七個
+  per-session 選項）。沒有 client 連著的時候，tmux 把那些行收進 pane 歷史、對外一個 byte 都不送，
+  之後的 attach 只重畫最後 24 列。每一次失敗都量到 `clients-at-first-print=[]`；在第一個 echo
+  之前多呼叫一次 `tmux list-clients`（約 15ms）就足以把紅翻成綠——這也解釋了那個
+  「pass pass fail fail…」不像擲硬幣的形狀：它跟的是快取冷熱，也就是 `clikae run` 多快抵達替身。
+  修在測試（等 client **再**印），不在產品：改完同一支測試連 10 次全綠，改前的版本 5 次紅 4 次。
+- ✅ **產品路徑手工驗過一次**（丟棄式 server、tmux 3.7b）：120 回合的引擎、attach、引擎自己結束 ⇒
+  對話最上面那幾行回到終端機裡。離開 session 時重播是空的——這件事在 macOS 上**沒有發生**。
 - **規範**：
-  1. **原因未知。** 這條規則記錄的是一個開放問題，不是一個解釋。任何要補上的人，先讀上面那份「已排除」清單。
+  1. **ubuntu 那一半仍然原因未知。** 這條規則記錄的是一個開放問題，不是一個解釋。任何要補上的人，先讀上面那份「已排除」清單。macOS 的部分已經結案（上面兩條），別再把 macOS 的偶發紅燈當成同一個問題的證據。
   2. 測試在非 Darwin 平台 `skip` 並指回這裡 —— **不是刪掉**。功能在 macOS 上是好的，缺口是真的、寫下來了，而一個帶理由的 skip 是邀請修復，不是掩蓋。
   3. 這是 Rule 2「tmux 是便利層」的延伸：**功能誠實降級，不假裝跨平台**。
   4. ⚠️ 本節前一版曾宣稱原因是「pane 被硬拆」。那是在探針量出 SURVIVES 之前寫的，**是錯的**，已更正。寫進 SSOT 的推論若沒有收據，下一個人會拿它當前提。
+  5. ⚠️ 第二次同型的錯：測試檔頭連續五輪斷言「擷取沒問題，問題在重播」，依據是一份每一站都健康的 stage 紀錄。它每一站都健康，是因為**它真的健康**——那份紀錄從頭到尾沒有任何一欄在講「畫出來的那一份」。**一個只量了半條鏈的紀錄，會替另外半條背書。**
 
 ### Rule 3: 背景無頭任務 (Headless Burn & Coroner Pattern)
 - **症狀**：輸出被 `tee` 吞噬、Exit Code 遺失，OOM 或 `SIGKILL` 無法留下死亡證明，併發執行覆蓋彼此的 Log。
