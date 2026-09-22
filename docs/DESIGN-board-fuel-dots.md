@@ -269,7 +269,10 @@ the note `⏳ expired · usage --wake <tank>` (the ⏳ lives in the note, not th
 dot: every dot is one column and the row grid is padded around that, an emoji
 is two; and the note is the short form because a tank row leaves 33 columns
 for it on an 80-column terminal — `clikae usage` prints the full sentence,
-`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The optional
+`⏳ token expired — run a session or 'clikae usage --wake <tank>'`). The tmux
+status row, which has a fuel SLOT rather than a padded grid, draws the ⏳ in
+that slot instead of the dot, on the same 24h ceiling and counted as the two
+columns tmux lays it out in (`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
 same rollout transcript evidence `limit_codex_status` does, so its source is
@@ -391,6 +394,25 @@ atomic, and `usage_read` is the ONLY writer in the repo.
   sit unverified forever behind cap-many fresher-but-not-necessarily-better
   candidates; and the loop stops the moment a refresh confirms a verified 0%
   (an unbeatable floor) rather than always spending every call in the cap.
+- **(e)** a LIVE SESSION refreshes its own tank, from the `wake` window it
+  already has (2026-09-22). (a)–(d) between them left the refresh UNOWNED on
+  a machine where nobody burns: measured, a nine-day-old cache and a tmux
+  status row showing the no-reading `·` the whole time, while a machine
+  burning all day showed live numbers — one `clikae usage <engine> <tank>`
+  took 0.7s and the row read `5h 25% · 7d 10%` on the next redraw. So the
+  session that is spending the quota is the one that keeps the reading
+  current: one `usage_read` at launch, backgrounded, for a session clikae
+  just spawned (`wake_usage_prime`, called from `lib/commands/switch.sh`),
+  and one every `WAKE_USAGE_INTERVAL` (300s) from the watcher's own loop
+  (`wake_watch`, `lib/core/wake.sh`). Same writer, same terms —
+  `CLIKAE_USAGE_TTL` still applies, so a cadence shorter than the TTL would
+  only re-read the cache — and it keeps that file's constraint: no daemon,
+  no state file, nothing that outlives the session, and no model of anyone's
+  quota. The tmux row itself still NEVER fetches (`tmux_status_fuelv`;
+  `docs/DESIGN-tmux.md` Rule 11 §3 carries the same receipt), and a refresh
+  that fails is silent: the last reading stays on disk and the row's own age
+  suffix says how old it is. A tank nobody has a session on is unaffected —
+  it ages on the board exactly as (c) describes.
 
 **Three different clocks answer three different questions here — reconciled,
 not unified, because unifying them would make one of the three lie (round-5

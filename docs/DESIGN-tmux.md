@@ -545,6 +545,25 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      檔 `state/usage/<engine>/<tank>.json`；讀不到就退回點，不是退回猜一個數字。
      `tests/bats/tmux-status.bats` 在 PATH 上放了會大聲失敗的 `curl`／`jq`／`clikae`
      樁，並斷言它們的 tripwire 檔沒有出現。
+
+     🔴 **「這一列不准去拿」是對的，但它把「誰去拿」留成了無主的**（2026-09-22）。
+     快取檔先前只有兩個寫入者：`clikae usage` 與 burn 在 run 結束時那一次
+     （`lib/core/usage.sh` 的 "who writes this cache"）。於是一台**只有人坐在互動
+     session、從來不 burn** 的機器，沒有任何東西會去更新它。實測：快取**九天前**寫的，
+     狀態列因此永遠畫著「沒有讀數」的 `·`；同一時間另一台整天在 burn 的機器畫的是
+     活的數字。手動跑一次 `clikae usage <engine> <tank>` 花 0.7 秒，下一次重畫就是
+     `5h 25% · 7d 10%`——**讀數一直是對的，缺的是刷新的責任人**。
+     現在的責任人是**這個 session 自己的 `wake` 視窗**（`lib/core/wake.sh`）：
+     `wake_watch` 每 `WAKE_USAGE_INTERVAL`（300 秒）呼叫一次 `usage_read`，另外
+     `switch.sh` 在**剛 spawn 的** session 上射出一發背景的 `wake_usage_prime`，
+     讓第一次 attach 後幾秒鐘就有數字。三件事沒有變：**這一列還是只讀檔**、守望者
+     仍然不是 daemon（沒有狀態檔、跟著 session 一起死、不保留任何人的額度模型，見
+     `wake.sh` 檔頭的設計約束），以及 300 秒這個地板是 `CLIKAE_USAGE_TTL`（120 秒）
+     決定的——比 TTL 更密的節奏只會拿到同一個快取值。
+     刷新**不擋迴圈也不出聲**：它的上界是 adapter 自己的 `curl --connect-timeout 3
+     --max-time 8`（`lib/adapters/claude.sh`）與 `timeout_bin` 包住的 Keychain 讀取，
+     沒有在這裡發明新的上界；失敗就讓上一次的讀數留在檔案裡，由這一列自己的年齡
+     後綴去說它多舊（這正是那個後綴存在的理由）。
      固定成本只有兩個 fork（`date`、問 tmux 這個 session 的 id），而且那個 `date`
      由 `tmux_status_render` 呼叫一次、交給油量與警示兩邊共用——不只省一個 fork，
      也讓兩半不會對「現在幾點」有不同答案。
@@ -660,6 +679,14 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      （只放行 ❯ 游標），而這一列是印出來的。提案原本的 `🔴N` 因此不可能做；它是
      `!N`，顏色由 tmux 上。`○`／`·`／`│` 不在被掃的區段裡，而且 `○`／`·` 本來就是
      board 的字彙（`docs/DESIGN-board-fuel-dots.md`）。
+
+     🔴 **2026-09-22 新增的 `⏳`（token 過期）走的是同一條判準，不是例外。**
+     它同樣**不在**被掃的區段裡（linter 掃 `U+2600–27BF`／`U+1F300–1FAFF`／
+     `U+2B00–2BFF`／`U+FE0F`，而 `⏳` 是 U+23F3），而且同樣**本來就是這件事在別處
+     的字彙**——`usage_expired_board_notev`（`lib/core/usage.sh`）印給 board 看的
+     就是這個字。理由與 `○`／`·` 同一條：快取講得出三種狀態（有讀數／token 過期／
+     沒有讀數），而狀態列先前只講得出兩種，把「有解法的那一種」併進了「沒有讀數」——
+     那正是 #107 在 board 上修掉的同一個併法。它唯一多出來的成本是寬度，見 §7。
   7. **寬度規則＝一道固定順序的讓步階梯；警示計數與時鐘永遠不在階梯上。**
      提案指定會截斷的那一段（session 標題）在同一串討論裡被第三次修正拿掉了，之後
      round 1 與 round 2 各自宣告過一次「剩下唯一長度不固定的東西」是什麼，**兩次都漏**：
@@ -697,6 +724,15 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      現在 rung 5 之後會用**剩下的欄位**重算一次 tank 名寬度（放得下就整個還原）。
      順序沒有改：還欄位發生在 rung 5 **之後**，所以加寬名字永遠不可能成為油量
      （或任何更低階的東西）被拿掉的理由。
+
+     🔴 **`⏳` 佔兩格，而數格子的那個函式必須知道**（2026-09-22）。
+     `_tmux_status_colsv` 的作法是「每個多位元組字形換成一個 ASCII 位元組再數」，
+     而那個作法只在**每個字形都是一格**時等於欄數。`…`／`·`／`│`／`○` 四個都是
+     East Asian **ambiguous**（tmux 排成 1），`⏳`（U+23F3）是 **wide**，tmux 排成 2。
+     量的，不是查表的（tmux 3.7b、`mktemp -d` 下的專用 socket、把字形送進 pane 再讀
+     `#{cursor_x}`）：`·` 1、`○` 1、`⏳` **2**、`AB` 2。所以它換成**兩個**位元組。
+     當成一格的話，階梯會發出一欄這一列沒有的空間，而且是在「警示計數與時鐘永遠
+     不切」那一階上發——`tests/bats/tmux-status.bats` 直接釘住這個 2。
 
      🔴 **警示計數與時鐘永遠不切。** `!N` 是這一列存在的理由（「什麼是紅的」），而缺了
      小時的時鐘不是時鐘。80 欄**保證**的只有三件事：完整的警示計數、完整的時鐘、以及

@@ -304,6 +304,118 @@ teardown() {
   tmux kill-session -t "$(_sess)" 2>/dev/null || true
 }
 
+# ── the fuel readout's refresher (the half that had no owner) ───────────────
+#
+# The status row reads the usage cache and can never fetch (tmux_status_fuelv).
+# Until this landed, the only writers were `clikae usage` and burn — so on a
+# machine where somebody only sits in interactive sessions the file just aged:
+# measured at nine days old, with the row showing the "no reading" glyph the
+# whole time. The watcher is already in that session, already looping, and
+# already dies with it, so it is where the refresh belongs.
+
+@test "watch: the fuel cache is refreshed on its OWN cadence, not every loop" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # Compressed exactly like the rest of this file: the VALUE of
+  # WAKE_USAGE_INTERVAL is asserted in wake.bats, the SHAPE here.
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_ALONE_INTERVAL=1
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_USAGE_INTERVAL=3
+  limit_tank_dry() { return 1; }              # never dry: only the cadence runs
+  local calls="$BATS_TEST_TMPDIR/usage-calls"
+  # The stub stands in for the one writer of the cache. Shell functions do
+  # cross a background `&` (same shell), which is how the watcher below sees it.
+  usage_read() { printf '%s/%s\n' "$1" "$2" >> "$calls"; }
+  tmux new-session -d -s "$(_sess)" -n claude 'sleep 30'
+  sleep 1
+  wake_watch claude "$(_tankname)" "$(_sess)" >/dev/null &
+  local w=$!
+  sleep 7
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+
+  [ -f "$calls" ] || { echo "the watcher never refreshed the reading at all"; false; }
+  local n; n="$(grep -c . "$calls")"
+  # ~7 passes of the loop at a 3s cadence: 2 refreshes. The bounds are what the
+  # test is FOR — an implementation that refreshed every pass would land near 7
+  # and is the failure this exists to catch (a vendor call per loop, forever).
+  [ "$n" -ge 1 ] || { echo "no refresh in 7s at a 3s cadence"; false; }
+  [ "$n" -le 3 ] || { echo "refreshed $n times in 7s — that is every loop, not the cadence"; false; }
+  [ "$(head -1 "$calls")" = "claude/$(_tankname)" ] \
+    || { echo "refreshed the wrong tank: $(head -1 "$calls")"; false; }
+}
+
+@test "watch: a refresh that fails does not end the watcher" {
+  # The reason it is silent AND ignored: this runs in the window a person is
+  # told to watch their countdown in. A vendor that is down, a token that
+  # expired, no network on a train — none of them may take the waiter with
+  # them, and none of them may print over the countdown either.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_ALONE_INTERVAL=1
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_USAGE_INTERVAL=1
+  limit_tank_dry() { return 1; }
+  local calls="$BATS_TEST_TMPDIR/usage-calls"
+  usage_read() { printf 'call\n' >> "$calls"; echo "vendor said no" >&2; return 1; }
+  tmux new-session -d -s "$(_sess)" -n claude 'sleep 30'
+  sleep 1
+  wake_watch claude "$(_tankname)" "$(_sess)" > "$BATS_TEST_TMPDIR/watch-out" 2>&1 &
+  local w=$!
+  sleep 5
+  local alive=0; kill -0 "$w" 2>/dev/null && alive=1
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+
+  [ "$alive" -eq 1 ] || { echo "a failing refresh ended the watcher"; cat "$BATS_TEST_TMPDIR/watch-out"; false; }
+  [ -f "$calls" ] || { echo "the refresh never ran, so this proved nothing"; false; }
+  [ "$(grep -c . "$calls")" -ge 2 ] \
+    || { echo "it stopped refreshing after the first failure"; false; }
+  ! grep -q "vendor said no" "$BATS_TEST_TMPDIR/watch-out" \
+    || { echo "the failure was printed over the countdown"; cat "$BATS_TEST_TMPDIR/watch-out"; false; }
+}
+
+@test "launch: a fresh session fires exactly ONE reading, so the row has a number" {
+  # The watcher's first tick is WAKE_USAGE_INTERVAL away, and it only exists
+  # when wake is on (it is OFF for the whole suite — see tests/helpers.bash), so
+  # the one-shot at launch is what puts a number on the row seconds after the
+  # first attach. Counted at the VENDOR CALL, not at the cache file: "exactly
+  # one" is a claim about what a launch spends.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  local tank; tank="$(_tankname)"
+  clikae init claude "$tank"
+  printf '%s\n' '{"claudeAiOauth":{"accessToken":"stub-secret-wake-usage"}}' \
+    > "$CLIKAE_HOME/profiles/claude/$tank/.credentials.json"
+  export USAGE_CALLS="$TEST_HOME/usage-calls"
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'call\n' >> "$USAGE_CALLS"
+cat >/dev/null                       # the real call pipes its headers in via -K -
+echo '{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":10,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  printf '#!/usr/bin/env bash\nsleep 3\n' > "$TEST_HOME/.testbin/claude"
+  chmod +x "$TEST_HOME/.testbin/claude"
+
+  _pty_run "$CLIKAE_BIN" claude "$tank" >/dev/null 2>&1 || true
+  # The refresh is backgrounded on purpose (the launch path pays nothing), so
+  # wait for it to land rather than assuming it beat the process out the door.
+  local cache="$CLIKAE_HOME/state/usage/claude/$tank.json" i
+  for ((i = 0; i < 20; i++)); do [ -f "$cache" ] && break; sleep 0.5; done
+  tmux kill-session -t "clikae-claude-$tank" 2>/dev/null || true
+
+  [ -f "$cache" ] || { echo "a launch left the row with nothing to draw"; false; }
+  grep -q '"window_pct":25' "$cache" || { echo "not the reading the vendor gave: $(cat "$cache")"; false; }
+  [ -f "$USAGE_CALLS" ] || { echo "no vendor call was made"; false; }
+  [ "$(grep -c . "$USAGE_CALLS")" -eq 1 ] \
+    || { echo "a launch spent $(grep -c . "$USAGE_CALLS") vendor calls, not one"; false; }
+}
+
 @test "ask: a launch asks once, on a real terminal, and remembers the answer" {
   # Driven through a pty rather than as a unit call: wake_ask_once deliberately
   # stays silent unless both ends are a terminal, and bats captures stdout — so a

@@ -274,6 +274,12 @@ EOF
       tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
     fi
     wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # …and give the status row a number to draw. The watcher refreshes the fuel
+    # cache from then on (WAKE_USAGE_INTERVAL), but its first tick is five
+    # minutes out and it only exists when wake is on — so the one-shot is fired
+    # here, for a session we JUST spawned, whatever the wake preference says.
+    # Backgrounded inside wake_usage_prime: the launch path pays nothing.
+    [ "$_fresh_spawn" -eq 1 ] && wake_usage_prime "$engine" "$tank"
 
     local clients
     clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
@@ -303,6 +309,11 @@ EOF
     # happens when tmux_sessv renames one off the old prefix: the old waiter had
     # the old name in its command and exits when that name stops resolving.
     wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # The fuel readout's one-shot, same as the branch above — but gated on
+    # `started_here`, which is THIS branch's name for "we just spawned it".
+    # Re-attaching to a session that is already running must not spend a vendor
+    # call: the watcher inside it is already refreshing on its own cadence.
+    [ "$started_here" -eq 1 ] && wake_usage_prime "$engine" "$tank"
 
     # Whether this terminal can host tmux is tmux's call, not ours. `new-session -d`
     # happily succeeds under a TERM tmux cannot draw on (TERM=dumb: "open terminal
