@@ -437,3 +437,84 @@ _codex_reply_line() {
   run limit_codex_output_dry "$(printf '%16sYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.' '')"
   [ "$status" -ne 0 ]
 }
+
+# --- claude: the vendor continuing BY ITSELF after a reset ---------------------
+#
+# Claude Code now writes its own user-role line the moment a limit lifts
+# mid-task — isMeta, promptSource "system", and the structural marker
+# `"origin":{"kind":"auto-continuation"}` — and carries on. Until it was read,
+# the transcript said DRY for as long as the assistant turn it then produced
+# took to land, and `clikae wake` typed a second "go" into a conversation that
+# was already working. Shape taken from a real transcript, 2026-09-15.
+
+_seed_claude_limit_then() {
+  # <dir> <extra-line…> -> a tank whose newest limit is at 13:37Z, plus whatever
+  # the caller appends after it.
+  local dir="$1"; shift
+  local proj="$dir/projects/p"
+  mkdir -p "$proj"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}' > "$proj/s.jsonl"
+  local l
+  for l in "$@"; do printf '%s\n' "$l" >> "$proj/s.jsonl"; done
+}
+
+_AUTOCONT_LINE='{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
+
+@test "claude limit: _limit_claude_readings reads an auto-continuation line as the newest recovery" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" "$_AUTOCONT_LINE"
+  # "<newest limit>\037<newest success>\037<reset phrase>" — assert the SECOND
+  # field, which is the only one this change can move.
+  local out; out="$(_limit_claude_readings "$dir/projects/p/s.jsonl")"
+  local maxL maxS
+  IFS=$'\037' read -r maxL maxS _ <<EOF
+$out
+EOF
+  [ "$maxL" = "2026-09-16T13:37:00.000Z" ]
+  [ "$maxS" = "2026-09-16T15:00:30.000Z" ] || { echo "maxS=[$maxS] out=[$out]"; false; }
+}
+
+@test "claude limit: an auto-continuation after the limit reads RECOVERED (rc 2), not merely not-dry" {
+  # rc 2 and rc 1 are different facts and clikae wake acts on the difference:
+  # 2 is positive evidence the account came back, 1 is "this scan found
+  # nothing" — which is also what a tank outside the 5h window looks like, and
+  # that is the case the nudge exists for.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" "$_AUTOCONT_LINE"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 2 ] || { echo "status=$status output=$output"; false; }
+}
+
+@test "claude limit: with the limit alone the tank is still DRY (the control)" {
+  # Without this, a reading that called every transcript recovered would pass
+  # the test above.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 8:20pm"* ]] || false
+}
+
+@test "claude limit: a transcript QUOTING the auto-continuation marker does not clear the tank" {
+  # The same rule the limit marker itself lives by. A person (or an assistant)
+  # pasting the marker into a message has it JSON-escaped inside the content
+  # string — \"origin\" — so it can never be mistaken for the record's own keys.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" \
+    '{"type":"user","message":{"role":"user","content":"look for {\"origin\":{\"kind\":\"auto-continuation\"}} in the jsonl"},"timestamp":"2026-09-16T16:00:00.000Z"}'
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ] || { echo "a quoted marker cleared the tank: status=$status"; false; }
+  [[ "$output" == *"resets 8:20pm"* ]] || false
+}

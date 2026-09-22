@@ -570,10 +570,22 @@ EOF
 
   # Dry only if nothing succeeded AFTER the newest limit (self-clearing). ISO
   # stamps sort lexicographically, so a later success sorting last cleared it.
+  #
+  # rc=2, not 1, and for the same reason codex's branch above returns it: this
+  # is POSITIVE evidence of recovery — a real turn (or the vendor's own
+  # auto-continuation) after the newest limit — whereas rc=1 also covers "this
+  # scan found nothing at all", which is what an untouched tank outside the 5h
+  # window looks like. `clikae wake` depends on the difference: it must skip the
+  # nudge on 2 and still send it on 1. Nothing else reads it — _limit_tank_dry_raw
+  # returns for claude before its rc=2 branch, and every other caller tests
+  # `rc != 0`.
   if [ -n "$maxS" ]; then
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
   fi
 
   # Dry: echo the vendor's own reset phrase (captured above from the newest limit
@@ -1760,6 +1772,27 @@ function scan(s,   t) {
       maxL = t; rphrase = ""
       if (match(s, /[Rr]esets [^"]*/)) rphrase = substr(s, RSTART, RLENGTH)
     }
+    return
+  }
+  # THE VENDOR CONTINUING BY ITSELF IS A RECOVERY, and it is not an assistant
+  # turn. Claude Code now writes a user-role line of its own the moment a limit
+  # lifts mid-task — isMeta, promptSource "system", and the structural marker
+  # below — and then carries on. Nothing else in this transcript says so: the
+  # assistant turn that follows may be minutes away (a long tool call first),
+  # and until it lands the account reads DRY although it is already working.
+  # That is the reading `clikae wake` consults immediately before it types, so
+  # missing it is a second "go" typed into a conversation that already resumed.
+  # Two separate `~` tests rather than one regex containing a brace: in an awk
+  # ERE a brace opens an interval, and the awk family macOS ships disagrees with
+  # gawk about an unescaped one.
+  #
+  # Structural, like everything else here, and for the same reason the limit
+  # branch above is: someone PASTING this marker into a prompt must not clear
+  # their own tank. JSONL escapes the quotes inside a message body, so a pasted
+  # copy reads \"origin\" and matches neither test — the keys below can only
+  # appear unescaped as keys of the record itself.
+  if (s ~ /"origin"/ && s ~ /"kind": *"auto-continuation"/) {
+    t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
     return
   }
   if (s ~ /"type": *"assistant"/ && s !~ /"model": *"<synthetic>"/) {
