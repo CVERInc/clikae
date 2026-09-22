@@ -50,7 +50,9 @@ implementation to read.
 | `adapter_title_for_file <file>` | A session's title, derived from the transcript file alone. **Prefer a user-set rename over a machine-generated title**, and scan the tail — a rename lands wherever it was typed. | claude, codex, grok, antigravity |
 | `adapter_session_title` / `adapter_session_recap` / `adapter_session_meta` | Richer board rows (title, one-line recap, age/size). | claude |
 | `adapter_find_session <id>` / `adapter_session_cwd` / `adapter_resume_args` | `clikae resume <id>` can locate, `cd` to, and reopen a past session. | claude, codex, grok, antigravity |
-| `adapter_list_sessions` / `adapter_recent_sids` | Feed the cross-tank picker and `clean`'s candidate scan. | claude, codex, grok |
+| `adapter_recent_sids <dir> <n>` | The board's **Continue** list: this tank's recent sessions **in `$PWD`**, newest first. Scope it to the current directory like every other engine does, or your rows compete with theirs on a different meaning and push them off a shared list. | claude, codex, grok, antigravity |
+| `adapter_all_transcripts <dir>` | The **store-wide** enumerator: every session path under a tank, no cwd filter, no limit. `clikae resume`'s picker, its prefix resolution and `clean`'s candidate scan are built from it — define it and your engine appears in all three by construction (there is no engine list anywhere to add yourself to). Also what `burn`'s before/after attribution diffs. | claude, codex, grok, antigravity |
+| `adapter_list_sessions` | An engine-specific session listing, where the two hooks above are not enough. | claude, codex, grok |
 | **Headless + fleet** | | |
 | `adapter_start_with_prompt` | Marks the engine as an **AI engine** — it's what the new-tank picker classifies on, and what `burn` needs to start a task. | claude, codex, grok |
 | `adapter_burn_flags` / `adapter_audit_flags` | `burn`'s write dialect and `conduct`'s read-only dialect, so a reroute regenerates the *right* flags for the target engine. | claude, codex, grok |
