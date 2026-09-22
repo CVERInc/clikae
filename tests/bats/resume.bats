@@ -237,6 +237,14 @@ _seed_transcript() {
   # as literal paths; stat's non-zero + pipefail + set -e killed resume/cleanup
   # dead silent for every single-engine user. Caught by the 2026-07-11
   # ephemeral red-team review.
+  #
+  # The store is a REAL tank now (`clikae init`), not a bare directory that
+  # merely looks like one: the enumerator behind this list walks
+  # tanks_for_engine, the same "what is a tank" answer the board has used since
+  # #61, instead of globbing profiles/<engine>/*/. What this test is about —
+  # a store with one engine in it must not die on the engines it has nothing
+  # for — is unchanged, and it now exercises the shape a user actually has.
+  clikae init claude only >/dev/null
   mkdir -p "$CLIKAE_HOME/profiles/claude/only/projects/-x"
   printf '{"type":"summary","aiTitle":"solo"}\n' > "$CLIKAE_HOME/profiles/claude/only/projects/-x/eeee-ffff.jsonl"
   CLIKAE_NO_INTERACTIVE=1 run clikae resume
@@ -357,4 +365,61 @@ STUB
   [ -f "$argv_log" ] || { echo "agy stub was never invoked — resume: $output"; false; }
   grep -qF -- "--conversation" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
   grep -qF "$sid" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+}
+
+# --- the engine list `clikae resume` scans with ------------------------------
+# `_resume_all_sessions` used to be three hand-typed globs, and its own comment
+# said a new resumable engine's glob "goes here only". grok landed on
+# 2026-07-31 with adapter_resume_args, adapter_recent_sids, adapter_find_session
+# and adapter_session_cwd — it reached the home board, and every store-wide
+# surface (the picker, prefix resolution, `clikae clean`'s scan) stayed blind to
+# it, because nobody extended a list that had no way to say it was incomplete.
+# The enumeration goes through the adapters now, so this test is about a
+# mechanism, not about grok: an engine that CAN be resumed is enumerated.
+@test "a grok session is reachable by prefix — resume enumerates through the adapters, not a glob list" {
+  clikae init grok g
+
+  local sid="019fb7b0-9b86-7f82-98a4-0000000000aa"
+  local work="$TEST_HOME/grok-work"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/grok/g/sessions/%2Fgrok-work/$sid"
+  mkdir -p "$d"
+  cat > "$d/summary.json" <<JSON
+{
+  "info": {
+    "id": "$sid",
+    "cwd": "$work"
+  },
+  "session_summary": "GROK-PREFIX-FIXTURE",
+  "generated_title": "GROK-PREFIX-FIXTURE"
+}
+JSON
+
+  local argv_log="$TEST_HOME/grok_argv.log"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf '"'"'%%s\\n'"'"' "$@" > %s\n' "$(printf '%q' "$argv_log")"
+    printf 'exit 0\n'
+  } > "$TEST_HOME/.testbin/grok"
+  chmod +x "$TEST_HOME/.testbin/grok"
+
+  cd "$TEST_HOME" || return 1      # NOT the session's own directory
+  # Eight characters is what the tmux status line shows, and prefix resolution
+  # is the surface that reads the store-wide scan (_resume_prefix_candidates).
+  run clikae resume "${sid:0:8}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$argv_log" ] || { echo "grok stub was never invoked — resume said: $output"; false; }
+  grep -qF -- "--resume" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+  grep -qF "$sid" "$argv_log" || { echo "argv: $(cat "$argv_log")"; false; }
+}
+
+# The same enumeration, from the other end: a MISS has to be reportable. The
+# store-wide locate used to inherit its exit status from the last tank it
+# looked in, so with a tank for the last resume-capable engine (alphabetically
+# grok) a miss killed the command under `set -e` — no "No session" line, and no
+# prefix retry either, since the retry is downstream of that return.
+@test "a miss is reported, not a silent death, when the last resume-capable engine has a tank" {
+  clikae init grok g
+  run clikae resume deadbeef
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No session"* ]] || { echo "output was: $output"; false; }
 }
