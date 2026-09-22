@@ -924,6 +924,99 @@ sys.exit(1 if bad else 0)
   [ -f "$sdir/clikae-claude-nosuch2-$$.session_id" ] || { echo "a dry run deleted it"; false; }
 }
 
+# --- prelaunch-lock GC (2026-09-22) -------------------------------------------
+#
+# `clikae burn` never unlinks its per (engine/tank, $PWD) prelaunch lock right
+# after releasing it (lib/commands/burn.sh — deleting a lock file a concurrent
+# burn may already have open is the classic lock-file race), so every distinct
+# (tank, cwd) leaves one behind forever, under `state/locks/`. This GC
+# (_burn_prelaunch_lock_gc, defined in burn.sh, called from both `clikae burn`
+# itself and `clikae clean`) is the only thing that ever reclaims them — by
+# mtime, never a recorded holder: `exec 7>` truncates the file (and so bumps
+# its mtime) on every acquisition, so a held lock is always younger than any
+# real threshold.
+_prelaunch_lock_age() {
+  date -v-2d '+%Y%m%d%H%M' 2>/dev/null || date -d '2 days ago' '+%Y%m%d%H%M'
+}
+
+@test "GC (prelaunch lock) keeps a fresh lock in the current locks/ dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12345.lock"
+  : > "$f"   # fresh mtime -- as if just released
+  _burn_prelaunch_lock_gc 0
+  [ -f "$f" ] || { echo "a fresh (just-released) prelaunch lock was deleted"; false; }
+}
+
+@test "GC (prelaunch lock) removes a lock older than 1 day from the current locks/ dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12346.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  _burn_prelaunch_lock_gc 0
+  [ ! -f "$f" ] || { echo "an aged prelaunch lock survived the sweep"; false; }
+}
+
+@test "GC (prelaunch lock) never touches a non-prelaunch-lock file in the same dir" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local age; age="$(_prelaunch_lock_age)"
+  # Same suffix, wrong infix -- not a prelaunch lock.
+  local other="$sdir/${CLIKAE_SESS_PREFIX}other-12347.lock"
+  : > "$other"; touch -t "$age" "$other"
+  # Right infix, wrong suffix -- not a prelaunch lock either.
+  local wrongsuffix="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12348.lock.bak"
+  : > "$wrongsuffix"; touch -t "$age" "$wrongsuffix"
+  # Unrelated file entirely.
+  local unrelated="$sdir/random.txt"
+  : > "$unrelated"; touch -t "$age" "$unrelated"
+  _burn_prelaunch_lock_gc 0
+  [ -f "$other" ] || { echo "deleted a non-prelaunch lock (wrong infix)"; false; }
+  [ -f "$wrongsuffix" ] || { echo "deleted a non-.lock file (wrong suffix)"; false; }
+  [ -f "$unrelated" ] || { echo "deleted an unrelated file"; false; }
+}
+
+@test "GC (prelaunch lock) migrates/cleans the OLD pre-migration location too" {
+  _source_clean
+  local sdir="$HOME/.clikae/state"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12349.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  _burn_prelaunch_lock_gc 0
+  [ ! -f "$f" ] || { echo "an aged OLD-location prelaunch lock survived the sweep"; false; }
+}
+
+@test "GC (prelaunch lock) --dry-run names the count and deletes nothing" {
+  _source_clean
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12350.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+  run _burn_prelaunch_lock_gc 1
+  [[ "$output" == *"Would remove 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
+  [ -f "$f" ] || { echo "a dry run deleted it"; false; }
+}
+
+@test "clikae clean --dry-run and a real run both report the stale-prelaunch-lock count" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"    # for CLIKAE_SESS_PREFIX, same as burn.sh
+  local sdir="$HOME/.clikae/state/locks"; mkdir -p "$sdir"
+  local f="$sdir/${CLIKAE_SESS_PREFIX}prelaunch-12351.lock"
+  : > "$f"
+  touch -t "$(_prelaunch_lock_age)" "$f"
+
+  run clikae clean --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$f" ]   # --dry-run: not yet
+  [[ "$output" == *"Would remove 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
+
+  run clikae clean
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -f "$f" ]
+  [[ "$output" == *"removed 1 stale prelaunch lock"* ]] || { echo "$output"; false; }
+}
+
 # --- dead-holder tank locks (R4-P3-2, R3-P3-3 before it) ----------------------
 #
 # 🔴 NOTHING ELSE EVER SWEPT THESE. `_burn_tank_lock_acquire` reclaims a dead
