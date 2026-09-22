@@ -57,6 +57,7 @@ implementation to read.
 | `adapter_relay <from> <to>` | `clikae to` / `relay` can carry a **live** session across tanks. Without it, the carry starts a clean session and says so. | claude |
 | `adapter_memory_dir` / `adapter_memory_pointer_path` | Soul membership. Defining `adapter_memory_dir` (a real memory directory) also enables `--ephemeral`; the pointer variant is for engines whose memory is opaque. | claude / codex, grok |
 | `adapter_mcp_config_file` | `clikae mcp share` can fan a server into this engine's tanks. | claude |
+| `adapter_hooks_config_file` | `clikae hooks share` can fan a hook into this engine's tanks. Defining it is a promise that the file is `<tank dir>/settings.json`: the writer is `_settings_write_file` (`lib/commands/settings.sh`), which derives that path from the tank directory, and `fleet_hooks_prelaunch` refuses to write when the adapter names anything else. An engine whose hooks live elsewhere needs a writer of its own first. | claude |
 
 > The classification rule that matters: **never key behaviour on "an adapter file
 > exists."** `antigravity` has an adapter file that is a resume-only shim on a

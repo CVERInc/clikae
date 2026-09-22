@@ -621,6 +621,78 @@ EOF
   return 0
 }
 
+# _doctor_fleet_config -> say something ONLY when a non-solo tank is missing
+# something the fleet shares: a hook (lib/core/fleet_hooks.sh) or an MCP
+# server (lib/core/fleet_mcp.sh).
+#
+# 🔴 WHY THIS IS THE REAL FIX FOR #141. Both halves of a tank's own engine
+# config are silent when they go missing. An absent MCP server reads as a
+# server that is down. An absent hook reads as nothing at all: the tank works
+# normally, only without the automation — which is how a memory-snapshot
+# `Stop` hook, lost when tanks were recreated under new names, stopped running
+# for five days and 102 commits before an unrelated symptom gave it away. The
+# merge (at init and at every launch) prevents the next one; this is where an
+# existing one is found on the day it happens, by someone who came here to ask
+# what is wrong.
+#
+# Silent when every non-solo tank has everything. Per _doctor_memory's rule: a
+# permanent "fleet config: fine" line on a screen built to tell you what to do
+# next is a line nobody can act on.
+_doctor_fleet_config() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local f e engines=""
+  # Only engines that actually share something — one `ls` of two directories,
+  # and on the common install both are absent and this whole section is free.
+  for f in "$(fleet_hooks_root)"/*.json "$(fleet_mcp_root)"/*.json; do
+    [ -f "$f" ] || continue
+    e="${f##*/}"; e="${e%.json}"
+    case " $engines " in *" $e "*) ;; *) engines="$engines $e" ;; esac
+  done
+  [ -n "$engines" ] || return 0
+  # One SUBSHELL per engine. adapter_loader.sh's unset list is what actually
+  # stops adapter_hooks_config_file leaking from claude onto the next engine
+  # in this loop (it is in that list, and a test holds it there) — this keeps
+  # the loading itself out of doctor's own process, so the sections AFTER this
+  # one see the adapter state they saw before it ran.
+  for e in $engines; do
+    ( _doctor_fleet_config_engine "$e" ) || true
+  done
+  return 0
+}
+
+# _doctor_fleet_config_engine <engine> -> the per-engine half of the above.
+# Runs in a subshell (see its loop) because it loads an adapter.
+_doctor_fleet_config_engine() {
+  local engine="$1" tank dir event command name said=0
+  load_adapter "$engine" >/dev/null 2>&1 || return 0
+  while IFS= read -r tank; do
+    [ -n "$tank" ] || continue
+    tank_is_solo "$engine" "$tank" && continue
+    dir="$(profile_dir "$engine" "$tank")"
+    while IFS=$'\t' read -r event command; do
+      [ -n "$event" ] || continue
+      printf '  %-16s %s\n' "fleet config" "$engine/$tank does not run the shared $event hook: $command"
+      said=1
+    done <<HOOKS
+$(fleet_hooks_missing "$engine" "$dir" 2>/dev/null || true)
+HOOKS
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      printf '  %-16s %s\n' "fleet config" "$engine/$tank does not have the shared MCP server: $name"
+      said=1
+    done <<SERVERS
+$(fleet_mcp_missing "$engine" "$dir" 2>/dev/null || true)
+SERVERS
+  done <<EOF
+$(tanks_for_engine "$engine" 2>/dev/null || true)
+EOF
+  if [ "$said" -eq 1 ]; then
+    log_dim "                   each is merged at that tank's next launch — or now: clikae hooks share <event> <command> / clikae mcp share <name>"
+    log_dim "                   (clikae hooks list / clikae mcp list show what every non-solo tank should have)"
+  fi
+  return 0
+}
+
 cmd_doctor() {
   case "${1:-}" in
     -h|--help)
@@ -753,6 +825,7 @@ EOF
   _doctor_tmux_guard
   _doctor_memory
   _doctor_cockpit
+  _doctor_fleet_config
   # shellcheck source=./settings.sh
   source "$CLIKAE_LIB/commands/settings.sh"
   local claude_template="$CLIKAE_ROOT/templates/permissions/claude.json"

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae hooks <share|unshare|list>` — fleet-wide hook sharing, and
+  `clikae doctor` now checks both halves of a tank's own engine config
+  (#141).** A tank's hooks live in its own `settings.json`, so recreating or
+  renaming tanks silently left them behind: on one machine a memory-snapshot
+  `Stop` hook was simply absent on the recreated tanks, and the shared memory
+  it wrote stopped moving for five days and 102 commits before an unrelated
+  symptom gave it away. An MCP server that vanishes at least looks like a
+  server that is down; a hook that vanishes looks like nothing at all.
+  `clikae hooks share <event> <command>` keeps one canonical per-engine list
+  under `$CLIKAE_HOME/fleet-hooks/<engine>.json` and merges it into every
+  non-solo tank — at `clikae init` (settings.json is clikae's own file, so a
+  brand-new tank is covered before its first run, unlike the MCP list, which
+  waits for the engine to write `.claude.json`) and at every launch, the same
+  four paths `fleet_mcp_prelaunch` is wired into. The merge is additive-only
+  and keyed on the command string: a command a tank already runs for that
+  event is never appended twice, nothing the tank has is ever removed or
+  rewritten, and a tank whose settings are already correct is not rewritten at
+  all (no inode churn under a live session). `clikae doctor` grew a `fleet
+  config` section that names every non-solo tank missing a shared hook or a
+  shared MCP server — day one instead of day five — and stays silent when
+  there is nothing to act on. `clikae rename` already carried both, because
+  they live inside the directory it moves; it now says so in its output, and a
+  test holds that true rather than code re-implementing it.
+
 - **`clikae usage` reports the vendor's per-model weekly quota.** The REPL's
   `/usage` shows two lines — "Current week (all models) 14%" and "Current week
   (Fable) 11%" — and only the first one reached clikae. The second was in the

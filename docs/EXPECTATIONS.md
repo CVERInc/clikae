@@ -171,6 +171,15 @@ into a JSON `mcpServers` object; grok keeps its servers in `config.toml` as a TO
 `[mcp_servers]` table. Rather than write a shape it might corrupt, clikae leaves
 grok out — use `grok mcp` inside the tank.
 
+**`clikae hooks share` is claude-only, and `--ephemeral` does not drop a shared
+hook.** Fleet hooks are merged into a tank's own `settings.json`, which only the
+claude adapter declares (`adapter_hooks_config_file`). And unlike the fleet's MCP
+servers — which an ephemeral run leaves behind by passing the engine's own
+`--strict-mcp-config` — there is no per-run flag that turns hooks off, so a cold
+reader still runs whatever the fleet shares. Keep a shared hook to things that are
+safe on every run; a hook that must not run in a cold reader belongs in one tank's
+`settings.json`, not the fleet's.
+
 **A grok session started by `burn` shows `(no preview)` on the board.** grok fills
 `generated_title` when it titles a conversation, which a one-shot headless run
 never gets to. The row is real and resumable — it just has no name yet.

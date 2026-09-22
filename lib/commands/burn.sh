@@ -4060,6 +4060,7 @@ cmd_burn() {
     fi
     soul_prelaunch "$cli" "$cur" "$dir"        # member tank → fan this dir into its Soul
     fleet_mcp_prelaunch "$cli" "$cur" "$dir"   # non-solo tank → fan in the shared MCP list
+    fleet_hooks_prelaunch "$cli" "$cur" "$dir" # …and the shared hooks (#141)
     # 🔴 `if`, not `[ … ] && exec …`: under bin/clikae's `set -eo pipefail`, a
     # `&&` whose LEFT side is false (the no-flock/no-lockf fallback, _prelocked=0)
     # makes the whole statement exit 1 — which set -e treats as this function
