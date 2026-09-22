@@ -519,3 +519,93 @@ EOF
   [ "$status" -eq 0 ] || { echo "a quoted marker cleared the tank: status=$status"; false; }
   [[ "$output" == *"resets 8:20pm"* ]] || false
 }
+
+# --- a stated reset that has ALREADY passed ----------------------------------
+#
+# An undated phrase names a time of day, not a date, so "resets 8:20pm" read at
+# 21:00 used to mean 8:20pm TOMORROW — there was no other reading available.
+# For `clikae wake` that was the difference between a nudge and a 23-hour sleep:
+# a watcher that first notices a limit after its stated reset (it polls once a
+# minute, and the machine may have been asleep) handed the waiter an instant a
+# day out. Measured before the fix: a phrase 40 minutes past resolved 1400
+# minutes into the future.
+#
+# 1789200000 is 2026-09-12 08:00:00 UTC. Every case below is anchored on it so
+# nothing here depends on when the suite runs.
+
+@test "reset epoch: a reset 10 minutes in the past means it ALREADY happened, not tomorrow" {
+  _src_limit
+  # 07:50 UTC — ten minutes behind the anchor, well inside LIMIT_RESET_PAST_GRACE.
+  run limit_reset_epoch "resets 7:50am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" -le 1789200000 ] || { echo "rolled forward to $output"; false; }
+  [ "$output" = "1789199400" ]      # 07:50 UTC — the instant the vendor named
+}
+
+@test "reset epoch: a reset five hours in the past is still the one in hand" {
+  # The inside edge of the grace. The window a limit can be held from is ~5h by
+  # construction, so this is the oldest phrase that is still today's.
+  _src_limit
+  run limit_reset_epoch "resets 3am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789182000" ]      # 03:00 UTC, five hours behind the anchor
+}
+
+@test "reset epoch: a reset EIGHT hours in the past is tomorrow's, not this morning's" {
+  # The control, and the reason the grace is bounded rather than "any past time
+  # means now". Beyond it, a phrase is a genuine next-day reset being read on
+  # the wrong side of midnight, and firing on it immediately would be worse than
+  # the bug being fixed. 00:00 UTC is eight hours behind the anchor, so the
+  # answer is the NEXT midnight: 2026-09-13 00:00:00 UTC.
+  _src_limit
+  run limit_reset_epoch "resets 12am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789257600" ] || { echo "got $output"; false; }
+  [ "$output" -gt 1789200000 ]
+}
+
+@test "reset epoch: a reset still ahead is untouched by any of this" {
+  _src_limit
+  run limit_reset_epoch "resets 11pm (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789254000" ]
+}
+
+@test "reset epoch: the same rule applies to codex's undated phrase" {
+  # codex's branch has its own copy of the roll-forward, and a rule that lives
+  # in one of two spellings is how this file's twin drifted before.
+  _src_limit
+  TZ=UTC run limit_reset_epoch "try again at 7:50 AM" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789199400" ] || { echo "got $output"; false; }
+  TZ=UTC run limit_reset_epoch "try again at 12:00 AM" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789257600" ] || { echo "got $output"; false; }
+}
+
+@test "reset epoch: a tank whose stated reset has passed reads 'unverified', not 'dry until tomorrow'" {
+  # What the grace actually changes at the tank level, and it is the honest
+  # reading: the reset happened, no successful turn has been seen since, so the
+  # fuel is probably back but nothing has proved it. Before the grace this same
+  # tank claimed a reset nearly a day out, and the board drew a countdown to it.
+  #
+  # 🔴 limit_tank_dry therefore reports NOT DRY here, which is why wake_watch
+  # cannot key on it alone — it hands over on this verdict too. Pinned in
+  # tests/bats/wake-sit.bats; pinned HERE because a future simplification of
+  # _limit_tank_dry_self would silently disconnect the watcher.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t" zone phrase ten
+  zone="$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')"
+  [ -n "$zone" ] || skip "no named zone on this host"
+  ten="$(( $(date +%s) - 600 ))"
+  phrase="resets $(date -r "$ten" '+%-I:%M' 2>/dev/null || date -d "@$ten" '+%-I:%M')$(date -r "$ten" '+%p' 2>/dev/null || date -d "@$ten" '+%p' | tr 'APM' 'apm') ($zone)"
+  phrase="${phrase/AM/am}"; phrase="${phrase/PM/pm}"
+  _seed_claude_limit_then "$dir"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n' \
+    "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" > "$dir/projects/p/s.jsonl"
+  run _limit_tank_dry_self claude t
+  [ "$status" -eq 0 ] || { echo "phrase=[$phrase] status=$status"; false; }
+  [ "$output" = "$LIMIT_RESET_UNVERIFIED" ] || { echo "phrase=[$phrase] got [$output]"; false; }
+}

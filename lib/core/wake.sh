@@ -695,6 +695,32 @@ wake_watch() {
         printf '\r\033[K'
         log_warn "$engine/$tank is dry, but \"$reset\" carries no time to wait for."
       fi
+    else
+      # 🔴 "NOT DRY" IS TWO DIFFERENT ANSWERS, AND ONLY ONE OF THEM MEANS GO
+      # BACK TO SLEEP. limit_tank_dry is asked "can this tank spend a turn right
+      # now"; the watcher's actual question is "is my session parked on a limit".
+      # They come apart at exactly the moment this feature is for: once the
+      # stated reset is behind us with no successful turn since,
+      # _limit_tank_dry_self downgrades the tank to `reset passed · unverified`
+      # and limit_tank_dry reports NOT DRY — correctly, the fuel is probably
+      # back — while the session it was limited in is still sitting there
+      # waiting for somebody to type. Watching on past that is the whole
+      # failure. So the downgrade is a HAND-OVER signal here, with the instant
+      # being now: the reset already happened.
+      #
+      # It cannot fire on a healthy session. The downgrade needs a genuine limit
+      # marker, in a transcript touched inside the 5h window, newer than any
+      # successful turn — so anyone who has worked since has cleared it. And
+      # wake_sit still asks its own recovered? question before typing, which is
+      # what catches the vendor having continued by itself.
+      local _self
+      if _self="$(_limit_tank_dry_self "$engine" "$tank" 2>/dev/null)" \
+         && [ "$_self" = "$LIMIT_RESET_UNVERIFIED" ]; then
+        printf '\r\033[K'
+        log_info "$engine/$tank — the stated reset has already passed"
+        wake_sit "$session" "$(date +%s)" "$engine" "$tank"
+        return $?
+      fi
     fi
 
     printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"

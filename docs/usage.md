@@ -995,6 +995,15 @@ line) it sends nothing and records why. The case this feature exists for is the
 other one: a limit hit at the moment you pressed enter, where the engine does
 *not* resume itself and the session sits there until somebody types.
 
+**A reset that has already gone by still counts.** The watcher checks once a
+minute, and your machine may have been asleep — so it often meets a limit whose
+stated reset is already behind it. The vendor's sentence names a time of day,
+not a date, so "resets 8:20pm" read at 21:00 used to mean 8:20pm *tomorrow*,
+and the waiter would have sat there for nearly a day. A stated reset less than
+six hours behind now means it has happened, and the waiter goes straight to
+deciding whether to type. Further back than that is treated as a genuine
+next-day time, because no limit clikae can still be holding is that old.
+
 **A moving screen is no longer a reason not to type.** It used to be: the
 waiter waited for the pane to stop changing between two captures, on the
 reasoning that movement could mean a tool call in flight. On a tank that is

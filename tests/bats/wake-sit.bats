@@ -528,3 +528,79 @@ PYEOF
   [[ "$output" != *ASKED* ]] || { echo "$output"; false; }
   [ "$(wake_pref_get)" = "unset" ]
 }
+
+# _phrase_minutes_ago <minutes> -> the vendor's own wording for a reset that
+# happened that long ago, in this host's named zone (the parser requires one).
+_phrase_minutes_ago() {
+  local t z h p
+  t="$(( $(date +%s) - $1 * 60 ))"
+  z="$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')"
+  [ -n "$z" ] || return 1
+  h="$(date -r "$t" '+%-I:%M' 2>/dev/null || date -d "@$t" '+%-I:%M')"
+  p="$(date -r "$t" '+%p' 2>/dev/null || date -d "@$t" '+%p')"
+  printf 'resets %s%s (%s)' "$h" "$(printf '%s' "$p" | tr 'APM' 'apm')" "$z"
+}
+
+@test "watch: a limit whose stated reset ALREADY passed is nudged now, not a day later" {
+  # The watcher polls once a minute and the machine may have been asleep, so it
+  # routinely meets a limit whose stated reset is already behind it. An undated
+  # phrase names a time of day, so "resets 8:20pm" read at 21:00 used to resolve
+  # to 8:20pm TOMORROW — the waiter was handed an instant 23 hours out and the
+  # session sat there. This runs the real limit_tank_dry and the real
+  # limit_reset_epoch against a real session: nothing about the clock is mocked
+  # except how far in the past the phrase is.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank; tank="$(_tankname)p"
+  local proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  mkdir -p "$proj"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n' \
+    "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" > "$proj/s.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  sleep 1
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$!
+  # Bounded on purpose: the regression's symptom is a wait, not a wrong value,
+  # and a test that waits for it would wedge the suite rather than fail it.
+  local i
+  for ((i = 0; i < 20; i++)); do
+    [ -s "$out" ] && break
+    sleep 1
+  done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ -s "$out" ] || { echo "nothing was typed within 20s (phrase: $phrase)"; false; }
+  [ "$(cat "$out")" = "go" ]
+  grep -q $'\ttyped\t' "$CLIKAE_HOME/state/wake/claude-$tank.log"
+}
+
+@test "watch: a passed reset still does NOT nudge a tank the vendor already continued" {
+  # The skip stays in front of the nudge on this path too — the fix above only
+  # moved WHEN the waiter acts, never whether it checks first.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank; tank="$(_tankname)q"
+  local proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  mkdir -p "$proj"
+  # A limit, then the vendor continuing by itself five minutes later. The tank
+  # therefore reads RECOVERED, and limit_tank_dry will not even hand over — but
+  # the waiter's own re-check is what this pins, so drive wake_sit directly with
+  # the passed instant the watcher would have computed.
+  {
+    printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"2026-09-16T13:37:00.000Z"}\n' "$phrase"
+    printf '%s\n' '{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
+  } > "$proj/s.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 30"
+  sleep 1
+  run wake_sit "$(_sess)" "$(( $(date +%s) - 600 ))" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
+  [ ! -f "$out" ] || { echo "typed anyway: $(cat "$out")"; false; }
+}

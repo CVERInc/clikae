@@ -42,6 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is also what an untouched tank outside the 5h window looks like) is what lets
   the waiter skip without also going silent on the case it exists for.
 
+- **A reset that has already passed no longer resolves to tomorrow, and the
+  watcher acts on it.** An undated phrase names a time of day, not a date, so
+  `resets 8:20pm` read at 21:00 resolved to 8:20pm the NEXT day — measured, a
+  phrase 40 minutes past came back 1400 minutes in the future. The waiter was
+  then handed an instant nearly a day out and the session sat there, which is
+  the same outcome as the idle-gate bug above reached by a different route: the
+  watcher polls once a minute and the machine may have been asleep, so meeting
+  a limit after its stated reset is ordinary. A wall-clock reset behind the
+  reference instant by less than `LIMIT_RESET_PAST_GRACE` (6h) is now read as
+  having already happened and returned as the past instant it is. The bound is
+  derived rather than chosen: a limit any caller can be holding is at most ~5h
+  old by construction (the transcript scan window is 300 minutes and the
+  vendor's own session window is 5h), so anything further back is a genuine
+  next-day phrase read on the wrong side of midnight, and firing on it at once
+  would be worse than the bug. A tie is deliberately excluded — a phrase is
+  written at the instant the limit fires, so `resets 3:50am` arriving AT 3:50am
+  still means the next occurrence.
+  Second half of the same fix: once the stated reset is behind us with no
+  successful turn since, `limit_tank_dry` correctly reports the tank NOT DRY
+  (`reset passed · unverified` — the fuel is probably back) while the session it
+  was limited in is still parked waiting for somebody to type. The watcher
+  used to key on dryness alone and would therefore have watched straight past
+  it; it now treats that verdict as a hand-over too, with the instant being now.
+  The waiter's own auto-continuation check still runs in front of the nudge.
+
 ### Added
 
 - **A durable trace of what the waiter did.** Every outcome — attached, each
