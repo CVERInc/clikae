@@ -1373,7 +1373,7 @@ STUB
   . "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"    # for CLIKAE_SESS_PREFIX, same as burn.sh
   cd "$BATS_TEST_TMPDIR"                    # fix $PWD: the lock key includes it
   local lockfile
-  lockfile="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "codex/T1:$PWD" | cksum | cut -d' ' -f1).lock"
+  lockfile="$HOME/.clikae/state/locks/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "codex/T1:$PWD" | cksum | cut -d' ' -f1).lock"
   mkdir -p "$(dirname "$lockfile")"
 
   # Hold the SAME lock burn.sh is about to want, the way suite-lock.bats holds
