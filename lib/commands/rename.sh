@@ -26,6 +26,36 @@ _rename_alias_name() {
   ' "$rc_file"
 }
 
+# _rename_report_carried <engine> <new dir> -> name the per-tank engine config
+# that just moved with the directory (#141).
+#
+# Nothing is copied here, and that is the point. A tank's hooks and its
+# user-scope MCP servers live INSIDE the tank directory, so the `mv` above
+# already carried them — the defect in #141 was never that a rename dropped
+# them, it was that nobody could tell whether it had. Three incidents on one
+# machine started with that uncertainty, and the two that really did lose
+# config lost it to a RECREATED tank (which `clikae hooks share` /
+# `clikae mcp share` now cover), not a renamed one. So: verified by
+# tests/bats/rename.bats rather than re-implemented, and said out loud here.
+_rename_report_carried() {
+  local cli="$1" dir="$2" f carried=""
+  if declare -F adapter_hooks_config_file >/dev/null 2>&1; then
+    f="$(adapter_hooks_config_file "$dir" 2>/dev/null || true)"
+    if [ -n "$f" ] && [ -f "$f" ]; then carried="hooks (${f##*/})"; fi
+  fi
+  if declare -F adapter_mcp_config_file >/dev/null 2>&1; then
+    f="$(adapter_mcp_config_file "$dir" 2>/dev/null || true)"
+    if [ -n "$f" ] && [ -f "$f" ]; then
+      [ -z "$carried" ] || carried="$carried, "
+      carried="${carried}MCP servers (${f##*/})"
+    fi
+  fi
+  if [ -n "$carried" ]; then
+    log_done "Carried the tank's own config across: $carried"
+  fi
+  return 0
+}
+
 cmd_rename() {
   local cli="" old="" new="" force=0
   local -a positionals=()
@@ -38,6 +68,9 @@ Usage: clikae rename <engine> <old> <new> [--force]
 
 Rename a tank: move its directory, rewrite its managed shell alias, and (for
 claude on macOS) carry the saved Keychain login across so you don't re-login.
+The tank's own engine config — its hooks and its user-scope MCP servers —
+lives inside that directory, so it moves with it; the output names what came
+along.
 
 Give your tanks meaningful names instead of a/b — e.g.:
   clikae rename claude a cver
@@ -123,6 +156,7 @@ EOF
   mkdir -p "$(dirname "$new_dir")"
   mv "$old_dir" "$new_dir"
   log_done "Moved $old_dir -> $new_dir"
+  _rename_report_carried "$cli" "$new_dir"
 
   # 1b) Carry Soul membership: the members files name <engine>/<tank>, so a
   # rename without this leaves a ghost member behind (and the renamed tank
