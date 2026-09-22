@@ -186,11 +186,22 @@ usage_read() (
 #     age, on its own 24h "unknown" cutoff (`home.sh`) instead — the two
 #     callers do not share one ruler (round-5 review P3-5).
 #
+# (e) a LIVE SESSION refreshes its own tank, from the `wake` window it
+#     already has: one `usage_read` at launch (wake_usage_prime, called from
+#     lib/commands/switch.sh for a session it just spawned) and one every
+#     WAKE_USAGE_INTERVAL from wake_watch's loop (lib/core/wake.sh). Added
+#     2026-09-22 because (a)-(d) between them left the refresh UNOWNED on a
+#     machine that never burns: measured, a nine-day-old cache and a tmux
+#     status row showing the "no reading" glyph forever, while a machine
+#     burning all day showed live numbers. It goes through this same function,
+#     so it honours CLIKAE_USAGE_TTL like every other caller and keeps nothing
+#     a `clikae usage` run would not have written.
+#
 # Nothing else writes or refreshes this cache. `usage_read` above is the
-# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b) above calling
-# it the same way); a cache file with no `clikae usage`/burn run behind it
-# simply does not exist yet, and one that stops being refreshed simply ages
-# in place — (c) is how the board says so instead of staying silent.
+# ONLY writer in the whole repo (`clikae usage`, plus (a)/(b)/(e) above calling
+# it the same way); a cache file with no `clikae usage`/burn/live-session run
+# behind it simply does not exist yet, and one that stops being refreshed simply
+# ages in place — (c) is how the board says so instead of staying silent.
 #
 # `scanned_at` vs `cached_at` (P3, round-2 review): a vendor reading's
 # `cached_at` IS the fetch time — the two never differ. A transcript

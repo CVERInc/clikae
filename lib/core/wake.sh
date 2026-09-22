@@ -421,11 +421,99 @@ WAKE_WATCH_INTERVAL=60
 # the same two questions, each asked at the rate its answer decays.
 WAKE_ALONE_INTERVAL=2
 
+# WAKE_USAGE_INTERVAL — how often this session refreshes the fuel READING the
+# status row draws.
+#
+# 🔴 WHY THE WATCHER OWNS THIS. The row's fuel segment reads the usage cache
+# (`state/usage/<engine>/<tank>.json`) and is structurally incapable of
+# fetching — see tmux_status_fuelv (lib/core/tmux.sh): a status line that could
+# call a vendor would call one every five seconds, per attached client, inside
+# tmux's server, where nobody would ever see it fail. That rule is right and
+# stays. What it left open is who WRITES the file: `clikae usage` and `burn` at
+# run end were the only two writers in the repo (lib/core/usage.sh, "who writes
+# this cache"), so on a machine where a person only ever sits in interactive
+# sessions, nothing ever refreshed it. Measured 2026-09-22: a nine-day-old
+# cache, the row showing the "no reading" glyph forever, while a machine that
+# burns all day showed live numbers; one `clikae usage <engine> <tank>` took
+# 0.7s and the row read `5h 25% · 7d 10%` on the next redraw. The readout was
+# never wrong — the refresh had no owner.
+#
+# 🔴 A READOUT REFRESH, NOT A QUOTA MODEL. This file's constraint (top of file)
+# holds: no daemon, no state file, nothing remembered between loops, nothing
+# that outlives the session. This asks the same question `clikae usage` asks,
+# through the same function, and leaves behind exactly what a `clikae usage`
+# run would have left. The verdict about whether a tank is dry still comes from
+# hitting the wall (limit_tank_dry), never from a percentage kept here.
+#
+# 300s, and the floor is not a guess: usage_read honours CLIKAE_USAGE_TTL (120s
+# by default) and answers from the cache below it, so a shorter cadence would
+# buy redraws that are no fresher than the ones before them. 5 minutes against
+# the 5-hour window the number describes is under 2% of it — finer than anyone
+# reads a percentage at — and the row already says so itself once a reading is
+# more than an hour old (tmux_status_fuelv's age suffix).
+WAKE_USAGE_INTERVAL=300
+
+# wake_usage_refresh <engine> <tank> -> write a fresh reading into the usage
+# cache. Silent, and never fails its caller.
+#
+# Silent because the window this runs in belongs to the countdown: a watcher
+# that printed a vendor's refusal every few minutes over somebody's "resuming
+# in 3h12m" would be noise about something nobody asked for. A refresh that
+# does not happen leaves the last reading on disk, and the row's own age suffix
+# is what says how old it is — that suffix exists for exactly this.
+#
+# 🔴 BOUNDED BY THE FETCH IT CALLS, and no new bound is invented here. This sits
+# in the watch loop, which has a 2-second question of its own to ask
+# (WAKE_ALONE_INTERVAL), so what matters is that usage_read cannot sit here
+# indefinitely. It cannot: the claude adapter's vendor call is `curl
+# --connect-timeout 3 --max-time 8` and its Keychain read is bounded through
+# _burn_timeout_bin (lib/adapters/claude.sh, lib/core/timeout_bin.sh), while
+# codex's reading is a local transcript scan. Worst case, the "am I the only
+# window left" question is asked ~11s late, once per WAKE_USAGE_INTERVAL.
+# burn's reroute refresh reuses the adapter's own --max-time for the same
+# reason (lib/core/usage.sh, (b)).
+wake_usage_refresh() {
+  local engine="$1" tank="$2"
+  [ -n "$engine" ] && [ -n "$tank" ] || return 0
+  # A watcher whose process never loaded the usage layer simply does not
+  # refresh. That is a missing number on a row, never a dead watcher.
+  declare -F usage_read >/dev/null 2>&1 || return 0
+  usage_read "$engine" "$tank" >/dev/null 2>&1 || true
+  return 0
+}
+
+# wake_usage_prime <engine> <tank> -> ONE refresh, in the background, at launch.
+#
+# The watcher's first refresh is a WAKE_USAGE_INTERVAL away, and the first thing
+# a person sees after `clikae <engine> <tank>` is this row. Without this, a tank
+# whose cache is empty (or old enough to be distrusted) shows the no-reading
+# glyph for the first five minutes of every session — the same defect, smaller.
+#
+# 🔴 THE LAUNCH PATH STILL PAYS ZERO for anything that talks to a vendor (the
+# rule burn's launch path already has). So: backgrounded, output discarded, and
+# disowned, because the caller may `exec` into tmux a line later.
+wake_usage_prime() {
+  local engine="$1" tank="$2"
+  [ -n "$engine" ] && [ -n "$tank" ] || return 0
+  declare -F usage_read >/dev/null 2>&1 || return 0
+  wake_usage_refresh "$engine" "$tank" >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  return 0
+}
+
 # wake_watch <engine> <tank> <session> -> watch until this tank runs dry, then
 # hand over to the countdown. Returns non-zero only if it cannot start.
 wake_watch() {
   local engine="$1" tank="$2" session="$3" reset epoch now
   [ -n "$engine" ] && [ -n "$tank" ] && [ -n "$session" ] || return 1
+
+  # Seconds slept since the last fuel refresh. Counted rather than clocked: the
+  # loop already knows how long it sleeps, and a counter is what lets a test
+  # drive the whole cadence with tiny intervals instead of waiting five minutes
+  # for one tick. It starts at 0 because the launch already fired one
+  # (wake_usage_prime, from switch.sh) — a watcher that refreshed on its first
+  # pass would make that two vendor calls a second apart.
+  local _usage_slept=0
 
   while :; do
     # 🔴 Do NOT ask whether the session is alive. We are a window IN it, so we
@@ -456,6 +544,13 @@ wake_watch() {
     tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
       | grep -qvE '^wake( |$)' || return 0
 
+    # AFTER both guards, never before: a session that is leaving must not spend
+    # a vendor call on its way out.
+    if [ "$_usage_slept" -ge "$WAKE_USAGE_INTERVAL" ]; then
+      _usage_slept=0
+      wake_usage_refresh "$engine" "$tank"
+    fi
+
     if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
       if [ -n "$reset" ]; then
         now="$(date +%s)"
@@ -480,6 +575,7 @@ wake_watch() {
     while [ "$_slept" -lt "$WAKE_WATCH_INTERVAL" ]; do
       sleep "$WAKE_ALONE_INTERVAL"
       _slept=$((_slept + WAKE_ALONE_INTERVAL))
+      _usage_slept=$((_usage_slept + WAKE_ALONE_INTERVAL))
       tmux has-session -t "=$session" 2>/dev/null || return 0
       tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
         | grep -qvE '^wake( |$)' || return 0
