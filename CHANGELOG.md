@@ -82,6 +82,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outlives the session, no model of anyone's quota — and it is bounded by the
   adapter's own fetch timeout rather than a new one; a refresh that fails is
   silent, and the last reading stays on the row with its age next to it.
+- **The (engine/tank, `$PWD`) prelaunch lock `clikae burn` takes around
+  `soul_prelaunch`/`fleet_mcp_prelaunch` (#0.28.9's fix) is a file nothing ever
+  removed.** By design it is never unlinked right after release — deleting a
+  lock file a concurrent burn may already have open is the classic lock-file
+  race — so every distinct (tank, cwd) left one behind in `~/.clikae/state`
+  forever, mixed in with real state files (195 of them on one machine,
+  measured, the oldest from 2026-09-06). `clikae clean` had no notion of them
+  at all.
+
+  The lock now lives under `state/locks/` instead of `state/` directly, and a
+  new GC (`_burn_prelaunch_lock_gc`) reclaims it on age, never on a recorded
+  holder: `exec 7>` truncates the file on every acquisition, which bumps its
+  mtime, so a held lock is always younger than any real threshold — only a
+  file untouched for over a day is provably abandoned. The sweep runs
+  opportunistically once per `clikae burn` invocation and from `clikae clean`
+  (which reports the count the same way it reports every other reclaimable
+  class), and cleans the old `state/`-top-level location too, so an existing
+  machine tidies up on its next `burn` or `clean`.
 
 ### Changed
 
@@ -119,27 +137,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lays it out in — measured on tmux 3.7b, where the row's other glyphs are
   one — so the width ladder's promise that the alert count and the clock are
   never cut is unaffected.
-
-### Fixed
-
-- **The (engine/tank, `$PWD`) prelaunch lock `clikae burn` takes around
-  `soul_prelaunch`/`fleet_mcp_prelaunch` (#0.28.9's fix) is a file nothing ever
-  removed.** By design it is never unlinked right after release — deleting a
-  lock file a concurrent burn may already have open is the classic lock-file
-  race — so every distinct (tank, cwd) left one behind in `~/.clikae/state`
-  forever, mixed in with real state files (195 of them on one machine,
-  measured, the oldest from 2026-09-06). `clikae clean` had no notion of them
-  at all.
-
-  The lock now lives under `state/locks/` instead of `state/` directly, and a
-  new GC (`_burn_prelaunch_lock_gc`) reclaims it on age, never on a recorded
-  holder: `exec 7>` truncates the file on every acquisition, which bumps its
-  mtime, so a held lock is always younger than any real threshold — only a
-  file untouched for over a day is provably abandoned. The sweep runs
-  opportunistically once per `clikae burn` invocation and from `clikae clean`
-  (which reports the count the same way it reports every other reclaimable
-  class), and cleans the old `state/`-top-level location too, so an existing
-  machine tidies up on its next `burn` or `clean`.
 
 ## [0.30.0] — 2026-09-17
 
