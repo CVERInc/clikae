@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The home board's Continue list and `clikae resume` no longer disagree
+  about which engines and which directories they cover.** They answered what
+  looked like the same question and gave different answers, and neither said
+  why. Three things were wrong at once:
+  - `clikae resume` enumerated the store with **three hand-written globs**
+    whose own comment said a new resumable engine's glob "goes here only".
+    grok shipped with every resume hook implemented, reached the home board,
+    and stayed invisible to the picker, to prefix resolution (`clikae resume
+    a52bdc12`) and to `clikae clean`'s scan. The enumeration now goes through
+    the adapters under the same capability gate the board uses, so an engine
+    that can be resumed is listed by construction. claude and grok gained
+    `adapter_all_transcripts` (the hook codex and antigravity already
+    defined); tanks come from the same "what is a tank" answer the board has
+    used since #61, so a bare directory under `profiles/<engine>/` that was
+    never a tank no longer contributes rows.
+  - **A miss could kill `clikae resume` silently.** The store-wide locate
+    returned the status of the last tank it looked in, so when the last
+    resume-capable engine was one you had a tank for (alphabetically grok),
+    a session id that matched nothing exited non-zero with **no output at
+    all** — no "No session" line, and no prefix retry either.
+  - **The board's Continue list mixed two scopes in one ranked list.**
+    claude, codex and grok answered for `$PWD` while agy answered tank-wide
+    (#34), so on a real store all ten visible rows were agy and the one
+    claude session belonging to the current directory ranked #13 and never
+    appeared. agy is scoped to `$PWD` now too, falling back to tank-wide only
+    when this directory has nothing — which is what #34 actually needed,
+    since `workspace` is a constant on real agy installs. The cwd check is
+    bounded by `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per tank.
+- **The board's "N sessions total" footer counted no grok sessions.** Its
+  glob list had the same hole `clikae resume`'s did.
+
+### Changed
+
+- **The Continue section says what it is showing.** The heading names the
+  directory (`Resume — in ~/project`), and when the store holds sessions the
+  list is not showing, one dim line says how many and that `clikae resume`
+  covers every directory. Both notes travel in the board's own items stream
+  rather than on disk, like the truncation note before them, so a killed
+  board leaves nothing behind. Nine locales updated
+  (`T_CONTINUE_IN`, `T_RESUME_ELSEWHERE`).
+
 ## [0.30.0] — 2026-09-17
 
 ### Changed
