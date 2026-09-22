@@ -530,6 +530,39 @@ _home_seed_agy() {      # <tank> <dir> <sid> <title>
   printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$dir" >> "$base/brain/history.jsonl"
 }
 
+# claude writes a subagent's transcript beside its parent's as
+# `agent-<id>.jsonl`. They are not conversations (claude itself refuses to
+# resume one) and on a working store they outnumber the real sessions, so a
+# board that lists or counts them describes a store nobody has. The board's
+# warm path has skipped them by basename since board_state.sh round 5; these
+# pin the cold path and the counts to the same answer.
+@test "the Continue list leaves out claude's subagent transcripts, cold and warm" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"REAL-CONVERSATION"}\n' \
+    > "$d/11111111-0000-4000-8000-000000000001.jsonl"
+  sleep 1
+  # Newer than the real one, so mtime ranking would put it FIRST if it counted.
+  printf '{"type":"user","isSidechain":true,"message":{"role":"user","content":"SUBAGENT-BRIEF Effort: high."}}\n' \
+    > "$d/agent-99999999-0000-4000-8000-000000000002.jsonl"
+
+  cd "$work"
+  run clikae                                  # cold: no snapshot yet
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"REAL-CONVERSATION"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SUBAGENT-BRIEF"* ]] || { echo "cold path listed it: $output"; false; }
+  # …and it is not counted as a session the list is failing to show, either.
+  [[ "$output" != *"more in this store"* ]] || { echo "counted as a session: $output"; false; }
+
+  run clikae                                  # warm: the snapshot answers
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"REAL-CONVERSATION"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SUBAGENT-BRIEF"* ]] || { echo "warm path listed it: $output"; false; }
+  [[ "$output" != *"more in this store"* ]] || { echo "counted as a session: $output"; false; }
+}
+
 @test "the Continue list shows only THIS directory's sessions, for every engine at once" {
   clikae init claude a
   mkdir -p "$HOME/.gemini"
@@ -552,6 +585,48 @@ _home_seed_agy() {      # <tank> <dir> <sid> <title>
   # "all your sessions".
   [[ "$output" == *"Resume — in"* ]] || { echo "$output"; false; }
   [[ "$output" == *"dir-a"* ]]       || { echo "$output"; false; }
+}
+
+# 🔴 The fallback must never cost a real row its place. Measured on a
+# reproduction of the maintainer's store: one claude session recorded in this
+# directory (mtime Sep 13) against fifteen newer agy sessions recorded at
+# $HOME. Ranked on mtime alone, the fifteen courtesy rows filled the whole
+# board and the one row that genuinely belonged to the directory was #16 —
+# invisible, which is the symptom the cwd scoping exists to end, arriving
+# through the fallback instead.
+@test "a row that belongs to this directory outranks every fallback row" {
+  clikae init claude tuna
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy chromis >/dev/null 2>&1
+  local work="$TEST_HOME/Developer/clikae"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/tuna/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"THE-LOCAL-SESSION"}\n' \
+    > "$d/2f978009-6884-42b4-9300-8dc9fd40711b.jsonl"
+  touch -t 202001010000 "$d/2f978009-6884-42b4-9300-8dc9fd40711b.jsonl"   # OLDEST
+
+  local base="$CLIKAE_HOME/profiles/antigravity/chromis/antigravity-cli"
+  mkdir -p "$base/brain"
+  local i sid
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    sid="aaaaaaaa-0000-4000-8000-0000000000$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"AGY-FILLER-%s"}\n' "$i" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    touch -t 202606250000 "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    # workspace is the constant every real agy install records — never $work.
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$HOME" \
+      >> "$base/brain/history.jsonl"
+  done
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"THE-LOCAL-SESSION"* ]] || { echo "the local row was buried: $output"; false; }
+  # First in the section, ahead of every filler, despite being the oldest.
+  [[ "$output" == *"THE-LOCAL-SESSION"*"AGY-FILLER"* ]] || { echo "wrong order: $output"; false; }
+  # The fillers are still there — #34's need is unchanged, they just rank last.
+  [[ "$output" == *"AGY-FILLER"* ]] || { echo "agy vanished: $output"; false; }
 }
 
 @test "the Continue list says how many more sessions the store holds, with the right count" {
@@ -904,6 +979,46 @@ _seed_burn_flood_agy() {
   run _home_total_sessions
   [ "$status" -eq 0 ] || false
   [ "$output" = "2" ] || { echo "counted '$output', expected 2"; false; }
+}
+
+# The count feeds two sentences about conversations — the footer's "N sessions
+# total" and the Continue list's "N more in this store" — so a subagent
+# transcript in it is a wrong number, and on a real store it is most of the
+# number. Same basename rule as the adapter's adapter_transcript_is_resumable.
+@test "_home_total_sessions does not count claude's subagent transcripts" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"
+  : > "$p/agent-bbb.jsonl"; : > "$p/agent-ccc.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "1" ] || { echo "counted '$output', expected 1"; false; }
+}
+
+# 🔴 A store holding ONLY subagent transcripts must still render: the filter
+# stage exits non-zero when it prints nothing, and under bin/clikae's pipefail
+# that used to be the count killing the board. pipefail is load-bearing here.
+@test "_home_total_sessions survives a store with nothing but subagent transcripts" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/agent-bbb.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || { echo "the count died: $output"; false; }
+  [ "$output" = "0" ] || { echo "counted '$output', expected 0"; false; }
 }
 
 @test "the burn order is the FLEET: a solo tank holds no position in it" {

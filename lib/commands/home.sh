@@ -386,7 +386,7 @@ _home_elsewhere_row() {
 }
 
 _home_recent_rows() {
-  local name proot tdir tank rows sid mt acc="" _proots
+  local name proot tdir tank rows sid mt acc="" _proots _rowmark _rank
   local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
   local _clamped=0 _got=0 _kept=0 _trunc=0
   # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
@@ -489,9 +489,17 @@ _home_recent_rows() {
           if [ "$_kept" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _trunc=$((_trunc + _hidden)); fi
         fi
       fi
-      while IFS=$'\037' read -r mt sid; do
+      # A third field on a row is the adapter saying "this one is not from
+      # $PWD, I am only offering it because I had nothing that was" (see
+      # antigravity.sh's _agy_scope_rows). It becomes the FIRST sort key, so a
+      # row that genuinely belongs to this directory can never be pushed off
+      # the board by a courtesy row — measured: 15 fallback rows buried the one
+      # claude session that was actually recorded here. Adapters that emit two
+      # fields are scoped by construction and always rank 0.
+      while IFS=$'\037' read -r mt sid _rowmark; do
         [ -n "$sid" ] || continue
-        acc="$acc$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
+        _rank=0; [ -n "$_rowmark" ] && _rank=1
+        acc="$acc$_rank"$'\037'"$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
       done <<INNER
 $rows
 INNER
@@ -539,7 +547,7 @@ EOF
   if [ -n "$_burn_sids_f" ]; then
     acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
       BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
-      !($4 in skip)
+      !($5 in skip)
     ')"
     rm -f "$_burn_sids_f"
     if [ -z "$acc" ]; then _home_elsewhere_row 0; return 0; fi
@@ -552,12 +560,16 @@ EOF
   # `| while` below is a subshell nothing can come back out of (#113's lesson,
   # one layer down).
   local _top _shown
-  _top="$(printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX")"
+  # Sort key one: scope (0 = this directory, 1 = a fallback row an adapter
+  # could not place), ascending. Key two: mtime, descending. So the list is
+  # "everything that is really here, newest first, then whatever filler is
+  # left" — never "filler, because filler happened to be newer".
+  _top="$(printf '%s' "$acc" | sort -t$'\037' -k1,1n -k2,2rn | head -n "$CLIKAE_HOME_RECENT_MAX")"
   _shown="$(printf '%s\n' "$_top" | LC_ALL=C grep -c . 2>/dev/null || true)"
   case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
   _home_elsewhere_row "$_shown"
   printf '%s\n' "$_top" \
-    | while IFS=$'\037' read -r mt engine tank sid; do
+    | while IFS=$'\037' read -r _rank mt engine tank sid; do
         [ -n "$sid" ] || continue
         local dir title recap age now _d aflag _act
         dir="$(profile_dir "$engine" "$tank")"
@@ -3000,6 +3012,12 @@ _home_pick_draw_windowed() {
 # Swallow the failure INSIDE the subshell, where it belongs, and pin the result
 # to digits. NB a test for this must `set -o pipefail` itself or it passes
 # vacuously — the bug does not exist without it.
+#
+# 🔴 The `grep -v` stage needs its OWN `|| true` for the same reason, and it is
+# a different reason from the one above: grep exits 1 when it prints NOTHING,
+# which here means "an empty store", or "a store holding only subagent
+# transcripts" — the two cases where a board must still render. Without the
+# guard the count is the one thing on the board that kills it.
 _home_total_sessions_scan() {
   local chome="${CLIKAE_HOME:-$HOME/.clikae}" n
   # grok's glob was missing here for the same reason it was missing from
@@ -3007,11 +3025,21 @@ _home_total_sessions_scan() {
   # someone has to remember. This one stays a glob (it is a count, on the
   # board's hot path, with no adapter to load), so it is pinned by a test
   # instead — tests/bats/home.bats' grok-counting case.
+  # 🔴 claude's `agent-*.jsonl` subagent transcripts are NOT sessions and are
+  # dropped here too. They outnumber real sessions on a working store, so
+  # counting them made both numbers this feeds — the footer's "N sessions
+  # total" and the Continue list's "N more in this store" — describe a store
+  # the user does not have, and offered to go and find things that cannot be
+  # resumed. The rule is the adapter's (adapter_transcript_is_resumable); it is
+  # spelled inline because this is a count on the board's hot path with no
+  # adapter loaded, and pinned by a test so the two cannot drift apart.
   n="$( { ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
                 "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
                 "$chome"/profiles/grok/*/sessions/*/*/summary.json \
                 "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl \
-           2>/dev/null || true; } | wc -l | tr -d ' ' )"
+           2>/dev/null || true; } \
+         | { LC_ALL=C grep -av '/agent-[^/]*\.jsonl$' || true; } \
+         | wc -l | tr -d ' ' )"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
