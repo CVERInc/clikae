@@ -109,10 +109,21 @@ _source_clean() {
     echo "$out"; echo "-- the tank-lock GC (the PR's own documented recovery path) did not run/report while the ephemeral lock was held"; false; }
 }
 
+# Make sure tank $2 of engine $1 is a REAL tank before seeding it. The store
+# scan behind `clean` walks tanks_for_engine — the same "what is a tank" answer
+# the board has used since #61 — instead of globbing profiles/<engine>/*/, so a
+# bare directory that merely holds transcripts is not a candidate. Idempotent:
+# the marker is what `clikae init` leaves behind, and re-running it is not.
+_seed_tank() {
+  [ -f "$CLIKAE_HOME/profiles/$1/$2/.clikae-tank" ] || clikae init "$1" "$2" >/dev/null
+  return 0
+}
+
 # Seed a claude transcript for tank $1 with $3 conversation lines under a fixed
 # project dir; echoes the transcript path.
 _seed_lines() {
   local profile="$1" sid="$2" n="$3" i
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   for ((i=1; i<=n; i++)); do
@@ -126,6 +137,7 @@ _seed_lines() {
 # Latin. Raw UTF-8, exactly as a real transcript stores it.
 _seed_titled() {
   local profile="$1" sid="$2" title="$3" n="$4" i
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   { printf '{"type":"ai-title","aiTitle":"%s","sessionId":"%s"}\n' "$title" "$sid"
@@ -140,6 +152,7 @@ _seed_titled() {
 # pads it to ~$4 MB — the "big but recent" fixture (the built-in floor is 20 MB).
 _seed_big() {
   local profile="$1" sid="$2" title="$3" mb="$4"
+  _seed_tank claude "$profile"
   local dir="$CLIKAE_HOME/profiles/claude/$profile/projects/-w"
   mkdir -p "$dir"
   { printf '{"type":"user","cwd":"/tmp/w","message":{"role":"user","content":"%s"}}\n' "$title"
@@ -215,6 +228,7 @@ _seed_big() {
 @test "resume cleanup is a hidden alias: byte-identical output with clikae clean" {
   local sid="10101010-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -233,6 +247,7 @@ _seed_big() {
 @test "a stale copy lands in 'Redundant (safe)', pre-checked" {
   local sid="12121212-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -280,6 +295,7 @@ _seed_big() {
 @test "a diverged copy lands in 'Big but recent' unchecked, labeled has-unique-content" {
   local sid="56565656-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 80 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 60 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -300,6 +316,7 @@ _seed_big() {
 @test "clean dedupes copies of one session and keeps the LARGEST, not the newest" {
   local sid="66666666-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -330,6 +347,7 @@ _seed_big() {
 @test "clean skips a dedupe group whose sid has a live process" {
   local sid="99999999-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 100 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 50 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
@@ -401,6 +419,7 @@ PSSTUB
 
 @test "clean --min-size with --older-than requires BOTH (a recent big file is excluded)" {
   local big="ffffffff-2222-3333-4444-555555555555"
+  _seed_tank claude a
   mkdir -p "$CLIKAE_HOME/profiles/claude/a/projects/-w"
   { printf '{"type":"user","cwd":"/tmp/w","message":{"role":"user","content":"big recent"}}\n'
     dd if=/dev/zero bs=1024 count=2048 2>/dev/null | LC_ALL=C tr '\0' 'a'; echo
@@ -757,7 +776,8 @@ PSSTUB
     # a stale cross-tank copy -> a "Redundant (safe)" row, i.e. the row that
     # carries the LONG localized label right next to the CJK title. That
     # combination is what measured 120-124 cols on the maintainer's real store.
-    mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
+    _seed_tank claude b
+  mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
     head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
       > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
   done
@@ -788,6 +808,7 @@ sys.exit(1 if bad else 0)
 @test "the localized stale-copy LABEL is never truncated, even in the longest language (fr)" {
   local sid="45454545-2222-3333-4444-555555555555"
   _seed_lines a "$sid" 200 >/dev/null
+  _seed_tank claude b
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
