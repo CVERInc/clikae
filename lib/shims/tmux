@@ -118,6 +118,7 @@ if [ -n "${TMUX:-}" ]; then
   _seg_verb=""
   _seg_has_target=0
   _seg_has_a=0
+  _seg_has_C=0
   _want_tval=0
   # P3-新1 (clikae#97 review round 4): once an unrecognised dash-option shows
   # up ahead of the verb, `_seg_verb` can no longer be trusted to land on the
@@ -179,6 +180,7 @@ if [ -n "${TMUX:-}" ]; then
           -t=)           : ;;
           -t*)           _seg_has_target=1 ;;
           -a|-aC|-Ca)    _seg_has_a=1 ;;
+          -C)            _seg_has_C=1 ;;
           # P3-新2 (clikae#97 review round 4): `t` clustered with kill-
           # session's OTHER short options (`-at`, `-Ct`, `-aCt`, …) named a
           # target exactly like a lone `-t` does — tmux's own getopt-style
@@ -191,6 +193,16 @@ if [ -n "${TMUX:-}" ]; then
           # matched by ending in a literal `t` that isn't just `-t` alone
           # (already caught above) or `-t=` (also already caught above).
           -*t)           _want_tval=1 ;;
+        esac
+        # 🔴 `-C` MEANS "CLEAR ALERTS", NOT "KILL" (clikae#106). tmux's
+        # cmd-kill-session returns right after clearing alerts when -C is
+        # set — no session dies, with or without -a. Any short-option
+        # cluster carrying `C` (`-C`, `-aC`, `-Ca`, `-aCt x`, or a separate
+        # `-a -C`) therefore makes kill-session non-destructive. Recorded for
+        # every segment like -t/-a; only the kill-session check reads it.
+        case "$_tok" in
+          -t*) : ;;
+          -*C*) _seg_has_C=1 ;;
         esac
       elif [ "$_global_phase" -eq 1 ]; then
         case "$_tok" in
@@ -249,7 +261,7 @@ if [ -n "${TMUX:-}" ]; then
           printf 'tmux-guard: refusing `tmux` invocation — unrecognised option %s came before the verb, so this shim no longer trusts the verb slot; `kill-server` appears in the command and $TMUX names a socket (%s). Name yours: tmux -S <path> kill-server\n' "$_unknown_opt" "$_sock" >&2
           exit 86
         fi
-        if [ "$_seg_saw_ksess" -eq 1 ] && [ "$_seg_has_target" -eq 0 ]; then
+        if [ "$_seg_saw_ksess" -eq 1 ] && [ "$_seg_has_target" -eq 0 ] && [ "$_seg_has_C" -eq 0 ]; then
           printf 'tmux-guard: refusing `tmux` invocation — unrecognised option %s came before the verb, so this shim no longer trusts the verb slot; `kill-session` appears in the command with no named -t this shim can verify. Name yours: tmux kill-session -t <target>\n' "$_unknown_opt" >&2
           exit 86
         fi
@@ -277,7 +289,7 @@ if [ -n "${TMUX:-}" ]; then
         # shellcheck disable=SC2194  # same reason as the kill-server case above.
         case kill-session in
           "$_seg_verb"*)
-            if [ "$_seg_has_target" -eq 0 ]; then
+            if [ "$_seg_has_target" -eq 0 ] && [ "$_seg_has_C" -eq 0 ]; then
               if [ "$_seg_has_a" -eq 1 ]; then
                 printf 'tmux-guard: refusing `tmux %s` — with no named -t and -a set this kills every OTHER session on %s. Name yours: tmux kill-session -t <target>\n' "$_seg_verb" "$_sock" >&2
               else
@@ -294,6 +306,7 @@ if [ -n "${TMUX:-}" ]; then
       _seg_verb=""
       _seg_has_target=0
       _seg_has_a=0
+      _seg_has_C=0
       _want_tval=0
       _unknown_opt=""
       _seg_saw_ks=0
@@ -386,12 +399,32 @@ if [ "$_hops" -gt 4 ]; then
   exit 127
 fi
 
+# 🔴 AN EMPTY PATH ENTRY IS THE CURRENT DIRECTORY (clikae#106). POSIX and
+# bash's own command lookup read `PATH="<shim>:"` / `"<shim>::/x"` / a
+# leading `:` as `.`; an earlier walk skipped empty entries, so a `tmux`
+# the plain shell would have run from cwd came back 127 through the shim.
+# Word splitting on a non-whitespace IFS drops a TRAILING empty field
+# (`a:` splits to just `a`), so one extra `:` is appended: `a:` + `:` keeps
+# its empty field, and a PATH with no trailing colon only gains a field
+# that is dropped again. Each empty field is then read as `.`.
+#
+# 🔴 THE FALLBACK TRIES A DIFFERENT SCRIPT EACH HOP (clikae#106). Once hops
+# >= 2 and no binary exists, the fallback used to be the FIRST script
+# candidate — which is exactly the guard hop 1 already exec'd into and that
+# just bounced us back, so `shim : guard : usable-script` always died at the
+# ceiling. Hop 1 took script candidate #1 (a binary ahead of it would have
+# been taken instead, and never bounces), so hop N now takes script
+# candidate #N, clamped to the last one: each bounce moves one guard
+# further down PATH. The ceiling below is unchanged and still ends the
+# one-guard/no-binary shape (its only candidate is that guard every time).
 _real_tmux=""
 _fallback_tmux=""
+_script_n=0
 _ifs_save="$IFS"
 IFS=:
-for _d in $PATH; do
+for _d in $PATH:; do
   IFS="$_ifs_save"
+  [ -n "$_d" ] || _d=.
   if [ -n "$_d" ] && [ -x "$_d/tmux" ] && [ "$_d/tmux" -ef "$0" ]; then
     IFS=:
     continue
@@ -423,7 +456,10 @@ for _d in $PATH; do
       # A cycle was detected (see above): now avoid handing off to ANOTHER
       # script, which is how we got back here in the first place. Remember it
       # as a last resort only — see the fallback note below.
-      [ -z "$_fallback_tmux" ] && _fallback_tmux="$_d/tmux"
+      _script_n=$((_script_n + 1))
+      if [ -z "$_fallback_tmux" ] || [ "$_script_n" -le "$_hops" ]; then
+        _fallback_tmux="$_d/tmux"
+      fi
     else
       _real_tmux="$_d/tmux"
     fi
