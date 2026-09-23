@@ -31,6 +31,20 @@ So:
   relay (same quota bucket) — that's still true; it's cross-ACCOUNT tanks that
   now hop for free.
 
+### On Linux
+
+agy ships for Linux too, and there the login is not a Keychain item: on a host
+with no keyring daemon it is one file, `~/.gemini/antigravity-cli/antigravity-oauth-token`
+(mode 0600, refreshed by agy on use). That path sits inside `~/.gemini`, which
+clikae already turns into a symlink to the active tank dir, so each tank's login
+file lives in its own dir and moves with the switch — `clikae agy <tank>`, burn's
+auto-hop, `rename agy` and `remove agy` all carry it with no copy of the secret
+anywhere else. clikae picks the backend by `uname -s` (Darwin: Keychain; Linux:
+file). After a switch it keeps the token 0600 and warns when the incoming tank
+has no saved login yet (agy would stop at a sign-in prompt, which a headless run
+can't answer); sign in once from a real terminal with `clikae agy <tank>`.
+`clikae doctor` names the active backend and which tanks carry a login.
+
 ## The canonical headless invocation
 
 ```bash

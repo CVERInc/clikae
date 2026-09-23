@@ -222,7 +222,7 @@ way.
 
 | Command | What it does |
 |---|---|
-| `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. |
+| `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. If `$CLIKAE_HOME/template/<engine>/` exists, its files are also copied into the new tank (a `settings.json` in there is MERGED — only the keys the tank doesn't already have — everything else is copied only if the tank doesn't already have that file). Silent when there's no template. `--no-template` skips this too. |
 | `init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; `clikae doctor` names any candidate. |
 | `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
@@ -628,6 +628,57 @@ things (#136):
 | `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
 | `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired · usage --wake <tank>` the moment it lands. |
 | anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
+
+### Warm `/compact` before the prompt cache goes cold (#131)
+
+A claude conversation's prompt cache lives one hour. A session that sits idle
+past that and then speaks again re-reads its whole context at fresh-input price
+— for a large conversation, two orders of magnitude more than the same turn
+warm (see [fleet-cost-doctrine.md](/fleet-cost-doctrine.md)). Compacting while
+the cache is still warm only reads it; the next turn rebuilds the cache on the
+summary alone.
+
+So the watcher window inside every clikae tmux session (the same one that
+waits out a limit) types `/compact` into a claude session **once** when all of
+these hold:
+
+- nothing has been written to that session's transcript for **50 minutes**
+  (under the 1h TTL — idle is read from the conversation itself, never a clock
+  alone, and there is no scheduled `/clear`);
+- the last real turn's context — `input_tokens` + `cache_creation_input_tokens`
+  + `cache_read_input_tokens` from the transcript's `usage` — is at least
+  **200K** (`CLIKAE_COMPACT_MIN_TOKENS`);
+- the pane is alive and its screen has stopped moving (no turn running);
+- the prompt line is **empty** — never while you are typing. If the prompt line
+  can't be recognised at all, it does nothing.
+
+One send per idle stretch; the compaction itself ends the stretch. It only acts
+on a session whose transcript clikae stamped at launch, never on a guess.
+
+**On by default, asked once.** The first launch in a terminal asks, and the
+answer is remembered in `$CLIKAE_HOME/warm-compact`. Opt a single tank out, or
+turn it off everywhere:
+
+```bash
+clikae watch compact                      # preference + thresholds
+clikae watch compact claude work          # …and what it did on that tank
+clikae watch compact off claude work      # opt this tank out (on to undo)
+clikae watch compact off                  # off everywhere
+CLIKAE_WARM_COMPACT=off clikae claude work   # one run, not remembered
+```
+
+**What it did** goes to the waiter's own trace (`$CLIKAE_HOME/state/wake/<engine>-<tank>.log`),
+which `clikae watch compact <engine> <tank>`, `clikae watch <engine>` and
+`clikae wake` read back:
+
+```
+2026-09-24T03:10:02Z  compact-sent      context=512340 idle=3004s
+2026-09-24T08:41:17Z  compact-verified  before=512340 after_cache_creation=23110 after_context=23115
+```
+
+`compact-verified` is the check: the first turn after the compaction boundary
+should show a `cache_creation_input_tokens` near the summary's size (tens of K),
+not the full context. Compare it against a tank with the feature off.
 
 ## Ambient: turn GitHub replies into wake events (`watch github`)
 
