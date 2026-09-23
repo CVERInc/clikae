@@ -60,6 +60,31 @@ agy_harness_install() {
   return 0
 }
 
+# agy_harness_repoint <old_tank_dir> <new_tank_dir> -> 0 rewrote something, 1 nothing to do.
+#
+# hooks.json's hook `command` is an absolute path INTO the tank (agy_harness_install
+# bakes it in with sed, see above), so a `mv` of the tank directory leaves it
+# pointing at a path that no longer exists — every tool call then fails on
+# `sh: <old>/config/clikae-harness.sh: No such file or directory` (#128). The
+# directory move already happened by the time this runs; this only rewrites the
+# stale path string inside the file that survived it, and does so atomically
+# (write to a sibling temp file, then rename over it) so a crash mid-write never
+# leaves a half-written hooks.json behind.
+agy_harness_repoint() {
+  local old_dir="$1" new_dir="$2" json tmp
+  [ -n "$old_dir" ] && [ -n "$new_dir" ] || return 1
+  json="$(agy_harness_hooks "$new_dir")"
+  [ -f "$json" ] || return 1
+  grep -qF "$old_dir" "$json" 2>/dev/null || return 1
+  tmp="$(mktemp "$json.XXXXXX" 2>/dev/null)" || return 1
+  if sed "s|$old_dir|$new_dir|g" "$json" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$json"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 # agy_harness_seed_mark <tank_name> — where clikae records that it has ALREADY
 # offered this tank the harness. Deliberately in CLIKAE_HOME, not in the tank:
 # the whole point is that it survives someone deleting the harness files.
