@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae burn codex` no longer reports a sandbox refusal as a task
+  failure (#39, #69).** Codex's `workspace-write` sandbox writes only under
+  its cwd (the first `--add-dir`) and `/tmp`. Burn now refuses up front,
+  before any lock or state file, when `--artifact` lies outside those roots
+  (naming both; `--json` reason `refused: artifact outside codex writable
+  roots`), says once on stderr that extra `--add-dir` values are read-only,
+  and classifies a no-artifact ending with an `Operation not permitted`
+  signature as `sandbox refused the write` instead of `no fresh artifact and
+  no limit`. `bypassPermissions` and tank-declared sandbox modes are not
+  refused.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

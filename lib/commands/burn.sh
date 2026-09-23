@@ -3594,6 +3594,72 @@ _burn_check_codex_git_cwd() {
   fi
 }
 
+# _burn_canon_path <path> — absolute, symlink-resolved spelling of <path>
+# (its nearest existing ancestor is resolved with `pwd -P`; the missing tail
+# is appended as written). Relative paths resolve against $PWD.
+_burn_canon_path() {
+  local p="$1" tail=""
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  while [ ! -d "$p" ] && [ "$p" != / ] && [ -n "$p" ]; do
+    tail="/${p##*/}$tail"; p="${p%/*}"; [ -n "$p" ] || p=/
+  done
+  p="$(cd "$p" 2>/dev/null && pwd -P)" || p="${1%/}"
+  printf '%s%s' "${p%/}" "$tail"
+}
+
+# _burn_codex_sandbox_is_workspace_write <tank> — does this codex run get
+# `-s workspace-write`? Mirrors adapter_burn_flags: an explicit --permission
+# decides; otherwise a tank config.toml that declares its own sandbox_mode is
+# the tank's ruling and is honoured (only its workspace-write value counts).
+_burn_codex_sandbox_is_workspace_write() {
+  if [ "$permission_set" -eq 1 ]; then
+    case "$burn_permission" in bypassPermissions|plan|default) return 1 ;; esac
+    return 0
+  fi
+  local cfg; cfg="$(profile_dir codex "$1" 2>/dev/null)/config.toml"
+  if [ -f "$cfg" ] && grep -Eq '^[[:space:]]*sandbox_mode[[:space:]]*=[[:space:]]*"[^"]+"' "$cfg"; then
+    grep -Eq '^[[:space:]]*sandbox_mode[[:space:]]*=[[:space:]]*"workspace-write"' "$cfg"
+    return
+  fi
+  return 0
+}
+
+# _burn_check_codex_artifact_scope <tank> — #39/#69: under workspace-write
+# codex can write only under its single cwd (-C, = add_dirs[0]) and /tmp;
+# extra --add-dir values are read-only. An --artifact outside those roots can
+# never be produced (EPERM, then "no fresh artifact" after the full timeout),
+# so refuse before any lock or state file. Also says, once, that extra
+# --add-dir values are read-only. Called at entry and again when a reroute
+# lands on codex (same shape as _burn_check_codex_git_cwd).
+_burn_check_codex_artifact_scope() {
+  [ "$cli" = codex ] || return 0
+  [ "$prompt_set" -eq 1 ] || return 0
+  if [ "${#add_dirs[@]}" -gt 1 ] && [ "${_burn_codex_ro_notice:-0}" -eq 0 ]; then
+    _burn_codex_ro_notice=1
+    log_warn "codex writes only under its cwd (${add_dirs[0]}) and /tmp; extra --add-dir values are read-only to its sandbox: ${add_dirs[*]:1}"
+  fi
+  [ -n "$artifact" ] || return 0
+  _burn_codex_sandbox_is_workspace_write "$1" || return 0
+  local art cwd root
+  art="$(_burn_canon_path "$artifact")"
+  cwd="$(_burn_canon_path "${add_dirs[0]}")"
+  for root in "$cwd" /tmp /private/tmp; do
+    case "$art" in "$root"/*) return 0 ;; esac
+  done
+  local msg="--artifact '$artifact' is outside codex's writable roots ('${add_dirs[0]}' and /tmp); put it under the first --add-dir or /tmp."
+  log_err "$msg"
+  # Same --json shape as _burn_result, minus its left-behind scan: nothing
+  # has run yet, so there is nothing to scan for (and the scan would report
+  # the caller's own dirty tree as if this burn had touched it).
+  if [ "${as_json:-0}" -eq 1 ]; then
+    printf '{"ok":false,"engine":"codex","tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[%s],"elapsed_s":0,"run_id":null,"left_behind":[],%s}\n' \
+      "$(json_or_null "$1")" "$(json_or_null "$artifact")" \
+      "$(json_str "refused: artifact outside codex writable roots")" \
+      "$(_burn_tried_json "${tried:-}")" "$(_burn_lb_meta 0 0 0 0 0)" >&4
+  fi
+  exit 1
+}
+
 # _burn_sanitize_reason <raw-line> — make an engine's own stderr safe to carry
 # as a JSON string value.
 #
@@ -3795,6 +3861,7 @@ cmd_burn() {
   # Validate the cwd we compose, before carry notices, logs, status or locks.
   # Raw argv owns its own cwd and git-check policy.
   _burn_check_codex_git_cwd
+  _burn_check_codex_artifact_scope "$tank"
   validate_name cli "$cli"
   validate_name profile "$tank"
   # Fall-through armed (the default) means a dry tank re-fires this task on the
@@ -4711,6 +4778,16 @@ KV
       _burn_result false "$cli" "$cur" "$artifact" "infra"
       _burn_output_tail "$out"
       return 1
+    elif [ "$cli" = codex ] && printf '%s' "$out_for_class" | grep -Eq 'Operation not permitted|PermissionError|EPERM'; then
+      # #39: the engine did the work but its workspace-write sandbox refused
+      # the write (EPERM) — not a task failure and not a dry tank. Say where
+      # codex can write so the next run puts the artifact there.
+      log_err "$cli/$cur produced no fresh artifact: its sandbox refused a write (Operation not permitted). codex writes only under ${add_dirs[0]:-its cwd} and /tmp; check its output for a fallback path."
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "sandbox refused the write" ""
+      _burn_result false "$cli" "$cur" "$artifact" "sandbox refused the write"
+      _burn_output_tail "$out"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
+      return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
       local failure_reason="no fresh artifact and no limit" stderr_first=""
@@ -4840,6 +4917,7 @@ KV
         # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
         # exactly like the entry check did, so it needs the same refusal.
         _burn_check_codex_git_cwd
+        _burn_check_codex_artifact_scope "$nx_tank"
         _burn_launch_cwd="${add_dirs[0]}"
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
