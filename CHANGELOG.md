@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **tmux guard shim follow-ups (#106).** `kill-session -C` (in any spelling:
+  `-C`, `-aC`, `-Ca`, `-a -C`) only clears alerts and kills nothing, so it is
+  no longer refused. An empty `PATH` entry (leading/trailing `:` or `::`) now
+  means the current directory, as in any shell command lookup, instead of
+  being skipped. With no real tmux binary on `PATH`, the hop fallback no
+  longer re-picks the guard that just bounced the call back: hop N takes the
+  Nth script candidate, so `shim : guard : usable script` reaches the script
+  instead of failing at the hop ceiling.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

@@ -530,15 +530,19 @@ EOF
   [ "$status" -ne 0 ] || { echo "the target session should be dead: $output"; false; }
 }
 
-@test "shim: kill-session -aC (combined short options) is still recognised as -a (review round 2 P3)" {
+@test "shim: kill-session -aC clears alerts, kills nothing, and is no longer refused (#106; was review round 2 P3)" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   local sock="$TEST_HOME/bypass-ac.sock"
   tmux -S "$sock" new-session -d -s bypassac 'sleep 60'
-  run env TMUX="$sock,1,0" bash "$(SHIM)" kill-session -aC
-  [ "$status" -eq 86 ] || { echo "status=$status output=$output"; false; }
-  [[ "$output" == *"every OTHER session"* ]] || { echo "message doesn't credit -a: $output"; false; }
+  tmux -S "$sock" new-session -d -s other 'sleep 60'
+  local pid; pid="$(tmux -S "$sock" display-message -p -t '=bypassac' '#{pid}')"
+  # $TMUX points at the throwaway server, and the call itself names it with
+  # -S too, so even a regression can only ever reach this throwaway.
+  run env TMUX="$sock,$pid,0" bash "$(SHIM)" -S "$sock" kill-session -aC
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
   run tmux -S "$sock" list-sessions -F '#{session_name}'
-  [ "$status" -eq 0 ] && [ "$output" = "bypassac" ] || { echo "did not survive: $output"; false; }
+  [ "$status" -eq 0 ] && [ "$(printf '%s\n' "$output" | sort | tr '\n' ' ')" = "bypassac other " ] || {
+    echo "-C should clear alerts and kill nothing; sessions now: $output"; false; }
   tmux -S "$sock" kill-server 2>/dev/null || true
 }
 
@@ -748,4 +752,92 @@ EOF
   # -a alone still names nothing: unchanged.
   _tg_expect2 86 "-a alone (unchanged)"    kill-session -a
   [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+# ── clikae#106: three follow-ups left by review rounds 3-4 ─────────────────
+
+@test "shim: kill-session with -C in any spelling passes (clears alerts, kills nothing); without -C still refused (#106)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local p="$CLIKAE_LIB/shims:$TEST_HOME/.recorderbin"
+  local bad=""
+  _tg_expect3() { # _tg_expect3 <86|0> <label> args...
+    local want="$1" label="$2"; shift 2
+    rm -f "$TEST_HOME/recorder.log"
+    local rc=0
+    env TMUX="$TEST_HOME/fake,1,0" PATH="$p" "$bash_bin" "$(SHIM)" "$@" >/dev/null 2>&1 || rc=$?
+    local reached=no; [ -e "$TEST_HOME/recorder.log" ] && reached=yes
+    if [ "$want" -eq 86 ]; then
+      { [ "$rc" -eq 86 ] && [ "$reached" = no ]; } || bad="$bad
+  expected refusal:     $label (rc=$rc reached=$reached)"
+    else
+      { [ "$rc" -eq 0 ] && [ "$reached" = yes ]; } || bad="$bad
+  expected pass-through: $label (rc=$rc reached=$reached)"
+    fi
+  }
+  _tg_expect3 0  "-C"                    kill-session -C
+  _tg_expect3 0  "-aC"                   kill-session -aC
+  _tg_expect3 0  "-Ca"                   kill-session -Ca
+  _tg_expect3 0  "-a -C"                 kill-session -a -C
+  _tg_expect3 0  "kill-ses -C (prefix)"  kill-ses -C
+  _tg_expect3 0  "-q kill-session -C (unknown global)"  -q kill-session -C
+  # -C belongs to ITS segment only; -tC names the target "C", not the flag.
+  _tg_expect3 86 "ls -C ; kill-session"  ls -C \; kill-session
+  _tg_expect3 86 "-a alone"              kill-session -a
+  _tg_expect3 86 "bare"                  kill-session
+  _tg_expect3 86 "-t ''"                 kill-session -t ''
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "shim: an empty PATH entry is the current directory, as for any command lookup (#106)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  local shimdir="$CLIKAE_LIB/shims" bad="" pth rc
+  for pth in "$shimdir:" "$shimdir::/nonexistent" ":$shimdir"; do
+    rm -f "$TEST_HOME/recorder.log"
+    rc=0
+    (cd "$TEST_HOME/.recorderbin" && env -u TMUX PATH="$pth" "$bash_bin" "$(SHIM)" -V) >/dev/null 2>&1 || rc=$?
+    { [ "$rc" -eq 0 ] && [ -e "$TEST_HOME/recorder.log" ]; } || bad="$bad
+  PATH='$pth': rc=$rc"
+  done
+  # Control: no empty entry, so the tmux in cwd must NOT be found.
+  rc=0
+  (cd "$TEST_HOME/.recorderbin" && env -u TMUX PATH="$shimdir:/nonexistent" "$bash_bin" "$(SHIM)" -V) >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 127 ] || bad="$bad
+  control (no empty entry) should be 127: rc=$rc"
+  # cwd = the shim's own directory: the empty entry is the shim itself, skipped by identity.
+  rm -f "$TEST_HOME/recorder.log"
+  rc=0
+  (cd "$shimdir" && env -u TMUX PATH=":$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" -V) >/dev/null 2>&1 || rc=$?
+  { [ "$rc" -eq 0 ] && [ -e "$TEST_HOME/recorder.log" ]; } || bad="$bad
+  cwd = shim dir should skip itself and reach the recorder: rc=$rc"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "shim: past a bouncing guard, the hop fallback moves on to the next script instead of re-picking the guard (#106)" {
+  _tg_recorder
+  local bash_bin; bash_bin="$(command -v bash)"
+  mkdir -p "$TEST_HOME/.guard2bin"
+  cat > "$TEST_HOME/.guard2bin/tmux" <<EOF
+#!$bash_bin
+_IFS_SAVE="\$IFS"; IFS=:
+for _d in \$PATH; do
+  IFS="\$_IFS_SAVE"
+  [ -n "\$_d" ] || continue
+  [ -x "\$_d/tmux" ] || continue
+  [ "\$_d/tmux" -ef "\$0" ] && continue
+  exec "\$_d/tmux" "\$@"
+done
+IFS="\$_IFS_SAVE"
+exit 127
+EOF
+  chmod +x "$TEST_HOME/.guard2bin/tmux"
+  # shim : guard (bounces back to the shim) : recorder (a usable script tmux).
+  # No binary anywhere on PATH; rc 127 at the hop ceiling is the regression.
+  run env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.guard2bin:$TEST_HOME/.recorderbin" "$bash_bin" "$(SHIM)" -V
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  grep -qF 'ARGV:-V' "$TEST_HOME/recorder.log" || { echo "recorder never reached"; false; }
+  # Invariant kept: shim + that guard alone still ends at the ceiling.
+  run -127 env -u TMUX PATH="$CLIKAE_LIB/shims:$TEST_HOME/.guard2bin" "$bash_bin" "$(SHIM)" -V
+  [[ "$output" == *"gave up after"* ]] || { echo "expected the hop-ceiling message, got: $output"; false; }
 }
